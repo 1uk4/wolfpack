@@ -1,116 +1,120 @@
 # Deploy hubd on sfo-01 (ticket work-wolfpack-gctZOIO)
 
-Prepared, NOT yet run. Everything below needs owner confirmation first. Never print `/etc/wolfpack/hubd.env` or tokens.
+Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolfpack/hubd.env` or tokens.
 
 ## Target state
 | | |
 |---|---|
 | user / group | `hubd` / `hubd` (system, nologin). Never `wolf-W1hOrJ` (Dewey) |
-| bind | Tailscale IP `100.120.154.69` only (loopback also fine), port **3150** (3141 = wolfpack-agent) |
-| unit | `/etc/systemd/system/hubd.service`, `After=tailscaled`, `Restart=on-failure`, hardened (see file) |
+| bind | Tailscale IP `100.120.154.69` only, port **3150** (3141 = wolfpack-agent; port confirmed free) |
+| unit | `/etc/systemd/system/hubd.service`: `After=tailscaled`, `Restart=on-failure`, hardened (see file) |
 | env | `/etc/wolfpack/hubd.env`, root:root 600 |
-| code | `/opt/wolfpack-hubd/releases/<ts>-<sha>/hubd.mjs`, symlinks `current` and `previous` |
-| data | `/var/lib/hubd` (hubd 0700): ledger, registry, auth tokens, `kb/base`, `kb/ops` |
-| KB read | `/var/lib/hubd/kb/base/domains` → symlink to `/home/wolf-W1hOrJ/knowledge/base/domains`; ACL `u:hubd:rX` + default ACL |
-| inbox write | ACL `u:hubd:rwX` + default ACLs (hubd and Dewey) on `/home/wolf-W1hOrJ/librarian/{inbox,receipts}`; `--x` on `/home/wolf-W1hOrJ`, `knowledge`, `knowledge/base`, `librarian` |
+| code | `/opt/wolfpack-hubd/releases/<ts>-<sha>/hubd.mjs`, symlinks `current` and `previous` (node: `/usr/bin/node` v22) |
+| data | `/var/lib/hubd` (0700): ledger, registry, tokens, `kb-rev`, `run`, hub-owned `kb/base`, `kb/ops` |
+| KB read | `/var/lib/hubd/kb/base/domains` → `/home/wolf-W1hOrJ/knowledge/base/domains`, bound **read-only** by the unit |
+| inbox/receipts | `/home/wolf-W1hOrJ/librarian/{inbox,receipts}` bound **read-write** by the unit; lane dirs `<lane>/1uk4` pre-created |
 
-Why `kb/base` is a hub-owned dir and not a symlink to Dewey's `knowledge/base`: hubd regenerates `<kbBase>/domains.yaml` on every registry write and would overwrite Dewey's file. Only `domains/` is shared.
+### How access works (no ACLs, `acl` is not installed and is not needed)
+- On sfo-01 `/var/wolfpack/kb/base/domains` → `/home/wolf-W1hOrJ/knowledge/base/domains` and `/var/wolfpack/kb/ops/{inbox,receipts}` → `/home/wolf-W1hOrJ/librarian/{inbox,receipts}` are root-owned symlinks (Dewey runs with `KB_BASE=/var/wolfpack/kb/base`, `KB_OPS=/var/wolfpack/kb/ops`). The unit and hubd use the **real** `/home/...` paths, because the sandbox binds real paths.
+- Modes: `/home/wolf-W1hOrJ` 755, `librarian` 755, `domains`/`inbox`/`receipts` 777, lane dirs 777; files in `domains/` 644, dirs 755 (Dewey umask 0022). hubd therefore already has what it needs as "other".
+- **Because those dirs are world-writable, read-only KB comes only from the sandbox** (`BindReadOnlyPaths=` on `domains/`; no `-` prefix so a missing path fails the start).
+- **UMask=0022**, data dir 0700. hubd's contribution files are written with the default mode, so they are 644 and Dewey can read them; Dewey moves/deletes them via write on the 777 lane dir. 0022 does not expose `/var/lib/hubd` (0700 dir) and `tokens.json` is written 0600 explicitly.
+- **Lane dirs**: if hubd creates a NEW `inbox/<wolf>` dir it is hubd-owned 755 and Dewey cannot write into it. `setup.sh` pre-creates `inbox/<wolf>` and `receipts/<wolf>` (owner wolf-W1hOrJ, mode 777) for `--wolf` names (default `1uk4`). **A new wolf needs its lanes created before it contributes** (`setup.sh setup --wolf <name>`, idempotent; or `install -d -o wolf-W1hOrJ -g wolf-W1hOrJ -m 0777 .../inbox/<wolf> .../receipts/<wolf>`).
 
-### KB write access for hub commits (ticket 5) — proposal
-Hub KB commits write under `kb/base/domains/<d>/…`, i.e. into Dewey's tree. Default is read-only. Proposal: leave read-only now (reads, pairing, registry, link all work); when the hub becomes the KB's writer, run `setup.sh setup --kb-write` (ACL `rwX` + default on `domains/` only) AND stop Dewey's sweep writing the same tree, or the two writers race (hubd's KB writer lock does not cover Dewey). Until then, treat KB commit endpoints as unsupported on sfo-01.
+### What hubd writes into `domains/` (tested on a read-only copy, bundle from this branch)
+- **Startup and serving work**: recovery, the KB revisions scan (`kb-rev/` is under the data dir), the registry (incl. `domains.yaml`, which lives in the hub-owned `kb/base`), pairing, tokens, link, event stream, reads. Verified: `hubd serve` started, scanned 2 domains, answered 401/201 with `domains/` unwritable.
+- **Fails with domains/ read-only**: work-item writes (`POST /v1/work`, patch, claim, graduate…) render `domains/<d>/work/<id>.md` and return **502 engine_error** (EACCES; EROFS under the real sandbox); KB commits (`POST /v1/kb/commits`) write `domains/<d>/…` and fail the same way. Reads of work items are fine.
+- No code change was needed for startup. Decision for the owner: if the hub should take work writes on sfo-01 now, run `setup.sh setup --hub-writes` — it adds a drop-in that makes only `domains/*/work` dirs writable (not tested under real systemd). KB commits stay disabled until the hub is the KB's only writer (then the whole `domains/` bind becomes read-write, a unit change; stop Dewey's sweep writing the same tree first).
+- Contributions land in `/var/lib/hubd/kb/ops/contributions/<wolf>/` until ticket 7 (`HUBD_INBOX_ROOT`, `HUBD_RECEIPTS_ROOT`, already set in the env template; this branch ignores them) points them at Dewey's inbox.
 
-Contributions today go to `/var/lib/hubd/kb/ops/contributions/<wolf>/` (hubd's own lane). Pointing them at Dewey's inbox/receipts needs ticket 7's config; env names are TBD (`HUBD_INBOX_ROOT`, `HUBD_RECEIPTS_ROOT` commented in `hubd.env.example`). The ACLs and unit binds for those paths are already in place so ticket 7 needs no host change.
-
-## 0. Build (on the Mac, from the repo)
+## 0. Build (Mac)
 ```
 npm ci && npx tsc --build
-node deploy/hubd/build-bundle.mjs /tmp/hubd-bundle        # prints sha256 of hubd.mjs
+node deploy/hubd/build-bundle.mjs /tmp/hubd-bundle     # prints the sha256 of hubd.mjs
+node /tmp/hubd-bundle/hubd.mjs | head -2               # expect "usage:"
 ```
-## 1. Preflight (read-only, over ssh as in ops.md)
+## 1. Preflight (read-only, ssh as in ops.md)
 ```
-ssh ... root@100.120.154.69 '
-  node --version                          # >= 22
-  command -v setfacl || echo "need: apt-get install -y acl"
-  tailscale ip -4; systemctl is-active tailscaled
-  ss -ltnp | grep -E ":(3141|3150)\b"      # 3150 must be free
-  id hubd 2>&1 | head -1                   # absent on first run
-  ls -ld /home/wolf-W1hOrJ /home/wolf-W1hOrJ/knowledge/base/domains /home/wolf-W1hOrJ/librarian/{inbox,receipts}
-  df -h /var/lib /opt | tail -2'
+node --version; command -v node                       # /usr/bin/node, >= 22
+tailscale ip -4; systemctl is-active tailscaled
+ss -ltnp | grep -E ':(3141|3150)\b'                   # only 3141 (agent); 3150 free
+id hubd; ls -d /etc/wolfpack /opt/wolfpack-hubd /var/lib/hubd   # all absent on first run
+stat -c '%a %U %n' /home/wolf-W1hOrJ /home/wolf-W1hOrJ/librarian /home/wolf-W1hOrJ/knowledge/base/domains /home/wolf-W1hOrJ/librarian/{inbox,receipts}
+# real modes: -L follows the /var/wolfpack symlinks
+find -L /home/wolf-W1hOrJ/knowledge/base/domains /home/wolf-W1hOrJ/librarian -type f -printf '%m %u\n' | sort | uniq -c
+# files hubd could not read (after setup creates the user: setup.sh also runs this and warns, up to 20)
+runuser -u hubd -- find -L /home/wolf-W1hOrJ/knowledge/base/domains ! -readable | head -20
 ```
-Check the filesystem under `/home` supports ACLs (`setfacl` on ext4/xfs works by default).
+Any `600`-mode files in the survey, or any unreadable file, means the hub's KB scan/serving will skip or fail on them: report to the owner before starting.
 
-## 2. Copy to the host (staging only, nothing live changes)
+## 2. Copy (staging only)
 ```
-rsync -a --delete -e "ssh -i ~/.ssh/wolfpack -o IdentitiesOnly=yes -o IdentityAgent=none" /tmp/hubd-bundle/ root@100.120.154.69:/root/hubd-stage/bundle/
-rsync -a -e "..." deploy/hubd/ root@100.120.154.69:/root/hubd-stage/deploy/   # setup.sh, hubd.service, hubd.env.example
+S="ssh -i ~/.ssh/wolfpack -o IdentitiesOnly=yes -o IdentityAgent=none"
+rsync -a --delete -e "$S" /tmp/hubd-bundle/ root@100.120.154.69:/root/hubd-stage/bundle/
+rsync -a --delete -e "$S" deploy/hubd/ root@100.120.154.69:/root/hubd-stage/deploy/
 ```
-## 3. Dry run, then real (on the host, as root)
+## 3. Dry run, then real (on sfo-01 as root)
 ```
 cd /root/hubd-stage/deploy
-./setup.sh --dry-run setup
+./setup.sh --dry-run setup --bind 100.120.154.69 --port 3150 --wolf 1uk4
 ./setup.sh --dry-run install --bundle /root/hubd-stage/bundle
-# review output, then:
-./setup.sh setup
+# review; any "WOULD FAIL" line must be resolved. Then:
+./setup.sh setup --bind 100.120.154.69 --port 3150 --wolf 1uk4      # add --hub-writes only if the owner wants work writes
 ./setup.sh install --bundle /root/hubd-stage/bundle
 systemctl start hubd
 ```
-`setup` is idempotent (existing env file is kept; unit is rewritten). `install` smoke-tests the bundle before flipping `current`, restarts hubd only if already running, keeps 5 releases.
+`setup` dies (before installing anything) if node is not in /usr/bin|/usr/local/bin, port 3150 is held by anything but hubd, an existing env file has a bad port/host, `domains/` is not readable by hubd, or `inbox/`/`receipts/` (and lane dirs that exist) are not writable by hubd. It creates the hubd user first, then re-runs the access checks with `runuser -u hubd`. `install` smoke-tests the bundle, flips `current` atomically (rename), keeps 5 releases, restarts hubd only if already active.
 
 ## 4. Verify
 ```
-systemctl is-active hubd; journalctl -u hubd -n 30 --no-pager          # "hubd listening on http://100.120.154.69:3150"
-ss -ltnp | grep hubd                      # ONLY 100.120.154.69:3150 (no 0.0.0.0, no *)
-ps -o user= -p "$(systemctl show -p MainPID --value hubd)"              # hubd, not wolf-W1hOrJ
-stat -c '%U:%G %a' /etc/wolfpack/hubd.env                               # root:root 600
-curl -s -o /dev/null -w '%{http_code}\n' http://100.120.154.69:3150/v1/registry/wolves   # 401 = up and enforcing tokens (hubd has no unauthenticated health route)
-curl -s -m 3 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3150/v1/registry/wolves   # must fail (000): not bound on loopback
-# ACLs, as the hubd user:
-sudo -u hubd test -r /home/wolf-W1hOrJ/knowledge/base/domains && echo kb-read ok
-sudo -u hubd test -x /home/wolf-W1hOrJ/knowledge/base/domains && echo kb-traverse ok
-sudo -u hubd test -w /home/wolf-W1hOrJ/librarian/inbox && echo inbox-write ok
-sudo -u hubd test -w /home/wolf-W1hOrJ/librarian/receipts && echo receipts-write ok
-sudo -u hubd test ! -w /home/wolf-W1hOrJ/knowledge/base/domains && echo kb-readonly ok   # expected unless --kb-write
-sudo -u hubd test ! -r /home/wolf-W1hOrJ/.env && echo secrets-unreadable ok
-getfacl -p /home/wolf-W1hOrJ/librarian/inbox
-systemctl is-active wolf-W1hOrJ wolfpack-agent                          # unchanged
+systemctl is-active hubd; journalctl -u hubd -n 30 --no-pager        # "hubd listening on http://100.120.154.69:3150"
+journalctl -k | grep -i seccomp                                      # nothing about hubd (a filtered call would show up here); also check journalctl -u hubd -p err
+ss -ltnp | grep -E 'hubd|:3150'                                      # ONLY 100.120.154.69:3150; no 0.0.0.0, *, or [::]
+ps -o user= -p "$(systemctl show -p MainPID --value hubd)"            # hubd (not wolf-W1hOrJ)
+stat -c '%U:%G %a' /etc/wolfpack/hubd.env                            # root:root 600
+curl -s -o /dev/null -w '%{http_code}\n' http://100.120.154.69:3150/v1/registry/wolves       # 401: up, tokens enforced (no unauthenticated health route)
+curl -s -m 3 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3150/v1/registry/wolves       # 000: not on loopback
+# as the hubd user (outside the sandbox these test plain file permissions)
+runuser -u hubd -- test -r /home/wolf-W1hOrJ/knowledge/base/domains && echo kb-read ok
+runuser -u hubd -- find -L /home/wolf-W1hOrJ/knowledge/base/domains -type f ! -readable | head   # must print nothing
+runuser -u hubd -- test -w /home/wolf-W1hOrJ/librarian/inbox/1uk4 && echo inbox-lane-write ok
+runuser -u hubd -- test -w /home/wolf-W1hOrJ/librarian/receipts/1uk4 && echo receipts-lane-write ok
+runuser -u hubd -- test ! -r /home/wolf-W1hOrJ/.env && echo secrets-unreadable ok
+# the unit's sandbox itself (read-only KB, writable inbox):
+systemd-run --wait --pipe -p User=hubd -p ProtectHome=tmpfs -p BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains -p BindPaths=/home/wolf-W1hOrJ/librarian/inbox \
+  /bin/sh -c 'touch /home/wolf-W1hOrJ/knowledge/base/domains/.p 2>&1 | grep -q "Read-only" && echo kb-ro-in-sandbox ok; touch /home/wolf-W1hOrJ/librarian/inbox/1uk4/.p && rm /home/wolf-W1hOrJ/librarian/inbox/1uk4/.p && echo inbox-rw-in-sandbox ok'
+systemctl is-active wolf-W1hOrJ wolfpack-agent                       # unchanged
 ```
-Write test with default ACL (creates and removes one file; Dewey must be able to read it):
-```
-sudo -u hubd sh -c 'f=/home/wolf-W1hOrJ/librarian/inbox/.hubd-acl-probe; : > "$f"'
-sudo -u wolf-W1hOrJ test -r /home/wolf-W1hOrJ/librarian/inbox/.hubd-acl-probe && echo dewey-can-read ok
-sudo -u wolf-W1hOrJ rm /home/wolf-W1hOrJ/librarian/inbox/.hubd-acl-probe
-```
-(If it is bound to the Tailscale IP, check loopback only to confirm refusal; the unit sets no loopback listener.)
+Contribution mode check (after the first contribution): `stat -c '%U %a' /home/wolf-W1hOrJ/librarian/inbox/1uk4/*` should be `hubd 644`; if it is not readable by Dewey, tell the owner (an explicit file mode would go into ticket 7).
 
-## 5. Pair the Mac workerd
-On sfo-01 (single-use code, valid 10 minutes). Run as hubd; it takes the token-store lock, safe while hubd runs:
+## 5. Register, pair, go online (host `mac-1uk4`, wolf `1uk4`, domains personal, snapjack, wolfpack)
+workerd announces wolves by **name** (`1uk4`), not by id (ddkyhT). Wolves must be registered, with their domains, before the Mac connects; order: domains → host → wolves → pair → workerd.
+
+1. A console (owner) token for the registry calls. On sfo-01 (single-use, 10 minutes):
 ```
-sudo -u hubd /usr/bin/env node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id <mac-host-id> --data-dir /var/lib/hubd
+umask 077; sudo -u hubd /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --data-dir /var/lib/hubd
+H=http://100.120.154.69:3150
+TOKEN=$(curl -sS -H 'Content-Type: application/json' -X POST $H/v1/pair -d '{"code":"<code>","label":"sfo-admin","kind":"console"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')   # keep in the shell, never echo
+A="Authorization: Bearer $TOKEN"; J='Content-Type: application/json'
 ```
-On the Mac, right away:
+2. Register (each returns 201):
 ```
-workerd pair http://100.120.154.69:3150 <code>      # stores ~/.wolfpack/workerd/hub.json (0600); plain http is OK only inside Tailscale
-```
-Pick `<mac-host-id>` as the registry host name (lower-case, e.g. `mac-lukaflores`; confirm with the owner).
-Register the host and the wolves before starting workerd (wolves must be pre-registered with their domains; owner-level token needed. Mint one with `pair --kind console`, redeem at `POST /v1/pair`, keep it out of shell history):
-```
-H=http://100.120.154.69:3150; A="Authorization: Bearer $TOKEN"; J='Content-Type: application/json'
-curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/hosts   -d '{"name":"<mac-host-id>"}'
-curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/wolves  -d '{"name":"1uk4","host":"<mac-host-id>","domains":["wolfpack","snapjack","personal"]}'
+for d in personal snapjack wolfpack; do curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/domains -d "{\"name\":\"$d\"}"; echo; done
+curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/hosts  -d '{"name":"mac-1uk4"}'
+curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/wolves -d '{"name":"1uk4","host":"mac-1uk4","domains":["personal","snapjack","wolfpack"]}'
 curl -sS -H "$A" $H/v1/registry/wolves
 ```
-(Domains must also exist: `POST /v1/registry/domains`. List the Mac's wolves from `~/wolves/local/*/wolf.yaml`. Names must match the wolf ids workerd announces.)
-Then start workerd on the Mac as usual. Online check, either:
-- `curl -sN -m 15 -H "$A" $H/v1/events` shows `wolf.presence` events with state `online` for the Mac's wolves (hubd exposes presence on the event stream; there is no GET for it), or
-- the console / `journalctl -u hubd` (no `rejected wolves` / `not registered` lines for the Mac's host id).
+3. Pair the Mac (single-use code for exactly this host id). On sfo-01:
+```
+sudo -u hubd /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id mac-1uk4 --data-dir /var/lib/hubd
+```
+   On the Mac, within 10 minutes: `workerd pair http://100.120.154.69:3150 <code>` (writes `~/.wolfpack/workerd/hub.json`, mode 0600; plain http is accepted inside Tailscale only; workerd prints a warning).
+4. Start workerd on the Mac as usual. `runWorkerd` reads `hub.json` at startup (`packages/workerd/src/run.ts:61-71`, called from `bin/workerd.ts`) and opens the link.
+5. Online check (there is no GET for presence):
+   - `curl -sN -m 20 -H "$A" $H/v1/events` shows `wolf.presence` with state `online` for `1uk4`;
+   - `journalctl -u hubd --since "5 min ago"` has no `rejected wolves` / `not registered` lines for `mac-1uk4`; `curl -s localhost:7141/health` on the Mac shows `hub.state: online`.
 
-## 6. Rollback
-- Bad release: `./setup.sh rollback` (swaps `current` and `previous`, restarts if active).
-- Back out entirely (leaves Dewey and everything else untouched):
-```
-systemctl disable --now hubd; rm /etc/systemd/system/hubd.service; systemctl daemon-reload
-for d in /home/wolf-W1hOrJ /home/wolf-W1hOrJ/knowledge /home/wolf-W1hOrJ/knowledge/base /home/wolf-W1hOrJ/librarian; do setfacl -x u:hubd "$d"; done
-setfacl -R -x u:hubd,d:u:hubd,d:u:wolf-W1hOrJ /home/wolf-W1hOrJ/knowledge/base/domains /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
-# optional, destroys hub state: rm -rf /var/lib/hubd /opt/wolfpack-hubd /etc/wolfpack/hubd.env; userdel hubd
-```
-  (Removing `d:u:wolf-W1hOrJ` default entries is harmless; Dewey owns those directories.) Before deleting `/var/lib/hubd`, `hubd export --data-dir /var/lib/hubd --out hub.tar` with the service stopped.
+## 6. Rollback / removal
+- Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
+- Remove hubd (leaves Dewey, the KB and the lane dirs untouched): `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. It keeps `/var/lib/hubd`, the env file and the user; `uninstall --purge` removes them too (stop first and `hubd export --data-dir /var/lib/hubd --out hub.tar` if the state matters).
+- No ACLs were set, so nothing in Dewey's tree needs undoing. Pre-created lane dirs are empty and harmless.

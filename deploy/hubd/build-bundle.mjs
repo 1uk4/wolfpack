@@ -23,7 +23,8 @@ await esbuild.build({
 	format: "esm",
 	target: "node22",
 	// CJS deps (ws, yaml, qrcode-terminal) need require() inside an ESM bundle.
-	banner: { js: "#!/usr/bin/env node\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+	banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+	external: ["bufferutil", "utf-8-validate"], // optional native ws addons; ws falls back to plain JS
 	logLevel: "info",
 });
 copyFileSync(path.join(here, "RUNBOOK.md"), path.join(out, "RUNBOOK.md"));

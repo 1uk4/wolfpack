@@ -100,7 +100,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       log(`[workerd] sandbox ${sandboxRoot}: no shared work server: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  const supervisor = new Supervisor({ ...opts, wolves, log });
+  // Link-only never spawns; a placeholder command also keeps the Supervisor from resolving @wolfpack/harness (absent in the single-file bundle).
+  const supervisor = new Supervisor({ ...opts, ...(linkOnly ? { command: opts.command ?? ["/bin/false"] } : {}), wolves, log });
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
   const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
   const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));

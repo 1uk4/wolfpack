@@ -69,6 +69,8 @@ export interface KbRevisionsOptions {
   pollMs?: number;
   /** Runs `fn` on the KB writer queue; used by the poll timer. */
   exclusive?: <T>(fn: () => T) => Promise<T | undefined>;
+  /** Called (queue-side, after the new revision is durable) whenever a domain's revision advanced. Must not throw into the caller; errors are swallowed. */
+  onRevision?: (domain: string, rev: number, epoch: string) => void;
 }
 
 const utf8 = (buf: Buffer): string | undefined => {
@@ -322,6 +324,11 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
       doms.delete(d);
       rotateNext.add(d);
       throw e;
+    }
+    try {
+      opts.onRevision?.(d, s.rev, s.epoch);
+    } catch {
+      /* a notification hook never affects recording */
     }
     return rows.length;
   }

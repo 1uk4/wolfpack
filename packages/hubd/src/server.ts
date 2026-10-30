@@ -292,7 +292,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     settleMs: opts.kbSettleMs,
     pollMs: opts.kbPollMs,
     exclusive: (fn) => kbWriter!.exclusive(fn),
+    onRevision: (d, rev, epoch) => linkRef?.pushKbChanged(d, rev, epoch),
   });
+  let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({
     roots,
@@ -478,6 +480,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       faults: opts.linkFaults,
     });
     link = createLink({ authenticate, registry, timers: opts.linkTimers, onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
+    linkRef = link;
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
     relay = createRelay({ link, registry, bodyTimeoutMs: opts.bodyTimeoutMs });
     revokeListeners.add((id) => link.closeByToken(id));

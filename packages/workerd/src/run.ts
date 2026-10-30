@@ -6,8 +6,9 @@ import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } f
 import { Outbox, writeReceiptFile } from "./outbox.js";
 import { dirname, join } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
-import type { LinkWolf } from "@wolfpack/protocol";
+import type { LinkWelcome, LinkWolf } from "@wolfpack/protocol";
 import { WorkerRelay } from "./relay.js";
+import { KbSync } from "./kb-sync.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
@@ -33,6 +34,10 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   outboxDir?: string;
   /** Test seam: resend overdue contribution acks after this long, ms. */
   ackTimeoutMs?: number;
+  /** Where the hub-synced KB mirror lives (side by side with the Syncthing KB, never inside it). Default `<configDir>/kb-mirror`. */
+  kbMirrorDir?: string;
+  /** Test seams for the KB sync. */
+  kbSync?: { baseMs?: number; capMs?: number; pollMs?: number };
 }
 
 export interface RunningWorkerd {
@@ -40,6 +45,8 @@ export interface RunningWorkerd {
   supervisor: Supervisor;
   /** The hub link, when paired. */
   link?: HubLink;
+  /** The hub KB mirror sync, when paired. */
+  kbSync?: KbSync;
   server: WorkerdServer;
   /** Discovery problems (broken wolf.yaml files), already logged. */
   errors: string[];
@@ -70,6 +77,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
   const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
   let link: HubLink | undefined;
+  let kbSync: KbSync | undefined;
   let wake: { stop(): void } | undefined;
   let serverUrl = "";
   const relay = new WorkerRelay({ baseUrl: () => serverUrl, send: (f, written) => link?.sendFrame(f, written) ?? false });
@@ -78,8 +86,26 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     if (warning) log(`[workerd] ${warning}`);
     const kbOps = opts.kbOps ?? process.env.KB_OPS ?? join(dirname(root), "librarian");
     const outbox = new Outbox(opts.outboxDir ?? join(opts.configDir ?? workerdConfigDir(), "outbox"));
+    // The subscribed set is the union of the wolves' domains; the hub registry decides, so a wolf whose wolf.yaml differs
+    // from the grant uses the granted list (from the last welcome), and retired wolves contribute nothing.
+    let welcome: LinkWelcome | undefined;
+    kbSync = new KbSync({
+      hubUrl: hubCfg.hubUrl,
+      token: hubCfg.token,
+      mirrorDir: opts.kbMirrorDir ?? join(opts.configDir ?? workerdConfigDir(), "kb-mirror"),
+      domains: () => {
+        const granted = new Map((welcome?.domainMismatch ?? []).map((m) => [m.wolf, m.granted] as const));
+        const retired = new Set(welcome?.retired ?? []);
+        return [...new Set(supervisor.configs().filter((c) => !retired.has(c.identity.name)).flatMap((c) => granted.get(c.identity.name) ?? c.identity.domains))];
+      },
+      log,
+      ...opts.kbSync,
+    });
     link = new HubLink({
       ...hubCfg,
+      kbRevisions: () => kbSync!.revisions(),
+      onWelcome: (w) => ((welcome = w), kbSync!.refresh()),
+      onKbChanged: (d, rev, epoch) => kbSync!.notify(d, rev, epoch),
       outbox,
       ackTimeoutMs: opts.ackTimeoutMs,
       onReceipt: (r) => {
@@ -94,7 +120,12 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       onRetired: (names) => log(`[workerd] hub retired wolves: ${names.join(", ")}`),
       ...opts.linkOptions,
     });
-    supervisor.onChange((e) => (e.type === "add" ? link!.wolfAdded(linkWolf(e.config)) : link!.wolfRemoved(e.name)));
+    supervisor.onChange((e) => {
+      if (e.type === "add") link!.wolfAdded(linkWolf(e.config));
+      else link!.wolfRemoved(e.name);
+      kbSync!.refresh();
+    });
+    kbSync.start();
     wake = startWakeMonitor({ ...opts.wake, onWake: (reason) => (log(`[workerd] ${reason}: reconnecting hub link`), link!.kick()) });
   }
   const server = new WorkerdServer({
@@ -109,10 +140,12 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     url,
     supervisor,
     link,
+    kbSync,
     server,
     errors,
     async close() {
       wake?.stop();
+      kbSync?.stop();
       await link?.stop();
       await server.close();
       await supervisor.stop();

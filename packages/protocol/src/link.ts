@@ -93,6 +93,13 @@ export const LinkSleepSchema = z.object({ t: z.literal("sleep") });
 export const LinkByeSchema = z.object({ t: z.literal("bye") });
 export const LinkErrorSchema = z.object({ t: z.literal("error"), code: LinkErrorCodeSchema, message: z.string().optional() });
 
+/**
+ * Hub -> worker hint (additive, link protocol 1): domain `domain` reached revision `rev` under `epoch`. Sent only to hosts whose
+ * non-retired wolves (per the registry) subscribe to the domain. The worker pulls the data over HTTP (GET /v1/kb/domains/:d/changes);
+ * the frame carries no content and may be lost or coalesced: polling and sync-on-reconnect still converge.
+ */
+export const LinkKbChangedSchema = z.object({ t: z.literal("kb.changed"), domain: z.string().min(1).max(64), rev: z.number().int().nonnegative(), epoch: z.string().min(1).max(128) });
+
 // Relay frames.
 export const LinkReqSchema = z.object({
   t: z.literal("req"),
@@ -163,6 +170,7 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
   LinkSleepSchema,
   LinkByeSchema,
   LinkErrorSchema,
+  LinkKbChangedSchema,
   LinkReqSchema,
   LinkResSchema,
   LinkChunkSchema,
@@ -174,6 +182,7 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
 ]);
 export type LinkFrame = z.infer<typeof LinkFrameSchema>;
 export type LinkHello = z.infer<typeof LinkHelloSchema>;
+export type LinkKbChanged = z.infer<typeof LinkKbChangedSchema>;
 export type LinkWelcome = z.infer<typeof LinkWelcomeSchema>;
 
 export type ParsedFrame = { ok: true; frame: LinkFrame } | { ok: false; reason: string };

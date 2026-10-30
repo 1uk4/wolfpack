@@ -1,7 +1,7 @@
 /** In-process link harness: a real hubd (port 0, small timers), a real workerd with the fake wolf, and an HttpConsoleClient. */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { WebSocket as WsClient } from "ws";
 import { HttpConsoleClient } from "@wolfpack/client";
 import { createHubServer, createTokenStore, type HubServer } from "@wolfpack/hubd";
@@ -43,6 +43,15 @@ export interface LinkRig {
   startHub(): Promise<void>;
   /** Close workerd and start a new one with the same outbox/config (a worker restart). */
   restartWorkerd(): Promise<void>;
+  /** Where workerd mirrors the hub KB. */
+  kbMirrorDir: string;
+  /** Write a file into the hub's KB domain folder like Dewey does (backdated), then scan so it becomes a revision. */
+  kbWrite(domain: string, path: string, text: string): Promise<void>;
+  kbRemove(domain: string, path: string): Promise<void>;
+  /** Operator: set the registry's granted domains for a wolf. */
+  grant(wolf: string, domains: string[]): Promise<void>;
+  /** A mirrored file's text, or undefined. */
+  mirrored(domain: string, path: string): string | undefined;
   close(): Promise<void>;
 }
 export interface RawLink {
@@ -67,6 +76,16 @@ export interface LinkRigOptions {
   hubOptions?: Partial<Parameters<typeof createHubServer>[0]>;
   ackTimeoutMs?: number;
   linkOptions?: { retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
+  /** Registry domains created up front (the registry must know a domain before a wolf can be granted it). */
+  kbDomains?: string[];
+  /** Registry-granted domains per wolf (operator side). */
+  grants?: Record<string, string[]>;
+  /** `domains:` written into each wolf's wolf.yaml (what the worker reports). Default: the grants. */
+  wolfDomains?: Record<string, string[]>;
+  /** KB sync timing seams. */
+  kbSync?: { baseMs?: number; capMs?: number; pollMs?: number };
+  /** Reuse a mirror dir (restart tests). */
+  kbMirrorDir?: string;
 }
 
 const KEY = "rig-legacy-key-0123456789";
@@ -80,7 +99,7 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const kbOps = join(ops, "worker", "librarian");
   const outboxDir = join(ops, "worker", "outbox");
   mkdirSync(receiptsRoot, { recursive: true });
-  const hubOpts = { dataDir, apiKey: KEY, port: 0, authPollMs: 30, inboxRoot, receiptsRoot, receiptPollMs: 40, receiptAckTimeoutMs: 300, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 }, ...o.hubOptions };
+  const hubOpts = { dataDir, apiKey: KEY, port: 0, authPollMs: 30, kbPollMs: 0, kbSettleMs: -1, inboxRoot, receiptsRoot, receiptPollMs: 40, receiptAckTimeoutMs: 300, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 }, ...o.hubOptions };
   const hub = await createHubServer(hubOpts);
   const hubPort = hub.port;
   const store = createTokenStore(dataDir);
@@ -90,15 +109,28 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   };
   const op = { "X-API-Key": KEY, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
   await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name: "wolfpack" }) });
+  for (const name of o.kbDomains ?? []) await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name }) });
   const { token, tokenId } = mintWorker();
   const wolfNames = o.wolves ?? ["alpha"];
   const { root } = makeWolves(...wolfNames);
+  const kbMirrorDir = o.kbMirrorDir ?? mkdtempSync(join(tmpdir(), "link-rig-mirror-"));
+  for (const n of wolfNames) {
+    const ds = o.wolfDomains?.[n] ?? o.grants?.[n] ?? [];
+    if (ds.length) writeFileSync(join(root, n, "wolf.yaml"), `name: ${n}\ndomains: [${ds.join(", ")}]\nserve:\n  socket: ${join(root, `${n}.sock`)}\n`);
+  }
   // The operator pre-registers wolves; a worker cannot create them.
   const registerWolf = async (name: string) => {
     const r = await fetch(`${hub.url}/v1/registry/wolves`, { method: "POST", headers: op, body: JSON.stringify({ name, domains: [] }) });
     if (!r.ok) throw new Error(`pre-register ${name} failed: ${r.status}`);
   };
   for (const n of [...wolfNames, ...(o.preRegister ?? [])]) await registerWolf(n);
+  const grant = async (wolf: string, domains: string[]) => {
+    const r = await fetch(`${hub.url}/v1/registry/wolves/${wolf}`, { method: "PATCH", headers: op, body: JSON.stringify({ domains }) });
+    if (!r.ok) throw new Error(`grant ${wolf} failed: ${r.status} ${await r.text()}`);
+  };
+  for (const [w, ds] of Object.entries(o.grants ?? {})) await grant(w, ds);
+  const kbFile = (d: string, p: string) => join(dataDir, "kb", "base", "domains", d, ...p.split("/"));
+  let bump = 0;
   const logs: string[] = [];
   const startWorkerd = (url: string) =>
     runWorkerd({
@@ -108,6 +140,8 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       laptop: o.laptop,
       hub: o.noHub ? false : { hubUrl: url, token, hostId },
       linkOptions: { baseMs: 20, capMs: 200, rand: () => 0.5, retryBaseMs: 20, ...o.linkOptions },
+      kbMirrorDir,
+      kbSync: { baseMs: 20, capMs: 200, pollMs: 0, ...o.kbSync },
       wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
       kbOps,
       outboxDir,
@@ -154,6 +188,27 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       await rig.workerd.close();
       rig.workerd = await startWorkerd(rig.hub.url);
     },
+    kbMirrorDir,
+    grant,
+    async kbWrite(d, p, text) {
+      const f = kbFile(d, p);
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, text);
+      const t = (Date.now() - 3_600_000 + ++bump * 1000) / 1000;
+      utimesSync(f, t, t);
+      await hub.scanKb({ settle: false });
+    },
+    async kbRemove(d, p) {
+      rmSync(kbFile(d, p), { force: true });
+      await hub.scanKb({ settle: false });
+    },
+    mirrored(d, p) {
+      try {
+        return readFileSync(join(kbMirrorDir, d, ...p.split("/")), "utf8");
+      } catch {
+        return undefined;
+      }
+    },
     async eventually(cond, what, ms = 5000) {
       const end = Date.now() + ms;
       while (!(await cond())) {
@@ -186,6 +241,7 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       rmSync(dataDir, { recursive: true, force: true });
       rmSync(ops, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
+      if (!o.kbMirrorDir) rmSync(kbMirrorDir, { recursive: true, force: true });
     },
   };
   return rig;

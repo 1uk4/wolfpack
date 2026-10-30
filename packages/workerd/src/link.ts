@@ -7,7 +7,7 @@
  * for "replaced") until a welcome arrives.
  */
 import WebSocket from "ws";
-import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWolf } from "@wolfpack/protocol";
+import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWelcome, type LinkWolf } from "@wolfpack/protocol";
 import type { Outbox } from "./outbox.js";
 
 export type LinkState = "idle" | "connecting" | "online" | "backoff" | "incompatible" | "unauthorized" | "replaced" | "stopped";
@@ -32,6 +32,10 @@ export interface HubLinkOptions {
   connectTimeoutMs?: number;
   /** The welcome must arrive within this after the socket opens. Default 10s. */
   welcomeTimeoutMs?: number;
+  /** Called with every welcome (also after reconnects). */
+  onWelcome?: (w: LinkWelcome) => void;
+  /** Called with each kb.changed hint pushed by the hub. */
+  onKbChanged?: (domain: string, rev: number, epoch: string) => void;
   /** Called with the welcome's retired wolf names. */
   onRetired?: (names: string[]) => void;
   /** Called with the welcome's rejected wolf names (unknown to the hub, or owned by another host). */
@@ -336,6 +340,7 @@ export class HubLink {
         this.o.onDomainMismatch?.(f.domainMismatch);
       }
       this.syncDiff();
+      this.o.onWelcome?.(f);
       this.inflight.clear(); // a new connection: everything unacked is replayed (the hub dedups on the idempotency id)
       this.flushOutbox();
       if (this.resendTimer) clearInterval(this.resendTimer);
@@ -371,6 +376,8 @@ export class HubLink {
       } catch (e) {
         this.log(`could not write receipt ${JSON.stringify(f.name.slice(0, 80))} for ${JSON.stringify(f.wolf.slice(0, 64))}: ${(e as Error).message}`); // no ack: the hub resends
       }
+    } else if (f.t === "kb.changed") {
+      this.o.onKbChanged?.(f.domain, f.rev, f.epoch);
     } else if (f.t === "ping") {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeLinkFrame({ t: "pong", n: f.n }));
     } else if (f.t === "req" || f.t === "cancel" || f.t === "pause" || f.t === "resume") {

@@ -75,6 +75,11 @@ export interface Link {
   onPresence(l: PresenceListener): () => void;
   /** Send a frame to the host's live link. False when the host has no live link. */
   sendToHost(hostId: string, frame: LinkFrame): boolean;
+  /**
+   * Hint every connected host with a non-retired wolf subscribed to `domain` (per the registry) that the domain moved to `rev`.
+   * Returns the host ids notified. Hosts outside the union never get the frame.
+   */
+  pushKbChanged(domain: string, rev: number, epoch: string): string[];
   /** Resolves the wolf's host from the registry and sends. */
   sendToWolf(wolf: string, frame: LinkFrame): boolean;
   /** Identity of the host's live link (changes on every reconnect); undefined when there is none. */
@@ -319,6 +324,20 @@ export function createLink(opts: LinkOptions): Link {
     return true;
   }
 
+  function pushKbChanged(domain: string, rev: number, epoch: string): string[] {
+    const hosts = new Set<string>();
+    try {
+      for (const w of opts.registry.list("wolves") as { host?: string; domains?: string[]; status?: string }[]) {
+        if (w.host && w.status !== "retired" && (w.domains ?? []).includes(domain)) hosts.add(w.host);
+      }
+    } catch {
+      return [];
+    }
+    const sent: string[] = [];
+    for (const h of hosts) if (sendToHost(h, { t: "kb.changed", domain, rev, epoch })) sent.push(h);
+    return sent;
+  }
+
   return {
     handleUpgrade(req, socket, head) {
       socket.on("error", () => {});
@@ -357,6 +376,7 @@ export function createLink(opts: LinkOptions): Link {
     sendToHost,
     epoch: (hostId) => byHost.get(hostId)?.epoch,
     relayHeadTimeoutMs: t.relayHeadTimeoutMs,
+    pushKbChanged,
     sendToWolf(wolf, frame) {
       try {
         const host = (opts.registry.get("wolves", wolf) as { host?: string }).host;

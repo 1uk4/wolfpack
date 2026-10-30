@@ -2,11 +2,15 @@
 /** hubd CLI: `hubd serve` and `hubd dev`. The API key comes from env HUBD_API_KEY only (never argv, never logged). */
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { exportHub, importHub } from "./export.js";
 import { createHubServer } from "./server.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
-  command: "serve" | "dev";
+  command: "serve" | "dev" | "export" | "import";
+  /** export: output tar. import: input tar. */
+  out?: string;
+  in?: string;
   dataDir?: string;
   port: number;
   host: string;
@@ -29,12 +33,14 @@ const USAGE = `usage:
   hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
   hubd dev --snapshot <host> [--data-dir <dir>] [--port N] [--allow-network]    pull a read-only copy of <host>, then serve it
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
+  hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped)
+  hubd import --data-dir <dir> --in <file.tar>                restore into a missing or empty dir
 env: HUBD_API_KEY (required, >= 16 chars)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
 
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest] = argv;
-  if (command !== "serve" && command !== "dev") throw new Error(USAGE);
+  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import") throw new Error(USAGE);
   const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [] };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
@@ -46,6 +52,8 @@ export function parseArgs(argv: string[]): CliArgs {
     if (flag === "--data-dir") out.dataDir = val();
     else if (flag === "--seed-domains") out.seedDomains = val();
     else if (flag === "--seed-wolf") out.seedWolves.push(val());
+    else if (flag === "--out" && command === "export") out.out = val();
+    else if (flag === "--in" && command === "import") out.in = val();
     else if (flag === "--host") out.host = val();
     else if (flag === "--snapshot" && command === "dev") out.snapshot = val();
     else if (flag === "--allow-network" && command === "dev") out.allowNetwork = true;
@@ -56,6 +64,8 @@ export function parseArgs(argv: string[]): CliArgs {
       out.port = p;
     } else throw new Error(`unknown argument ${flag}\n${USAGE}`);
   }
+  if (command === "export" && (!out.dataDir || !out.out)) throw new Error("export requires --data-dir and --out");
+  if (command === "import" && (!out.dataDir || !out.in)) throw new Error("import requires --data-dir and --in");
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
   if (command === "dev" && !out.snapshot && !out.dataDir) throw new Error("dev requires --snapshot <host> or --data-dir <existing snapshot>");
   if (command === "dev" && !isLoopback(out.host) && !out.allowNetwork) throw new Error(`refusing to bind dev mode (production data copy) to non-loopback host ${out.host} without --allow-network`);
@@ -64,6 +74,16 @@ export function parseArgs(argv: string[]): CliArgs {
 
 export async function main(argv: string[], env = process.env, log: (m: string) => void = console.log) {
   const args = parseArgs(argv);
+  if (args.command === "export") {
+    const { manifest, skipped } = exportHub({ dataDir: args.dataDir!, out: args.out! });
+    log(`hubd export: ${args.out} (${manifest.files.length} files, work events ${manifest.lastEventSequence}, kb ledger lines ${manifest.kbLedgerLines})${skipped.length ? `; not exported: ${skipped.join(", ")}` : ""}`);
+    return;
+  }
+  if (args.command === "import") {
+    const manifest = importHub({ dataDir: args.dataDir!, in: args.in! });
+    log(`hubd import: ${args.dataDir} (${manifest.files.length} files verified, work events ${manifest.lastEventSequence})`);
+    return;
+  }
   const apiKey = env.HUBD_API_KEY;
   if (!apiKey) throw new Error("HUBD_API_KEY is not set");
   if (apiKey.length < MIN_KEY_LENGTH) throw new Error(`HUBD_API_KEY must be at least ${MIN_KEY_LENGTH} characters`);

@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { seedFixture, FIXTURE_DOMAIN } from "./testing/fixture.js";
 import { main, parseArgs } from "./cli.js";
 import { createTokenStore, PAIRING_TTL_MS, tryBreakStaleLock } from "./auth.js";
@@ -14,6 +13,8 @@ let clock = Date.now();
 let featureId = "";
 let hub: HubServer;
 let store: ReturnType<typeof createTokenStore>;
+// The removed actor header, kept only so the negative tests can forge it: hubd must ignore it (it is no longer exported from @wolfpack/protocol).
+const ACTOR_HEADER = "X-Wolfpack-Actor";
 const OLD_KEY = "legacy-key-0123456789"; // what the removed shared key looked like: must never authenticate
 const CON = { kind: "console" } as const;
 const asOp = JSON.stringify({ id: "forged-operator", kind: "operator" });

@@ -41,15 +41,31 @@ export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleC
  */
 export type RequestToken = () => Promise<string | null | undefined>;
 
+/** Next's "called outside a request scope" error (the only failure that means "no request"). */
+export const isOutsideRequestScope = (e: unknown): boolean => e instanceof Error && /was called outside a request scope/.test(e.message);
+
+/** `getHeaders` is Next's `headers()` (injected for tests). Fails CLOSED: only the outside-a-request error is `undefined`; any other failure is `null` (-> 401). */
+export function makeRequestToken(getHeaders: () => Promise<Headers>): RequestToken {
+	return async () => {
+		let h: Headers;
+		try {
+			h = await getHeaders();
+		} catch (e) {
+			return isOutsideRequestScope(e) ? undefined : null;
+		}
+		return bearerOf(h.get("authorization")) ?? null;
+	};
+}
+
 export const nextRequestToken: RequestToken = async () => {
-	let h: Headers;
+	let getHeaders: () => Promise<Headers>;
 	try {
 		const { headers } = await import("next/headers");
-		h = await headers();
+		getHeaders = async () => headers();
 	} catch {
-		return undefined; // outside a request (headers() throws)
+		return null; // cannot even load Next's request API: do not assume "no request"
 	}
-	return bearerOf(h.get("authorization")) ?? null;
+	return makeRequestToken(getHeaders)();
 };
 
 /** A hub authentication failure as the routes see it: a ProtocolError(unauthorized) tagged `hubAuth`, which memory-api answers 401 + X-Wolfpack-Hub-Auth. */

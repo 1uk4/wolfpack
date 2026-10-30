@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { bearerOf, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
 import { createMemoryApi } from "../src/server/memory-api.ts";
-import { createConsoleClient } from "../src/server/console-client.ts";
+import { createConsoleClient, makeRequestToken, nextRequestToken } from "../src/server/console-client.ts";
 
 const mem = (): TokenStorage & { m: Map<string, string> } => {
 	const m = new Map<string, string>();
@@ -120,5 +120,46 @@ describe("server: forwarded token", () => {
 		} finally {
 			hub.close();
 		}
+	});
+	for (const [label, body] of [["a valid envelope", JSON.stringify({ code: "unauthorized", message: "missing or invalid bearer token", retryable: false })], ["a bare non-envelope body", "nope"], ["an empty body", ""]] as const) {
+		it(`a hub 401 with ${label} reaches the route as 401 + marker (not 5xx) for listWork and getWorkRecord`, async () => {
+			const hub = createServer((_req, res) => {
+				res.writeHead(401, { "Content-Type": "application/json" });
+				res.end(body);
+			});
+			await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
+			try {
+				const url = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+				const c = createConsoleClient({ WOLFPACK_HUB_URL: url }, async () => "revoked");
+				const api = createMemoryApi(() => c);
+				for (const res of [await api.workList("w", "d", false), await api.workRecord("w", "id")]) {
+					assert.equal(res.status, 401);
+					assert.equal(res.headers.get(HUB_AUTH_HEADER), "required");
+				}
+			} finally {
+				hub.close();
+			}
+		});
+	}
+});
+
+describe("request token fails closed", () => {
+	const h = (auth?: string) => async () => new Headers(auth ? { authorization: auth } : {});
+	it("header -> token; request without header -> null", async () => {
+		assert.equal(await makeRequestToken(h("Bearer abc"))(), "abc");
+		assert.equal(await makeRequestToken(h())(), null);
+	});
+	it("only the outside-a-request error means no scope (undefined); any other failure is null", async () => {
+		const outside = async (): Promise<Headers> => {
+			throw new Error("`headers` was called outside a request scope. Read more: x");
+		};
+		const other = async (): Promise<Headers> => {
+			throw new Error("something else broke");
+		};
+		assert.equal(await makeRequestToken(outside)(), undefined);
+		assert.equal(await makeRequestToken(other)(), null);
+	});
+	it("real next/headers outside a request is undefined", async () => {
+		assert.equal(await nextRequestToken(), undefined);
 	});
 });

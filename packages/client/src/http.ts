@@ -521,6 +521,11 @@ export class HttpConsoleClient implements ConsoleClient {
         ...(hubRoute && !this.hub!.token && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
+    if (hubRoute && res.status === 401) {
+      // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.
+      const err = await this.toError(res, threadId);
+      throw err instanceof ProtocolError && err.code === "unauthorized" ? err : new ProtocolError("unauthorized", err instanceof Error && err.message ? err.message : "hub rejected the token (HTTP 401)", false);
+    }
     throw await this.toError(res, threadId);
   }
 

@@ -43,6 +43,7 @@ import {
 } from "./schemas.js";
 
 import * as R from "./registry.js";
+import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
@@ -366,6 +367,14 @@ export const ROUTES = {
    * replays from a bounded buffer, or answers `resync` when the cursor is older than the buffer (or from another hub boot).
    * Keepalive comments; never ends with `[DONE]`.
    */
+  /**
+   * KB commit (hubd): a batch of create/update/delete changes to entries/*.md, _registry.md, _digest.json and INDEX.md of declared
+   * domains, each with contentHash and prevHash. All-or-nothing under the KB writer lock: entry schema, declared domain (domains.yaml),
+   * path confinement, and prevHash compare-and-set (409 `conflict`, `details.path`, on a stale write). Then it writes the files,
+   * appends the KB ledger (ledger/events.jsonl) and emits `kb.changed` per domain. 400 `invalid_request`, 403 `forbidden` for a wolf
+   * actor. Body cap 8 MiB. Actor: operator over HTTP (X-Wolfpack-Actor required); the curator (system) uses the in-process hub.commitKb.
+   */
+  hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
   hubEvents: { scope: "hub", method: "GET", path: "/v1/events", response: { kind: "sse", event: HubEventSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a

@@ -11,6 +11,8 @@ export interface HubSuiteOptions {
   record: () => { id: string; title: string; kind: string };
   /** Run the "no/wrong key is 401" checks (the server enforces auth). Default true. */
   auth?: boolean;
+  /** Run the "kb commits" group (`domain` must be declared in the hub's domains.yaml). Default true. */
+  kbCommits?: boolean;
 }
 
 /**
@@ -201,6 +203,46 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         const res = await send("POST", buildPath("hubGraduateWork", { id: g.id }));
         expect(res.status).toBe(200);
         expect(((await res.json()) as { item: { graduated?: string } }).item.graduated).toBeTruthy();
+      });
+    });
+
+    describe.runIf(options.kbCommits !== false)("kb commits", () => {
+      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
+      const wolf = { "X-Wolfpack-Actor": JSON.stringify({ id: "w1", kind: "wolf" }) };
+      const sha = (t: string) => "sha256:" + createHash("sha256").update(t, "utf-8").digest("hex");
+      const post = (body: unknown, actor: Record<string, string> | undefined = op) =>
+        fetch(baseUrl() + buildPath("hubKbCommit"), { method: "POST", headers: { "Content-Type": "application/json", ...options.headers, ...actor }, body: JSON.stringify(body) });
+      const entryId = () => `kb-${options.domain}-${randomBytes(4).toString("hex").slice(0, 7)}`;
+      const entry = (id: string, title: string) => `---\nid: ${id}\ntitle: "${title}"\ndomain: ${options.domain}\n---\n\n# ${title}\n\nBody.\n`;
+
+      it("commits a create then an update, and a stale prevHash is a 409 conflict", async () => {
+        const id = entryId();
+        const v1 = entry(id, "One");
+        const path = `entries/${id}.md`;
+        const res = await post({ changes: [{ op: "create", domain: options.domain, path, content: v1, contentHash: sha(v1), prevHash: null }] });
+        expect(res.status).toBe(200);
+        expect(ROUTES.hubKbCommit.response.schema.parse(await res.json())).toMatchObject({ committed: 1, entryIds: [id], domains: [options.domain] });
+        const v2 = entry(id, "Two");
+        const upd = (prev: string) => ({ changes: [{ op: "update", domain: options.domain, path, content: v2, contentHash: sha(v2), prevHash: sha(prev) }] });
+        await expectError(await post(upd("not the current content")), "conflict");
+        expect((await post(upd(v1))).status).toBe(200);
+      });
+
+      it("rejects an invalid entry, an undeclared domain and an escaping path (400)", async () => {
+        const id = entryId();
+        const bad = (c: Record<string, unknown>) => post({ changes: [{ op: "create", domain: options.domain, path: `entries/${id}.md`, prevHash: null, ...c }] });
+        const text = "no frontmatter";
+        await expectError(await bad({ content: text, contentHash: sha(text) }), "invalid_request");
+        const ok = entry(id, "X");
+        await expectError(await bad({ content: ok, contentHash: sha(ok), domain: "no-such-domain-x" }), "invalid_request");
+        await expectError(await bad({ content: ok, contentHash: sha(ok), path: "../escape.md" }), "invalid_request");
+        await expectError(await bad({ content: ok, contentHash: sha("other") }), "invalid_request");
+      });
+
+      it("a wolf actor is forbidden (403), a missing actor is invalid_request", async () => {
+        const body = { changes: [{ op: "create", domain: options.domain, path: "INDEX.md", content: "x", contentHash: sha("x"), prevHash: null }] };
+        await expectError(await post(body, wolf), "forbidden");
+        await expectError(await post(body, {}), "invalid_request");
       });
     });
 

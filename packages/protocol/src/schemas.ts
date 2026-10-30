@@ -37,6 +37,8 @@ export const ErrorCodeSchema = z.enum([
   "preview_stale",
   /** Hub claim: the item (or its feature) is held by another wolf; `details.holder` names it. */
   "conflict",
+  /** The actor is authenticated but not allowed this operation (e.g. a wolf committing to the KB). */
+  "forbidden",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -66,6 +68,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   not_ready: 409,
   preview_stale: 409,
   conflict: 409,
+  forbidden: 403,
 };
 
 // ---------------------------------------------------------------- cards

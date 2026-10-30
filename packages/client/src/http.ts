@@ -18,6 +18,8 @@ import {
   type ThreadSettingsPatch,
   type ThreadSettingsResponse,
   type RouteName,
+  type KbCommitRequest,
+  type KbCommitResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -419,6 +421,12 @@ export class HttpConsoleClient implements ConsoleClient {
   async claimWork(workId: string): Promise<WorkItemResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "claimWork needs a hub client", false);
     return (await this.json("hubClaimWork", { id: workId }, ROUTES.hubClaimWork.response.schema)) as WorkItemResponse;
+  }
+
+  /** Hub only: commit a KB batch (operator actor; the hub's all-or-nothing POST /v1/kb/commits). 409 `conflict` on a stale prevHash. */
+  async commitKb(req: KbCommitRequest): Promise<KbCommitResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "commitKb needs a hub client", false);
+    return (await this.json("hubKbCommit", {}, ROUTES.hubKbCommit.response.schema, req)) as KbCommitResponse;
   }
 
   async releaseWork(workId: string): Promise<WorkItemResponse> {

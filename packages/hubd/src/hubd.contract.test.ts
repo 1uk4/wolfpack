@@ -1,5 +1,5 @@
 /** The /v1 contract (transport checks) and the hub suite against a real hubd on port 0 with a temp, fixture-seeded data dir. */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll } from "vitest";
@@ -14,6 +14,8 @@ let url = "";
 let feature = { id: "", title: "", kind: "" };
 beforeAll(async () => {
   feature = seedFixture(dataDir).feature;
+  mkdirSync(join(dataDir, "kb", "base"), { recursive: true });
+  writeFileSync(join(dataDir, "kb", "base", "domains.yaml"), `domains:\n  ${FIXTURE_DOMAIN}:\n    label: Fixture\n`);
   hub = await createHubServer({ dataDir, apiKey: KEY, port: 0 });
   url = hub.url;
 });

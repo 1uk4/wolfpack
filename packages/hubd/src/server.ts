@@ -14,6 +14,10 @@ import {
   CreateWorkRequestSchema,
   PatchWorkBatchSchema,
   PatchWorkOpSchema,
+  KbCommitRequestSchema,
+  KB_COMMIT_BODY_LIMIT,
+  type KbCommitRequest,
+  type KbCommitResponse,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
@@ -43,6 +47,7 @@ import {
   type WorkAppendedListener,
 } from "./work-writes.js";
 import { createEventBus } from "./events.js";
+import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
@@ -83,6 +88,8 @@ export interface HubOptions {
   eventBufferSize?: number;
   /** Max concurrent GET /v1/events streams; beyond it a new one is refused with 409 `busy` (retryable). Default 128. */
   maxEventStreams?: number;
+  /** @internal TEST-ONLY: failure injection inside KB commits. */
+  kbFaults?: KbCommitFaults;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
@@ -93,6 +100,11 @@ export interface HubServer {
   onWorkAppended(listener: WorkAppendedListener): () => void;
   /** Publish a `kb.changed` event (entry ids, optional domain) to /v1/events subscribers; the KB commit path calls this. */
   emitKbChanged(entryIds: string[], domain?: string): void;
+  /**
+   * Commit a KB batch in-process (the curator child process, actor kind `system`, uses this; over HTTP only the operator may).
+   * Same validation, atomicity and kb.changed emission as POST /v1/kb/commits. A `wolf` actor rejects `forbidden`.
+   */
+  commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -209,6 +221,14 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
   sweepStageDirs(stageRoot(roots)); // scratch dirs orphaned by a crashed hubd (hub-owned <dataDir>/tmp, own prefix, dead pid)
+  const busRef = { emitKbChanged: (_ids: string[], _domain?: string): void => {} };
+  let kbWriter: ReturnType<typeof createKbWriter>;
+  try {
+    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => busRef.emitKbChanged(ids, domain), faults: opts.kbFaults });
+  } catch (e) {
+    writerLock.release();
+    throw e;
+  }
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
   const domainCache = new Map<string, string>(); // work item id -> domain
   const bus = createEventBus({
@@ -232,6 +252,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return out;
     },
   });
+  busRef.emitKbChanged = (ids, domain) => bus.emitKbChanged(ids, domain);
   writer.onAppended(({ events }) => {
     // `work.created` is the only ledger event that carries a domain; seed the cache from it so the fold is rarely needed.
     for (const e of events) if (typeof e.domain === "string") domainCache.set(e.id, e.domain);
@@ -365,6 +386,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const item = await writeWork(actor, () => unclaimItem(roots, params.id, actor));
           return send(res, 200, { item });
         }
+        case "hubKbCommit": {
+          const actor = writeActor(req); // `system` cannot be asserted, so over HTTP this is the operator; a wolf is 403 below
+          if (actor.kind !== "operator") throw new HubError("forbidden", "only the operator (or the in-process curator) may commit to the KB");
+          const body = parseBody(KbCommitRequestSchema, await readJson(req, { maxBytes: KB_COMMIT_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 200, await kbWriter.commit(actor, body));
+        }
         case "hubEvents": {
           const hdr = req.headers["last-event-id"];
           const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
@@ -404,6 +431,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
+    void kbWriter.close();
     writerLock.release();
     throw e;
   }
@@ -413,12 +441,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     port,
     url: `http://${host}:${port}`,
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
+    commitKb: (actor, req) => kbWriter.commit(actor, req),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
-        const drained = writer.close();
+        const drained = Promise.all([writer.close(), kbWriter.close()]).then(() => undefined);
         bus.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));

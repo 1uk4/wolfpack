@@ -514,3 +514,13 @@ export function matchRoute(method: string, pathname: string): RouteMatch | "meth
 export function buildPath(name: RouteName, params: Record<string, string> = {}): string {
   return ROUTES[name].path.replace(/:(\w+)/g, (_, k: string) => encodeURIComponent(params[k] ?? ""));
 }
+
+/** Which wolf a wolf-scoped /v1 request belongs to: the name in `wolves/:name/*`, or the prefix of the thread id `<wolf>/<rest>`. */
+export function wolfForRoute(params: Record<string, string>): string | undefined {
+  if (params.name !== undefined) return params.name;
+  if (params.id !== undefined) {
+    const i = params.id.indexOf("/");
+    return i > 0 ? params.id.slice(0, i) : undefined;
+  }
+  return undefined;
+}

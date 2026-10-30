@@ -35,6 +35,35 @@ describe("createConsoleClient", () => {
 	});
 });
 
+describe("WOLFPACK_HUB_RELAY (relay mode)", () => {
+	it("sends wolf-scoped requests and streams to the hub with the request's token; no request token is a hub-auth 401", async () => {
+		const seen: { url?: string; auth?: string }[] = [];
+		const hub = createServer((req, res) => {
+			seen.push({ url: req.url, auth: String(req.headers.authorization) });
+			if (req.url?.endsWith("/stream")) {
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				return void res.end("data: [DONE]\n\n");
+			}
+			res.setHeader("Content-Type", "application/json");
+			res.end(JSON.stringify({ threads: [] }));
+		});
+		await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
+		const url = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+		try {
+			const env = { WOLFPACK_HUB_URL: url, WOLFPACK_HUB_RELAY: "1", WOLFPACK_API_URL: "http://127.0.0.1:1" };
+			const c = createConsoleClient(env, async () => "tok-1");
+			assert.deepEqual(await c.listThreads("alpha"), []);
+			for await (const _ of c.watch("alpha/home")) void _;
+			assert.deepEqual(seen.map((s) => [s.url, s.auth]), [["/v1/wolves/alpha/threads", "Bearer tok-1"], ["/v1/threads/alpha%2Fhome/stream", "Bearer tok-1"]]);
+			const unpaired = createConsoleClient(env, async () => null);
+			await assert.rejects(unpaired.listThreads("alpha"), (e: Error & { hubAuth?: boolean }) => e.hubAuth === true);
+		} finally {
+			hub.closeAllConnections();
+			hub.close();
+		}
+	});
+});
+
 describe("composeWorkReads", () => {
 	it("answers work reads from the source, leaves the base unmutated, and keeps base methods bound to the base", async () => {
 		const base = new MockConsoleClient({ delayMs: 1 });

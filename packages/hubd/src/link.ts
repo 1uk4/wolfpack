@@ -1,8 +1,8 @@
 /**
  * Worker link: one WebSocket per host on GET /v1/link. Authenticates BEFORE upgrading (worker token with a hostId only; the legacy
  * key and console/browser tokens are refused), registers the host and its wolves from `hello`, tracks presence
- * (online / asleep / offline), and drops the link when its token is revoked. Relay frames are valid but not handled yet: they are
- * ignored until the relay ticket (no error is sent for them).
+ * (online / asleep / offline), and drops the link when its token is revoked. Relay frames from the worker (res/chunk/end/rerr) are
+ * handed to `onRelayFrame` (relay.ts); `onDown` fires when a registered link closes, so in-flight relayed requests fail.
  *
  * Wolves are pre-registered by the operator: a hello/wolf.add can only attach a known, unretired wolf that is unowned or already on
  * this host. Anything else is `rejected` (welcome.rejected / an error frame) and logged; nothing is created.
@@ -21,6 +21,7 @@ import {
   LINK_HELLO_TIMEOUT_MS,
   LINK_MAX_PAYLOAD,
   LINK_PROTOCOL_VERSION,
+  LINK_RELAY_HEAD_TIMEOUT_MS,
   encodeLinkFrame,
   linkCompatible,
   parseLinkFrame,
@@ -40,6 +41,8 @@ export interface LinkTimers {
   helloTimeoutMs: number;
   /** Asleep -> offline after this long without a reconnect. Default 12h. */
   asleepOfflineMs: number;
+  /** Relay: how long a tunnelled request may wait for the worker's `res` head. Default LINK_RELAY_HEAD_TIMEOUT_MS. */
+  relayHeadTimeoutMs: number;
 }
 
 export interface LinkOptions {
@@ -53,6 +56,10 @@ export interface LinkOptions {
     onContribute: (hostId: string, f: LinkContribute) => LinkContributeAck | Promise<LinkContributeAck>;
     onReceiptAck: (hostId: string, id: string) => void;
   };
+  /** A relay frame (res/chunk/end/rerr) arrived from a registered host's live link. */
+  onRelayFrame?: (hostId: string, epoch: number, frame: LinkFrame) => void;
+  /** A registered link (identified by its epoch) closed, for whatever reason (including being replaced). */
+  onDown?: (hostId: string, epoch: number) => void;
 }
 
 export type PresenceListener = (hostId: string, presence: LinkPresence) => void;
@@ -68,8 +75,11 @@ export interface Link {
   onPresence(l: PresenceListener): () => void;
   /** Send a frame to the host's live link. False when the host has no live link. */
   sendToHost(hostId: string, frame: LinkFrame): boolean;
-  /** Relay stub (next ticket): resolves the wolf's host from the registry and sends. */
+  /** Resolves the wolf's host from the registry and sends. */
   sendToWolf(wolf: string, frame: LinkFrame): boolean;
+  /** Identity of the host's live link (changes on every reconnect); undefined when there is none. */
+  epoch(hostId: string): number | undefined;
+  readonly relayHeadTimeoutMs: number;
 }
 
 interface Conn {
@@ -89,10 +99,13 @@ interface Conn {
   pingTimer?: NodeJS.Timeout;
   deadTimer?: NodeJS.Timeout;
   queue: Promise<void>;
+  epoch: number;
+  downNotified?: boolean;
 }
 
 export function createLink(opts: LinkOptions): Link {
-  const t: LinkTimers = { heartbeatMs: LINK_HEARTBEAT_MS, deadAfterMs: LINK_DEAD_AFTER_MS, helloTimeoutMs: LINK_HELLO_TIMEOUT_MS, asleepOfflineMs: LINK_ASLEEP_OFFLINE_MS, ...opts.timers };
+  const t: LinkTimers = { heartbeatMs: LINK_HEARTBEAT_MS, deadAfterMs: LINK_DEAD_AFTER_MS, helloTimeoutMs: LINK_HELLO_TIMEOUT_MS, asleepOfflineMs: LINK_ASLEEP_OFFLINE_MS, relayHeadTimeoutMs: LINK_RELAY_HEAD_TIMEOUT_MS, ...opts.timers };
+  let epochs = 0;
   const log = opts.log ?? ((m: string) => console.log(m));
   const wss = new WebSocketServer({ noServer: true, maxPayload: LINK_HELLO_MAX_PAYLOAD });
   const conns = new Set<Conn>();
@@ -157,6 +170,14 @@ export function createLink(opts: LinkOptions): Link {
   function onClose(c: Conn, code: number) {
     clearTimers(c);
     conns.delete(c);
+    if (c.hello && !c.downNotified) {
+      c.downNotified = true;
+      try {
+        opts.onDown?.(c.hostId, c.epoch);
+      } catch (e) {
+        log(`hubd: link ${c.hostId}: onDown failed: ${(e as Error).message}`);
+      }
+    }
     if (byHost.get(c.hostId) !== c) return; // replaced or never registered: presence belongs to the newer link
     byHost.delete(c.hostId);
     const laptop = c.hello?.laptop ?? false;
@@ -262,13 +283,18 @@ export function createLink(opts: LinkOptions): Link {
         return;
       case "receipt.ack":
         return opts.contributions?.onReceiptAck(c.hostId, f.id);
+      case "res":
+      case "chunk":
+      case "end":
+      case "rerr":
+        return opts.onRelayFrame?.(c.hostId, c.epoch, f);
       default:
-        return; // pong, and relay frames (next ticket): nothing to do
+        return; // pong, req/cancel (hub-originated only): nothing to do
     }
   }
 
   function connect(ws: WebSocket, id: AuthIdentity & { tokenId: string; hostId: string }) {
-    const c: Conn = { ws, tokenId: id.tokenId, hostId: id.hostId, sleeping: false, activeAt: 0, sleptAt: 0, bye: false, hubClosed: false, queue: Promise.resolve() };
+    const c: Conn = { ws, tokenId: id.tokenId, hostId: id.hostId, sleeping: false, activeAt: 0, sleptAt: 0, bye: false, hubClosed: false, queue: Promise.resolve(), epoch: ++epochs };
     conns.add(c);
     c.helloTimer = setTimeout(() => hubClose(c, LINK_CLOSE.noHello, "no hello"), t.helloTimeoutMs);
     c.helloTimer.unref();
@@ -329,6 +355,8 @@ export function createLink(opts: LinkOptions): Link {
       return () => void listeners.delete(l);
     },
     sendToHost,
+    epoch: (hostId) => byHost.get(hostId)?.epoch,
+    relayHeadTimeoutMs: t.relayHeadTimeoutMs,
     sendToWolf(wolf, frame) {
       try {
         const host = (opts.registry.get("wolves", wolf) as { host?: string }).host;

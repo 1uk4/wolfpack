@@ -60,7 +60,8 @@ import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
-import { LINK_PATH } from "@wolfpack/protocol";
+import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
+import { createRelay, type Relay } from "./relay.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
@@ -359,6 +360,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let linkContrib!: LinkContributions;
   const inboxRoot = opts.inboxRoot ?? contributionsRoot(opts.dataDir);
   const receiptsRoot = opts.receiptsRoot ?? join(roots.opsRoot, "receipts");
+  let relay!: Relay;
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
@@ -475,8 +477,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       seenMax: opts.linkSeenMax,
       faults: opts.linkFaults,
     });
-    link = createLink({ authenticate, registry, timers: opts.linkTimers, contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
+    link = createLink({ authenticate, registry, timers: opts.linkTimers, onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
+    relay = createRelay({ link, registry, bodyTimeoutMs: opts.bodyTimeoutMs });
     revokeListeners.add((id) => link.closeByToken(id));
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
       if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
@@ -558,8 +561,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           }
         }
         case "listWolves":
-          // The hub is not a wolf host. (The registry ticket makes this the pack's wolf list.)
-          return send(res, 200, { wolves: [] });
+          // The pack's wolf list from the registry: online when the owning host's link is online (asleep/offline hosts show offline; the relay names the state).
+          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired").map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");
@@ -672,8 +675,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         default: {
           const reg = registryRoute(m.name);
           if (reg) return registryDispatch(req, res, reg, params);
-          // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts, not the hub.
-          throw new HubError("not_found", `${m.name} is served by a wolf host, not the hub`);
+          // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts: tunnelled over the host's link (relay.ts).
+          // A worker token must not reach into any host's wolves; console/browser tokens (and the legacy key) may.
+          const wolf = wolfForRoute(params);
+          if (!wolf) throw new HubError("not_found", `no wolf in ${url.pathname}`);
+          if (identity && !identity.legacy && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot use the console relay");
+          return relay.handle(req, res, wolf);
         }
       }
     }

@@ -1,8 +1,11 @@
 /**
  * Hub <-> workerd link frames (one WebSocket per host, GET /v1/link). JSON text frames discriminated on `t`.
  * LINK_PROTOCOL_VERSION is separate from the HTTP PROTOCOL_VERSION; a MAJOR mismatch is rejected (close 4001).
- * Relay frames (req/res/chunk/end/cancel/rerr) are defined here for the relay ticket; nothing handles them yet.
- * Request ids are prefixed by the side that opened them: `h-` (hub) or `w-` (worker).
+ * Relay frames (req/res/chunk/end/cancel/rerr) tunnel the console's /v1 HTTP requests (SSE included) from the hub to a worker's local
+ * /v1 handler. Only the hub opens requests (ids `h-<n>`); a worker answers with res (head), chunk* (body, base64) and end, or rerr.
+ * `cancel` (hub -> worker) aborts a request whose HTTP client went away. Additive over the v1 frames: `req.body` and `chunk.enc`
+ * are optional, so a peer that never sends them is unchanged. A worker that does not know the relay ignores these frames.
+ * Request ids are prefixed by the side that opened them: `h-` (hub) or `w-` (worker; reserved, not used yet).
  */
 import { z } from "zod";
 
@@ -10,6 +13,14 @@ export const LINK_PROTOCOL_VERSION = 1;
 export const LINK_PATH = "/v1/link";
 /** Max frame size once the hello is accepted (before that: LINK_HELLO_MAX_PAYLOAD). */
 export const LINK_MAX_PAYLOAD = 8 * 1024 * 1024;
+/** Relay: max raw bytes per chunk frame (base64 grows it ~4/3; well below LINK_MAX_PAYLOAD). */
+export const LINK_RELAY_CHUNK_BYTES = 256 * 1024;
+/** Relay: max request body the hub tunnels (raw bytes). */
+export const LINK_RELAY_MAX_BODY = 2 * 1024 * 1024;
+/** Relay: no `res` head within this after `req` = the hub gives up (504) and sends `cancel`. */
+export const LINK_RELAY_HEAD_TIMEOUT_MS = 30_000;
+/** Relay: max concurrent tunnelled requests per host. */
+export const LINK_RELAY_MAX_INFLIGHT = 256;
 export const LINK_HELLO_TIMEOUT_MS = 10_000;
 export const LINK_HEARTBEAT_MS = 10_000;
 export const LINK_DEAD_AFTER_MS = 30_000;
@@ -67,7 +78,7 @@ export const LinkSleepSchema = z.object({ t: z.literal("sleep") });
 export const LinkByeSchema = z.object({ t: z.literal("bye") });
 export const LinkErrorSchema = z.object({ t: z.literal("error"), code: LinkErrorCodeSchema, message: z.string().optional() });
 
-// Relay frames (reserved; no handlers yet).
+// Relay frames.
 export const LinkReqSchema = z.object({
   t: z.literal("req"),
   id: Id,
@@ -75,9 +86,12 @@ export const LinkReqSchema = z.object({
   path: z.string().min(1),
   headers: z.record(z.string(), z.string()).default({}),
   wolf: z.string().optional(),
+  /** Additive: request body, base64 (at most LINK_RELAY_MAX_BODY raw bytes). Absent = no body. */
+  body: z.string().optional(),
 });
 export const LinkResSchema = z.object({ t: z.literal("res"), id: Id, status: z.number().int(), headers: z.record(z.string(), z.string()).default({}) });
-export const LinkChunkSchema = z.object({ t: z.literal("chunk"), id: Id, data: z.string(), seq: z.number().int().nonnegative() });
+/** `data` is base64 when `enc` is "b64" (what workerd sends; at most LINK_RELAY_CHUNK_BYTES raw), else UTF-8 text. */
+export const LinkChunkSchema = z.object({ t: z.literal("chunk"), id: Id, data: z.string(), seq: z.number().int().nonnegative(), enc: z.enum(["b64", "utf8"]).optional() });
 export const LinkEndSchema = z.object({ t: z.literal("end"), id: Id });
 export const LinkCancelSchema = z.object({ t: z.literal("cancel"), id: Id });
 export const LinkRerrSchema = z.object({ t: z.literal("rerr"), id: Id, code: z.string().min(1), message: z.string().optional() });

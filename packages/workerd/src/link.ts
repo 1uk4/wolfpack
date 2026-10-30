@@ -37,6 +37,10 @@ export interface HubLinkOptions {
   /** Called with the welcome's rejected wolf names (unknown to the hub, or owned by another host). */
   onRejected?: (names: string[]) => void;
   /** Called with the welcome's domain mismatches (informational; the hub registry decides domains). */
+  /** Relay: called for `req` / `cancel` frames from the hub. */
+  onRelay?: (f: Extract<LinkFrame, { t: "req" | "cancel" }>) => void;
+  /** Relay: called when the live socket closes or is retired (in-flight relayed requests must stop). */
+  onLinkDown?: () => void;
   onDomainMismatch?: (m: { wolf: string; reported: string[]; granted: string[] }[]) => void;
   /** Durable contribution outbox. Items are sent on every (re)connect and removed when the hub acks them. */
   outbox?: Outbox;
@@ -128,6 +132,7 @@ export class HubLink {
     this.retryAt = null;
     const ws = this.ws;
     this.ws = null;
+    this.o.onLinkDown?.();
     if (!ws) return;
     await new Promise<void>((resolve) => {
       const fin = setTimeout(resolve, 1000);
@@ -139,6 +144,14 @@ export class HubLink {
   /** Tell the hub the machine is about to sleep (when the OS gives notice). */
   sendSleep(): void {
     this.send({ t: "sleep" });
+  }
+  /** Send any frame on the live link (relay answers). False when not online. */
+  sendFrame(f: LinkFrame): boolean {
+    return this.send(f);
+  }
+  /** Bytes queued on the socket, for relay backpressure. */
+  bufferedAmount(): number {
+    return this.ws?.bufferedAmount ?? 0;
   }
   wolfAdded(w: LinkWolf): void {
     if (this.send({ t: "wolf.add", wolf: w })) this.sentWolves.set(w.name, JSON.stringify(w.domains));
@@ -228,6 +241,7 @@ export class HubLink {
     this.deadTimer = this.welcomeTimer = null;
     ws.removeAllListeners("message");
     ws.on("error", () => {});
+    this.o.onLinkDown?.();
     this.bye(ws);
   }
 
@@ -275,6 +289,7 @@ export class HubLink {
     });
     ws.on("close", (code) => {
       if (this.ws !== ws) return; // retired by kick()/stop()
+      this.o.onLinkDown?.();
       this.ws = null;
       this.clearTimers();
       if (this.stopped) return;
@@ -358,6 +373,8 @@ export class HubLink {
       }
     } else if (f.t === "ping") {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeLinkFrame({ t: "pong", n: f.n }));
+    } else if (f.t === "req" || f.t === "cancel") {
+      if (this.st === "online") this.o.onRelay?.(f);
     } else if (f.t === "error") {
       // Never overwrite a sticky reason; a rejected wolf.add is informational.
       if (!this.sticky() && f.code !== "rejected") this.detail = f.message ? `${f.code}: ${f.message}` : f.code;

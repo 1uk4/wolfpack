@@ -7,6 +7,7 @@ import { Outbox, writeReceiptFile } from "./outbox.js";
 import { dirname, join } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
 import type { LinkWolf } from "@wolfpack/protocol";
+import { WorkerRelay } from "./relay.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
@@ -70,6 +71,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
   let link: HubLink | undefined;
   let wake: { stop(): void } | undefined;
+  let serverUrl = "";
+  const relay = new WorkerRelay({ baseUrl: () => serverUrl, send: (f) => link?.sendFrame(f) ?? false, buffered: () => link?.bufferedAmount() ?? 0 });
   if (hubCfg) {
     const warning = insecureHubWarning(hubCfg.hubUrl);
     if (warning) log(`[workerd] ${warning}`);
@@ -86,6 +89,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       laptop: opts.laptop,
       wolves: () => supervisor.configs().map(linkWolf),
       log,
+      onRelay: (f) => (f.t === "req" ? relay.handle(f) : relay.cancel(f.id)),
+      onLinkDown: () => relay.abortAll(),
       onRetired: (names) => log(`[workerd] hub retired wolves: ${names.join(", ")}`),
       ...opts.linkOptions,
     });
@@ -97,6 +102,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     health: () => ({ ok: true, wolves: supervisor.status(), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
   });
   const url = await server.listen(opts.port ?? 7141, opts.host);
+  serverUrl = url;
   supervisor.start();
   link?.start();
   return {

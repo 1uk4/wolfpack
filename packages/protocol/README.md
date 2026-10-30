@@ -170,3 +170,15 @@ Where it appears: `ThreadToolCall.closed` (history; absent while pending), `card
 Older clients keep working: `ThreadToolCall.dismissed: true` is still set for BOTH skipped and superseded, and `card-settled.outcome`
 stays `"answered" | "dismissed"` (`dismissed` for both). A skipped call's `result` is `(skipped by the user)` and has no `answer`.
 Skipping a card that is unknown, already closed, or held by a running turn is 404 `not_found` / 409 `busy`, as for answering.
+
+## Console relay (link frames, additive)
+
+The hub tunnels any wolf-scoped `/v1` request (`/v1/wolves/:name/*`, `/v1/threads/:id/*`) from a console/browser token to the host that owns the wolf, over that host's `GET /v1/link` socket. The route's wolf (`wolfForRoute`) is resolved to a host through the registry.
+
+- `req {id:"h-<n>", method, path, headers, wolf, body?}` (hub → worker; `body` is base64, ≤ `LINK_RELAY_MAX_BODY`). Credentials (`Authorization`, `X-API-Key`, cookies) are never forwarded.
+- `res {id, status, headers}` then `chunk {id, seq, data, enc:"b64"}`* (each ≤ `LINK_RELAY_CHUNK_BYTES` raw) then `end {id}`; or `rerr {id, code, message?}` (worker → hub).
+- `cancel {id}` (hub → worker): the HTTP client went away. If the link drops, the hub fails every in-flight request of that link (503 before the head, a destroyed stream after) and the worker aborts its local requests.
+- A host that is not `online` fails at once with 503 `engine_error` (retryable), `details.presence` = `asleep` | `offline`; nothing is queued. No `res` within `LINK_RELAY_HEAD_TIMEOUT_MS` is 504 + `cancel`.
+- Auth: console/browser tokens (and the legacy key) may relay; a worker token gets 403 `forbidden`. A worker can only answer request ids opened on its own link.
+- Client: `HttpConsoleClient` option `hub: {…, relay: true}` sends every route to the hub. Console: `WOLFPACK_HUB_RELAY=1` + `WOLFPACK_HUB_URL`.
+- `GET /v1/wolves` on the hub now lists the registry's non-retired wolves (`online` when the host's link is online, else `offline`).

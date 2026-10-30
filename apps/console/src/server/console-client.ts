@@ -112,18 +112,77 @@ export function requestScopedWork(hub: { baseUrl: string; token?: string; apiKey
 	};
 }
 
+const STREAMS = new Set(["watch", "watchMemory", "watchActivity", "watchHubEvents"]);
+
+/**
+ * RELAY MODE: the whole ConsoleClient (threads, chat, streams, memory, KB, work) talks to the HUB only, which tunnels wolf-scoped requests
+ * to the wolf's host over its worker link. Credentials are per request exactly as in `requestScopedWork` (a request scope with no token is
+ * 401; the env token serves only scope-less callers). One HttpConsoleClient per token, cached.
+ */
+export function relayClient(hub: { baseUrl: string; token?: string; apiKey?: string }, requestToken?: RequestToken): ConsoleClient {
+	const clients = new Map<string, ConsoleClient>();
+	const forToken = (t: string | undefined): ConsoleClient => {
+		const key = t ?? "";
+		let c = clients.get(key);
+		if (!c) {
+			if (clients.size >= 32) clients.delete(clients.keys().next().value as string);
+			const h = t ? { baseUrl: hub.baseUrl, token: t, relay: true } : { ...hub, relay: true };
+			c = new HttpConsoleClient({ baseUrl: hub.baseUrl, hub: h });
+			clients.set(key, c);
+		}
+		return c;
+	};
+	const resolve = async (): Promise<ConsoleClient> => {
+		const t = requestToken ? await requestToken() : undefined;
+		if (t === null) throw new HubAuthError("this browser is not paired with the hub (no bearer token)");
+		return forToken(t);
+	};
+	const mapAuth = (err: unknown): never => {
+		if (err instanceof Error && err.name === "ProtocolError" && (err as Error & { code?: string }).code === "unauthorized") throw new HubAuthError(err.message);
+		throw err;
+	};
+	const fallback = forToken(undefined);
+	return new Proxy(fallback, {
+		get(_target, prop) {
+			const v = Reflect.get(fallback, prop, fallback) as unknown;
+			if (typeof v !== "function" || typeof prop !== "string") return v;
+			if (STREAMS.has(prop)) {
+				return async function* (...args: unknown[]) {
+					const c = await resolve().catch(mapAuth);
+					try {
+						yield* (Reflect.get(c, prop, c) as (...a: unknown[]) => AsyncIterable<unknown>).apply(c, args);
+					} catch (e) {
+						mapAuth(e);
+					}
+				};
+			}
+			return async (...args: unknown[]) => {
+				const c = await resolve().catch(mapAuth);
+				try {
+					return await (Reflect.get(c, prop, c) as (...a: unknown[]) => unknown).apply(c, args);
+				} catch (e) {
+					return mapAuth(e);
+				}
+			};
+		},
+	}) as ConsoleClient;
+}
+
 /**
  * Build a client from the environment (exported for tests; no singleton).
  *
  *   WOLFPACK_API_URL   a wolf's /v1 (otherwise the mock)
  *   WOLFPACK_HUB_URL   a hubd /v1: work reads (list + record) go there instead of the wolf (optional)
  *   WOLFPACK_HUB_TOKEN the hub bearer token from `hubd pair` (optional; preferred)
+ *   WOLFPACK_HUB_RELAY 1/true: RELAY MODE. Everything (chat, streams, memory, KB, work) goes through the hub, which tunnels to the wolf's host;
+ *                      WOLFPACK_API_URL is not used. Needs only WOLFPACK_HUB_URL (+ token). Unset: the direct mode below.
  *   WOLFPACK_HUB_KEY   LEGACY: the hub's X-API-Key (optional; ignored when a token is set)
  */
 export function createConsoleClient(env: Record<string, string | undefined> = process.env, requestToken?: RequestToken): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
 	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
+	if (hub && /^(1|true|yes)$/i.test(env.WOLFPACK_HUB_RELAY?.trim() ?? "")) return relayClient(hub, requestToken);
 	const withToken = (c: ConsoleClient): ConsoleClient => (hub && requestToken ? composeWorkReads(c, requestScopedWork(hub, requestToken)) : c);
 	if (baseUrl) return withToken(new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) }));
 	if (!hub) return new MockConsoleClient();

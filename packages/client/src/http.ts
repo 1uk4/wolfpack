@@ -72,7 +72,13 @@ export interface HttpClientOptions {
    * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
    * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `Authorization: Bearer token` (preferred) or the legacy `X-API-Key: apiKey`; everything else still goes to `baseUrl`.
    */
-  hub?: { baseUrl: string; /** Per-device bearer token (preferred). */ token?: string; /** LEGACY shared key; ignored when `token` is set. */ apiKey?: string };
+  hub?: { baseUrl: string; /** Per-device bearer token (preferred). */ token?: string; /** LEGACY shared key; ignored when `token` is set. */ apiKey?: string;
+    /**
+     * Relay mode: wolf-scoped requests (threads, memory, streams, ...) go to the HUB too, with the same credentials; the hub tunnels them to the
+     * wolf's host over its worker link. With this set `baseUrl` is not contacted (pass the hub's URL). A wolf whose host is asleep/offline
+     * fails at once with ProtocolError `engine_error` (retryable) naming the state.
+     */
+    relay?: boolean };
   /** Injectable fetch (tests, auth wrappers). Defaults to global fetch. */
   fetch?: typeof fetch;
   /** Consecutive failed stream reconnects tolerated before giving up. Default 5. */
@@ -90,7 +96,7 @@ interface Frame {
 export class HttpConsoleClient implements ConsoleClient {
   readonly actor?: Actor;
   private readonly base: string;
-  private readonly hub?: { base: string; token?: string; apiKey?: string };
+  private readonly hub?: { base: string; token?: string; apiKey?: string; relay?: boolean };
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
@@ -98,7 +104,7 @@ export class HttpConsoleClient implements ConsoleClient {
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
     this.actor = opts.actor;
-    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), token: opts.hub.token, apiKey: opts.hub.apiKey };
+    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), token: opts.hub.token, apiKey: opts.hub.apiKey, relay: opts.hub.relay };
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
@@ -513,15 +519,16 @@ export class HttpConsoleClient implements ConsoleClient {
     const route: RouteDef = ROUTES[name];
     const hubRoute = route.scope === "hub";
     if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
-    const origin = hubRoute ? this.hub!.base : this.base;
+    const viaHub = hubRoute || this.hub?.relay === true; // relay mode: every route goes through the hub
+    const origin = viaHub ? this.hub!.base : this.base;
     const res = await this.fetchFn(origin + buildPath(name, params) + query, {
       ...init,
       method: route.method,
-      headers: { ...init.headers, ...(hubRoute && this.hub!.token ? { Authorization: `Bearer ${this.hub!.token}` } : hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
-        ...(hubRoute && !this.hub!.token && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      headers: { ...init.headers, ...(viaHub && this.hub!.token ? { Authorization: `Bearer ${this.hub!.token}` } : viaHub && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
+        ...(viaHub && !this.hub!.token && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
-    if (hubRoute && res.status === 401) {
+    if (viaHub && res.status === 401) {
       // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.
       const err = await this.toError(res, threadId);
       throw err instanceof ProtocolError && err.code === "unauthorized" ? err : new ProtocolError("unauthorized", err instanceof Error && err.message ? err.message : "hub rejected the token (HTTP 401)", false);

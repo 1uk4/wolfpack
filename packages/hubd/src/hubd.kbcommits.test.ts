@@ -512,5 +512,49 @@ describe("ledger-level atomicity", () => {
     expect(() => acquireKbWriterLock(dir, process.pid, { afterJudgedStale: () => { rmSync(lock, { force: true }); writeFileSync(lock, dead()); m++; } })).toThrow(/cannot take/);
     expect(m).toBeLessThan(20);
   });
+
+  it("a dead mutex is cleared only if unchanged: a live mutex swapped in between judging and clearing survives", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-mutex-"));
+    tmp.push(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    const lock = join(dir, "run", "kb-writer.lock");
+    const mutex = `${lock}.takeover`;
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 12345 }));
+    writeFileSync(mutex, JSON.stringify({ pid: 2 ** 22 + 54321, nonce: "dead" }));
+    const live = JSON.stringify({ pid: process.pid, nonce: "live-contender" });
+    expect(() =>
+      acquireKbWriterLock(dir, process.pid, {
+        afterMutexJudgedDead: () => {
+          rmSync(mutex, { force: true });
+          writeFileSync(mutex, live, { flag: "wx" }); // another contender cleared it and took the mutex
+        },
+      }),
+    ).toThrow(/another process is taking over/);
+    expect(readFileSync(mutex, "utf8")).toBe(live);
+  });
+
+  it("the mutex release only removes our own mutex (a replaced one stays)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-mrel-"));
+    tmp.push(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    const lock = join(dir, "run", "kb-writer.lock");
+    const mutex = `${lock}.takeover`;
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 12345 }));
+    const other = JSON.stringify({ pid: process.pid, nonce: "someone-else" });
+    // while we hold the mutex and have unlinked the stale lock, a foreign file replaces our mutex
+    acquireKbWriterLock(dir, process.pid, { afterUnlinked: () => { rmSync(mutex, { force: true }); writeFileSync(mutex, other); } }).release();
+    expect(readFileSync(mutex, "utf8")).toBe(other);
+  });
+
+  it("an unparseable mutex is not cleared automatically and the error names it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-mbad-"));
+    tmp.push(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    const lock = join(dir, "run", "kb-writer.lock");
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 12345 }));
+    writeFileSync(`${lock}.takeover`, "garbage");
+    expect(() => acquireKbWriterLock(dir)).toThrow(/kb-writer\.lock\.takeover.*by hand/s);
+    expect(readFileSync(`${lock}.takeover`, "utf8")).toBe("garbage");
+  });
 });
 

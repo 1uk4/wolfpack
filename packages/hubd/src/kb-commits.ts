@@ -62,6 +62,8 @@ export interface KbLockHooks {
   afterJudgedStale?: () => void;
   /** @internal TEST-ONLY: runs after the stale lock was unlinked, before we link our own (simulates a third linker). */
   afterUnlinked?: () => void;
+  /** @internal TEST-ONLY: runs after a dead takeover mutex was judged dead, before it is cleared (simulates another contender). */
+  afterMutexJudgedDead?: () => void;
 }
 
 const LOCK_MAX_ATTEMPTS = 6;
@@ -73,8 +75,17 @@ const clearHint = (file: string) => `if no hubd is running on this data director
  * A dead owner's lock is taken over WITHOUT renaming the lock file: a takeover mutex (`kb-writer.lock.takeover`, exclusive link,
  * holds the contender's pid) serialises contenders; under it the lock is re-read, and only if it is still exactly the content that
  * was judged dead is it unlinked, then our fresh lock is linked (atomic, EEXIST = someone else won). A live owner's lock is never
- * unlinked, and no path can leave the live owner without a lock file. Residual: a contender that crashes while holding the
- * mutex leaves it behind; a dead-pid mutex is cleared by the next contender (the same judge-then-act window, one level down).
+ * unlinked by this code. The mutex file carries pid + a per-attempt nonce; it is cleared (dead holder) or released (our own) only
+ * after re-reading it and finding the exact content judged dead / our own nonce, so one contender does not delete another's live
+ * mutex in the normal interleavings.
+ *
+ * RESIDUAL (precise): "re-read, then rm" is not atomic. Between the re-read and the rmSync of the mutex a third contender could
+ * still swap in its own mutex and have it removed; the window is two syscalls wide and needs a dead-mutex clear to race a fresh
+ * takeover. Even then the lock file itself is only unlinked after a re-read compare under whichever mutex is held, and a live
+ * owner's lock is never judged dead, so the worst case is two contenders both trying to link their lock (linkSync is atomic: one
+ * wins, the other gets EEXIST and re-judges). Not guaranteed: that a stale lock is taken over by exactly one contender.
+ * A mutex that is unparseable or has no pid cannot be cleared automatically (its holder is unknown); it needs a hand clear, and
+ * the error names the file. A mutex whose pid is dead IS cleared automatically by the next contender.
  */
 export function acquireKbWriterLock(dataDir: string, pid = process.pid, hooks: KbLockHooks = {}): { release(): void } {
   const file = kbLockFile(dataDir);
@@ -82,27 +93,40 @@ export function acquireKbWriterLock(dataDir: string, pid = process.pid, hooks: K
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${pid}.${randomBytes(4).toString("hex")}`;
   writeFileSync(tmp, JSON.stringify({ pid, startedAt: new Date().toISOString() }), { mode: 0o600 });
+  const mutexBody = JSON.stringify({ pid, nonce: randomBytes(8).toString("hex") });
+  const mutexTmp = `${file}.mutex.${pid}.${randomBytes(4).toString("hex")}`;
+  writeFileSync(mutexTmp, mutexBody, { mode: 0o600 });
+  const readMutex = (): string | undefined => {
+    try {
+      return readFileSync(mutexFile, "utf8");
+    } catch {
+      return undefined;
+    }
+  };
   const withMutex = (fn: () => void): void => {
     try {
-      linkSync(tmp, mutexFile);
+      linkSync(mutexTmp, mutexFile);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const seen = readMutex();
       let holder: number | undefined;
       try {
-        holder = (JSON.parse(readFileSync(mutexFile, "utf8")) as { pid?: number }).pid;
+        holder = seen === undefined ? undefined : (JSON.parse(seen) as { pid?: number }).pid;
       } catch {
         holder = undefined;
       }
-      if (holder !== undefined && !pidAlive(holder)) {
-        rmSync(mutexFile, { force: true }); // a dead contender's mutex
-        return; // the caller's loop retries (bounded)
+      if (seen !== undefined && typeof holder === "number" && !pidAlive(holder)) {
+        hooks.afterMutexJudgedDead?.();
+        if (readMutex() === seen) rmSync(mutexFile, { force: true }); // a dead contender's mutex, only if unchanged since judged
+        return; // the caller's loop re-judges (bounded)
       }
+      if (seen === undefined) return; // vanished meanwhile: re-judge
       throw new Error(`another process is taking over the KB writer lock ${file}; retry (${clearHint(mutexFile)})`);
     }
     try {
       fn();
     } finally {
-      rmSync(mutexFile, { force: true });
+      if (readMutex() === mutexBody) rmSync(mutexFile, { force: true }); // only our own (pid + nonce)
     }
   };
   try {
@@ -147,6 +171,7 @@ export function acquireKbWriterLock(dataDir: string, pid = process.pid, hooks: K
     }
   } finally {
     rmSync(tmp, { force: true });
+    rmSync(mutexTmp, { force: true });
   }
   return {
     release() {

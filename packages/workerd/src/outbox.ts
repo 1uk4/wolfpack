@@ -18,7 +18,16 @@ export interface OutboxItem {
   queuedAt: string;
 }
 
-export class OutboxError extends Error {}
+export type OutboxErrorCode = "bad_id" | "too_large" | "full";
+
+export class OutboxError extends Error {
+  constructor(
+    readonly code: OutboxErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 const ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 
@@ -80,13 +89,13 @@ export class Outbox {
 
   /** Queue an item durably. Throws OutboxError when it is too large or the outbox is full. */
   enqueue(wolf: string, contribution: Record<string, unknown>, id: string = randomUUID()): OutboxItem {
-    if (!ID_RE.test(id)) throw new OutboxError(`bad idempotency id ${JSON.stringify(id.slice(0, 40))}`);
+    if (!ID_RE.test(id)) throw new OutboxError("bad_id", `bad idempotency id ${JSON.stringify(id.slice(0, 40))}`);
     const max = this.opts.maxItemBytes ?? LINK_CONTRIBUTION_MAX_BYTES;
     const bytes = Buffer.byteLength(JSON.stringify(contribution));
-    if (bytes > max) throw new OutboxError(`contribution is ${bytes} bytes; the limit is ${max}`);
+    if (bytes > max) throw new OutboxError("too_large", `contribution is ${bytes} bytes; the limit is ${max}`);
     const have = this.index.get(id);
     if (have) return have.item;
-    if (this.index.size >= (this.opts.maxItems ?? 10_000)) throw new OutboxError(`outbox is full (${this.index.size} items)`);
+    if (this.index.size >= (this.opts.maxItems ?? 10_000)) throw new OutboxError("full", `outbox is full (${this.index.size} items)`);
     const item: OutboxItem = { id, wolf, contribution, queuedAt: new Date().toISOString() };
     const file = `${String(Date.now()).padStart(15, "0")}-${String(this.n++ % 1_000_000).padStart(6, "0")}-${id}.json`;
     writeFileDurable(join(this.dir, file), JSON.stringify(item));

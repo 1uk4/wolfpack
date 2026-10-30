@@ -3,7 +3,7 @@ import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } fr
 import { WorkerdServer } from "./proxy.js";
 import { HubLink, type LinkStatus } from "./link.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
-import { feedContributions } from "./feed.js";
+import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
 import { dirname, join } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
@@ -41,6 +41,10 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   kbSync?: Partial<Omit<KbSyncOptions, "hubUrl" | "token" | "mirrorDir">>;
   /** How often the kb inbox lanes are scanned for contributions to send over the link, ms (default 5000). */
   feedIntervalMs?: number;
+  /** The hub's inbox root when hubd runs on this host (default env HUBD_INBOX_ROOT). The feed is skipped when kbOps/inbox is that dir. */
+  hubInboxRoot?: string;
+  /** Turn the inbox feed off. Also env WORKERD_FEED=0. A workerd that shares a host (and lanes) with hubd, e.g. on sfo-01 hosting a wolf, MUST set it. */
+  feed?: boolean;
 }
 
 export interface RunningWorkerd {
@@ -121,10 +125,15 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     });
     supervisor.onChange((e) => (e.type === "add" ? link!.wolfAdded(linkWolf(e.config)) : link!.wolfRemoved(e.name)));
     kbSync.start();
-    const feedOnce = () => void feedContributions(kbOps, supervisor.configs().map((c) => c.identity.name), { contribute: (w, c, id) => link!.contribute(w, c, id) }, log);
-    feedOnce();
-    feed = setInterval(feedOnce, opts.feedIntervalMs ?? 5000);
-    feed.unref();
+    const off = opts.feed === false ? "disabled by options" : feedDisabledReason(kbOps, process.env, opts.hubInboxRoot);
+    if (off) log(`[workerd] contribution feed off: ${off}`);
+    else {
+      const warned = new Set<string>();
+      const feedOnce = () => void feedContributions(kbOps, supervisor.configs().map((c) => c.identity.name), { contribute: (w, c, id) => link!.contribute(w, c, id) }, log, warned);
+      feedOnce();
+      feed = setInterval(feedOnce, opts.feedIntervalMs ?? 5000);
+      feed.unref();
+    }
     wake = startWakeMonitor({ ...opts.wake, onWake: (reason) => (log(`[workerd] ${reason}: reconnecting hub link`), link!.kick()) });
   }
   const server = new WorkerdServer({

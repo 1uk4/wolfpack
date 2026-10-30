@@ -78,6 +78,10 @@ export interface LinkRigOptions {
   ackTimeoutMs?: number;
   /** How often workerd scans the kb inbox lanes (default 40ms). */
   feedIntervalMs?: number;
+  /** false = start workerd with the inbox feed off. */
+  feed?: boolean;
+  /** Pass as workerd's hubInboxRoot; "hub" = the rig hub's inbox root. */
+  hubInboxRoot?: string;
   linkOptions?: { retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
   /** Registry domains created up front (the registry must know a domain before a wolf can be granted it). */
   kbDomains?: string[];
@@ -149,6 +153,8 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       kbOps,
       outboxDir,
       feedIntervalMs: o.feedIntervalMs ?? 40,
+      feed: o.feed,
+      hubInboxRoot: o.hubInboxRoot === "hub" ? inboxRoot : o.hubInboxRoot,
       ackTimeoutMs: o.ackTimeoutMs ?? 400,
       log: (m) => void logs.push(m),
     });

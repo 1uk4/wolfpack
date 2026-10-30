@@ -93,6 +93,11 @@ export interface EmitDeltaInput {
   force?: boolean;
 }
 
+/** The file name of a contribution: `<denTopicId>-<10 hex of the content hash>.md`. */
+export function contributionFileName(denTopicId: string, hash: string): string {
+  return `${safeSegment(denTopicId, "den topic id")}-${hashTag(hash)}.md`;
+}
+
 /**
  * Write a contribution to librarian-ops/inbox/<wolf>/, but ONLY if the content
  * actually changed since the last emit for this topic (hash guard). Returns the
@@ -138,8 +143,8 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     source: input.source,
   };
 
-  const file = join(dir, `${safeSegment(input.denTopicId, "den topic id")}-${hashTag(hash)}.md`);
-  atomicWrite(file, render(contribution));
+  const file = join(dir, contributionFileName(input.denTopicId, hash));
+  atomicWrite(file, renderContribution(contribution));
 
   // Record what we emitted so a later unchanged re-promote is a true no-op
   // (no inbox churn for the sweep to hash-skip). Best-effort: the inbox file is
@@ -171,7 +176,8 @@ export function tryEmitDelta(input: EmitDeltaInput, onSkip: (reason: string) => 
   }
 }
 
-function render(c: Contribution): string {
+/** The contribution file text (frontmatter + summary + body), exactly what the librarian intake reads. */
+export function renderContribution(c: Contribution): string {
   const fm = [
     "---",
     `from: ${c.from}`,

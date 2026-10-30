@@ -263,3 +263,109 @@ describe("children and ledger", () => {
     await expect(c.getLedger(home)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
+
+describe("HttpConsoleClient watchHubEvents", () => {
+  const sse = (frames: string) => new Response(new TextEncoder().encode(frames), { headers: { "Content-Type": "text/event-stream" } });
+  it("yields events, sends the API key, and reconnects with the last frame id (resync included) as Last-Event-ID", async () => {
+    const seen: { url: string; cursor: string | null; key: string | null }[] = [];
+    const ctl = new AbortController();
+    const f: typeof fetch = async (input, init) => {
+      const req = new Request(input as string, init);
+      seen.push({ url: req.url, cursor: req.headers.get("last-event-id"), key: req.headers.get("x-api-key") });
+      if (seen.length === 1) return sse(`id: b:0\ndata: {"type":"resync","id":0,"at":"2026-10-29T00:00:00.000Z"}\n\nid: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
+      return sse(`id: b:2\ndata: {"type":"future.thing","id":2,"at":"x"}\n\nid: b:3\ndata: {"type":"wolf.presence","id":3,"at":"2026-10-29T00:00:00.000Z","wolf":"w","state":"online","host":"h"}\n\n`);
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", apiKey: "sekret" }, fetch: f, retryDelayMs: 1 });
+    const got: string[] = [];
+    for await (const ev of c.watchHubEvents({ signal: ctl.signal })) {
+      got.push(ev.type);
+      if (got.length === 3) ctl.abort();
+    }
+    expect(got).toEqual(["resync", "kb.changed", "wolf.presence"]); // the unknown type is skipped
+    expect(seen[0]).toEqual({ url: "http://hub.invalid/v1/events", cursor: null, key: "sekret" });
+    expect(seen[1].cursor).toBe("b:1");
+  });
+  it("a busy refusal is retried (no limit) and then succeeds", async () => {
+    let calls = 0;
+    const ctl = new AbortController();
+    const f: typeof fetch = async () => {
+      calls++;
+      if (calls <= 8) return Response.json({ code: "busy", message: "too many open event streams", retryable: true }, { status: 409 });
+      return sse(`id: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f, retryDelayMs: 1, maxStreamRetries: 2 });
+    for await (const ev of c.watchHubEvents({ signal: ctl.signal })) {
+      expect(ev.type).toBe("kb.changed");
+      ctl.abort();
+    }
+    expect(calls).toBe(9); // more attempts than maxStreamRetries: hub events retry without a limit
+  });
+  it("an abort during backoff returns promptly", async () => {
+    const ctl = new AbortController();
+    const f: typeof fetch = async () => Response.json({ code: "busy", message: "busy", retryable: true }, { status: 409 });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f, retryDelayMs: 60_000 });
+    const t0 = Date.now();
+    setTimeout(() => ctl.abort(), 50);
+    const got: unknown[] = [];
+    for await (const ev of c.watchHubEvents({ signal: ctl.signal })) got.push(ev);
+    expect(got).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+  it("needs a hub", async () => {
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", fetch: async () => new Response("") });
+    await expect(c.watchHubEvents().next()).rejects.toBeInstanceOf(ProtocolError);
+  });
+});
+
+describe("HttpConsoleClient hub work reads", () => {
+  it("goes to the hub's /v1/work routes with the API key; other calls keep using baseUrl", async () => {
+    const seen: { url: string; key: string | null }[] = [];
+    const f: typeof fetch = async (input, init) => {
+      const req = new Request(input as string, init);
+      seen.push({ url: req.url, key: req.headers.get("x-api-key") });
+      if (req.url.includes("/record")) return Response.json({ id: "work-x-1234567", title: "T", kind: "task", stage: "plan", plan: "p", record: "" });
+      return Response.json({ items: [{ id: "work-x-1234567", title: "T", kind: "task", stage: "plan", domain: "x", dependsOn: [] }] });
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid/", apiKey: "sekret" }, fetch: f });
+    expect((await c.listWork("any", { domain: "x y", graduated: true })).items).toHaveLength(1);
+    expect((await c.getWorkRecord("any", "work-x-1234567")).title).toBe("T");
+    expect(seen.map((s) => s.url)).toEqual(["http://hub.invalid/v1/work?domain=x%20y&graduated=true", "http://hub.invalid/v1/work/work-x-1234567/record"]);
+    expect(seen.every((s) => s.key === "sekret")).toBe(true);
+  });
+  it("sends the configured actor as X-Wolfpack-Actor on hub requests only, never a system actor", async () => {
+    const seen: (string | null)[] = [];
+    const f: typeof fetch = async (input, init) => {
+      seen.push(new Request(input as string, init).headers.get("x-wolfpack-actor"));
+      return Response.json({ items: [] });
+    };
+    const hub = { baseUrl: "http://hub.invalid" };
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, actor: { id: "1uk4", kind: "wolf" }, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, actor: { id: "system", kind: "system" }, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", actor: { id: "1uk4", kind: "wolf" }, fetch: f }).listWork("w", { domain: "x" });
+    expect(seen).toEqual([JSON.stringify({ id: "1uk4", kind: "wolf" }), null, null, null]);
+  });
+  it("maps a hub not_found envelope to NotFoundError", async () => {
+    const f: typeof fetch = async () => Response.json({ code: "not_found", message: "work item w", retryable: false }, { status: 404 });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f });
+    await expect(c.getWorkRecord("any", "work-x-1234567")).rejects.toBeInstanceOf(NotFoundError);
+  });
+  it("hub claim posts to /claim and a conflict envelope keeps its details on the ProtocolError", async () => {
+    const seen: string[] = [];
+    const f: typeof fetch = async (u, init) => {
+      seen.push(`${init?.method} ${String(u)}`);
+      return Response.json({ code: "conflict", message: "already claimed: w is held by w1", retryable: false, details: { holder: "w1" } }, { status: 409 });
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, actor: { id: "w2", kind: "wolf" }, fetch: f });
+    const e = await c.claimWork("work-x-1234567").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ProtocolError);
+    expect((e as ProtocolError).code).toBe("conflict");
+    expect((e as ProtocolError).details).toEqual({ holder: "w1" });
+    await c.releaseWork("work-x-1234567").catch(() => undefined);
+    expect(seen).toEqual(["POST http://hub.invalid/v1/work/work-x-1234567/claim", "POST http://hub.invalid/v1/work/work-x-1234567/unclaim"]);
+  });
+  it("without a hub, work reads still use the wolf-scoped routes", async () => {
+    const c = make();
+    await expect(c.listWork("1uk4", { domain: "x" })).rejects.toBeInstanceOf(ProtocolError); // stub: no Work API
+  });
+});

@@ -35,7 +35,7 @@ export {
   seenHashes,
   foldRegistry,
 } from "./ledger.js";
-export { drainInbox, countPending } from "./intake.js";
+export { drainInbox, countPending, parseContribution, DEFAULT_LANE, type LaneOptions } from "./intake.js";
 export {
   createEmbedder,
   resolveEmbedConfig,

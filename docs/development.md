@@ -14,7 +14,7 @@ Run from the repo root (turbo):
 | `npm run dev` | Console dev server on http://localhost:3000 (mock-backed). No Electron. |
 | `npm run dev -w @wolfpack/desktop` | Console on :3210, then Electron. Run in your own terminal. |
 | `npm run verify` | `turbo run build typecheck lint test`, cached, all workspaces. Run before committing. |
-| `npm run build` | `tsc --build` (legacy root build). |
+| `npm run build` | `tsc --build` (legacy root build). A bare root `tsc --build` leaves `packages/hubd/dist/cli.js` without its exec bit: run `npm run build -w @wolfpack/hubd` to restore it, or use `node dist/cli.js`. |
 | `npx vitest run` | Root vitest run for the packages. |
 
 Packages have no linter yet (`lint` is a no-op echo). The console lints with eslint, including its import-law rules.
@@ -32,6 +32,8 @@ WOLFPACK_API_URL=http://127.0.0.1:3141 npm run dev
 ```
 
 A minimal `wolf.yaml` is `name: <wolf>` plus `workspace: <dir>`; use a scratch dir, not a real wolf's. Unset `WOLFPACK_API_URL` to go back to the mock. A stale-cursor snapshot from the wolf is logged server-side, not forwarded to the browser (full snapshot UX is planned).
+
+Set `WOLFPACK_HUB_URL` (and `WOLFPACK_HUB_KEY`, the hub's `X-API-Key`) to read work (the Work view lists and records) from a hubd instead of the wolf; unset = unchanged. It works with or without `WOLFPACK_API_URL`.
 
 **Subscription variant (no API key).** A models file with `"transport": "subscription"` (tiers `provider: "claude-agent-sdk"`, `piModel: "claude-bridge/<model>"`) makes wolfd build the pi-claude-bridge provider (`pi-claude-bridge/core`, a git dep on the 1uk4 fork) and bill turns to your Claude subscription through your local Claude Code login. No `ANTHROPIC_API_KEY` is needed or used (the bridge strips it from the `claude` child; there is no fallback onto the key). Skip the `.env` step:
 

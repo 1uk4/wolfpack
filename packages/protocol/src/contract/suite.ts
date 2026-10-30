@@ -22,6 +22,13 @@ export interface ContractOptions {
   turnTimeoutMs?: number;
   /** Servers that can graduate a feature: closes the feature thread of this work item (enables the thread_closed test). */
   closeFeatureThread?: (workItemId: string) => Promise<void> | void;
+  /**
+   * False for servers that are not a wolf host (hubd): skips every group that needs a wolf runtime (wolves, threads, turns,
+   * memory, KB, ...) and keeps the transport-level checks (unknown routes, protocol version). Default true.
+   */
+  wolfRuntime?: boolean;
+  /** Extra headers sent on every request (e.g. the hub's X-API-Key). */
+  headers?: Record<string, string>;
 }
 
 interface Frame {
@@ -43,7 +50,10 @@ interface StreamResult {
 export function runContractSuite(baseUrl: () => string, options: ContractOptions = {}): void {
   const timeout = options.turnTimeoutMs ?? 10_000;
 
-  const call = (path: string, init: RequestInit = {}) => fetch(baseUrl() + path, init);
+  const wolfRuntime = options.wolfRuntime !== false;
+  const itW = wolfRuntime ? it : it.skip;
+  const call = (path: string, init: RequestInit = {}) =>
+    fetch(baseUrl() + path, options.headers ? { ...init, headers: { ...options.headers, ...(init.headers as Record<string, string> | undefined) } } : init);
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
     call(path, {
       method: "POST",
@@ -132,14 +142,14 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
     let wolf = "";
     let threadId = "";
 
-    it("GET /v1/wolves lists wolves", async () => {
+    itW("GET /v1/wolves lists wolves", async () => {
       const body = await expectJson(await call(buildPath("listWolves")), ROUTES.listWolves.response.schema);
       expect(body.wolves.length).toBeGreaterThan(0);
       wolf = options.wolf ?? body.wolves[0].name;
       expect(body.wolves.some((w) => w.name === wolf)).toBe(true);
     });
 
-    it("POST threads creates the home thread idempotently", async () => {
+    itW("POST threads creates the home thread idempotently", async () => {
       const path = buildPath("createThread", { name: wolf });
       const first = await expectJson(await post(path, { kind: "home" }), ROUTES.createThread.response.schema, [200, 201]);
       expect(first.kind).toBe("home");
@@ -152,7 +162,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(list.threads.map((t) => t.id)).toContain(threadId);
     });
 
-    it("POST threads {feature, workItemId} opens a feature thread, idempotently, listed beside home", async () => {
+    itW("POST threads {feature, workItemId} opens a feature thread, idempotently, listed beside home", async () => {
       const path = buildPath("createThread", { name: wolf });
       const first = await expectJson(await post(path, { kind: "feature", workItemId: "work-contract-feat1" }), ROUTES.createThread.response.schema, [201]);
       expect(first.kind).toBe("feature");
@@ -168,7 +178,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect((await getThread(first.id)).kind).toBe("feature");
     });
 
-    it("a feature thread runs turns on its own, apart from home", async () => {
+    itW("a feature thread runs turns on its own, apart from home", async () => {
       const f = await expectJson(await post(buildPath("createThread", { name: wolf }), { kind: "feature", workItemId: "work-contract-feat1" }), ROUTES.createThread.response.schema, [200]);
       const events = await runTurn(f.id, "from the feature");
       expect(events.every((e) => e.threadId === f.id)).toBe(true);
@@ -178,7 +188,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect((await getThread(threadId)).messages.some((m) => m.text.includes("from the feature"))).toBe(false);
     });
 
-    it.runIf(!!options.closeFeatureThread)("a closed feature thread stays readable and refuses sends with 409 thread_closed", async () => {
+    it.runIf(wolfRuntime && !!options.closeFeatureThread)("a closed feature thread stays readable and refuses sends with 409 thread_closed", async () => {
       const f = await expectJson(await post(buildPath("createThread", { name: wolf }), { kind: "feature", workItemId: "work-contract-closed" }), ROUTES.createThread.response.schema, [200, 201]);
       await options.closeFeatureThread!("work-contract-closed");
       const detail = await getThread(f.id);
@@ -188,7 +198,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(res, "thread_closed");
     });
 
-    it("create rejects bad bodies, a feature without a work item, subagents and unknown wolves", async () => {
+    itW("create rejects bad bodies, a feature without a work item, subagents and unknown wolves", async () => {
       await expectError(await post(buildPath("createThread", { name: wolf }), { kind: "feature" }), "invalid_request");
       await expectError(await post(buildPath("createThread", { name: wolf }), { kind: "subagent", workItemId: "w" }), "invalid_request");
       await expectError(await post(buildPath("createThread", { name: wolf }), "not json"), "invalid_request");
@@ -196,7 +206,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await call(buildPath("listThreads", { name: "no-such-wolf" })), "not_found");
     });
 
-    it("children and ledger: a thread with no subagents lists none; a non-subagent has no ledger; unknown threads are not_found", async () => {
+    itW("children and ledger: a thread with no subagents lists none; a non-subagent has no ledger; unknown threads are not_found", async () => {
       const kids = await expectJson(await call(buildPath("listChildren", { id: threadId })), ROUTES.listChildren.response.schema);
       expect(kids.threads).toEqual([]);
       await expectError(await call(buildPath("getLedger", { id: threadId })), "not_found");
@@ -205,7 +215,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
     });
 
     // ---- header git tree ----
-    it("workspace status: a thread without a git workspace is not_found, one with it matches the schema; unknown threads are not_found", async () => {
+    itW("workspace status: a thread without a git workspace is not_found, one with it matches the schema; unknown threads are not_found", async () => {
       const r = await call(buildPath("getWorkspaceStatus", { id: threadId }));
       if (r.status === 200) await expectJson(r, ROUTES.getWorkspaceStatus.response.schema);
       else await expectError(r, "not_found");
@@ -213,7 +223,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
     });
     // ---- /header git tree ----
 
-    it("GET thread returns ThreadDetail; unknown thread is a not_found envelope", async () => {
+    itW("GET thread returns ThreadDetail; unknown thread is a not_found envelope", async () => {
       const t = await getThread(threadId);
       expect(t.id).toBe(threadId);
       await expectError(await call(buildPath("getThread", { id: "nope/nope" })), "not_found");
@@ -222,7 +232,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await post(buildPath("abort", { id: "nope/nope" }), {}), "not_found");
     });
 
-    it("GET thread pages: no limit = all; limit = newest page with hasMore/cursor; before = the older page", async () => {
+    itW("GET thread pages: no limit = all; limit = newest page with hasMore/cursor; before = the older page", async () => {
       const all = await getThread(threadId);
       expect(all.hasMore).toBeUndefined();
       if (all.messages.length < 2) return;
@@ -241,7 +251,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await call("/v1/nothing"), "not_found");
     });
 
-    it("submit validates its body; whenBusy is required", async () => {
+    itW("submit validates its body; whenBusy is required", async () => {
       await waitIdle(threadId);
       await expectError(await submit(threadId, "hi"), "invalid_request");
       await expectError(await submit(threadId, "hi", "bogus"), "invalid_request");
@@ -250,7 +260,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect((await getThread(threadId)).busy).toBe(false);
     });
 
-    describe("attachments", () => {
+    (wolfRuntime ? describe : describe.skip)("attachments", () => {
       const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
       const upload = (id: string, type: string | undefined, body: Uint8Array | string, name?: string) =>
         call(buildPath("uploadAttachment", { id }), {
@@ -303,7 +313,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       });
     });
 
-    it("a turn streams monotonic server-minted ids, ends at turn-end with [DONE]", async () => {
+    itW("a turn streams monotonic server-minted ids, ends at turn-end with [DONE]", async () => {
       await waitIdle(threadId);
       const before = (await getThread(threadId)).lastEventId;
       const events = await runTurn(threadId, "hello");
@@ -334,14 +344,14 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       }
     });
 
-    it("stream with no cursor replays the most recent turn then ends", async () => {
+    itW("stream with no cursor replays the most recent turn then ends", async () => {
       const events = await runTurn(threadId);
       const again = await readStream(streamPath(threadId));
       expect(again.done).toBe(true);
       expect(again.events).toEqual(events);
     });
 
-    it("replays buffered events after Last-Event-ID (header and ?from=) within the current turn", async () => {
+    itW("replays buffered events after Last-Event-ID (header and ?from=) within the current turn", async () => {
       const events = await runTurn(threadId);
       const cursor = events[2].id;
       const expected = events.filter((e) => e.id > cursor);
@@ -355,7 +365,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(atEnd.done).toBe(true);
     });
 
-    it("resumes mid-turn: replay then live, no gaps or duplicates", async () => {
+    itW("resumes mid-turn: replay then live, no gaps or duplicates", async () => {
       await waitIdle(threadId);
       await submit(threadId, "resume", "reject");
       const head = await readStream(streamPath(threadId), {}, 2);
@@ -371,7 +381,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(full.events).toEqual(all);
     });
 
-    it("sends a snapshot when the cursor predates the current turn (turn finished)", async () => {
+    itW("sends a snapshot when the cursor predates the current turn (turn finished)", async () => {
       const first = await runTurn(threadId, "one");
       const second = await runTurn(threadId, "two");
       expect(second[0].id).toBeGreaterThan(first[1].id + 1);
@@ -389,7 +399,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(snap.inFlight).toBeUndefined();
     });
 
-    it("snapshot then live when the stale cursor arrives mid-turn", async () => {
+    itW("snapshot then live when the stale cursor arrives mid-turn", async () => {
       const prev = await runTurn(threadId, "prev");
       await submit(threadId, "live", "reject");
       const s = await readStream(streamPath(threadId), { "Last-Event-ID": String(prev[1].id) });
@@ -403,7 +413,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       if (snap.thread.busy) expect(snap.inFlight?.turnId).toBeTruthy();
     });
 
-    it("whenBusy=reject on a busy thread is a 409 busy envelope", async () => {
+    itW("whenBusy=reject on a busy thread is a 409 busy envelope", async () => {
       await waitIdle(threadId);
       await submit(threadId, "first", "reject");
       const res = await submit(threadId, "second", "reject");
@@ -411,7 +421,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await waitIdle(threadId);
     });
 
-    it("whenBusy=steer on a busy thread is acked as steered", async () => {
+    itW("whenBusy=steer on a busy thread is acked as steered", async () => {
       await waitIdle(threadId);
       await submit(threadId, "first", "reject");
       const ack = await expectJson(await submit(threadId, "steer me", "steer"), ROUTES.submit.response.schema);
@@ -420,7 +430,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await waitIdle(threadId);
     });
 
-    it("whenBusy=followUp is queued and runs after the current turn", async () => {
+    itW("whenBusy=followUp is queued and runs after the current turn", async () => {
       await waitIdle(threadId);
       const before = (await getThread(threadId)).messages.filter((m) => m.role === "assistant").length;
       await submit(threadId, "first", "reject");
@@ -435,7 +445,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       }
     });
 
-    it("whenBusy is ignored when idle: submit starts a turn", async () => {
+    itW("whenBusy is ignored when idle: submit starts a turn", async () => {
       await waitIdle(threadId);
       for (const wb of ["steer", "followUp", "reject"]) {
         const ack = await expectJson(await submit(threadId, "idle", wb), ROUTES.submit.response.schema);
@@ -444,7 +454,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       }
     });
 
-    it("abort ends the turn with turn-end reason aborted", async () => {
+    itW("abort ends the turn with turn-end reason aborted", async () => {
       await waitIdle(threadId);
       await submit(threadId, "abort me", "reject");
       const res = await post(buildPath("abort", { id: threadId }), {});
@@ -455,7 +465,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await waitIdle(threadId);
     });
 
-    it("abort drops queued follow-ups", async () => {
+    itW("abort drops queued follow-ups", async () => {
       await waitIdle(threadId);
       await submit(threadId, "first", "reject");
       await submit(threadId, "queued", "followUp");
@@ -465,7 +475,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect((await getThread(threadId)).busy).toBe(false);
     });
 
-    it("memory actions: unknown wolf is not_found; otherwise a valid result or a memory_unavailable envelope", async () => {
+    itW("memory actions: unknown wolf is not_found; otherwise a valid result or a memory_unavailable envelope", async () => {
       await expectError(await post(buildPath("consolidateMemory", { name: "no-such-wolf" }), {}), "not_found");
       await expectError(await post(buildPath("promoteMemory", { name: "no-such-wolf" }), {}), "not_found");
       // A server may or may not run memory for this wolf: both outcomes are legal, nothing else is.
@@ -480,7 +490,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       }
     });
 
-    it("memory read routes: unknown wolf is not_found; otherwise a valid status (any state), topic envelope or work error", async () => {
+    itW("memory read routes: unknown wolf is not_found; otherwise a valid status (any state), topic envelope or work error", async () => {
       for (const path of [buildPath("getMemoryStatus", { name: "no-such-wolf" }), buildPath("getMemoryTopic", { name: "no-such-wolf", id: "x" }), buildPath("getMemoryObservations", { name: "no-such-wolf" }), buildPath("getWorkRecord", { name: "no-such-wolf", id: "work-x-1234567" })]) {
         await expectError(await call(path), "not_found");
       }
@@ -509,7 +519,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);
     });
 
-    it("graduation: unknown wolf is not_found, a bad id or confirm body is invalid_request, a start answers a job or a refusal, status and count answer their schemas", async () => {
+    itW("graduation: unknown wolf is not_found, a bad id or confirm body is invalid_request, a start answers a job or a refusal, status and count answer their schemas", async () => {
       const preview = (name: string, id: string) => post(buildPath("previewGraduation", { name, id }), {});
       const confirm = (name: string, id: string, body: unknown) => post(buildPath("confirmGraduation", { name, id }), body);
       const status = (name: string, id: string) => call(buildPath("graduationStatus", { name, id }));
@@ -535,7 +545,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       }
     });
 
-    it("cards: unknown wolf/thread/card are not_found, a bad answer body is invalid_request, the list is valid", async () => {
+    itW("cards: unknown wolf/thread/card are not_found, a bad answer body is invalid_request, the list is valid", async () => {
       await expectError(await call(buildPath("listCards", { name: "no-such-wolf" })), "not_found");
       const list = await call(buildPath("listCards", { name: wolf }));
       expect(list.status).toBe(200);
@@ -549,7 +559,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await skip(threadId), "not_found");
     });
 
-    it("settings: defaults, PUT merges and persists, bad bodies are invalid_request, unknown thread is not_found", async () => {
+    itW("settings: defaults, PUT merges and persists, bad bodies are invalid_request, unknown thread is not_found", async () => {
       const put = (id: string, body: unknown) => call(buildPath("putThreadSettings", { id }), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       await expectError(await call(buildPath("getThreadSettings", { id: "nope/nope" })), "not_found");
       await expectError(await put("nope/nope", { tier: "fast" }), "not_found");
@@ -569,7 +579,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectJson(await put(threadId, { tier: "main", autoShip: false }), ROUTES.putThreadSettings.response.schema);
     });
 
-    it("context + compact: stats answer the schema, compact is accepted (also with instructions), bad bodies are invalid_request, unknown thread is not_found", async () => {
+    itW("context + compact: stats answer the schema, compact is accepted (also with instructions), bad bodies are invalid_request, unknown thread is not_found", async () => {
       const compact = (id: string, body: unknown) => post(buildPath("compactThread", { id }), body);
       await expectError(await call(buildPath("getThreadContext", { id: "nope/nope" })), "not_found");
       await expectError(await compact("nope/nope", {}), "not_found");
@@ -581,7 +591,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
     });
 
     // --- feature progress: bind ---
-    it("bind: an unknown thread is not_found, a bad body or malformed id is invalid_request, a valid bind answers the schema", async () => {
+    itW("bind: an unknown thread is not_found, a bad body or malformed id is invalid_request, a valid bind answers the schema", async () => {
       const bind = (id: string, body: unknown) => post(buildPath("bindThread", { id }), body);
       await expectError(await bind("nope/nope", { workItemId: "work-x-1234567" }), "not_found");
       await expectError(await bind(threadId, { nope: 1 }), "invalid_request");
@@ -593,7 +603,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
     });
     // --- end feature progress ---
 
-    it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {
+    itW("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {
       for (const path of [buildPath("getKbGraph", { name: "no-such-wolf" }), buildPath("getKbEntry", { name: "no-such-wolf", id: "kb-x-1234567" })]) {
         await expectError(await call(path), "not_found");
       }
@@ -608,7 +618,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(["not_found", "kb_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await e.json()).code);
     });
 
-    it("kb pipeline: unknown wolf is not_found; otherwise a valid pipeline, or kb_unavailable when not the librarian", async () => {
+    itW("kb pipeline: unknown wolf is not_found; otherwise a valid pipeline, or kb_unavailable when not the librarian", async () => {
       await expectError(await call(buildPath("kbPipeline", { name: "no-such-wolf" })), "not_found");
       const p = await call(buildPath("kbPipeline", { name: wolf }));
       if (p.status === 200) ROUTES.kbPipeline.response.schema.parse(await p.json());

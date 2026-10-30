@@ -15,10 +15,39 @@ const KEY = Symbol.for("wolfpack.console.client");
 
 type Holder = { [KEY]?: ConsoleClient };
 
-/** Build a client from the environment (exported for tests; no singleton). */
+/** The work reads a hub can serve. */
+export type WorkReads = Pick<ConsoleClient, "listWork" | "getWorkRecord">;
+
+/**
+ * `base` with its work reads answered by `work`; every other member is `base`'s own (methods bound to it, so its internal state
+ * stays on it). A typed composition, not a patch: `base` is never mutated.
+ */
+export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleClient {
+	return new Proxy(base, {
+		get(target, prop) {
+			if (prop === "listWork" || prop === "getWorkRecord") return work[prop]?.bind(work);
+			const v = Reflect.get(target, prop, target) as unknown;
+			return typeof v === "function" ? v.bind(target) : v;
+		},
+	});
+}
+
+/**
+ * Build a client from the environment (exported for tests; no singleton).
+ *
+ *   WOLFPACK_API_URL   a wolf's /v1 (otherwise the mock)
+ *   WOLFPACK_HUB_URL   a hubd /v1: work reads (list + record) go there instead of the wolf (optional)
+ *   WOLFPACK_HUB_KEY   the hub's X-API-Key (optional)
+ */
 export function createConsoleClient(env: Record<string, string | undefined> = process.env): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
-	return baseUrl ? new HttpConsoleClient({ baseUrl }) : new MockConsoleClient();
+	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
+	const hub = hubUrl ? { baseUrl: hubUrl, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
+	if (baseUrl) return new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) });
+	if (!hub) return new MockConsoleClient();
+	// No wolf configured, a hub is: threads stay on the mock; work reads come from the hub. The reader's own baseUrl is the hub's
+	// and moot: the composition exposes only its two work reads, which target `hub` explicitly.
+	return composeWorkReads(new MockConsoleClient(), new HttpConsoleClient({ baseUrl: hub.baseUrl, hub }));
 }
 
 export function getConsoleClient(): ConsoleClient {

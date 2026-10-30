@@ -25,7 +25,7 @@ import { defineTool, Type, type ExtensionContext, type ToolContext, type ToolRes
 import type { Card } from "@wolfpack/protocol";
 import { engineSteps, createEngine, loadModelTable } from "@wolfpack/engine";
 import { confirmCard } from "@wolfpack/harness/engine";
-import { DEFAULT_CRAWL_CONCURRENCY, emitCrawl, readPlan, runCrawl, type EmitCrawlOptions, type EmitCrawlResult, type RunCrawlOptions, type RunCrawlResult } from "@wolfpack/memory";
+import { DEFAULT_CRAWL_CONCURRENCY, emitCrawl, emitCrawlToHub, hubTargetFromEnv, redactUrl, readPlan, runCrawl, type EmitCrawlOptions, type EmitCrawlResult, type RunCrawlOptions, type RunCrawlResult } from "@wolfpack/memory";
 import type { CrawlCore } from "./crawl-core.js";
 import {
   applyProgress,
@@ -50,7 +50,7 @@ const CONCURRENCY_CHOICES = [5, 8, 12, 16, 24, 32];
 /** The engine entry points the tools call; tests replace them (a real run needs an LLM, a real release the KB inbox). */
 export interface CrawlRunner {
   run(planFile: string, opts: RunCrawlOptions): Promise<RunCrawlResult>;
-  emit(runDir: string, opts: EmitCrawlOptions): EmitCrawlResult;
+  emit(runDir: string, opts: EmitCrawlOptions): EmitCrawlResult | Promise<EmitCrawlResult>;
 }
 
 const text = (t: string, extra: Partial<ToolResult> = {}): ToolResult => ({ content: [{ type: "text", text: t }], ...extra });
@@ -122,7 +122,11 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const engine = createEngine({ provider, ...(apiKey ? { apiKey } : {}), defaultModel: table.tiers.smart.model, steps });
       return runCrawl(planFile, { ...opts, engine: { engine, fastModel: steps.classify.model, smartModel: steps.consolidate.model } });
     },
-    emit: (runDir, opts) => emitCrawl(runDir, opts),
+    // A real release goes to the hub when WOLFPACK_HUB_URL is set; otherwise (and for the dry-run review) the KB_OPS inbox as before.
+    emit: (runDir, opts) => {
+      const hub = opts.dryRun ? undefined : hubTargetFromEnv(env);
+      return hub ? emitCrawlToHub(runDir, hub, opts) : emitCrawl(runDir, opts);
+    },
   };
   const runner: CrawlRunner = { ...defaultRunner, ...i.runner };
 
@@ -422,7 +426,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const roots = { ...(opsRoot ? { opsRoot } : {}), ...(env.KB_BASE ? { kbBase: env.KB_BASE } : {}), denLocal: join(ctx.wolfDen, "kb") };
       let preview: EmitCrawlResult;
       try {
-        preview = runner.emit(dir, { dryRun: true, wolf: ctx.wolfName, sinkBase: crawlHome, quiet: true, roots });
+        preview = await runner.emit(dir, { dryRun: true, wolf: ctx.wolfName, sinkBase: crawlHome, quiet: true, roots });
       } catch (e) {
         return fail(`Could not build the release preview: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -440,7 +444,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const review = `${items.length} contribution(s) from ${dir} (domain ${plan.domain}):\n${list}`;
 
       const journeyMissing = !hasFile(dir, "history.json");
-      if (!opsRoot) return text(`${review}\n\nThe KB is not configured here (no KB_OPS), so this cannot be released.`, { isError: true });
+      const hubTarget = hubTargetFromEnv(env);
+      if (!opsRoot && !hubTarget) return text(`${review}\n\nThe KB is not configured here (no KB_OPS), so this cannot be released.`, { isError: true });
       if (journeyMissing) return text(`${review}\n\nThe run's journey is not written yet — finish it with crawl_run (resume) before releasing.`, { isError: true });
 
       // No card, no release: without a user who can confirm in the console (a task-owned conversation, or a host without
@@ -463,7 +468,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
           title: "Release to the librarian?",
           question: label,
           description:
-            `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → inbox lane "${ctx.wolfName}" → Dewey` +
+            `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → ${hubTarget ? `hub ${redactUrl(hubTarget.baseUrl)} as wolf "${ctx.wolfName}"` : `inbox lane "${ctx.wolfName}"`} → Dewey` +
             `${unchanged ? ` (${unchanged} unchanged will be skipped)` : ""}.\n\n${list}\n\n` +
             `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
           confirmLabel: "Release",
@@ -473,7 +478,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       }
 
       try {
-        const r = runner.emit(dir, { dryRun: false, wolf: ctx.wolfName, sinkBase: crawlHome, quiet: true, roots });
+        const r = await runner.emit(dir, { dryRun: false, wolf: ctx.wolfName, sinkBase: crawlHome, quiet: true, roots });
         try {
           writeFileSync(join(dir, "emitted.json"), JSON.stringify({ at: Date.now(), emitted: r.emitted, dest: r.dest }, null, 2));
         } catch {

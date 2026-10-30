@@ -13,6 +13,7 @@ import {
   LedgerEntrySchema,
   MemoryEventSchema,
   WolfEventSchema,
+  HubEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
   MemoryObservationsSchema,
@@ -41,15 +42,27 @@ import {
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
+import * as R from "./registry.js";
+import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
+import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
+
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
 /** Request header carrying the client's protocol version (single integer). */
 export const PROTOCOL_VERSION_HEADER = "X-Protocol-Version";
+/**
+ * `X-Wolfpack-Actor: {"id":"<id>","kind":"operator"|"wolf"}` (JSON): who a request to a HUB acts as. PROVISIONAL: the hub's shared
+ * `X-API-Key` is the only authentication, so the actor is ASSERTED by the client, not proven; do not treat it as an identity
+ * guarantee. Per-actor pairing (work-wolfpack-WRkevxL) replaces it. Rules (hubd): reads default to the `system` actor when it is
+ * absent; mutating routes REQUIRE it (400 `invalid_request` when missing); owner-only operations require kind `operator`
+ * (401 `unauthorized` otherwise); `system` is reserved for the hub's own jobs and a client asserting it is 400 `invalid_request`.
+ */
+export const ACTOR_HEADER = "X-Wolfpack-Actor";
 /** SSE resume: standard header, or the `?from=` query fallback. */
 export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
 /** Terminator frame payload (`data: [DONE]`) sent when a stream ends at turn-end. */
 export const SSE_DONE = "[DONE]";
 
-export type HttpMethod = "GET" | "POST" | "PUT";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** Wire bodies: the path carries the identifier, so it is dropped from the body. */
 export const SubmitBodySchema = SubmitRequestSchema.omit({ threadId: true });
@@ -64,6 +77,21 @@ export const BindThreadBodySchema = BindThreadRequestSchema;
 // --- end feature progress ---
 export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSchema) });
 
+/**
+ * Hub contribution submission body: the contribution's fields (the kb `ContributionSchema`: from, denTopicId, change, contentHash,
+ * prevHash, domainHint, summary, submitted, body, + optional provenance) as JSON. The protocol only requires an object; hubd validates
+ * it against the kb schema and quarantines a non-conforming one.
+ */
+export const SubmitContributionBodySchema = z.record(z.string(), z.unknown());
+export const SubmitContributionResponseSchema = z.object({
+  /** The stored file name, `<denTopicId>-<10 hex of contentHash>.md`. */
+  id: z.string(),
+  /** The submitting wolf's lane (`contributions/<wolf>/`). */
+  wolf: z.string(),
+  /** true: the same contribution (topic + content hash) was already stored; nothing was written. */
+  duplicate: z.boolean(),
+});
+
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
 export const ListThreadsResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
 export const ListChildrenResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
@@ -74,6 +102,8 @@ export interface RouteDef {
   readonly method: HttpMethod;
   /** Path pattern; `:name` segments are URL-encoded path params (thread ids contain `/`). */
   readonly path: string;
+  /** `"hub"`: served by hubd (the pack authority), not by a wolf host. Absent = a wolf-host route. */
+  readonly scope?: "hub";
   /** JSON request body schema, if any. */
   readonly body?: z.ZodType;
   /** Success response: a JSON body schema, or an SSE stream of events. */
@@ -280,6 +310,73 @@ export const ROUTES = {
   listWork: { method: "GET", path: "/v1/wolves/:name/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
   /**
+   * Hub-scoped work reads (served by hubd, the pack authority; no wolf in the path). Same response shapes as the wolf-scoped
+   * `listWork` / `getWorkRecord`. `?domain=` and `?graduated=` behave as for `listWork`; a missing domain is 400 `invalid_request`,
+   * an unknown item is 404 `not_found`. Wolves keep serving the wolf-scoped routes.
+   */
+  hubListWork: { scope: "hub", method: "GET", path: "/v1/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
+  hubGetWorkRecord: { scope: "hub", method: "GET", path: "/v1/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
+   * Submit a wolf contribution to the hub (the hub-side librarian inbox). Body: the contribution fields as JSON. Needs `X-Wolfpack-Actor`;
+   * a wolf actor may only submit as itself (`from` must equal the actor id; an operator may submit for any wolf). 201 when stored,
+   * 200 `duplicate: true` when the same topic + content hash is already stored (idempotent). 400 `invalid_request` for non-JSON, a
+   * `from`/actor mismatch, or a contribution that fails the contribution schema (the latter is also quarantined under
+   * `contributions/<wolf>/_bad/` with a `.reason.txt`).
+   */
+  submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
+  /**
+   * Hub work WRITES (hubd is the only ledger writer). Every one requires `X-Wolfpack-Actor` (400 `invalid_request` without).
+   * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),
+   * 409 `not_ready` (stage not advanceable), 403 `forbidden` (`body` / `assignee` PATCH by a non-operator).
+   * `hubCreateWork`: create an item (a parentless task/issue/spike is filed in the domain Inbox). 201.
+   * `hubPatchWork`: STRICT body (unknown key = `invalid_request`): one single-field op, or a batch `{ops:[...]}` (1..50 ops,
+   * all-or-nothing: staged in a scratch copy, then appended to the ledger in one write; nothing is appended if any op fails).
+   * Fields: stage, note, title, successCriteria, moveTo, link, unlink, standing, schedule, section ({name: "plan"|"notes",
+   * text}; the generated Record/Log is rejected, as is text holding an H1/H2 outside a code fence or an unclosed fence, and a
+   * body with two of the same heading); operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
+   * rejected; `moveTo: null` un-parents (hierarchy rules still apply); `successCriteria: ""` clears it.
+   * A batch must be ALL ledger ops or ALL `body`/`section` ops: a mix is `invalid_request` ("section/body ops can't be combined
+   * with ledger ops in one batch; send them separately"). A ledger batch copies the ledger and the domain's work/ dir under the
+   * write queue; a content-only batch is one atomic .md write.
+   * KNOWN GAP: `body` and `section` ops rewrite the .md only and append NO ledger event, so they do not bump `updated` and
+   * emit no work.changed (follow-up; no new event type here).
+   * `hubDeleteWork`: delete the item and its descendants; answers the deleted ids.
+   * `hubGraduateWork`: mark the item graduated on the ledger (the agent route's behaviour; no distill step).
+   */
+  hubCreateWork: { scope: "hub", method: "POST", path: "/v1/work", body: CreateWorkRequestSchema, response: { kind: "json", schema: CreateWorkResponseSchema }, status: [201], error: err },
+  hubPatchWork: { scope: "hub", method: "PATCH", path: "/v1/work/:id", body: PatchWorkRequestSchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubDeleteWork: { scope: "hub", method: "DELETE", path: "/v1/work/:id", response: { kind: "json", schema: DeleteWorkResponseSchema }, status: [200], error: err },
+  /**
+   * `hubClaimWork`: compare-and-set under the writer queue. The actor (a wolf, or the operator) becomes the holder: appends
+   * work.assigned + work.bound (and work.staged approved -> in_build in the same append). Idempotent for the same holder.
+   * Targets: features and bindable tasks/issues/spikes (loose Inbox items or feature children). 409 `conflict` (`details.holder`)
+   * when held by another wolf, or when the item's feature is; 400 `invalid_request` for idea/initiative/container items or items
+   * not in stage approved or in_build (idea, plan, feasibility and the terminal stages are refused). Inheritance runs both ways: a
+   * child of a held feature, and a feature with a held child, are 409. An actor id that is not a valid wolf id is 400.
+   * LEGACY: an old work.bound with no matching work.unbound reads as held (last writer wins, no origin filter); an operator clears it
+   * with unclaim. task_bind outside the hub can displace a hub claim until wolves are repointed (JPhfaEL / cutover).
+   * `hubUnclaimWork`: the holder or an operator appends work.unbound; the stage is left alone.
+   * 409 `conflict` for any other actor. No timeout or presence expiry.
+   */
+  hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  /**
+   * KB commit (hubd): a batch of create/update/delete changes to entries/*.md, _registry.md, _digest.json and INDEX.md of declared
+   * domains, each with contentHash and prevHash. All-or-nothing under the KB writer lock: entry schema, declared domain (domains.yaml),
+   * path confinement, and prevHash compare-and-set (409 `conflict`, `details.path`, on a stale write). Then it writes the files,
+   * appends the KB ledger (ledger/events.jsonl) and emits `kb.changed` per domain. 400 `invalid_request`, 403 `forbidden` for a wolf
+   * actor. Body cap 8 MiB. Actor: operator over HTTP (X-Wolfpack-Actor required); the curator (system) uses the in-process hub.commitKb.
+   */
+  hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
+  /**
+   * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
+   * write (event = ledger event type), `kb.changed {entryIds}`, `wolf.presence`. Live from connect; `Last-Event-ID` / `?from=`
+   * replays from a bounded buffer, or answers `resync` when the cursor is older than the buffer (or from another hub boot).
+   * Keepalive comments; never ends with `[DONE]`.
+   */
+  hubEvents: { scope: "hub", method: "GET", path: "/v1/events", response: { kind: "sse", event: HubEventSchema }, status: [200], error: err },
+  /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start
    * while a preview for the item is running returns that job (409 `busy` while a confirm runs). Nothing is sent or archived (the wolf folds the item's pending
@@ -319,6 +416,36 @@ export const ROUTES = {
   getKbGraph: { method: "GET", path: "/v1/wolves/:name/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
   /** One KB entry (frontmatter, body, wikilinks, backlinks). Any wolf with KB roots. 400 malformed id, 404 unknown, 409 `kb_unavailable`. */
   getKbEntry: { method: "GET", path: "/v1/wolves/:name/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
+  /**
+   * The hub registry: hosts, wolves, domains, subscriptions (subscription id = `<wolf>:<domain>`). Reads: any actor. Writes
+   * (create/update/delete/retire) need an operator actor, else 403 `forbidden`. Creating a wolf writes ONLY the entry (no provisioning).
+   * `registryRetireWolf` sets status retired and releases every claim the wolf holds (work.unbound); `released` lists the item ids.
+   * Retire order: the registry entry is written FIRST (status retired), the claims are released SECOND. If the release fails the
+   * answer is an error saying the wolf is retired but claims remain; retrying retire is safe (it releases what is still held).
+   * A retired wolf's `hubClaimWork` is 403 `forbidden`; a wolf with no registry entry is unaffected. Creating a wolf with a `status`
+   * field is 400; deleting a wolf that holds claims is 409 `conflict` (retire it first).
+   * Every write regenerates domains.yaml in the hub data dir. 404 unknown name, 409 `conflict` on a duplicate create.
+   */
+  registryListHosts: { scope: "hub", method: "GET", path: "/v1/registry/hosts", response: { kind: "json", schema: R.RegistryHostsResponseSchema }, status: [200], error: err },
+  registryGetHost: { scope: "hub", method: "GET", path: "/v1/registry/hosts/:name", response: { kind: "json", schema: R.RegistryHostResponseSchema }, status: [200], error: err },
+  registryCreateHost: { scope: "hub", method: "POST", path: "/v1/registry/hosts", body: R.RegistryHostSchema, response: { kind: "json", schema: R.RegistryHostResponseSchema }, status: [200,201], error: err },
+  registryUpdateHost: { scope: "hub", method: "PATCH", path: "/v1/registry/hosts/:name", body: R.UpdateRegistryHostRequestSchema, response: { kind: "json", schema: R.RegistryHostResponseSchema }, status: [200], error: err },
+  registryDeleteHost: { scope: "hub", method: "DELETE", path: "/v1/registry/hosts/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
+  registryListWolves: { scope: "hub", method: "GET", path: "/v1/registry/wolves", response: { kind: "json", schema: R.RegistryWolvesResponseSchema }, status: [200], error: err },
+  registryGetWolf: { scope: "hub", method: "GET", path: "/v1/registry/wolves/:name", response: { kind: "json", schema: R.RegistryWolfResponseSchema }, status: [200], error: err },
+  registryCreateWolf: { scope: "hub", method: "POST", path: "/v1/registry/wolves", body: R.RegistryWolfSchema, response: { kind: "json", schema: R.RegistryWolfResponseSchema }, status: [200,201], error: err },
+  registryUpdateWolf: { scope: "hub", method: "PATCH", path: "/v1/registry/wolves/:name", body: R.UpdateRegistryWolfRequestSchema, response: { kind: "json", schema: R.RegistryWolfResponseSchema }, status: [200], error: err },
+  registryDeleteWolf: { scope: "hub", method: "DELETE", path: "/v1/registry/wolves/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
+  registryRetireWolf: { scope: "hub", method: "POST", path: "/v1/registry/wolves/:name/retire", response: { kind: "json", schema: R.RetireWolfResponseSchema }, status: [200], error: err },
+  registryListDomains: { scope: "hub", method: "GET", path: "/v1/registry/domains", response: { kind: "json", schema: R.RegistryDomainsResponseSchema }, status: [200], error: err },
+  registryGetDomain: { scope: "hub", method: "GET", path: "/v1/registry/domains/:name", response: { kind: "json", schema: R.RegistryDomainResponseSchema }, status: [200], error: err },
+  registryCreateDomain: { scope: "hub", method: "POST", path: "/v1/registry/domains", body: R.RegistryDomainSchema, response: { kind: "json", schema: R.RegistryDomainResponseSchema }, status: [200,201], error: err },
+  registryUpdateDomain: { scope: "hub", method: "PATCH", path: "/v1/registry/domains/:name", body: R.UpdateRegistryDomainRequestSchema, response: { kind: "json", schema: R.RegistryDomainResponseSchema }, status: [200], error: err },
+  registryDeleteDomain: { scope: "hub", method: "DELETE", path: "/v1/registry/domains/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
+  registryListSubscriptions: { scope: "hub", method: "GET", path: "/v1/registry/subscriptions", response: { kind: "json", schema: R.RegistrySubscriptionsResponseSchema }, status: [200], error: err },
+  registryGetSubscription: { scope: "hub", method: "GET", path: "/v1/registry/subscriptions/:name", response: { kind: "json", schema: R.RegistrySubscriptionResponseSchema }, status: [200], error: err },
+  registryCreateSubscription: { scope: "hub", method: "POST", path: "/v1/registry/subscriptions", body: R.RegistrySubscriptionSchema, response: { kind: "json", schema: R.RegistrySubscriptionResponseSchema }, status: [200, 201], error: err },
+  registryDeleteSubscription: { scope: "hub", method: "DELETE", path: "/v1/registry/subscriptions/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

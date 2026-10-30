@@ -8,6 +8,7 @@
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { pairPageHtml } from "./pair-page.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -75,6 +76,8 @@ export interface HubOptions {
   dataDir: string;
   /** LEGACY, optional: shared secret (X-API-Key) accepted alongside device tokens until the legacy path is removed. */
   apiKey?: string;
+  /** Where the pairing page sends the browser after a successful pair (the console's base URL; it receives the token in the URL fragment at /pair). Unset: the page just reports the token saved. */
+  consoleUrl?: string;
   /** How often the running hub checks the token file for revokes (closing their SSE streams), ms. Default 1000. */
   authPollMs?: number;
   /** Clock (ms since epoch) for pairing-code expiry and last-used stamps. Tests inject one; default Date.now. */
@@ -446,6 +449,18 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       readActor(req); // validated for every request; write routes (later tickets) call writeActor() and record it on the ledger event
       const { params } = m;
       switch (m.name) {
+        case "hubPairPage": {
+          const html = pairPageHtml(opts.consoleUrl);
+          res.writeHead(200, {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Length": Buffer.byteLength(html),
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+          });
+          return void res.end(html);
+        }
         case "hubPair": {
           const addr = req.socket.remoteAddress ?? "?"; // the socket peer; X-Forwarded-For is deliberately NOT trusted
           const t = (opts.now ?? Date.now)();

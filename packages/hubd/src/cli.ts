@@ -3,6 +3,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { exportHub, importHub } from "./export.js";
+import qr from "qrcode-terminal";
 import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
 import { createHubServer } from "./server.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
@@ -12,6 +13,10 @@ export interface CliArgs {
   /** pair: what the code is for. */
   kind?: "worker" | "console" | "browser";
   hostId?: string;
+  /** pair: base URL the phone/browser reaches (the hub, or the console when --console-url is set on serve) for the QR code. Env HUBD_PUBLIC_URL when unset. */
+  url?: string;
+  /** serve/dev: the console base URL the pairing page redirects to (token in the URL fragment). Env HUBD_CONSOLE_URL when unset. */
+  consoleUrl?: string;
   /** tokens: list | revoke */
   sub?: "list" | "revoke";
   /** tokens revoke: the token id. */
@@ -38,13 +43,14 @@ export const isLoopback = (h: string): boolean => {
 };
 
 const USAGE = `usage:
-  hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
+  hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1] [--console-url <url>] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
   hubd dev --snapshot <host> [--data-dir <dir>] [--port N] [--allow-network]    pull a read-only copy of <host>, then serve it
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
   hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped; creates run/ in <dir> to take the locks, so <dir> must be writable)
   hubd import --data-dir <dir> --in <file.tar>                restore into a missing or empty dir
-  hubd pair --kind worker|console|browser [--host-id <id>] --data-dir <dir>
-                                                              print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token
+  hubd pair --kind worker|console|browser [--host-id <id>] [--url <base>] --data-dir <dir>
+                                                              print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token.
+                                                              browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
@@ -74,6 +80,10 @@ export function parseArgs(argv: string[]): CliArgs {
       if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);
       return v;
     };
+    if (command === "pair" && flag === "--url") {
+      out.url = val0();
+      continue;
+    }
     if (command === "pair" && (flag === "--kind" || flag === "--host-id")) {
       const v = val0();
       if (flag === "--kind") {
@@ -94,6 +104,7 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (flag === "--seed-wolf") out.seedWolves.push(val());
     else if (flag === "--out" && command === "export") out.out = val();
     else if (flag === "--in" && command === "import") out.in = val();
+    else if (flag === "--console-url" && (command === "serve" || command === "dev")) out.consoleUrl = val();
     else if (flag === "--host") out.host = val();
     else if (flag === "--snapshot" && command === "dev") out.snapshot = val();
     else if (flag === "--allow-network" && command === "dev") out.allowNetwork = true;
@@ -133,6 +144,15 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   if (args.command === "pair") {
     const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode({ kind: args.kind!, ...(args.hostId ? { hostId: args.hostId } : {}) });
     log(`pairing code: ${code}\nfor a ${args.kind}${args.hostId ? ` token for host ${args.hostId}` : " token"}; single-use, expires ${expiresAt} (${PAIRING_TTL_MS / 60000} minutes)`);
+    if (args.kind === "browser") {
+      const base = (args.url ?? env.HUBD_PUBLIC_URL)?.trim().replace(/\/+$/, "");
+      if (!base) log("no QR code: pass --url <hub base url> (or set HUBD_PUBLIC_URL) to print one");
+      else {
+        const link = `${base}/pair?code=${encodeURIComponent(code)}`;
+        const art = await new Promise<string>((r) => qr.generate(link, { small: true }, r));
+        log(`${art}\n${link}`);
+      }
+    }
     return;
   }
   if (args.command === "tokens") {
@@ -165,7 +185,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
   } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
-  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
+  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, consoleUrl: (args.consoleUrl ?? env.HUBD_CONSOLE_URL)?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));

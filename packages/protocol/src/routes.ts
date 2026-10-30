@@ -379,6 +379,8 @@ export const ROUTES = {
    * `Authorization: Bearer <token>`; with a token the identity comes from the token and `X-Wolfpack-Actor` is IGNORED.
    */
   hubPair: { scope: "hub", public: true, method: "POST", path: "/v1/pair", body: PairRequestSchema, response: { kind: "json", schema: PairResponseSchema }, status: [200], error: err },
+  /** The hub's browser pairing page (static HTML + JS, public like hubPair): code + label form that POSTs hubPair with kind browser. `?code=` prefills. */
+  hubPairPage: { scope: "hub", public: true, method: "GET", path: "/pair", response: { kind: "bytes" }, status: [200], error: err },
   /**
    * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
    * write (event = ledger event type), `kb.changed {entryIds}`, `wolf.presence`. Live from connect; `Last-Event-ID` / `?from=`

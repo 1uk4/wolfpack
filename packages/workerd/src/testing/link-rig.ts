@@ -76,6 +76,8 @@ export interface LinkRigOptions {
   /** Extra createHubServer options (limits, poll intervals). */
   hubOptions?: Partial<Parameters<typeof createHubServer>[0]>;
   ackTimeoutMs?: number;
+  /** How often workerd scans the kb inbox lanes (default 40ms). */
+  feedIntervalMs?: number;
   linkOptions?: { retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
   /** Registry domains created up front (the registry must know a domain before a wolf can be granted it). */
   kbDomains?: string[];
@@ -146,6 +148,7 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
       kbOps,
       outboxDir,
+      feedIntervalMs: o.feedIntervalMs ?? 40,
       ackTimeoutMs: o.ackTimeoutMs ?? 400,
       log: (m) => void logs.push(m),
     });

@@ -3,6 +3,7 @@ import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } fr
 import { WorkerdServer } from "./proxy.js";
 import { HubLink, type LinkStatus } from "./link.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
+import { feedContributions } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
 import { dirname, join } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
@@ -38,6 +39,8 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   kbMirrorDir?: string;
   /** Test seams for the KB sync. */
   kbSync?: Partial<Omit<KbSyncOptions, "hubUrl" | "token" | "mirrorDir">>;
+  /** How often the kb inbox lanes are scanned for contributions to send over the link, ms (default 5000). */
+  feedIntervalMs?: number;
 }
 
 export interface RunningWorkerd {
@@ -81,6 +84,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   let wake: { stop(): void } | undefined;
   let serverUrl = "";
   const relay = new WorkerRelay({ baseUrl: () => serverUrl, send: (f, written) => link?.sendFrame(f, written) ?? false });
+  let feed: ReturnType<typeof setInterval> | undefined;
   if (hubCfg) {
     const warning = insecureHubWarning(hubCfg.hubUrl);
     if (warning) log(`[workerd] ${warning}`);
@@ -117,6 +121,10 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     });
     supervisor.onChange((e) => (e.type === "add" ? link!.wolfAdded(linkWolf(e.config)) : link!.wolfRemoved(e.name)));
     kbSync.start();
+    const feedOnce = () => void feedContributions(kbOps, supervisor.configs().map((c) => c.identity.name), { contribute: (w, c, id) => link!.contribute(w, c, id) }, log);
+    feedOnce();
+    feed = setInterval(feedOnce, opts.feedIntervalMs ?? 5000);
+    feed.unref();
     wake = startWakeMonitor({ ...opts.wake, onWake: (reason) => (log(`[workerd] ${reason}: reconnecting hub link`), link!.kick()) });
   }
   const server = new WorkerdServer({
@@ -137,6 +145,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     async close() {
       wake?.stop();
       kbSync?.stop();
+      if (feed) clearInterval(feed);
       await link?.stop();
       await server.close();
       await supervisor.stop();

@@ -62,8 +62,9 @@ export interface Relay {
   inflight(): number;
 }
 
-export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?: number; /** @internal TEST-ONLY */ stallMs?: number; log?: (m: string) => void }): Relay {
+export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?: number; /** @internal TEST-ONLY */ stallMs?: number; /** @internal TEST-ONLY: per-host cap override */ hostBuffered?: number; log?: (m: string) => void }): Relay {
   const stallMs = o.stallMs ?? DRAIN_STALL_MS;
+  const hostCap = o.hostBuffered ?? RELAY_MAX_BUFFERED_HOST;
   const pending = new Map<string, Pending>();
   const perHost = new Map<string, number>();
   const log = o.log ?? ((m: string) => console.log(m));
@@ -222,11 +223,23 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
       if (f.data.length > (utf8 ? LINK_RELAY_CHUNK_BYTES : Math.ceil((LINK_RELAY_CHUNK_BYTES * 4) / 3) + 4)) return tooBigChunk(f.id, p, hostId);
       const buf = utf8 ? Buffer.from(f.data, "utf8") : Buffer.from(f.data, "base64");
       if (buf.length > LINK_RELAY_CHUNK_BYTES) return tooBigChunk(f.id, p, hostId);
-      let hostBuffered = 0;
-      for (const q of pending.values()) if (q.hostId === hostId) hostBuffered += q.res.writableLength;
-      if (res.writableLength + buf.length > RELAY_HARD_BUFFERED || hostBuffered + buf.length > RELAY_MAX_BUFFERED_HOST) {
+      if (res.writableLength + buf.length > RELAY_HARD_BUFFERED) {
         log(`hubd: relay ${f.id} to ${hostId}: client too slow (${res.writableLength} bytes queued); cutting it off`);
         return abort(f.id, p, () => res.destroy());
+      }
+      // Host cap: cut the request holding the LARGEST buffer (the hog), not whichever chunk happened to cross the cap.
+      for (;;) {
+        let hostBuffered = buf.length;
+        let big: [string, Pending] | undefined;
+        for (const [qid, q] of pending) {
+          if (q.hostId !== hostId) continue;
+          hostBuffered += q.res.writableLength;
+          if (!big || q.res.writableLength > big[1].res.writableLength) big = [qid, q];
+        }
+        if (hostBuffered <= hostCap || !big) break;
+        log(`hubd: relay ${big[0]} to ${hostId}: host buffer cap exceeded; cutting off the largest (${big[1].res.writableLength} bytes queued)`);
+        abort(big[0], big[1], () => big![1].res.destroy());
+        if (big[0] === f.id) return;
       }
       if (!res.write(buf)) {
         armStall(f.id, p, hostId);
@@ -240,10 +253,7 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
             p.drainWatch = false;
             clearTimeout(p.stallTimer);
             p.stallTimer = undefined;
-            if (p.paused && !p.done) {
-              p.paused = false;
-              if (o.link.epoch(hostId) === p.epoch) o.link.sendToHost(hostId, { t: "resume", id: f.id });
-            }
+            resumePaused(f.id, p, hostId); // drain: the queue is empty (node flushes its buffered chunks in one batch, so there is no earlier reliable point)
           });
         }
       }
@@ -258,6 +268,13 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
     finish(f.id, p);
     if (!p.started) return envelope(res, 502, "engine_error", `worker failed the request: ${f.code}${f.message ? `: ${f.message.slice(0, 200)}` : ""}`, true, { code: f.code.slice(0, 40) });
     res.destroy();
+  }
+
+  /** One `resume` per paused state. */
+  function resumePaused(id: string, p: Pending, hostId: string): void {
+    if (!p.paused || p.done) return;
+    p.paused = false;
+    if (o.link.epoch(hostId) === p.epoch) o.link.sendToHost(hostId, { t: "resume", id });
   }
 
   /** No-progress timer: fires only if the client's socket moved no bytes over a whole window (slow-but-advancing readers survive). */

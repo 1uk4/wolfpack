@@ -58,6 +58,12 @@ export interface CliConfig {
    * the agent honours the same values via WOLFPACK_* env (see agent/src/paths.ts).
    */
   remote?: RemoteLayout;
+  /**
+   * Override for the shared KB root that wolves read (KB_BASE). Default
+   * <wolvesRoot>/knowledge/base (the Syncthing copy); set it to point wolves at a
+   * hub mirror in base layout. `WOLFPACK_KB_BASE` takes precedence over this.
+   */
+  kbBase?: string;
   /** Extra directories searched for helper binaries (tailscale, …) and put on launchd PATH. */
   binDirs?: string[];
 }
@@ -103,6 +109,7 @@ export function loadConfig(): CliConfig {
       owner: parsed.owner,
       remote: parsed.remote,
       binDirs: parsed.binDirs,
+      kbBase: parsed.kbBase,
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -125,8 +132,14 @@ export function localHostDir(config: CliConfig): string {
 }
 
 /** Shared knowledge-base root: <root>/knowledge/base (Dewey writes, wolves read). */
-export function kbBaseDir(config: CliConfig): string {
-  return path.join(config.wolvesRoot, "knowledge", "base");
+export function kbBaseDir(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string {
+  return explicitKbBase(config, env) ?? path.join(config.wolvesRoot, "knowledge", "base");
+}
+
+/** The KB base the owner set explicitly (`WOLFPACK_KB_BASE` env, then config `kbBase`), if any. */
+export function explicitKbBase(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const v = env.WOLFPACK_KB_BASE?.trim() || config.kbBase?.trim();
+  return v || undefined;
 }
 
 /** Librarian-ops root: <root>/librarian (inbox/kb-feed/receipts/rejected per wolf). */

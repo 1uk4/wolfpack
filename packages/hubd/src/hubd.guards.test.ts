@@ -4,16 +4,17 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACTOR_HEADER, ErrorEnvelopeSchema } from "@wolfpack/protocol";
+import { ErrorEnvelopeSchema } from "@wolfpack/protocol";
 import { appendWorkLedger, createWork, linkWork, loadWorkState, moveWork, setStanding, stageWork } from "@wolfpack/kb/client";
-import { createHubServer, type HubServer } from "./server.js";
+import { createHubServer as createRawHubServer, type HubServer } from "./server.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
+import { OP, seedTokens } from "./testing/tokens.js";
 import { HubError } from "./errors.js";
 import { GUARD_MESSAGES, createWorkWriter, mapWorkError } from "./work-writes.js";
 
-const KEY = "k";
-const OP = { [ACTOR_HEADER]: JSON.stringify({ id: "1uk4", kind: "operator" }) };
+/** createHubServer on a data dir that already holds the test operator token (OP). */
+const createHubServer = (o: Parameters<typeof createRawHubServer>[0]) => (seedTokens(o.dataDir), createRawHubServer(o));
 const tmp: string[] = [];
 const servers: HubServer[] = [];
 const mk = () => {
@@ -27,12 +28,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 const start = async (dataDir: string, extra: Partial<Parameters<typeof createHubServer>[0]> = {}) => {
-  const h = await createHubServer({ dataDir, apiKey: KEY, ...extra });
+  const h = await createHubServer({ dataDir, ...extra });
   servers.push(h);
   return h;
 };
 const req = (h: HubServer, method: string, path: string, body?: unknown, headers: Record<string, string> = OP) =>
-  fetch(h.url + path, { method, headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  fetch(h.url + path, { method, headers: { "Content-Type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
 const ledger = (dir: string) => readFileSync(join(dir, "ledger", "work-events.jsonl"), "utf8");
 async function expectCode(res: Response, code: string) {
   const env = ErrorEnvelopeSchema.parse(await res.json());
@@ -167,33 +168,33 @@ describe("PATCH parity", () => {
 });
 
 describe("request bodies", () => {
-  it("auth runs before the body is read (a wrong key with a bad body is 401)", async () => {
+  it("auth runs before the body is read (a bad token with a bad body is 401)", async () => {
     const hub = await start(mk());
-    const res = await fetch(hub.url + "/v1/work", { method: "POST", headers: { "X-API-Key": "wrong", ...OP }, body: "{not json" });
+    const res = await fetch(hub.url + "/v1/work", { method: "POST", headers: { Authorization: "Bearer wrong" }, body: "{not json" });
     await expectCode(res, "unauthorized");
   });
 
   it("oversized (Content-Length and chunked) and malformed bodies are invalid_request", async () => {
     const hub = await start(mk());
     const big = JSON.stringify({ kind: "idea", domain: FIXTURE_DOMAIN, title: "x".repeat(3 * 1024 * 1024), assignee: "a" });
-    const sized = await fetch(hub.url + "/v1/work", { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...OP }, body: big });
+    const sized = await fetch(hub.url + "/v1/work", { method: "POST", headers: { "Content-Type": "application/json", ...OP }, body: big });
     expect((await expectCode(sized, "invalid_request")).message).toMatch(/too large/);
     const chunked = await fetch(hub.url + "/v1/work", {
       method: "POST",
-      headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...OP },
+      headers: { "Content-Type": "application/json", ...OP },
       body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(big)); c.close(); } }),
       // @ts-expect-error node fetch needs duplex for streams
       duplex: "half",
     });
     expect((await expectCode(chunked, "invalid_request")).message).toMatch(/too large/);
-    const bad = await fetch(hub.url + "/v1/work", { method: "POST", headers: { "X-API-Key": KEY, ...OP }, body: "{not json" });
+    const bad = await fetch(hub.url + "/v1/work", { method: "POST", headers: { ...OP }, body: "{not json" });
     expect((await expectCode(bad, "invalid_request")).message).toMatch(/valid JSON/);
   });
 
   it("a stalled body times out", async () => {
     const hub = await start(mk(), { bodyTimeoutMs: 150 });
     const status = await new Promise<number>((resolve, reject) => {
-      const r = request(hub.url + "/v1/work", { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", "Content-Length": "100", ...OP } }, (res) => {
+      const r = request(hub.url + "/v1/work", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": "100", ...OP } }, (res) => {
         res.resume();
         resolve(res.statusCode ?? 0);
       });
@@ -214,7 +215,6 @@ describe("close vs writes", () => {
     let gated = false;
     const hub = await createHubServer({
       dataDir: dir,
-      apiKey: KEY,
       writeGate: async () => {
         if (gated) return;
         gated = true;
@@ -224,13 +224,13 @@ describe("close vs writes", () => {
     });
     const url = new URL(hub.url);
     const mkBody = (title: string) => JSON.stringify({ kind: "idea", domain: FIXTURE_DOMAIN, title, assignee: "a" });
-    const aRes = fetch(hub.url + "/v1/work", { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...OP }, body: mkBody("in-flight") });
+    const aRes = fetch(hub.url + "/v1/work", { method: "POST", headers: { "Content-Type": "application/json", ...OP }, body: mkBody("in-flight") });
     await inGate; // A is inside the write queue
 
     // B: connected with headers + part of its body sent, so it is a live request when close starts.
     const bBody = mkBody("too-late");
     const bDone = new Promise<{ status: number; body: string }>((resolve, reject) => {
-      const r = request({ host: url.hostname, port: url.port, path: "/v1/work", method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", "Content-Length": String(Buffer.byteLength(bBody)), ...OP } }, (res) => {
+      const r = request({ host: url.hostname, port: url.port, path: "/v1/work", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": String(Buffer.byteLength(bBody)), ...OP } }, (res) => {
         let t = "";
         res.on("data", (c) => (t += c));
         res.on("end", () => resolve({ status: res.statusCode ?? 0, body: t }));
@@ -258,7 +258,7 @@ describe("close vs writes", () => {
     expect(l).toContain("in-flight");
     expect(l).not.toContain("too-late");
     // lock released: a new hub can start on the same dir
-    servers.push(await createHubServer({ dataDir: dir, apiKey: KEY }));
+    servers.push(await createHubServer({ dataDir: dir }));
   });
 });
 
@@ -304,8 +304,8 @@ describe("startup failure and probe failure", () => {
     const dir = mk();
     const other = mk();
     const blocker = await start(other); // holds a port
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY, port: blocker.port })).rejects.toThrow(/EADDRINUSE/);
-    servers.push(await createHubServer({ dataDir: dir, apiKey: KEY })); // no wait between the reject and the retry
+    await expect(createHubServer({ dataDir: dir, port: blocker.port })).rejects.toThrow(/EADDRINUSE/);
+    servers.push(await createHubServer({ dataDir: dir })); // no wait between the reject and the retry
   });
 
   it("a non-ENOENT stat failure skips the hook diff (no replay of the ledger) and does not affect the write", async () => {

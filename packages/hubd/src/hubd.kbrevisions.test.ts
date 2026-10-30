@@ -3,13 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER, type KbChange, type KbChangesResponse, type KbManifestDiffResponse } from "@wolfpack/protocol";
+import { type KbChange, type KbChangesResponse, type KbManifestDiffResponse } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
 import { createHubServer, type HubOptions, type HubServer } from "./server.js";
 import { createTokenStore } from "./auth.js";
+import { OP as OP_HEADERS, seedTokens } from "./testing/tokens.js";
 
-const KEY = "k";
-const OP = { id: "1uk4", kind: "operator" } as const;
 const tmp: string[] = [];
 let servers: HubServer[] = [];
 afterEach(async () => {
@@ -35,7 +34,8 @@ async function setup(over: Partial<HubOptions> = {}, existing?: string) {
     for (const d of ["alpha", "beta"]) mkdirSync(join(dir, "kb", "base", "domains", d, "entries"), { recursive: true });
   }
   const clock = { t: Date.now() };
-  const opts: HubOptions = { dataDir: dir, apiKey: KEY, kbPollMs: 0, kbSettleMs: -1, now: () => clock.t, ...over };
+  const opts: HubOptions = { dataDir: dir, kbPollMs: 0, kbSettleMs: -1, now: () => clock.t, ...over };
+  seedTokens(dir); // before the first start only: a restart must keep tokens paired since
   let hub = await createHubServer(opts);
   servers.push(hub);
   const base = join(dir, "kb", "base", "domains");
@@ -52,7 +52,7 @@ async function setup(over: Partial<HubOptions> = {}, existing?: string) {
       servers.push(hub);
     },
     commit: (...changes: KbChange[]) =>
-      fetch(hub.url + "/v1/kb/commits", { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify(OP) }, body: JSON.stringify({ changes }) }),
+      fetch(hub.url + "/v1/kb/commits", { method: "POST", headers: { ...OP_HEADERS, "Content-Type": "application/json" }, body: JSON.stringify({ changes }) }),
     file: (d: string, p: string) => join(base, d, p),
     /** Direct write like Dewey's; `old` backdates the mtime out of any settle window. */
     write(d: string, p: string, text: string, old = true) {
@@ -61,19 +61,19 @@ async function setup(over: Partial<HubOptions> = {}, existing?: string) {
       writeFileSync(f, text);
       if (old) utimesSync(f, (long + ++bump * 1000) / 1000, (long + bump * 1000) / 1000);
     },
-    get: (path: string, headers: Record<string, string> = { "X-API-Key": KEY }) => fetch(hub.url + path, { headers }),
+    get: (path: string, headers: Record<string, string> = OP_HEADERS) => fetch(hub.url + path, { headers }),
     async changes(d: string, q = "") {
       // since > 0 needs an epoch: add the hub's current one unless the test passes its own
-      if (/since=[1-9]/.test(q) && !q.includes("epoch=")) q += `&epoch=${((await (await fetch(`${hub.url}/v1/kb/domains/${d}/manifest`, { headers: { "X-API-Key": KEY } })).json()) as { epoch: string }).epoch}`;
-      const r = await fetch(`${hub.url}/v1/kb/domains/${d}/changes${q}`, { headers: { "X-API-Key": KEY } });
+      if (/since=[1-9]/.test(q) && !q.includes("epoch=")) q += `&epoch=${((await (await fetch(`${hub.url}/v1/kb/domains/${d}/manifest`, { headers: OP_HEADERS })).json()) as { epoch: string }).epoch}`;
+      const r = await fetch(`${hub.url}/v1/kb/domains/${d}/changes${q}`, { headers: OP_HEADERS });
       expect(r.status).toBe(200);
       return (await r.json()) as KbChangesResponse;
     },
     async rev(d: string) {
-      return ((await (await fetch(`${hub.url}/v1/kb/domains/${d}/manifest`, { headers: { "X-API-Key": KEY } })).json()) as { revision: number }).revision;
+      return ((await (await fetch(`${hub.url}/v1/kb/domains/${d}/manifest`, { headers: OP_HEADERS })).json()) as { revision: number }).revision;
     },
     async diff(d: string, files: Record<string, string>, maxBytes?: number) {
-      const r = await fetch(`${hub.url}/v1/kb/domains/${d}/manifest-diff`, { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json" }, body: JSON.stringify({ files, maxBytes }) });
+      const r = await fetch(`${hub.url}/v1/kb/domains/${d}/manifest-diff`, { method: "POST", headers: { ...OP_HEADERS, "Content-Type": "application/json" }, body: JSON.stringify({ files, maxBytes }) });
       expect(r.status).toBe(200);
       return (await r.json()) as KbManifestDiffResponse;
     },
@@ -344,7 +344,7 @@ describe("KB revisions", () => {
     const s = await setup();
     const call = (method: string, path: string, headers: Record<string, string>, body?: unknown) =>
       fetch(s.hub.url + path, { method, headers: { "Content-Type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
-    const adm = { "X-API-Key": KEY, [ACTOR_HEADER]: JSON.stringify(OP) };
+    const adm = OP_HEADERS;
     for (const d of ["alpha", "beta"]) expect((await call("POST", "/v1/registry/domains", adm, { name: d })).status).toBe(201);
     expect((await call("POST", "/v1/registry/hosts", adm, { name: "h1" })).status).toBe(201);
     expect((await call("POST", "/v1/registry/hosts", adm, { name: "h2" })).status).toBe(201);
@@ -370,7 +370,7 @@ describe("KB revisions", () => {
     }
     expect((await call("GET", "/v1/kb/domains/beta/changes", con)).status).toBe(200);
     expect((await call("POST", "/v1/kb/commits", w1, { changes: [create("alpha", A2)] })).status).toBe(403);
-    expect((await call("GET", "/v1/kb/domains/beta/changes", { "X-API-Key": KEY })).status).toBe(200); // legacy key: unchanged behaviour
+    expect((await call("GET", "/v1/kb/domains/beta/changes", { "X-API-Key": "0123456789abcdef0123456789abcdef" })).status).toBe(401); // the shared key is gone
   });
 
   it("the poll timer detects direct writes on its own", async () => {

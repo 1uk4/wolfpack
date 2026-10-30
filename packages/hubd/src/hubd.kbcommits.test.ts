@@ -4,14 +4,16 @@ import { createServer as netServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER, type KbChange } from "@wolfpack/protocol";
+import { type KbChange } from "@wolfpack/protocol";
 import { contentHash, ledgerFile } from "@wolfpack/kb/shared";
 import { readLedger } from "@wolfpack/kb/librarian";
-import { createHubServer, type HubServer } from "./server.js";
+import { createHubServer as createRawHubServer, type HubServer } from "./server.js";
 import { hubRoots } from "./layout.js";
+import { OP as OP_HEADERS, seedTokens, workerHeaders } from "./testing/tokens.js";
 import { applyKbCommit, acquireKbWriterLock, kbJournalFile, recoverKbCommit } from "./kb-commits.js";
 
-const KEY = "k";
+/** createHubServer on a data dir that already holds the test operator token and a worker token for host h1. */
+const createHubServer = (o: Parameters<typeof createRawHubServer>[0]) => (seedTokens(o.dataDir, ["h1"]), createRawHubServer(o));
 const OP = { id: "1uk4", kind: "operator" } as const;
 const SYS = { id: "system", kind: "system" } as const;
 const WOLF = { id: "w1", kind: "wolf" } as const;
@@ -28,16 +30,19 @@ const ID2 = "kb-alpha-bbbbbbb";
 const create = (domain: string, id: string, content = entry(domain, id)): KbChange => ({ op: "create", domain, path: `entries/${id}.md`, content, contentHash: contentHash(content), prevHash: null });
 const update = (domain: string, id: string, prev: string, content: string): KbChange => ({ op: "update", domain, path: `entries/${id}.md`, content, contentHash: contentHash(content), prevHash: contentHash(prev) });
 
+/** The credentials a test actor stands for: operator = the console token, wolf = a worker token; system / none = no credentials (system cannot be asserted over HTTP). */
+const credsFor = (actor?: { kind: string }): Record<string, string> => (actor?.kind === "operator" ? OP_HEADERS : actor?.kind === "wolf" ? workerHeaders("h1") : {});
+
 async function setup(kbFaults?: Parameters<typeof createHubServer>[0]["kbFaults"]) {
   const dir = mkdtempSync(join(tmpdir(), "hubd-kb-"));
   tmp.push(dir);
   const base = join(dir, "kb", "base");
   mkdirSync(base, { recursive: true });
   writeFileSync(join(base, "domains.yaml"), "domains:\n  alpha:\n    label: Alpha\n  beta:\n    label: Beta\n  wp:\n    label: WP\n");
-  const hub = await createHubServer({ dataDir: dir, apiKey: KEY, kbFaults });
+  const hub = await createHubServer({ dataDir: dir, kbFaults });
   servers.push(hub);
   const post = (body: unknown, actor?: object) =>
-    fetch(hub.url + "/v1/kb/commits", { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...(actor ? { [ACTOR_HEADER]: JSON.stringify(actor) } : {}) }, body: JSON.stringify(body) });
+    fetch(hub.url + "/v1/kb/commits", { method: "POST", headers: { "Content-Type": "application/json", ...credsFor(actor) }, body: JSON.stringify(body) });
   const file = (d: string, p: string) => join(base, "domains", d, p);
   const ledger = () => (existsSync(ledgerFile(hub.roots)) ? readFileSync(ledgerFile(hub.roots)) : Buffer.alloc(0));
   /** Every file under kb/base/domains, with bytes. */
@@ -61,7 +66,7 @@ describe("POST /v1/kb/commits", () => {
     const s = await setup();
     const events: unknown[] = [];
     const ctl = new AbortController();
-    const sse = await fetch(s.hub.url + "/v1/events", { headers: { "X-API-Key": KEY }, signal: ctl.signal });
+    const sse = await fetch(s.hub.url + "/v1/events", { headers: OP_HEADERS, signal: ctl.signal });
     const reader = sse.body!.getReader();
     const pump = (async () => {
       const dec = new TextDecoder();
@@ -165,13 +170,13 @@ describe("POST /v1/kb/commits", () => {
     expect(readFileSync(join(outside, "t"), "utf8")).toBe("secret");
   });
 
-  it("actor policy: wolf 403 forbidden, no actor 400, system cannot be asserted over HTTP; in-process commitKb allows system and operator", async () => {
+  it("actor policy: wolf token 403 forbidden, no credentials 401, system cannot be asserted over HTTP; in-process commitKb allows system and operator", async () => {
     const s = await setup();
     const body = { changes: [create("alpha", ID1)] };
     expect((await s.post(body, WOLF)).status).toBe(403);
     expect(await (await s.post(body, WOLF)).json()).toMatchObject({ code: "forbidden" });
-    expect((await s.post(body)).status).toBe(400);
-    expect((await s.post(body, SYS)).status).toBe(400);
+    expect((await s.post(body)).status).toBe(401);
+    expect((await s.post(body, SYS)).status).toBe(401);
     expect(existsSync(s.file("alpha", `entries/${ID1}.md`))).toBe(false);
     await expect(s.hub.commitKb(WOLF, body)).rejects.toMatchObject({ code: "forbidden" });
     await expect(s.hub.commitKb(SYS, body)).resolves.toMatchObject({ committed: 1 });
@@ -261,7 +266,7 @@ describe("ledger-level atomicity", () => {
     writeFileSync(join(roots.kbBase, "domains.yaml"), "domains:\n  alpha: {}\n");
     expect(() => applyKbCommit(roots, dir, { changes: [create("alpha", ID1)] }, { crash: true, at: (st) => { if (st === "ledger") throw new Error("crash"); } })).toThrow();
     expect(existsSync(join(roots.kbBase, "domains/alpha/entries", `${ID1}.md`))).toBe(true);
-    const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
+    const hub = await createHubServer({ dataDir: dir });
     servers.push(hub);
     expect(existsSync(join(roots.kbBase, "domains/alpha/entries", `${ID1}.md`))).toBe(false);
     expect(existsSync(kbJournalFile(dir))).toBe(false);
@@ -302,7 +307,7 @@ describe("ledger-level atomicity", () => {
     expect(readFileSync(jf).equals(journalBytes)).toBe(true);
     expect(s.snapshot()).toEqual(partial);
     await servers.pop()!.close();
-    const hub2 = await createHubServer({ dataDir: s.dir, apiKey: KEY });
+    const hub2 = await createHubServer({ dataDir: s.dir });
     servers.push(hub2);
     expect(s.snapshot()).toEqual(before.snap);
     expect(readFileSync(ledgerFile(hub2.roots)).equals(before.led)).toBe(true);
@@ -377,10 +382,10 @@ describe("ledger-level atomicity", () => {
     const blocker = netServer();
     await new Promise<void>((r) => blocker.listen(0, "127.0.0.1", () => r()));
     const port = (blocker.address() as { port: number }).port;
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY, port })).rejects.toThrow();
+    await expect(createHubServer({ dataDir: dir, port })).rejects.toThrow();
     blocker.close();
     expect(existsSync(join(dir, "run", "kb-writer.lock"))).toBe(false);
-    const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
+    const hub = await createHubServer({ dataDir: dir });
     servers.push(hub);
   });
 
@@ -398,7 +403,7 @@ describe("ledger-level atomicity", () => {
   it("an unparseable journal is never deleted: start fails naming it, bytes unchanged, lock released", async () => {
     const { dir } = bare("garbage");
     writeFileSync(kbJournalFile(dir), "{not json");
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/kb-commit\.journal\.json is unparseable.*half-applied.*by hand/s);
+    await expect(createHubServer({ dataDir: dir })).rejects.toThrow(/kb-commit\.journal\.json is unparseable.*half-applied.*by hand/s);
     expect(readFileSync(kbJournalFile(dir), "utf8")).toBe("{not json");
     expect(existsSync(join(dir, "run", "kb-writer.lock"))).toBe(false);
     expect(existsSync(join(dir, "run", "kb-writer.lock.takeover"))).toBe(false);
@@ -408,7 +413,7 @@ describe("ledger-level atomicity", () => {
     const { dir } = bare("torn");
     const torn = join(dir, "run", "kb-commit.journal.json.tmp-1-deadbeef");
     writeFileSync(torn, "{tor");
-    const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
+    const hub = await createHubServer({ dataDir: dir });
     servers.push(hub);
     expect(existsSync(torn)).toBe(false);
   });
@@ -437,7 +442,7 @@ describe("ledger-level atomicity", () => {
         const rel = mk(dir);
         const journal = JSON.stringify({ v: 1, ledgerOffset: 0, ledgerAppend: "", files: [{ rel: "kb/base/domains/alpha/INDEX.md", prev: Buffer.from("original").toString("base64") }, { rel, prev: null }] });
         writeFileSync(kbJournalFile(dir), journal);
-        await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/journal path/);
+        await expect(createHubServer({ dataDir: dir })).rejects.toThrow(/journal path/);
         expect(readFileSync(kbJournalFile(dir), "utf8")).toBe(journal);
         expect(readFileSync(join(roots.kbBase, "domains/alpha/INDEX.md"), "utf8")).toBe("changed on disk"); // the valid first file was NOT restored
         expect(existsSync(join(dir, "run", "kb-writer.lock"))).toBe(false);

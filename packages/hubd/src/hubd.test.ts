@@ -2,24 +2,24 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { assertedActor, createHubServer, HubError, readActor, writeActor, type HubServer } from "./server.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
+import { bearer, mintOperatorToken } from "./testing/tokens.js";
 
-const KEY = "k";
+let auth: Record<string, string> = {};
 const dataDir = mkdtempSync(join(tmpdir(), "hubd-unit-"));
 let hub: HubServer;
 let seeded: ReturnType<typeof seedFixture>;
 beforeAll(async () => {
   seeded = seedFixture(dataDir);
-  hub = await createHubServer({ dataDir, apiKey: KEY });
+  hub = await createHubServer({ dataDir });
+  auth = bearer(mintOperatorToken(dataDir));
 });
 afterAll(async () => {
   await hub.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
-const get = (p: string, extra: Record<string, string> = {}) => fetch(hub.url + p, { headers: { "X-API-Key": KEY, ...extra } });
-const actor = (a: unknown) => ({ [ACTOR_HEADER]: JSON.stringify(a) });
+const get = (p: string, extra: Record<string, string> = {}) => fetch(hub.url + p, { headers: { ...auth, ...extra } });
 type Row = { id: string; container?: boolean; graduated?: string };
 
 describe("hubd work reads", () => {
@@ -46,17 +46,10 @@ describe("hubd work reads", () => {
   });
 });
 
-describe("hubd actor (PROVISIONAL: asserted, not proven)", () => {
-  it("a valid actor header is accepted on reads", async () => {
-    for (const a of [{ id: "1uk4", kind: "wolf" }, { id: "owner", kind: "operator" }]) {
-      expect((await get(`/v1/work?domain=${FIXTURE_DOMAIN}`, actor(a))).status).toBe(200);
-    }
-  });
-  it("a malformed actor, or a client asserting system, is invalid_request", async () => {
-    for (const h of [{ [ACTOR_HEADER]: "nope" }, actor({ id: "", kind: "wolf" }), actor({ id: "x", kind: "root" }), actor({ id: "system", kind: "system" })]) {
-      const r = await get("/v1/work?domain=x", h);
-      expect(r.status).toBe(400);
-      expect(((await r.json()) as { code: string }).code).toBe("invalid_request");
+describe("hubd actor (the token's identity; nothing a client sends can assert one)", () => {
+  it("an X-Wolfpack-Actor header, valid, malformed or asserting system, is ignored", async () => {
+    for (const v of [JSON.stringify({ id: "1uk4", kind: "wolf" }), "nope", JSON.stringify({ id: "system", kind: "system" })]) {
+      expect((await get(`/v1/work?domain=${FIXTURE_DOMAIN}`, { "X-Wolfpack-Actor": v })).status).toBe(200);
     }
   });
   it("wolf-scoped routes are not served by the hub", async () => {
@@ -64,7 +57,7 @@ describe("hubd actor (PROVISIONAL: asserted, not proven)", () => {
     expect((await get("/v1/wolves")).status).toBe(200);
   });
 
-  const req = (a?: unknown) => ({ headers: a === undefined ? {} : { [ACTOR_HEADER.toLowerCase()]: JSON.stringify(a) } });
+  const req = () => ({ headers: { "x-wolfpack-actor": JSON.stringify({ id: "w", kind: "wolf" }) } });
   const code = (f: () => unknown) => {
     try {
       f();
@@ -73,18 +66,13 @@ describe("hubd actor (PROVISIONAL: asserted, not proven)", () => {
     }
     return "none";
   };
-  it("reads default to the system actor; assertedActor does not", () => {
+  it("a request with no verified token has no actor, whatever its headers say", () => {
     expect(readActor(req())).toEqual({ id: "system", kind: "system" });
     expect(assertedActor(req())).toBeUndefined();
-    expect(readActor(req({ id: "w", kind: "wolf" }))).toEqual({ id: "w", kind: "wolf" });
   });
-  it("writeActor: an explicit actor is required; system is refused; ownerOnly needs an operator", () => {
+  it("writeActor needs an authenticated token (the actor header never counts)", () => {
     expect(code(() => writeActor(req()))).toBe("invalid_request");
-    expect(code(() => writeActor(req({ id: "system", kind: "system" })))).toBe("invalid_request");
-    expect(writeActor(req({ id: "w", kind: "wolf" }))).toEqual({ id: "w", kind: "wolf" });
-    expect(code(() => writeActor(req({ id: "w", kind: "wolf" }), { ownerOnly: true }))).toBe("forbidden");
     expect(code(() => writeActor(req(), { ownerOnly: true }))).toBe("invalid_request");
-    expect(writeActor(req({ id: "me", kind: "operator" }), { ownerOnly: true })).toEqual({ id: "me", kind: "operator" });
   });
 });
 
@@ -93,9 +81,9 @@ describe("hubd internal errors", () => {
     const dir = mkdtempSync(join(tmpdir(), "hubd-broken-"));
     mkdirSync(join(dir, "ledger", "work-events.jsonl"), { recursive: true }); // a directory where the ledger file should be: reads throw
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const broken = await createHubServer({ dataDir: dir, apiKey: KEY });
+    const broken = await createHubServer({ dataDir: dir });
     try {
-      const r = await fetch(`${broken.url}/v1/work?domain=x`, { headers: { "X-API-Key": KEY } });
+      const r = await fetch(`${broken.url}/v1/work?domain=x`, { headers: bearer(mintOperatorToken(dir)) });
       expect(r.status).toBe(502);
       const env = (await r.json()) as { code: string; message: string };
       expect(env.code).toBe("engine_error");

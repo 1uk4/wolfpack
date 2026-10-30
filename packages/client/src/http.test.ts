@@ -271,21 +271,21 @@ describe("HttpConsoleClient watchHubEvents", () => {
     const ctl = new AbortController();
     const f: typeof fetch = async (input, init) => {
       const req = new Request(input as string, init);
-      seen.push({ url: req.url, cursor: req.headers.get("last-event-id"), key: req.headers.get("x-api-key") });
+      seen.push({ url: req.url, cursor: req.headers.get("last-event-id"), key: req.headers.get("authorization") });
       if (seen.length === 1) return sse(`id: b:0\ndata: {"type":"resync","id":0,"at":"2026-10-29T00:00:00.000Z"}\n\nid: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
       return sse(`id: b:2\ndata: {"type":"future.thing","id":2,"at":"x"}\n\nid: b:3\ndata: {"type":"wolf.presence","id":3,"at":"2026-10-29T00:00:00.000Z","wolf":"w","state":"online","host":"h"}\n\n`);
     };
-    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", apiKey: "sekret" }, fetch: f, retryDelayMs: 1 });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", token: "sekret" }, fetch: f, retryDelayMs: 1 });
     const got: string[] = [];
     for await (const ev of c.watchHubEvents({ signal: ctl.signal })) {
       got.push(ev.type);
       if (got.length === 3) ctl.abort();
     }
     expect(got).toEqual(["resync", "kb.changed", "wolf.presence"]); // the unknown type is skipped
-    expect(seen[0]).toEqual({ url: "http://hub.invalid/v1/events", cursor: null, key: "sekret" });
+    expect(seen[0]).toEqual({ url: "http://hub.invalid/v1/events", cursor: null, key: "Bearer sekret" });
     expect(seen[1].cursor).toBe("b:1");
   });
-  it("hub requests send the bearer token (preferred over the legacy key)", async () => {
+  it("hub requests send the bearer token and never X-API-Key", async () => {
     const seen: { auth: string | null; key: string | null }[] = [];
     const ctl = new AbortController();
     const f: typeof fetch = async (input, init) => {
@@ -293,7 +293,7 @@ describe("HttpConsoleClient watchHubEvents", () => {
       seen.push({ auth: req.headers.get("authorization"), key: req.headers.get("x-api-key") });
       return sse(`id: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
     };
-    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", token: "tok123", apiKey: "sekret" }, fetch: f });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", token: "tok123" }, fetch: f });
     for await (const _ev of c.watchHubEvents({ signal: ctl.signal })) ctl.abort();
     expect(seen[0]).toEqual({ auth: "Bearer tok123", key: null });
   });
@@ -334,28 +334,26 @@ describe("HttpConsoleClient hub work reads", () => {
     const seen: { url: string; key: string | null }[] = [];
     const f: typeof fetch = async (input, init) => {
       const req = new Request(input as string, init);
-      seen.push({ url: req.url, key: req.headers.get("x-api-key") });
+      seen.push({ url: req.url, key: req.headers.get("authorization") });
       if (req.url.includes("/record")) return Response.json({ id: "work-x-1234567", title: "T", kind: "task", stage: "plan", plan: "p", record: "" });
       return Response.json({ items: [{ id: "work-x-1234567", title: "T", kind: "task", stage: "plan", domain: "x", dependsOn: [] }] });
     };
-    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid/", apiKey: "sekret" }, fetch: f });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid/", token: "sekret" }, fetch: f });
     expect((await c.listWork("any", { domain: "x y", graduated: true })).items).toHaveLength(1);
     expect((await c.getWorkRecord("any", "work-x-1234567")).title).toBe("T");
     expect(seen.map((s) => s.url)).toEqual(["http://hub.invalid/v1/work?domain=x%20y&graduated=true", "http://hub.invalid/v1/work/work-x-1234567/record"]);
-    expect(seen.every((s) => s.key === "sekret")).toBe(true);
+    expect(seen.every((s) => s.key === "Bearer sekret")).toBe(true);
   });
-  it("sends the configured actor as X-Wolfpack-Actor on hub requests only, never a system actor", async () => {
-    const seen: (string | null)[] = [];
+  it("sends no credentials without a token, and never X-API-Key or X-Wolfpack-Actor", async () => {
+    const seen: (string | null)[][] = [];
     const f: typeof fetch = async (input, init) => {
-      seen.push(new Request(input as string, init).headers.get("x-wolfpack-actor"));
+      const h = new Request(input as string, init).headers;
+      seen.push([h.get("authorization"), h.get("x-api-key"), h.get("x-wolfpack-actor")]);
       return Response.json({ items: [] });
     };
-    const hub = { baseUrl: "http://hub.invalid" };
-    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, actor: { id: "1uk4", kind: "wolf" }, fetch: f }).listWork("w", { domain: "x" });
-    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, fetch: f }).listWork("w", { domain: "x" });
-    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, actor: { id: "system", kind: "system" }, fetch: f }).listWork("w", { domain: "x" });
-    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", actor: { id: "1uk4", kind: "wolf" }, fetch: f }).listWork("w", { domain: "x" });
-    expect(seen).toEqual([JSON.stringify({ id: "1uk4", kind: "wolf" }), null, null, null]);
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", token: "t" }, fetch: f }).listWork("w", { domain: "x" });
+    expect(seen).toEqual([[null, null, null], ["Bearer t", null, null]]);
   });
   it("maps a hub not_found envelope to NotFoundError", async () => {
     const f: typeof fetch = async () => Response.json({ code: "not_found", message: "work item w", retryable: false }, { status: 404 });
@@ -368,7 +366,7 @@ describe("HttpConsoleClient hub work reads", () => {
       seen.push(`${init?.method} ${String(u)}`);
       return Response.json({ code: "conflict", message: "already claimed: w is held by w1", retryable: false, details: { holder: "w1" } }, { status: 409 });
     };
-    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, actor: { id: "w2", kind: "wolf" }, fetch: f });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f });
     const e = await c.claimWork("work-x-1234567").catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ProtocolError);
     expect((e as ProtocolError).code).toBe("conflict");

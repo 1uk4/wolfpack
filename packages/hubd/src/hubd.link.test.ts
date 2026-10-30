@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { ACTOR_HEADER, LINK_PROTOCOL_VERSION, parseLinkFrame, type LinkFrame, type LinkPresence } from "@wolfpack/protocol";
+import { LINK_PROTOCOL_VERSION, parseLinkFrame, type LinkFrame, type LinkPresence } from "@wolfpack/protocol";
 import { createTokenStore } from "./auth.js";
 import { registryFile } from "./layout.js";
 import { createHubServer, type HubServer } from "./server.js";
+import { OP as OP_AUTH, seedTokens } from "./testing/tokens.js";
 
-const KEY = "legacy-key-0123456789";
-const OP = { "X-API-Key": KEY, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
+const OP = { ...OP_AUTH, "Content-Type": "application/json" };
 let dir = "";
 let hub: HubServer;
 let hubClosed = false;
@@ -21,7 +21,8 @@ const open: WebSocket[] = [];
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "hubd-link-"));
   hubClosed = false;
-  hub = await createHubServer({ dataDir: dir, apiKey: KEY, port: 0, authPollMs: 30, linkTimers: { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 400, asleepOfflineMs: 600 } });
+  seedTokens(dir);
+  hub = await createHubServer({ dataDir: dir, port: 0, authPollMs: 30, linkTimers: { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 400, asleepOfflineMs: 600 } });
   store = createTokenStore(dir);
 });
 afterEach(async () => {
@@ -83,7 +84,7 @@ async function join_(token: string, hostId: string, extra: Record<string, unknow
   await c.until(() => c.frame("welcome"), "welcome");
   return c;
 }
-const reg = async (p: string) => (await (await fetch(`${hub.url}/v1/registry/${p}`, { headers: { "X-API-Key": KEY } })).json()) as Record<string, any>;
+const reg = async (p: string) => (await (await fetch(`${hub.url}/v1/registry/${p}`, { headers: OP })).json()) as Record<string, any>;
 /** The operator creates wolves (and any domains they need) up front. */
 async function register(name: string, domains: string[] = [], host?: string) {
   const r = await fetch(`${hub.url}/v1/registry/wolves`, { method: "POST", headers: OP, body: JSON.stringify({ name, domains, ...(host ? { host } : {}) }) });
@@ -106,10 +107,10 @@ const rejectedWith = (headers: Record<string, string>) =>
   });
 
 describe("hubd worker link: upgrade", () => {
-  it("authenticates before upgrading: no token 401, legacy key / console token 403", async () => {
+  it("authenticates before upgrading: no token 401, the old shared key 401, console token 403", async () => {
     expect(await rejectedWith({})).toBe(401);
     expect(await rejectedWith({ Authorization: "Bearer nope" })).toBe(401);
-    expect(await rejectedWith({ "X-API-Key": KEY })).toBe(403);
+    expect(await rejectedWith({ "X-API-Key": "legacy-key-0123456789" })).toBe(401);
     expect(await rejectedWith({ Authorization: `Bearer ${(await mint("console")).token}` })).toBe(403);
   });
 

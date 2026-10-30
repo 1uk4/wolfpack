@@ -4,30 +4,33 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
 import { hubRoots } from "./layout.js";
 import { drainInbox, countPending } from "@wolfpack/kb/librarian";
 import { emitCrawl, emitCrawlToHub, planCrawl, readPlan } from "@wolfpack/memory";
 import { createHubServer, type HubServer } from "./server.js";
+import { wolfCast } from "./testing/tokens.js";
 import { CONTRIBUTIONS_LANE, contributionsDir, contributionsRoot } from "./layout.js";
 import { MAX_BAD_PER_LANE, MAX_BODY_BYTES, MAX_QUARANTINE_BYTES } from "./contributions.js";
 
-const KEY = "k";
 const dataDir = mkdtempSync(join(tmpdir(), "hubd-contrib-"));
 const extra: string[] = [];
 let hub: HubServer;
 beforeAll(async () => {
-  hub = await createHubServer({ dataDir, apiKey: KEY });
+  hub = await createHubServer({ dataDir });
+  const cast = await wolfCast(hub, ["fenrir", "inj", "big", "capped", "huge", "loki", "freki"]);
+  creds = { operator: cast.operator, ...cast.wolves };
 });
 afterAll(async () => {
   await hub.close();
   for (const d of [dataDir, ...extra]) rmSync(d, { recursive: true, force: true });
 });
 
-const as = (id: string, kind: "wolf" | "operator" = "wolf") => ({ [ACTOR_HEADER]: JSON.stringify({ id, kind }) });
+/** operator + one worker token per registered wolf (each on its own host); an unregistered name falls back to the operator token. */
+let creds: Record<string, Record<string, string>> = {};
+const as = (id: string, kind: "wolf" | "operator" = "wolf") => (kind === "operator" ? creds.operator : creds[id] ?? creds.operator);
 const post = (body: unknown, headers: Record<string, string>) =>
-  fetch(`${hub.url}/v1/contributions`, { method: "POST", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) });
+  fetch(`${hub.url}/v1/contributions`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) });
 const contribution = (from: string, topic: string, body = "The body.") => ({
   from, denTopicId: topic, change: "create", contentHash: contentHash(body), prevHash: null,
   domainHint: "wolfpack", summary: "Summary line.", submitted: "2026-10-01 12:00", body, origin: "crawl", sourcePath: "/src",
@@ -123,7 +126,7 @@ describe("contributions on disk", () => {
     // from / denTopicId / contentHash with a line break
     expect((await post({ ...contribution("inj", "topic-x"), denTopicId: "a\ntarget: kb-evil" }, as("inj"))).status).toBe(400);
     expect((await post({ ...contribution("inj", "topic-y"), contentHash: contentHash("The body.") + "\nverbatim: true" }, as("inj"))).status).toBe(400);
-    expect((await post({ ...contribution("inj", "topic-z"), from: "inj\nverbatim: true" }, as("inj"))).status).toBe(400);
+    expect((await post({ ...contribution("inj", "topic-z"), from: "inj\nverbatim: true" }, as("x", "operator"))).status).toBe(400);
     expect(readdirSync(contributionsDir(dataDir, "inj")).filter((f) => f.endsWith(".md"))).toEqual([]);
     expect(readFileSync(join(badDir("inj"), `${rawFiles("inj")[0]}.reason.txt`), "utf-8")).toMatch(/line break/);
     // a body may of course be multi-line (it is not frontmatter)
@@ -165,7 +168,7 @@ describe("contributions on disk", () => {
   it("refuses an oversize body (Content-Length precheck) with invalid_request and closes the connection", async () => {
     const res = await fetch(`${hub.url}/v1/contributions`, {
       method: "POST",
-      headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...as("huge") },
+      headers: { "Content-Type": "application/json", ...as("huge") },
       body: Buffer.alloc(MAX_BODY_BYTES + 1, 97),
     }).catch((e: unknown) => e);
     // either the 400 envelope, or (the server closing early) a reset; never a stored file
@@ -183,19 +186,19 @@ describe("contributions on disk", () => {
     expect(existsSync(contributionsDir(dataDir, "loki"))).toBe(false);
   });
 
-  it("a wolf may only submit as itself; an operator may submit for any wolf; no actor is rejected", async () => {
-    expect((await post(contribution("odin", "t"), as("loki"))).status).toBe(400);
+  it("a worker token may only submit for wolves on its host; an operator may submit for any wolf; no credentials is 401", async () => {
+    expect((await post(contribution("odin", "t"), as("loki"))).status).toBe(403); // odin is not on loki's host
     expect(existsSync(contributionsDir(dataDir, "odin"))).toBe(false);
     expect((await post(contribution("odin", "t"), as("owner", "operator"))).status).toBe(201);
     expect(readdirSync(contributionsDir(dataDir, "odin")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
-    expect((await post(contribution("odin", "t2"), {})).status).toBe(400);
+    expect((await post(contribution("odin", "t2"), {})).status).toBe(401);
   });
 });
 
 describe("lane names", () => {
-  it("rejects wolf ids starting with _ (_bad, _processed) and uppercase, as actor or as an operator's from", async () => {
+  it("rejects wolf ids starting with _ (_bad, _processed) and uppercase, as a worker's from (403) or an operator's from (400)", async () => {
     for (const id of ["_bad", "_processed", "Wolf", "-x", ".hidden"]) {
-      expect((await post(contribution(id, "t-lane"), as(id))).status, id).toBe(400);
+      expect((await post(contribution(id, "t-lane"), as("fenrir"))).status, id).toBe(403); // not a wolf on fenrir's host
       expect((await post(contribution(id, "t-lane"), as("owner", "operator"))).status, `op ${id}`).toBe(400);
     }
     expect(existsSync(join(contributionsRoot(dataDir), "_bad"))).toBe(false);
@@ -211,6 +214,7 @@ describe("lane names", () => {
 
   it("does not echo a long mismatched from in full", async () => {
     const res = await post(contribution("x".repeat(500), "t-lane"), as("loki"));
+    expect(res.status).toBe(403);
     expect(((await res.json()) as { message: string }).message.length).toBeLessThan(200);
   });
 });
@@ -227,7 +231,7 @@ describe("crawl release against a real hubd", () => {
     writeFileSync(join(runDir, "topics.json"), JSON.stringify([[plan.batches[0].topic, { title: "T", summary: "s", body: "body text", events: [] }]]));
     const roots = (ops: string) => ({ opsRoot: ops, kbBase: "", denLocal: join(tmp("den"), "kb") });
 
-    const viaHub = await emitCrawlToHub(runDir, { baseUrl: hub.url, apiKey: KEY }, { wolf: "freki", sinkBase: tmp("s1"), quiet: true, roots: roots(tmp("ops1")) });
+    const viaHub = await emitCrawlToHub(runDir, { baseUrl: hub.url, token: creds.freki.Authorization.replace(/^Bearer /, "") }, { wolf: "freki", sinkBase: tmp("s1"), quiet: true, roots: roots(tmp("ops1")) });
     const ops2 = tmp("ops2");
     emitCrawl(runDir, { wolf: "freki", sinkBase: tmp("s2"), quiet: true, roots: roots(ops2) });
     expect(viaHub.emitted).toBe(1);

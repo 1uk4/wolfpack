@@ -3,14 +3,19 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { appendWorkLedger, createWork, loadWorkState, stageWork } from "@wolfpack/kb/client";
 import { createHubServer, type HubServer } from "./server.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
+import { wolfCast } from "./testing/tokens.js";
 
-const KEY = "k";
-const as = (id: string, kind: "wolf" | "operator" = "wolf") => ({ [ACTOR_HEADER]: JSON.stringify({ id, kind }) });
+/** Credentials per wolf name (worker token of the wolf's own host) or "operator"; filled by setup(). */
+let creds: Record<string, Record<string, string>> = {};
+const as = (id: string, kind: "wolf" | "operator" = "wolf") => {
+  const h = creds[kind === "operator" ? "operator" : id];
+  if (!h) throw new Error(`no credentials for ${id}`);
+  return h;
+};
 const tmp: string[] = [];
 const servers: HubServer[] = [];
 afterEach(async () => {
@@ -24,9 +29,11 @@ async function setup() {
   const roots = hubRoots(dir);
   const mk = (kind: "task" | "feature" | "idea", extra: Record<string, unknown> = {}) =>
     createWork(roots, { kind, domain: FIXTURE_DOMAIN, title: `${kind} x`, assignee: "1uk4", successCriteria: "ok", ...extra } as never).id as string;
-  const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
+  const hub = await createHubServer({ dataDir: dir });
   servers.push(hub);
-  const post = (path: string, actor: Record<string, string>) => fetch(hub.url + path, { method: "POST", headers: { "X-API-Key": KEY, ...actor } });
+  const cast = await wolfCast(hub, ["w1", "w2", "wolf-a", "wolf-b"], FIXTURE_DOMAIN);
+  creds = { operator: cast.operator, ...cast.wolves };
+  const post = (path: string, actor: Record<string, string>) => fetch(hub.url + path, { method: "POST", headers: actor });
   return { dir, seeded, roots, mk, hub, claim: (id: string, a: Record<string, string>) => post(`/v1/work/${id}/claim`, a), unclaim: (id: string, a: Record<string, string>) => post(`/v1/work/${id}/unclaim`, a) };
 }
 
@@ -105,14 +112,35 @@ describe("hub claim", () => {
     expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBeNull();
   });
 
-  it("a bad actor id is 400 on claim and unclaim; an operator id passes WolfId and can claim", async () => {
+  it("a worker token cannot claim for a wolf that is unregistered or on another host (403); the operator token can claim as itself", async () => {
     const s = await setup();
     const id = s.mk("task");
     stageWork(s.roots, id, "approved");
-    expect((await s.claim(id, as("Bad_Id"))).status).toBe(400);
-    expect((await s.unclaim(id, as("Bad_Id"))).status).toBe(400);
+    const post = (path: string, actor: Record<string, string>, wolf: string) =>
+      fetch(s.hub.url + path, { method: "POST", headers: { "Content-Type": "application/json", ...actor }, body: JSON.stringify({ wolf }) });
+    for (const wolf of ["Bad_Id", "ghost", "w2"]) {
+      expect((await post(`/v1/work/${id}/claim`, as("w1"), wolf)).status).toBe(403);
+      expect((await post(`/v1/work/${id}/unclaim`, as("w1"), wolf)).status).toBe(403);
+    }
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy ?? null).toBeNull();
     expect((await s.claim(id, as("1uk4", "operator"))).status).toBe(200);
-    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("1uk4");
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("owner");
+  });
+
+  it("a worker token may act for any active wolf on its host (named in the body); a retired wolf is refused", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    stageWork(s.roots, id, "approved");
+    const op = as("x", "operator");
+    // second wolf on host h-w1
+    expect((await fetch(`${s.hub.url}/v1/registry/wolves`, { method: "POST", headers: { "Content-Type": "application/json", ...op }, body: JSON.stringify({ name: "w1b", host: "h-w1" }) })).status).toBe(201);
+    const post = (wolf?: string) =>
+      fetch(`${s.hub.url}/v1/work/${id}/claim`, { method: "POST", headers: { "Content-Type": "application/json", ...as("w1") }, body: wolf ? JSON.stringify({ wolf }) : undefined });
+    expect((await post()).status).toBe(400); // two wolves on the host and none named
+    expect((await post("w1b")).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("w1b");
+    expect((await fetch(`${s.hub.url}/v1/registry/wolves/w1b/retire`, { method: "POST", headers: op })).status).toBe(200);
+    expect((await post("w1b")).status).toBe(403);
   });
 
   it("an unknown id is 404 on claim and unclaim", async () => {

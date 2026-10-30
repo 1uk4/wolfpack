@@ -8,7 +8,6 @@ import { readWorkLedger } from "@wolfpack/kb/client";
 import { ledgerFile } from "@wolfpack/kb/shared";
 import { readLedger } from "@wolfpack/kb/librarian";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
 import { hubRoots } from "./layout.js";
 import { createHubServer, type HubServer } from "./server.js";
@@ -17,9 +16,10 @@ import { readTar, writeTar, type TarEntry } from "./tar.js";
 import { main, parseArgs } from "./cli.js";
 import { kbJournalFile } from "./kb-commits.js";
 import { seedFixture } from "./testing/fixture.js";
+import { OP, seedTokens, workerHeaders } from "./testing/tokens.js";
 
-const KEY = "k";
-const OP = { [ACTOR_HEADER]: JSON.stringify({ id: "1uk4", kind: "operator" }) };
+const ALPHA = workerHeaders("h-alpha");
+
 const tmp: string[] = [];
 const servers: HubServer[] = [];
 const mk = () => {
@@ -55,12 +55,16 @@ async function seed() {
   writeFileSync(join(src, "domains.yaml"), "domains:\n  wolfpack:\n    label: Wolfpack\n    description: The pack\n    created: 2026-01-03\n");
   writeFileSync(join(src, "a.yaml"), "name: alpha\ndomains: [wolfpack]\n");
   const seeded = seedFixture(dir);
-  const hub = await createHubServer({ dataDir: dir, apiKey: KEY, registrySeed: { domainsYaml: join(src, "domains.yaml"), wolfYamls: [join(src, "a.yaml")] } });
+  seedTokens(dir, ["h-alpha"]);
+  const hub = await createHubServer({ dataDir: dir, registrySeed: { domainsYaml: join(src, "domains.yaml"), wolfYamls: [join(src, "a.yaml")] } });
   const call = (h: HubServer, method: string, path: string, body?: unknown, hdr: Record<string, string> = OP) =>
-    fetch(h.url + path, { method, headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...hdr }, body: body === undefined ? undefined : JSON.stringify(body) });
+    fetch(h.url + path, { method, headers: { "Content-Type": "application/json", ...hdr }, body: body === undefined ? undefined : JSON.stringify(body) });
+  // alpha (seeded without a host) is placed on host h-alpha, whose worker token then acts for it
+  expect((await call(hub, "POST", "/v1/registry/hosts", { name: "h-alpha" })).status).toBe(201);
+  expect((await call(hub, "PATCH", "/v1/registry/wolves/alpha", { host: "h-alpha" })).status).toBe(200);
   // work: stage + claim
   await call(hub, "PATCH", `/v1/work/${seeded.tasks[0]}`, { stage: "approved" });
-  const claim = await call(hub, "POST", `/v1/work/${seeded.tasks[0]}/claim`, undefined, { [ACTOR_HEADER]: JSON.stringify({ id: "alpha", kind: "wolf" }) });
+  const claim = await call(hub, "POST", `/v1/work/${seeded.tasks[0]}/claim`, undefined, ALPHA);
   expect(claim.status).toBe(200);
   // KB commit
   const id = "kb-wolfpack-aaaaaaa";
@@ -72,7 +76,7 @@ async function seed() {
   const c = await call(hub, "POST", "/v1/contributions", {
     from: "alpha", denTopicId: "topic-a", change: "create", contentHash: contentHash(body), prevHash: null, domainHint: "wolfpack",
     summary: "S.", submitted: "2026-10-01 12:00", body, origin: "crawl", sourcePath: "/src",
-  }, { [ACTOR_HEADER]: JSON.stringify({ id: "alpha", kind: "wolf" }) });
+  }, ALPHA);
   expect(c.status).toBe(201);
   const lane = join(dir, "kb", "ops", "contributions", "alpha");
   mkdirSync(join(lane, "_processed"), { recursive: true });
@@ -119,6 +123,7 @@ describe("hubd export / import", () => {
     const a = tree(s.dir);
     for (const k of Object.keys(a)) if (k === "run" || k.startsWith("run/") || k === "tmp" || k.startsWith("tmp/") || k === "link" || k.startsWith("link/")) delete a[k]; // link/ = transient link state (idempotency ids), not exported
     // import gives every KB revision log a NEW epoch (a new lineage); everything else is byte-identical
+    for (const k of Object.keys(a)) if (k === "auth" || k.startsWith("auth/")) delete a[k]; // device tokens are not exported
     const b = tree(target);
     const stateKeys = Object.keys(a).filter((k) => /^kb-rev\/[^/]+\/state\.json$/.test(k));
     expect(stateKeys.length).toBeGreaterThan(0);
@@ -132,7 +137,8 @@ describe("hubd export / import", () => {
     }
     expect(b).toEqual(a);
 
-    const hub = await createHubServer({ dataDir: target, apiKey: KEY });
+    seedTokens(target);
+    const hub = await createHubServer({ dataDir: target });
     servers.push(hub);
     const after = await s.reads(hub);
     expect(after).toEqual(s.before);
@@ -192,7 +198,7 @@ describe("hubd export / import", () => {
 
   it("export refuses while a hub holds the lock, and with a leftover KB journal", async () => {
     const s = await seed();
-    const hub = await createHubServer({ dataDir: s.dir, apiKey: KEY });
+    const hub = await createHubServer({ dataDir: s.dir });
     servers.push(hub);
     const out = join(mk(), "hub.tar");
     expect(() => exportHub({ dataDir: s.dir, out })).toThrow(/stop it first/);

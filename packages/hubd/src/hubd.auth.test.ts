@@ -1,4 +1,4 @@
-/** Token auth: bearer required, identity from the token (forged actor ignored), pairing, revocation (incl. SSE close), CLI, legacy key. */
+/** Token auth: bearer required, identity from the token (forged actor ignored), pairing, revocation (incl. SSE close), CLI. The old shared API key (HUBD_API_KEY / X-API-Key) is gone and must be rejected. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ let clock = Date.now();
 let featureId = "";
 let hub: HubServer;
 let store: ReturnType<typeof createTokenStore>;
-const KEY = "legacy-key-0123456789";
+const OLD_KEY = "legacy-key-0123456789"; // what the removed shared key looked like: must never authenticate
 const CON = { kind: "console" } as const;
 const asOp = JSON.stringify({ id: "forged-operator", kind: "operator" });
 
@@ -22,7 +22,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "hubd-auth-"));
   featureId = seedFixture(dir).feature.id;
   clock = Date.now();
-  hub = await createHubServer({ dataDir: dir, apiKey: KEY, port: 0, authPollMs: 50, now: () => clock });
+  hub = await createHubServer({ dataDir: dir, port: 0, authPollMs: 50, now: () => clock });
   store = createTokenStore(dir, () => clock);
 });
 afterEach(async () => {
@@ -43,7 +43,7 @@ const createWork = (headers: Record<string, string>) =>
 
 describe("hubd token auth", () => {
   it("401 for a missing, malformed or unknown token on every route (pair excepted)", async () => {
-    for (const h of [{}, { Authorization: "Bearer nope" }, { Authorization: "Basic abc" }, { "X-API-Key": "wrong-wrong-wrong-1" }]) {
+    for (const h of [{}, { Authorization: "Bearer nope" }, { Authorization: "Basic abc" }, { "X-API-Key": OLD_KEY }]) {
       const r = await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: h });
       expect(r.status).toBe(401);
       expect((await r.json()).code).toBe("unauthorized");
@@ -150,13 +150,6 @@ describe("hubd token auth", () => {
     expect(existsSync(join(dir, "auth", "attribution.jsonl"))).toBe(false);
   });
 
-  it("a very long actor id is truncated in the attribution stamp and the write still succeeds", async () => {
-    const long = "o".repeat(300);
-    const r = await createWork({ "X-API-Key": KEY, [ACTOR_HEADER]: JSON.stringify({ id: long, kind: "operator" }) });
-    expect(r.status).toBe(201);
-    expect(lastLedgerEvent().by).toBe("o".repeat(128));
-  });
-
   it("a worker pairing needs a hostId; it is stored on the token and the worker acts as that host", async () => {
     expect(() => store.mintPairingCode({ kind: "worker" })).toThrow(/hostId/); // a worker code is minted for a host
     expect(() => store.mintPairingCode({ kind: "console", hostId: "x" })).toThrow(/worker/);
@@ -215,27 +208,20 @@ describe("hubd token auth", () => {
     expect(seen).toEqual([a.tokenId]);
   });
 
-  it("the legacy API key still works (asserted actor) and has no token identity", async () => {
-    expect((await createWork({ "X-API-Key": KEY })).status).toBe(400); // legacy mutations still need an actor header
-    expect((await createWork({ "X-API-Key": KEY, [ACTOR_HEADER]: asOp })).status).toBe(201);
-    // the asserted actor is honoured on the legacy path: a wolf actor is refused an operator-only write, the operator is not
-    const reg = (actor: string) => fetch(`${hub.url}/v1/registry/hosts`, { method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": KEY, [ACTOR_HEADER]: actor }, body: "{}" });
-    expect((await reg(JSON.stringify({ id: "w", kind: "wolf" }))).status).toBe(403);
-    expect((await reg(asOp)).status).not.toBe(403);
-    expect(hub.authenticate({ headers: { "x-api-key": KEY } } as never)).toEqual({ owner: "owner", legacy: true });
+  it("X-API-Key never authenticates, with or without an actor header; hub.authenticate sees no identity", async () => {
+    const forged = { [ACTOR_HEADER]: asOp };
+    for (const h of [{ "X-API-Key": OLD_KEY }, { "X-API-Key": OLD_KEY, ...forged }, forged]) {
+      expect((await createWork(h)).status).toBe(401);
+      expect((await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: h })).status).toBe(401);
+      expect((await fetch(`${hub.url}/v1/registry/hosts`, { method: "POST", headers: { "Content-Type": "application/json", ...h }, body: "{}" })).status).toBe(401);
+    }
+    expect(hub.authenticate({ headers: { "x-api-key": OLD_KEY } } as never)).toBeNull();
     expect(hub.authenticate({ headers: {} } as never)).toBeNull();
   });
 
-  it("starts with tokens only (no apiKey), and a bad bearer does not fall back to the key", async () => {
-    const d2 = mkdtempSync(join(tmpdir(), "hubd-auth2-"));
-    const h2 = await createHubServer({ dataDir: d2, port: 0 });
-    try {
-      expect((await fetch(`${h2.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { "X-API-Key": KEY } })).status).toBe(401);
-    } finally {
-      await h2.close();
-      rmSync(d2, { recursive: true, force: true });
-    }
-    expect((await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { Authorization: "Bearer bad", "X-API-Key": KEY } })).status).toBe(401);
+  it("a bad bearer is 401 even next to an X-API-Key", async () => {
+    expect((await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { Authorization: "Bearer bad", "X-API-Key": OLD_KEY } })).status).toBe(401);
+    expect(hub.authenticate({ headers: { authorization: "Bearer bad", "x-api-key": OLD_KEY } } as never)).toBeNull();
   });
 
   it("the code fixes kind and hostId: a mismatch is 401 (and does not consume the code), a match or omission works", async () => {

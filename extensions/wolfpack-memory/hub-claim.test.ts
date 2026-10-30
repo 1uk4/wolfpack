@@ -1,4 +1,4 @@
-/** task_claim / task_release / task_bind-on-a-feature against a real hubd over HTTP (127.0.0.1, port 0, temp data dir, throwaway key). */
+/** task_claim / task_release / task_bind-on-a-feature against a real hubd over HTTP (127.0.0.1, port 0, temp data dir, throwaway tokens). */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +7,10 @@ import { createWork } from "@wolfpack/kb/client";
 import { createHubServer, type HubServer } from "../../packages/hubd/src/server.js";
 import { hubRoots } from "../../packages/hubd/src/layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "../../packages/hubd/src/testing/fixture.js";
+import { OP, seedTokens, workerTokenFor } from "../../packages/hubd/src/testing/tokens.js";
 import createTasksExtension, { hubErrorText } from "./unified-tasks.js";
 
-const KEY = "throwaway-key-1234";
+const KEY = workerTokenFor("h-wolf-a"); // wolf-a's worker token: must never show up in error text
 type Item = Record<string, any>;
 const dirs: string[] = [];
 let hub: HubServer;
@@ -35,7 +36,7 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
 function wolf(name: string, hubEnv: Record<string, string>, shared?: string) {
   const den = shared ?? mkdtempSync(join(tmpdir(), `hubclaim-${name}-`));
   if (!shared) dirs.push(den);
-  const env = { PATH: process.env.PATH, WORK_ENDPOINT: LOCAL, WORK_TOKEN: "t", PI_SUBAGENT_AGENT: "", ...hubEnv } as NodeJS.ProcessEnv; // minimal base: a WOLFPACK_HUB_KEY in the shell must not leak in
+  const env = { PATH: process.env.PATH, WORK_ENDPOINT: LOCAL, WORK_TOKEN: "t", PI_SUBAGENT_AGENT: "", ...hubEnv } as NodeJS.ProcessEnv; // minimal base: a WOLFPACK_HUB_TOKEN in the shell must not leak in
   const ext = createTasksExtension({ kbRoots: { kbBase: join(den, "kb"), opsRoot: join(den, "ops"), denLocal: join(den, "kbl") } } as never, { wolfDen: den, wolfName: name, domains: [FIXTURE_DOMAIN], wolfConfig: {}, env } as never);
   const run = async (tool: string, args: Record<string, unknown>, conversationId = 1) => {
     const r = await ext.tools!.find((t) => t.name === tool)!.execute(args as never, { cwd: den, wolfDen: den, wolfName: name, conversationId } as never);
@@ -54,7 +55,14 @@ beforeEach(async () => {
     createWork(roots, { kind, domain: FIXTURE_DOMAIN, title: `${kind} x`, assignee: "1uk4", successCriteria: "ok", ...extra } as never).id as string;
   featureId = mk("feature", { stage: "approved" });
   taskId = mk("task", { partOf: featureId });
-  hub = await createHubServer({ dataDir: dir, apiKey: KEY, host: "127.0.0.1", port: 0 });
+  seedTokens(dir, ["h-wolf-a", "h-wolf-b"]);
+  hub = await createHubServer({ dataDir: dir, host: "127.0.0.1", port: 0 });
+  // each wolf is registered on its own host, so its host's worker token may act for it
+  for (const n of ["wolf-a", "wolf-b"]) {
+    const post = (path: string, body: unknown) => realFetch(`${hub.url}${path}`, { method: "POST", headers: { "Content-Type": "application/json", ...OP }, body: JSON.stringify(body) });
+    expect((await post("/v1/registry/hosts", { name: `h-${n}` })).status).toBe(201);
+    expect((await post("/v1/registry/wolves", { name: n, host: `h-${n}` })).status).toBe(201);
+  }
   local = new Map([
     [featureId, { id: featureId, kind: "feature", title: "feature x", stage: "approved", domain: FIXTURE_DOMAIN, log: [], container: true, partOf: null, body: null }],
     [taskId, { id: taskId, kind: "task", title: "task x", stage: "plan", domain: FIXTURE_DOMAIN, log: [], container: false, partOf: featureId, body: null }],
@@ -67,11 +75,11 @@ afterEach(async () => {
 });
 
 describe("hub claim tools", () => {
-  const cfg = () => ({ WOLFPACK_HUB_URL: hub.url, WOLFPACK_HUB_KEY: KEY });
+  const cfg = (wolfName: string) => ({ WOLFPACK_HUB_URL: hub.url, WOLFPACK_HUB_TOKEN: workerTokenFor(`h-${wolfName}`) });
 
   it("task_claim, a 409 naming the holder for a second wolf, task_release, then the second wolf can claim", async () => {
-    const a = wolf("wolf-a", cfg());
-    const b = wolf("wolf-b", cfg());
+    const a = wolf("wolf-a", cfg("wolf-a"));
+    const b = wolf("wolf-b", cfg("wolf-b"));
     const c = await a.run("task_claim", { id: featureId });
     expect(c).toMatchObject({ isError: false });
     expect(c.text).toContain(`Claimed ${featureId}`);
@@ -85,8 +93,8 @@ describe("hub claim tools", () => {
   });
 
   it("task_bind on a feature claims it and binds locally; a task under it binds without a claim", async () => {
-    const a = wolf("wolf-a", cfg());
-    const b = wolf("wolf-b", cfg());
+    const a = wolf("wolf-a", cfg("wolf-a"));
+    const b = wolf("wolf-b", cfg("wolf-b"));
     const bound = await a.run("task_bind", { id: featureId });
     expect(bound.isError).toBe(false);
     expect(bound.text).toContain(`Claimed and bound to: [${featureId}]`);
@@ -100,9 +108,9 @@ describe("hub claim tools", () => {
   });
 
   it("passes the hub's 404 through, and a transport failure hides credentials", async () => {
-    const a = wolf("wolf-a", cfg());
+    const a = wolf("wolf-a", cfg("wolf-a"));
     expect((await a.run("task_claim", { id: "work-wolfpack-nope0000" })).isError).toBe(true);
-    const down = wolf("wolf-a", { WOLFPACK_HUB_URL: "http://user:secret@127.0.0.1:1", WOLFPACK_HUB_KEY: KEY });
+    const down = wolf("wolf-a", { WOLFPACK_HUB_URL: "http://user:secret@127.0.0.1:1", WOLFPACK_HUB_TOKEN: KEY });
     const r = await down.run("task_claim", { id: featureId });
     expect(r.isError).toBe(true);
     expect(r.text).not.toContain("secret");
@@ -110,13 +118,13 @@ describe("hub claim tools", () => {
   });
 
   it("shows the stage from the claim response (approved -> in_build), not the local copy", async () => {
-    const a = wolf("wolf-a", cfg());
+    const a = wolf("wolf-a", cfg("wolf-a"));
     expect((await a.run("task_bind", { id: featureId })).text).toContain("Stage: in_build");
   });
 
   it("a second conversation of the holder is refused locally and the hub claim stays", async () => {
-    const a = wolf("wolf-a", cfg());
-    const b = wolf("wolf-b", cfg());
+    const a = wolf("wolf-a", cfg("wolf-a"));
+    const b = wolf("wolf-b", cfg("wolf-b"));
     expect((await a.run("task_bind", { id: featureId }, 1)).isError).toBe(false);
     const refused = await a.run("task_bind", { id: featureId }, 2);
     expect(refused.isError).toBe(true);
@@ -128,7 +136,7 @@ describe("hub claim tools", () => {
 
   // Intended: with a hub configured, an invalid wolf id blocks a feature bind (and claim/release) rather than falling back to local behaviour.
   it("an invalid wolf id is refused before any request", async () => {
-    const bad = wolf("Bad_Wolf", cfg());
+    const bad = wolf("Bad_Wolf", cfg("Bad_Wolf"));
     const r = await bad.run("task_claim", { id: featureId });
     expect(r.isError).toBe(true);
     expect(r.text).toContain("not a valid wolf id");

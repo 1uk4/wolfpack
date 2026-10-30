@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { HubLink, linkBackoff } from "./link.js";
 import { insecureHubWarning, loadHubConfig, pairWithHub } from "./hub-config.js";
 import { startWakeMonitor } from "./wake.js";
@@ -21,7 +20,6 @@ async function rig(o: Parameters<typeof startLinkRig>[0] = {}): Promise<LinkRig>
   return r;
 }
 const names = async (r: LinkRig) => (await r.registry("wolves")).map((w) => [w.name, w.host ?? null]);
-const op = { "X-API-Key": "rig-legacy-key-0123456789", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
 
 describe("worker link (hubd + workerd + fake wolf)", () => {
   it("registers the host and its pre-registered wolves and goes online; the wolf stays reachable through workerd", async () => {
@@ -37,7 +35,7 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
   it("a retired wolf is not resurrected on reconnect and stays retired", async () => {
     const r = await rig({ wolves: ["alpha"] });
     await r.waitPresence("online");
-    expect((await fetch(`${r.hub.url}/v1/registry/wolves/alpha/retire`, { method: "POST", headers: op })).status).toBe(200);
+    expect((await fetch(`${r.hub.url}/v1/registry/wolves/alpha/retire`, { method: "POST", headers: r.operator })).status).toBe(200);
     r.workerd.link!.kick();
     await r.eventually(async () => r.presence() === "online" && (await r.registry("wolves"))[0].status === "retired", "reconnected, still retired");
   });

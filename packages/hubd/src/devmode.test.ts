@@ -4,13 +4,13 @@ import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { isLoopback, main, parseArgs } from "./cli.js";
 
-const GOOD_KEY = "0123456789abcdef0123";
 import { createHubServer } from "./server.js";
 import {
   assertNotLiveMirror, assertSafeDevDataDir, buildPullArgs, sshCommand, defaultDevDataDir, DEV_MARKER, snapshotState, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
   type PullRunner, type RemoteHost,
 } from "./snapshot.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
+import { OP, seedTokens } from "./testing/tokens.js";
 
 const tmp: string[] = [];
 const mk = (p: string) => {
@@ -66,8 +66,13 @@ describe("hubd cli args", () => {
     expect(() => parseArgs(["dev", "--snapshot", "h", "--host", "127.evil.com"])).toThrow(/allow-network/);
     expect(parseArgs(["dev", "--snapshot", "h", "--host", "127.0.0.1"]).host).toBe("127.0.0.1");
   });
-  it("HUBD_API_KEY is optional (legacy) but, when set, must be at least 16 characters", async () => {
-    await expect(main(["serve", "--data-dir", "/d"], { HUBD_API_KEY: "short" })).rejects.toThrow(/at least 16/);
+  it("refuses to start when HUBD_API_KEY is set (serve and dev), whatever its length; an empty value counts as unset", async () => {
+    for (const value of ["short", "0123456789abcdef0123456789"]) {
+      await expect(main(["serve", "--data-dir", "/d"], { HUBD_API_KEY: value })).rejects.toThrow(/HUBD_API_KEY is no longer supported; remove it and pair devices with `hubd pair`/);
+      await expect(main(["dev", "--data-dir", "/d"], { HUBD_API_KEY: value })).rejects.toThrow(/HUBD_API_KEY is no longer supported/);
+    }
+    // empty = unset: the run gets past the key check and stops at the next guard instead
+    await expect(main(["serve", "--data-dir", "/var/wolfpack/x"], { HUBD_API_KEY: "" }, () => {})).rejects.not.toThrow(/HUBD_API_KEY/);
   });
   it("dev on a non-loopback host needs --allow-network, and warns loudly", async () => {
     expect(() => parseArgs(["dev", "--snapshot", "h", "--host", "0.0.0.0"])).toThrow(/allow-network/);
@@ -77,7 +82,7 @@ describe("hubd cli args", () => {
     expect(() => parseArgs(["serve", "--data-dir", "/d", "--allow-network"])).toThrow(/unknown/);
     const logs: string[] = [];
     // the warning is logged before anything is pulled; the missing marker then stops the run (no network, no server)
-    await expect(main(["dev", "--data-dir", mk("hubd-net-"), "--host", "0.0.0.0", "--allow-network"], { HUBD_API_KEY: GOOD_KEY }, (m) => logs.push(m))).rejects.toThrow(/DEV-SNAPSHOT/);
+    await expect(main(["dev", "--data-dir", mk("hubd-net-"), "--host", "0.0.0.0", "--allow-network"], {}, (m) => logs.push(m))).rejects.toThrow(/DEV-SNAPSHOT/);
     expect(logs.join("\n")).toMatch(/WARNING.*PRODUCTION DATA/);
   });
   it("is an executable-style bin: shebang in the source, chmod in the build script", () => {
@@ -170,8 +175,8 @@ describe("serve guard (assertNotLiveMirror) vs dev guard (assertSafeDevDataDir)"
   it("hubd serve applies the live-mirror guard before binding", async () => {
     const real = join(homedirForTest(), "wolves");
     // main() uses the real home; a path under it is refused without touching anything (no server starts, nothing is created)
-    await expect(main(["serve", "--data-dir", join(real, "knowledge", "hubd-test-never-created")], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/knowledge/);
-    await expect(main(["serve", "--data-dir", join(real, "local", "x", "den", "hubd-test-never-created")], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/den/);
+    await expect(main(["serve", "--data-dir", join(real, "knowledge", "hubd-test-never-created")], {}, () => {})).rejects.toThrow(/knowledge/);
+    await expect(main(["serve", "--data-dir", join(real, "local", "x", "den", "hubd-test-never-created")], {}, () => {})).rejects.toThrow(/den/);
   });
 });
 
@@ -250,9 +255,10 @@ describe("snapshot, manifest, and serving over HTTP", () => {
     expect(existsSync(join(dataDir, DEV_MARKER))).toBe(true);
     expect(existsSync(join(dataDir, "ledger/work-events.jsonl"))).toBe(true);
 
-    const hub = await createHubServer({ dataDir, apiKey: "k" });
+    seedTokens(dataDir);
+    const hub = await createHubServer({ dataDir });
     try {
-      const r = await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { "X-API-Key": "k" } });
+      const r = await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: OP });
       const body = (await r.json()) as { items: { title: string }[] };
       expect(body.items.map((i) => i.title)).toEqual(expect.arrayContaining(["Hub fixture feature", "First task"]));
     } finally {
@@ -260,7 +266,7 @@ describe("snapshot, manifest, and serving over HTTP", () => {
     }
   });
   it("re-serving requires the marker", async () => {
-    await expect(main(["dev", "--data-dir", mk("hubd-nomark-")], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/DEV-SNAPSHOT/);
+    await expect(main(["dev", "--data-dir", mk("hubd-nomark-")], {}, () => {})).rejects.toThrow(/DEV-SNAPSHOT/);
   });
   it("a failed pull leaves an incomplete snapshot: marker first, complete:false, re-serve refused, retry allowed", async () => {
     const dataDir = join(mk("hubd-f-"), "snap");
@@ -274,7 +280,7 @@ describe("snapshot, manifest, and serving over HTTP", () => {
     expect(existsSync(join(dataDir, DEV_MARKER))).toBe(true);
     expect(JSON.parse(readFileSync(join(dataDir, SNAPSHOT_MANIFEST), "utf8")).complete).toBe(false);
     expect(snapshotState(dataDir)).toBe("incomplete");
-    await expect(main(["dev", "--data-dir", dataDir], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/INCOMPLETE/);
+    await expect(main(["dev", "--data-dir", dataDir], {}, () => {})).rejects.toThrow(/INCOMPLETE/);
     // retry into the same dir is allowed because it is incomplete
     const m = await takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: fakeRemote(remote, []) });
     expect(m.complete).toBe(true);
@@ -295,6 +301,6 @@ describe("snapshot, manifest, and serving over HTTP", () => {
     const calls: string[][] = [];
     await expect(takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: fakeRemote(remote, calls) })).rejects.toThrow(/complete snapshot.*fresh/);
     expect(calls).toHaveLength(0);
-    await expect(main(["dev", "--snapshot", "sfo-01", "--data-dir", dataDir], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/complete snapshot/);
+    await expect(main(["dev", "--snapshot", "sfo-01", "--data-dir", dataDir], {}, () => {})).rejects.toThrow(/complete snapshot/);
   });
 });

@@ -13,21 +13,21 @@ describe("createConsoleClient", () => {
 		assert.ok(createConsoleClient({ WOLFPACK_API_URL: "http://127.0.0.1:1" }) instanceof HttpConsoleClient);
 	});
 
-	it("WOLFPACK_HUB_URL (+ WOLFPACK_HUB_KEY) points work reads at the hub", async () => {
-		const seen: { url?: string; key?: string }[] = [];
+	it("WOLFPACK_HUB_URL (+ WOLFPACK_HUB_TOKEN) points work reads at the hub", async () => {
+		const seen: { url?: string; auth?: string; key?: string }[] = [];
 		const hub = createServer((req, res) => {
-			seen.push({ url: req.url, key: String(req.headers["x-api-key"]) });
+			seen.push({ url: req.url, auth: String(req.headers.authorization), key: String(req.headers["x-api-key"]) });
 			res.setHeader("Content-Type", "application/json");
 			res.end(JSON.stringify({ items: [] }));
 		});
 		await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
 		const url = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
 		try {
-			for (const env of [{ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_KEY: "k" }, { WOLFPACK_API_URL: "http://127.0.0.1:1", WOLFPACK_HUB_URL: url, WOLFPACK_HUB_KEY: "k" }]) {
+			for (const env of [{ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "k" }, { WOLFPACK_API_URL: "http://127.0.0.1:1", WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "k" }]) {
 				seen.length = 0;
 				const c = createConsoleClient(env);
 				assert.deepEqual(await c.listWork!("1uk4", { domain: "wolfpack" }), { items: [] });
-				assert.deepEqual(seen, [{ url: "/v1/work?domain=wolfpack", key: "k" }]);
+				assert.deepEqual(seen, [{ url: "/v1/work?domain=wolfpack", auth: "Bearer k", key: "undefined" }]);
 			}
 		} finally {
 			hub.close();
@@ -104,5 +104,31 @@ describe("composeWorkReads", () => {
 		assert.equal(base.listWork, own);
 		assert.equal((await base.listWork!("w", { domain: "wolfpack" })).items.length > 0, true);
 		assert.equal((await c.listWolves()).length, 1);
+	});
+});
+
+describe("the removed WOLFPACK_HUB_KEY", () => {
+	it("is ignored (no credentials sent) and logs a one-line warning", async () => {
+		const seen: { auth?: string; key?: string }[] = [];
+		const hub = createServer((req, res) => {
+			seen.push({ auth: String(req.headers.authorization), key: String(req.headers["x-api-key"]) });
+			res.setHeader("Content-Type", "application/json");
+			res.end(JSON.stringify({ items: [] }));
+		});
+		await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
+		const url = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+		const warnings: string[] = [];
+		const orig = console.warn;
+		console.warn = (m: unknown) => void warnings.push(String(m));
+		try {
+			await createConsoleClient({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_KEY: "old-shared-key-0123456789" }).listWork!("1uk4", { domain: "wolfpack" }).catch(() => undefined);
+		} finally {
+			console.warn = orig;
+			hub.close();
+		}
+		assert.deepEqual(seen, [{ auth: "undefined", key: "undefined" }]);
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0], /WOLFPACK_HUB_KEY is no longer supported/);
+		assert.doesNotMatch(warnings[0], /old-shared-key/);
 	});
 });

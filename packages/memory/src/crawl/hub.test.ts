@@ -35,7 +35,9 @@ describe("hubTargetFromEnv", () => {
   it("reads WOLFPACK_HUB_URL / WOLFPACK_HUB_KEY; no URL = no hub", () => {
     expect(hubTargetFromEnv({})).toBeUndefined();
     expect(hubTargetFromEnv({ WOLFPACK_HUB_URL: " " })).toBeUndefined();
-    expect(hubTargetFromEnv({ WOLFPACK_HUB_URL: "http://h:1", WOLFPACK_HUB_KEY: "k" })).toEqual({ baseUrl: "http://h:1", apiKey: "k" });
+    expect(hubTargetFromEnv({ WOLFPACK_HUB_URL: "http://h:1", WOLFPACK_HUB_TOKEN: "k" })).toEqual({ baseUrl: "http://h:1", token: "k" });
+    // the removed shared key is not read
+    expect(hubTargetFromEnv({ WOLFPACK_HUB_URL: "http://h:1", WOLFPACK_HUB_KEY: "k" })).toEqual({ baseUrl: "http://h:1", token: undefined });
   });
 });
 
@@ -49,13 +51,14 @@ describe("emitCrawlToHub", () => {
       return new Response(JSON.stringify({ id: "x.md", wolf: "w", duplicate: false }), { status: 201 });
     }) as unknown as typeof fetch;
     const opsRoot = tmp("ops");
-    const hub = { baseUrl: "http://hub.test/", apiKey: "K", fetch: fetchStub };
+    const hub = { baseUrl: "http://hub.test/", token: "K", fetch: fetchStub };
     const r = await emitCrawlToHub(runDir, hub, { wolf: "w", sinkBase: tmp("emit-sink"), quiet: true, roots: { opsRoot, kbBase: "", denLocal } });
     expect(r.emitted).toBe(1);
     expect(sent).toHaveLength(1);
     expect(sent[0].url).toBe("http://hub.test/v1/contributions");
-    expect(sent[0].headers["X-API-Key"]).toBe("K");
-    expect(JSON.parse(sent[0].headers["X-Wolfpack-Actor"])).toEqual({ id: "w", kind: "wolf" });
+    expect(sent[0].headers.Authorization).toBe("Bearer K");
+    expect(sent[0].headers["X-API-Key"]).toBeUndefined();
+    expect(sent[0].headers["X-Wolfpack-Actor"]).toBeUndefined();
     expect(sent[0].body).toMatchObject({ from: "w", origin: "crawl" });
     expect(existsSync(join(opsRoot, "inbox"))).toBe(false); // the opsRoot is untouched
     expect(readdirSync(opsRoot)).toEqual([]);

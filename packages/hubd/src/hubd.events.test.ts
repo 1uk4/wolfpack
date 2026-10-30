@@ -4,12 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { createEventBus } from "./events.js";
 import { createHubServer, type HubOptions, type HubServer } from "./server.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
+import { OP, seedTokens } from "./testing/tokens.js";
 
-const KEY = "k";
 const tmp: string[] = [];
 const servers: HubServer[] = [];
 afterEach(async () => {
@@ -25,14 +24,15 @@ const mk = () => {
 };
 async function start(extra: Partial<HubOptions> = {}, dir = mk(), seed = true) {
   if (seed) seedFixture(dir);
-  const h = await createHubServer({ dataDir: dir, apiKey: KEY, ...extra });
+  seedTokens(dir);
+  const h = await createHubServer({ dataDir: dir, ...extra });
   servers.push(h);
   return h;
 }
 const create = (h: HubServer, domain = FIXTURE_DOMAIN) =>
   fetch(h.url + "/v1/work", {
     method: "POST",
-    headers: { "X-API-Key": KEY, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id: "1uk4", kind: "operator" }) },
+    headers: { ...OP, "Content-Type": "application/json" },
     body: JSON.stringify({ kind: "task", domain, title: "t", assignee: "1uk4" }),
   }).then((r) => r.json() as Promise<{ id: string }>);
 
@@ -40,7 +40,7 @@ type Frame = { id?: string; data: any };
 /** Open /v1/events; `next(n)` resolves the next n data frames (comments skipped). */
 async function open(h: HubServer, headers: Record<string, string> = {}, query = "") {
   const ctl = new AbortController();
-  const res = await fetch(h.url + "/v1/events" + query, { headers: { "X-API-Key": KEY, ...headers }, signal: ctl.signal });
+  const res = await fetch(h.url + "/v1/events" + query, { headers: { ...OP, ...headers }, signal: ctl.signal });
   if (res.status !== 200) return { res, next: async () => [] as Frame[], close: () => ctl.abort() };
   const reader = res.body!.getReader();
   const dec = new TextDecoder();

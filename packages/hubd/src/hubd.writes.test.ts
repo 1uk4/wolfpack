@@ -3,16 +3,16 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { createWork, loadWorkState, moveWork, noteWork, stageWork, graduateWork, deleteWork, setCriteria } from "@wolfpack/kb/client";
-import { createHubServer, type HubServer } from "./server.js";
+import { createHubServer as createRawHubServer, type HubServer } from "./server.js";
+import { OP, seedTokens, workerHeaders } from "./testing/tokens.js";
 import { spawnSync } from "node:child_process";
 import { applyOps, assertSectionText, pidAlive, replaceSection, sweepStageDirs } from "./work-writes.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 
-const KEY = "k";
-const OP = { [ACTOR_HEADER]: JSON.stringify({ id: "1uk4", kind: "operator" }) };
+/** createHubServer on a data dir that already holds the test operator token (OP) and a worker token for host h1 (workerHeaders). */
+const createHubServer = (o: Parameters<typeof createRawHubServer>[0]) => (seedTokens(o.dataDir, ["h1"]), createRawHubServer(o));
 const tmp: string[] = [];
 const servers: HubServer[] = [];
 const mk = () => {
@@ -25,12 +25,12 @@ afterEach(async () => {
   while (tmp.length) rmSync(tmp.pop()!, { recursive: true, force: true });
 });
 const start = async (dataDir: string) => {
-  const h = await createHubServer({ dataDir, apiKey: KEY });
+  const h = await createHubServer({ dataDir });
   servers.push(h);
   return h;
 };
 const req = (h: HubServer, method: string, path: string, body?: unknown) =>
-  fetch(h.url + path, { method, headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...OP }, body: body === undefined ? undefined : JSON.stringify(body) });
+  fetch(h.url + path, { method, headers: { "Content-Type": "application/json", ...OP }, body: body === undefined ? undefined : JSON.stringify(body) });
 const ledger = (dir: string) => readFileSync(join(dir, "ledger", "work-events.jsonl"), "utf8");
 
 /** Normalise the fields that legitimately differ between runs: every `at` timestamp, and the generated ids (work-<domain>-<random>) mapped to stable placeholders by first appearance. */
@@ -116,7 +116,7 @@ describe("serialised concurrent writers", () => {
     const hub = await start(dir);
     const seen: string[] = [];
     hub.onWorkAppended(({ actor, events }) => {
-      expect(actor.id).toBe("1uk4");
+      expect(actor.id).toBe("owner"); // the operator token's identity
       seen.push(...events.map((e) => e.type));
     });
     await req(hub, "POST", "/v1/work", { kind: "idea", domain: FIXTURE_DOMAIN, title: "hooked", assignee: "1uk4" });
@@ -128,18 +128,18 @@ describe("writer lock", () => {
   it("a second hubd on the same dataDir is refused, and the lock is released on close", async () => {
     const dir = mk();
     const first = await start(dir);
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/already has a writer/);
+    await expect(createHubServer({ dataDir: dir })).rejects.toThrow(/already has a writer/);
     await first.close();
     servers.pop();
     const again = await start(dir);
-    expect((await fetch(again.url + `/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { "X-API-Key": KEY } })).status).toBe(200);
+    expect((await fetch(again.url + `/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: OP })).status).toBe(200);
   });
 });
 
 describe("batch PATCH, sections, owner-only", () => {
-  const WOLF = { [ACTOR_HEADER]: JSON.stringify({ id: "w1", kind: "wolf" }) };
+  const WOLF = workerHeaders("h1");
   const patch = (h: HubServer, id: string, body: unknown, headers: Record<string, string> = OP) =>
-    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   const codeOf = async (r: Response) => ((await r.json()) as { code: string }).code;
 
   it("applies a batch in order; a failing op appends nothing (ledger byte-identical)", async () => {
@@ -172,7 +172,7 @@ describe("batch PATCH, sections, owner-only", () => {
     const hub = await start(dir);
     expect((await patch(hub, t, { section: { name: "plan", text: "Do the thing" } })).status).toBe(200);
     expect((await patch(hub, t, { ops: [{ section: { name: "notes", text: "first" } }, { section: { name: "notes", text: "second" } }] })).status).toBe(200);
-    const rec = (await (await fetch(hub.url + `/v1/work/${t}/record`, { headers: { "X-API-Key": KEY } })).json()) as { body?: string };
+    const rec = (await (await fetch(hub.url + `/v1/work/${t}/record`, { headers: OP })).json()) as { body?: string };
     const body = JSON.stringify(rec);
     expect(body).toContain("Do the thing");
     expect(body).toContain("second");
@@ -196,9 +196,9 @@ describe("batch PATCH, sections, owner-only", () => {
 });
 
 describe("batch atomicity and sections (staged)", () => {
-  const WOLF = { [ACTOR_HEADER]: JSON.stringify({ id: "w1", kind: "wolf" }) };
+  const WOLF = workerHeaders("h1");
   const patch = (h: HubServer, id: string, body: unknown, headers: Record<string, string> = OP) =>
-    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   const mdFiles = (dir: string) => {
     const root = join(dir, "kb", "base", "domains", FIXTURE_DOMAIN, "work");
     return Object.fromEntries(readdirSync(root).filter((f) => f.endsWith(".md")).map((f) => [f, readFileSync(join(root, f), "utf8")]));
@@ -343,7 +343,7 @@ describe("section text and replaceSection", () => {
 
 describe("mixed batches, orphan sweep, setext and fences", () => {
   const patch = (h: HubServer, id: string, body: unknown) =>
-    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...OP }, body: JSON.stringify(body) });
+    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", ...OP }, body: JSON.stringify(body) });
 
   it("section/body ops can't be mixed with ledger ops; a content-only batch is one .md write with no ledger change", async () => {
     const dir = mk();

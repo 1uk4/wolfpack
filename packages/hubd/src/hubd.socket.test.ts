@@ -9,6 +9,7 @@ import { LINK_PATH } from "@wolfpack/protocol";
 import { createTokenStore } from "./auth.js";
 import { main, parseArgs } from "./cli.js";
 import { createHubServer, type HubServer } from "./server.js";
+import { OP_TOKEN, seedTokens } from "./testing/tokens.js";
 import { listenOnSocket, parseSocketMode, removeSocket } from "./socket.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 
@@ -26,14 +27,15 @@ afterEach(async () => {
 const start = async (extra: { socketMode?: number } = {}, sock?: string) => {
   const dataDir = tmp();
   seedFixture(dataDir);
+  seedTokens(dataDir);
   const socketPath = sock ?? join(tmp(), "h.sock");
-  const hub = await createHubServer({ dataDir, apiKey: "k", socketPath, ...extra });
+  const hub = await createHubServer({ dataDir, socketPath, ...extra });
   hubs.push(hub);
   return { hub, socketPath };
 };
-const get = (socketPath: string, path: string, key = "k") =>
+const get = (socketPath: string, path: string, token = OP_TOKEN) =>
   new Promise<{ status: number; body: string }>((resolve, reject) => {
-    const r = request({ socketPath, path, headers: { "X-API-Key": key } }, (res) => {
+    const r = request({ socketPath, path, headers: { Authorization: `Bearer ${token}` } }, (res) => {
       let b = "";
       res.on("data", (c) => (b += c));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body: b }));

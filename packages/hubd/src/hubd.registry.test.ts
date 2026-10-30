@@ -4,17 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { loadWorkState, stageWork } from "@wolfpack/kb/client";
 import { createWork } from "@wolfpack/kb/client";
 import { readDomainRegistry } from "@wolfpack/kb/shared";
 import { createRegistry } from "./registry.js";
-import { createHubServer, type HubServer } from "./server.js";
+import { createHubServer as createRawHubServer, type HubServer } from "./server.js";
+import { OP, seedTokens, workerHeaders } from "./testing/tokens.js";
 import { domainsYamlFile, hubRoots, registryFile } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 
-const KEY = "k";
-const as = (id: string, kind: "wolf" | "operator") => ({ [ACTOR_HEADER]: JSON.stringify({ id, kind }) });
+/** Wolves the tests act as: each has a worker token for its own host `h-<wolf>` (the wolf must be registered there, see `place`). */
+const WOLVES = ["w1", "w2", "wolf-a", "unregistered"];
+const createHubServer = (o: Parameters<typeof createRawHubServer>[0]) => (seedTokens(o.dataDir, WOLVES.map((w) => `h-${w}`)), createRawHubServer(o));
+const as = (id: string, kind: "wolf" | "operator") => (kind === "operator" ? OP : workerHeaders(`h-${id}`));
 const tmp: string[] = [];
 const servers: HubServer[] = [];
 afterEach(async () => {
@@ -27,11 +29,16 @@ const mkdir = () => {
   return d;
 };
 async function start(dir: string, registrySeed?: Parameters<typeof createHubServer>[0]["registrySeed"]) {
-  const hub = await createHubServer({ dataDir: dir, apiKey: KEY, registrySeed });
+  const hub = await createHubServer({ dataDir: dir, registrySeed });
   servers.push(hub);
-  const call = (method: string, path: string, body?: unknown, actor = as("1uk4", "operator")) =>
-    fetch(hub.url + path, { method, headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...actor }, body: body === undefined ? undefined : JSON.stringify(body) });
-  return { hub, call };
+  const call = (method: string, path: string, body?: unknown, actor = OP) =>
+    fetch(hub.url + path, { method, headers: { "Content-Type": "application/json", ...actor }, body: body === undefined ? undefined : JSON.stringify(body) });
+  /** Register `name` on its own host `h-<name>` (the host is created first). */
+  const place = async (name: string, extra: Record<string, unknown> = {}) => {
+    await call("POST", "/v1/registry/hosts", { name: `h-${name}` });
+    return call("POST", "/v1/registry/wolves", { name, host: `h-${name}`, ...extra });
+  };
+  return { hub, call, place };
 }
 function fixtures() {
   const src = mkdir();
@@ -51,12 +58,12 @@ describe("hub registry", () => {
     const f = fixtures();
     const dir = mkdir();
     const { hub, call } = await start(dir, { domainsYaml: f.domains, wolfYamls: f.wolfs });
-    const wolves = ((await (await call("GET", "/v1/registry/wolves", undefined, {})).json()) as { wolves: { name: string; domains: string[]; status: string }[] }).wolves;
+    const wolves = ((await (await call("GET", "/v1/registry/wolves", undefined)).json()) as { wolves: { name: string; domains: string[]; status: string }[] }).wolves;
     expect(wolves.map((w) => w.name)).toEqual(["alpha", "beta"]);
     expect(wolves[0]).toMatchObject({ domains: ["personal", "wolfpack"], status: "active", workspace: "/tmp/x", tiers: { fast: { model: "m1" } } });
-    const subs = ((await (await call("GET", "/v1/registry/subscriptions", undefined, {})).json()) as { subscriptions: unknown[] }).subscriptions;
+    const subs = ((await (await call("GET", "/v1/registry/subscriptions", undefined)).json()) as { subscriptions: unknown[] }).subscriptions;
     expect(subs).toHaveLength(3);
-    expect(((await (await call("GET", "/v1/registry/hosts", undefined, {})).json()) as { hosts: unknown[] }).hosts).toEqual([]);
+    expect(((await (await call("GET", "/v1/registry/hosts", undefined)).json()) as { hosts: unknown[] }).hosts).toEqual([]);
     // domains.yaml is byte-identical to the CLI-format source
     expect(readFileSync(domainsYamlFile(dir), "utf8")).toBe(f.domainsText);
     await call("DELETE", "/v1/registry/wolves/beta");
@@ -90,7 +97,7 @@ describe("hub registry", () => {
     expect(reg.ops?.description).toBe("Operations");
   });
 
-  it("create wolf writes only the entry; writes by a wolf are 403; reads need no actor", async () => {
+  it("create wolf writes only the entry; writes by a wolf are 403; reads need a token", async () => {
     const dir = mkdir();
     const { call } = await start(dir);
     await call("POST", "/v1/registry/domains", { name: "docs" });
@@ -99,7 +106,7 @@ describe("hub registry", () => {
     expect((await call("POST", "/v1/registry/wolves", { name: "newbie", domains: ["docs"] })).status).toBe(201);
     expect((await call("POST", "/v1/registry/subscriptions", { wolf: "newbie", domain: "docs" })).status).toBe(409);
     expect(existsSync(join(dir, "wolves"))).toBe(false);
-    expect(((await (await call("GET", "/v1/registry/wolves/newbie", undefined, {})).json()) as { wolf: { status: string } }).wolf.status).toBe("active");
+    expect(((await (await call("GET", "/v1/registry/wolves/newbie")).json()) as { wolf: { status: string } }).wolf.status).toBe("active");
   });
 
   it("retire marks the wolf retired and releases every claim it holds (work.unbound), leaving other holders alone", async () => {
@@ -112,8 +119,9 @@ describe("hub registry", () => {
       return id;
     };
     const [a, b, c] = [mk(), mk(), mk()];
-    const { call } = await start(dir);
-    await call("POST", "/v1/registry/wolves", { name: "w1" });
+    const { call, place } = await start(dir);
+    await place("w1");
+    await place("w2");
     for (const [id, w] of [[a, "w1"], [b, "w1"], [c, "w2"]] as const) expect((await call("POST", `/v1/work/${id}/claim`, undefined, as(w, "wolf"))).status).toBe(200);
     const res = await call("POST", "/v1/registry/wolves/w1/retire");
     expect(res.status).toBe(200);
@@ -135,7 +143,7 @@ describe("hub registry", () => {
     const dir = mkdir();
     const bad = join(mkdir(), "w.yaml");
     writeFileSync(bad, "domains: [x]\n");
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY, registrySeed: { wolfYamls: [bad] } })).rejects.toThrow(/seed wolf.yaml invalid/);
+    await expect(createHubServer({ dataDir: dir, registrySeed: { wolfYamls: [bad] } })).rejects.toThrow(/seed wolf.yaml invalid/);
     // the failed start released the writer lock
     const { hub } = await start(dir);
     expect(hub.url).toBeTruthy();
@@ -162,7 +170,7 @@ describe("hub registry", () => {
     const dir = mkdir();
     mkdirSync(join(dir, "registry"), { recursive: true });
     writeFileSync(registryFile(dir), "{not json");
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/registry\.json is not valid JSON/);
+    await expect(createHubServer({ dataDir: dir })).rejects.toThrow(/registry\.json is not valid JSON/);
     rmSync(registryFile(dir));
     await start(dir);
   });
@@ -206,7 +214,7 @@ describe("hub registry", () => {
     const src = mkdir();
     const f = join(src, "domains.yaml");
     writeFileSync(f, stringify({ domains: { registry: { label: "R" } } }));
-    await expect(createHubServer({ dataDir: mkdir(), apiKey: KEY, registrySeed: { domainsYaml: f } })).rejects.toThrow(/reserved name/);
+    await expect(createHubServer({ dataDir: mkdir(), registrySeed: { domainsYaml: f } })).rejects.toThrow(/reserved name/);
   });
 
   it("a seeded wolf subscribing to an unseeded domain fails startup naming wolf and domain, and releases the lock", async () => {
@@ -216,7 +224,7 @@ describe("hub registry", () => {
     const w = join(src, "w.yaml");
     writeFileSync(w, "name: gamma\ndomains: [personal, ghosts]\n");
     const dir = mkdir();
-    await expect(createHubServer({ dataDir: dir, apiKey: KEY, registrySeed: { domainsYaml: d, wolfYamls: [w] } })).rejects.toThrow(/"gamma".*"ghosts"/);
+    await expect(createHubServer({ dataDir: dir, registrySeed: { domainsYaml: d, wolfYamls: [w] } })).rejects.toThrow(/"gamma".*"ghosts"/);
     await start(dir);
   });
 
@@ -226,9 +234,9 @@ describe("hub registry", () => {
     const roots = hubRoots(dir);
     const id = createWork(roots, { kind: "task", domain: FIXTURE_DOMAIN, title: "t", assignee: "1uk4", successCriteria: "ok" } as never).id as string;
     stageWork(roots, id, "approved");
-    const { call } = await start(dir);
+    const { call, place } = await start(dir);
     expect((await call("POST", "/v1/registry/wolves", { name: "w1", status: "retired" })).status).toBe(400);
-    expect((await call("POST", "/v1/registry/wolves", { name: "w1" })).status).toBe(201);
+    expect((await place("w1")).status).toBe(201);
     await call("POST", `/v1/work/${id}/claim`, undefined, as("w1", "wolf"));
     const del = await call("DELETE", "/v1/registry/wolves/w1");
     expect(del.status).toBe(409);
@@ -237,7 +245,7 @@ describe("hub registry", () => {
     expect((await call("DELETE", "/v1/registry/wolves/w1")).status).toBe(200);
   });
 
-  it("a retired wolf's claim is 403 forbidden; an unregistered wolf can still claim", async () => {
+  it("a retired wolf's claim is 403 forbidden; an unregistered wolf cannot claim through a worker token either", async () => {
     const dir = mkdir();
     seedFixture(dir);
     const roots = hubRoots(dir);
@@ -247,14 +255,16 @@ describe("hub registry", () => {
       return id;
     };
     const [a, b] = [mk(), mk()];
-    const { call } = await start(dir);
-    await call("POST", "/v1/registry/wolves", { name: "wolf-a" });
+    const { call, place } = await start(dir);
+    await place("wolf-a");
     await call("POST", "/v1/registry/wolves/wolf-a/retire");
     const res = await call("POST", `/v1/work/${a}/claim`, undefined, as("wolf-a", "wolf"));
     expect(res.status).toBe(403);
     expect(((await res.json()) as { code: string }).code).toBe("forbidden");
     expect(loadWorkState(roots).get(a as never)!.boundBy).toBeFalsy();
-    expect((await call("POST", `/v1/work/${b}/claim`, undefined, as("unregistered", "wolf"))).status).toBe(200);
+    expect((await call("POST", `/v1/work/${b}/claim`, undefined, as("unregistered", "wolf"))).status).toBe(403);
+    expect(loadWorkState(roots).get(b as never)!.boundBy).toBeFalsy();
+    expect((await call("POST", `/v1/work/${b}/claim`, undefined, OP)).status).toBe(200); // the operator token claims as itself
   });
 
   it("a release failure on retire says the wolf is retired but claims remain, and a retry works", async () => {

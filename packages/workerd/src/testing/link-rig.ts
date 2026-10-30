@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { WebSocket as WsClient } from "ws";
 import { HttpConsoleClient } from "@wolfpack/client";
 import { createHubServer, createTokenStore, type HubServer } from "@wolfpack/hubd";
-import { ACTOR_HEADER, LINK_PROTOCOL_VERSION, type LinkFrame, type LinkPresence, parseLinkFrame } from "@wolfpack/protocol";
+import { LINK_PROTOCOL_VERSION, type LinkFrame, type LinkPresence, parseLinkFrame } from "@wolfpack/protocol";
 import type { KbSyncOptions } from "../kb-sync.js";
 import { runWorkerd, type RunningWorkerd } from "../run.js";
 import { FAKE_COMMAND, makeWolves, until } from "./helpers.js";
@@ -29,6 +29,8 @@ export interface LinkRig {
   eventually(cond: () => boolean | Promise<boolean>, what: string, ms?: number): Promise<void>;
   /** Mint another worker token for `hostId` (default: the rig's host). */
   mintWorker(hostId?: string): { token: string; tokenId: string };
+  /** Operator request headers: a minted console token (`Authorization: Bearer`). */
+  operator: Record<string, string>;
   /** A bare WebSocket speaking raw frames (for impersonating a second worker or a version-skewed one). */
   rawLink(token: string): Promise<RawLink>;
   /** workerd log lines. */
@@ -95,8 +97,6 @@ export interface LinkRigOptions {
   kbMirrorDir?: string;
 }
 
-const KEY = "rig-legacy-key-0123456789";
-
 export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const hostId = o.hostId ?? "box";
   const dataDir = mkdtempSync(join(tmpdir(), "link-rig-hub-"));
@@ -106,7 +106,7 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const kbOps = join(ops, "worker", "librarian");
   const outboxDir = join(ops, "worker", "outbox");
   mkdirSync(receiptsRoot, { recursive: true });
-  const hubOpts = { dataDir, apiKey: KEY, port: 0, authPollMs: 30, kbPollMs: 0, kbSettleMs: -1, inboxRoot, receiptsRoot, receiptPollMs: 40, receiptAckTimeoutMs: 300, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 }, ...o.hubOptions };
+  const hubOpts = { dataDir, port: 0, authPollMs: 30, kbPollMs: 0, kbSettleMs: -1, inboxRoot, receiptsRoot, receiptPollMs: 40, receiptAckTimeoutMs: 300, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 }, ...o.hubOptions };
   const hub = await createHubServer(hubOpts);
   const hubPort = hub.port;
   const store = createTokenStore(dataDir);
@@ -114,7 +114,8 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     const { code } = store.mintPairingCode({ kind: "worker", hostId: h });
     return store.redeem(code, "rig", "worker", h);
   };
-  const op = { "X-API-Key": KEY, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
+  const operator = { Authorization: `Bearer ${store.redeem(store.mintPairingCode({ kind: "console" }).code, "rig-operator", "console").token}` };
+  const op = { ...operator, "Content-Type": "application/json" };
   await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name: "wolfpack" }) });
   for (const name of o.kbDomains ?? []) await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name }) });
   const { token, tokenId } = mintWorker();
@@ -174,10 +175,11 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     presence: () => rig.hub.link.presence(hostId),
     waitPresence: (p, ms = 8000) => until(() => rig.hub.link.presence(hostId) === p, ms, `presence ${p} (is ${rig.hub.link.presence(hostId)})`),
     async registry(c) {
-      const r = await fetch(`${hub.url}/v1/registry/${c}`, { headers: { "X-API-Key": KEY } });
+      const r = await fetch(`${hub.url}/v1/registry/${c}`, { headers: operator });
       return ((await r.json()) as Record<string, any[]>)[c]!;
     },
     mintWorker,
+    operator,
     registerWolf,
     logs,
     inboxRoot,

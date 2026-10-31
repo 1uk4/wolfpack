@@ -212,10 +212,10 @@ describe("promoteTopics", () => {
 });
 
 describe("reconcile with distilled contributions", () => {
-  const receipt = (id: string, body: string, outcome = "create", detail = "kb-wolfpack-AAAAAAA") => {
+  const receipt = (id: string, body: string, outcome = "create", detail = "kb-wolfpack-AAAAAAA", untrimmed = false) => {
     const dir = join(roots.opsRoot, "receipts", WOLF);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${id}-${contentHash(body.trim()).slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: ${id}\noutcome: ${outcome}\nprocessed: 2026-10-22 10:00\n---\n\n${detail}\n`);
+    writeFileSync(join(dir, `${id}-${contentHash(untrimmed ? body : body.trim()).slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: ${id}\noutcome: ${outcome}\nprocessed: 2026-10-22 10:00\n---\n\n${detail}\n`);
   };
 
   it("a topic is absorbed only when every distilled contribution has a receipt", async () => {
@@ -230,6 +230,18 @@ describe("reconcile with distilled contributions", () => {
     expect(isAbsorbed(roots, WOLF, "t", "raw body of the topic")).toBe(false);
     receipt(rec.outputs[1].id, rec.outputs[1].body, "merge");
     expect(denTopicStates(den, roots, WOLF)[0].status).toMatchObject({ kind: "absorbed", entryId: "kb-wolfpack-AAAAAAA" });
+    expect(isAbsorbed(roots, WOLF, "t", "raw body of the topic")).toBe(true);
+  });
+
+  it("a legacy receipt named from the untrimmed body (ending in a newline) still counts as absorbed", async () => {
+    const den = join(root, "den");
+    writeDenTopic(den, { id: "t", title: "t", summary: "s", updated: "2026-10-22 10:00", body: "raw body of the topic" });
+    await promoteTopics(readDenTopics(den).map((t) => topic(t.id, t.body)), opts(engineOf({ contributions: [clean] }).engine));
+    const rec = readDistillRecord(roots, "t")!;
+    const legacy = rec.outputs[0].body.endsWith("\n") ? rec.outputs[0].body : `${rec.outputs[0].body}\n`;
+    expect(contentHash(legacy)).not.toBe(contentHash(legacy.trim()));
+    receipt(rec.outputs[0].id, legacy, "create", "kb-wolfpack-AAAAAAA", true);
+    expect(denTopicStates(den, roots, WOLF)[0].status.kind).toBe("absorbed");
     expect(isAbsorbed(roots, WOLF, "t", "raw body of the topic")).toBe(true);
   });
 

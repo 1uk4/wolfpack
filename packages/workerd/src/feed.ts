@@ -162,7 +162,7 @@ export function feedContributions(
       }
     }
     if (fresh.length) {
-      log(`[workerd] feed: ${fresh.length} contribution(s) left in place in ${lane} (not sent; first: ${basename(fresh[0]!)}: ${freshWhy[0]})`);
+      log(`[workerd] feed: ${fresh.length} contribution(s) left in place in ${lane} (not sent; first: ${basename(fresh[0]!)}; reasons: ${[...new Set(freshWhy)].slice(0, 3).map((w) => w.slice(0, 200)).join(" | ")})`);
     }
   }
   return res;

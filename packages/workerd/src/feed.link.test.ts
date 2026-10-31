@@ -282,7 +282,7 @@ describe("emitDelta bodies with stray whitespace reach the hub", () => {
     });
   }
 
-  it("a refused file is logged with the failed check, once per lane per scan", async () => {
+  it("a refused file is logged with the failed check, once per process (shared warned set), in one line per lane", async () => {
     const r = await rig({ noHub: true });
     const name = emit(r, make("alpha", "bad", "Body.", { contentHash: contentHash("Body.\n") }));
     const logs: string[] = [];

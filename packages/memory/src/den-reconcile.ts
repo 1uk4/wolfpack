@@ -46,6 +46,19 @@ function receiptStem(id: string, body: string): string {
   return `${id}-${contentHash(body.trim()).slice(7, 17)}`;
 }
 
+/** Every stem a receipt/inbox file for this body may carry: the canonical (trimmed) one, and the pre-trim one older writers used. */
+function receiptStems(id: string, body: string): string[] {
+  return [...new Set([receiptStem(id, body), `${id}-${contentHash(body).slice(7, 17)}`])];
+}
+
+function readReceiptFor(dir: string, id: string, body: string): { outcome: string; processed: string; detail: string } | null {
+  for (const stem of receiptStems(id, body)) {
+    const r = readReceipt(join(dir, `${stem}.md`));
+    if (r) return r;
+  }
+  return null;
+}
+
 function readReceipt(path: string): { outcome: string; processed: string; detail: string } | null {
   if (!existsSync(path)) return null;
   const raw = readFileSync(path, "utf-8");
@@ -98,8 +111,7 @@ function statusOf(
   const parts = current ? current.outputs.map((o) => ({ id: o.id, body: o.body })) : [{ id: topic.id, body: topic.body }];
 
   const states = parts.map((p): DenTopicStatus => {
-    const stem = receiptStem(p.id, p.body);
-    const r = readReceipt(join(receipts, `${stem}.md`));
+    const r = readReceiptFor(receipts, p.id, p.body);
     const absorbed = r ? asAbsorbed(r) : null;
     if (absorbed) return absorbed;
     if (r?.outcome === "unclassified") {
@@ -107,7 +119,7 @@ function statusOf(
       return { kind: "awaiting-domain", domain };
     }
     if (r?.outcome === "parked") return { kind: "parked" };
-    const wasEmitted = emitted[p.id] === contentHash(p.body.trim()) || existsSync(join(inbox, `${stem}.md`));
+    const wasEmitted = emitted[p.id] === contentHash(p.body.trim()) || emitted[p.id] === contentHash(p.body) || receiptStems(p.id, p.body).some((s) => existsSync(join(inbox, `${s}.md`)));
     return { kind: wasEmitted ? "awaiting-sweep" : "pending-promote" };
   });
   // The first part that is not absorbed decides; all absorbed → absorbed (first part's entry).
@@ -130,11 +142,11 @@ export function isAbsorbed(roots: KbRoots, wolf: string, id: string, body: strin
   const rec = readDistillRecord(roots, id);
   if (rec && !rec.held && contentHash(rec.rawBody.trim()) === contentHash(body.trim())) {
     return rec.outputs.every((o) => {
-      const r = readReceipt(join(receiptsDir(roots, wolf), `${receiptStem(o.id, o.body)}.md`));
+      const r = readReceiptFor(receiptsDir(roots, wolf), o.id, o.body);
       return !!(r && asAbsorbed(r));
     });
   }
-  const r = readReceipt(join(receiptsDir(roots, wolf), `${receiptStem(id, body.trim())}.md`));
+  const r = readReceiptFor(receiptsDir(roots, wolf), id, body);
   return !!(r && asAbsorbed(r));
 }
 

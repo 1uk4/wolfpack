@@ -215,7 +215,7 @@ describe("reconcile with distilled contributions", () => {
   const receipt = (id: string, body: string, outcome = "create", detail = "kb-wolfpack-AAAAAAA") => {
     const dir = join(roots.opsRoot, "receipts", WOLF);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${id}-${contentHash(body).slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: ${id}\noutcome: ${outcome}\nprocessed: 2026-10-22 10:00\n---\n\n${detail}\n`);
+    writeFileSync(join(dir, `${id}-${contentHash(body.trim()).slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: ${id}\noutcome: ${outcome}\nprocessed: 2026-10-22 10:00\n---\n\n${detail}\n`);
   };
 
   it("a topic is absorbed only when every distilled contribution has a receipt", async () => {

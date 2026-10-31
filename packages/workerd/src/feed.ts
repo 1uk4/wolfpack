@@ -82,16 +82,19 @@ export function feedContributions(
   const res: FeedResult = { queued: 0, skipped: 0 };
   // Newly refused files of the lane being scanned; reported as ONE summary line per lane per scan (each file only once per process).
   let fresh: string[] = [];
-  const leave = (file: string, _why: string): void => {
+  let freshWhy: string[] = [];
+  const leave = (file: string, why: string): void => {
     res.skipped++;
     if (warned.has(file)) return;
     warned.add(file);
     fresh.push(file);
+    freshWhy.push(why);
   };
   for (const wolf of wolves) {
     if (!WOLF_RE.test(wolf)) continue;
     const lane = join(kbOps, "inbox", wolf);
     fresh = [];
+    freshWhy = [];
     let names: string[];
     try {
       names = readdirSync(lane).sort();
@@ -118,13 +121,18 @@ export function feedContributions(
       let id: string;
       let contribution: Record<string, unknown>;
       try {
-        const parsed = parseContribution(file, wolf);
+        let parsed: ReturnType<typeof parseContribution>;
+        try {
+          parsed = parseContribution(file, wolf);
+        } catch (pe) {
+          throw new Error(`parse check failed: ${(pe as Error).message}`);
+        }
         const { filePath: _filePath, ...c } = parsed;
         // The kb parser returns summary + body together as `body` (the file is `summary \n\n body`); the link carries them apart.
         if (c.body.startsWith(`${c.summary}\n\n`)) c.body = c.body.slice(c.summary.length + 2);
         // Trailing whitespace is not content (the parser trims the body), so only that difference is tolerated.
-        if (renderContribution(c).trimEnd() !== text.trimEnd()) throw new Error("file does not round-trip through parse and render (it would arrive changed)");
-        if (contentHash(c.body) !== c.contentHash) throw new Error("content_hash does not match the body (the hub would refuse it)");
+        if (renderContribution(c).trimEnd() !== text.trimEnd()) throw new Error("round-trip check failed: file does not round-trip through parse and render (it would arrive changed)");
+        if (contentHash(c.body) !== c.contentHash) throw new Error("hash check failed: content_hash does not match the body (the hub would refuse it)");
         id = feedId(wolf, parsed.denTopicId, parsed.contentHash);
         contribution = c as unknown as Record<string, unknown>;
       } catch (e) {
@@ -134,7 +142,7 @@ export function feedContributions(
       try {
         target.contribute(wolf, contribution, id);
       } catch (e) {
-        if (e instanceof OutboxError && (e.code === "too_large" || e.code === "bad_id")) leave(file, e.message);
+        if (e instanceof OutboxError && (e.code === "too_large" || e.code === "bad_id")) leave(file, `size check failed: ${e.message}`);
         else {
           const key = `q:${file}`;
           if (!warned.has(key)) {
@@ -154,7 +162,7 @@ export function feedContributions(
       }
     }
     if (fresh.length) {
-      log(`[workerd] feed: ${fresh.length} contribution(s) left in place in ${lane} (not sent: failed parse, round-trip, hash or size checks; first: ${basename(fresh[0]!)})`);
+      log(`[workerd] feed: ${fresh.length} contribution(s) left in place in ${lane} (not sent; first: ${basename(fresh[0]!)}: ${freshWhy[0]})`);
     }
   }
   return res;

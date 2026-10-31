@@ -43,7 +43,7 @@ export const denArchiveDir = (denRoot: string) => join(denRoot, "memory", "archi
 
 /** Receipt name stem for a topic body, as written by the sweep (`<id>-<hex[0..10]>`). */
 function receiptStem(id: string, body: string): string {
-  return `${id}-${contentHash(body).slice(7, 17)}`;
+  return `${id}-${contentHash(body.trim()).slice(7, 17)}`;
 }
 
 function readReceipt(path: string): { outcome: string; processed: string; detail: string } | null {
@@ -107,7 +107,7 @@ function statusOf(
       return { kind: "awaiting-domain", domain };
     }
     if (r?.outcome === "parked") return { kind: "parked" };
-    const wasEmitted = emitted[p.id] === contentHash(p.body) || existsSync(join(inbox, `${stem}.md`));
+    const wasEmitted = emitted[p.id] === contentHash(p.body.trim()) || existsSync(join(inbox, `${stem}.md`));
     return { kind: wasEmitted ? "awaiting-sweep" : "pending-promote" };
   });
   // The first part that is not absorbed decides; all absorbed → absorbed (first part's entry).

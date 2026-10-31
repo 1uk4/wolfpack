@@ -111,7 +111,9 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const dir = inboxDir(roots, wolf);
   mkdirSync(dir, { recursive: true });
 
-  const hash = contentHash(input.body);
+  // Canonical body = what parseContribution reads back (it trims); hash, file and dedup all use it, whatever the caller passed.
+  const body = input.body.trim();
+  const hash = contentHash(body);
   const emitted = readEmittedMap(roots);
   const prevHash = emitted[input.denTopicId] ?? null;
   if (prevHash === hash && !input.force) return null; // unchanged re-promotion → no-op
@@ -127,7 +129,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     summary: input.summary,
     session: input.session,
     submitted: input.submitted ?? now(),
-    body: input.body,
+    body,
     sourceCreated: input.sourceCreated,
     sourceUpdated: input.sourceUpdated,
     dateBasis: input.dateBasis,
@@ -153,7 +155,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     mkdirSync(roots.denLocal, { recursive: true });
     emitted[input.denTopicId] = hash;
     mkdirSync(join(roots.denLocal, "emitted-bodies"), { recursive: true });
-    atomicWrite(emittedBodyPath(roots, input.denTopicId), input.body);
+    atomicWrite(emittedBodyPath(roots, input.denTopicId), body);
     atomicWrite(emittedMapPath(roots), JSON.stringify(emitted, null, 2) + "\n");
   } catch {
     /* dedup map is an optimization — never fail an emit over it */

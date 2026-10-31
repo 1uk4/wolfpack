@@ -1,10 +1,11 @@
 /** Contribution files written by emitDelta reach the hub over the link (real hubd + workerd), and move to sent/. */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { contributionFileName, renderContribution } from "@wolfpack/kb/client";
+import { contributionFileName, emitDelta, renderContribution } from "@wolfpack/kb/client";
 import { contentHash, type Contribution } from "@wolfpack/kb/shared";
-import { chmodSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { feedContributions, feedDisabledReason, feedId } from "./feed.js";
 import { OutboxError } from "./outbox.js";
 import { Outbox } from "./outbox.js";
@@ -263,5 +264,35 @@ describe("feeding emitDelta files into the link", () => {
     }
     expect(feedContributions(r.kbOps, ["alpha"], target, () => {})).toEqual({ queued: 2, skipped: 0 });
     for (const c of cs) expect(renderContribution(got.find((g) => g.denTopicId === c.denTopicId)! as unknown as Contribution)).toBe(renderContribution(c));
+  });
+});
+
+describe("emitDelta bodies with stray whitespace reach the hub", () => {
+  for (const [label, body] of [["a trailing newline", "Body text.\n"], ["two trailing newlines", "Body text.\n\n"], ["leading and trailing spaces", "  Body text.  "]] as const) {
+    it(`${label}: the feed and the hub accept the file`, async () => {
+      const r = await rig({ linkOptions: {} });
+      const base = mkdtempSync(join(tmpdir(), "emit-feed-"));
+      cleanup.push(() => rmSync(base, { recursive: true, force: true }));
+      const roots = { kbBase: join(base, "kb"), opsRoot: r.kbOps, denLocal: join(base, "den") };
+      const c = emitDelta({ roots, wolf: "alpha", denTopicId: "t-ws", change: "create", domainHint: "wolfpack", summary: "Sum.", body })!;
+      expect(c.contentHash).toBe(contentHash(body.trim()));
+      await r.waitPresence("online");
+      await r.eventually(() => hubInbox(r, "alpha").length === 1 && outboxIds(r).length === 0, "delivered");
+      expect(top(r, "alpha")).toEqual([]);
+    });
+  }
+
+  it("a refused file is logged with the failed check, once per lane per scan", async () => {
+    const r = await rig({ noHub: true });
+    const name = emit(r, make("alpha", "bad", "Body.", { contentHash: contentHash("Body.\n") }));
+    const logs: string[] = [];
+    const warned = new Set<string>();
+    const target = { contribute: () => { throw new Error("must not be queued"); } };
+    feedContributions(r.kbOps, ["alpha"], target, (m) => logs.push(m), warned);
+    feedContributions(r.kbOps, ["alpha"], target, (m) => logs.push(m), warned);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain(name);
+    expect(logs[0]).toContain("hash check failed");
+    expect(top(r, "alpha")).toEqual([name]);
   });
 });

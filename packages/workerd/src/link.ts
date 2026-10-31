@@ -376,7 +376,10 @@ export class HubLink {
         this.o.onReceipt?.(f);
         if (this.o.onReceipt) this.send({ t: "receipt.ack", id: f.id });
       } catch (e) {
-        this.log(`could not write receipt ${JSON.stringify(f.name.slice(0, 80))} for ${JSON.stringify(f.wolf.slice(0, 64))}: ${(e as Error).message}`); // no ack: the hub resends
+        const permanent = (e as { permanent?: boolean }).permanent === true;
+        this.log(`could not write receipt ${JSON.stringify(f.name.slice(0, 80))} for ${JSON.stringify(f.wolf.slice(0, 64))}: ${(e as Error).message}${permanent ? " (permanent; acked and dropped)" : ""}`);
+        // transient: no ack, the hub resends. Permanent (bad name): ack so the hub records it delivered and stops resending (else it loops forever).
+        if (permanent) this.send({ t: "receipt.ack", id: f.id });
       }
     } else if (f.t === "grants") {
       this.o.onGrants?.(f.domains);

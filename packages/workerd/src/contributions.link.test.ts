@@ -175,6 +175,24 @@ describe("receipts over the link", () => {
     expect(readFileSync(join(r.kbOps, "receipts", "alpha", "topic-a-abc.md"), "utf8")).toContain("outcome: committed");
   });
 
+  it("a receipt with a ~ in its name (split distill output) is written", async () => {
+    const r = await rig();
+    await r.waitPresence("online");
+    const name = "parent~child-and-more-0123456789.md";
+    writeReceipt(r, "alpha", name);
+    await r.eventually(() => existsSync(join(r.kbOps, "receipts", "alpha", name)), "~ receipt written");
+  });
+
+  it("a receipt whose name can never be written is logged once, acked and not resent", async () => {
+    const r = await rig();
+    await r.waitPresence("online");
+    writeReceipt(r, "alpha", "_bad name.md");
+    await r.eventually(() => fileLines(join(r.dataDir, "link", "receipts-delivered.jsonl")).length === 1, "acked as delivered");
+    await new Promise((res) => setTimeout(res, 600));
+    expect(r.logs.filter((l) => l.includes("could not write receipt"))).toHaveLength(1);
+    expect(existsSync(join(r.kbOps, "receipts", "alpha", "_bad name.md"))).toBe(false);
+  });
+
   it("receipts for an offline host queue on the hub, flush on reconnect, are resent until acked and then stop", async () => {
     const r = await rig({ noHub: true });
     writeReceipt(r, "alpha", "r1.md");
@@ -390,10 +408,11 @@ describe("outbox", () => {
   });
   it("receipt names cannot escape the receipts dir", () => {
     const ko = tmp();
-    for (const [wolf, name] of [["..", "a.md"], ["a/b", "a.md"], ["alpha", "../../x.md"], ["alpha", "a/b.md"], ["alpha", ".hidden.md"], ["alpha", "a.txt"]] as const) {
+    for (const [wolf, name] of [["..", "a.md"], ["a/b", "a.md"], ["alpha", "../../x.md"], ["alpha", "a/b.md"], ["alpha", ".hidden.md"], ["alpha", "a.txt"], ["alpha", "../x.md"], ["alpha", ".x.md"], ["alpha", "~x.md"]] as const) {
       expect(() => writeReceiptFile(ko, wolf, name, "x")).toThrow();
     }
     expect(readdirSync(ko)).toEqual([]);
+    expect(writeReceiptFile(ko, "alpha", "parent~child-abc1234567.md", "x")).toBe(join(ko, "receipts", "alpha", "parent~child-abc1234567.md"));
     expect(writeReceiptFile(ko, "alpha", "ok-1.md", "x")).toBe(join(ko, "receipts", "alpha", "ok-1.md"));
   });
   it("sends at most sendWindow unacked items and resumes as acks arrive", async () => {

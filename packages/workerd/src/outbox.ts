@@ -135,12 +135,18 @@ export class Outbox {
 }
 
 const WOLF_RE = /^[a-z0-9][a-z0-9._-]*$/;
-const RECEIPT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
+/** `~` joins parent and child in split distill outputs (`<parent>~<child>-<hash>.md`) and the librarian's receipts. No `/`, no leading dot. */
+const RECEIPT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]*\.md$/;
+
+/** A receipt that can never be written (bad name): retrying cannot help, so the link acks it after logging once. */
+export class PermanentReceiptError extends Error {
+  readonly permanent = true;
+}
 
 /** Write a receipt where the wolf expects it today: `<kbOps>/receipts/<wolf>/<name>` (kb receiptsDir). Durable and idempotent. */
 export function writeReceiptFile(kbOps: string, wolf: string, name: string, content: string): string {
-  if (!WOLF_RE.test(wolf)) throw new Error(`bad wolf name ${JSON.stringify(wolf.slice(0, 40))}`);
-  if (!RECEIPT_NAME_RE.test(name)) throw new Error(`bad receipt file name ${JSON.stringify(name.slice(0, 60))}`);
+  if (!WOLF_RE.test(wolf)) throw new PermanentReceiptError(`bad wolf name ${JSON.stringify(wolf.slice(0, 40))}`);
+  if (!RECEIPT_NAME_RE.test(name)) throw new PermanentReceiptError(`bad receipt file name ${JSON.stringify(name.slice(0, 60))}`);
   const file = join(kbOps, "receipts", wolf, name);
   writeFileDurable(file, content);
   return file;

@@ -55,6 +55,20 @@ describe("feeding emitDelta files into the link", () => {
     expect(readFileSync(join(lane(r, "alpha"), "sent", name), "utf8")).toBe(text);
   });
 
+  it("a ~ topic (split output) goes over the link and its ~ receipt comes back", async () => {
+    const r = await rig({ linkOptions: {} });
+    const c = make("alpha", "parent~child-topic-bd");
+    const name = emit(r, c);
+    expect(name).toContain("~");
+    await r.waitPresence("online");
+    await r.eventually(() => hubInbox(r, "alpha").length === 1 && outboxIds(r).length === 0, "delivered");
+    expect(hubInbox(r, "alpha")).toEqual([name]);
+    const rname = name.replace(/\.md$/, "-receipt.md");
+    mkdirSync(join(r.receiptsRoot, "alpha"), { recursive: true });
+    writeFileSync(join(r.receiptsRoot, "alpha", rname), "---\noutcome: committed\n---\n\nok\n");
+    await r.eventually(() => existsSync(join(r.kbOps, "receipts", "alpha", rname)), "receipt written");
+  });
+
   it("without a hub link nothing is scanned or moved", async () => {
     const r = await rig({ noHub: true });
     const name = emit(r, make("alpha", "t"));

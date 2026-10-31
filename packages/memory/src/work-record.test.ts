@@ -19,6 +19,7 @@ import {
   type WorkRecordItem,
   type WorkRecordStore,
 } from "./work-record.js";
+import { WorkPendingState } from "./work-pending.js";
 
 const REC = "## Record\n\n### Decisions\n\n- Use X — why: Y";
 
@@ -413,5 +414,33 @@ describe("Record line sources", () => {
     const r = WorkRecordSchema.parse({ decisions: [{ decision: "d", why: "w", from: null }], changes: ["c"], findings: [{ text: "f" }], problems: [] });
     expect(r.decisions[0].from).toEqual([]);
     expect(findRecordLine("## Record\n\n### Changes\n\n- c\n", parseRecordLines("### Changes\n\n- c")[0].ref)?.text).toBe("c");
+  });
+});
+
+describe("pending entries do not outlive their observations", () => {
+  const obs = (feature: string | undefined, work: string) => ({ id: `${work}-0`, content: "c", work, ...(feature ? { feature } : {}) });
+
+  it("a feature-group success clears the orphan entry of the task key", async () => {
+    const { store } = fakeStore({ f1: { kind: "feature" }, t1: {} });
+    const state = new WorkPendingState(undefined);
+    state.pending("t1", "work-api-unavailable");
+    state.pending("f1", "work-api-unavailable");
+    state.clear("f1"); // make the feature due again
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, state, observations: [obs("f1", "t1")] });
+    expect(state.entry("t1")).toBeUndefined();
+    expect(state.entry("f1")).toBeUndefined();
+  });
+
+  it("a discarded group clears the task entries too", async () => {
+    const { store } = fakeStore({ f1: { kind: "feature" }, t1: { stage: "archived" } });
+    const state = new WorkPendingState(undefined);
+    state.pending("t1", "work-api-unavailable");
+    state.pending("t2", "work-api-unavailable");
+    state.clear("t1"); // due again
+    state.pending("t2", "work-api-unavailable");
+    const out = await consolidateWorkRecords({ engine: fakeEngine([]), store, state, observations: [obs(undefined, "t1")] });
+    expect(out[0]?.status).toBe("discarded");
+    expect(state.entry("t1")).toBeUndefined();
+    expect(state.entry("t2")).toBeDefined();
   });
 });

@@ -354,7 +354,7 @@ export const PENDING_WARN_COUNT = 50;
 export interface PoolPending { count: number; oldestAgeMs?: number }
 export function pendingWarning(p: PoolPending | undefined | null): string | null {
 	if (!p || p.count === 0) return null;
-	if ((p.oldestAgeMs ?? 0) >= PENDING_WARN_AGE_MS) return `${p.count} observation(s) have waited over ${Math.floor((p.oldestAgeMs ?? 0) / 3_600_000)} h to be folded into a Record`;
+	if ((p.oldestAgeMs ?? 0) >= PENDING_WARN_AGE_MS) return `${p.count} observation(s) are waiting to be folded into a Record; the oldest has waited over ${Math.floor((p.oldestAgeMs ?? 0) / 3_600_000)} h`;
 	if (p.count > PENDING_WARN_COUNT) return `${p.count} observations are waiting to be folded into a Record`;
 	return null;
 }

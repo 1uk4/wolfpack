@@ -414,6 +414,13 @@ function buildPrompt(item: WorkRecordItem, current: string | null, obs: WorkObse
   ].join("\n");
 }
 
+/** A group is settled: forget its key and every task key its observations carry (an earlier run may have grouped them under the task). */
+function clearEntries(state: ConsolidateWorkOptions["state"], key: string, obs: WorkObservation[]): void {
+  if (!state) return;
+  state.clear(key);
+  for (const o of obs) state.clear(o.work);
+}
+
 const isInfra = (err: unknown) => err instanceof LlmInfraError || (err instanceof Error && err.cause instanceof LlmInfraError);
 
 /**
@@ -463,7 +470,7 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
         continue;
       }
       if (!item || item.stage === "archived") {
-        state?.clear(work);
+        clearEntries(state, work, obs);
         const reason = item ? "archived" : "deleted";
         onProgress?.(`  work ${work}: item is ${reason}, ${obs.length} observation(s) are discarded`);
         outcomes.push({ work, ids: obs.map((o) => o.id), status: "discarded", reason });
@@ -497,7 +504,7 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       // ran is not overwritten (only the Record section is ours).
       const fresh = (await store.get(work)) ?? item;
       await store.setBody(work, replaceRecordSection(fresh.body, rendered));
-      state?.clear(work);
+      clearEntries(state, work, obs);
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
       outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: stripSources(rendered).length });
     } catch (err) {

@@ -274,14 +274,16 @@ export class WorkPendingState {
 }
 
 /** The pending summary the observations route serves: keys waiting, and the oldest wait. */
-export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; oldestAgeMs?: number } {
+export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; oldestAgeMs?: number } {
   const st = new WorkPendingState(root, () => now);
   const keys: Record<string, PendingCause> = {};
+  const firstPendingAt: Record<string, number> = {};
   let oldest: number | undefined;
   for (const [k, e] of Object.entries((st as unknown as { data: StateFile }).data)) {
     if (e.tries === 0) continue;
     keys[k] = e.cause;
+    firstPendingAt[k] = e.firstPendingAt;
     oldest = Math.min(oldest ?? e.firstPendingAt, e.firstPendingAt);
   }
-  return { keys, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
+  return { keys, firstPendingAt, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
 }

@@ -107,12 +107,24 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
   const api = { endpoint: work?.endpoint || process.env.WORK_ENDPOINT, token: work?.token || process.env.WORK_TOKEN };
   const unavailable = tagged.length > 0 && (await workApiUnavailable(den, tagged[0]!.work || tagged[0]!.feature!, api, now));
   const waiting = readPendingSummary(den, now);
-  const causeOf = (o: { work?: string; feature?: string }): "work-api-unavailable" | "consolidation-failed" | undefined =>
-    (o.feature && waiting.keys[o.feature]) || (o.work && waiting.keys[o.work]) || (unavailable && (o.work || o.feature) ? "work-api-unavailable" : undefined);
+  // A state entry blocks an observation only if it is not an orphan: it must be under a key the observation
+  // is grouped under (feature or work) and started after the observation was recorded. An entry older than the
+  // observation was left by an earlier grouping and is ignored (consolidation clears it on the next success).
+  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed"; since: number } | undefined => {
+    const rec = o.recordedAt ? Date.parse(o.recordedAt) : NaN;
+    for (const k of [o.feature, o.work]) {
+      const t = k ? waiting.firstPendingAt[k] : undefined;
+      if (k && t !== undefined && (Number.isNaN(rec) || t >= rec)) return { cause: waiting.keys[k]!, since: t };
+    }
+    return unavailable && (o.work || o.feature) ? { cause: "work-api-unavailable", since: Number.isNaN(rec) ? now : rec } : undefined;
+  };
+  let oldestWait: number | undefined;
   const blocked = unavailable;
   // The same ids the Records and the archive use (observationIds, in @wolfpack/memory).
   const poolIds = observationIds(pool);
   const all = pool.map((o, i): MemoryObservation & { _i: number } => {
+    const w = waitOf(o);
+    if (w) oldestWait = Math.max(oldestWait ?? 0, now - w.since);
     return {
       id: poolIds[i]!,
       timestamp: o.timestamp ?? "",
@@ -122,14 +134,14 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
       ...(o.domain ? { domain: o.domain } : {}),
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
-      ...(causeOf(o) ? { blocked: causeOf(o)! } : {}),
+      ...(w ? { blocked: w.cause } : {}),
       _i: i,
     };
   });
   const pendingCount = all.filter((o) => o.blocked).length;
   all.sort((a, b) => (b.recordedAt ?? b.timestamp).localeCompare(a.recordedAt ?? a.timestamp) || b._i - a._i);
   const kept = limit === undefined ? all : all.slice(0, limit);
-  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}), ...(pendingCount > 0 ? { pending: { count: pendingCount, ...(waiting.oldestAgeMs !== undefined ? { oldestAgeMs: waiting.oldestAgeMs } : {}) } } : {}) };
+  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}), ...(pendingCount > 0 ? { pending: { count: pendingCount, ...(oldestWait !== undefined ? { oldestAgeMs: oldestWait } : {}) } } : {}) };
 }
 
 /** One topic by id. `scope` restricts the store; otherwise den first, then session. Undefined: no such topic. */

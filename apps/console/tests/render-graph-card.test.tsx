@@ -87,7 +87,7 @@ describe("GraphUnavailable (no librarian online)", () => {
 describe("KbMirrorLabel", () => {
 	it("says the graph is a read-only mirror because the librarian is offline", () => {
 		const h = renderToStaticMarkup(createElement(KbMirrorLabel));
-		assert.match(h, /read-only mirror \(librarian offline\)/);
+		assert.match(h, /read-only hub copy/);
 	});
 	it("GraphUnavailable no longer insists on the librarian alone", () => {
 		assert.match(renderToStaticMarkup(createElement(GraphUnavailable, {})), /librarian wolf or a wolf with a KB mirror/);

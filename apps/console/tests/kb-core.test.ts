@@ -29,7 +29,7 @@ describe("findKbSource", () => {
 		assert.equal(findKbSource([]), null);
 		assert.equal(findKbSource([blind, { ...mirror, status: "offline" }, { name: "y", status: "online", kbReadable: false }]), null);
 	});
-	it("labels the mirror", () => assert.equal(KB_MIRROR_LABEL, "read-only mirror (librarian offline)"));
+	it("labels the mirror", () => assert.equal(KB_MIRROR_LABEL, "read-only hub copy"));
 });
 
 describe("parseMemoryEventFrame", () => {

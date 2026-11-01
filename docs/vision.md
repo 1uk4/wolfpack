@@ -4,7 +4,7 @@
 
 ## Goal: visibility
 
-Wolfpack Console replaces the whole front end (pi TUI, Telegram bridge, vis-network dashboard, Syncthing mesh) with one harness. The goal is visibility: agents render structure as they work (plans, task graphs, decisions, observations) so the operator can reshape the work while it happens.
+Wolfpack Console replaces the whole front end (pi TUI, Telegram bridge, vis-network dashboard, Syncthing KB/ops mesh) with one harness. The goal is visibility: agents render structure as they work (plans, task graphs, decisions, observations) so the operator can reshape the work while it happens.
 
 Personal use first, built to production standard. Single operator now; the protocol carries identity so per-wolf multi-user access can be added later (designed in, not built).
 
@@ -35,7 +35,7 @@ Done when a real conversation with a durable 1uk4 in the console replaces one pi
 Every ticket is sorted at grilling time.
 
 - **Master-safe groundwork** (lands on `main`, TUI keeps working): `packages/protocol`, client extraction from the CLI, durable extension ports, per-conversation binding, the claim operation, small KB and identity fixes.
-- **Divergent work** (branch only): `apps/console`, `apps/desktop`, the hubd/workerd split, Syncthing removal, route retirement.
+- **Divergent work** (branch only): `apps/console`, `apps/desktop`, the hubd/workerd split, Syncthing KB/ops removal (den backups stay until H3GuSmC), route retirement.
 
 Production fixes land once; the branch stays mostly additive until cutover, when `console` becomes `main`.
 

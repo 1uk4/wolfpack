@@ -1,7 +1,7 @@
 /**
  * registry rendering — project the ledger into per-domain, human-auditable topic
  * maps at `domains/<domain>/_registry.md`. Each lives inside its domain folder,
- * so it rides that domain's Syncthing share to subscribed wolves (the registry
+ * so it is distributed over the hub link to subscribed wolves (the registry
  * is their route — and coverage map — into the KB). Write-only: Dewey always
  * re-derives the registry from the ledger, so this is a pure projection.
  */

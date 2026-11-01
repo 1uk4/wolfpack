@@ -112,7 +112,7 @@ export interface SubscribedDomain {
  *
  * Source of truth, in order:
  *   1. `WOLF_DOMAINS` (comma-separated; exported from wolf.yaml `domains:`)
- *   2. the folders present under `<kbBase>/domains/` (Syncthing only mirrors
+ *   2. the folders present under `<kbBase>/domains/` (the hub link only mirrors
  *      subscribed domains to a wolf)
  * Labels/descriptions are enriched from `<kbBase>/domains.yaml` when present.
  * Returns [] when nothing is configured — callers must stay generic then.

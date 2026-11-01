@@ -175,7 +175,7 @@ export function createLinkContributions(o: LinkContributionsOptions): LinkContri
   mkdirSync(dir, { recursive: true });
   const seen = new IdSet(join(dir, "contribution-ids.jsonl"), max, age, now, log);
   const delivered = new IdSet(join(dir, "receipts-delivered.jsonl"), max, age, now, log);
-  // High-water mark (mtime ms): receipts older than this are history and are never read again. First start = now (Syncthing already
+  // High-water mark (mtime ms): receipts older than this are history and are never read again. First start = now (the previous transport already
   // delivered everything before the hub took over). It only moves forward (see scanReceipts).
   const sinceFile = join(dir, "receipts-since");
   let since: number;

@@ -41,7 +41,7 @@ export const rebuildBadJournalFile = (r: KbRoots) => join(r.denLocal, ".rebuild-
 export const backupStamp = (d = new Date()) => d.toISOString().replace(/\.\d+Z$/, "Z").replace(/:/g, "-");
 export const sectionsBackupFile = (r: KbRoots, stamp: string) => join(r.denLocal, `sections.json.pre-rebuild-${stamp}`);
 export const rebuildOldValuesFile = (r: KbRoots, stamp: string) => join(r.denLocal, `.rebuild-old-sections-${stamp}.json`);
-/** Temp files are hidden and do not end in .md, so no entry scan picks them up. Syncthing ignores `.rebuild-tmp-*`. */
+/** Temp files are hidden and do not end in .md, so no entry scan picks them up. the hub-link mirror skips `.rebuild-tmp-*`. */
 export const TMP_PREFIX = ".rebuild-tmp-";
 const tmpPath = (file: string) => join(dirname(file), `${TMP_PREFIX}${basename(file)}.tmp`);
 

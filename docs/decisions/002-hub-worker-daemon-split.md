@@ -13,7 +13,7 @@ Two separate daemons, even on one machine, built from the same packages and spea
 - **hubd:** pack registry, Work API and ledger, KB authority, contributions inbox, relay. A role, not a fixed machine; it starts on the Mac and ends on a VPS. Moving it is a supported export/import.
 - **workerd:** runs one process per wolf (`ProcessRunner`), holds dens, workspaces and the KB copy. Workers dial out to the hub and keep the connection open. Wolves talk only to their own worker and never hold hub credentials.
 
-Transport is POST for commands and SSE for streams, resumable with `Last-Event-ID`. Tokens are always required; Tailscale, TLS or a local socket provide the network layer. Syncthing is retired; workers pull the KB from the hub, which enforces domain access.
+Transport is POST for commands and SSE for streams, resumable with `Last-Event-ID`. Tokens are always required; Tailscale, TLS or a local socket provide the network layer. Syncthing no longer carries the KB or ops lanes; workers pull the KB from the hub, which enforces domain access. Syncthing remains for den backups only until feature H3GuSmC.
 
 ## Consequences
 
@@ -21,4 +21,4 @@ Transport is POST for commands and SSE for streams, resumable with `Last-Event-I
 - Development uses a local hub on a copy of production data, with dev wolves in sandbox mode.
 - A new protocol package and token/pairing flow must be built before any remote wolf works.
 - Two sequencing domains: pi-durable log sequence for conversations, hub-minted sequences for pack-wide streams.
-- Legacy `packages/agent` and the Syncthing mesh are removed at cutover.
+- Legacy `packages/agent` and the Syncthing KB/ops mesh are removed at cutover.

@@ -48,8 +48,8 @@ pi's consolidation defaults (trigger hybrid, 4h; threshold 20000, poolTarget 100
   wolfd attaches via `run/work-server.json` (pid + url + token). Without workerd the first wolf starts it. A second writer
   fails loudly (`<root>/run/work-server.lock`, exclusive create + pid liveness; stale locks are taken over).
 * **Snapshots never touch the sources.** Local sources are read-only copies (never `--delete`, never `mv`, symlinks
-  skipped); the destination must not overlap the live KB, `~/wolves/{knowledge,librarian,local,sfo-01}` or any Syncthing
-  folder (paths read from `config.xml`, nothing else).
+  skipped); the destination must not overlap the live KB, `~/wolves/{knowledge,librarian,local,sfo-01}` or any den-backup Syncthing
+  folder (paths read from `config.xml`, nothing else). Syncthing carries den backups only.
 * **Nothing is deleted.** `--force` and `--refresh-work` move the previous parts to `.replaced-<ts>/`; a snapshot is
   staged in `.staging-<ts>/` and installed only after verification. A snapshot refuses to swap the ledger while the work
   server runs.
@@ -89,7 +89,7 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 * rsync with the remote path as **source only**; no `--delete*`, no `--remove-source-files`, no `--rsync-path`
   (`assertReadOnlyRsyncArgv` refuses them before spawning); explicit filter: only `/ledger/work-events.jsonl` under
   `/var/wolfpack/kb/work/`. The work item `.md` files are NOT pulled from the host: they are copied read-only from the local
-  Syncthing mirror (`--work-md-from`, default `~/wolves/knowledge/base`). After install the snapshot prints a cross-check of
+  KB mirror (`--work-md-from`, default `~/wolves/knowledge/base`). After install the snapshot prints a cross-check of
   ledger ids vs `.md` files, and fails (installing nothing) if the ledger has events but no `.md` was found. No den, ops or KB comes from the host.
 * The remote ledger is hashed over ssh before and after (`sha256sum -- <file>`, read-only). The snapshot fails loudly,
   installing nothing, if the copy's sha256 differs from the hash taken before, or the two remote hashes differ (a live

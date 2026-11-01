@@ -75,9 +75,9 @@ Make the KB authoritative on the VPS and reachable over Tailscale.
   **+ WorkItem CRUD** endpoints.
 - **Ollama** sidecar (embeddings for search + routing); automated **sweep** on a timer;
   **token auth** (Dewey = write, others = read).
-- **KB client pi extension** — API calls replace wolves reading the Syncthing mirror
+- **KB client pi extension** — API calls replace wolves reading a synced KB copy
   directly. This is the piece your own dev env needs first.
-- **Syncthing** shrinks from a per-wolf star to a single **cold-backup** pipe VPS → Mac.
+- **Syncthing** no longer carries the KB or ops lanes (hub-only). It stays only for den backups (`den-<host>-<wolf>`) until feature H3GuSmC builds a backup system and removes it.
 
 *Milestone:* your pi CLI dev wolf reads/writes the authoritative VPS KB live; the Factory
 is service-backed with no data-model change (same WorkItem files, now behind the API).

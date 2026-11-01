@@ -84,7 +84,7 @@ function resolveReal(dir: string): { abs: string; real: string } {
 }
 
 /**
- * Check 1, for BOTH `hubd serve` and `hubd dev`: a hub must never be pointed at a live Syncthing mirror or a den.
+ * Check 1, for BOTH `hubd serve` and `hubd dev`: a hub must never be pointed at a live KB mirror or a den (den backups are Syncthing folders).
  * Refuses ~/wolves/knowledge/** and ANY `den` segment anywhere under ~/wolves. Symlinks are resolved; the resolved path is
  * what is checked AND returned. Case-insensitive on darwin. Deliberately does NOT refuse /var/wolfpack (a real VPS hub may live there).
  */

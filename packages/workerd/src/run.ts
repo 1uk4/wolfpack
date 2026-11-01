@@ -5,8 +5,8 @@ import { HubLink, type LinkStatus } from "./link.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
-import { existsSync } from "node:fs";
-import { dirname, join, relative, resolve, isAbsolute } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve, isAbsolute, sep } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
 import type { LinkWelcome, LinkWolf } from "@wolfpack/protocol";
 import { WorkerRelay } from "./relay.js";
@@ -77,18 +77,40 @@ export const envKbMirror = (env: NodeJS.ProcessEnv = process.env): { dir?: strin
  * inside the private config dir (hub.json), equals/contains/sits inside the outbox, or when hub.json / outbox/ exist inside the mirror.
  */
 export function groupReadConflict(mirrorDir: string, configDir: string, outboxDir: string): string | undefined {
-  const m = resolve(mirrorDir);
+  // Symlinks are resolved where the path exists, so a mirror dir that is a symlink into the config dir is caught.
+  const real = (p: string): string => {
+    // Not-yet-existing paths: resolve the nearest existing ancestor (macOS /var -> /private/var) and re-append the rest.
+    let cur = resolve(p);
+    const rest: string[] = [];
+    for (;;) {
+      try {
+        return join(realpathSync(cur), ...rest);
+      } catch {
+        const up = dirname(cur);
+        if (up === cur) return resolve(p);
+        rest.unshift(cur.slice(up.length + 1));
+        cur = up;
+      }
+    }
+  };
+  const m = real(mirrorDir);
   const inside = (a: string, b: string): boolean => {
     const r = relative(b, a);
-    return r === "" || (!r.startsWith("..") && !isAbsolute(r));
+    return r === "" || (r !== ".." && !r.startsWith(".." + sep) && !isAbsolute(r));
   };
   for (const [name, p] of [["config dir", configDir], ["outbox", outboxDir]] as const) {
-    const q = resolve(p);
+    const q = real(p);
     if (inside(m, q) || inside(q, m)) return `the mirror dir ${m} equals, contains or is inside the ${name} ${q}`;
   }
   for (const n of ["hub.json", "outbox"]) if (existsSync(join(m, n))) return `${join(m, n)} exists inside the mirror dir`;
   return undefined;
 }
+
+/** A WORKERD_KB_MIRROR_GROUP_READ value that is neither "1" (on) nor "0"/empty (off): returned so the caller can warn that it is treated as OFF. */
+export const badGroupReadValue = (env: NodeJS.ProcessEnv = process.env): string | undefined => {
+  const v = (env.WORKERD_KB_MIRROR_GROUP_READ ?? "").trim();
+  return v === "" || v === "0" || v === "1" ? undefined : v;
+};
 
 export interface RunningWorkerd {
   url: string;
@@ -165,6 +187,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     if (rawLayout !== "flat" && rawLayout !== "base") throw new Error(`invalid WORKERD_KB_LAYOUT ${JSON.stringify(rawLayout)} (expected flat or base)`);
     const kbLayout: "flat" | "base" = rawLayout;
     const envMirror = envKbMirror();
+    const badGr = badGroupReadValue();
+    if (badGr !== undefined) log(`[workerd] WARNING WORKERD_KB_MIRROR_GROUP_READ=${JSON.stringify(badGr.slice(0, 20))} is not "1" or "0": group-read is OFF`);
     const configDir = opts.configDir ?? workerdConfigDir();
     const mirrorDir = opts.kbMirrorDir ?? envMirror.dir ?? join(configDir, "kb-mirror");
     const groupRead = opts.kbMirrorGroupRead ?? envMirror.groupRead;

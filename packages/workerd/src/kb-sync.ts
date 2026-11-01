@@ -208,10 +208,32 @@ export class KbSync {
     this.warned.add(m);
     this.log(`WARNING ${m}`);
   }
-  /** The group every shared file/dir is given: the mirror root's. Creates the root if missing (the operator normally does). */
+  /**
+   * The group every shared file/dir is given: the mirror root's. In group-read mode the root is NEVER auto-created (the operator makes it
+   * workerd:wolfpack-kb 0750): a missing root throws. Warns (once) when the root cannot give Hal read access: its group is workerd's own
+   * effective group, or the group bits lack r-x.
+   */
   private rootGid(): number {
-    mkdirSync(this.o.mirrorDir, { recursive: true });
-    return statSync(this.o.mirrorDir).gid;
+    let st;
+    try {
+      st = statSync(this.o.mirrorDir);
+    } catch (e) {
+      this.warnOnce(`group-read: the mirror root ${this.o.mirrorDir} is missing or unreadable (${(e as Error).message}); create it as <owner>:wolfpack-kb 0750. Not creating it.`);
+      throw e;
+    }
+    if (typeof process.getegid === "function" && st.gid === process.getegid()) this.warnOnce(`group-read: the mirror root ${this.o.mirrorDir} has workerd's own group (gid ${st.gid}), not a shared one; the reader group cannot read it`);
+    if ((st.mode & 0o050) !== 0o050) this.warnOnce(`group-read: the mirror root ${this.o.mirrorDir} mode is ${(st.mode & 0o7777).toString(8)}, its group has no r-x; the reader group cannot read it`);
+    return st.gid;
+  }
+  /** lstat that never throws: undefined when missing or unreadable (EACCES/ENOTDIR/...), the latter logged once. */
+  private safeLstat(p: string): ReturnType<typeof lstatSync> | undefined {
+    try {
+      return lstatSync(p);
+    } catch (e) {
+      const c = (e as NodeJS.ErrnoException).code;
+      if (c !== "ENOENT" && c !== "ENOTDIR") this.warnOnce(`group-read: cannot stat ${p}: ${(e as Error).message}`);
+      return undefined;
+    }
   }
   /** fchown (group only, to the mirror root's gid) + fchmod an open fd. Plain modes, no special bits. */
   private share(fd: number, mode: number, gid: number): void {
@@ -240,7 +262,7 @@ export class KbSync {
   /**
    * groupRead only, at EVERY start: bring existing mirror content to 0640 / 0750 with the root's group. Only the domain folders are walked
    * (`domains/<d>` in base layout, `<d>` in flat) and only entries/, versions/<id>/ and the sync-path files inside; `.sync/` and any other
-   * entry under the root are left alone. Symlinks are never followed (O_NOFOLLOW). Failures are logged once per message, never swallowed.
+   * entry under the root are left alone. Domains whose .sync state is active:false (revoked) are LEFT ALONE (not re-shared, not tightened). Symlinks are never followed (O_NOFOLLOW). Failures are logged once per message, never swallowed.
    */
   private fixModes(): void {
     let gid: number;
@@ -270,7 +292,8 @@ export class KbSync {
     for (const d of names(parent)) {
       if (!DOMAIN.test(d)) continue;
       const root = join(parent, d);
-      if (lstatSync(root, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+      if (this.safeLstat(root)?.isDirectory() !== true) continue;
+      if (this.load(d)?.active === false) continue; // revoked domain: stale copy, not re-shared
       tryShare(root, () => this.shareDir(root, gid));
       for (const n of names(root)) {
         const p = join(root, n);
@@ -281,7 +304,7 @@ export class KbSync {
           tryShare(p, () => this.shareDir(p, gid));
           for (const v of names(p)) {
             const vd = join(p, v);
-            if (lstatSync(vd, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+            if (this.safeLstat(vd)?.isDirectory() !== true) continue;
             tryShare(vd, () => this.shareDir(vd, gid));
             for (const f of names(vd)) if (KB_SYNC_PATH.test(`versions/${v}/${f}`)) tryShare(join(vd, f), () => this.shareFileAt(join(vd, f), gid));
           }
@@ -608,11 +631,15 @@ export class KbSync {
   private writeAtomic(file: string, content: string, shared = true): void {
     const dir = dirname(file);
     const gr = !!this.o.groupRead && shared;
-    mkdirSync(dir, { recursive: true });
     let gid = -1;
     try {
+      if (gr) gid = this.rootGid(); // before mkdir: a missing root must not be created implicitly
+    } catch (e) {
+      throw new Retry(`group-read: ${(e as Error).message}`);
+    }
+    mkdirSync(dir, { recursive: true });
+    try {
       if (gr) {
-        gid = this.rootGid();
         // Every directory between the mirror root (exclusive) and the file, parent first. Plain 0750 + the root's group; no setgid.
         let cur = this.o.mirrorDir;
         for (const seg of relative(this.o.mirrorDir, dir).split(sep).filter(Boolean)) {

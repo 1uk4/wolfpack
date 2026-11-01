@@ -57,7 +57,7 @@ valid_port "$PORT" || die "bad --port $PORT (1024-65535, never 3141 wolfpack-age
 hal_unit_exists() { systemctl cat "$HAL_UNIT.service" >/dev/null 2>&1; }
 workerd_user_exists() { id "$WU" >/dev/null 2>&1; }
 # Value of KEY in a file (last assignment), empty if absent.
-envval() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1; }
+envval() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"; }
 
 # Is the TCP port bound by something other than our own workerd? Prints the offending line.
 port_foreign_listener() {

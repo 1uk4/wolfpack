@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
-import { MessageResponse } from "@/components/ai-elements/message";
-import { mdComponentsInert } from "@/components/md-blocks";
+import { InlineMarkdown, MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
@@ -391,8 +390,8 @@ function FieldView({
 							>
 								<Indicator shape="radio" on={sel} />
 								<span className="flex min-w-0 flex-col items-start">
-									<MessageResponse components={mdComponentsInert}>{o.label}</MessageResponse>
-									{o.description && <MessageResponse components={mdComponentsInert} className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
+									<InlineMarkdown>{o.label}</InlineMarkdown>
+									{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
 								</span>
 							</button>
 						);
@@ -515,8 +514,8 @@ function MultiView({
 					>
 						<Indicator shape="check" on={sel} />
 						<span className="flex min-w-0 flex-col items-start">
-							<MessageResponse components={mdComponentsInert}>{o.label}</MessageResponse>
-							{o.description && <MessageResponse components={mdComponentsInert} className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
+							<InlineMarkdown>{o.label}</InlineMarkdown>
+							{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
 						</span>
 					</button>
 				);

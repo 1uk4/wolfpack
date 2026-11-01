@@ -339,4 +339,17 @@ describe("AskCard link option selection + visible incomplete submit", () => {
 		assert.equal(q('[data-field="serve"]')!.hasAttribute("data-incomplete"), false);
 		assert.equal(submit().hasAttribute("aria-disabled"), false);
 	});
+	it("option markdown is phrasing-only: no <p>, <div>, nested <p>, button or a inside card-option, text kept", async () => {
+		const label = "Para one with https://sfo.example.com/x and `code`\n\nPara two **bold** [d](https://e.com)\n\n- item a\n- item b\n\n> quote\n\n```js\nlet a = 1;\n```";
+		for (const kind of ["single", "multi"] as const) {
+			await mount({ tool: "t", fields: [{ id: "f", kind, label: "Pick", options: [{ label, value: "a", description: "Desc\n\nsecond para [x](https://e.com)" }] }] as Card["fields"] });
+			const opt = qa('[data-testid="card-option"]')[0]!;
+			assert.equal(opt.querySelectorAll("p, div, button, a, ul, pre, blockquote").length, 0, opt.innerHTML);
+			assert.equal(q('[data-testid="card-submit-hint"]')!.querySelectorAll("p").length, 0);
+			const text = opt.textContent ?? "";
+			for (const w of ["Para one", "Para two", "bold", "item a", "quote", "let a = 1", "second para"]) assert.ok(text.includes(w), w);
+			assert.equal(document.querySelectorAll("p p").length, 0);
+			await unmountRoot();
+		}
+	});
 });

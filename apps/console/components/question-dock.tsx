@@ -5,7 +5,7 @@ import { ArrowDownIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { useEnterSubmits } from "@/components/enter-submits";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { InlineMarkdown, MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
@@ -534,7 +534,7 @@ function QuestionDockForm({
 										)}
 									</span>
 									<span>
-										<MessageResponse>{opt.label}</MessageResponse>
+										<InlineMarkdown>{opt.label}</InlineMarkdown>
 										{kind !== "quiz" && opt.description && (
 											// Option subtext renders in Source Sans 3 (owner's mockup);
 											// the "I don't know" copy stays JetBrains Mono. QUIZ options render
@@ -543,9 +543,7 @@ function QuestionDockForm({
 											// records must not leak either. Same MessageResponse path as the
 											// label (owner, 2026-10-12): descriptions are full markdown —
 											// LaTeX included — not plain text.
-											<MessageResponse className="lh-prose block text-xs text-muted-foreground">
-												{opt.description}
-											</MessageResponse>
+											<InlineMarkdown className="block text-xs text-muted-foreground">{opt.description}</InlineMarkdown>
 										)}
 									</span>
 								</button>

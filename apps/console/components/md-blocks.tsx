@@ -530,3 +530,42 @@ export const mdComponentsInert = {
 	span: InertSpan,
 	img: InertImage,
 };
+
+/** Phrasing-only set for INLINE_markdown inside buttons: every block element becomes a span
+ *  (paragraphs, lists, quotes, headings, rules, code fences), so no <p>/<div> can land
+ *  inside a <button> or a <p>. Used with `Block` (no wrapper div) by InlineMarkdown. */
+function inlineTag(name: string) {
+	const C = (props: ComponentProps<"span"> & ExtraProps) => {
+		const { children, node, ...rest } = props as ComponentProps<"span"> & ExtraProps;
+		return (
+			<span data-streamdown={name} {...(rest as object)}>
+				{children}
+			</span>
+		);
+	};
+	C.displayName = `Inline(${name})`;
+	return C;
+}
+export const mdComponentsInline = {
+	...mdComponentsInert,
+	p: inlineTag("p"),
+	ul: inlineTag("ul"),
+	ol: inlineTag("ol"),
+	li: inlineTag("li"),
+	blockquote: inlineTag("blockquote"),
+	pre: inlineTag("pre"),
+	hr: inlineTag("hr"),
+	h1: inlineTag("h1"),
+	h2: inlineTag("h2"),
+	h3: inlineTag("h3"),
+	h4: inlineTag("h4"),
+	h5: inlineTag("h5"),
+	h6: inlineTag("h6"),
+	table: inlineTag("table"),
+	thead: inlineTag("thead"),
+	tbody: inlineTag("tbody"),
+	tr: inlineTag("tr"),
+	th: inlineTag("th"),
+	td: inlineTag("td"),
+	div: inlineTag("div"),
+};

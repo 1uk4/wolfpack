@@ -27,7 +27,7 @@
  * EXPAND icon (opens the session overlay) when a chat page is mounted.
  */
 
-import { cloneElement, isValidElement, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, MaximizeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -366,6 +366,56 @@ export function MarkdownBlockquote(props: ComponentProps<"blockquote"> & ExtraPr
 	);
 }
 
+// ─── Paragraphs (the Streamdown `p` override) ────────────────────────────────
+
+/** Tags that may not live inside a <p> (HTML: only phrasing content may). */
+const NON_PHRASING = new Set([
+	"p", "div", "pre", "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th", "blockquote",
+	"hr", "section", "h1", "h2", "h3", "h4", "h5", "h6", "figure", "details", "dl", "form", "fieldset",
+]);
+
+const InParagraph = createContext(false);
+
+/** Does any direct child render a block element? (hast tag from props.node for
+ *  Streamdown's wrapped components, the raw type for plain elements.) */
+function hasBlockChild(children: ReactNode): boolean {
+	return Children.toArray(children).some((c) => {
+		if (!isValidElement(c)) return false;
+		const tag = markdownTag(c);
+		if (tag && NON_PHRASING.has(tag)) return true;
+		return c.type === MarkdownCode && "data-block" in (c.props as object);
+	});
+}
+
+/** Paragraph that can never produce invalid <p> nesting. Raw HTML in message
+ *  text (a prose mention like "use <p> or <div>" is parsed as real elements by
+ *  Streamdown's rehype-raw) yields a <p> inside a <p>, or a <div>/<ul> inside
+ *  one: React logs "<p> cannot be a descendant of <p>" and hydration breaks.
+ *  So: a paragraph nested in a paragraph, or holding any block child, renders
+ *  as a <div> with the same styling. Mirrors Streamdown's own unwrap of a
+ *  lone image / code block. */
+export function MarkdownParagraph(props: ComponentProps<"p"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	const nested = useContext(InParagraph);
+	const kids = Children.toArray(children).filter((c) => c !== "");
+	if (kids.length === 1 && isValidElement(kids[0])) {
+		const tag = markdownTag(kids[0]);
+		if (tag === "img" || (tag === "code" && "data-block" in (kids[0].props as object))) return <>{children}</>;
+	}
+	if (nested || hasBlockChild(children)) {
+		return (
+			<InParagraph.Provider value={true}>
+				<div {...(rest as ComponentProps<"div">)}>{children}</div>
+			</InParagraph.Provider>
+		);
+	}
+	return (
+		<InParagraph.Provider value={true}>
+			<p {...rest}>{children}</p>
+		</InParagraph.Provider>
+	);
+}
+
 // ─── Tables (the Streamdown `table` override) ────────────────────────────────
 
 /** A plain PROSE table: no wrapper box, no button rows — just the table
@@ -514,6 +564,7 @@ export function InertImage(props: ComponentProps<"img"> & ExtraProps) {
 }
 
 export const mdComponents = {
+	p: MarkdownParagraph,
 	code: MarkdownCode,
 	table: MarkdownTable,
 	span: MathDisplay,

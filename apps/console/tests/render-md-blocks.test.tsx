@@ -255,3 +255,22 @@ describe("ThinkingBlock — the document band + ⌘T sync (owner rounds, 2026-10
 		setAllUserThinkingOpen(true);
 	});
 });
+
+describe("md-blocks — paragraph nesting (hydration)", () => {
+	const cases = [
+		"inside options, use <p> or <div> text",
+		"a <p>b</p> c",
+		"see <p>, <div>, and <ul> here",
+		"Streamdown renders <p>\nnested",
+		"x <p> y\n\nnormal para",
+	];
+	for (const md of cases) {
+		it(`no p-in-p / block-in-p for ${JSON.stringify(md)}`, () => {
+			const html = render(md);
+			assert.doesNotMatch(html, /<p(?=[ >])(?:(?!<\/p>).)*?<(p|div|pre|ul|ol|table|blockquote|h[1-6])(?=[ >])/s);
+		});
+	}
+	it("ordinary paragraphs stay <p>", () => {
+		assert.match(render("hello\n\nworld"), /<p[ >]/);
+	});
+});

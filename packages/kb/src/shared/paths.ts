@@ -1,7 +1,7 @@
 /**
  * Path resolution — the three storage tiers.
  *
- *   kbBase   — Dewey writes; read-only mirror to wolves over the hub link (kb-sync)
+ *   kbBase   — Dewey writes; read-only mirror to wolves via `workerd` kb-sync (from hubd)
  *   opsRoot  — per-wolf lanes (inbox/receipts/rejected), carried by the hub link, not Syncthing
  *   denLocal — Dewey-local, never synced (ledger/vectors/clusters) — Dewey's brain
  */

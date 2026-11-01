@@ -60,7 +60,8 @@ export async function checkTailscale(): Promise<ServiceHealth> {
  *
  * Config via env:
  *   SYNCTHING_UNIT     systemd unit to probe (default "syncthing"); a per-wolf
- *                      instance can be named, e.g. "wolf-<id>-syncthing" or "syncthing@wolf"
+ *                      instance can be named, e.g. "wolf-<id>-syncthing" (the per-wolf unit
+ *                      provisioned by `wolfpack mesh`, see packages/cli deployer.ts) or the legacy "syncthing@wolf"
  *   SYNCTHING_URL      REST base (default http://127.0.0.1:8384)
  *   SYNCTHING_API_KEY  enables the deeper REST check
  */

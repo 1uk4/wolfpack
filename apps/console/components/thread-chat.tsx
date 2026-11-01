@@ -21,6 +21,7 @@ import { ComposerControls, useThreadSettings } from "@/components/composer-contr
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
+import { useComposerDraft } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
@@ -346,10 +347,17 @@ function ThreadChatInner({
 	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after
 	// `await dictation.finish()` cannot observe in time (same law as chat.tsx).
 	const textRef = useRef("");
+	const scheduleDraft = useRef<(v: string) => void>(() => {});
 	const applyText = useCallback((v: string) => {
 		textRef.current = v;
 		setText(v);
+		scheduleDraft.current(v);
 	}, []);
+	// Unsent text survives leaving the thread, switching wolves and reloads (localStorage, text only).
+	scheduleDraft.current = useComposerDraft(wolf, threadId, textRef, (v) => {
+		textRef.current = v;
+		setText(v);
+	});
 	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
 	const dictation = useDictation({ append: (t) => applyText(joinDictation(textRef.current, t)) });
 	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.

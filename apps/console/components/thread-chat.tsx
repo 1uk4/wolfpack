@@ -21,7 +21,7 @@ import { ComposerControls, useThreadSettings } from "@/components/composer-contr
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
-import { useComposerDraft } from "@/lib/composer-draft";
+import { useComposerDraft, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
@@ -354,6 +354,8 @@ function ThreadChatInner({
 		scheduleDraft.current(v);
 	}, []);
 	// Unsent text survives leaving the thread, switching wolves and reloads (localStorage, text only).
+	// Restore callback: deliberately skips applyText, so a restored draft is not re-scheduled for writing, does not
+	// focus the composer and does not touch the dictation state.
 	scheduleDraft.current = useComposerDraft(wolf, threadId, textRef, (v) => {
 		textRef.current = v;
 		setText(v);
@@ -421,17 +423,19 @@ function ThreadChatInner({
 		}
 	}, [dictation.active]);
 
+	const beginSend = useRestoreOnSendFailure(error, status, textRef, applyText);
 	const doSend = useCallback(() => {
 		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
 		const refs = readyInfos(attachments);
 		applyText("");
+		beginSend(t, busy); // a failed send/steer puts the text back (unless the user typed anew)
 		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
 		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
 		// whenBusy "steer"); Stop is the abort.
 		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
-	}, [busy, send, steer, attachments, applyText]);
+	}, [busy, send, steer, attachments, applyText, beginSend]);
 	// Finish a live dictation first: the spoken tail must be in the message. One send in flight at a time (a second
 	// Enter/click during the finish must not send twice); doSend runs through a ref so it sees the settled state, and
 	// does nothing (composer untouched) when the finish left no text and no ready attachment.

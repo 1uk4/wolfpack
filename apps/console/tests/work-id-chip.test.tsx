@@ -28,7 +28,8 @@ Object.assign(globalThis, {
 const { MessageResponse } = await import("../components/ai-elements/message.tsx");
 const { WorkIdChip, WorkItemCard, lookupWorkItem, resetWorkLookupCache, criteriaExcerpt } = await import("../components/work-id-chip.tsx");
 const { AskCard } = await import("../components/ask-card.tsx");
-const { linkifyWorkIds } = await import("../src/core/index.ts");
+const { linkifyWorkIds, workIdFromHref } = await import("../src/core/index.ts");
+const { KbMarkdown } = await import("../components/kb-markdown.tsx");
 type Card = import("@wolfpack/client").Card;
 
 const ID = "work-wolfpack-cEg92qS";
@@ -53,6 +54,29 @@ describe("work id rendering", () => {
 		const md = `\`\`\`\n${ID}\n\`\`\``;
 		assert.equal(linkifyWorkIds(md), md);
 		assert.ok(!render(md).includes("data-work-id"));
+	});
+	it("does not link slugs, other domains or file names", () => {
+		for (const t of ["work-item-details", "work-wolfpack-section", "work-wolfpack-abc1234.md", "work-other-cEg92qS"]) {
+			assert.equal(linkifyWorkIds(`see ${t} here`), `see ${t} here`, t);
+		}
+		assert.ok(linkifyWorkIds(`see ${ID}.`).includes("work-item.invalid"), "a sentence-ending period still links");
+		assert.ok(linkifyWorkIds("work-snapjack-0p87p9Q ok").includes("work-item.invalid"));
+	});
+	it("a malformed escape in the href yields null instead of throwing", () => {
+		assert.equal(workIdFromHref("https://work-item.invalid/%E0%A4%A"), null);
+		assert.equal(workIdFromHref(`https://work-item.invalid/${ID}`), ID);
+	});
+	it("fences in blockquotes and list items and indented code are untouched", () => {
+		for (const md of [`> \`\`\`\n> ${ID}\n> \`\`\``, `- item\n  \`\`\`\n  ${ID}\n  \`\`\``, `1. \`\`\`sh\n   ${ID}\n   \`\`\``, `para\n\n    ${ID}\n\n    ${ID}`]) {
+			assert.equal(linkifyWorkIds(md), md, md);
+		}
+		assert.ok(linkifyWorkIds(`> \`\`\`\n> x\n> \`\`\`\n> ${ID}`).includes("work-item.invalid"), "text after a closed quoted fence links");
+		assert.ok(linkifyWorkIds(`- item\n\n    ${ID} continued`).includes("work-item.invalid"), "list continuation is prose");
+	});
+	it("KB markdown renders an id as a chip, not a dead link", () => {
+		const html = renderToStaticMarkup(<KbMarkdown>{`Depends on ${ID}`}</KbMarkdown>);
+		assert.match(html, new RegExp(`data-work-id="${ID}"`));
+		assert.ok(!html.includes("work-item.invalid"));
 	});
 	it("existing links and urls are not rewritten", () => {
 		const md = `[${ID}](https://x.test/a) and https://x.test/${ID}`;
@@ -106,6 +130,60 @@ describe("hover card", () => {
 		assert.equal(q('[data-testid="work-card-thread"]')!.hasAttribute("disabled"), false);
 	});
 
+	const ev = (el: Element, type: string) => act(async () => void el.dispatchEvent(new dom.window.Event(type, { bubbles: true, cancelable: true })));
+	async function mountChip() {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<WorkIdChip id={ID} />));
+		return q("[data-work-id]")!;
+	}
+	it("a press focuses then clicks and the card stays open", async () => {
+		respond({ [ID]: record({ partOf: null }) });
+		const chip = await mountChip();
+		await ev(chip, "pointerdown");
+		await ev(chip, "mousedown");
+		await ev(chip, "focusin");
+		await ev(chip, "click");
+		await flush();
+		assert.ok(q('[data-testid="work-card"]'), "open after press");
+		await ev(chip, "click");
+		assert.ok(q('[data-testid="work-card"]'), "a second click does not close it");
+		await ev(document.documentElement, "pointerdown");
+		assert.equal(q('[data-testid="work-card"]'), null, "outside pointerdown closes");
+	});
+	it("keyboard focus opens, Escape closes, aria-haspopup is set", async () => {
+		respond({ [ID]: record({ partOf: null }) });
+		const chip = await mountChip();
+		assert.equal(chip.getAttribute("aria-haspopup"), "dialog");
+		await ev(chip, "focusin");
+		await flush();
+		assert.ok(q('[data-testid="work-card"]'));
+		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true }), { key: "Escape" })));
+		assert.equal(q('[data-testid="work-card"]'), null);
+	});
+	it("Space does not activate, Enter does", async () => {
+		respond({ [ID]: record({ partOf: null }) });
+		const chip = await mountChip();
+		const key = (k: string) => act(async () => void chip.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: k })));
+		await key(" ");
+		assert.equal(q('[data-testid="work-card"]'), null);
+		await key("Enter");
+		await flush();
+		assert.ok(q('[data-testid="work-card"]'));
+	});
+	it("an existing feature thread is found and a missing one is labelled Start thread", async () => {
+		respond({ [ID]: record(), "work-wolfpack-07auwWg": parent });
+		const base = (globalThis as { fetch: (u: string) => Promise<Response> }).fetch;
+		(globalThis as Record<string, unknown>).fetch = async (u: string) =>
+			u === "/api/wolves/w1/threads" ? Response.json({ threads: [{ id: "t9", kind: "feature", boundWorkItem: "work-wolfpack-07auwWg" }] }) : base(u);
+		const found = await lookupWorkItem(ID);
+		assert.ok(found.kind === "ok" && found.thread?.id === "t9" && found.thread.wolf === "w1");
+		resetWorkLookupCache();
+		respond({ [ID]: record(), "work-wolfpack-07auwWg": parent });
+		await openChip();
+		assert.equal(q('[data-testid="work-card-thread"]')!.textContent, "Start thread");
+	});
 	it("a second open makes no new request (cache)", async () => {
 		respond({ [ID]: record(), "work-wolfpack-07auwWg": parent });
 		await lookupWorkItem(ID);
@@ -137,6 +215,23 @@ describe("hover card", () => {
 	it("criteria excerpt is bounded", () => {
 		assert.equal(criteriaExcerpt("a".repeat(500)).length, 201);
 		assert.ok(typeof WorkItemCard === "function");
+	});
+});
+
+describe("card option toggling", () => {
+	it("clicking text inside an option still toggles it", async () => {
+		const card = { tool: "t", fields: [{ id: "m", kind: "multi", label: "Pick", options: [{ label: "A", value: "a", description: `d ${ID}` }] }] } as unknown as Card;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const root = createRoot(host);
+		await act(async () => root.render(<AskCard callId="c1" card={card} pending submitting={false} onAnswer={() => {}} />));
+		const opt = document.querySelector('[data-testid="card-option"]')!;
+		assert.equal(opt.getAttribute("aria-pressed"), "false");
+		const inner = opt.querySelector("p, span:not([data-work-id])") ?? opt;
+		await act(async () => void inner.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true })));
+		assert.equal(document.querySelector('[data-testid="card-option"]')!.getAttribute("aria-pressed"), "true");
+		await act(async () => root.unmount());
+		document.body.innerHTML = "";
 	});
 });
 

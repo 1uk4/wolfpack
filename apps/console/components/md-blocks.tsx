@@ -27,7 +27,7 @@
  * EXPAND icon (opens the session overlay) when a chat page is mounted.
  */
 
-import { cloneElement, isValidElement, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { cloneElement, isValidElement, useEffect, useRef, useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, MaximizeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -474,8 +474,8 @@ export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
 	const id = workIdFromHref(props.href);
 	if (id) return <WorkIdChip id={id} />;
 	if (inert) return <span className="underline underline-offset-2" data-streamdown="link-inert">{props.children}</span>;
-	const Default = defaultComponents.a as (p: ComponentProps<"a"> & ExtraProps) => ReactNode;
-	return Default(props);
+	const Default = defaultComponents.a as ComponentType<ComponentProps<"a"> & ExtraProps>;
+	return <Default {...props} />;
 }
 
 export { InertMarkdown };

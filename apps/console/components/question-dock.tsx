@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { useEnterSubmits } from "@/components/enter-submits";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { InertMarkdown } from "@/components/work-id-chip";
 import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
@@ -533,7 +534,7 @@ function QuestionDockForm({
 											</span>
 										)}
 									</span>
-									<span>
+									<InertMarkdown value={true}><span>
 										<MessageResponse>{opt.label}</MessageResponse>
 										{kind !== "quiz" && opt.description && (
 											// Option subtext renders in Source Sans 3 (owner's mockup);
@@ -547,7 +548,7 @@ function QuestionDockForm({
 												{opt.description}
 											</MessageResponse>
 										)}
-									</span>
+									</span></InertMarkdown>
 								</button>
 							);
 						})}

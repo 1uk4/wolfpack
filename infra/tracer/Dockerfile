@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl procps
 # Users: hubd runs as `hubd`; workerd + the wolfd it supervises run as `wolf-hal2` (workerd spawns children as its own uid).
 RUN useradd --create-home --shell /bin/bash hubd && useradd --create-home --shell /bin/bash wolf-hal2
 
+# claude CLI, pinned (bump deliberately). Installed globally so it is on PATH for every user; `claude --version` is the build-time check.
+ARG CLAUDE_CODE_VERSION=2.1.316
+RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && claude --version | grep -F "${CLAUDE_CODE_VERSION}"
+
 WORKDIR /opt/wolfpack
 COPY package.json package-lock.json tsconfig.json ./
 COPY packages ./packages

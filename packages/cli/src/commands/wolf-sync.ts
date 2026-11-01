@@ -68,9 +68,16 @@ export function resolveWolfKbBase(
   const existing = unquoteEnv(existingEnvLines.find((l) => l.startsWith("KB_BASE="))?.slice("KB_BASE=".length));
   if (!existing || existing === configured) return { value: configured };
   if (explicitKbBase(config, env)) {
-    return { value: configured, notice: `KB_BASE changed ${existing} -> ${configured} (WOLFPACK_KB_BASE/config kbBase)` };
+    const src = env.WOLFPACK_KB_BASE?.trim() ? "WOLFPACK_KB_BASE" : "config kbBase";
+    return { value: configured, notice: `KB_BASE changed ${existing} -> ${configured} (${src})` };
   }
   if (reset) return { value: configured, notice: `KB_BASE reset ${existing} -> ${configured} (--reset-kb-base)` };
+  if (existing === path.join(config.wolvesRoot, "knowledge", "base")) {
+    return {
+      value: existing,
+      notice: `KB_BASE kept as ${existing}, a FROZEN ARCHIVE (no longer updated; the hub mirror is current). Pass --reset-kb-base to point at ${configured}`,
+    };
+  }
   return {
     value: existing,
     notice: `KB_BASE kept as ${existing} (configured default is ${configured}; pass --reset-kb-base to rewrite)`,

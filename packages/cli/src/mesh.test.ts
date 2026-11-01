@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { diff } from "./mesh-reconcile.js";
 import {
   planMesh,
   allocatePorts,
@@ -81,5 +82,14 @@ describe("isManagedFolderId (prune guard)", () => {
     expect(isManagedFolderId("ops-inbox-hal")).toBe(false);
     expect(isManagedFolderId("ops-receipts-hal")).toBe(false);
     expect(isManagedFolderId("my-personal-photos")).toBe(false);
+  });
+});
+
+describe("drift diff (checkMesh) never touches kb-/ops- folders", () => {
+  it("does not report kb-*/ops-* as stale, but reports a stale den- id; missing den still reported", () => {
+    const live = new Set(["kb-wolfpack", "kb-personal", "ops-inbox-hal", "ops-receipts-hal", "den-host-a-OLD", "den-host-a-HAL", "photos"]);
+    const d = diff("HAL", new Set(["den-host-a-HAL", "den-host-a-NEW"]), live);
+    expect(d.stale).toEqual(["den-host-a-OLD"]);
+    expect(d.missing).toEqual(["den-host-a-NEW"]);
   });
 });

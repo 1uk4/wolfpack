@@ -60,8 +60,8 @@ export interface CliConfig {
   remote?: RemoteLayout;
   /**
    * Override for the shared KB root that wolves read (KB_BASE). Default
-   * the hub mirror (~/.wolfpack/workerd/kb-mirror) when it exists, else the frozen
-   * legacy <wolvesRoot>/knowledge/base. `KB_BASE` / `WOLFPACK_KB_BASE` take precedence.
+   * the hub mirror (~/.wolfpack/workerd/kb-mirror) when it has domains/, else the frozen
+   * legacy <wolvesRoot>/knowledge/base. `WOLFPACK_KB_BASE` takes precedence (readers also honour a plain `KB_BASE`).
    */
   kbBase?: string;
   /** Extra directories searched for helper binaries (tailscale, …) and put on launchd PATH. */
@@ -139,14 +139,26 @@ export function hubKbMirrorDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * READER KB root. Order: explicit (WOLFPACK_KB_BASE, KB_BASE env, config kbBase), then the hub mirror when it
- * exists, then the legacy <root>/knowledge/base (frozen archive). Writers use kbWriteBaseDir instead.
+ * KB root for readers and the wolf .env writers. Order: WOLFPACK_KB_BASE env, config kbBase, then the hub mirror when it
+ * has domains/, then the legacy <root>/knowledge/base (frozen archive). Writers use kbWriteBaseDir instead.
  */
 export function kbBaseDir(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = explicitKbBase(config, env);
-  if (explicit) return explicit;
+  return explicitKbBase(config, env) ?? defaultKbBase(config, env);
+}
+
+/**
+ * READ-ONLY consumers (sandbox snapshot sources). Same as kbBaseDir but a plain `KB_BASE` env is honoured
+ * after the explicit settings. Never use this for anything that writes a wolf's .env KB_BASE: a sync run from
+ * inside a wolf session would otherwise rewrite every wolf's KB_BASE.
+ */
+export function kbReadBaseDir(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string {
+  return explicitKbBase(config, env) ?? (env.KB_BASE?.trim() || defaultKbBase(config, env));
+}
+
+/** Hub mirror when it holds domains/, else the frozen legacy <root>/knowledge/base. */
+function defaultKbBase(config: CliConfig, env: NodeJS.ProcessEnv): string {
   const mirror = hubKbMirrorDir(env);
-  if (fs.existsSync(mirror)) return mirror;
+  if (fs.existsSync(path.join(mirror, "domains"))) return mirror;
   return path.join(config.wolvesRoot, "knowledge", "base");
 }
 
@@ -158,9 +170,9 @@ export function kbWriteBaseDir(config: CliConfig): string {
   return path.join(config.wolvesRoot, "knowledge", "base");
 }
 
-/** The KB base the owner set explicitly (`WOLFPACK_KB_BASE`, `KB_BASE` env, then config `kbBase`), if any. */
+/** The KB base the owner set explicitly (`WOLFPACK_KB_BASE` env, then config `kbBase`), if any. */
 export function explicitKbBase(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const v = env.WOLFPACK_KB_BASE?.trim() || env.KB_BASE?.trim() || config.kbBase?.trim();
+  const v = env.WOLFPACK_KB_BASE?.trim() || config.kbBase?.trim();
   return v || undefined;
 }
 

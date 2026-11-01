@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { kbBaseDir, kbWriteBaseDir, type CliConfig } from "./config.js";
+import { kbBaseDir, kbReadBaseDir, kbWriteBaseDir, type CliConfig } from "./config.js";
 import { resolveWolfKbBase } from "./commands/wolf-sync.js";
 
 const cfg = (extra: Partial<CliConfig> = {}): CliConfig => ({ wolvesRoot: "/w", hosts: {}, ...extra });
@@ -77,18 +77,52 @@ describe("loadConfig", () => {
   });
 });
 
-describe("kbBaseDir reader default order", () => {
-  const cfg = { wolvesRoot: "/tmp/wp-legacy-root" } as never;
-  it("KB_BASE wins, then the hub mirror when present, then the legacy path", async () => {
-    const fs = await import("node:fs");
-    const os = await import("node:os");
-    const path = await import("node:path");
-    const { kbBaseDir } = await import("./config.js");
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wp-kbdef-"));
+describe("kbBaseDir / kbReadBaseDir default order", () => {
+  const root = { wolvesRoot: "/tmp/wp-legacy-root", hosts: {} } as CliConfig;
+  const legacy = "/tmp/wp-legacy-root/knowledge/base";
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
+  const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "wp-kbdef-")); dirs.push(d); return d; };
+
+  it("legacy when no mirror, an empty mirror is ignored, a mirror with domains/ wins", () => {
+    const dir = tmp();
     const env = { WORKERD_CONFIG_DIR: dir } as NodeJS.ProcessEnv;
-    expect(kbBaseDir(cfg, env)).toBe("/tmp/wp-legacy-root/knowledge/base");
+    expect(kbBaseDir(root, env)).toBe(legacy);
     fs.mkdirSync(path.join(dir, "kb-mirror"));
-    expect(kbBaseDir(cfg, env)).toBe(path.join(dir, "kb-mirror"));
-    expect(kbBaseDir(cfg, { ...env, KB_BASE: "/explicit/base" })).toBe("/explicit/base");
+    expect(kbBaseDir(root, env)).toBe(legacy);
+    fs.mkdirSync(path.join(dir, "kb-mirror", "domains"));
+    expect(kbBaseDir(root, env)).toBe(path.join(dir, "kb-mirror"));
+  });
+
+  it("kbBaseDir (writers) ignores a plain KB_BASE; kbReadBaseDir honours it after explicit settings", () => {
+    const env = { WORKERD_CONFIG_DIR: "/nonexistent-wp-cfg", KB_BASE: "/from/env" } as NodeJS.ProcessEnv;
+    expect(kbBaseDir(root, env)).toBe(legacy);
+    expect(kbReadBaseDir(root, env)).toBe("/from/env");
+    expect(kbReadBaseDir({ ...root, kbBase: "/cfg" }, env)).toBe("/cfg");
+    expect(kbReadBaseDir(root, { ...env, WOLFPACK_KB_BASE: "/wp" })).toBe("/wp");
+    expect(kbReadBaseDir({ ...root, kbBase: "/cfg" }, { ...env, WOLFPACK_KB_BASE: "/wp" })).toBe("/wp");
+  });
+
+  it("resolveWolfKbBase never takes a plain KB_BASE: not as value, not as an override of the existing .env", () => {
+    const env = { WORKERD_CONFIG_DIR: "/nonexistent-wp-cfg", KB_BASE: "/from/env" } as NodeJS.ProcessEnv;
+    expect(resolveWolfKbBase(root, [], false, env)).toEqual({ value: legacy });
+    const r = resolveWolfKbBase(root, ["KB_BASE=/hub/mirror"], false, env);
+    expect(r.value).toBe("/hub/mirror");
+    expect(r.notice).toContain("kept");
+  });
+
+  it("a wolf still on the legacy path gets a frozen-archive notice suggesting --reset-kb-base, unchanged", () => {
+    const dir = tmp();
+    fs.mkdirSync(path.join(dir, "kb-mirror", "domains"), { recursive: true });
+    const r = resolveWolfKbBase(root, [`KB_BASE=${legacy}`], false, { WORKERD_CONFIG_DIR: dir });
+    expect(r.value).toBe(legacy);
+    expect(r.notice).toMatch(/FROZEN ARCHIVE/);
+    expect(r.notice).toContain("--reset-kb-base");
+  });
+
+  it("changed-notice names the real source", () => {
+    const env = { ...NOENV, WOLFPACK_KB_BASE: "/e" };
+    expect(resolveWolfKbBase(root, ["KB_BASE=/old"], false, env).notice).toContain("(WOLFPACK_KB_BASE)");
+    expect(resolveWolfKbBase({ ...root, kbBase: "/c" }, ["KB_BASE=/old"], false, NOENV).notice).toContain("(config kbBase)");
   });
 });

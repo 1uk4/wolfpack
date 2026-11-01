@@ -12,9 +12,9 @@
  * Subscription edits the wolf's own `domains: []` — the same list surfaced in
  * `wolfpack status` and pickable at `wolfpack add wolf`.
  *
- * This arm is the ONLY writer of ~/.wolfpack/domains.yaml. Provisioning the KB
- * base folders happens on deploy/sync (ensureKbMirror), never by hand — so `domain add` records intent and scaffolds the hub copy;
- * `wolfpack sync` / redeploy makes it live on Dewey + subscribers.
+ * This arm is the ONLY writer of ~/.wolfpack/domains.yaml. `domain add` records
+ * intent and scaffolds the hub copy; `wolfpack sync` / redeploy makes it live
+ * on Dewey + subscribers.
  */
 
 import fs from "node:fs";

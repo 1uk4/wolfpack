@@ -15,7 +15,7 @@
  *                              rsync, remote path as SOURCE only, no --delete, explicit include/exclude filters; the
  *                              remote ledger is hashed (read-only `sha256sum`) before and after and must equal the copy.
  *   --work-md-from <dir>       local KB base whose domains/<d>/work/<id>.md are the item files (read-only). With --ledger-from-host it
- *                              is the ONLY source of .md files (default: KB_BASE, then ~/.wolfpack/workerd/kb-mirror if present, then the frozen ~/wolves/knowledge/base); nothing
+ *                              is the ONLY source of .md files (default: KB_BASE, then ~/.wolfpack/workerd/kb-mirror if it has domains/, then the frozen ~/wolves/knowledge/base); nothing
  *                              but the ledger is rsynced from the host. Fails if the ledger has events and 0 .md were found.
  *   --work-from <dir>          the same ledger/items from a local dir <dir>/{ledger/work-events.jsonl,base} instead (tests, stand-ins)
  *   --shared                   den goes to <dev-root>/dens/<wolf> (several wolves share the root)
@@ -47,7 +47,7 @@ import path from "node:path";
 import { assertNotProtected, crossCheckWork, dryRunRemote, loadWolfConfig, remotePlan, seedLibrarianState, takeSnapshot, wolfDenDir, type SnapshotSource } from "@wolfpack/engine";
 import { installDevExtensions } from "../bundle.js";
 import { getExtension } from "../extensions.js";
-import { loadConfig, getHost, kbBaseDir, type CliConfig } from "../config.js";
+import { loadConfig, getHost, kbReadBaseDir, type CliConfig } from "../config.js";
 import { remotePathsFrom } from "../paths.js";
 import { c } from "../render.js";
 
@@ -234,7 +234,7 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
       sshIdentity = host.ssh.key;
     }
     const abs = (p?: string) => (p ? path.resolve(p) : undefined);
-    source = mixedSnapshotSource({ den: abs(values.den) ?? "", kbBase: abs(values["kb-base"]), ops: abs(values.ops), opsLane: values["ops-lane"], workFrom: abs(values["work-from"]), workMdFrom: abs(values["work-md-from"]) ?? (ledgerRemote ? kbBaseDir(config) : undefined), ledgerRemote });
+    source = mixedSnapshotSource({ den: abs(values.den) ?? "", kbBase: abs(values["kb-base"]), ops: abs(values.ops), opsLane: values["ops-lane"], workFrom: abs(values["work-from"]), workMdFrom: abs(values["work-md-from"]) ?? (ledgerRemote ? kbReadBaseDir(config) : undefined), ledgerRemote });
     if (values["print-plan"]) {
       for (const step of remotePlan(source, sshIdentity)) console.log(`${step.label}:\n  ${step.command}`);
       return;

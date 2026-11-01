@@ -338,14 +338,14 @@ async function addRemote(
       ),
     );
 
-    // Auto-wire the den backup mirror (best-effort; host must be Syncthing-ready).
+    // Verify the den backup folder (read-only; wiring is `wolfpack mesh`).
     try {
       const { macDen } = await ensureDenMirror(opts.host!, host, result.wolf);
       console.log(c.dim(`  Mirror:  ${macDen}`));
     } catch (err) {
       console.log(
         c.yellow(
-          `  ! Den mirror not wired (${err instanceof Error ? err.message : err}). Run: wolfpack host sync ${opts.host}`,
+          `  ! Den mirror not wired (${err instanceof Error ? err.message : err}). Run: wolfpack mesh`,
         ),
       );
     }

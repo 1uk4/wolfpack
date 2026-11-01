@@ -85,5 +85,5 @@ export async function hostRedeploy(name?: string, opts: { rotateKey?: boolean } 
   console.log();
   console.log(c.bold("Next:"));
   console.log(`  ${c.cyan(`wolfpack host status ${hostName}`)}   Verify the host is healthy`);
-  console.log(`  ${c.cyan(`wolfpack host sync ${hostName}`)}     Re-apply den backup mirrors`);
+  console.log(`  ${c.cyan("wolfpack mesh --check")}   Check den backup folders (then \`wolfpack mesh\` to wire)`);
 }

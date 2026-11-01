@@ -130,6 +130,8 @@ async function applyHub(mac: SyncthingRest, plan: InstancePlan): Promise<void> {
   for (const f of plan.folders) {
     const devIds = resolveFolderDeviceIds(f, plan, "hub");
     fs.mkdirSync(f.path, { recursive: true });
+    // Dens are not empty (NOTES.md), so Syncthing will not create the marker itself and the folder stalls.
+    fs.mkdirSync(path.join(f.path, ".stfolder"), { recursive: true });
     await mac.putFolder(buildFolder(f.id, f.path, f.type, devIds));
   }
 }
@@ -159,9 +161,10 @@ function applyRemote(
       .map((id) => `{"deviceID":"${id}"}`)
       .join(",");
     return (
-      // Den dirs are wolf-owned; Syncthing creates its own marker on an empty dir.
-      `mkdir -p "${f.path}"\n` +
-      `chown wolf-${instanceKey}:wolf-${instanceKey} "${f.path}"\n` +
+      // Dens are not empty (NOTES.md): Syncthing will not create the marker itself, so create it,
+      // and normalize ownership to the wolf user (root-run tooling may have created files).
+      `mkdir -p "${f.path}/.stfolder"\n` +
+      `chown -R wolf-${instanceKey}:wolf-${instanceKey} "${f.path}"\n` +
       putJson(
         `folders/${f.id}`,
         `{"id":"${f.id}","label":"${f.id}","path":"${f.path}","type":"${f.type}","fsWatcherEnabled":true,"rescanIntervalS":3600,"devices":[${devIds}]}`,
@@ -425,7 +428,7 @@ export async function checkMesh(): Promise<MeshDrift[]> {
   return drift.filter((d) => d.missing.length || d.stale.length);
 }
 
-function diff(instance: string, desired: Set<string>, live: Set<string>): MeshDrift {
+export function diff(instance: string, desired: Set<string>, live: Set<string>): MeshDrift {
   const missing = [...desired].filter((id) => !live.has(id));
   const stale = [...live].filter((id) => isManagedFolderId(id) && !desired.has(id));
   return { instance, missing, stale };

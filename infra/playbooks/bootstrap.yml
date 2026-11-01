@@ -186,7 +186,7 @@
           - "          IMPORTANT: click 'Edit' on the device after adding and"
           - "          set Addresses to:   tcp://{{ final_ts_ip.stdout }}:22000"
           - "          (dynamic discovery is unreliable over Tailscale)"
-          - "       c. Accept folder 'den-{{ inventory_hostname }}-{{ wolf_name }}'"
+          - "       c. Accept folder 'den-{{ syncthing_host }}-{{ wolf_id | default('<wolf-id>') }}'"
           - "          type: Send & Receive"
           - "     (Already accepted previously? Skip.)"
           - ""

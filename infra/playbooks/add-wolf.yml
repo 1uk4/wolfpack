@@ -139,6 +139,6 @@
           - "    runtime: {{ wolf_runtime | default('claude') }}"
           - ""
           - "    Next steps:"
-          - "    1. Den backup (optional until H3GuSmC): run `wolfpack sync {{ wolf_name }}`"
+          - "    1. Den backup, optional (until H3GuSmC): run `wolfpack sync {{ wolf_name }}`"
           - "    2. The KB arrives through the hub link; no Syncthing KB folder to set up"
           - "    3. DM the bot to verify it's alive"

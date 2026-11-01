@@ -3,6 +3,14 @@
 # The KB and ops lanes (kb-*, ops-inbox-*, ops-receipts-*) are NOT carried by
 # Syncthing: KB distribution is hub-only (hubd + workerd link + kb-sync mirror).
 # This role goes away when feature H3GuSmC lands a backup system.
+- name: Resolve the host part of den folder ids
+  # Same source as sync-wolf.sh / `wolfpack sync` (hostname -s), NOT
+  # inventory_hostname, which in this inventory names a wolf, not a host.
+  # Override with the inventory var `wolf_host` if the hostname differs from the
+  # host name used by `wolfpack mesh`.
+  set_fact:
+    syncthing_host: "{{ wolf_host | default(ansible_facts['hostname']) }}"
+
 - name: Install Syncthing
   shell: |
     curl -fsSL https://syncthing.net/release-key.gpg | gpg --dearmor -o /usr/share/keyrings/syncthing-archive-keyring.gpg
@@ -32,9 +40,14 @@
 - name: Configure Syncthing folders and Mac hub device via REST API
   # Reads the local API key out of config.xml, then talks to the local
   # Syncthing REST API to add the Mac as a remote device and create the den
-  # backup folder den-<host>-<wolf> (sendreceive), shared with the Mac.
+  # backup folder den-<host>-<wolf-id> (sendreceive), shared with the Mac.
   #
-  # Idempotent: checks for existing device/folder entries before adding.
+  # Idempotent. An existing folder is matched by realpath of the den (not by id)
+  # and kept exactly as is (id, type, path): live dens carry ids from
+  # `wolfpack mesh`. A NEW folder id needs the wolf ID (inventory var `wolf_id`,
+  # the same id as wolf.yaml `id:` / mesh.ts denFolderId). Without it no folder
+  # is created; the ids are never derived from the wolf name.
+  # The den path is `wolf_den` from the inventory, else the single-wolf default.
   shell: |
     python3 - <<'PY'
     import json, os, re, sys, urllib.request, urllib.error
@@ -43,7 +56,9 @@
     API_BASE   = "http://127.0.0.1:8384/rest"
     MAC_ID     = "{{ mac_syncthing_device_id }}"
     WOLF_NAME  = "{{ wolf_name }}"
-    HOST_NAME  = "{{ inventory_hostname }}"
+    WOLF_ID    = "{{ wolf_id | default('') }}"
+    DEN_PATH   = "{{ wolf_den | default('/home/' ~ wolf_user ~ '/workspace/den') }}"
+    HOST_NAME  = "{{ syncthing_host }}"
     WOLF_USER  = "{{ wolf_user }}"
 
     if not MAC_ID or "REPLACE_ME" in MAC_ID:
@@ -86,11 +101,20 @@
     else:
         print("mac-hub device already present")
 
-    # 2. Helper to upsert a folder
+    # 2. Upsert the den folder. Match by id OR by realpath of the path; an
+    #    existing folder is never retyped, moved or renamed.
     def upsert_folder(folder_id, label, path, folder_type, rescan):
         existing = api("GET", "/config/folders") or []
-        if any(f.get("id") == folder_id for f in existing):
-            print(f"folder {folder_id} already present")
+        real = os.path.realpath(path)
+        hit = next((f for f in existing if f.get("id") == folder_id), None) \
+            or next((f for f in existing if os.path.realpath(f.get("path", "")) == real), None)
+        if hit:
+            note = "" if hit["id"] == folder_id else f" (keeping existing id, wanted {folder_id})"
+            print(f"folder {hit['id']} already present at {hit.get('path')}{note}")
+            return
+        if not WOLF_ID:
+            print(f"no folder at {path} and wolf_id is not set for {WOLF_NAME}: not creating one. "
+                  f"Set wolf_id in the inventory (the wolf.yaml id) or provision with `wolfpack mesh`.")
             return
         api("POST", "/config/folders", {
             "id":                folder_id,
@@ -106,11 +130,11 @@
         })
         print(f"added folder {folder_id} ({folder_type}) at {path}")
 
-    # 3. Den — sendreceive, bidi with Mac
+    # 3. Den: sendreceive, bidi with Mac. Id is den-<host>-<wolf-id>.
     upsert_folder(
-        folder_id   = f"den-{HOST_NAME}-{WOLF_NAME}",
+        folder_id   = f"den-{HOST_NAME}-{WOLF_ID}",
         label       = f"{WOLF_NAME}-den",
-        path        = f"/home/{WOLF_USER}/workspace/den",
+        path        = DEN_PATH,
         folder_type = "sendreceive",
         rescan      = 60,
     )
@@ -141,5 +165,5 @@
       - "     Then click Edit on the new device and set Addresses to:"
       - "       tcp://{{ syncthing_ts_ip.stdout }}:22000"
       - "     (dynamic discovery is unreliable over Tailscale)"
-      - "  2. Accept folder 'den-{{ inventory_hostname }}-{{ wolf_name }}' (den backup only)"
+      - "  2. Accept folder 'den-{{ syncthing_host }}-{{ wolf_id | default('<wolf-id>') }}' (den backup only)"
       - "     Type: Send & Receive"

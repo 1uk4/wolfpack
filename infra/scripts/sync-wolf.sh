@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sync-wolf.sh — wire a den, or a shared knowledge folder, into Syncthing.
+# sync-wolf.sh — wire a wolf's den backup folder into Syncthing.
 #
 # The pack's topology is hub-and-spoke: every folder is shared with the Mac hub
 # and never wolf-to-wolf. The Mac is where you read the vaults, so a folder that
@@ -9,10 +9,17 @@
 # system and removes it. The KB and the ops lanes are not synced here: KB
 # distribution is hub-only (hubd + workerd link + kb-sync mirror).
 #
-#   den-<host>-<wolf> <-> <mac wolfpack checkout>/dens/<wolf>   bidirectional
+#   den-<host>-<wolf-id> <-> <mac wolfpack checkout>/dens/<wolf>   bidirectional
 #
-# <host> is $WOLF_HOST (default: this machine's short hostname), matching the
-# live folder ids.
+# <host> is $WOLF_HOST (set by `wolfpack sync`, else `hostname -s`). <wolf-id> is
+# the wolf ID (the id in wolf.yaml, as in packages/cli mesh.ts denFolderId), NOT
+# the wolf name. It comes from $WOLF_ID, else `id:` in <den>/../wolf.yaml. If it
+# cannot be resolved this script refuses to create a NEW folder (an existing
+# folder at the den path is still matched by path and kept) and points at
+# `wolfpack mesh`.
+#
+# The old kb-*, ops-inbox-*, ops-receipts-* and wolfpack-shared folders are NOT
+# pruned by this script; they were removed on the hosts by hand.
 #
 # Run via `wolfpack sync`. Idempotent — it repairs drift instead of duplicating,
 # and never edits an existing folder's versioning or type.
@@ -93,6 +100,22 @@ def den_path(wolf):
     p = f"/home/{USER}/wolves/{wolf}/den"
     return p if os.path.isdir(p) else f"/home/{USER}/workspace/den"
 
+def wolf_id(wolf, den):
+    """The wolf ID for new folder ids: $WOLF_ID, else `id:` in <den>/../wolf.yaml
+    (only when its `name:` matches). Never derived from the name."""
+    if os.environ.get("WOLF_ID"):
+        return os.environ["WOLF_ID"]
+    p = os.path.join(os.path.dirname(den.rstrip("/")), "wolf.yaml")
+    try:
+        txt = open(p).read()
+    except OSError:
+        return ""
+    i = re.search(r"^id:\s*[\"']?([A-Za-z0-9_-]+)", txt, re.M)
+    n = re.search(r"^name:\s*[\"']?([^\"'\n]+)", txt, re.M)
+    if i and (not n or n.group(1).strip() == wolf):
+        return i.group(1)
+    return ""
+
 def wolves():
     out = subprocess.run(["systemctl", "show", "*.service", "--property=Id,Description",
                           "--no-pager"], capture_output=True, text=True).stdout
@@ -133,6 +156,10 @@ def upsert(folder_id, label, path, ftype, rescan):
             step(f"'{existing['id']}' already wired")
         return existing["id"]
 
+    if not folder_id:
+        die(f"no folder at {path} and the wolf ID could not be resolved (set WOLF_ID, or put "
+            f"`id:` in wolf.yaml next to the den). Not creating a folder with a name-derived id; "
+            f"see `wolfpack mesh`.")
     if not os.path.isdir(path):
         die(f"nothing at {path} — build it before syncing it")
 
@@ -167,7 +194,9 @@ if MODE == "status":
     if not up:
         print(f"     {DIM}nothing reaches your Mac until this is up{R}")
     print()
-    print(f"{B}{'FOLDER':<18} {'TYPE':<12} {'FILES':>6}  {'HUB':>6}  PATH{R}")
+    allf = [f for f in (api("GET", "/config/folders") or []) if f["id"]]
+    W = max([18] + [len(f["id"]) for f in allf]) + 2
+    print(f"{B}{'FOLDER':<{W}} {'TYPE':<12} {'FILES':>6}  {'HUB':>6}  PATH{R}")
     for f in sorted(api("GET", "/config/folders") or [], key=lambda x: x["id"]):
         if not f["id"]:
             continue
@@ -187,7 +216,7 @@ if MODE == "status":
                 pct = cell(f"{comp.get('completion', 0):.0f}%")
             else:
                 pct = cell("accept", YEL)
-        print(f"{f['id']:<18} {f['type']:<12} {st.get('localFiles', 0):>6}  {pct}  {f['path']}")
+        print(f"{f['id']:<{W}} {f['type']:<12} {st.get('localFiles', 0):>6}  {pct}  {f['path']}")
     print()
     print(f"{DIM}accept = offered to the Mac but not accepted there yet{R}")
     print(f"{DIM}wolfpack sync <wolf>        wire a den backup folder{R}")
@@ -198,7 +227,8 @@ if MODE == "den":
     if TARGET not in wolves():
         die(f"no wolf named '{TARGET}'. Known: {' '.join(wolves())}")
     den = den_path(TARGET)
-    fid = upsert(f"den-{HOST}-{TARGET}", f"{TARGET}-den", den, "sendreceive", 60)
+    wid = wolf_id(TARGET, den)
+    fid = upsert(f"den-{HOST}-{wid}" if wid else "", f"{TARGET}-den", den, "sendreceive", 60)
     mac_steps(fid, f"dens/{TARGET}", "Send & Receive")
     sys.exit(0)
 PY

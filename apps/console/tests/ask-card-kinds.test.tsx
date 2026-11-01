@@ -269,3 +269,46 @@ describe("draft logic", () => {
 		assert.equal(draftComplete(card, { ...full, m: { value: [] } }), false, "under min");
 	});
 });
+
+describe("AskCard option links", () => {
+	for (const kind of ["multi", "single"] as const) {
+		it(`${kind}: markdown links in options render inert, no nested button/a`, async () => {
+			const opts = [{ label: "See [docs](https://example.com)", value: "a", description: "More at [site](https://example.org)" }];
+			await mount({ tool: "t", fields: [{ id: "f", kind, label: "Pick", options: opts }] as Card["fields"] });
+			const options = qa('[data-testid="card-option"]');
+			assert.equal(options.length, 1);
+			assert.equal(options[0]!.querySelectorAll("button, a").length, 0);
+			assert.match(options[0]!.textContent ?? "", /docs/);
+			await click(options[0]!);
+			assert.equal(options[0]!.getAttribute("aria-pressed"), "true");
+		});
+	}
+});
+
+describe("AskCard link option selection + visible incomplete submit", () => {
+	const linked = (): Card => ({
+		tool: "t",
+		fields: [{ id: "serve", kind: "single", label: "Serve how?", options: [{ label: "Hub at https://sfo.example.com/path and [docs](https://example.com)", value: "console-root-hub-path" }, { label: "Other thing", value: "x" }] }] as Card["fields"],
+	});
+	it("clicking a link-containing option selects it and Submit sends it", async () => {
+		await mount(linked());
+		const opt = qa('[data-testid="card-option"]')[0]!;
+		assert.equal(opt.querySelectorAll("button, a").length, 0);
+		// click the link text itself: it bubbles to the option button
+		await click(opt.querySelector('[data-streamdown="inert-link"]') ?? opt);
+		assert.equal(opt.getAttribute("aria-pressed"), "true");
+		await click(submit());
+		assert.deepEqual(sent[0], { serve: { value: "console-root-hub-path" } });
+	});
+	it("an incomplete card explains why Submit is unavailable and highlights the field", async () => {
+		await mount(linked());
+		const hint = q('[data-testid="card-submit-hint"]');
+		assert.ok(hint, "hint visible while required field unanswered");
+		assert.match(hint!.textContent ?? "", /Serve how\?/);
+		assert.equal(q('[data-field="serve"]')!.getAttribute("data-incomplete"), "true");
+		assert.equal(submit().hasAttribute("disabled"), true);
+		await click(qa('[data-testid="card-option"]')[1]!);
+		assert.equal(q('[data-testid="card-submit-hint"]'), null);
+		assert.equal(q('[data-field="serve"]')!.hasAttribute("data-incomplete"), false);
+	});
+});

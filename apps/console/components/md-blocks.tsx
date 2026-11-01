@@ -463,6 +463,18 @@ export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
 	);
 }
 
+/** Links inside interactive containers (card options are buttons): Streamdown
+ *  renders `a` as a <button>, which nests illegally. Show the text styled as
+ *  a link, non-interactive, so the whole option stays the one click target. */
+export function MarkdownInertLink(props: ComponentProps<"a"> & ExtraProps) {
+	const { children, className, node, href, ...rest } = props;
+	return (
+		<span data-streamdown="inert-link" className={cn("underline underline-offset-2", className)} title={href}>
+			{children}
+		</span>
+	);
+}
+
 export const mdComponents = {
 	code: MarkdownCode,
 	table: MarkdownTable,
@@ -470,3 +482,6 @@ export const mdComponents = {
 	strong: MarkdownStrong,
 	blockquote: MarkdownBlockquote,
 };
+
+/** mdComponents with links made inert, for markdown rendered inside buttons. */
+export const mdComponentsInert = { ...mdComponents, a: MarkdownInertLink };

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, type InputHTMLAttribut
 import { Button } from "@/components/ui/button";
 import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { mdComponentsInert } from "@/components/md-blocks";
 import { cn } from "@/lib/utils";
 import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
@@ -64,9 +65,13 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	const finishingRef = useRef(false);
 	// Recomputed from the mirrors at call time (after a dictation finish the render state is stale): an invalid or
 	// incomplete result aborts the submit and leaves the typed text with its inline error.
+	const [attempted, setAttempted] = useState(false);
 	const answerNow = () => {
 		const f = foldPendingOther(card, draftRef.current, typedRef.current);
-		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) return;
+		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) {
+			setAttempted(true); // never a silent no-op: the hint + highlight below say what is missing
+			return;
+		}
 		onAnswer(draftAnswers(card, f.draft));
 	};
 	const submit = () => {
@@ -82,6 +87,8 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	};
 	const folded = foldPendingOther(card, draft, typed);
 	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
+	// Required fields still unanswered (visible ones only): highlighted, and named beside the disabled Submit so it is never a mystery.
+	const missingIds = new Set(visibleFields(card, folded.draft).filter((f) => !fieldsComplete([f], folded.draft)).map((f) => f.id));
 	// Stepped card: one step at a time with Back/Next; the answers stay in the draft until the single Submit on the last step.
 	// The step list follows the draft (a dependent step appears/vanishes with its controlling answer); `step` is clamped.
 	const stepped = card.steps !== undefined && !closed;
@@ -160,8 +167,16 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 					onAddCustom={f.kind === "multi" ? () => addCustomFor(f) : undefined}
 					dictation={dictationProps.field(f.id)}
 					pendingError={folded.errors[f.id]}
+					missing={!closed && pending && missingIds.has(f.id)}
 				/>
 			))}
+			{!closed && pending && !submitting && !(stepped && !lastStep) && !canSubmit && (
+				<div className="mt-3 text-xs text-amber-700 dark:text-amber-400" role="status" data-testid="card-submit-hint" data-attempted={attempted || undefined}>
+					{Object.keys(folded.errors).length > 0
+						? "Fix the highlighted entry to submit."
+						: `Answer to submit: ${visibleFields(card, folded.draft).filter((f) => missingIds.has(f.id)).map((f) => f.label.replace(/[*_`]|\[([^\]]*)\]\([^)]*\)/g, "$1")).join(", ")}`}
+				</div>
+			)}
 			{!closed && (
 				<div className="mt-3 flex justify-end gap-2">
 					{onSkip && (
@@ -284,6 +299,7 @@ function FieldView({
 	skipped,
 	pendingError,
 	dictation,
+	missing,
 }: {
 	field: CardField;
 	value: CardFieldAnswer | undefined;
@@ -297,10 +313,12 @@ function FieldView({
 	skipped?: boolean;
 	pendingError?: string;
 	dictation: FieldDictation;
+	/** A required field with no (valid) answer yet: highlighted so it is clear what Submit is waiting for. */
+	missing?: boolean;
 }) {
 	const labelId = `card-field-${useId()}`;
 	return (
-		<div className="mb-2 last:mb-0" data-field={field.id}>
+		<div className={cn("mb-2 last:mb-0", missing && "border-l-2 border-amber-500/70 pl-2")} data-field={field.id} data-incomplete={missing || undefined}>
 			<div className="mb-2 flex flex-wrap items-baseline gap-x-2 font-medium" id={labelId}>
 				<MessageResponse>{field.label}</MessageResponse>
 				{field.optional && (
@@ -360,8 +378,8 @@ function FieldView({
 							>
 								<Indicator shape="radio" on={sel} />
 								<span className="flex min-w-0 flex-col items-start">
-									<MessageResponse>{o.label}</MessageResponse>
-									{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
+									<MessageResponse components={mdComponentsInert}>{o.label}</MessageResponse>
+									{o.description && <MessageResponse components={mdComponentsInert} className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
 								</span>
 							</button>
 						);
@@ -484,8 +502,8 @@ function MultiView({
 					>
 						<Indicator shape="check" on={sel} />
 						<span className="flex min-w-0 flex-col items-start">
-							<MessageResponse>{o.label}</MessageResponse>
-							{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
+							<MessageResponse components={mdComponentsInert}>{o.label}</MessageResponse>
+							{o.description && <MessageResponse components={mdComponentsInert} className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
 						</span>
 					</button>
 				);

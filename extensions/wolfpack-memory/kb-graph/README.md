@@ -24,7 +24,7 @@ has three parts:
 
 ## How it works
 
-The KB lives on the laptop as a read-only mirror (delivered by the hub link, kb-sync) at
+The KB lives on the laptop as a read-only mirror (mirrored by `workerd` `kb-sync` from hubd) at
 `~/wolves/knowledge/base/` with `domains/<domain>/` folders containing
 `_digest.json` (section tree + entry membership) and `entries/*.md`
 (frontmatter + markdown body). The generator reads these, embeds everything into
@@ -54,5 +54,5 @@ Options:
 
 - The page loads `vis-network` and `marked` from CDNs, so it needs internet the
   first time a browser opens it. The graph data itself is fully embedded.
-- If no domains are found, check that the KB mirror is present and the hub link has synced it
+- If no domains are found, check that the KB mirror is present and `workerd` `kb-sync` has synced it
   at `~/wolves/knowledge/base/domains/`.

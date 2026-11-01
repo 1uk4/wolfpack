@@ -27,7 +27,7 @@
   `wolfpack-kb sweep`, the same tick, every 60s); the admin CLI is bundled to
   `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
 - **Mirrors:** every other wolf gets each `domains/<domain>/` folder as a
-  **read-only** mirror, delivered over the hub link (hubd + workerd, kb-sync). Syncthing no longer carries the KB; it carries den backups only, pending H3GuSmC. Edits or deletions on a mirror never reach
+  **read-only** mirror, mirrored by `workerd` `kb-sync` from hubd. Syncthing no longer carries the KB; it carries den backups only, pending H3GuSmC. Edits or deletions on a mirror never reach
   Dewey — change the KB on the VPS host (e.g. `kb retire`), never by editing the mirror.
 - **Contributions** flow wolf → `opsRoot/inbox/<wolf>/` → sweep. Wolves produce
   them by promoting den topics (`emitDelta`), crawling documents, or graduating

@@ -5,7 +5,8 @@ import { HubLink, type LinkStatus } from "./link.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
 import type { LinkWelcome, LinkWolf } from "@wolfpack/protocol";
 import { WorkerRelay } from "./relay.js";
@@ -64,6 +65,30 @@ export const isLoopbackHost = (h: string): boolean => h === "127.0.0.1" || h ===
 /** Parse WORKERD_LINK_ONLY (1/true/yes/on). */
 export const envLinkOnly = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|yes|on)$/i.test(env.WORKERD_LINK_ONLY ?? "");
 export const envAnnounce = (env: NodeJS.ProcessEnv = process.env): string[] => (env.WORKERD_ANNOUNCE ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+
+/** WORKERD_KB_MIRROR_DIR (trimmed, empty = unset) and WORKERD_KB_MIRROR_GROUP_READ (ONLY the exact value "1" enables it; setup.sh checks the same). */
+export const envKbMirror = (env: NodeJS.ProcessEnv = process.env): { dir?: string; groupRead: boolean } => ({
+  dir: env.WORKERD_KB_MIRROR_DIR?.trim() || undefined,
+  groupRead: (env.WORKERD_KB_MIRROR_GROUP_READ ?? "").trim() === "1",
+});
+
+/**
+ * Why group-read mirror modes must NOT be used for this mirror dir, or undefined when fine. Refuses when the mirror equals, contains or sits
+ * inside the private config dir (hub.json), equals/contains/sits inside the outbox, or when hub.json / outbox/ exist inside the mirror.
+ */
+export function groupReadConflict(mirrorDir: string, configDir: string, outboxDir: string): string | undefined {
+  const m = resolve(mirrorDir);
+  const inside = (a: string, b: string): boolean => {
+    const r = relative(b, a);
+    return r === "" || (!r.startsWith("..") && !isAbsolute(r));
+  };
+  for (const [name, p] of [["config dir", configDir], ["outbox", outboxDir]] as const) {
+    const q = resolve(p);
+    if (inside(m, q) || inside(q, m)) return `the mirror dir ${m} equals, contains or is inside the ${name} ${q}`;
+  }
+  for (const n of ["hub.json", "outbox"]) if (existsSync(join(m, n))) return `${join(m, n)} exists inside the mirror dir`;
+  return undefined;
+}
 
 export interface RunningWorkerd {
   url: string;
@@ -132,17 +157,26 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     const warning = insecureHubWarning(hubCfg.hubUrl);
     if (warning) log(`[workerd] ${warning}`);
     const kbOps = opts.kbOps ?? process.env.KB_OPS ?? join(dirname(root), "librarian");
-    const outbox = new Outbox(opts.outboxDir ?? join(opts.configDir ?? workerdConfigDir(), "outbox"));
+    const outboxPath = opts.outboxDir ?? join(opts.configDir ?? workerdConfigDir(), "outbox");
+    const outbox = new Outbox(outboxPath);
     // The subscribed set is ONLY what the hub registry grants this host (welcome.grantedDomains / grants frames); wolf.yaml domains are
     // never consulted, and nothing syncs before the first welcome.
     const rawLayout = opts.kbMirrorLayout ?? process.env.WORKERD_KB_LAYOUT ?? "flat";
     if (rawLayout !== "flat" && rawLayout !== "base") throw new Error(`invalid WORKERD_KB_LAYOUT ${JSON.stringify(rawLayout)} (expected flat or base)`);
     const kbLayout: "flat" | "base" = rawLayout;
+    const envMirror = envKbMirror();
+    const configDir = opts.configDir ?? workerdConfigDir();
+    const mirrorDir = opts.kbMirrorDir ?? envMirror.dir ?? join(configDir, "kb-mirror");
+    const groupRead = opts.kbMirrorGroupRead ?? envMirror.groupRead;
+    if (groupRead) {
+      const why = groupReadConflict(mirrorDir, configDir, outboxPath);
+      if (why) throw new Error(`group-read KB mirror refused: ${why} (it would expose hub.json or the outbox)`);
+    }
     kbSync = new KbSync({
       hubUrl: hubCfg.hubUrl,
       token: hubCfg.token,
-      mirrorDir: opts.kbMirrorDir ?? (process.env.WORKERD_KB_MIRROR_DIR?.trim() || join(opts.configDir ?? workerdConfigDir(), "kb-mirror")),
-      groupRead: opts.kbMirrorGroupRead ?? /^(1|true|yes|on)$/i.test((process.env.WORKERD_KB_MIRROR_GROUP_READ ?? "").trim()),
+      mirrorDir,
+      groupRead,
       layout: kbLayout,
       log,
       ...opts.kbSync,

@@ -25,7 +25,7 @@
  * REMOVAL: a domain that leaves the subscribed set stops syncing; its mirror is KEPT and marked `active:false` (stale, ignore it).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync, lstatSync, statSync } from "node:fs";
+import { constants as FS, existsSync, closeSync, fchmodSync, fchownSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync, lstatSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { KB_SYNC_PATH, KbChangesResponseSchema, KbManifestDiffResponseSchema, type KbSyncFile } from "@wolfpack/protocol";
 
@@ -44,9 +44,12 @@ export interface KbSyncOptions {
   /** Where domain folders live: "flat" = `<mirrorDir>/<d>/` (default), "base" = `<mirrorDir>/domains/<d>/` (KB_BASE shape). `.sync/` stays at `<mirrorDir>/.sync/` either way. */
   layout?: KbMirrorLayout;
   /**
-   * Opt-in shared read (env WORKERD_KB_MIRROR_GROUP_READ=1): mirror CONTENT files are written 0640 and the directories holding them 0750
-   * (the parent's setgid bit is kept, so new files stay in the mirror dir's group), whatever the process umask. `.sync/` (state) is never
-   * widened, and neither is the mirror root itself (the operator creates it). Off (default): modes are whatever the umask gives, as before.
+   * Opt-in shared read (env WORKERD_KB_MIRROR_GROUP_READ=1): mirror CONTENT files are written 0640 and the directories holding them 0750,
+   * whatever the process umask, and chowned to the GROUP of the mirror root (owner may chown to a group it belongs to; no capability).
+   * NO setgid bit is ever requested (the unit's RestrictSUIDSGID=yes makes seccomp refuse any chmod that sets S_ISGID), so group
+   * inheritance is done explicitly. `.sync/` (state) is never widened, and neither is the mirror root itself (the operator creates it).
+   * Failures to chown/chmod are logged (once per start per message) and fail the write, so the mirror is never silently unreadable.
+   * Off (default): modes are whatever the umask gives, as before.
    */
   groupRead?: boolean;
   log?: (m: string) => void;
@@ -120,6 +123,7 @@ export class KbSync {
   private readonly full = new Set<string>();
   private readonly refusals = new Map<string, { n: number; at: number }>();
   private readonly overrides = new Set<string>();
+  private readonly warned = new Set<string>();
   private poll?: NodeJS.Timeout;
   private pollTicks = 0;
   private ac = new AbortController();
@@ -186,6 +190,7 @@ export class KbSync {
 
   start(): void {
     this.stopped = false;
+    this.warned.clear();
     if (this.o.groupRead) this.fixModes();
     if (this.ac.signal.aborted) this.ac = new AbortController();
     this.refresh();
@@ -197,34 +202,92 @@ export class KbSync {
       this.poll.unref();
     }
   }
-  /** groupRead only: once at start, bring existing mirror content (not `.sync/`, not the root) to 0640 / 0750. Best effort; symlinks are skipped. */
+  /** Log a problem once per start (per distinct message). */
+  private warnOnce(m: string): void {
+    if (this.warned.has(m)) return;
+    this.warned.add(m);
+    this.log(`WARNING ${m}`);
+  }
+  /** The group every shared file/dir is given: the mirror root's. Creates the root if missing (the operator normally does). */
+  private rootGid(): number {
+    mkdirSync(this.o.mirrorDir, { recursive: true });
+    return statSync(this.o.mirrorDir).gid;
+  }
+  /** fchown (group only, to the mirror root's gid) + fchmod an open fd. Plain modes, no special bits. */
+  private share(fd: number, mode: number, gid: number): void {
+    if (fstatSync(fd).gid !== gid) fchownSync(fd, -1, gid);
+    fchmodSync(fd, mode);
+  }
+  /** Share one directory, opened O_NOFOLLOW|O_DIRECTORY so a symlink swapped in after our checks is never followed. */
+  private shareDir(dir: string, gid: number): void {
+    const fd = openSync(dir, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_DIRECTORY);
+    try {
+      this.share(fd, 0o750, gid);
+    } finally {
+      closeSync(fd);
+    }
+  }
+  private shareFileAt(file: string, gid: number): void {
+    const fd = openSync(file, FS.O_RDONLY | FS.O_NOFOLLOW);
+    try {
+      if (!fstatSync(fd).isFile()) return;
+      this.share(fd, 0o640, gid);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /**
+   * groupRead only, at EVERY start: bring existing mirror content to 0640 / 0750 with the root's group. Only the domain folders are walked
+   * (`domains/<d>` in base layout, `<d>` in flat) and only entries/, versions/<id>/ and the sync-path files inside; `.sync/` and any other
+   * entry under the root are left alone. Symlinks are never followed (O_NOFOLLOW). Failures are logged once per message, never swallowed.
+   */
   private fixModes(): void {
-    const walk = (dir: string, top: boolean): void => {
-      let ents;
+    let gid: number;
+    try {
+      gid = this.rootGid();
+    } catch (e) {
+      return this.warnOnce(`group-read: cannot read the mirror root ${this.o.mirrorDir}: ${(e as Error).message}`);
+    }
+    const names = (dir: string): string[] => {
       try {
-        ents = readdirSync(dir, { withFileTypes: true });
+        return readdirSync(dir);
       } catch {
-        return;
-      }
-      for (const e of ents) {
-        if (top && e.name === ".sync") continue;
-        const p = join(dir, e.name);
-        try {
-          if (e.isDirectory()) {
-            this.shareDir(p, dir);
-            walk(p, false);
-          } else if (e.isFile() && !e.name.endsWith(".tmp")) chmodSync(p, 0o640);
-        } catch (err) {
-          this.log(`could not fix modes of ${p}: ${(err as Error).message}`);
-        }
+        return [];
       }
     };
-    walk(this.o.mirrorDir, true);
-  }
-  /** chmod a directory to 0750, keeping setgid when its parent has it. */
-  private shareDir(dir: string, parent: string): void {
-    if (lstatSync(dir).isSymbolicLink()) return;
-    chmodSync(dir, 0o750 | (statSync(parent).mode & 0o2000));
+    const tryShare = (p: string, f: () => void) => {
+      try {
+        f();
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT" || (e as NodeJS.ErrnoException).code === "ELOOP" || (e as NodeJS.ErrnoException).code === "ENOTDIR") return; // gone or a symlink: skipped
+        this.warnOnce(`group-read: cannot share ${p}: ${(e as Error).message}`);
+      }
+    };
+    const base = this.o.layout === "base";
+    const parent = base ? join(this.o.mirrorDir, "domains") : this.o.mirrorDir;
+    if (base) tryShare(parent, () => this.shareDir(parent, gid));
+    for (const d of names(parent)) {
+      if (!DOMAIN.test(d)) continue;
+      const root = join(parent, d);
+      if (lstatSync(root, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+      tryShare(root, () => this.shareDir(root, gid));
+      for (const n of names(root)) {
+        const p = join(root, n);
+        if (n === "entries") {
+          tryShare(p, () => this.shareDir(p, gid));
+          for (const f of names(p)) if (KB_SYNC_PATH.test(`entries/${f}`)) tryShare(join(p, f), () => this.shareFileAt(join(p, f), gid));
+        } else if (n === "versions") {
+          tryShare(p, () => this.shareDir(p, gid));
+          for (const v of names(p)) {
+            const vd = join(p, v);
+            if (lstatSync(vd, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+            tryShare(vd, () => this.shareDir(vd, gid));
+            for (const f of names(vd)) if (KB_SYNC_PATH.test(`versions/${v}/${f}`)) tryShare(join(vd, f), () => this.shareFileAt(join(vd, f), gid));
+          }
+        } else if (KB_SYNC_PATH.test(n)) tryShare(p, () => this.shareFileAt(p, gid));
+      }
+    }
   }
   stop(): void {
     this.stopped = true;
@@ -546,27 +609,28 @@ export class KbSync {
     const dir = dirname(file);
     const gr = !!this.o.groupRead && shared;
     mkdirSync(dir, { recursive: true });
-    if (gr) {
-      // Every directory between the mirror root (exclusive) and the file, parent first, so the setgid bit propagates.
-      const parts = relative(this.o.mirrorDir, dir).split(sep).filter(Boolean);
-      let cur = this.o.mirrorDir;
-      for (const seg of parts) {
-        if (seg === "..") break;
-        const next = join(cur, seg);
-        try {
-          this.shareDir(next, cur);
-        } catch {
-          /* best effort: the file write below reports real problems */
+    let gid = -1;
+    try {
+      if (gr) {
+        gid = this.rootGid();
+        // Every directory between the mirror root (exclusive) and the file, parent first. Plain 0750 + the root's group; no setgid.
+        let cur = this.o.mirrorDir;
+        for (const seg of relative(this.o.mirrorDir, dir).split(sep).filter(Boolean)) {
+          if (seg === "..") throw new Error("path escapes the mirror root");
+          this.shareDir((cur = join(cur, seg)), gid);
         }
-        cur = next;
       }
+    } catch (e) {
+      const m = `group-read: cannot share directories for ${file}: ${(e as Error).message}`;
+      this.warnOnce(m);
+      throw new Retry(m);
     }
     const tmp = join(dir, `.${randomBytes(6).toString("hex")}.tmp`);
     try {
       const fd = openSync(tmp, "w", 0o644);
       try {
         writeSync(fd, content);
-        if (gr) fchmodSync(fd, 0o640);
+        if (gr) this.share(fd, 0o640, gid);
         fsyncSync(fd);
       } finally {
         closeSync(fd);
@@ -574,6 +638,7 @@ export class KbSync {
       renameSync(tmp, file);
     } catch (e) {
       rmSync(tmp, { force: true });
+      if (gr) this.warnOnce(`group-read: cannot write/share ${file}: ${(e as Error).message}`);
       throw new Retry(`cannot write ${file}: ${(e as Error).message}`);
     }
     try {

@@ -128,7 +128,7 @@ describe("the removed WOLFPACK_HUB_KEY", () => {
 		}
 		assert.deepEqual(seen, [{ auth: "undefined", key: "undefined" }]);
 		assert.equal(warnings.length, 1);
-		assert.match(warnings[0], /WOLFPACK_HUB_KEY is no longer supported/);
-		assert.doesNotMatch(warnings[0], /old-shared-key/);
+		assert.match(warnings[0] ?? "", /WOLFPACK_HUB_KEY is no longer supported/);
+		assert.doesNotMatch(warnings[0] ?? "", /old-shared-key/);
 	});
 });

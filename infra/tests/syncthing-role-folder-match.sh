@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Local check for infra/roles/syncthing: renders the embedded python, runs it
-# against a stub Syncthing REST API, and asserts that
-#   1. a pre-existing folder at the den path (any id) is kept, nothing POSTed;
-#   2. with no folder and no wolf_id, nothing is created;
-#   3. with no folder and wolf_id set, den-<host>-<wolf-id> is created.
-# Usage: infra/tests/syncthing-role-folder-match.sh
+# against a stub Syncthing REST API, and asserts the role NEVER writes a folder
+# (`wolfpack mesh` is the only creator):
+#   1. a pre-existing folder at the den path (any id) is matched, nothing written;
+#   2. no folder and no wolf_id: nothing written, "run: wolfpack mesh";
+#   3. no folder even WITH wolf_id: still nothing written, same hint;
+#   4. a folder whose path is a SYMLINK to the den, with a different id, matches
+#      by realpath and nothing is written.
+# Run (no npm script exists for infra; package.json is outside this change):
+#   bash infra/tests/syncthing-role-folder-match.sh      # prints "ok: 4 cases"
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 exec python3 -I - "$HERE/../roles/syncthing/tasks/main.yml" <<'PY'
@@ -28,9 +32,10 @@ def run(folders, wolf_id):
             self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
         def do_GET(self):
             self._send([{"deviceID": MAC}] if self.path.endswith("/devices") else folders)
-        def do_POST(self):
-            n = int(self.headers.get("Content-Length", 0)); posted.append((self.path, json.loads(self.rfile.read(n))))
+        def _write(self):
+            n = int(self.headers.get("Content-Length", 0)); posted.append((self.command, self.path, self.rfile.read(n)))
             self._send({})
+        do_POST = do_PUT = do_PATCH = do_DELETE = _write
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     code = block
@@ -45,13 +50,17 @@ def run(folders, wolf_id):
     assert r.returncode == 0, r.stderr
     return posted, r.stdout
 
+link = os.path.join(tmp, "den-link"); os.symlink(den, link)
+
 live = [{"id": "den-sfo-01-W1hOrJ", "path": den, "type": "sendonly", "devices": []}]
 posted, out = run(live, "ETAy7b")
-assert posted == [], f"existing folder duplicated: {posted}"
-assert "den-sfo-01-W1hOrJ" in out
+assert posted == [], f"wrote: {posted}"
+assert "den-sfo-01-W1hOrJ" in out and "already present" in out, out
 posted, out = run([], "")
-assert posted == [] and "not creating" in out, out
+assert posted == [] and "run: wolfpack mesh" in out, (posted, out)
 posted, out = run([], "ETAy7b")
-assert len(posted) == 1 and posted[0][1]["id"] == "den-sfo-01-ETAy7b" and posted[0][1]["path"] == den, posted
-print("ok: 3 cases")
+assert posted == [] and "not creating; run: wolfpack mesh" in out, (posted, out)
+posted, out = run([{"id": "den-other-xxxx", "path": link, "type": "sendreceive", "devices": []}], "ETAy7b")
+assert posted == [] and "den-other-xxxx" in out and "already present" in out, (posted, out)
+print("ok: 4 cases")
 PY

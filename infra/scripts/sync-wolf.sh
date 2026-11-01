@@ -11,12 +11,17 @@
 #
 #   den-<host>-<wolf-id> <-> <mac wolfpack checkout>/dens/<wolf>   bidirectional
 #
+# This script NEVER creates folders. `wolfpack mesh` is the only creator: it
+# knows the per-wolf Syncthing instances (wolf-<id>-syncthing on per-wolf GUI
+# ports), while this script only talks to the host-level :8384. Here a den folder
+# is matched by id or by realpath of the den path and REPORTED. The old additive
+# "share with mac-hub" PUT is gone too (report-only): a folder not shared with
+# the hub is flagged with a `wolfpack mesh` hint instead of being edited.
+#
 # <host> is $WOLF_HOST (set by `wolfpack sync`, else `hostname -s`). <wolf-id> is
 # the wolf ID (the id in wolf.yaml, as in packages/cli mesh.ts denFolderId), NOT
-# the wolf name. It comes from $WOLF_ID, else `id:` in <den>/../wolf.yaml. If it
-# cannot be resolved this script refuses to create a NEW folder (an existing
-# folder at the den path is still matched by path and kept) and points at
-# `wolfpack mesh`.
+# the wolf name; it comes from $WOLF_ID, else `id:` in <den>/../wolf.yaml, and is
+# used only for the id match.
 #
 # The old kb-*, ops-inbox-*, ops-receipts-* and wolfpack-shared folders are NOT
 # pruned by this script; they were removed on the hosts by hand.
@@ -129,50 +134,30 @@ def wolves():
 def folder_by_path(folders, path):
     return next((f for f in folders if os.path.realpath(f["path"]) == os.path.realpath(path)), None)
 
-def ensure_shared_with_hub(folder):
+def shared_with_hub(folder):
     ids = {d["deviceID"] for d in folder.get("devices", [])}
-    changed = False
-    for want in (me, HUB):
-        if want not in ids:
-            folder.setdefault("devices", []).append({"deviceID": want})
-            changed = True
-    return changed
+    return me in ids and HUB in ids
 
 def upsert(folder_id, label, path, ftype, rescan):
+    """Report-only (name kept for the caller). Returns the existing folder id, or
+    "" when there is none; never writes."""
     folders = api("GET", "/config/folders") or []
 
     # Reuse whatever folder already owns this path, whatever it is called. Folder
-    # ids survive a wolf rename, so one may not match its wolf; making a second
-    # folder over the same directory would have the two fight each other.
-    existing = next((f for f in folders if f["id"] == folder_id), None) or folder_by_path(folders, path)
+    # ids survive a wolf rename, so one may not match its wolf.
+    existing = next((f for f in folders if folder_id and f["id"] == folder_id), None) or folder_by_path(folders, path)
 
     if existing:
         if existing["id"] != folder_id:
             note(f"{YEL}!{R} path already synced as '{existing['id']}' — keeping that id")
-        if ensure_shared_with_hub(existing):
-            api("PUT", f"/config/folders/{existing['id']}", existing)
-            step(f"shared '{existing['id']}' with mac-hub")
-        else:
+        if shared_with_hub(existing):
             step(f"'{existing['id']}' already wired")
+        else:
+            note(f"{YEL}!{R} '{existing['id']}' is not shared with mac-hub; not editing; run: wolfpack mesh")
         return existing["id"]
 
-    if not folder_id:
-        die(f"no folder at {path} and the wolf ID could not be resolved (set WOLF_ID, or put "
-            f"`id:` in wolf.yaml next to the den). Not creating a folder with a name-derived id; "
-            f"see `wolfpack mesh`.")
-    if not os.path.isdir(path):
-        die(f"nothing at {path} — build it before syncing it")
-
-    api("POST", "/config/folders", {
-        "id": folder_id, "label": label, "path": path, "type": ftype,
-        "rescanIntervalS": rescan, "fsWatcherEnabled": True, "fsWatcherDelayS": 10,
-        "devices": [{"deviceID": me}, {"deviceID": HUB}],
-        # New folders get versioning. Nothing in the pack had it, and a den is
-        # bidirectional with a laptop that can be offline for weeks.
-        "versioning": {"type": "simple", "params": {"keep": "5"}},
-    })
-    step(f"created '{folder_id}' ({ftype}) at {path}")
-    return folder_id
+    note(f"{YEL}!{R} no folder at {path}; not creating; run: wolfpack mesh")
+    return ""
 
 def mac_steps(folder_id, mac_path, mac_type):
     ts = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True).stdout.strip().split("\n")[0]
@@ -229,6 +214,7 @@ if MODE == "den":
     den = den_path(TARGET)
     wid = wolf_id(TARGET, den)
     fid = upsert(f"den-{HOST}-{wid}" if wid else "", f"{TARGET}-den", den, "sendreceive", 60)
-    mac_steps(fid, f"dens/{TARGET}", "Send & Receive")
+    if fid:
+        mac_steps(fid, f"dens/{TARGET}", "Send & Receive")
     sys.exit(0)
 PY

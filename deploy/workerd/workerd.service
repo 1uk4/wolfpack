@@ -23,15 +23,18 @@ RestartSec=5
 TimeoutStopSec=20
 UMask=0077
 
-# State: /var/lib/workerd (hub.json, outbox, kb-mirror, ops).
+# State: /var/lib/workerd (hub.json, outbox, ops), private 0700 / files 0600 under UMask=0077.
+# The hub KB mirror is NOT in there: it is /var/lib/workerd-kb (WORKERD_KB_MIRROR_DIR), workerd:wolfpack-kb 2750, created by setup.sh, so Hal can read it
+# via the group. It is a ReadWritePaths entry rather than a second StateDirectory= because StateDirectoryMode= is one value for every
+# StateDirectory entry (it would force 0700 on the shared dir, or loosen hub.json's); with ReadWritePaths the dir keeps the owner/mode setup.sh gave it.
 StateDirectory=workerd
 StateDirectoryMode=0700
 
-# Hardening. /home is invisible; the only writable path is /var/lib/workerd.
+# Hardening. /home is invisible; the only writable paths are /var/lib/workerd and /var/lib/workerd-kb.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/workerd
+ReadWritePaths=/var/lib/workerd /var/lib/workerd-kb
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

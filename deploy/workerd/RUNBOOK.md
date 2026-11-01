@@ -7,13 +7,14 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 |---|---|
 | mode | `workerd --link-only` (`WORKERD_LINK_ONLY=1`): hub link + KB sync + announces wolf `hal`. It supervises and spawns **no** wolfd (`packages/workerd/src/run.ts`, `linkOnly`). Hal keeps running from `wolf-ETAy7b.service` |
 | user | `workerd` (system, nologin); no access to `/home` (`ProtectHome=yes`) |
-| env | `/etc/wolfpack/workerd.env`, root:root 600 (link-only, announce `hal`, `WORKERD_FEED=0`, `WORKERD_KB_LAYOUT=base`, `WORKERD_CONFIG_DIR=/var/lib/workerd`) |
+| env | `/etc/wolfpack/workerd.env`, root:root 600 (link-only, announce `hal`, `WORKERD_FEED=0`, `WORKERD_KB_LAYOUT=base`, `WORKERD_CONFIG_DIR=/var/lib/workerd`, `WORKERD_KB_MIRROR_DIR=/var/lib/workerd-kb`, `WORKERD_KB_MIRROR_GROUP_READ=1`) |
 | code | `/opt/wolfpack-workerd/{releases,current,previous}`, `/usr/bin/node` |
-| data | `/var/lib/workerd` (0700): `hub.json` (from `workerd pair`), `outbox/`, `ops/`, **`kb-mirror/`** (base layout: `kb-mirror/domains/<d>/…`) |
+| data | `/var/lib/workerd` (0700, files 0600): `hub.json` (from `workerd pair`), `outbox/`, `ops/` |
+| KB mirror | `/var/lib/workerd-kb` (`workerd:wolfpack-kb`, 2750; base layout `domains/<d>/…`; files 0640, dirs 0750; `.sync/` state stays 0600/0700). Group `wolfpack-kb` = `workerd` + `wolf-ETAy7b` |
 | HTTP | `127.0.0.1:7142` (cannot be disabled; never 3141 agent, 3150 hubd, 7141 Mac workerd) |
 | feed | off: Hal writes contributions straight into Dewey's inbox |
 
-Hal's `.env` (`KB_BASE=/var/wolfpack/kb/base`) is **not** changed. Pointing `KB_BASE` at `/var/lib/workerd/kb-mirror` is a later, owner-approved step (note: that dir would need to be readable by Hal's user, which this sandbox layout does not grant yet). No KB copy is ever deleted by anything here.
+Hal's `.env` (`KB_BASE=/var/wolfpack/kb/base`) is **not** changed. Pointing `KB_BASE` at `/var/lib/workerd-kb` is a later, owner-approved step: see "Hal reads the hub mirror" below. No KB copy is ever deleted by anything here.
 
 The unit starts only when `/var/lib/workerd/hub.json` exists. `setup.sh` fails the preflight (`WOULD FAIL` in dry-run) if the env would not be link-only, announces nothing, has the feed on, a non-loopback bind, a bad port (3141, 3150, 7141, out of range) or any foreign listener on the port, or if the unit's `ExecStart` lacks `--link-only` or mentions `wolfd`. The unit repeats the guards in `ExecStartPre`.
 
@@ -76,11 +77,39 @@ ss -tnpe state established '( dport = :3150 )' | grep -E "users:\(\(\"node\"" | 
 ss -ltnp | grep ':7142'                                                                         # 127.0.0.1 only
 ps -o user= -p "$(systemctl show -p MainPID --value workerd)"                                   # workerd
 pgrep -u workerd -a . | wc -l                                                                   # 1: no wolfd children
-ls /var/lib/workerd/kb-mirror/domains; du -sh /var/lib/workerd/kb-mirror                        # fills in (personal, snapjack, wolfpack)
+ls /var/lib/workerd-kb/domains; du -sh /var/lib/workerd-kb                        # fills in (personal, snapjack, wolfpack)
 ```
 Hal unchanged: `systemctl is-active wolf-ETAy7b` as recorded in B; exactly one Hal process (`pgrep -u wolf-ETAy7b -af agent | wc -l`, same as before); `stat -c '%U:%G %a' /etc/wolfpack/workerd.env /var/lib/workerd/hub.json` is `root:root 600` and `workerd:workerd 600`. (A seccomp journal check proves little here: `SystemCallErrorNumber=EPERM` makes filtered calls fail quietly, so rely on the sandbox smoke test in E.)
+
+## Hal reads the hub mirror (sfo-01, root; owner-approved, after G)
+Why a separate dir: workerd's state dir stays `0700`/`0600` (it holds `hub.json` with the token and the outbox), so the mirror lives in `/var/lib/workerd-kb`. The unit grants it with `ReadWritePaths` (not a second `StateDirectory=`, whose single `StateDirectoryMode=` would force one mode on both dirs). With `WORKERD_KB_MIRROR_GROUP_READ=1` workerd chmods mirror files 0640 and dirs 0750 (keeping the setgid bit) even under `UMask=0077`, and fixes existing files once at start. Hal has no `domains.yaml` today, so nothing filters the domains he sees: he reads exactly the domains the hub grants host sfo-01 (`ls /var/lib/workerd-kb/domains`).
+```
+# 1. group and dir (setup.sh install does this too; safe to repeat)
+getent group wolfpack-kb >/dev/null || groupadd --system wolfpack-kb
+usermod -aG wolfpack-kb workerd
+usermod -aG wolfpack-kb wolf-ETAy7b
+install -d -o workerd -g wolfpack-kb -m 2750 /var/lib/workerd-kb
+# 2. env (an existing /etc/wolfpack/workerd.env is kept by setup.sh, so add the lines by hand; never print the file)
+grep -q '^WORKERD_KB_MIRROR_DIR=' /etc/wolfpack/workerd.env || printf 'WORKERD_KB_MIRROR_DIR=/var/lib/workerd-kb\nWORKERD_KB_MIRROR_GROUP_READ=1\n' >> /etc/wolfpack/workerd.env
+# 3. install the new unit (ReadWritePaths) and bundle via setup.sh (E), then restart workerd
+systemctl daemon-reload && systemctl restart workerd
+# 4. wait for sync: every granted domain appears and the revisions settle
+journalctl -u workerd -n 30 --no-pager | grep -E 'hub link: online|kb sync'
+ls /var/lib/workerd-kb/domains; du -sh /var/lib/workerd-kb
+stat -c '%U:%G %a' /var/lib/workerd-kb /var/lib/workerd-kb/domains/* /var/lib/workerd /var/lib/workerd/hub.json   # workerd:wolfpack-kb 2750 / 750; workerd:workerd 700 / 600
+# 5. verify as Hal (his running process does not have the new group until step 7; sudo -u starts a fresh session that does)
+sudo -u wolf-ETAy7b ls /var/lib/workerd-kb/domains
+sudo -u wolf-ETAy7b ls /var/lib/workerd-kb/domains/wolfpack/entries | head -3
+sudo -u wolf-ETAy7b cat /var/lib/workerd-kb/domains/wolfpack/INDEX.md | head -3
+sudo -u wolf-ETAy7b ls /var/lib/workerd/hub.json        # must FAIL (permission denied)
+# 6. switch Hal: EITHER set KB_BASE=/var/lib/workerd-kb in Hal's .env (keep the old line as a comment),
+#    OR repoint the symlink: ln -sfn /var/lib/workerd-kb/domains /var/wolfpack/kb/base/domains   (record the old target first: readlink /var/wolfpack/kb/base/domains)
+# 7. restart Hal so he picks up the group and the new base
+systemctl restart wolf-ETAy7b.service && systemctl is-active wolf-ETAy7b
+```
+Rollback: restore Hal's `.env` `KB_BASE` line (or `ln -sfn <recorded old target> /var/wolfpack/kb/base/domains`), `systemctl restart wolf-ETAy7b.service`. The old Syncthing-era KB copy is never deleted by these steps. To undo the mirror layout itself: remove the two `WORKERD_KB_MIRROR_*` lines (workerd goes back to `/var/lib/workerd/kb-mirror`, a full re-sync) and `systemctl restart workerd`; `gpasswd -d wolf-ETAy7b wolfpack-kb` is optional.
 
 ## Rollback / removal
 - Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
 - Stop quickly: `systemctl disable --now workerd`. Hal and hubd are unaffected; the hub just sees the host offline.
-- Remove: `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. Keeps `/var/lib/workerd` (hub.json, mirror), the env file and the user. `uninstall --purge` refuses while any systemd unit or `/home/*/.env` still references `/var/lib/workerd/kb-mirror` (it searches systemd unit dirs, `/etc/wolfpack`, `/var/wolfpack`, `/home/*/.env`, and Hal's `EnvironmentFile=`/`WorkingDirectory=` from `systemctl cat wolf-ETAy7b`; **the guard is best-effort**, so confirm by hand that nothing reads the mirror, and it also refuses in `--dry-run`); otherwise it deletes `/var/lib/workerd` (including the **derived** hub mirror and hub.json) and the user; stop first. It never touches Hal's unit or `.env`, Dewey's tree, or Syncthing/`/var/wolfpack/kb` copies. Revoke the host's token on the hub afterwards if it is gone for good.
+- Remove: `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. Keeps `/var/lib/workerd` (hub.json) and `/var/lib/workerd-kb` (mirror), the env file and the user. `uninstall --purge` refuses while any systemd unit or `/home/*/.env` still references `/var/lib/workerd/kb-mirror` or `/var/lib/workerd-kb` (it searches systemd unit dirs, `/etc/wolfpack`, `/var/wolfpack`, `/home/*/.env`, and Hal's `EnvironmentFile=`/`WorkingDirectory=` from `systemctl cat wolf-ETAy7b`; **the guard is best-effort**, so confirm by hand that nothing reads the mirror, and it also refuses in `--dry-run`); otherwise it deletes `/var/lib/workerd` and `/var/lib/workerd-kb` (including the **derived** hub mirror and hub.json) and the user; stop first. It never touches Hal's unit or `.env`, Dewey's tree, or Syncthing/`/var/wolfpack/kb` copies. Revoke the host's token on the hub afterwards if it is gone for good.

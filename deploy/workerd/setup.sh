@@ -14,6 +14,10 @@ WU=workerd
 WG=workerd
 HAL_UNIT=wolf-ETAy7b
 DATA_DIR=/var/lib/workerd
+# The hub KB mirror lives OUTSIDE the 0700 state dir so Hal can read it through a group (see RUNBOOK "Hal reads the hub mirror").
+KB_DIR=/var/lib/workerd-kb
+KB_GROUP=wolfpack-kb
+HAL_USER=wolf-ETAy7b
 OPT=/opt/wolfpack-workerd
 ENV_DIR=/etc/wolfpack
 ENV_FILE=$ENV_DIR/workerd.env
@@ -73,6 +77,9 @@ no_spawn_checks() { # no_spawn_checks <env file or example>
   need "$f: WORKERD_ANNOUNCE is empty" test -n "$(envval "$f" WORKERD_ANNOUNCE)"
   need "$f: WORKERD_FEED must be 0 (Hal writes into Dewey's inbox directly)" test "$(envval "$f" WORKERD_FEED)" = 0
   need "$f: WORKERD_KB_LAYOUT must be base" test "$(envval "$f" WORKERD_KB_LAYOUT)" = base
+  if [[ $(envval "$f" WORKERD_KB_MIRROR_GROUP_READ) == 1 ]]; then
+    need "$f: WORKERD_KB_MIRROR_GROUP_READ=1 needs WORKERD_KB_MIRROR_DIR=$KB_DIR" test "$(envval "$f" WORKERD_KB_MIRROR_DIR)" = "$KB_DIR"
+  fi
   need "$f: WORKERD_HOST must be 127.0.0.1" test "$(envval "$f" WORKERD_HOST)" = 127.0.0.1
   need "$f: bad WORKERD_PORT" valid_port "$(envval "$f" WORKERD_PORT)"
   need "$HERE/workerd.service ExecStart must pass --link-only" grep -Eq '^ExecStart=.* --link-only( |$)' "$HERE/workerd.service"
@@ -107,14 +114,22 @@ cmd_setup() {
   # Hal must exist as its own unit and must not be touched; show its state for the record.
   need "$HAL_UNIT.service not found (Hal runs from his own unit; workerd must not replace it)" hal_unit_exists
   echo "Hal unit $HAL_UNIT: $(systemctl is-active "$HAL_UNIT" 2>/dev/null || echo unknown) (left untouched)"
-  echo "target: node $node, 127.0.0.1:$PORT, announce ${ANNOUNCE[*]}, link-only, feed off, mirror $DATA_DIR/kb-mirror (base layout)"
+  echo "target: node $node, 127.0.0.1:$PORT, announce ${ANNOUNCE[*]}, link-only, feed off, mirror $KB_DIR (base layout, group $KB_GROUP, via WORKERD_KB_MIRROR_DIR in the env file; default $DATA_DIR/kb-mirror)"
 
   log "user and group"
   getent group "$WG" >/dev/null 2>&1 || run groupadd --system "$WG"
   workerd_user_exists || run useradd --system --gid "$WG" --home-dir "$DATA_DIR" --no-create-home --shell /usr/sbin/nologin "$WU"
 
+  # Shared-read group for the mirror: workerd writes, Hal (if his user exists) reads. Hal's own unit is not touched (his group list only
+  # takes effect when wolf-ETAy7b.service is restarted).
+  getent group "$KB_GROUP" >/dev/null 2>&1 || run groupadd --system "$KB_GROUP"
+  run usermod -aG "$KB_GROUP" "$WU"
+  if id "$HAL_USER" >/dev/null 2>&1; then run usermod -aG "$KB_GROUP" "$HAL_USER"; else echo "NOTE: user $HAL_USER not found; add it to $KB_GROUP by hand"; fi
+
   log "directories"
   run install -d -o "$WU" -g "$WG" -m 0700 "$DATA_DIR" "$DATA_DIR/ops"
+  # setgid (2750) so files workerd creates inside keep group $KB_GROUP; workerd's own state above stays 0700.
+  run install -d -o "$WU" -g "$KB_GROUP" -m 2750 "$KB_DIR"
   run install -d -o root -g root -m 0755 "$OPT" "$OPT/releases"
   # /etc/wolfpack is shared with hubd: create only if missing, never reset its owner or mode.
   [[ -d $ENV_DIR ]] || run install -d -o root -g root -m 0755 "$ENV_DIR"
@@ -197,7 +212,7 @@ cmd_uninstall() {
     done < <(systemctl cat "$HAL_UNIT" 2>/dev/null || true)
     for t in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /etc/wolfpack /var/wolfpack /home/*/.env /home/*/agent/.env ${targets[@]+"${targets[@]}"}; do
       [[ -e $t ]] || continue
-      refs+="$(grep -rlsF "$DATA_DIR/kb-mirror" "$t" 2>/dev/null | grep -vx "$ENV_FILE" || true)"$'\n'
+      refs+="$(grep -rlsF -e "$DATA_DIR/kb-mirror" -e "$KB_DIR" "$t" 2>/dev/null | grep -vx "$ENV_FILE" || true)"$'\n'
     done
     refs="$(printf '%s' "$refs" | sed '/^$/d' | sort -u)"
     if [[ -n $refs ]]; then
@@ -211,13 +226,14 @@ cmd_uninstall() {
   run systemctl daemon-reload
   run rm -rf "$OPT"
   if ((PURGE)); then
-    echo "--purge: deleting $DATA_DIR (hub.json, outbox and the hub KB MIRROR; the mirror is a derived copy, Syncthing/Dewey KB is not affected)."
-    run rm -rf "$DATA_DIR"
+    echo "--purge: deleting $DATA_DIR and $KB_DIR (hub.json, outbox and the hub KB MIRROR; the mirror is a derived copy, Syncthing/Dewey KB is not affected)."
+    run rm -rf "$DATA_DIR" "$KB_DIR"
     run rm -f "$ENV_FILE"
     if workerd_user_exists; then run userdel "$WU"; else echo "user $WU already gone"; fi
     if getent group "$WG" >/dev/null 2>&1; then run groupdel "$WG"; else echo "group $WG already gone"; fi
+    if getent group "$KB_GROUP" >/dev/null 2>&1; then run groupdel "$KB_GROUP"; else echo "group $KB_GROUP already gone"; fi
   else
-    echo "kept: $DATA_DIR (hub.json, mirror), $ENV_FILE, user $WU (use --purge to remove)"
+    echo "kept: $DATA_DIR (hub.json), $KB_DIR (mirror), $ENV_FILE, user $WU (use --purge to remove)"
   fi
 }
 

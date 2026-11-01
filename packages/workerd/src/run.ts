@@ -35,7 +35,7 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   outboxDir?: string;
   /** Test seam: resend overdue contribution acks after this long, ms. */
   ackTimeoutMs?: number;
-  /** Where the hub-synced KB mirror lives (side by side with the Syncthing KB, never inside it). Default `<configDir>/kb-mirror`. */
+  /** Where the hub-synced KB mirror lives (Syncthing no longer carries the KB, only den backups). Default `<configDir>/kb-mirror`. */
   kbMirrorDir?: string;
   /** Mirror layout: "flat" (default) or "base" (`<mirror>/domains/<d>/`). Env WORKERD_KB_LAYOUT. */
   kbMirrorLayout?: "flat" | "base";

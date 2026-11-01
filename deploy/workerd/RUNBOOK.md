@@ -77,9 +77,7 @@ ss -ltnp | grep ':7142'                                                         
 ps -o user= -p "$(systemctl show -p MainPID --value workerd)"                                   # workerd
 pgrep -u workerd -a . | wc -l                                                                   # 1: no wolfd children
 ls /var/lib/workerd/kb-mirror/domains; du -sh /var/lib/workerd/kb-mirror                        # fills in (personal, snapjack, wolfpack)
-/usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs kb-compare --syncthing /var/wolfpack/kb/base --mirror /var/lib/workerd/kb-mirror --layout base
 ```
-`kb-compare` must report CLEAN. Do not pass `--json` a path inside `/var/lib/workerd` (it would write into the data dir; use `/root/...`). It is read-only (`--syncthing` is only read); run it as root, since the `workerd` user may not be able to read `/var/wolfpack/kb/base`.
 Hal unchanged: `systemctl is-active wolf-ETAy7b` as recorded in B; exactly one Hal process (`pgrep -u wolf-ETAy7b -af agent | wc -l`, same as before); `stat -c '%U:%G %a' /etc/wolfpack/workerd.env /var/lib/workerd/hub.json` is `root:root 600` and `workerd:workerd 600`. (A seccomp journal check proves little here: `SystemCallErrorNumber=EPERM` makes filtered calls fail quietly, so rely on the sandbox smoke test in E.)
 
 ## Rollback / removal

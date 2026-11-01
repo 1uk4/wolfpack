@@ -4,14 +4,12 @@
  * Supervises one wolfd per wolf under <dir> and serves the /v1 protocol for all of them on one port.
  */
 import { parseServeArgs } from "../cli-args.js";
-import { KB_COMPARE_USAGE, runKbCompare } from "../kb-compare.js";
 import { pairWithHub } from "../hub-config.js";
 import { runWorkerd } from "../run.js";
 
-const USAGE = "usage: workerd pair <hub-url> <code>\n       " + KB_COMPARE_USAGE.replace("usage: ", "") + "\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)";
+const USAGE = "usage: workerd pair <hub-url> <code>\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)";
 
 async function main(): Promise<void> {
-  if (process.argv[2] === "kb-compare") process.exit(runKbCompare(process.argv.slice(3)));
   if (process.argv[2] === "pair") {
     const [url, code] = process.argv.slice(3);
     if (!url || !code) {

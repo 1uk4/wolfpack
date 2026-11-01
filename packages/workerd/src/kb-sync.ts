@@ -1,5 +1,5 @@
 /**
- * KbSync: pulls each subscribed KB domain from the hub into a MIRROR next to (never inside) the Syncthing KB.
+ * KbSync: pulls each subscribed KB domain from the hub into a MIRROR directory (Syncthing no longer carries the KB, only den backups).
  *
  * LAYOUT  <mirrorDir>/<domain>/{entries,versions,_registry.md,_digest.json,INDEX.md}   whole files, exactly the hub's bytes
  *         <mirrorDir>/.sync/<domain>.json                                              {v, epoch, rev, active}

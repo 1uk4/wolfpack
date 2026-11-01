@@ -13,7 +13,7 @@
 #   - the Syncthing folder *label*, which is what you read in the UI and in
 #     `wolfpack sync`
 #
-# NOT touched: the Syncthing folder id (`den-<old>`). Folder ids are immutable
+# NOT touched: the Syncthing folder id (`den-<host>-<old>`). Folder ids are immutable
 # in Syncthing, so changing it means removing and re-sharing the folder and
 # re-accepting on the Mac — a coordinated two-sided operation, never done
 # silently as part of a rename.
@@ -209,7 +209,7 @@ ${LEFT} file(s). That is history, not identity, so it was left as written.
 Still manual:
   - .env on your Mac: TELEGRAM_BOT_TOKEN_${OLD^^} -> TELEGRAM_BOT_TOKEN_${NEW^^}
   - @BotFather: rename the bot's display name (the token itself is unchanged)
-  - Syncthing folder id is still 'den-${OLD}' - immutable. The label now reads
+  - Syncthing folder id is still 'den-<host>-${OLD}' - immutable. The label now reads
     '${NEW}-den'; changing the id needs a remove/re-add on both ends.
   - Mac den folder: mv ~/Code/wolfpack/dens/${OLD} ~/Code/wolfpack/dens/${NEW}
     (do this with Syncthing paused, then repoint the folder path)

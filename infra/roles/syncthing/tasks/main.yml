@@ -1,4 +1,8 @@
 ---
+# Syncthing is installed for den backups ONLY (folder id den-<host>-<wolf>).
+# The KB and ops lanes (kb-*, ops-inbox-*, ops-receipts-*) are NOT carried by
+# Syncthing: KB distribution is hub-only (hubd + workerd link + kb-sync mirror).
+# This role goes away when feature H3GuSmC lands a backup system.
 - name: Install Syncthing
   shell: |
     curl -fsSL https://syncthing.net/release-key.gpg | gpg --dearmor -o /usr/share/keyrings/syncthing-archive-keyring.gpg
@@ -27,9 +31,8 @@
 
 - name: Configure Syncthing folders and Mac hub device via REST API
   # Reads the local API key out of config.xml, then talks to the local
-  # Syncthing REST API to add the Mac as a remote device and create two
-  # folders: den-<wolf> (sendreceive) and wolfpack-shared (receiveonly),
-  # both shared with the Mac.
+  # Syncthing REST API to add the Mac as a remote device and create the den
+  # backup folder den-<host>-<wolf> (sendreceive), shared with the Mac.
   #
   # Idempotent: checks for existing device/folder entries before adding.
   shell: |
@@ -40,6 +43,7 @@
     API_BASE   = "http://127.0.0.1:8384/rest"
     MAC_ID     = "{{ mac_syncthing_device_id }}"
     WOLF_NAME  = "{{ wolf_name }}"
+    HOST_NAME  = "{{ inventory_hostname }}"
     WOLF_USER  = "{{ wolf_user }}"
 
     if not MAC_ID or "REPLACE_ME" in MAC_ID:
@@ -104,20 +108,11 @@
 
     # 3. Den — sendreceive, bidi with Mac
     upsert_folder(
-        folder_id   = f"den-{WOLF_NAME}",
+        folder_id   = f"den-{HOST_NAME}-{WOLF_NAME}",
         label       = f"{WOLF_NAME}-den",
         path        = f"/home/{WOLF_USER}/workspace/den",
         folder_type = "sendreceive",
         rescan      = 60,
-    )
-
-    # 4. Shared — receiveonly, pulled from Mac
-    upsert_folder(
-        folder_id   = "wolfpack-shared",
-        label       = "wolfpack-shared",
-        path        = f"/home/{WOLF_USER}/workspace/shared",
-        folder_type = "receiveonly",
-        rescan      = 120,
     )
 
     print("OK")
@@ -146,7 +141,5 @@
       - "     Then click Edit on the new device and set Addresses to:"
       - "       tcp://{{ syncthing_ts_ip.stdout }}:22000"
       - "     (dynamic discovery is unreliable over Tailscale)"
-      - "  2. Accept folder 'den-{{ wolf_name }}' → path ~/Code/wolfpack/dens/{{ wolf_name }}"
+      - "  2. Accept folder 'den-{{ inventory_hostname }}-{{ wolf_name }}' (den backup only)"
       - "     Type: Send & Receive"
-      - "  3. Accept folder 'wolfpack-shared' → path ~/Code/wolfpack/shared"
-      - "     Type: Send Only"

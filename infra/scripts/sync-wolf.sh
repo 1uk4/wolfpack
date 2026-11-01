@@ -5,14 +5,14 @@
 # and never wolf-to-wolf. The Mac is where you read the vaults, so a folder that
 # is not shared with the hub is invisible no matter how healthy it looks here.
 #
-# Three folder classes, and the Mac layout they produce:
+# Syncthing carries DEN BACKUPS ONLY, until feature H3GuSmC builds a backup
+# system and removes it. The KB and the ops lanes are not synced here: KB
+# distribution is hub-only (hubd + workerd link + kb-sync mirror).
 #
-#   den-<wolf>       <-> ~/Code/wolfpack/dens/<wolf>        bidirectional
-#   kb-<topic>       <-> ~/Code/wolfpack/knowledge/<topic>  bidirectional
-#   wolfpack-shared   -> ~/Code/wolfpack/shared             Mac sends, wolves receive
+#   den-<host>-<wolf> <-> <mac wolfpack checkout>/dens/<wolf>   bidirectional
 #
-# Open ~/Code/wolfpack/ as one Obsidian vault and wikilinks resolve across all
-# three. That is the whole reason the paths are shaped this way.
+# <host> is $WOLF_HOST (default: this machine's short hostname), matching the
+# live folder ids.
 #
 # Run via `wolfpack sync`. Idempotent — it repairs drift instead of duplicating,
 # and never edits an existing folder's versioning or type.
@@ -20,7 +20,8 @@
 set -uo pipefail
 
 WOLF_USER="${WOLF_USER:-wolf}"
-export WOLF_USER
+WOLF_HOST="${WOLF_HOST:-$(hostname -s)}"
+export WOLF_USER WOLF_HOST
 export CONFIG_XML="/home/${WOLF_USER}/.local/state/syncthing/config.xml"
 export API="http://127.0.0.1:8384/rest"
 
@@ -38,8 +39,7 @@ die() { printf '%ssync:%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
 MODE="status"; TARGET=""
 case "${1:-}" in
   "")        MODE="status" ;;
-  --kb)      MODE="kb";  TARGET="${2:-}"; [ -n "$TARGET" ] || die "usage: wolfpack sync --kb <topic>" ;;
-  -*)        die "usage: wolfpack sync [wolf] | wolfpack sync --kb <topic>" ;;
+  -*)        die "usage: wolfpack sync [wolf]" ;;
   *)         MODE="den"; TARGET="$1" ;;
 esac
 
@@ -48,7 +48,7 @@ import json, os, re, sys, subprocess, urllib.request, urllib.error
 
 MODE, TARGET = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else ""
 USER, CONFIG_XML, API = os.environ["WOLF_USER"], os.environ["CONFIG_XML"], os.environ["API"]
-KB_ROOT = f"/home/{USER}/knowledge"
+HOST = os.environ["WOLF_HOST"]
 
 tty = sys.stdout.isatty()
 B, DIM, R = ("\033[1m", "\033[2m", "\033[0m") if tty else ("", "", "")
@@ -106,16 +106,6 @@ def wolves():
 def folder_by_path(folders, path):
     return next((f for f in folders if os.path.realpath(f["path"]) == os.path.realpath(path)), None)
 
-def den_folder_id(wolf):
-    """The folder id that owns this wolf's den — 'den-<wolf>' by convention, but a
-    folder id survives a wolf rename, so fall back to matching on path."""
-    folders = api("GET", "/config/folders") or []
-    want = f"den-{wolf}"
-    if any(f["id"] == want for f in folders):
-        return want
-    hit = folder_by_path(folders, den_path(wolf))
-    return hit["id"] if hit else ""
-
 def ensure_shared_with_hub(folder):
     ids = {d["deviceID"] for d in folder.get("devices", [])}
     changed = False
@@ -124,31 +114,6 @@ def ensure_shared_with_hub(folder):
             folder.setdefault("devices", []).append({"deviceID": want})
             changed = True
     return changed
-
-def ensure_kb_ignores(folder_id, den):
-    """A kb-<topic> corpus is symlinked into a den. Syncthing does not follow the
-    symlink, and without an ignore the den folder would propagate a delete of the
-    real corpus to the Mac. So every symlink into KB_ROOT gets ignored here."""
-    kdir = os.path.join(den, "knowledge")
-    if not folder_id or not os.path.isdir(kdir):
-        return []
-    linked = []
-    for entry in sorted(os.listdir(kdir)):
-        p = os.path.join(kdir, entry)
-        if os.path.islink(p) and os.path.realpath(p).startswith(KB_ROOT + os.sep):
-            linked.append(f"/knowledge/{entry}")
-    if not linked:
-        return []
-    cur = api("GET", f"/db/ignores?folder={folder_id}") or {}
-    patterns = list(cur.get("ignore") or [])
-    missing = [l for l in linked if l not in patterns]
-    if missing:
-        hdr = "// shared kb-* corpora — they sync as their own folders, not via this den"
-        if hdr not in patterns:
-            patterns = [hdr] + patterns
-        patterns = patterns[:1] + missing + patterns[1:]
-        api("POST", f"/db/ignores?folder={folder_id}", {"ignore": patterns})
-    return linked
 
 def upsert(folder_id, label, path, ftype, rescan):
     folders = api("GET", "/config/folders") or []
@@ -225,8 +190,7 @@ if MODE == "status":
         print(f"{f['id']:<18} {f['type']:<12} {st.get('localFiles', 0):>6}  {pct}  {f['path']}")
     print()
     print(f"{DIM}accept = offered to the Mac but not accepted there yet{R}")
-    print(f"{DIM}wolfpack sync <wolf>        wire a den{R}")
-    print(f"{DIM}wolfpack sync --kb <topic>  wire a shared knowledge folder{R}")
+    print(f"{DIM}wolfpack sync <wolf>        wire a den backup folder{R}")
     sys.exit(0)
 
 # ------------------------------------------------------------------- den ----
@@ -234,22 +198,7 @@ if MODE == "den":
     if TARGET not in wolves():
         die(f"no wolf named '{TARGET}'. Known: {' '.join(wolves())}")
     den = den_path(TARGET)
-    fid = upsert(f"den-{TARGET}", f"{TARGET}-den", den, "sendreceive", 60)
-    linked = ensure_kb_ignores(fid, den)
-    for l in linked:
-        note(f"ignoring {l} — it syncs as its own kb folder")
+    fid = upsert(f"den-{HOST}-{TARGET}", f"{TARGET}-den", den, "sendreceive", 60)
     mac_steps(fid, f"dens/{TARGET}", "Send & Receive")
-    sys.exit(0)
-
-# -------------------------------------------------------------------- kb ----
-if MODE == "kb":
-    path = os.path.join(KB_ROOT, TARGET)
-    fid = upsert(f"kb-{TARGET}", f"kb-{TARGET}", path, "sendreceive", 60)
-    # Any den that symlinks this corpus must ignore it, or the den folder and the
-    # kb folder both claim the same files.
-    for w in wolves():
-        for l in ensure_kb_ignores(den_folder_id(w), den_path(w)):
-            note(f"{w}: ignoring {l}")
-    mac_steps(fid, f"knowledge/{TARGET}", "Send & Receive")
     sys.exit(0)
 PY

@@ -35,7 +35,10 @@ import {
 	extractTableDataFromElement,
 	tableDataToMarkdown,
 	useIsCodeFenceIncomplete,
+	defaultComponents,
 } from "streamdown";
+import { InertMarkdown, useInertMarkdown, WorkIdChip } from "@/components/work-id-chip";
+import { isFullWorkId, workIdFromHref } from "@/src/core";
 import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/mermaid-render";
 import { MermaidError } from "@/components/mermaid-error";
@@ -239,6 +242,7 @@ export function MarkdownCode(props: ComponentProps<"code"> & ExtraProps) {
 
 	// Inline code: no data-block (the pre handler stamps block fences only).
 	if (!("data-block" in props)) {
+		if (typeof children === "string" && isFullWorkId(children.trim())) return <WorkIdChip id={children.trim()} />;
 		return (
 			<code className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)} data-streamdown="inline-code" {...rest}>
 				{children}
@@ -463,7 +467,21 @@ export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
 	);
 }
 
+/** Links: a rewritten work id (src/core/work-id-link) → chip. Inside a button (InertMarkdown) any other link is plain
+ *  underlined text: Streamdown's default link is a <button>, and a button in a button is invalid HTML. */
+export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
+	const inert = useInertMarkdown();
+	const id = workIdFromHref(props.href);
+	if (id) return <WorkIdChip id={id} />;
+	if (inert) return <span className="underline underline-offset-2" data-streamdown="link-inert">{props.children}</span>;
+	const Default = defaultComponents.a as (p: ComponentProps<"a"> & ExtraProps) => ReactNode;
+	return Default(props);
+}
+
+export { InertMarkdown };
+
 export const mdComponents = {
+	a: MarkdownLink,
 	code: MarkdownCode,
 	table: MarkdownTable,
 	span: MathDisplay,

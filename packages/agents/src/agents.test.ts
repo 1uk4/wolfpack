@@ -80,3 +80,10 @@ describe("discovery", () => {
     expect(loadAgent("nope", opts)).toBeNull();
   });
 });
+
+describe("orchestrator work-id rule", () => {
+  it("tells agents to write full work ids", async () => {
+    const { orchestratorRules } = await import("./orchestrator.js");
+    expect(orchestratorRules({ opsRef: "x", surface: "wolfd" })).toMatch(/full `work-<domain>-<id>`/);
+  });
+});

@@ -769,7 +769,7 @@ export default function createTasksExtension(
 
 Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
-Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
+Domains: ${domainList}\n\nAlways write a work item as its full \`work-<domain>-<id>\` id (e.g. \`work-wolfpack-cEg92qS\`), never a bare short id.${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context

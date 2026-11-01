@@ -35,6 +35,7 @@ import {
 } from "streamdown";
 import { mdComponents } from "@/components/md-blocks";
 import { transformMathDelimiters } from "@/src/core";
+import { linkifyWorkIds } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: LhViewMessage["role"];
@@ -362,7 +363,7 @@ export const MessageResponse = memo(
     // legacy spans are left for a later render when their closer arrives.
     const content =
       typeof children === "string"
-        ? transformMathDelimiters(children)
+        ? linkifyWorkIds(transformMathDelimiters(children))
         : children;
 
     return (

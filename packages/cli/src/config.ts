@@ -32,7 +32,7 @@ export interface CliConfig {
    * Root of the host-first wolves tree: <root>/<host>/<wolf>/.
    *   <root>/local/<wolf>     — wolves running on this machine (authoritative)
    *   <root>/<vpshost>/<wolf> — read-only backup mirror of a VPS wolf's den
-   *   <root>/knowledge/base   — shared KB, Syncthing-mirrored (Dewey writes, wolves read)
+   *   <root>/knowledge/base   — legacy KB copy, now a frozen archive (the hub link replaces the Syncthing mirror)
    *   <root>/librarian        — librarian-ops lanes (inbox/kb-feed/receipts/rejected)
    *   <root>/_archive         — retired trees pending migration
    */
@@ -60,8 +60,8 @@ export interface CliConfig {
   remote?: RemoteLayout;
   /**
    * Override for the shared KB root that wolves read (KB_BASE). Default
-   * <wolvesRoot>/knowledge/base (the Syncthing copy); set it to point wolves at a
-   * hub mirror in base layout. `WOLFPACK_KB_BASE` takes precedence over this.
+   * the hub mirror (~/.wolfpack/workerd/kb-mirror) when it exists, else the frozen
+   * legacy <wolvesRoot>/knowledge/base. `KB_BASE` / `WOLFPACK_KB_BASE` take precedence.
    */
   kbBase?: string;
   /** Extra directories searched for helper binaries (tailscale, …) and put on launchd PATH. */
@@ -131,9 +131,23 @@ export function localHostDir(config: CliConfig): string {
   return path.join(config.wolvesRoot, LOCAL_HOST);
 }
 
-/** Shared knowledge-base root: <root>/knowledge/base (Dewey writes, wolves read). */
+/** The workerd hub KB mirror dir: WORKERD_KB_MIRROR, else <WORKERD_CONFIG_DIR | ~/.wolfpack/workerd>/kb-mirror. */
+export function hubKbMirrorDir(env: NodeJS.ProcessEnv = process.env): string {
+  const home = (p: string) => (p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p);
+  if (env.WORKERD_KB_MIRROR && path.isAbsolute(home(env.WORKERD_KB_MIRROR))) return home(env.WORKERD_KB_MIRROR);
+  return path.join(home(env.WORKERD_CONFIG_DIR || path.join(os.homedir(), ".wolfpack", "workerd")), "kb-mirror");
+}
+
+/**
+ * READER KB root. Order: explicit (WOLFPACK_KB_BASE, KB_BASE env, config kbBase), then the hub mirror when it
+ * exists, then the legacy <root>/knowledge/base (frozen archive). Writers use kbWriteBaseDir instead.
+ */
 export function kbBaseDir(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string {
-  return explicitKbBase(config, env) ?? path.join(config.wolvesRoot, "knowledge", "base");
+  const explicit = explicitKbBase(config, env);
+  if (explicit) return explicit;
+  const mirror = hubKbMirrorDir(env);
+  if (fs.existsSync(mirror)) return mirror;
+  return path.join(config.wolvesRoot, "knowledge", "base");
 }
 
 /**
@@ -144,9 +158,9 @@ export function kbWriteBaseDir(config: CliConfig): string {
   return path.join(config.wolvesRoot, "knowledge", "base");
 }
 
-/** The KB base the owner set explicitly (`WOLFPACK_KB_BASE` env, then config `kbBase`), if any. */
+/** The KB base the owner set explicitly (`WOLFPACK_KB_BASE`, `KB_BASE` env, then config `kbBase`), if any. */
 export function explicitKbBase(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const v = env.WOLFPACK_KB_BASE?.trim() || config.kbBase?.trim();
+  const v = env.WOLFPACK_KB_BASE?.trim() || env.KB_BASE?.trim() || config.kbBase?.trim();
   return v || undefined;
 }
 

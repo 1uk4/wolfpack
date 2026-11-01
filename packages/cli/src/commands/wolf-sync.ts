@@ -31,7 +31,6 @@ import {
 import { isLibrarian, isLibrarianConfig, writePiSettings } from "../extensions.js";
 import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
-import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { readEnvValue } from "./wolf-models.js";
@@ -129,7 +128,6 @@ export async function wolfSync(
     await syncOne(config, host, hostName, name);
   }
 
-  await runMeshReconcile();
 }
 
 /**
@@ -465,7 +463,6 @@ async function syncAll(config: CliConfig): Promise<void> {
     }
   }
 
-  await runMeshReconcile();
 }
 
 async function reportDrift(
@@ -516,20 +513,6 @@ function resolveModelsOrExit(resolve: () => ModelTable): ModelTable {
   }
   for (const w of table.warnings) console.log(c.yellow(`  ! models: ${w}`));
   return table;
-}
-
-async function runMeshReconcile(): Promise<void> {
-  try {
-    console.log(c.dim("\n  Reconciling mesh..."));
-    const result = await reconcileMesh();
-    if (result.applied === 0) {
-      console.log(c.dim("  Mesh: already in sync."));
-    } else {
-      console.log(c.green(`  \u2713 Mesh: ${result.applied} folder(s) wired.`));
-    }
-  } catch (err) {
-    console.log(c.yellow(`  ! Mesh reconcile skipped: ${err instanceof Error ? err.message : err}`));
-  }
 }
 
 /** Load check, then start check (createWolfHarness against a throwaway home). */

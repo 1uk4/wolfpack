@@ -39,7 +39,7 @@ ${c.bold("COMMANDS")}
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
   launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
-  sync <wolf>                     Deploy wolf to host (bundle + mesh)
+  sync <wolf>                     Deploy wolf to host (bundle)
   list                            Show all wolves grouped by host
   status <wolf>                   Wolf health and service state
   logs <wolf>                     View wolf logs
@@ -66,7 +66,7 @@ ${c.bold("WORKFLOW COMMANDS")}
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
   launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
-  sync <wolf> [--host <h>]        Deploy wolf to host (bundle + mesh)
+  sync <wolf> [--host <h>]        Deploy wolf to host (bundle)
   sync --all                      Sync every wolf on every host
   sync <wolf> --reset-kb-base     Also rewrite a local wolf's KB_BASE from config (default keeps its .env value)
   list [--json]                   Show all wolves grouped by host
@@ -90,7 +90,7 @@ ${c.bold("HOST (advanced)")}
   host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
   host list                       Show registered hosts
   host status [name]              Host health + wolf overview
-  host sync [name]                Wire Syncthing den mirrors (VPS \u2192 ~/wolves)
+  host sync [name]                Wire Syncthing den backups (VPS \u2192 ~/wolves)
   host redeploy [name] [--rotate-key]  Re-provision + redeploy (preserves API key by default)
 
 ${c.bold("DOMAIN (advanced)")}
@@ -108,9 +108,9 @@ ${c.bold("SANDBOX (advanced)")}
                                   Copy a host's work ledger, KB lanes and the wolf's den into a dev root;
                                   run the wolf against it with \`sandbox: true\` in wolf.yaml
 
-${c.bold("MESH (advanced)")}
-  mesh                            Reconcile Syncthing fabric to match config
-  mesh --check                    Report mesh drift without changes
+${c.bold("DEN BACKUP MESH (advanced; den-<host>-<wolf> only)")}
+  mesh                            Reconcile den-backup Syncthing folders
+  mesh --check                    Report den folder drift without changes
 
 ${c.bold("OTHER")}
   restart <wolf> [--host <h>]     Restart wolf service

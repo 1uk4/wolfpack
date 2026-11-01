@@ -3,9 +3,6 @@ import {
   planMesh,
   allocatePorts,
   denFolderId,
-  kbFolderId,
-  opsInboxId,
-  opsReceiptsId,
   isManagedFolderId,
   type PlanInput,
   type DeviceRegistry,
@@ -22,157 +19,49 @@ const registry: DeviceRegistry = {
 
 const input: PlanInput = {
   registry,
-  domains: ["wolfpack", "personal"],
   wolvesRoot: "/Users/me/wolves",
   wolves: [
-    { id: "DEWEY", name: "dewey", host: "host-a", role: "librarian", domains: [] },
-    { id: "HAL", name: "hal", host: "host-a", role: "wolf", domains: ["wolfpack", "personal"] },
-    { id: "WORK", name: "work", host: "host-a", role: "wolf", domains: ["wolfpack"] },
-    { id: "LOCAL1", name: "luk4", host: "local", role: "wolf", domains: ["wolfpack"] },
+    { id: "DEWEY", name: "dewey", host: "host-a", role: "librarian" },
+    { id: "HAL", name: "hal", host: "host-a", role: "wolf" },
+    { id: "WORK", name: "work", host: "host-a", role: "wolf" },
+    { id: "LOCAL1", name: "luk4", host: "local", role: "wolf" },
   ],
 };
 
 const plan = planMesh(input);
 const byKey = (k: string) => plan.find((p) => p.key === k)!;
 
-describe("planMesh — star topology", () => {
+describe("planMesh - den backups only", () => {
   it("local wolves are not their own Syncthing devices", () => {
     expect(plan.find((p) => p.key === "LOCAL1")).toBeUndefined();
   });
 
-  it("each wolf peers only with librarian + hub (star, not mesh)", () => {
-    const hal = byKey("HAL");
-    const peers = hal.peers.map((p) => p.key).sort();
-    expect(peers).toEqual(["DEWEY", "hub"]);
-    // HAL never peers with WORK
-    expect(peers).not.toContain("WORK");
+  it("each wolf peers only with the hub", () => {
+    expect(byKey("HAL").peers.map((p) => p.key)).toEqual(["hub"]);
   });
 
-  it("librarian owns kb-<domain> sendonly, listing all receivers", () => {
-    const dewey = byKey("DEWEY");
-    const kbWolfpack = dewey.folders.find((f) => f.id === kbFolderId("wolfpack"))!;
-    expect(kbWolfpack.type).toBe("sendonly");
-    // receivers of wolfpack: hub, HAL, WORK (+ owner)
-    expect([...kbWolfpack.deviceIds].sort()).toEqual(["DEWEY", "HAL", "WORK", "hub"]);
-  });
-
-  it("private domain only reaches subscribers", () => {
-    const dewey = byKey("DEWEY");
-    const kbPersonal = dewey.folders.find((f) => f.id === kbFolderId("personal"))!;
-    // personal: subscribed by HAL only (+ hub + owner); WORK excluded
-    expect([...kbPersonal.deviceIds].sort()).toEqual(["DEWEY", "HAL", "hub"]);
-    const work = byKey("WORK");
-    expect(work.folders.find((f) => f.id === kbFolderId("personal"))).toBeUndefined();
-  });
-
-  it("subscriber folders are receiveonly and know only the owner", () => {
-    const hal = byKey("HAL");
-    const kbWolfpack = hal.folders.find((f) => f.id === kbFolderId("wolfpack"))!;
-    expect(kbWolfpack.type).toBe("receiveonly");
-    expect([...kbWolfpack.deviceIds].sort()).toEqual(["DEWEY", "HAL"]);
-  });
-
-  it("hub receives every domain (access + backup)", () => {
-    const hub = byKey("hub");
-    expect(hub.folders.find((f) => f.id === kbFolderId("wolfpack"))?.type).toBe("receiveonly");
-    expect(hub.folders.find((f) => f.id === kbFolderId("personal"))?.type).toBe("receiveonly");
-  });
-
-  it("den backup: wolf sendonly → hub receiveonly", () => {
-    const hal = byKey("HAL");
-    const den = hal.folders.find((f) => f.id === denFolderId("host-a", "HAL"))!;
+  it("den backup: wolf sendonly -> hub receiveonly", () => {
+    const den = byKey("HAL").folders.find((f) => f.id === denFolderId("host-a", "HAL"))!;
     expect(den.type).toBe("sendonly");
     expect(den.path).toBe("/home/wolf-HAL/den");
-
-    const hub = byKey("hub");
-    const hubDen = hub.folders.find((f) => f.id === denFolderId("host-a", "HAL"))!;
+    const hubDen = byKey("hub").folders.find((f) => f.id === "den-host-a-HAL")!;
     expect(hubDen.type).toBe("receiveonly");
     expect(hubDen.path).toBe("/Users/me/wolves/host-a/hal/den");
   });
 
-  it("librarian does not back up a den it doesn't own, and isn't a KB receiver", () => {
-    const dewey = byKey("DEWEY");
-    // dewey has its own den sendonly
-    expect(dewey.folders.find((f) => f.id === denFolderId("host-a", "DEWEY"))?.type).toBe("sendonly");
-    // dewey never receives kb (it's the source)
-    expect(dewey.folders.every((f) => !f.id.startsWith("kb-") || f.type === "sendonly")).toBe(true);
-  });
-});
-
-describe("librarian-ops lanes (star)", () => {
-  it("remote wolf: inbox sendonly \u2192 Dewey, receipts receiveonly \u2190 Dewey", () => {
-    const hal = byKey("HAL");
-    const inbox = hal.folders.find((f) => f.id === opsInboxId("hal"))!;
-    expect(inbox.type).toBe("sendonly");
-    expect(inbox.path).toBe("/home/wolf-HAL/librarian/inbox/hal");
-    expect([...inbox.deviceIds].sort()).toEqual(["DEWEY", "HAL"]);
-    const receipts = hal.folders.find((f) => f.id === opsReceiptsId("hal"))!;
-    expect(receipts.type).toBe("receiveonly");
+  it("never plans kb-* or ops-* folders, on any instance", () => {
+    const ids = plan.flatMap((p) => p.folders.map((f) => f.id));
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.every((id) => id.startsWith("den-"))).toBe(true);
+    expect(ids.some((id) => id.startsWith("kb-") || id.startsWith("ops-"))).toBe(false);
   });
 
-  it("Dewey receives every wolf's inbox and sends every wolf's receipts", () => {
-    const dewey = byKey("DEWEY");
-    const inbox = dewey.folders.find((f) => f.id === opsInboxId("hal"))!;
-    expect(inbox.type).toBe("receiveonly");
-    expect(inbox.path).toBe("/home/wolf-DEWEY/librarian/inbox/hal");
-    const receipts = dewey.folders.find((f) => f.id === opsReceiptsId("hal"))!;
-    expect(receipts.type).toBe("sendonly");
-  });
-
-  it("local wolf's ops lane rides the hub device, not its own", () => {
-    const hub = byKey("hub");
-    const inbox = hub.folders.find((f) => f.id === opsInboxId("luk4"))!;
-    expect(inbox.type).toBe("sendonly");
-    expect(inbox.path).toBe("/Users/me/wolves/librarian/inbox/luk4");
-    expect([...inbox.deviceIds].sort()).toEqual(["DEWEY", "hub"]);
-  });
-
-  it("Dewey has no ops lane to itself", () => {
-    const dewey = byKey("DEWEY");
-    expect(dewey.folders.find((f) => f.id === opsInboxId("dewey"))).toBeUndefined();
-  });
-});
-
-describe("local librarian (librarian == hub)", () => {
-  // Librarian runs on the hub machine: no separate device, hub is the KB source.
-  const localLibReg: DeviceRegistry = {
-    devices: {
-      hub: { role: "hub", host: "local", deviceId: "HUB", addr: "tcp://100.64.0.1:22000" },
-      HAL: { role: "wolf", host: "host-a", deviceId: "HAL", tcpPort: 22001, guiPort: 8385, addr: "tcp://100.64.0.2:22001" },
-    },
-  };
-  const localLibPlan = planMesh({
-    registry: localLibReg,
-    domains: ["wolfpack"],
-    wolvesRoot: "/Users/me/wolves",
-    wolves: [
-      { id: "LUK4", name: "luk4", host: "local", role: "librarian", domains: [] },
-      { id: "HAL", name: "hal", host: "host-a", role: "wolf", domains: ["wolfpack"] },
-    ],
-  });
-  const k = (key: string) => localLibPlan.find((p) => p.key === key);
-
-  it("hub is the KB source (sendonly), not a receiver", () => {
-    const hub = k("hub")!;
-    const kb = hub.folders.find((f) => f.id === kbFolderId("wolfpack"))!;
-    expect(kb.type).toBe("sendonly");
-    expect(kb.path).toBe("/Users/me/wolves/knowledge/base/domains/wolfpack");
-    expect([...kb.deviceIds].sort()).toEqual(["HAL", "hub"]);
-  });
-
-  it("remote subscriber receives from the hub", () => {
-    const hal = k("HAL")!;
-    const kb = hal.folders.find((f) => f.id === kbFolderId("wolfpack"))!;
-    expect(kb.type).toBe("receiveonly");
-    expect([...kb.deviceIds].sort()).toEqual(["HAL", "hub"]);
-  });
-
-  it("ops lanes connect remote wolf to the hub (the local librarian)", () => {
-    const hub = k("hub")!;
-    const inbox = hub.folders.find((f) => f.id === opsInboxId("hal"))!;
-    expect(inbox.type).toBe("receiveonly");
-    expect(inbox.path).toBe("/Users/me/wolves/librarian/inbox/hal");
-    expect([...inbox.deviceIds].sort()).toEqual(["HAL", "hub"]);
+  it("keeps one den id per provisioned remote wolf", () => {
+    expect(byKey("hub").folders.map((f) => f.id).sort()).toEqual([
+      "den-host-a-DEWEY",
+      "den-host-a-HAL",
+      "den-host-a-WORK",
+    ]);
   });
 });
 
@@ -185,12 +74,12 @@ describe("allocatePorts", () => {
   });
 });
 
-describe("isManagedFolderId", () => {
-  it("matches kb- and den- ids only", () => {
-    expect(isManagedFolderId("kb-wolfpack")).toBe(true);
+describe("isManagedFolderId (prune guard)", () => {
+  it("matches den- ids only; kb-/ops- are never pruned", () => {
     expect(isManagedFolderId("den-host-a-HAL")).toBe(true);
-    expect(isManagedFolderId("ops-inbox-hal")).toBe(true);
-    expect(isManagedFolderId("ops-receipts-hal")).toBe(true);
+    expect(isManagedFolderId("kb-wolfpack")).toBe(false);
+    expect(isManagedFolderId("ops-inbox-hal")).toBe(false);
+    expect(isManagedFolderId("ops-receipts-hal")).toBe(false);
     expect(isManagedFolderId("my-personal-photos")).toBe(false);
   });
 });

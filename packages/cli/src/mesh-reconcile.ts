@@ -7,8 +7,9 @@
  * Syncthing is driven by a bash script over SSH (reads its API key on-box, curls
  * 127.0.0.1:<guiPort>) — the same key-stays-on-box pattern as den-sync.
  *
- * ADDITIVE for now: we PUT desired devices/folders. Pruning (revocation) is
- * reported by checkMesh() but applied manually until auto-prune lands.
+ * DEN BACKUP ONLY (removed in feature H3GuSmC): only den-<host>-<wolf> folders are
+ * planned, applied and reported as stale. kb-* / ops-* ids are never touched.
+ * ADDITIVE: we PUT desired devices/folders; stale den folders are reported only.
  */
 
 import fs from "node:fs";
@@ -16,14 +17,12 @@ import os from "node:os";
 import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { loadConfig, getHost, localHostDir, type CliConfig, type HostEntry } from "./config.js";
-import { loadRegistry, listDomainNames } from "./domains.js";
 import {
   loadDevices,
   saveDevices,
   allocatePorts,
   planMesh,
   isManagedFolderId,
-  kbFolderId,
   type DeviceRegistry,
   type MeshDevice,
   type MeshWolf,
@@ -59,11 +58,11 @@ function gatherLocalWolves(config: CliConfig): MeshWolf[] {
     if (!fs.existsSync(p)) continue;
     try {
       const w = yamlParse(fs.readFileSync(p, "utf8")) as {
-        id: string; name: string; domains?: string[]; extensions?: string[];
+        id: string; name: string; extensions?: string[];
       };
       out.push({
         id: w.id, name: w.name, host: "local",
-        role: roleOf(w.extensions), domains: w.domains ?? [],
+        role: roleOf(w.extensions),
       });
     } catch { /* skip */ }
   }
@@ -78,16 +77,14 @@ async function gatherRemoteWolves(hostName: string, host: HostEntry): Promise<Me
   for (const w of wolves) {
     try {
       const s = (await client.wolfStatus(w.id)) as {
-        domains?: string[];
         bundle?: { extensions?: Array<{ key: string }> };
       };
       out.push({
         id: w.id, name: w.name, host: hostName,
         role: roleOf(s.bundle?.extensions?.map((e) => e.key)),
-        domains: s.domains ?? [],
       });
     } catch {
-      out.push({ id: w.id, name: w.name, host: hostName, role: "wolf", domains: [] });
+      out.push({ id: w.id, name: w.name, host: hostName, role: "wolf" });
     }
   }
   return out;
@@ -133,11 +130,6 @@ async function applyHub(mac: SyncthingRest, plan: InstancePlan): Promise<void> {
   for (const f of plan.folders) {
     const devIds = resolveFolderDeviceIds(f, plan, "hub");
     fs.mkdirSync(f.path, { recursive: true });
-    // Syncthing refuses to scan/advertise a folder whose `.stfolder` marker is
-    // missing ("folder marker missing" \u2192 0 files offered). It only auto-creates
-    // the marker for an empty, self-owned dir \u2014 so a domain dir that was already
-    // populated (e.g. by Dewey's sweep) stays stuck forever. Create it ourselves.
-    fs.mkdirSync(path.join(f.path, ".stfolder"), { recursive: true });
     await mac.putFolder(buildFolder(f.id, f.path, f.type, devIds));
   }
 }
@@ -167,12 +159,9 @@ function applyRemote(
       .map((id) => `{"deviceID":"${id}"}`)
       .join(",");
     return (
-      // Create the path AND the `.stfolder` marker, then normalize ownership to
-      // the wolf user. The sweep runs as root and can pre-create a domain dir
-      // (root-owned, no marker) before mesh runs; without this the wolf's
-      // Syncthing errors "folder marker missing" and advertises 0 files.
-      `mkdir -p "${f.path}/.stfolder"\n` +
-      `chown -R wolf-${instanceKey}:wolf-${instanceKey} "${f.path}"\n` +
+      // Den dirs are wolf-owned; Syncthing creates its own marker on an empty dir.
+      `mkdir -p "${f.path}"\n` +
+      `chown wolf-${instanceKey}:wolf-${instanceKey} "${f.path}"\n` +
       putJson(
         `folders/${f.id}`,
         `{"id":"${f.id}","label":"${f.id}","path":"${f.path}","type":"${f.type}","fsWatcherEnabled":true,"rescanIntervalS":3600,"devices":[${devIds}]}`,
@@ -325,27 +314,14 @@ export interface MeshPreview {
 export async function previewMesh(): Promise<MeshPreview> {
   const config = loadConfig();
   const reg = loadDevices();
-  const domains = listDomainNames(loadRegistry());
   const wolves = await gatherWolves(config);
   const remote = wolves.filter((w) => w.host !== "local");
-  const librarian = wolves.find((w) => w.role === "librarian");
-
   const toProvision = remote
     .filter((w) => !reg.devices[w.id]?.deviceId)
     .map((w) => `${w.name} (${w.host})`);
 
   const shares: string[] = [];
   for (const w of remote) shares.push(`den-${w.host}-${w.id}: ${w.name} → hub`);
-  if (librarian) {
-    for (const d of domains) {
-      const subs = remote.filter((w) => w.id !== librarian.id && w.domains.includes(d)).map((w) => w.name);
-      shares.push(`kb-${d}: ${librarian.name} → [hub${subs.length ? ", " + subs.join(", ") : ""}]`);
-    }
-    for (const w of wolves) {
-      if (w.id === librarian.id) continue;
-      shares.push(`ops: ${w.name} ↔ ${librarian.name} (inbox + receipts)`);
-    }
-  }
   return { toProvision, shares, reachableHosts: Object.keys(config.hosts).length > 0 };
 }
 
@@ -357,7 +333,6 @@ export interface ReconcileResult {
 export async function reconcileMesh(): Promise<ReconcileResult> {
   const config = loadConfig();
   const reg = loadDevices();
-  const domains = listDomainNames(loadRegistry());
   const wolves = await gatherWolves(config);
 
   const mac = await ensureHubDevice(reg);
@@ -383,7 +358,7 @@ export async function reconcileMesh(): Promise<ReconcileResult> {
   }
   saveDevices(reg);
 
-  const plans = planMesh({ registry: reg, domains, wolves, wolvesRoot: config.wolvesRoot });
+  const plans = planMesh({ registry: reg, wolves, wolvesRoot: config.wolvesRoot });
 
   const skipped: string[] = [];
   let applied = 0;
@@ -418,9 +393,8 @@ export interface MeshDrift {
 export async function checkMesh(): Promise<MeshDrift[]> {
   const config = loadConfig();
   const reg = loadDevices();
-  const domains = listDomainNames(loadRegistry());
   const wolves = await gatherWolves(config);
-  const plans = planMesh({ registry: reg, domains, wolves, wolvesRoot: config.wolvesRoot });
+  const plans = planMesh({ registry: reg, wolves, wolvesRoot: config.wolvesRoot });
 
   const drift: MeshDrift[] = [];
 
@@ -476,6 +450,3 @@ curl -fsS -H "X-API-Key: $API" http://127.0.0.1:${guiPort}/rest/config/folders |
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
-
-// avoid unused import error for kbFolderId (kept for callers/readability)
-void kbFolderId;

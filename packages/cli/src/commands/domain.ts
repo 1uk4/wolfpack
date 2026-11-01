@@ -13,8 +13,7 @@
  * `wolfpack status` and pickable at `wolfpack add wolf`.
  *
  * This arm is the ONLY writer of ~/.wolfpack/domains.yaml. Provisioning the KB
- * base folders + Syncthing mirrors happens on deploy/sync (ensureKbMirror),
- * never by hand — so `domain add` records intent and scaffolds the hub copy;
+ * base folders happens on deploy/sync (ensureKbMirror), never by hand — so `domain add` records intent and scaffolds the hub copy;
  * `wolfpack sync` / redeploy makes it live on Dewey + subscribers.
  */
 
@@ -225,8 +224,8 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   }
 
   // Scaffold the hub-side KB base folder so the domain is immediately visible
-  // to `domain list` and ready to mirror. Authoritative provisioning (Dewey
-  // host + Syncthing folder) happens on deploy/sync.
+  // to `domain list`. Authoritative provisioning (Dewey host) happens on
+  // deploy/sync; the hub link distributes the KB.
   scaffoldDomainFolder(name, entry);
 
   console.log(c.green(`✓ Declared domain "${name}"`));
@@ -250,7 +249,7 @@ async function pushRegistry(): Promise<void> {
 /** Post-declare hook: offer the picker unless non-interactive. */
 async function offerSubscription(domain: string, opts: DomainOpts): Promise<void> {
   if (opts.yes || !process.stdin.isTTY) {
-    console.log(c.yellow(`  Next: wolfpack domain subscribe <wolf> ${domain}, then wolfpack mesh.`));
+    console.log(c.yellow(`  Next: wolfpack domain subscribe <wolf> ${domain}.`));
     return;
   }
   await manageDomainSubscribers(domain);
@@ -290,7 +289,7 @@ export async function manageDomainSubscribers(domain: string): Promise<void> {
   for (const w of toAdd) await applySubscription(w, domain, true);
   for (const w of toRemove) await applySubscription(w, domain, false);
   if (toAdd.length || toRemove.length) {
-    console.log(c.yellow("  Run `wolfpack mesh` to wire the Syncthing mirror."));
+    console.log(c.yellow("  Deploy/sync to apply the subscription change."));
   } else {
     console.log(c.dim("  No subscription changes."));
   }
@@ -370,10 +369,6 @@ function scaffoldDomainFolder(name: string, entry: DomainEntry): void {
   const domainDir = path.join(base, "domains", name);
   assertNotHubMirror(domainDir);
   fs.mkdirSync(path.join(domainDir, "entries"), { recursive: true });
-  // Syncthing marker: without `.stfolder` the mirror errors "folder marker
-  // missing" and syncs nothing. Scaffold it now so the domain is sync-ready the
-  // moment `wolfpack mesh` wires the folder (mesh also ensures this, belt-and-braces).
-  fs.mkdirSync(path.join(domainDir, ".stfolder"), { recursive: true });
   const metaPath = path.join(domainDir, "meta.yaml");
   if (!fs.existsSync(metaPath)) fs.writeFileSync(metaPath, renderDomainMeta(name, entry));
   const indexPath = path.join(domainDir, "INDEX.md");
@@ -473,7 +468,7 @@ async function domainRm(name: string | undefined, opts: DomainOpts): Promise<voi
     /* hub not present */
   }
   console.log(c.green(`✓ Removed domain declaration "${name}"`));
-  console.log(c.yellow("  Deploy/sync to drop the Syncthing mirror from subscribers."));
+  console.log(c.yellow("  Deploy/sync to apply the change to subscribers."));
 }
 
 async function domainSubscribe(

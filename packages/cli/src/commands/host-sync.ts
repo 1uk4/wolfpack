@@ -1,6 +1,7 @@
 /**
  * wolfpack host sync [host]
  *
+ * Den backup only (removed in feature H3GuSmC). Folder ids are den-<host>-<wolf>.
  * Wire up (or re-apply) Syncthing den mirrors for every wolf on a host:
  *   VPS <wolf home>/den  (send-only, authoritative)
  *     → Mac ~/wolves/<host>/<wolf>/den  (receive-only backup)
@@ -18,6 +19,7 @@ import { c } from "../render.js";
 import { AgentClient } from "../agent-client.js";
 import { scpToHost, execSsh } from "../ssh-helper.js";
 import { remotePaths } from "../paths.js";
+import { denFolderId } from "../mesh.js";
 import {
   readLocalSyncthing,
   localTailscaleIp,
@@ -79,7 +81,8 @@ export async function ensureDenMirror(
   const macIp = localTailscaleIp();
   const macAddr = macIp ? `tcp://${macIp}:22000` : "dynamic";
 
-  const folderId = `${hostName}-${wolf.id}-den`;
+  // Same scheme as mesh.ts denFolderId: matches the live den-<host>-<wolf> folders.
+  const folderId = denFolderId(hostName, wolf.id);
   const vpsDen = remotePaths().den(wolf.id);
   const macDen = path.join(config.wolvesRoot, hostName, wolf.name, "den");
 

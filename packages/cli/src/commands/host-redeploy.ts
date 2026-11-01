@@ -2,7 +2,7 @@
  * wolfpack host redeploy [name] [--rotate-key]
  *
  * Re-provision an already-registered host: re-runs prerequisites (idempotent)
- * and redeploys the agent, picking up deployer changes (e.g. the Syncthing
+ * and redeploys the agent, picking up deployer changes (e.g. the agent
  * service + env additions).
  *
  * **Default: PRESERVE the agent API key** so every wolf's WORK_TOKEN keeps
@@ -84,6 +84,6 @@ export async function hostRedeploy(name?: string, opts: { rotateKey?: boolean } 
   }
   console.log();
   console.log(c.bold("Next:"));
-  console.log(`  ${c.cyan(`wolfpack host status ${hostName}`)}   Verify Syncthing now reports folders`);
-  console.log(`  ${c.cyan(`wolfpack host sync ${hostName}`)}     Re-apply den mirrors (reconcile)`);
+  console.log(`  ${c.cyan(`wolfpack host status ${hostName}`)}   Verify the host is healthy`);
+  console.log(`  ${c.cyan(`wolfpack host sync ${hostName}`)}     Re-apply den backup mirrors`);
 }

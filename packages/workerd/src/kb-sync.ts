@@ -25,8 +25,8 @@
  * REMOVAL: a domain that leaves the subscribed set stops syncing; its mirror is KEPT and marked `active:false` (stale, ignore it).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync, lstatSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, existsSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync, lstatSync, statSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { KB_SYNC_PATH, KbChangesResponseSchema, KbManifestDiffResponseSchema, type KbSyncFile } from "@wolfpack/protocol";
 
 const DOMAIN = /^[a-z0-9][a-z0-9-]*$/;
@@ -43,6 +43,12 @@ export interface KbSyncOptions {
   mirrorDir: string;
   /** Where domain folders live: "flat" = `<mirrorDir>/<d>/` (default), "base" = `<mirrorDir>/domains/<d>/` (KB_BASE shape). `.sync/` stays at `<mirrorDir>/.sync/` either way. */
   layout?: KbMirrorLayout;
+  /**
+   * Opt-in shared read (env WORKERD_KB_MIRROR_GROUP_READ=1): mirror CONTENT files are written 0640 and the directories holding them 0750
+   * (the parent's setgid bit is kept, so new files stay in the mirror dir's group), whatever the process umask. `.sync/` (state) is never
+   * widened, and neither is the mirror root itself (the operator creates it). Off (default): modes are whatever the umask gives, as before.
+   */
+  groupRead?: boolean;
   log?: (m: string) => void;
   fetchImpl?: typeof fetch;
   baseMs?: number;
@@ -144,7 +150,7 @@ export class KbSync {
     return undefined;
   }
   private save(d: string, s: DomState): void {
-    this.writeAtomic(this.stateFile(d), JSON.stringify({ v: 1, ...s }));
+    this.writeAtomic(this.stateFile(d), JSON.stringify({ v: 1, ...s }), false);
   }
 
   /** Revisions on disk, for the link hello. */
@@ -180,6 +186,7 @@ export class KbSync {
 
   start(): void {
     this.stopped = false;
+    if (this.o.groupRead) this.fixModes();
     if (this.ac.signal.aborted) this.ac = new AbortController();
     this.refresh();
     if ((this.o.pollMs ?? 300_000) > 0) {
@@ -189,6 +196,35 @@ export class KbSync {
       }, this.o.pollMs ?? 300_000);
       this.poll.unref();
     }
+  }
+  /** groupRead only: once at start, bring existing mirror content (not `.sync/`, not the root) to 0640 / 0750. Best effort; symlinks are skipped. */
+  private fixModes(): void {
+    const walk = (dir: string, top: boolean): void => {
+      let ents;
+      try {
+        ents = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of ents) {
+        if (top && e.name === ".sync") continue;
+        const p = join(dir, e.name);
+        try {
+          if (e.isDirectory()) {
+            this.shareDir(p, dir);
+            walk(p, false);
+          } else if (e.isFile() && !e.name.endsWith(".tmp")) chmodSync(p, 0o640);
+        } catch (err) {
+          this.log(`could not fix modes of ${p}: ${(err as Error).message}`);
+        }
+      }
+    };
+    walk(this.o.mirrorDir, true);
+  }
+  /** chmod a directory to 0750, keeping setgid when its parent has it. */
+  private shareDir(dir: string, parent: string): void {
+    if (lstatSync(dir).isSymbolicLink()) return;
+    chmodSync(dir, 0o750 | (statSync(parent).mode & 0o2000));
   }
   stop(): void {
     this.stopped = true;
@@ -506,14 +542,31 @@ export class KbSync {
     }
   }
 
-  private writeAtomic(file: string, content: string): void {
+  private writeAtomic(file: string, content: string, shared = true): void {
     const dir = dirname(file);
+    const gr = !!this.o.groupRead && shared;
     mkdirSync(dir, { recursive: true });
+    if (gr) {
+      // Every directory between the mirror root (exclusive) and the file, parent first, so the setgid bit propagates.
+      const parts = relative(this.o.mirrorDir, dir).split(sep).filter(Boolean);
+      let cur = this.o.mirrorDir;
+      for (const seg of parts) {
+        if (seg === "..") break;
+        const next = join(cur, seg);
+        try {
+          this.shareDir(next, cur);
+        } catch {
+          /* best effort: the file write below reports real problems */
+        }
+        cur = next;
+      }
+    }
     const tmp = join(dir, `.${randomBytes(6).toString("hex")}.tmp`);
     try {
       const fd = openSync(tmp, "w", 0o644);
       try {
         writeSync(fd, content);
+        if (gr) fchmodSync(fd, 0o640);
         fsyncSync(fd);
       } finally {
         closeSync(fd);

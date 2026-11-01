@@ -35,8 +35,10 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   outboxDir?: string;
   /** Test seam: resend overdue contribution acks after this long, ms. */
   ackTimeoutMs?: number;
-  /** Where the hub-synced KB mirror lives (Syncthing no longer carries the KB, only den backups). Default `<configDir>/kb-mirror`. */
+  /** Where the hub-synced KB mirror lives (Syncthing no longer carries the KB, only den backups). Default env WORKERD_KB_MIRROR_DIR, else `<configDir>/kb-mirror`. */
   kbMirrorDir?: string;
+  /** Make mirror content group-readable (files 0640, dirs 0750; hub.json/outbox/.sync stay private). Env WORKERD_KB_MIRROR_GROUP_READ=1. Default off. */
+  kbMirrorGroupRead?: boolean;
   /** Mirror layout: "flat" (default) or "base" (`<mirror>/domains/<d>/`). Env WORKERD_KB_LAYOUT. */
   kbMirrorLayout?: "flat" | "base";
   /** Test seams for the KB sync. */
@@ -139,7 +141,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     kbSync = new KbSync({
       hubUrl: hubCfg.hubUrl,
       token: hubCfg.token,
-      mirrorDir: opts.kbMirrorDir ?? join(opts.configDir ?? workerdConfigDir(), "kb-mirror"),
+      mirrorDir: opts.kbMirrorDir ?? (process.env.WORKERD_KB_MIRROR_DIR?.trim() || join(opts.configDir ?? workerdConfigDir(), "kb-mirror")),
+      groupRead: opts.kbMirrorGroupRead ?? /^(1|true|yes|on)$/i.test((process.env.WORKERD_KB_MIRROR_GROUP_READ ?? "").trim()),
       layout: kbLayout,
       log,
       ...opts.kbSync,

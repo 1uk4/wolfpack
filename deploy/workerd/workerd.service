@@ -24,7 +24,7 @@ TimeoutStopSec=20
 UMask=0077
 
 # State: /var/lib/workerd (hub.json, outbox, ops), private 0700 / files 0600 under UMask=0077.
-# The hub KB mirror is NOT in there: it is /var/lib/workerd-kb (WORKERD_KB_MIRROR_DIR), workerd:wolfpack-kb 2750, created by setup.sh, so Hal can read it
+# The hub KB mirror is NOT in there: it is /var/lib/workerd-kb (WORKERD_KB_MIRROR_DIR), workerd:wolfpack-kb 0750 (no setgid: RestrictSUIDSGID=yes; workerd chowns files to the dir's group itself), created by setup.sh, so Hal can read it
 # via the group. It is a ReadWritePaths entry rather than a second StateDirectory= because StateDirectoryMode= is one value for every
 # StateDirectory entry (it would force 0700 on the shared dir, or loosen hub.json's); with ReadWritePaths the dir keeps the owner/mode setup.sh gave it.
 StateDirectory=workerd

@@ -128,8 +128,9 @@ cmd_setup() {
 
   log "directories"
   run install -d -o "$WU" -g "$WG" -m 0700 "$DATA_DIR" "$DATA_DIR/ops"
-  # setgid (2750) so files workerd creates inside keep group $KB_GROUP; workerd's own state above stays 0700.
-  run install -d -o "$WU" -g "$KB_GROUP" -m 2750 "$KB_DIR"
+  # Plain 0750, NO setgid: the unit has RestrictSUIDSGID=yes, so workerd cannot set S_ISGID. It instead chowns what it writes to this dir's group
+  # (WORKERD_KB_MIRROR_GROUP_READ=1). workerd's own state above stays 0700.
+  run install -d -o "$WU" -g "$KB_GROUP" -m 0750 "$KB_DIR"
   run install -d -o root -g root -m 0755 "$OPT" "$OPT/releases"
   # /etc/wolfpack is shared with hubd: create only if missing, never reset its owner or mode.
   [[ -d $ENV_DIR ]] || run install -d -o root -g root -m 0755 "$ENV_DIR"
@@ -212,7 +213,7 @@ cmd_uninstall() {
     done < <(systemctl cat "$HAL_UNIT" 2>/dev/null || true)
     for t in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /etc/wolfpack /var/wolfpack /home/*/.env /home/*/agent/.env ${targets[@]+"${targets[@]}"}; do
       [[ -e $t ]] || continue
-      refs+="$(grep -rlsF -e "$DATA_DIR/kb-mirror" -e "$KB_DIR" "$t" 2>/dev/null | grep -vx "$ENV_FILE" || true)"$'\n'
+      refs+="$(grep -rlsF -e "$DATA_DIR/kb-mirror" -e "$KB_DIR" "$t" 2>/dev/null | grep -vx -e "$ENV_FILE" -e "$UNIT" || true)"$'\n'
     done
     refs="$(printf '%s' "$refs" | sed '/^$/d' | sort -u)"
     if [[ -n $refs ]]; then

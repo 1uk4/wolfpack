@@ -10,7 +10,7 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 | env | `/etc/wolfpack/workerd.env`, root:root 600 (link-only, announce `hal`, `WORKERD_FEED=0`, `WORKERD_KB_LAYOUT=base`, `WORKERD_CONFIG_DIR=/var/lib/workerd`, `WORKERD_KB_MIRROR_DIR=/var/lib/workerd-kb`, `WORKERD_KB_MIRROR_GROUP_READ=1`) |
 | code | `/opt/wolfpack-workerd/{releases,current,previous}`, `/usr/bin/node` |
 | data | `/var/lib/workerd` (0700, files 0600): `hub.json` (from `workerd pair`), `outbox/`, `ops/` |
-| KB mirror | `/var/lib/workerd-kb` (`workerd:wolfpack-kb`, 2750; base layout `domains/<d>/…`; files 0640, dirs 0750; `.sync/` state stays 0600/0700). Group `wolfpack-kb` = `workerd` + `wolf-ETAy7b` |
+| KB mirror | `/var/lib/workerd-kb` (`workerd:wolfpack-kb`, 0750, no setgid; base layout `domains/<d>/…`; files 0640, dirs 0750; `.sync/` state stays 0600/0700). Group `wolfpack-kb` = `workerd` + `wolf-ETAy7b` |
 | HTTP | `127.0.0.1:7142` (cannot be disabled; never 3141 agent, 3150 hubd, 7141 Mac workerd) |
 | feed | off: Hal writes contributions straight into Dewey's inbox |
 
@@ -77,36 +77,50 @@ ss -tnpe state established '( dport = :3150 )' | grep -E "users:\(\(\"node\"" | 
 ss -ltnp | grep ':7142'                                                                         # 127.0.0.1 only
 ps -o user= -p "$(systemctl show -p MainPID --value workerd)"                                   # workerd
 pgrep -u workerd -a . | wc -l                                                                   # 1: no wolfd children
-ls /var/lib/workerd-kb/domains; du -sh /var/lib/workerd-kb                        # fills in (personal, snapjack, wolfpack)
+ls /var/lib/workerd-kb/domains; du -sh /var/lib/workerd-kb   # fills in (personal, snapjack, wolfpack)
 ```
 Hal unchanged: `systemctl is-active wolf-ETAy7b` as recorded in B; exactly one Hal process (`pgrep -u wolf-ETAy7b -af agent | wc -l`, same as before); `stat -c '%U:%G %a' /etc/wolfpack/workerd.env /var/lib/workerd/hub.json` is `root:root 600` and `workerd:workerd 600`. (A seccomp journal check proves little here: `SystemCallErrorNumber=EPERM` makes filtered calls fail quietly, so rely on the sandbox smoke test in E.)
 
 ## Hal reads the hub mirror (sfo-01, root; owner-approved, after G)
-Why a separate dir: workerd's state dir stays `0700`/`0600` (it holds `hub.json` with the token and the outbox), so the mirror lives in `/var/lib/workerd-kb`. The unit grants it with `ReadWritePaths` (not a second `StateDirectory=`, whose single `StateDirectoryMode=` would force one mode on both dirs). With `WORKERD_KB_MIRROR_GROUP_READ=1` workerd chmods mirror files 0640 and dirs 0750 (keeping the setgid bit) even under `UMask=0077`, and fixes existing files once at start. Hal has no `domains.yaml` today, so nothing filters the domains he sees: he reads exactly the domains the hub grants host sfo-01 (`ls /var/lib/workerd-kb/domains`).
+Why a separate dir: workerd's state dir stays `0700`/`0600` (it holds `hub.json` with the token and the outbox), so the mirror lives in `/var/lib/workerd-kb`. The unit grants it with `ReadWritePaths` (not a second `StateDirectory=`, whose single `StateDirectoryMode=` would force one mode on both dirs). **No setgid bit is used:** the unit has `RestrictSUIDSGID=yes`, so seccomp refuses any chmod that sets `S_ISGID`. Instead, with `WORKERD_KB_MIRROR_GROUP_READ=1` (exactly `1`) workerd chowns every file and dir it writes to the group of `/var/lib/workerd-kb` (allowed: workerd is a member of `wolfpack-kb`, no capability needed) and sets plain `0640` files / `0750` dirs, even under `UMask=0077`. At every start it re-applies this to existing domain content (`domains/<d>/` only; `.sync/`, symlinks and stray entries are left alone). A failure to chown/chmod is logged (`WARNING group-read: ...`) and fails that sync with backoff; it is never silent. workerd refuses to start in this mode if the mirror dir equals, contains or sits inside `/var/lib/workerd` or the outbox, or holds a `hub.json`/`outbox`. Hal has no `domains.yaml` today, so nothing filters the domains he sees: he reads exactly the domains the hub grants host sfo-01 (`ls /var/lib/workerd-kb/domains`).
 ```
-# 1. group and dir (setup.sh install does this too; safe to repeat)
+# 1. group and dir. The dir MUST exist before workerd starts: the unit's ReadWritePaths needs it, else workerd fails with status 226/NAMESPACE.
+#    (./setup.sh setup does this too; safe to repeat)
 getent group wolfpack-kb >/dev/null || groupadd --system wolfpack-kb
 usermod -aG wolfpack-kb workerd
 usermod -aG wolfpack-kb wolf-ETAy7b
-install -d -o workerd -g wolfpack-kb -m 2750 /var/lib/workerd-kb
+install -d -o workerd -g wolfpack-kb -m 0750 /var/lib/workerd-kb
 # 2. env (an existing /etc/wolfpack/workerd.env is kept by setup.sh, so add the lines by hand; never print the file)
 grep -q '^WORKERD_KB_MIRROR_DIR=' /etc/wolfpack/workerd.env || printf 'WORKERD_KB_MIRROR_DIR=/var/lib/workerd-kb\nWORKERD_KB_MIRROR_GROUP_READ=1\n' >> /etc/wolfpack/workerd.env
-# 3. install the new unit (ReadWritePaths) and bundle via setup.sh (E), then restart workerd
+# 3. install the new unit (ReadWritePaths) with setup.sh (E: `setup` writes the unit; `install --bundle` ships a new bundle), then restart workerd
+./setup.sh setup --announce hal --port 7142
 systemctl daemon-reload && systemctl restart workerd
 # 4. wait for sync: every granted domain appears and the revisions settle
-journalctl -u workerd -n 30 --no-pager | grep -E 'hub link: online|kb sync'
+journalctl -u workerd -n 30 --no-pager | grep -E 'hub link: online|kb sync|WARNING group-read'   # no WARNING lines expected
 ls /var/lib/workerd-kb/domains; du -sh /var/lib/workerd-kb
-stat -c '%U:%G %a' /var/lib/workerd-kb /var/lib/workerd-kb/domains/* /var/lib/workerd /var/lib/workerd/hub.json   # workerd:wolfpack-kb 2750 / 750; workerd:workerd 700 / 600
-# 5. verify as Hal (his running process does not have the new group until step 7; sudo -u starts a fresh session that does)
+stat -c '%U:%G %a' /var/lib/workerd-kb /var/lib/workerd-kb/domains/* /var/lib/workerd /var/lib/workerd/hub.json   # workerd:wolfpack-kb 750 for the kb dirs; workerd:workerd 700 / 600
+find /var/lib/workerd-kb -path /var/lib/workerd-kb/.sync -prune -o \( -type f -o -type d \) ! -group wolfpack-kb -print | head      # must print nothing: files AND dirs are group wolfpack-kb
+find /var/lib/workerd-kb -path /var/lib/workerd-kb/.sync -prune -o -perm /7000 -print | head                                         # must print nothing: no setuid/setgid/sticky bits
+# 5. verify as Hal (his running process does not have the new group until step 8; sudo -u starts a fresh session that does)
 sudo -u wolf-ETAy7b ls /var/lib/workerd-kb/domains
 sudo -u wolf-ETAy7b ls /var/lib/workerd-kb/domains/wolfpack/entries | head -3
 sudo -u wolf-ETAy7b cat /var/lib/workerd-kb/domains/wolfpack/INDEX.md | head -3
 sudo -u wolf-ETAy7b ls /var/lib/workerd/hub.json        # must FAIL (permission denied)
-# 6. switch Hal: EITHER set KB_BASE=/var/lib/workerd-kb in Hal's .env (keep the old line as a comment),
+# 6. before the switch: Hal's unit may hide the new path from him. Look for ProtectSystem, InaccessiblePaths, TemporaryFileSystem, ProtectHome, BindPaths.
+systemctl cat wolf-ETAy7b.service | grep -E 'ProtectSystem|InaccessiblePaths|TemporaryFileSystem|ProtectHome|BindReadOnlyPaths|BindPaths|ReadOnlyPaths'
+#    /var/lib is visible under ProtectSystem=strict/full (read-only is fine). If /var/lib, /var or the path is inaccessible or tmpfs'd, add
+#    ReadOnlyPaths=/var/lib/workerd-kb (or BindReadOnlyPaths=) in a drop-in first; do not continue until this is understood.
+# 7. switch Hal: EITHER set KB_BASE=/var/lib/workerd-kb in Hal's .env (keep the old line as a comment),
 #    OR repoint the symlink: ln -sfn /var/lib/workerd-kb/domains /var/wolfpack/kb/base/domains   (record the old target first: readlink /var/wolfpack/kb/base/domains)
-# 7. restart Hal so he picks up the group and the new base
+# 8. restart Hal so he picks up the group and the new base
 systemctl restart wolf-ETAy7b.service && systemctl is-active wolf-ETAy7b
+# 9. verify from Hal's OWN namespace and uid (sudo -u in step 5 does not see his sandbox): both must list the domains
+pid=$(systemctl show -p MainPID --value wolf-ETAy7b); uid=$(id -u wolf-ETAy7b)
+nsenter -t "$pid" -m -S "$uid" -G "$(getent group wolfpack-kb | cut -d: -f3)" ls /var/lib/workerd-kb/domains
+grep Groups /proc/$pid/status                  # includes the wolfpack-kb gid (getent group wolfpack-kb)
 ```
+Notes: the old `/var/lib/workerd/kb-mirror` (from before this change) stays as a stale `0600` copy that nothing updates. Do not delete it as part of this change; it may be removed later once Hal has run from the new mirror for a while. Skipping step 1's `install -d` makes the unit fail with `226/NAMESPACE` (ReadWritePaths target missing).
+
 Rollback: restore Hal's `.env` `KB_BASE` line (or `ln -sfn <recorded old target> /var/wolfpack/kb/base/domains`), `systemctl restart wolf-ETAy7b.service`. The old Syncthing-era KB copy is never deleted by these steps. To undo the mirror layout itself: remove the two `WORKERD_KB_MIRROR_*` lines (workerd goes back to `/var/lib/workerd/kb-mirror`, a full re-sync) and `systemctl restart workerd`; `gpasswd -d wolf-ETAy7b wolfpack-kb` is optional.
 
 ## Rollback / removal

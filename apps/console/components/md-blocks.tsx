@@ -463,16 +463,54 @@ export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
 	);
 }
 
-/** Links inside interactive containers (card options are buttons): Streamdown
- *  renders `a` as a <button>, which nests illegally. Show the text styled as
- *  a link, non-interactive, so the whole option stays the one click target. */
+// ─── Inert set: markdown inside buttons (card options) ───────────────────────
+// A <button> may not contain interactive content. Streamdown 2.7.1 (and the
+// overrides above) render buttons for links (link-safety), code-fence copy,
+// table copy, display-math copy, mermaid and image download/overlay, so each
+// is replaced here by a plain, non-interactive element. Option labels are
+// still meant to be INLINE markdown (emphasis, inline code, links); the block
+// overrides are a safety net so an odd label can never nest a button.
+
+/** Links: the text styled as a link, non-interactive. The href is only
+ *  exposed as a hover `title` (never a visible URL or an anchor). */
 export function MarkdownInertLink(props: ComponentProps<"a"> & ExtraProps) {
-	const { children, className, node, href, ...rest } = props;
+	const { children, className, href } = props;
 	return (
 		<span data-streamdown="inert-link" className={cn("underline underline-offset-2", className)} title={href}>
 			{children}
 		</span>
 	);
+}
+
+/** Code: inline code keeps the house look; fences become a bare <code> (no copy corner, no mermaid). */
+export function InertCode(props: ComponentProps<"code"> & ExtraProps) {
+	const { children, className, node, ...rest } = props;
+	return (
+		<code className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)} data-streamdown="inline-code" {...rest}>
+			{children}
+		</code>
+	);
+}
+
+/** Tables: the bare table, no copy corner. */
+export function InertTable(props: ComponentProps<"table"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	return (
+		<table className="w-full border-collapse" data-streamdown="table" {...rest}>
+			{children}
+		</table>
+	);
+}
+
+/** Spans (incl. KaTeX display math): pass through without the copy corner. */
+export function InertSpan(props: ComponentProps<"span"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	return <span {...rest}>{children}</span>;
+}
+
+/** Images: the alt text, no download/overlay buttons. */
+export function InertImage(props: ComponentProps<"img"> & ExtraProps) {
+	return <span data-streamdown="inert-image">{props.alt ?? ""}</span>;
 }
 
 export const mdComponents = {
@@ -483,5 +521,12 @@ export const mdComponents = {
 	blockquote: MarkdownBlockquote,
 };
 
-/** mdComponents with links made inert, for markdown rendered inside buttons. */
-export const mdComponentsInert = { ...mdComponents, a: MarkdownInertLink };
+/** mdComponents with every interactive element made inert, for markdown rendered inside buttons. */
+export const mdComponentsInert = {
+	...mdComponents,
+	a: MarkdownInertLink,
+	code: InertCode,
+	table: InertTable,
+	span: InertSpan,
+	img: InertImage,
+};

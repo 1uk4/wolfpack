@@ -93,6 +93,6 @@ describe("AskCard: multi ship card (task_done)", () => {
 	it("unticking all blocks Submit (min 1)", async () => {
 		await mount(ships);
 		for (const r of qa('[data-testid="card-option"]')) await click(r);
-		assert.equal(submit().hasAttribute("disabled"), true);
+		assert.equal(submit().hasAttribute("aria-disabled"), true);
 	});
 });

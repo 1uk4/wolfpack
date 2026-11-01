@@ -86,7 +86,7 @@ describe("AskCard multi", () => {
 		assert.deepEqual(checked(), ["true", "true", "false"]);
 		await new Promise((r) => setTimeout(r, 100));
 		assert.deepEqual(sent, []);
-		assert.equal(submit().hasAttribute("disabled"), false, "a valid default can be submitted by the operator");
+		assert.equal(submit().hasAttribute("aria-disabled"), false, "a valid default can be submitted by the operator");
 		await click(qa('[data-testid="card-option"]')[1]!);
 		await click(submit());
 		assert.deepEqual(sent, [{ m: { value: ["a"] } }]);
@@ -94,9 +94,9 @@ describe("AskCard multi", () => {
 
 	it("min blocks Submit; max disables the unchecked boxes", async () => {
 		await mount(multi({ min: 1, max: 2 }));
-		assert.equal(submit().hasAttribute("disabled"), true, "under min");
+		assert.equal(submit().hasAttribute("aria-disabled"), true, "under min");
 		await click(qa('[data-testid="card-option"]')[0]!);
-		assert.equal(submit().hasAttribute("disabled"), false);
+		assert.equal(submit().hasAttribute("aria-disabled"), false);
 		await click(qa('[data-testid="card-option"]')[1]!);
 		assert.equal(qa('[data-testid="card-option"]')[2]!.hasAttribute("disabled"), true, "at max");
 		await click(qa('[data-testid="card-option"]')[1]!);
@@ -121,9 +121,9 @@ describe("AskCard multi", () => {
 	it("text typed in Other… but not added is folded in on Submit (never lost)", async () => {
 		await mount(multi({ allowOther: true, min: 2 }));
 		await click(qa('[data-testid="card-option"]')[0]!);
-		assert.equal(submit().hasAttribute("disabled"), true, "min 2 not met yet");
+		assert.equal(submit().hasAttribute("aria-disabled"), true, "min 2 not met yet");
 		await type(q('[data-testid="card-other"]') as HTMLInputElement, " teal ");
-		assert.equal(submit().hasAttribute("disabled"), false, "the pending entry counts toward min");
+		assert.equal(submit().hasAttribute("aria-disabled"), false, "the pending entry counts toward min");
 		await click(submit());
 		assert.deepEqual(sent, [{ m: { value: ["a", "teal"], other: ["teal"] } }]);
 	});
@@ -134,12 +134,12 @@ describe("AskCard multi", () => {
 		await type(q('[data-testid="card-other"]') as HTMLInputElement, "b");
 		assert.match(q('[data-testid="card-other-error"]')?.textContent ?? "", /already an option/);
 		assert.equal(q('[data-testid="card-other-add"]')!.hasAttribute("disabled"), true);
-		assert.equal(submit().hasAttribute("disabled"), true);
+		assert.equal(submit().hasAttribute("aria-disabled"), true);
 		await click(q('[data-testid="card-other-add"]')!);
 		assert.equal(qa('[data-testid="card-option"]').length, 3);
 		await type(q('[data-testid="card-other"]') as HTMLInputElement, "");
 		assert.equal(q('[data-testid="card-other-error"]'), null);
-		assert.equal(submit().hasAttribute("disabled"), false);
+		assert.equal(submit().hasAttribute("aria-disabled"), false);
 	});
 
 	it("pending Other text beyond max blocks Submit", async () => {
@@ -147,7 +147,7 @@ describe("AskCard multi", () => {
 		await click(qa('[data-testid="card-option"]')[0]!);
 		await type(q('[data-testid="card-other"]') as HTMLInputElement, "extra");
 		assert.match(q('[data-testid="card-other-error"]')?.textContent ?? "", /At most 1/);
-		assert.equal(submit().hasAttribute("disabled"), true);
+		assert.equal(submit().hasAttribute("aria-disabled"), true);
 	});
 
 	it("groups are labelled by the field label and buttons use aria-pressed (no radio/checkbox roles)", async () => {
@@ -215,7 +215,7 @@ describe("AskCard confirm", () => {
 		await mount(confirm());
 		assert.equal(q('[data-testid="card-confirm"]')!.textContent, "Yes");
 		assert.equal(q('[data-testid="card-reject"]')!.textContent, "No");
-		assert.equal(submit().hasAttribute("disabled"), true);
+		assert.equal(submit().hasAttribute("aria-disabled"), true);
 		await click(q('[data-testid="card-confirm"]')!);
 		await click(submit());
 		assert.deepEqual(sent, [{ c: { value: true } }]);
@@ -286,29 +286,57 @@ describe("AskCard option links", () => {
 });
 
 describe("AskCard link option selection + visible incomplete submit", () => {
-	const linked = (): Card => ({
+	const linked = (kind: "single" | "multi" = "single"): Card => ({
 		tool: "t",
-		fields: [{ id: "serve", kind: "single", label: "Serve how?", options: [{ label: "Hub at https://sfo.example.com/path and [docs](https://example.com)", value: "console-root-hub-path" }, { label: "Other thing", value: "x" }] }] as Card["fields"],
+		fields: [{ id: "serve", kind, label: "Serve how?", options: [{ label: "Hub at https://sfo.example.com/path and [docs](https://example.com)", value: "console-root-hub-path" }, { label: "Other thing", value: "x" }] }] as Card["fields"],
 	});
 	it("clicking a link-containing option selects it and Submit sends it", async () => {
 		await mount(linked());
 		const opt = qa('[data-testid="card-option"]')[0]!;
 		assert.equal(opt.querySelectorAll("button, a").length, 0);
-		// click the link text itself: it bubbles to the option button
-		await click(opt.querySelector('[data-streamdown="inert-link"]') ?? opt);
+		const link = opt.querySelector('[data-streamdown="inert-link"]');
+		assert.ok(link, "inert link span rendered");
+		await click(link);
 		assert.equal(opt.getAttribute("aria-pressed"), "true");
 		await click(submit());
 		assert.deepEqual(sent[0], { serve: { value: "console-root-hub-path" } });
 	});
-	it("an incomplete card explains why Submit is unavailable and highlights the field", async () => {
+	it("multi: clicking the link text toggles the option on and off", async () => {
+		await mount(linked("multi"));
+		const opt = qa('[data-testid="card-option"]')[0]!;
+		const link = opt.querySelector('[data-streamdown="inert-link"]');
+		assert.ok(link);
+		await click(link);
+		assert.equal(opt.getAttribute("aria-pressed"), "true");
+		await click(link);
+		assert.equal(opt.getAttribute("aria-pressed"), "false");
+	});
+	it("the option is a native enabled button, so keyboard Space/Enter activation selects it (click)", async () => {
 		await mount(linked());
-		const hint = q('[data-testid="card-submit-hint"]');
-		assert.ok(hint, "hint visible while required field unanswered");
-		assert.match(hint!.textContent ?? "", /Serve how\?/);
-		assert.equal(q('[data-field="serve"]')!.getAttribute("data-incomplete"), "true");
-		assert.equal(submit().hasAttribute("disabled"), true);
-		await click(qa('[data-testid="card-option"]')[1]!);
-		assert.equal(q('[data-testid="card-submit-hint"]'), null);
+		const opt = qa('[data-testid="card-option"]')[0]!;
+		assert.equal(opt.tagName, "BUTTON");
+		assert.equal(opt.getAttribute("type"), "button");
+		assert.equal(opt.hasAttribute("disabled"), false);
+		// linkedom has no native activation or focus, so assert the native-button contract and dispatch the click Space/Enter would fire.
+		await click(opt);
+		assert.equal(opt.getAttribute("aria-pressed"), "true");
+	});
+	it("an incomplete card looks normal until Submit is tried; then it explains and highlights, sending nothing", async () => {
+		await mount(linked());
+		const hint = q('[data-testid="card-submit-hint"]')!;
+		assert.equal(hint.getAttribute("role"), "status");
+		assert.equal(hint.textContent, "", "no hint before an attempt");
 		assert.equal(q('[data-field="serve"]')!.hasAttribute("data-incomplete"), false);
+		assert.equal(submit().hasAttribute("aria-disabled"), true);
+		assert.equal(submit().hasAttribute("disabled"), false, "still clickable");
+		assert.equal(submit().getAttribute("aria-describedby"), hint.id);
+		await click(submit());
+		assert.equal(sent.length, 0);
+		assert.match(hint.textContent ?? "", /Answer to submit: Serve how\?/);
+		assert.equal(q('[data-field="serve"]')!.getAttribute("data-incomplete"), "true");
+		await click(qa('[data-testid="card-option"]')[1]!);
+		assert.equal(hint.textContent, "", "cleared once complete");
+		assert.equal(q('[data-field="serve"]')!.hasAttribute("data-incomplete"), false);
+		assert.equal(submit().hasAttribute("aria-disabled"), false);
 	});
 });

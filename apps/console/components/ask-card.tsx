@@ -69,7 +69,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	const answerNow = () => {
 		const f = foldPendingOther(card, draftRef.current, typedRef.current);
 		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) {
-			setAttempted(true); // never a silent no-op: the hint + highlight below say what is missing
+			setAttempted(true); // never a silent no-op: the hint + highlight say what is missing
 			return;
 		}
 		onAnswer(draftAnswers(card, f.draft));
@@ -88,7 +88,16 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	const folded = foldPendingOther(card, draft, typed);
 	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
 	// Required fields still unanswered (visible ones only): highlighted, and named beside the disabled Submit so it is never a mystery.
-	const missingIds = new Set(visibleFields(card, folded.draft).filter((f) => !fieldsComplete([f], folded.draft)).map((f) => f.id));
+	const missingFields = visibleFields(card, folded.draft).filter((f) => !fieldsComplete([f], folded.draft));
+	const missingIds = new Set(missingFields.map((f) => f.id));
+	// Shown only after a failed Submit; clears itself once the draft is complete and valid.
+	const hasErrors = Object.keys(folded.errors).length > 0;
+	const incomplete = hasErrors || missingFields.length > 0;
+	useEffect(() => {
+		if (!incomplete) setAttempted(false);
+	}, [incomplete]);
+	const showHint = attempted && incomplete && pending && !closed && !submitting;
+	const hintId = `card-hint-${useId()}`;
 	// Stepped card: one step at a time with Back/Next; the answers stay in the draft until the single Submit on the last step.
 	// The step list follows the draft (a dependent step appears/vanishes with its controlling answer); `step` is clamped.
 	const stepped = card.steps !== undefined && !closed;
@@ -167,14 +176,18 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 					onAddCustom={f.kind === "multi" ? () => addCustomFor(f) : undefined}
 					dictation={dictationProps.field(f.id)}
 					pendingError={folded.errors[f.id]}
-					missing={!closed && pending && missingIds.has(f.id)}
+					missing={showHint && missingIds.has(f.id)}
 				/>
 			))}
-			{!closed && pending && !submitting && !(stepped && !lastStep) && !canSubmit && (
-				<div className="mt-3 text-xs text-amber-700 dark:text-amber-400" role="status" data-testid="card-submit-hint" data-attempted={attempted || undefined}>
-					{Object.keys(folded.errors).length > 0
-						? "Fix the highlighted entry to submit."
-						: `Answer to submit: ${visibleFields(card, folded.draft).filter((f) => missingIds.has(f.id)).map((f) => f.label.replace(/[*_`]|\[([^\]]*)\]\([^)]*\)/g, "$1")).join(", ")}`}
+			{!closed && (
+				<div id={hintId} role="status" className="mt-3 text-xs text-amber-700 empty:hidden dark:text-amber-400" data-testid="card-submit-hint">
+					{showHint &&
+						[
+							hasErrors ? "Fix the highlighted entry to submit." : "",
+							missingFields.length > 0 ? `Answer to submit: ${missingFields.map((f) => f.label.replace(/[*_`]|\[([^\]]*)\]\([^)]*\)/g, "$1")).join(", ")}` : "",
+						]
+							.filter(Boolean)
+							.join(" ")}
 				</div>
 			)}
 			{!closed && (
@@ -194,7 +207,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 							Next
 						</Button>
 					) : (
-						<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
+						<Button type="button" size="sm" disabled={!pending || submitting || finishing} aria-disabled={!canSubmit || undefined} aria-describedby={hintId} onClick={submit} data-testid="card-submit">
 							{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
 						</Button>
 					)}

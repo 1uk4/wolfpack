@@ -220,14 +220,14 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.equal(q('[data-testid="answered-card"]'), null);
 		assert.equal(document.querySelectorAll('[data-testid="card-option"]').length, 2);
 		assert.match(document.body.textContent ?? "", /Which branch\?/);
-		assert.equal(q('[data-testid="card-submit"]')!.hasAttribute("disabled"), true);
+		assert.equal(q('[data-testid="card-submit"]')!.hasAttribute("aria-disabled"), true);
 	});
 
 	it("single: pick an option, Submit -> POSTed through the server layer, answered card shows, next turn streams in", async () => {
 		const client = new CardClient(SINGLE);
 		await mount(client);
 		await click(document.querySelectorAll('[data-testid="card-option"]')[1]!);
-		assert.equal(q('[data-testid="card-submit"]')!.hasAttribute("disabled"), false);
+		assert.equal(q('[data-testid="card-submit"]')!.hasAttribute("aria-disabled"), false);
 		await click(q('[data-testid="card-submit"]')!);
 		await settle();
 		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "develop" } } }]);

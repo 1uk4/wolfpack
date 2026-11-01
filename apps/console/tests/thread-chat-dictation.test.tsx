@@ -261,7 +261,7 @@ describe("ThreadChat dictation", () => {
 		await focus(other);
 		await dictate("something else");
 		assert.equal(other.value, "something else");
-		assert.equal(q('[data-testid="card-submit"]')!.hasAttribute("disabled"), false);
+		assert.equal(q('[data-testid="card-submit"]')!.hasAttribute("aria-disabled"), false);
 	});
 
 	it("Esc in a card field cancels the run and discards the transcript", async () => {

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { diff } from "./mesh-reconcile.js";
+import { describe, it, expect, vi } from "vitest";
+import { diff, folderFieldDrift, buildRemoteApplyScript, resolveFolderDeviceIds } from "./mesh-reconcile.js";
 import {
   planMesh,
   allocatePorts,
@@ -91,5 +91,48 @@ describe("drift diff (checkMesh) never touches kb-/ops- folders", () => {
     const d = diff("HAL", new Set(["den-host-a-HAL", "den-host-a-NEW"]), live);
     expect(d.stale).toEqual(["den-host-a-OLD"]);
     expect(d.missing).toEqual(["den-host-a-NEW"]);
+  });
+});
+
+describe("field-level drift report (mesh --check)", () => {
+  const desired = [{ id: "den-sfo-01-W1hOrJ", path: "/w/sfo-01/hal/den", type: "receiveonly", deviceIds: ["HUB", "WOLF"] }];
+  const live = (over: object = {}) => [{
+    id: "den-sfo-01-W1hOrJ", path: "/w/sfo-01/hal/den", type: "receiveonly",
+    devices: [{ deviceID: "HUB" }, { deviceID: "WOLF" }], ...over,
+  }];
+  it("a matching folder is no drift", () => {
+    expect(folderFieldDrift(desired, live())).toEqual([]);
+  });
+  it("reports a different device list, type and path", () => {
+    expect(folderFieldDrift(desired, live({ devices: [{ deviceID: "HUB" }, { deviceID: "ROOTVPS" }] })))
+      .toEqual(["den-sfo-01-W1hOrJ: devices +[WOLF] -[ROOTVPS]"]);
+    expect(folderFieldDrift(desired, live({ type: "sendonly", path: "/elsewhere" }))).toEqual([
+      "den-sfo-01-W1hOrJ: type sendonly -> receiveonly",
+      "den-sfo-01-W1hOrJ: path /elsewhere -> /w/sfo-01/hal/den",
+    ]);
+  });
+  it("ignores folders that are not live (that is 'missing', not 'changed')", () => {
+    expect(folderFieldDrift(desired, [])).toEqual([]);
+  });
+});
+
+describe("applyRemote script", () => {
+  it("creates the .stfolder marker and chown -R for den folders", () => {
+    const script = buildRemoteApplyScript("HAL", byKey("HAL"), registry);
+    expect(script).toContain('mkdir -p "/home/wolf-HAL/den/.stfolder"');
+    expect(script).toContain('chown -R wolf-HAL:wolf-HAL "/home/wolf-HAL/den"');
+    expect(script).toContain("den-host-a-HAL");
+    expect(script).not.toMatch(/kb-|ops-/);
+  });
+});
+
+describe("resolveFolderDeviceIds", () => {
+  it("warns when a device key is missing from devices.yaml, and drops it", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const f = { id: "den-x", path: "/p", type: "sendonly" as const, deviceIds: ["HAL", "GHOST"] };
+    expect(resolveFolderDeviceIds(f, "HAL", registry)).toEqual(["HAL"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain("GHOST");
+    warn.mockRestore();
   });
 });

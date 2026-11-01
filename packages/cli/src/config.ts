@@ -61,7 +61,8 @@ export interface CliConfig {
   /**
    * Override for the shared KB root that wolves read (KB_BASE). Default
    * the hub mirror (~/.wolfpack/workerd/kb-mirror) when it has domains/, else the frozen
-   * legacy <wolvesRoot>/knowledge/base. `WOLFPACK_KB_BASE` takes precedence (readers also honour a plain `KB_BASE`).
+   * legacy <wolvesRoot>/knowledge/base. `WOLFPACK_KB_BASE` takes precedence. A plain `KB_BASE` env is honoured
+   * ONLY by kbReadBaseDir (read-only consumers), never by kbBaseDir or the wolf .env writers.
    */
   kbBase?: string;
   /** Extra directories searched for helper binaries (tailscale, …) and put on launchd PATH. */
@@ -139,7 +140,7 @@ export function hubKbMirrorDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * KB root for readers and the wolf .env writers. Order: WOLFPACK_KB_BASE env, config kbBase, then the hub mirror when it
+ * KB root for readers and the wolf .env writers (a plain `KB_BASE` env is NOT consulted; see kbReadBaseDir). Order: WOLFPACK_KB_BASE env, config kbBase, then the hub mirror when it
  * has domains/, then the legacy <root>/knowledge/base (frozen archive). Writers use kbWriteBaseDir instead.
  */
 export function kbBaseDir(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string {

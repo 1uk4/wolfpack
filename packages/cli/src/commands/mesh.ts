@@ -24,6 +24,7 @@ export async function meshCmd(opts: { check?: boolean; yes?: boolean }): Promise
     for (const d of drift) {
       console.log(c.bold(`  ${d.instance}`));
       for (const m of d.missing) console.log(c.yellow(`    - missing: ${m}`));
+      for (const ch of d.changed) console.log(c.yellow(`    - would change: ${ch}`));
       for (const s of d.stale) console.log(c.red(`    - stale:   ${s} (revoke manually until auto-prune)`));
     }
     console.log(c.dim("\n  Run `wolfpack mesh` to apply missing shares (additive)."));

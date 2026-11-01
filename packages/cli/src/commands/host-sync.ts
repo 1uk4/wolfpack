@@ -11,10 +11,10 @@
  */
 
 import path from "node:path";
-import { loadConfig, getHost, type HostEntry } from "../config.js";
+import { loadConfig, getHost } from "../config.js";
 import { c } from "../render.js";
 import { AgentClient } from "../agent-client.js";
-import { denFolderId } from "../mesh.js";
+import { denFolderId, loadDevices } from "../mesh.js";
 import { readLocalSyncthing, SyncthingRest } from "../syncthing.js";
 
 export async function hostSync(hostArg?: string): Promise<void> {
@@ -40,8 +40,9 @@ export async function hostSync(hostArg?: string): Promise<void> {
 
   for (const w of wolves) {
     try {
-      const { macDen } = await ensureDenMirror(name, host, w);
+      const { macDen, warnings } = await ensureDenMirror(name, w);
       console.log(c.green(`  ✓ ${w.name}`) + c.dim(`  ${denFolderId(name, w.id)} → ${macDen}`));
+      for (const msg of warnings) console.log(c.yellow(`    ! ${msg}`));
     } catch (err) {
       console.error(c.red(`  ✗ ${w.name}: ${err instanceof Error ? err.message : err}`));
     }
@@ -59,9 +60,8 @@ export async function hostSync(hostArg?: string): Promise<void> {
  */
 export async function ensureDenMirror(
   hostName: string,
-  _host: HostEntry,
   wolf: { id: string; name: string },
-): Promise<{ vpsDen: string; macDen: string; folderId: string }> {
+): Promise<{ macDen: string; folderId: string; warnings: string[] }> {
   const config = loadConfig();
   const local = readLocalSyncthing();
   const mac = new SyncthingRest(local.url, local.apiKey);
@@ -71,6 +71,15 @@ export async function ensureDenMirror(
   if (!existing) {
     throw new Error(`den folder ${folderId} is not wired on the hub; run: wolfpack mesh`);
   }
+  // Warn only (never fail, never write): the folder looks wrong for a den backup.
+  const warnings: string[] = [];
+  if (existing.type !== "receiveonly") {
+    warnings.push(`${folderId} is type ${existing.type ?? "unknown"}, expected receiveonly; run: wolfpack mesh --check`);
+  }
+  const expected = loadDevices().devices[wolf.id]?.deviceId;
+  if (expected && !(existing.devices ?? []).some((d) => d.deviceID === expected)) {
+    warnings.push(`${folderId} does not list the wolf's Syncthing device ${expected}; run: wolfpack mesh --check`);
+  }
   const macDen = existing.path ?? path.join(config.wolvesRoot, hostName, wolf.name, "den");
-  return { vpsDen: "", macDen, folderId };
+  return { macDen, folderId, warnings };
 }

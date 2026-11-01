@@ -90,7 +90,7 @@ ${c.bold("HOST (advanced)")}
   host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
   host list                       Show registered hosts
   host status [name]              Host health + wolf overview
-  host sync [name]                Wire Syncthing den backups (VPS \u2192 ~/wolves)
+  host sync [name]                Check den backup folders (read-only; wiring is \`wolfpack mesh\`)
   host redeploy [name] [--rotate-key]  Re-provision + redeploy (preserves API key by default)
 
 ${c.bold("DOMAIN (advanced)")}

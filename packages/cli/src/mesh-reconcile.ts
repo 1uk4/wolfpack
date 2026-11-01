@@ -128,7 +128,7 @@ async function applyHub(mac: SyncthingRest, plan: InstancePlan): Promise<void> {
     await mac.putDevice(buildDevice(peer.device.deviceId, peer.key, addr));
   }
   for (const f of plan.folders) {
-    const devIds = resolveFolderDeviceIds(f, plan, "hub");
+    const devIds = resolveFolderDeviceIds(f, "hub", loadDevices());
     fs.mkdirSync(f.path, { recursive: true });
     // Dens are not empty (NOTES.md), so Syncthing will not create the marker itself and the folder stalls.
     fs.mkdirSync(path.join(f.path, ".stfolder"), { recursive: true });
@@ -143,6 +143,15 @@ function applyRemote(
   plan: InstancePlan,
   reg: DeviceRegistry,
 ): void {
+  runScript(host, instanceKey, buildRemoteApplyScript(instanceKey, plan, reg));
+}
+
+/** The bash script applyRemote runs on the VPS (pure, exported for tests). */
+export function buildRemoteApplyScript(
+  instanceKey: string,
+  plan: InstancePlan,
+  reg: DeviceRegistry,
+): string {
   const self = reg.devices[instanceKey];
   if (!self?.guiPort) throw new Error(`No guiPort for ${instanceKey} in devices.yaml`);
 
@@ -157,7 +166,7 @@ function applyRemote(
     });
 
   const folderLines = plan.folders.map((f) => {
-    const devIds = resolveFolderDeviceIds(f, plan, instanceKey)
+    const devIds = resolveFolderDeviceIds(f, instanceKey, reg)
       .map((id) => `{"deviceID":"${id}"}`)
       .join(",");
     return (
@@ -182,15 +191,18 @@ ${deviceLines.join("\n")}
 ${folderLines.join("\n")}
 echo "ok"
 `;
-  runScript(host, instanceKey, script);
+  return script;
 }
 
-/** Owner lists all receivers; a receiver lists only [owner, self]. */
-function resolveFolderDeviceIds(f: PlannedFolder, _plan: InstancePlan, selfKey: string): string[] {
-  const reg = loadDevices();
-  return f.deviceIds
-    .map((k) => (k === selfKey ? deviceIdFor(reg, selfKey) : deviceIdFor(reg, k)))
-    .filter((x): x is string => !!x);
+/** Owner lists all receivers; a receiver lists only [owner, self]. Warns on keys missing from devices.yaml. */
+export function resolveFolderDeviceIds(f: PlannedFolder, selfKey: string, reg: DeviceRegistry): string[] {
+  const ids: string[] = [];
+  for (const k of f.deviceIds) {
+    const id = deviceIdFor(reg, k);
+    if (id) ids.push(id);
+    else console.warn(c.yellow(`  ! ${f.id} on ${selfKey}: device "${k}" has no deviceId in devices.yaml; dropped from the folder`));
+  }
+  return ids;
 }
 
 function deviceIdFor(reg: DeviceRegistry, key: string): string | undefined {
@@ -391,6 +403,33 @@ export interface MeshDrift {
   instance: string;
   missing: string[]; // desired folders not present
   stale: string[];   // managed folders present but not desired
+  /** field-level differences on folders present on both sides (what a real `mesh` run would change) */
+  changed: string[];
+}
+
+/** A folder as the live Syncthing reports it. */
+export interface LiveFolder { id: string; path?: string; type?: string; devices?: Array<{ deviceID: string }> }
+
+/** Desired folder with device ids already resolved. */
+export interface DesiredFolder { id: string; path: string; type: string; deviceIds: string[] }
+
+/** Report-only field drift (type, path, device ids) for folders present on both sides. Never writes. */
+export function folderFieldDrift(desired: DesiredFolder[], live: LiveFolder[]): string[] {
+  const out: string[] = [];
+  for (const d of desired) {
+    const l = live.find((x) => x.id === d.id);
+    if (!l) continue;
+    if (l.type !== d.type) out.push(`${d.id}: type ${l.type ?? "?"} -> ${d.type}`);
+    if (l.path !== d.path) out.push(`${d.id}: path ${l.path ?? "?"} -> ${d.path}`);
+    const liveIds = new Set((l.devices ?? []).map((x) => x.deviceID));
+    const want = new Set(d.deviceIds);
+    const add = [...want].filter((x) => !liveIds.has(x));
+    const drop = [...liveIds].filter((x) => !want.has(x));
+    if (add.length || drop.length) {
+      out.push(`${d.id}: devices${add.length ? ` +[${add.join(",")}]` : ""}${drop.length ? ` -[${drop.join(",")}]` : ""}`);
+    }
+  }
+  return out;
 }
 
 export async function checkMesh(): Promise<MeshDrift[]> {
@@ -407,9 +446,15 @@ export async function checkMesh(): Promise<MeshDrift[]> {
     try {
       const local = readLocalSyncthing();
       const mac = new SyncthingRest(local.url, local.apiKey);
-      const live = new Set((await mac.listFolders()).map((f) => f.id));
+      const liveFolders = await mac.listFolders();
+      const live = new Set(liveFolders.map((f) => f.id));
       const desired = new Set(hubPlan.folders.map((f) => f.id));
-      drift.push(diff("hub", desired, live));
+      const d = diff("hub", desired, live);
+      d.changed = folderFieldDrift(
+        hubPlan.folders.map((f) => ({ id: f.id, path: f.path, type: f.type, deviceIds: resolveFolderDeviceIds(f, "hub", reg) })),
+        liveFolders,
+      );
+      drift.push(d);
     } catch { /* hub unreachable */ }
   }
 
@@ -425,13 +470,13 @@ export async function checkMesh(): Promise<MeshDrift[]> {
       drift.push(diff(plan.key, new Set(plan.folders.map((f) => f.id)), new Set(ids)));
     } catch { /* unreachable */ }
   }
-  return drift.filter((d) => d.missing.length || d.stale.length);
+  return drift.filter((d) => d.missing.length || d.stale.length || d.changed.length);
 }
 
 export function diff(instance: string, desired: Set<string>, live: Set<string>): MeshDrift {
   const missing = [...desired].filter((id) => !live.has(id));
   const stale = [...live].filter((id) => isManagedFolderId(id) && !desired.has(id));
-  return { instance, missing, stale };
+  return { instance, missing, stale, changed: [] };
 }
 
 function remoteFolderIds(host: HostEntry, instanceKey: string, guiPort: number): string[] {

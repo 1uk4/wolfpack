@@ -340,12 +340,13 @@ async function addRemote(
 
     // Verify the den backup folder (read-only; wiring is `wolfpack mesh`).
     try {
-      const { macDen } = await ensureDenMirror(opts.host!, host, result.wolf);
+      const { macDen, warnings } = await ensureDenMirror(opts.host!, result.wolf);
       console.log(c.dim(`  Mirror:  ${macDen}`));
+      for (const w of warnings) console.log(c.yellow(`  ! ${w}`));
     } catch (err) {
       console.log(
         c.yellow(
-          `  ! Den mirror not wired (${err instanceof Error ? err.message : err}). Run: wolfpack mesh`,
+          `  Next: wolfpack mesh to wire the den backup (${err instanceof Error ? err.message : err})`,
         ),
       );
     }

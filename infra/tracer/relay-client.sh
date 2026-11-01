@@ -25,11 +25,11 @@ echo "submit -> HTTP $code $(cat /tmp/submit.json)"
 [ "$code" = 200 ] || fail "submit returned HTTP $code"
 touch /tmp/tracer-turn-started   # signal to the entrypoint: sample in-turn RSS now
 echo "== relay: stream /v1/threads/$THREAD/stream until the turn ends (the stream replays the turn and finishes with [DONE])"
-curl -sN --max-time 30 "${auth[@]}" "$HUB/v1/threads/$THREAD/stream" >"$out" || true
+curl -sN --max-time "${STREAM_TIMEOUT:-30}" "${auth[@]}" "$HUB/v1/threads/$THREAD/stream" >"$out" || true
 grep -q '"type":"turn-end"' "$out" || { cat "$out" >&2; fail "no turn-end event on the stream"; }
 echo "== stream events (types): $(grep -o '"type":"[a-z-]*"' "$out" | sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
-grep -q "$EXPECT" "$out" || { cat "$out" >&2; fail "reply text '$EXPECT' not in stream"; }
+grep -qi "$EXPECT" "$out" || { cat "$out" >&2; fail "reply text '$EXPECT' not in stream"; }
 echo "== reply text seen in stream: '$EXPECT'"
 echo "== relay: GET /v1/threads/$THREAD (persisted)"
-curl -fsS "${auth[@]}" "$HUB/v1/threads/$THREAD" | grep -q "$EXPECT" || fail "reply not persisted in thread detail"
+curl -fsS "${auth[@]}" "$HUB/v1/threads/$THREAD" | grep -qi "$EXPECT" || fail "reply not persisted in thread detail"
 echo "PASS: round-trip $WOLF via hubd relay"

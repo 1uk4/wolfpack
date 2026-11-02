@@ -61,7 +61,7 @@ rm /srv/www/wolfd/v0.1.4/*.sha256
 sed -i 's/wolfd-v0.1.5/hubd-v0.1.5/' /srv/www/wolfd/v0.1.5/wolfd-v0.1.5-linux-x64.tar.gz.sha256
 for v in 0.2.0:good 0.2.1:failnoflip 0.2.2:failflip 0.2.3:crash 0.2.4:good 0.2.5:good 0.2.6:failflip 0.2.7:crash; do mkhub hubd ${v%%:*} ${v#*:}; done
 mkhub hubd 0.2.8 norestart; mkhub workerd 0.2.0 good
-( cd /srv/www && node -e 'const h=require("http"),fs=require("fs");h.createServer((q,r)=>{try{r.end(fs.readFileSync("/srv/www"+q.url))}catch{r.statusCode=404;r.end()}}).listen(8099,"127.0.0.1")' >/dev/null 2>&1 </dev/null & ); sleep 1
+( cd /srv/www && node -e 'const h=require("http"),fs=require("fs");h.createServer((q,r)=>{if(q.url==="/v1/wolves"){r.statusCode=401;return r.end("{}")}try{r.end(fs.readFileSync("/srv/www"+q.url))}catch{r.statusCode=404;r.end()}}).listen(8099,"127.0.0.1")' >/dev/null 2>&1 </dev/null & ); sleep 1
 
 T="--health-timeout 8 --settle 2"
 D() { bash -s -- "$@" < /opt/release/deploy-release.sh; }       # exactly how the CLI feeds it
@@ -156,6 +156,7 @@ run D wolfd 0.1.13 --wolf hal2 $T; rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q RECOVERY && [ "$(ver)" = 0.1.13 ] && [ "$(head -c5 $H/release.prev/VERSION)" != 6.6.6 ] && ok "recovery picks only strictly-named dirs (the launch.sh-bearing 'release.prev-notatimestamp' was not restored)" || bad "recovery selection rc=$rc"
 echo "--- hubd via setup.sh (fake unit flag; env file points at the listening http server)"
 install -d /etc/wolfpack /opt/wolfpack-hubd/releases /opt/wolfpack-workerd/releases
+for c in hubd workerd; do mkdir -p /opt/wolfpack-$c/releases/seed; echo 0.0.1 > /opt/wolfpack-$c/releases/seed/VERSION; ln -sfn /opt/wolfpack-$c/releases/seed /opt/wolfpack-$c/current; done  # deploy only upgrades an existing install
 printf 'HUBD_HOST=127.0.0.1\nHUBD_PORT=8099\nWORKERD_HOST=127.0.0.1\nWORKERD_PORT=8099\n' > /etc/wolfpack/hubd.env; cp /etc/wolfpack/hubd.env /etc/wolfpack/workerd.env
 touch $S/hubd.service.active; echo 1 > $S/hubd.service.iid; cur() { basename "$(readlink -f /opt/wolfpack-hubd/current)" | cut -d+ -f1; }
 run D hubd 0.2.0 $T || bad "hubd 0.2.0"; [ "$(cur)" = 0.2.0 ] && [ -f /opt/wolfpack-hubd/setup.sh ] && ok "hubd 0.2.0 installed, healthy (listening), setup.sh saved for rollback"

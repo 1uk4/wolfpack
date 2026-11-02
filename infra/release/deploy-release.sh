@@ -429,7 +429,7 @@ USAGE
     local anyact=0 allact=1
     for ((i = 0; i < n; i++)); do if [ "${U_WAS[i]}" = 1 ]; then anyact=1; else allact=0; fi; done
     if [ $irc = 0 ] && [ $anyact = 0 ]; then
-      log "no unit was running before this deploy; left stopped: installed $VER, no health check possible. Start when ready: systemctl start ${U_SVC[*]}"
+      log "${U_SVC[*]} was not running before this deploy and is left stopped: installed $VER, no health check possible. Start when ready: systemctl start ${U_SVC[*]}"
       [ "$LINK" -ge 0 ] && { install -m 0755 "$B/setup.sh" "${U_OPT[LINK]}/setup.sh" 2>/dev/null || true; }
       exit 0
     fi

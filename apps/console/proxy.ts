@@ -2,13 +2,31 @@
  * Cookie -> bearer for read-only navigations (see the COOKIE MIRROR note in src/core/hub-auth.ts for the rules). Runs before every page and
  * route; the rest of the server only ever reads `Authorization: Bearer`. It never touches a request that already has an Authorization
  * header, never acts on non-GET/HEAD, and never on a cross-site request that is not a top-level navigation.
+ *
+ * Which cookie NAME is read (`__Host-` on https) is decided by configuration, not by a header a client could send:
+ *   1. WOLFPACK_CONSOLE_PUBLIC_ORIGIN (e.g. https://sfo-01.tailnet.ts.net): its scheme decides. Set this in production.
+ *   2. unset: the RIGHTMOST X-Forwarded-Proto value (the one the nearest trusted proxy, e.g. `tailscale serve`, appended), else the request URL.
+ *      A warning is logged once at startup, since a client-supplied header is then in play.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { withCookieBearer } from "@/src/core/hub-auth";
 
-/** https as the browser saw it: the reverse proxy's X-Forwarded-Proto (tailscale serve), else the request URL. */
-export const isHttps = (req: Pick<NextRequest, "headers" | "nextUrl">): boolean => {
-	const fwd = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+let warned = false;
+/** https as the browser saw it. `env` is injectable for tests. */
+export const isHttps = (req: Pick<NextRequest, "headers" | "nextUrl">, env: Record<string, string | undefined> = process.env): boolean => {
+	const origin = env.WOLFPACK_CONSOLE_PUBLIC_ORIGIN?.trim();
+	if (origin) {
+		try {
+			return new URL(origin).protocol === "https:";
+		} catch {
+			throw new Error(`WOLFPACK_CONSOLE_PUBLIC_ORIGIN is not a URL: ${origin}`);
+		}
+	}
+	if (!warned) {
+		warned = true;
+		console.warn("console: WOLFPACK_CONSOLE_PUBLIC_ORIGIN is not set; the cookie name follows X-Forwarded-Proto (rightmost value) or the request URL. Set it to the public origin (https://...) in production.");
+	}
+	const fwd = req.headers.get("x-forwarded-proto")?.split(",").pop()?.trim().toLowerCase();
 	return fwd ? fwd === "https" : req.nextUrl.protocol === "https:";
 };
 

@@ -52,7 +52,7 @@ const srv = path.join(STANDALONE, "apps", "console");
 if (!fs.existsSync(path.join(srv, "server.js"))) die("apps/console/.next/standalone/apps/console/server.js missing; the build failed or output: 'standalone' is off");
 if (!fs.existsSync(path.join(APP, ".next", "static"))) die(".next/static missing; the build looks incomplete");
 
-// Nothing secret-shaped may be inlined into the client JS/CSS.
+// Nothing secret-shaped may be inlined into the client bundle (.next/static) or sit in the server output (.next/server: prerendered HTML/RSC, chunks, maps).
 const walk = (dir, fn) => {
 	for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
 		const p = path.join(dir, e.name);
@@ -60,16 +60,47 @@ const walk = (dir, fn) => {
 		else fn(p, e);
 	}
 };
-walk(path.join(APP, ".next", "static"), (p) => {
-	if (!/\.(js|css|html|json|map|txt)$/.test(p)) return;
-	const t = fs.readFileSync(p, "utf8");
-	for (const needle of ["WOLFPACK_HUB_TOKEN", "Bearer ", "sk-ant-"]) {
-		// "Bearer " legitimately appears in the hub-auth fetch wrapper (`Bearer ${token}`), never followed by a literal token.
-		if (needle === "Bearer ") {
-			if (/Bearer [A-Za-z0-9._~+\/=-]{16,}/.test(t)) die(`REFUSING: a literal bearer token in ${path.relative(APP, p)}`);
-		} else if (t.includes(needle)) die(`REFUSING: ${needle} found in ${path.relative(APP, p)} (a secret or its name was inlined into the client bundle)`);
-	}
-});
+// VALUE shapes: a literal credential, wherever it is.
+const VALUE_NEEDLES = [
+	["a literal bearer token", /Bearer [A-Za-z0-9._~+\/=-]{16,}/], // `Bearer ${token}` in the fetch wrapper is not followed by a literal
+	["an sk-ant- key", /sk-ant-[A-Za-z0-9_-]{16,}/],
+	["an sk- key", /\bsk-[A-Za-z0-9_-]{20,}/],
+	["a GitHub token (ghp_)", /ghp_[A-Za-z0-9]{20,}/],
+	["a GitHub fine-grained token (github_pat_)", /github_pat_[A-Za-z0-9_]{20,}/],
+	["an AWS access key id (AKIA)", /AKIA[0-9A-Z]{16}/],
+];
+// NAME needles: the env var names of our credentials. Legitimate in SERVER code (console-client reads WOLFPACK_HUB_TOKEN, the engine reads
+// OAUTH_TOKEN), so they are checked in the browser bundle only, where their presence means a build-time inline.
+const NAME_NEEDLES = ["WOLFPACK_HUB_TOKEN", "OAUTH_TOKEN", "sk-ant-", "ghp_", "github_pat_", "AKIA"];
+const SCAN_EXT = /\.(js|mjs|cjs|css|html|rsc|body|json|map|txt|segment)$/;
+const scan = (root, names) => {
+	if (!fs.existsSync(root)) return;
+	walk(root, (p) => {
+		if (!SCAN_EXT.test(p)) return;
+		const t = fs.readFileSync(p, "utf8");
+		for (const [what, re] of VALUE_NEEDLES) if (re.test(t)) die(`REFUSING: ${what} in ${path.relative(APP, p)}`);
+		if (names) for (const n of NAME_NEEDLES) if (t.includes(n)) die(`REFUSING: ${n} found in ${path.relative(APP, p)} (a secret or its name was inlined into the client bundle)`);
+	});
+};
+scan(path.join(APP, ".next", "static"), true);
+scan(path.join(APP, ".next", "server"), false);
+
+// Prerendered routes are baked at BUILD time, so anything they read (env, files, the hub) would be frozen into static HTML. Only these may be
+// prerendered; every one is a static shell with no data fetch (verified 2026-11 from the build output):
+//   /            the (home) layout's client graph shell; data arrives client-side through /api
+//   /pair        client page: reads location.hash, no server data
+//   /pipeline    static shell, data via /api
+//   /settings    static shell, data via /api
+//   /_not-found, /_global-error   Next's framework error pages
+// Any new prerendered route (a page that forgot `dynamic = "force-dynamic"`) fails the build until it is reviewed and added here.
+const PRERENDER_ALLOWLIST = new Set(["/", "/pair", "/pipeline", "/settings", "/_not-found", "/_global-error"]);
+{
+	const mf = path.join(APP, ".next", "prerender-manifest.json");
+	if (!fs.existsSync(mf)) die(".next/prerender-manifest.json missing");
+	const m = JSON.parse(fs.readFileSync(mf, "utf8"));
+	const extra = [...Object.keys(m.routes ?? {}), ...Object.keys(m.dynamicRoutes ?? {})].filter((r) => !PRERENDER_ALLOWLIST.has(r));
+	if (extra.length) die(`REFUSING: unexpected prerendered route(s): ${extra.join(", ")} (add \`export const dynamic = "force-dynamic"\`, or review and extend PRERENDER_ALLOWLIST)`);
+}
 
 // Safety: the trace sweep must not carry session data or dev secrets (see next.config.ts).
 for (const bad of ["data", "auth.json", ".env", ".env.local"]) {
@@ -77,28 +108,14 @@ for (const bad of ["data", "auth.json", ".env", ".env.local"]) {
 }
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
-fs.cpSync(STANDALONE, OUT, { recursive: true });
+// verbatimSymlinks: Next writes RELATIVE links (.next/node_modules/<pkg>-<hash> -> ../../../../../node_modules/<pkg>); the default cpSync would resolve them
+// to absolute paths into the build tree (dangling anywhere else). The audit below still verifies every link resolves inside the payload.
+fs.cpSync(STANDALONE, OUT, { recursive: true, verbatimSymlinks: true });
 const outSrv = path.join(OUT, "apps", "console");
 fs.cpSync(path.join(APP, ".next", "static"), path.join(outSrv, ".next", "static"), { recursive: true });
 if (fs.existsSync(path.join(APP, "public"))) fs.cpSync(path.join(APP, "public"), path.join(outSrv, "public"), { recursive: true });
 // Build-only payload the trace sweeps in (same curation as the desktop shell; never broader, that breaks externals).
 for (const extra of ["dist", path.join("node_modules", "electron")]) fs.rmSync(path.join(OUT, extra), { recursive: true, force: true });
-// Next writes ABSOLUTE symlinks (.next/node_modules/<pkg>-<hash> -> <build dir>/.next/standalone/node_modules/<pkg>) for server-external packages. Copied
-// verbatim they point back into the BUILD tree: they work on the build host and dangle anywhere else. Re-point those into the payload, relatively.
-const fixLinks = (dir) => {
-	for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-		const p = path.join(dir, e.name);
-		if (e.isSymbolicLink()) {
-			const t = fs.readlinkSync(p);
-			if (path.isAbsolute(t) && (t === STANDALONE || t.startsWith(STANDALONE + path.sep))) {
-				const to = path.join(OUT, path.relative(STANDALONE, t));
-				fs.rmSync(p);
-				fs.symlinkSync(path.relative(path.dirname(p), to), p);
-			}
-		} else if (e.isDirectory()) fixLinks(p);
-	}
-};
-fixLinks(OUT);
 // Whole-payload audit: no env files, no auth.json, no data/ dir outside node_modules; every symlink resolves inside the payload.
 const realOut = fs.realpathSync(OUT);
 const audit = (dir, inNodeModules) => {

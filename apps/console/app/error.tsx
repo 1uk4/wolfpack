@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { HUB_COOKIE, HUB_COOKIE_HOST, readHubToken } from "@/src/core/hub-auth";
 
 /**
  * Route error boundary. A server-rendered page that failed because the hub rejected the browser's token cannot tell the browser why (Next
@@ -9,6 +10,9 @@ import { useEffect } from "react";
  */
 export default function RouteError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
 	useEffect(() => {
+		// Nothing to be rejected (no stored token, no cookie): not an auth failure, skip the probe.
+		const hasCookie = document.cookie.split(";").some((c) => [HUB_COOKIE, HUB_COOKIE_HOST].includes(c.split("=")[0]!.trim()));
+		if (!readHubToken(window.localStorage) && !hasCookie) return;
 		void fetch("/api/wolves").catch(() => {});
 	}, []);
 	return (

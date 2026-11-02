@@ -7,6 +7,19 @@ const nextConfig: NextConfig = {
 	// The manual copies the docs require — public/ and .next/static — are
 	// done by scripts/build-server.mjs.
 	output: "standalone",
+	// Anti-framing on every route (clickjacking: the console acts with the paired browser's hub token). frame-ancestors is the modern control,
+	// X-Frame-Options the legacy one; tests/next-config.test.ts and the tracer proof pin both.
+	async headers() {
+		return [
+			{
+				source: "/:path*",
+				headers: [
+					{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+					{ key: "X-Frame-Options", value: "DENY" },
+				],
+			},
+		];
+	},
 	// SAFETY (empirically verified 2026-09-17): without this, output file
 	// tracing sweeps the repo's real data/ — chat records, graph ledgers —
 	// INTO the standalone bundle. A shipped desktop app would carry the

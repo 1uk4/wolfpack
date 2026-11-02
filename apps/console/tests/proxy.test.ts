@@ -18,4 +18,14 @@ describe("proxy cookie -> bearer", () => {
 		assert.equal(fwd(proxy(req("GET", { ...h, cookie: "wolfpack_hub_token=tok-1" }))), null);
 		assert.equal(fwd(proxy(req("GET", { ...h, cookie: "__Host-wolfpack_hub_token=tok-2" }))), "Bearer tok-2");
 	});
+	it("WOLFPACK_CONSOLE_PUBLIC_ORIGIN decides over X-Forwarded-Proto (a client-sent header cannot flip the cookie name)", () => {
+		const r = req("GET", { "x-forwarded-proto": "https" });
+		assert.equal(isHttps(r, { WOLFPACK_CONSOLE_PUBLIC_ORIGIN: "http://localhost:3210" }), false);
+		assert.equal(isHttps(req("GET", {}), { WOLFPACK_CONSOLE_PUBLIC_ORIGIN: "https://x.ts.net" }), true);
+		assert.throws(() => isHttps(r, { WOLFPACK_CONSOLE_PUBLIC_ORIGIN: "nonsense" }));
+	});
+	it("without config the RIGHTMOST X-Forwarded-Proto wins", () => {
+		assert.equal(isHttps(req("GET", { "x-forwarded-proto": "https, http" }), {}), false);
+		assert.equal(isHttps(req("GET", { "x-forwarded-proto": "http, https" }), {}), true);
+	});
 });

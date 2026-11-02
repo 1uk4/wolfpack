@@ -69,3 +69,21 @@ describe("emitDelta canonical body", () => {
     });
   }
 });
+
+describe("emitDelta allowedDomains (domain_hint guard)", () => {
+  it("writes a hint inside the wolf's subscribed domains", () => {
+    expect(emitDelta(input("a", { domainHint: "personal", allowedDomains: ["personal"] }))).toMatchObject({ domainHint: "personal" });
+    expect(inbox()).toHaveLength(1);
+  });
+
+  it("refuses a foreign hint: nothing written, nothing recorded as emitted", () => {
+    expect(() => emitDelta(input("b", { domainHint: "wolfpack", allowedDomains: ["personal"] }))).toThrow(/not one of this wolf's subscribed domains/);
+    expect(existsSync(join(roots.opsRoot, "inbox", WOLF))).toBe(false);
+    expect(existsSync(join(roots.denLocal, "emitted.json"))).toBe(false);
+  });
+
+  it("does not check when the wolf's domains are unknown (none / empty list)", () => {
+    expect(emitDelta(input("c", { domainHint: "snapjack" }))).not.toBeNull();
+    expect(emitDelta(input("d", { denTopicId: "t2", domainHint: "snapjack", allowedDomains: [] }))).not.toBeNull();
+  });
+});

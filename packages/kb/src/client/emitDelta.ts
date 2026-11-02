@@ -89,6 +89,11 @@ export interface EmitDeltaInput {
   target?: string;
   /** Provenance for the entry's properties (graduation). */
   source?: Contribution["source"];
+  /**
+   * The wolf's own subscribed domains. When given and non-empty, a `domainHint` outside it is REFUSED (throws): the contribution
+   * is never written, so a wolf cannot file knowledge into a domain it is not subscribed to. Omitted/empty = no check.
+   */
+  allowedDomains?: readonly string[];
   /** Rebuild (resend-all / --emit-den): write even when the body was emitted before. */
   force?: boolean;
 }
@@ -108,6 +113,9 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   if (input.anchor && !ANCHOR_RE.test(input.anchor)) throw new Error(`invalid anchor ${JSON.stringify(input.anchor)}`);
   if (input.group && !ANCHOR_RE.test(input.group)) throw new Error(`invalid group ${JSON.stringify(input.group)}`);
   if (input.groupDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.groupDate)) throw new Error(`invalid groupDate ${JSON.stringify(input.groupDate)}`);
+  if (input.allowedDomains?.length && !input.allowedDomains.includes(input.domainHint)) {
+    throw new Error(`domain_hint ${JSON.stringify(input.domainHint)} is not one of this wolf's subscribed domains [${input.allowedDomains.join(", ")}]`);
+  }
   const dir = inboxDir(roots, wolf);
   mkdirSync(dir, { recursive: true });
 

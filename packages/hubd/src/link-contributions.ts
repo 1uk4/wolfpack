@@ -41,6 +41,8 @@ export interface LinkContributionsOptions {
   receiptsRoot: string;
   /** The host that owns this wolf, or undefined (unknown / retired / unowned). */
   hostOf: (wolf: string) => string | undefined;
+  /** The wolf's subscribed domains, if the hub knows them (undefined = no check). */
+  domainsOf?: (wolf: string) => string[] | undefined;
   /** Send a frame to a host's live link; false when it has none. */
   send: (hostId: string, frame: LinkFrame) => boolean;
   log?: (m: string) => void;
@@ -206,7 +208,7 @@ export function createLinkContributions(o: LinkContributionsOptions): LinkContri
     // The actor is the frame's wolf (already checked against the host), and storeContribution requires contribution.from === that wolf.
     let stored;
     try {
-      stored = storeContribution(o.dataDir, { id: f.wolf, kind: "wolf" }, { text, json: f.contribution }, o.inboxRoot);
+      stored = storeContribution(o.dataDir, { id: f.wolf, kind: "wolf" }, { text, json: f.contribution }, o.inboxRoot, o.domainsOf?.(f.wolf));
     } catch (e) {
       if (e instanceof ContributionError) return reject(f.id, "invalid", e.message);
       log(`hubd: link ${hostId}: storing contribution ${q(f.id)} failed: ${(e as Error).message}`);

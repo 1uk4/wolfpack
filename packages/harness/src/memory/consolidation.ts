@@ -596,6 +596,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       roots: kbRoots,
       wolf: wolfName,
       defaultDomain,
+      allowedDomains: config.domains,
       onProgress,
       onEmit: (c) => emittedTopics.add(c.denTopicId),
       onHold: (t, reason) =>

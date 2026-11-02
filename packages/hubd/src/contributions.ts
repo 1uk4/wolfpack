@@ -123,8 +123,8 @@ function syncDir(dir: string): void {
 
 const shorten = (v: unknown) => JSON.stringify(String(v)).slice(0, 60);
 
-/** Validate + store one contribution submitted by `actor`. Throws ContributionError (invalid_request) when rejected. */
-export function storeContribution(dataDir: string, actor: Actor, submitted: SubmittedBody, inboxRoot?: string): StoredContribution {
+/** Validate + store one (`allowedDomains`: the sending wolf's subscriptions, if known; a domain_hint outside them is refused and quarantined) contribution submitted by `actor`. Throws ContributionError (invalid_request) when rejected. */
+export function storeContribution(dataDir: string, actor: Actor, submitted: SubmittedBody, inboxRoot?: string, allowedDomains?: readonly string[]): StoredContribution {
   const laneRoot = inboxRoot ?? contributionsRoot(dataDir);
   const raw = submitted.json;
   if (actor.kind !== "wolf" && actor.kind !== "operator") throw new ContributionError("invalid_request", "contributions are submitted by a wolf or an operator");
@@ -145,6 +145,10 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
   const parsed = ContributionSchema.safeParse(raw);
   if (!parsed.success) return reject(parsed.error.issues.map((i) => `${i.path.join(".") || "(body)"}: ${i.message}`).join("; ").slice(0, REASON_MAX));
   const c = parsed.data;
+  // Defence in depth: the wolf side filters too. Only checked when the hub knows the wolf's subscriptions (non-empty list).
+  if (allowedDomains?.length && !allowedDomains.includes(c.domainHint)) {
+    return reject(`domain_hint ${shorten(c.domainHint)} is not one of the wolf's subscribed domains [${allowedDomains.join(", ").slice(0, 100)}]`);
+  }
   if (c.from !== wolf) return reject(`from ${shorten(c.from)} does not match the lane ${shorten(wolf)}`);
   // NOT A SECURITY BOUNDARY: `origin` is set by the sender, so "crawl-only refusal" guards against ACCIDENTS (a crawl that swept up a credential),
   // not against a sender that leaves `origin` out: that one only gets the warning below. Refusing non-crawl contributions too is a follow-up task.

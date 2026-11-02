@@ -350,6 +350,8 @@ export interface PromoteOptions {
   roots: KbRoots;
   wolf: string;
   defaultDomain: string;
+  /** The wolf's subscribed domains: a topic whose domain is outside them is not emitted (refused, stays pending). */
+  allowedDomains?: readonly string[];
   session?: string;
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the inbox (id = the inbox file stem). Metadata only. */
@@ -458,6 +460,7 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
           denTopicId: o.id,
           change: topic.change,
           domainHint: domain,
+          ...(opts.allowedDomains?.length ? { allowedDomains: opts.allowedDomains } : {}),
           summary: o.summary,
           body: o.body,
           session: opts.session,

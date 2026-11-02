@@ -351,6 +351,15 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let link!: Link;
   let linkContrib!: LinkContributions;
   const inboxRoot = opts.inboxRoot ?? contributionsRoot(opts.dataDir);
+  /** A wolf's subscribed domains from the registry (undefined when unknown), for the contribution domain_hint check. */
+  const domainsOf = (wolf: string): string[] | undefined => {
+    try {
+      const w = registry.get("wolves", wolf) as { domains?: string[] };
+      return Array.isArray(w.domains) ? w.domains : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const receiptsRoot = opts.receiptsRoot ?? join(roots.opsRoot, "receipts");
   let relay!: Relay;
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
@@ -453,6 +462,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       }
     };
     linkContrib = createLinkContributions({
+      domainsOf,
       dataDir: opts.dataDir,
       inboxRoot,
       receiptsRoot,
@@ -618,7 +628,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           try {
             const submitted = await readJsonObject(req, res);
             const named = typeof submitted.json.from === "string" ? submitted.json.from : undefined;
-            const stored = storeContribution(opts.dataDir, wolfActorFor(tokenActor, named), submitted, inboxRoot);
+            const stored = storeContribution(opts.dataDir, wolfActorFor(tokenActor, named), submitted, inboxRoot, (() => {
+              const a = wolfActorFor(tokenActor, named);
+              return a.kind === "wolf" ? domainsOf(a.id) : undefined; // an operator may submit for any lane
+            })());
             return send(res, stored.duplicate ? 200 : 201, stored);
           } catch (e) {
             if (e instanceof ContributionError) throw new HubError(e.code, e.message);

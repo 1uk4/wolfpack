@@ -52,6 +52,8 @@ export interface ConsolidateOptions {
   kbRoots?: KbRoots;
   /** Default domain hint for emitted deltas (a declared domain name). */
   defaultDomain?: string;
+  /** The wolf's subscribed domains; a delta hinted for any other domain is refused. */
+  allowedDomains?: readonly string[];
   /** Skip emitting deltas to the KB. */
   skipClaims?: boolean;
   /** Optional progress sink — called with human-readable status lines as the
@@ -227,6 +229,7 @@ export async function consolidateSession(
       roots: kbRoots,
       wolf: den.wolfName,
       defaultDomain,
+      allowedDomains: options.allowedDomains,
       session: sessionId,
       onProgress,
       onEmit: options.onEmit,

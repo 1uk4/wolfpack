@@ -70,9 +70,16 @@ if [ -n "$KB" ]; then
   w /$TASK -X PATCH -d '{"stage":"shipped"}' >/dev/null
   echo "work items (created through the hub proxy with the wolf's token): feature=$FEAT task=$TASK"
   if [ -n "${TRACER_RO_WORK:-}" ]; then
-    # H6b: mirror sfo-01 (ProtectSystem=strict): from here on hubd cannot write under domains/*/work (the seeded items stay readable). The ledger
-    # (<data>/ledger) stays writable, as on the host. hubd runs as a non-root user, so mode 555/444 makes every .md write fail like EROFS does.
-    for d in "$HUBD_DATA"/kb/base/domains/*/work; do [ -d "$d" ] && { chmod 444 "$d"/*.md 2>/dev/null || true; chmod 555 "$d"; }; done
+    # H6b: mirror sfo-01 (ProtectSystem=strict): a REAL read-only mount over each domains/*/work, so a write fails with EROFS (chmod would give
+    # EACCES, which maps to a different error). Needs CAP_SYS_ADMIN (run-tracer.sh --ro-work adds it for this container only). The ledger stays writable.
+    for d in "$HUBD_DATA"/kb/base/domains/*/work; do
+      [ -d "$d" ] || continue
+      mount --bind "$d" "$d" && mount -o remount,ro,bind "$d" || { echo "FATAL: cannot make $d read-only (needs --cap-add SYS_ADMIN)" >&2; exit 78; }
+      findmnt -no TARGET,OPTIONS "$d" | grep -qw ro || { echo "FATAL: $d is not mounted ro" >&2; exit 78; }
+      if su -s /bin/sh hubd -c "touch '$d/.erofs-check'" 2>/tmp/erofs.err; then echo "FATAL: $d is still writable" >&2; exit 78; fi
+      grep -q 'Read-only file system' /tmp/erofs.err || { echo "FATAL: write to $d did not fail with EROFS: $(cat /tmp/erofs.err)" >&2; exit 78; }
+      echo "== ro-work: $d is a read-only mount; a hubd write fails with: $(cat /tmp/erofs.err)"
+    done
     find "$HUBD_DATA"/kb/base/domains/*/work -printf '%p %s %T@ %m\n' | sort > /tmp/ro-work.before
     sha256sum "$HUBD_DATA/ledger/work-events.jsonl" > /tmp/ro-ledger.before
     echo "== ro-work: domains/*/work is now read-only for hubd ($(wc -l < /tmp/ro-work.before) entries snapshotted)"

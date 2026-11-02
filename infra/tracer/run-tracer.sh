@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IMAGE="${TRACER_IMAGE:-wolfpack-tracer}"
 MODE=stub; [ "${1:-}" = "--max" ] && MODE=max
 KBARGS=(); [ "${1:-}" = "--kb" ] && KBARGS=(-e TRACER_KB=1)
-[ "${1:-}" = "--ro-work" ] && KBARGS=(-e TRACER_KB=1 -e TRACER_RO_WORK=1)
+[ "${1:-}" = "--ro-work" ] && KBARGS=(-e TRACER_KB=1 -e TRACER_RO_WORK=1 --cap-add SYS_ADMIN)
 docker build -q -f "$ROOT/infra/tracer/Dockerfile" -t "$IMAGE" "$ROOT" >/dev/null
 # --tmpfs /data + --rm: all state is throwaway.
 args=(--rm --tmpfs /data:exec,mode=755)

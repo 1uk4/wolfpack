@@ -20,6 +20,15 @@ export class WorkStoreReadOnlyError extends Error {
   }
 }
 
+/** Thrown for a write the hub refused with a permission error (EACCES/EPERM). The message is what the model sees. */
+export class WorkStorePermissionError extends Error {
+  readonly code = "work_store_permission_denied";
+  constructor() {
+    super("The hub's work store refused this write with a permission error, so nothing was changed. This looks like a permission fault on the hub, not a deliberate setting. Do not retry; tell the owner to check the hub's permissions on the work store.");
+    this.name = "WorkStorePermissionError";
+  }
+}
+
 export class WorkClient {
   private endpoint: string;
   private token: string;
@@ -54,6 +63,7 @@ export class WorkClient {
     if (!res.ok) {
       // The hub's work store is read-only (e.g. a VPS wolf behind a sandboxed hubd): say it in plain words, the model must not retry.
       if (data.code === "work_store_read_only") throw new WorkStoreReadOnlyError();
+      if (data.code === "work_store_permission_denied") throw new WorkStorePermissionError();
       throw new Error(String(data.error ?? `HTTP ${res.status}`));
     }
 

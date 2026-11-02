@@ -19,7 +19,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type Actor } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
-import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps } from "./work-writes.js";
+import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, WORK_STORE_PERMISSION_DENIED, WORK_STORE_READ_ONLY } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
@@ -45,7 +45,9 @@ const respond = (res: ServerResponse, status: number, body: unknown): void => {
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text) });
   res.end(text);
 };
-const STATUS: Record<string, number> = { invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503, memory_unavailable: 503 };
+const STATUS: Record<string, number> = { invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503 };
+/** Typed write failures (HubError details.code, see ERRNO_TABLE in work-writes.ts): the status is decided by the typed code, not the protocol code. */
+const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500 };
 
 /** Is this request under the proxy prefix? */
 export const isWorkProxyPath = (pathname: string): boolean => pathname === `${WORK_PROXY_PREFIX}/work` || pathname.startsWith(`${WORK_PROXY_PREFIX}/work/`);
@@ -119,8 +121,9 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     // Known path shape with a method outside the whitelist (DELETE, ...) or an unknown path.
     throw new HubError(rest.length <= 2 ? "invalid_request" : "not_found", rest.length <= 2 ? `method ${method} is not available through the work proxy` : `no route ${url.pathname}`);
   } catch (e) {
-    const err = e instanceof HubError ? e : mapWorkError(e);
-    if (!res.headersSent) respond(res, STATUS[err.code] ?? 500, { error: err.message, ...(err.details?.code ? { code: err.details.code } : {}) });
+    const err = e instanceof HubError ? e : mapWorkError(e, { write: req.method !== "GET" });
+    const typed = err.details?.code;
+    if (!res.headersSent) respond(res, (typed ? TYPED_STATUS[typed] : undefined) ?? STATUS[err.code] ?? 500, { error: err.message, ...(typed && TYPED_STATUS[typed] ? { code: typed } : {}) });
     else res.end();
   }
 }

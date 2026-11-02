@@ -45,6 +45,7 @@ import { startLibrarianSweep, startSweepTimer } from "../sweep-host.js";
 import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
+import { hubKbFromEnv, startHubKb, type RunningHubKb } from "./hub-kb.js";
 import { prepareSocketPath } from "./socket.js";
 import { loadHomeSettings, loadThreads, setThreadWorkspace, settingsOfSaved } from "./threads.js";
 
@@ -95,6 +96,8 @@ export interface RunningWolf {
   kbRoots?: KbRoots;
   /** Set when wolf.yaml has `sandbox`: the redirect in force and the local Work server behind WORK_ENDPOINT. */
   sandbox?: RunningSandbox;
+  /** Set when WOLFPACK_HUB_KB=1: the hub KB mirror sync + contribution feeder. */
+  hubKb?: RunningHubKb;
   close(): Promise<void>;
 }
 
@@ -118,10 +121,27 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   // One sandboxed wolf per process (startSandbox enforces it).
   // The den env always comes from the config: a sandbox's redirect, else the wolf's own den. An inherited WOLF_DEN
   // (a stale launcher env) must never win: engine usage logs and memory pools read it.
-  const denEnv: Record<string, string> = { ...(sandbox ? sandbox.env : {}), WOLF_DEN: config.den, WOLF_NAME: config.identity.name };
+  // Hub-backed KB (opt-in WOLFPACK_HUB_KB=1, VPS wolves): KB_BASE = the hub-synced mirror in the wolf's home, KB_OPS = its local inbox root.
+  const hubKb = hubKbFromEnv(config, env);
+  const denEnv: Record<string, string> = {
+    ...(sandbox ? sandbox.env : {}),
+    ...(hubKb ? { KB_BASE: env.KB_BASE || hubKb.mirrorDir, KB_OPS: env.KB_OPS || hubKb.kbOps } : {}),
+    WOLF_DEN: config.den,
+    WOLF_NAME: config.identity.name,
+  };
   const restoreEnv = !opts.env ? patchProcessEnv(denEnv) : () => {};
   try {
-    return await startConfigured(opts, config, { ...env, ...denEnv }, log, sandbox, restoreEnv);
+    const running = await startConfigured(opts, config, { ...env, ...denEnv }, log, sandbox, restoreEnv);
+    if (!hubKb) return running;
+    let hub: RunningHubKb;
+    try {
+      hub = startHubKb(hubKb, config, env, log);
+    } catch (e) {
+      await running.close().catch(() => {});
+      throw e;
+    }
+    const close = running.close;
+    return { ...running, hubKb: hub, close: async () => { hub.stop(); await close(); } };
   } catch (e) {
     restoreEnv();
     await sandbox?.close().catch(() => {});

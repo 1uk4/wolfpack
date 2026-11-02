@@ -133,6 +133,14 @@ iw=$(iidof workerd); run workerd 0.9.8 --unit both; rc=$?
 [ ! -e $WO ] && [ "$(ls /opt | sort | tr '\n' ' ')" = "$ls1" ] && mv /tmp/wo.away $WO
 [ $r1 = 1 ] && [ $rc = 1 ] && grep -q "no existing workerd-wolves install" <<<"$out" && [ "$(ver /opt/wolfpack-workerd)" = 0.9.5 ] && [ "$(iidof workerd)" = "$iw" ] && [ -d $WO ] && ok "no workerd-wolves install: wolves and both refused (rc 1) before anything was written; workerd untouched" || bad "no wolves install rc=$r1/$rc"
 
+echo "--- systemctl list-units fails -> no survival snapshot -> refused before any change"
+printf '#!/bin/sh\n[ "$1" = list-units ] && exit 1\nexec systemctl "$@"\n' > /usr/local/bin/sc-nolist; chmod +x /usr/local/bin/sc-nolist
+clone workerd 0.9.5 0.9.11
+iv=$(iidof workerd-wolves); iw=$(iidof workerd); lv=$(ver /opt/wolfpack-workerd); cv=$(wv)
+DEPLOY_SYSTEMCTL=/usr/local/bin/sc-nolist run workerd 0.9.11 --settle 3 --unit both; rc=$?
+[ $rc = 1 ] && [ "$(ver /opt/wolfpack-workerd)" = "$lv" ] && [ "$(wv)" = "$cv" ] && [ "$(iidof workerd-wolves)" = "$iv" ] && [ "$(iidof workerd)" = "$iw" ] && grep -q "cannot list the active" <<<"$out" && same \
+  && ok "list-units failing: --unit both refused (rc 1) before any change: no install, no restart, stand-ins unchanged" || bad "list-units failure rc=$rc"
+
 echo "--- a foreign process in workerd-wolves's cgroup -> restart refused"
 mkdir -p /etc/systemd/system/workerd-wolves.service.d
 printf '[Service]\nExecStartPost=/bin/bash -c "nohup /usr/bin/tail -f /dev/null >/dev/null 2>&1 &"\n' > /etc/systemd/system/workerd-wolves.service.d/foreign.conf

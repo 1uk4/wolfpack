@@ -83,6 +83,22 @@ fs.cpSync(path.join(APP, ".next", "static"), path.join(outSrv, ".next", "static"
 if (fs.existsSync(path.join(APP, "public"))) fs.cpSync(path.join(APP, "public"), path.join(outSrv, "public"), { recursive: true });
 // Build-only payload the trace sweeps in (same curation as the desktop shell; never broader, that breaks externals).
 for (const extra of ["dist", path.join("node_modules", "electron")]) fs.rmSync(path.join(OUT, extra), { recursive: true, force: true });
+// Next writes ABSOLUTE symlinks (.next/node_modules/<pkg>-<hash> -> <build dir>/.next/standalone/node_modules/<pkg>) for server-external packages. Copied
+// verbatim they point back into the BUILD tree: they work on the build host and dangle anywhere else. Re-point those into the payload, relatively.
+const fixLinks = (dir) => {
+	for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+		const p = path.join(dir, e.name);
+		if (e.isSymbolicLink()) {
+			const t = fs.readlinkSync(p);
+			if (path.isAbsolute(t) && (t === STANDALONE || t.startsWith(STANDALONE + path.sep))) {
+				const to = path.join(OUT, path.relative(STANDALONE, t));
+				fs.rmSync(p);
+				fs.symlinkSync(path.relative(path.dirname(p), to), p);
+			}
+		} else if (e.isDirectory()) fixLinks(p);
+	}
+};
+fixLinks(OUT);
 // Whole-payload audit: no env files, no auth.json, no data/ dir outside node_modules; every symlink resolves inside the payload.
 const realOut = fs.realpathSync(OUT);
 const audit = (dir, inNodeModules) => {

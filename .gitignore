@@ -48,3 +48,6 @@ viz/
 .turbo/
 .next/
 dist-release/
+
+# tracer --console output (screenshots)
+infra/tracer/out/

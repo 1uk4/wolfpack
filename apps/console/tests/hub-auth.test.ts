@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
-import { bearerOf, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
+import { bearerOf, cookieTokenOf, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
 import { createMemoryApi } from "../src/server/memory-api.ts";
 import { createConsoleClient, makeRequestToken, nextRequestToken } from "../src/server/console-client.ts";
 
@@ -161,5 +161,15 @@ describe("request token fails closed", () => {
 	});
 	it("real next/headers outside a request is undefined", async () => {
 		assert.equal(await nextRequestToken(), undefined);
+	});
+});
+
+describe("cookie fallback for server-rendered navigations", () => {
+	it("makeRequestToken: bearer wins, else the hub cookie, else null", async () => {
+		const tok = (h: Record<string, string>) => makeRequestToken(async () => new Headers(h))();
+		assert.equal(await tok({ authorization: "Bearer abc", cookie: "wolfpack_hub_token=zzz" }), "abc");
+		assert.equal(await tok({ cookie: "a=1; wolfpack_hub_token=t%2Fk; b=2" }), "t/k");
+		assert.equal(await tok({ cookie: "other=1" }), null);
+		assert.equal(cookieTokenOf("wolfpack_hub_token=%E0%A4%A"), undefined);
 	});
 });

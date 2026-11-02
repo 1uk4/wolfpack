@@ -32,8 +32,33 @@ export const readHubToken = (s: TokenStorage): string | undefined => {
 		return undefined;
 	}
 };
-export const saveHubToken = (s: TokenStorage, token: string): void => s.setItem(HUB_TOKEN_KEY, token);
+/**
+ * Server-rendered pages (/wolf/<name>, thread pages) are plain navigations: the browser cannot attach an Authorization header, so the
+ * paired token is mirrored into a SameSite=Strict cookie that the console server reads as a fallback (server/console-client.ts). Written
+ * only where a `document` exists (the browser); the storage-injected unit tests are unaffected.
+ */
+export const HUB_COOKIE = "wolfpack_hub_token";
+const writeCookie = (token: string | undefined): void => {
+	if (typeof document === "undefined") return;
+	const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+	document.cookie = token ? `${HUB_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Strict; Max-Age=31536000${secure}` : `${HUB_COOKIE}=; Path=/; SameSite=Strict; Max-Age=0`;
+};
+/** The token in a Cookie request header, if any. */
+export function cookieTokenOf(header: string | null | undefined): string | undefined {
+	for (const part of (header ?? "").split(";")) {
+		const i = part.indexOf("=");
+		if (i > 0 && part.slice(0, i).trim() === HUB_COOKIE) {
+			try { return decodeURIComponent(part.slice(i + 1).trim()) || undefined; } catch { return undefined; }
+		}
+	}
+	return undefined;
+}
+export const saveHubToken = (s: TokenStorage, token: string): void => {
+	s.setItem(HUB_TOKEN_KEY, token);
+	writeCookie(token);
+};
 export const clearHubToken = (s: TokenStorage): void => {
+	writeCookie(undefined);
 	try {
 		s.removeItem(HUB_TOKEN_KEY);
 	} catch {

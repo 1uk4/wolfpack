@@ -134,6 +134,30 @@ if [ -n "${TRACER_DURABLE:-}" ]; then
   [ $RC -eq 0 ] && echo "DURABILITY PASS: the interrupted turn completed after kill -9 + container restart" || { echo "DURABILITY FAIL rc=$RC"; tail -n 20 $D/log/workerd.log; }
   exit $RC
 fi
+if [ -n "${TRACER_CONSOLE:-}" ]; then
+  # --console: the standalone console (scripts/build-server.mjs payload at /opt/console) in RELAY mode + a headless browser round-trip to hal2.
+  # Relay mode = WOLFPACK_HUB_URL set, WOLFPACK_API_URL NOT set, and a token. The token is the BROWSER's (a `hubd pair --kind browser` code traded at
+  # /v1/pair, handed to the console's /pair page as #token=, exactly what the hub's own /pair page does); the console process itself holds no token.
+  OUT=/out; mkdir -p "$OUT"; rm -f "$OUT"/console-proof-*.png
+  BCODE=$(code --kind browser); BTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$BCODE\",\"label\":\"tracer-browser\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  CPORT=3210; CONSOLE=http://127.0.0.1:$CPORT
+  echo "== start console (user console, standalone server, RELAY mode: WOLFPACK_HUB_URL=$HUB, no WOLFPACK_API_URL, no env token)"
+  ( cd /opt/console && exec runuser -u console -- env -u WOLFPACK_API_URL -u WOLFPACK_HUB_TOKEN HOME=/home/console PORT=$CPORT HOSTNAME=127.0.0.1 NODE_ENV=production WOLFPACK_HUB_URL=$HUB node server.js ) >"$D/log/console.log" 2>&1 &
+  wait_for "curl -sf $CONSOLE/pair" || { cat $D/log/console.log >&2; exit 1; }
+  CPID=$(pgrep -u console | head -1); CENV=$(runuser -u console -- tr '\0' '\n' < /proc/$CPID/environ 2>/dev/null || runuser -u console -- sh -c "tr '\\0' '\\n' < /proc/$CPID/environ")
+  echo "console env (pid $CPID): WOLFPACK_API_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_API_URL=') (must be 0); WOLFPACK_HUB_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=') (must be 1)"
+  [ "$(echo "$CENV" | grep -c '^WOLFPACK_API_URL=')" = 0 ] && [ "$(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=')" = 1 ] || { echo "FATAL: console is not configured for relay mode" >&2; exit 1; }
+  set +e
+  ( cd /opt/proof && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node console-proof.mjs $CONSOLE "$BTOKEN" "$OUT" "${TRACER_REPLY:-tracer-pong}" ); RC=$?
+  if [ $RC -eq 0 ]; then
+    # hub-side evidence that the console really went through the relay: the browser token was used by the console server on the hub
+    as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js tokens list --data-dir "$HUBD_DATA" | tee /tmp/tokens.out
+    grep 'tracer-browser' /tmp/tokens.out | grep -vq 'lastUsed=never' || { echo "FAIL: hubd never saw the browser token used" >&2; RC=1; }
+  fi
+  set -e
+  if [ $RC -eq 0 ]; then echo "CONSOLE RELAY PROOF OK: browser -> console (relay mode) -> hubd -> workerd -> wolfd hal2 -> reply rendered"; else echo "CONSOLE RELAY PROOF FAILED (screenshot in /out, i.e. infra/tracer/out)"; echo "--- logs"; tail -n 30 $D/log/*.log; fi
+  exit $RC
+fi
 HUBD_PID=$(pidof_cmd hubd "hubd/dist/cli.js serve"); WORKERD_PID=$(pidof_cmd wolf-hal2 "bin/workerd.js --wolves"); WOLFD_PID=$(pidof_cmd wolf-hal2 "$WOLFD_PAT")
 echo "pids: hubd=$HUBD_PID workerd=$WORKERD_PID wolfd=$WOLFD_PID"
 echo "wolfd runs as: $(ps -o user= -p "$WOLFD_PID")  workerd runs as: $(ps -o user= -p "$WORKERD_PID")"

@@ -15,6 +15,7 @@
 
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
+import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { resolveThreadId } from "../core/thread-adapter.ts";
 import { workspaceGraph } from "./branch-graph.ts";
 import { getConsoleClient } from "./console-client.ts";
@@ -70,6 +71,8 @@ export const isBusy = (err: unknown): err is Error => isError(err, "BusyError");
 function failure(err: unknown): Response {
 	if (err instanceof TooLarge) return json({ error: err.message }, 413);
 	if (isNotFound(err)) return json({ error: err.message }, 404);
+	// Relay mode: a missing/revoked browser token is a HubAuthError (name ProtocolError, code unauthorized, hubAuth): 401 + the marker, so the browser goes to /pair.
+	if (isError(err, "ProtocolError") && (err as Error & { hubAuth?: boolean }).hubAuth === true) return Response.json({ error: err.message, code: "unauthorized" }, { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
 	// A refusal the user can act on (unsupported type, too large, unknown attachment).
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);

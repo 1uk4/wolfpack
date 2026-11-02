@@ -12,8 +12,10 @@
  *   - its ledger events are exactly one, and that one is `work.created` (nothing ever happened to it);
  *   - EVERY descendant (children, grandchildren, ...) is an orphan too: `deleteWork` cascades to the whole subtree, so one real
  *     descendant anywhere below keeps the whole chain out. A last check re-derives the cascade set before each delete.
- * SAFETY VALVE: if more than max(3, 10% of all items) qualify, `--apply` aborts unless `--force` (a sign the scan is wrong, e.g. an
- * unmounted work dir). The full list is always printed first. Tests: hubd.readonly.test.ts "work-orphans ...".
+ * SAFETY VALVE: `--apply` aborts unless `--force` when every item qualifies (orphans >= total), when the hub has 10 items or fewer and
+ * more than 3 qualify, or (above 10 items) when more than max(3, 10%) qualify: a sign the scan is wrong, e.g. an unmounted work dir.
+ * deleteWork appends `work.deleted` and unlinks the .md only; it does NOT clear other items' dependsOn/blocks references, so those
+ * are reported as warnings (dangling links) for the operator. The full list is always printed first. Tests: hubd.readonly.test.ts "work-orphans ...".
  */
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -28,12 +30,25 @@ export interface OrphanReport {
   deleted: string[];
   total: number;
   limit: number;
+  /** Non-orphan items that link to an orphan (dependsOn/blocks): the references dangle after a delete. */
+  warnings: string[];
   /** Set when --apply was refused (over the limit without --force); nothing was deleted. */
   aborted?: string;
 }
 
 /** Strip control characters (incl. newlines/escapes) and cap the length, so a title cannot forge output lines. */
 export const sanitizeTitle = (t: string): string => t.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+
+/** Same sanitising for ids and domain names (they come from the ledger, which a bad event could fill with control characters). */
+export const sanitizeToken = (t: unknown): string => String(t).replace(/[^\x20-\x7e]/g, "?").slice(0, 80);
+
+/** The abort rule for --apply without --force. */
+export function overLimit(orphans: number, total: number): boolean {
+  if (orphans === 0) return false;
+  if (orphans >= total) return true;
+  if (total <= 10) return orphans > 3;
+  return orphans > Math.max(3, Math.ceil(total * 0.1));
+}
 
 export function cleanOrphans(dataDir: string, opts: { apply: boolean; force?: boolean }): OrphanReport {
   const roots = hubRoots(dataDir);
@@ -76,29 +91,37 @@ export function cleanOrphans(dataDir: string, opts: { apply: boolean; force?: bo
       walk(id);
       return out;
     };
-    const report: OrphanReport = { orphans: [], skipped: [], deleted: [], total: items.size, limit: Math.max(3, Math.ceil(items.size * 0.1)) };
+    const report: OrphanReport = { orphans: [], skipped: [], deleted: [], total: items.size, limit: items.size <= 10 ? 3 : Math.max(3, Math.ceil(items.size * 0.1)), warnings: [] };
     for (const [id, it] of items) {
       const sid = id as string;
       const noMd = !existsSync(join(workDir(roots, it.domain as string), `${sid}.md`));
       if (!noMd) continue;
       if (!dirReadable(it.domain as string)) {
-        report.skipped.push({ id: sid, reason: `the ${it.domain} work dir is missing or unreadable; cannot tell whether the .md exists` });
+        report.skipped.push({ id: sanitizeToken(sid), reason: `the ${sanitizeToken(it.domain)} work dir is missing or unreadable; cannot tell whether the .md exists` });
         continue;
       }
       if (!selfOrphan(sid)) {
-        report.skipped.push({ id: sid, reason: `no .md but its ledger events are [${(events.get(sid) ?? []).join(", ")}], not exactly one work.created; inspect by hand` });
+        report.skipped.push({ id: sanitizeToken(sid), reason: `no .md but its ledger events are [${(events.get(sid) ?? []).map(sanitizeToken).join(", ")}], not exactly one work.created; inspect by hand` });
         continue;
       }
       const bad = subtree(sid).filter((x) => !selfOrphan(x));
       if (bad.length) {
-        report.skipped.push({ id: sid, reason: `descendant(s) that are not orphans: ${bad.join(", ")}` });
+        report.skipped.push({ id: sanitizeToken(sid), reason: `descendant(s) that are not orphans: ${bad.map(sanitizeToken).join(", ")}` });
         continue;
       }
-      report.orphans.push({ id: sid, domain: it.domain as string, title: sanitizeTitle(it.title) });
+      report.orphans.push({ id: sanitizeToken(sid), domain: sanitizeToken(it.domain), title: sanitizeTitle(it.title) });
+    }
+    // Links from items that will survive to an orphan (deleteWork does not clear them).
+    const orphanIds = new Set(report.orphans.flatMap((o) => subtree(o.id)));
+    for (const it of items.values()) {
+      if (orphanIds.has(it.id as string)) continue;
+      for (const ref of [...(it.dependsOn ?? []), ...(it.blocks ?? [])] as string[]) {
+        if (orphanIds.has(ref)) report.warnings.push(`${sanitizeToken(it.id)} links to orphan ${sanitizeToken(ref)}; the link will dangle after the delete`);
+      }
     }
     if (opts.apply) {
-      if (report.orphans.length > report.limit && !opts.force) {
-        report.aborted = `${report.orphans.length} orphans is more than max(3, 10% of ${report.total} items) = ${report.limit}; nothing deleted. Check the list, then re-run with --force if it is right`;
+      if (overLimit(report.orphans.length, report.total) && !opts.force) {
+        report.aborted = `${report.orphans.length} of ${report.total} items qualify, over the safety limit (all items, or more than ${report.limit}); nothing deleted. Check the list, then re-run with --force if it is right`;
         return report;
       }
       for (const o of report.orphans) {

@@ -2,16 +2,18 @@
  * H6b: the pre-flight write probe (no ledger bytes change on EROFS), the write-path errno table, and `hubd work-orphans`.
  * Referenced by name from work-writes.ts ("probe: ...") and work-orphans.ts ("work-orphans ...").
  */
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHubServer as createRaw, type HubServer } from "./server.js";
 import { OP, seedTokens, workerTokenFor } from "./testing/tokens.js";
 import { hubRoots } from "./layout.js";
-import { cleanOrphans } from "./work-orphans.js";
+import { cleanOrphans, overLimit } from "./work-orphans.js";
 import { main } from "./cli.js";
-import { deleteItem, mapWorkError, setWorkStoreProbe } from "./work-writes.js";
+import { claimItem, deleteItem, mapWorkError, probeWorkStore, setWorkStoreProbe, sweepProbeFiles, unclaimItem } from "./work-writes.js";
+import { releaseWolfClaims } from "./registry.js";
+import { createWork } from "@wolfpack/kb/client";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { workDir } from "@wolfpack/kb/shared";
 
@@ -115,11 +117,101 @@ describe("errno table (write paths only)", () => {
     // the protocol code is engine_error for both typed ones, so memory_unavailable (409 elsewhere) is not reused
     expect(mapWorkError(errno("EROFS"), { write: true }).code).toBe("engine_error");
   });
+  it("errno table: 'nothing was changed' only for probe-time failures; a post-probe failure says the ledger may hold a partial change", () => {
+    for (const c of ["EROFS", "EACCES", "EPERM"]) {
+      const post = mapWorkError(errno(c), { write: true }).message; // not from the probe: the append already happened
+      expect(post).not.toMatch(/nothing was changed/);
+      expect(post).toMatch(/partial change/);
+      expect(post).toMatch(/hubd work-orphans/);
+    }
+    expect(mapWorkError(errno("EACCES"), { write: true }).message).not.toMatch(/turned off/);
+  });
   it("errno table: reads never get the typed codes", () => {
     for (const c of ["EROFS", "EACCES", "EPERM"]) {
       expect(mapWorkError(errno(c)).details?.code).toBeUndefined();
       expect(mapWorkError(errno(c), { write: false }).message).toBe("internal hub error");
     }
+  });
+});
+
+describe("probe confinement, file and sweep", () => {
+  const mkRoots = () => {
+    const d = mkdtempSync(join(tmpdir(), "hubd-probe-"));
+    tmp.push(d);
+    return { d, r: hubRoots(d) };
+  };
+  it("probe: refuses a domain name that could traverse (../, separators, dots, empty) before touching any path", () => {
+    const { r } = mkRoots();
+    for (const bad of ["../x", "a/b", "..", ".", "", ".hidden", "a\\b", "x".repeat(65)]) {
+      expect(() => probeWorkStore(r, bad), bad).toThrow(/invalid domain name/);
+    }
+    expect(existsSync(join(r.kbBase, "domains"))).toBe(false);
+  });
+  it("probe: the ancestor climb stops at the KB root and throws; a FILE in the way is not a directory", () => {
+    const { d, r } = mkRoots();
+    expect(() => probeWorkStore(r, "personal")).toThrow(/no existing parent below the KB root/); // kbBase/domains does not exist
+    mkdirSync(r.kbBase, { recursive: true });
+    writeFileSync(join(r.kbBase, "domains"), "i am a file"); // existsSync would say yes; statSync().isDirectory() says no
+    expect(() => probeWorkStore(r, "personal")).toThrow(/no existing parent below the KB root/);
+    rmSync(join(r.kbBase, "domains"));
+    mkdirSync(join(r.kbBase, "domains"));
+    probeWorkStore(r, "personal"); // climbs to domains/ (a real dir inside the root) and probes it
+    expect(readdirSync(join(r.kbBase, "domains"))).toEqual([]); // the probe file is gone again
+    expect(existsSync(join(d, "outside"))).toBe(false);
+  });
+  it("probe: the probe file is .probe-<hex>, removed after use, and non-.md files are invisible to the work listing; the startup sweep removes stale ones", () => {
+    const { r } = mkRoots();
+    const dir = workDir(r, "personal");
+    mkdirSync(dir, { recursive: true });
+    const seen: string[] = [];
+    const restore = setWorkStoreProbe((d) => { seen.push(readdirSync(d).join(",")); });
+    probeWorkStore(r, "personal");
+    restore();
+    writeFileSync(join(dir, ".probe-deadbeef00112233"), "");
+    writeFileSync(join(dir, ".probe-notmine.md"), "keep");
+    writeFileSync(join(dir, "work-personal-abcd123.md"), "keep");
+    expect(sweepProbeFiles(r)).toBe(1);
+    expect(readdirSync(dir).sort()).toEqual([".probe-notmine.md", "work-personal-abcd123.md"]);
+    expect(seen).toHaveLength(1); // the seam saw the (empty) work dir
+  });
+});
+
+describe("claim / unclaim on a read-only store", () => {
+  const held = () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "hubd-claim-"));
+    tmp.push(dataDir);
+    const r = roots(dataDir);
+    const f = createWork(r, { kind: "feature", domain: "personal", title: "claimable", assignee: "wa", stage: "in_build" } as never);
+    return { dataDir, r, id: f.id as string };
+  };
+  it.skipIf(isRoot())("claim and unclaim only append to the ledger (the .md render is best effort), so they work with an unwritable work dir and never probe", () => {
+    const { dataDir, r, id } = held();
+    let probes = 0;
+    restores.push(setWorkStoreProbe(() => { probes++; throw errno("EROFS"); }));
+    const dir = workDir(r, "personal");
+    chmodSync(dir, 0o555);
+    roDirs.push(dir);
+    const before = ledgerOf(dataDir);
+    claimItem(r, id, "wa" as never);
+    expect(ledgerOf(dataDir).slice(before.length)).toContain('"work.bound"');
+    const mid = ledgerOf(dataDir);
+    unclaimItem(r, id, { id: "system", kind: "operator" });
+    expect(ledgerOf(dataDir).slice(mid.length)).toContain('"work.unbound"');
+    expect(probes).toBe(0);
+  });
+  it.skipIf(isRoot())("releaseWolfClaims on a read-only store releases every claim (ledger shows work.unbound) and returns the ids", () => {
+    const { dataDir, r, id } = held();
+    const g = createWork(r, { kind: "feature", domain: "personal", title: "second", assignee: "wa", stage: "in_build" } as never);
+    claimItem(r, id, "wa" as never);
+    claimItem(r, g.id as string, "wa" as never);
+    const dir = workDir(r, "personal");
+    chmodSync(dir, 0o555);
+    roDirs.push(dir);
+    const before = ledgerOf(dataDir);
+    expect(releaseWolfClaims(r, "wa").sort()).toEqual([id, g.id as string].sort());
+    const added = ledgerOf(dataDir).slice(before.length);
+    expect(added.match(/"work\.unbound"/g)).toHaveLength(2);
+    expect([...loadWorkState(r).values()].filter((i) => i.boundBy === "wa")).toEqual([]);
   });
 });
 
@@ -218,5 +310,27 @@ describe("work-orphans", () => {
     const hub = await createRaw({ dataDir });
     servers.push(hub);
     expect(() => cleanOrphans(dataDir, { apply: false })).toThrow(/stop it first/);
+  });
+
+  it("work-orphans: threshold: all-items, <=10 items with more than 3, and max(3, 10%) only above 10", () => {
+    expect(overLimit(0, 5)).toBe(false);
+    expect(overLimit(2, 2)).toBe(true); // every item qualifies
+    expect(overLimit(4, 8)).toBe(true); // small hub, more than 3
+    expect(overLimit(3, 8)).toBe(false);
+    expect(overLimit(3, 10)).toBe(false);
+    expect(overLimit(4, 40)).toBe(false); // above 10: max(3, ceil(4)) = 4 -> 4 is allowed
+    expect(overLimit(5, 40)).toBe(true);
+    expect(overLimit(4, 11)).toBe(true); // 11 items: max(3, 2) = 3
+  });
+  it("work-orphans: warns about surviving items that link to an orphan (deleteWork does not clear links) and sanitizes ids and domains", async () => {
+    const { dataDir, ids, orphan } = await base();
+    orphan("work-personal-lnk0001");
+    append(dataDir, { type: "work.linked", id: ids[1], at: "2026-10-29 10:00", rel: "depends_on", target: "work-personal-lnk0001" });
+    const r = cleanOrphans(dataDir, { apply: false });
+    expect(r.warnings.join("\n")).toMatch(new RegExp(`${ids[1]} links to orphan work-personal-lnk0001`));
+    const lines: string[] = [];
+    await main(["work-orphans", "--data-dir", dataDir], {}, (m) => lines.push(m));
+    expect(lines.some((l) => l.startsWith("warning: "))).toBe(true);
+    expect(lines.join("\n")).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
   });
 });

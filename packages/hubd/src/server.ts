@@ -48,6 +48,7 @@ import {
   parseWolfId,
   stageRoot,
   sweepStageDirs,
+  sweepProbeFiles,
   type WorkAppendedListener,
 } from "./work-writes.js";
 import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
@@ -268,6 +269,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
+  // The write probe never climbs above <kb>/domains, so a fresh hub needs it to exist. Best effort (a read-only store already has it).
+  try { mkdirSync(`${roots.kbBase}/domains`, { recursive: true }); } catch { /* read-only: nothing to create */ }
+  sweepProbeFiles(roots); // stale .probe-* files of a crashed write probe
   sweepStageDirs(stageRoot(roots)); // scratch dirs orphaned by a crashed hubd (hub-owned <dataDir>/tmp, own prefix, dead pid)
   const revisions = createKbRevisions({
     dataDir: opts.dataDir,

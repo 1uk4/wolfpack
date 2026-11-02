@@ -1,0 +1,22 @@
+# Template: @USER@ = wolf Linux user (wolf-<name>), @HOME@ = its home, @RELEASE@ = unpacked release dir. H4 hardens this.
+[Unit]
+Description=wolfd wolf (@USER@)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@HOME@
+EnvironmentFile=@HOME@/.env
+Environment=HOME=@HOME@
+Environment=WOLF_HOME=@HOME@
+ExecStart=@RELEASE@/launch.sh
+Restart=on-failure
+RestartSec=10
+MemoryMax=@MEMORY_MAX@
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

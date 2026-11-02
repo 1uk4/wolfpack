@@ -7,6 +7,8 @@ const calls: string[][] = [];
 vi.mock("node:child_process", () => ({
   execFile: (cmd: string, args: string[], ...rest: unknown[]) => {
     calls.push([cmd, ...args]);
+    // The tar mock "unpacks" a release: just a launch.sh in the -C dir.
+    if (cmd === "tar") fs.writeFileSync(path.join(args[args.indexOf("-C") + 1]!, "launch.sh"), "#!/bin/sh\n");
     const cb = rest[rest.length - 1] as (e: Error | null, r: { stdout: string; stderr: string }) => void;
     cb(null, { stdout: args.includes("--property=NRestarts") ? "3\n" : args[0] === "is-active" ? "active\n" : "", stderr: "" });
   },
@@ -119,5 +121,64 @@ describe("harness bundle rollback", () => {
 
   it("status reports the restart count", async () => {
     expect(await manager.status("abc123")).toMatchObject({ serviceState: "active", active: true, restarts: 3 });
+  });
+});
+
+describe("runtime wolfd release deploy", () => {
+  let root: string;
+  let manager: InstanceType<typeof WolfManager>;
+  const home = () => path.join(root, "home", "wolf-abc123");
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+
+  beforeEach(async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-mgr-wolfd-"));
+    process.env.WOLFPACK_HOME_ROOT = path.join(root, "home");
+    fs.mkdirSync(path.join(home(), "agent"), { recursive: true });
+    fs.mkdirSync(path.join(root, "data"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "data", "wolves.json"),
+      JSON.stringify([{ id: "abc123", name: "hal2", runtime: "pi-durable", role: "r", domains: [], extensions: [] }]),
+    );
+    manager = new WolfManager(path.join(root, "data"));
+    await manager.init();
+    calls.length = 0;
+  });
+  afterEach(() => {
+    delete process.env.WOLFPACK_HOME_ROOT;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("unpacks the tarball to release/, launches via release/launch.sh, switches runtime, restarts", async () => {
+    const updated = await manager.updateWolfdRelease("abc123", b64("TARBALL"), b64("name: hal2\nworkspace: /w\n"), b64("{}"), { CLAUDE_CODE_OAUTH_TOKEN: "t" });
+    expect(updated.runtime).toBe("wolfd");
+    expect(calls.find((c) => c[0] === "tar")).toEqual(["tar", "-xzf", path.join(home(), ".release.tar.gz"), "-C", path.join(home(), "release.new")]);
+    expect(fs.existsSync(path.join(home(), "release", "launch.sh"))).toBe(true);
+    expect(fs.existsSync(path.join(home(), ".release.tar.gz"))).toBe(false);
+    expect(fs.readFileSync(path.join(home(), "wolf.yaml"), "utf8")).toContain("workspace: /w");
+    expect(fs.readFileSync(path.join(home(), "models.json"), "utf8")).toBe("{}");
+    const launcher = fs.readFileSync(path.join(home(), "agent", "launch.sh"), "utf8");
+    expect(launcher).toContain(`exec "${home()}/release/launch.sh"`);
+    expect(launcher).not.toContain("harness.cjs");
+    expect(fs.readFileSync(path.join(home(), ".env"), "utf8")).toContain("CLAUDE_CODE_OAUTH_TOKEN=t");
+    expect(calls).toContainEqual(["systemctl", "restart", "wolf-abc123.service"]);
+    expect(manager.resolve("hal2")?.runtime).toBe("wolfd");
+  });
+
+  it("keeps the previous release as release.prev on a second deploy", async () => {
+    await manager.updateWolfdRelease("abc123", b64("T1"), b64("name: hal2\nworkspace: /w\n"));
+    fs.writeFileSync(path.join(home(), "release", "MARK"), "one");
+    await manager.updateWolfdRelease("abc123", b64("T2"), b64("name: hal2\nworkspace: /w\n"));
+    expect(fs.readFileSync(path.join(home(), "release.prev", "MARK"), "utf8")).toBe("one");
+    expect(fs.existsSync(path.join(home(), "release", "MARK"))).toBe(false);
+  });
+
+  it("pi-durable deploys still write the harness launcher", async () => {
+    await manager.updatePiDurableBundle("abc123", b64("H"), b64("id: abc123\nname: hal2\n"), b64("#"));
+    expect(fs.readFileSync(path.join(home(), "agent", "launch.sh"), "utf8")).toContain("harness.cjs");
+    expect(manager.resolve("hal2")?.runtime).toBe("pi-durable");
+  });
+
+  it("rejects an unknown wolf", async () => {
+    await expect(manager.updateWolfdRelease("nope", b64("T"), b64("x"))).rejects.toThrow(/Wolf not found/);
   });
 });

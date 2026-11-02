@@ -89,7 +89,7 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
   // 2. Runtime
   let runtime: string;
   if (opts.runtime) {
-    runtime = opts.runtime === "pi-durable" ? "pi-durable" : "pi";
+    runtime = opts.runtime === "pi-durable" || opts.runtime === "wolfd" ? opts.runtime : "pi";
   } else if (interactive) {
     const defaultRt = host ? "pi-durable" : "pi";
     runtime = await select<string>("Runtime", [

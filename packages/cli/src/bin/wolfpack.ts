@@ -68,6 +68,7 @@ ${c.bold("WORKFLOW COMMANDS")}
   launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf> [--host <h>]        Deploy wolf to host (bundle)
   sync --all                      Sync every wolf on every host
+  sync <wolf> --release <tgz>     runtime wolfd: deploy this wolfd release tarball (or $WOLFD_RELEASE)
   sync <wolf> --reset-kb-base     Also rewrite a local wolf's KB_BASE from config (default keeps its .env value)
   list [--json]                   Show all wolves grouped by host
   status <wolf> [--host <h>]      Wolf health and service state
@@ -149,6 +150,8 @@ function parseArgs(argv: string[]) {
       flags.all = true;
     } else if (arg === "--reset-kb-base") {
       flags["reset-kb-base"] = true;
+    } else if (arg === "--release" && argv[i + 1]) {
+      flags.release = argv[++i];
     } else if (arg === "--check") {
       flags.check = true;
     } else if (arg === "-f" || arg === "--follow") {
@@ -346,6 +349,7 @@ async function main(): Promise<void> {
           host: flags.host as string | undefined,
           all: flags.all as boolean | undefined,
           resetKbBase: flags["reset-kb-base"] as boolean | undefined,
+          release: flags.release as string | undefined,
         });
         break;
 

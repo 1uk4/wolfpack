@@ -47,3 +47,4 @@ coverage/
 viz/
 .turbo/
 .next/
+dist-release/

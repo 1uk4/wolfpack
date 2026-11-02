@@ -32,8 +32,8 @@ export interface WolfConfig {
 
 export type WolfProfile = "worker" | "assistant";
 
-/** Wolfpack runtime types: pi (original) | pi-durable (harness-based). */
-export type WolfRuntime = "pi" | "pi-durable";
+/** Wolfpack runtime types: pi (original) | pi-durable (harness bundle) | wolfd (release tarball run by launch.sh). */
+export type WolfRuntime = "pi" | "pi-durable" | "wolfd";
 
 /** Version + content identity of one installed extension (drift detection). */
 export interface ExtensionStamp {

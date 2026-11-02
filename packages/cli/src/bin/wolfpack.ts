@@ -17,6 +17,7 @@ import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
+import { deployCmd } from "../commands/deploy.js";
 import { workDoctor } from "../commands/work-doctor.js";
 import { workBackfillFeatureStages } from "../commands/work-backfill.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
@@ -48,6 +49,7 @@ ${c.bold("COMMANDS")}
   usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|use|day)
   work backfill-feature-stages    Move features whose tasks all shipped to shipped (--dry-run, --domain d)
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
+  deploy <wolf> --release <tag>   Host downloads + verifies a release, switches, health-checks, rolls back (--host, --dry-run, --component hubd|workerd)
   release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
@@ -379,6 +381,23 @@ async function main(): Promise<void> {
         if (sub !== "doctor") throw new Error("Usage: wolfpack work doctor [--domain d] [--json] | work backfill-feature-stages [--dry-run]");
         await workDoctor({ domain: flags.domain as string | undefined, json: flags.json as boolean | undefined });
         break;
+
+      case "deploy": {
+        const a = process.argv.slice(3);
+        const opt = (n: string) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : undefined; };
+        const vals = new Set(["--release", "--component", "--host", "--health-timeout"].map((n) => a.indexOf(n) + 1).filter((i) => i > 0));
+        const ht = opt("--health-timeout");
+        const code = await deployCmd({
+          wolf: a.find((x, i) => !x.startsWith("-") && !vals.has(i)),
+          component: opt("--component"),
+          release: opt("--release") ?? "",
+          host: opt("--host"),
+          dryRun: a.includes("--dry-run"),
+          healthTimeout: ht === undefined ? undefined : Number(ht),
+        });
+        if (code !== 0) process.exit(code);
+        break;
+      }
 
       case "release": {
         const a = process.argv.slice(3);

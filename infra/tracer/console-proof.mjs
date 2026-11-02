@@ -1,8 +1,11 @@
 // Browser-driven proof (runs inside the --console container): the standalone console in RELAY mode, a real headless chromium.
-//   node console-proof.mjs <console-url> <browser-token> <out-dir> <expected-reply>
+//   node console-proof.mjs <console-url> <hub-pair-link> <out-dir> <expected-reply>
+// The pair link is what `hubd pair --kind browser` prints (QR target): the hub's /pair page with a one-time code. The page redirects to <console>/pair#token=...
+// After the proof the entrypoint revokes the device (/tmp/proof-want-revoke -> hubd tokens revoke -> /tmp/proof-revoked) and the console must send the browser back to /pair.
 // Fails loudly (exit 1 + screenshot <out-dir>/console-proof-FAIL.png). Success prints CONSOLE RELAY PROOF OK from the caller.
 import { chromium } from "playwright-core";
-const [base, token, out, expect] = process.argv.slice(2);
+const [base, pairLink, out, expect] = process.argv.slice(2);
+let token; // device token from pairing via the QR link; the mobile pass reuses it, so it must run before the revoke step
 const step = (m) => console.log(`[console-proof] ${m}`);
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -32,11 +35,25 @@ try {
   step(`bogus token: landed on ${page.url()}, cookies left=${left.length}, localStorage token=${tokLeft}`);
   if (left.length || tokLeft) throw new Error("bogus token/cookie were not cleared");
   await shot("0-bogus-token-to-pair");
-  // 2. pair exactly like the hub's /pair page does: land on /pair#token=...
-  await page.goto("about:blank"); // a hash-only navigation from /pair would not reload the page
-  await page.goto(`${base}/pair#token=${token}`);
+  // 2. pair through the QR link: the hub's /pair page (code prefilled from ?code=), submit, the hub redirects to <console>/pair#token=...
+  await page.goto("about:blank");
+  await page.goto(pairLink);
+  await page.locator("#code").waitFor({ timeout: 10000 });
+  if (!(await page.locator("#code").inputValue())) throw new Error("the QR link did not prefill the pairing code");
+  await page.getByRole("button", { name: "Pair" }).click();
   await page.waitForURL(`${base}/`, { timeout: 20000 });
-  step("paired: token stored by the console /pair page, redirected home");
+  step("paired through the hub /pair page (QR link): token stored by the console /pair page, redirected home");
+  const stored = await page.evaluate(() => localStorage.getItem("wolfpack.hub.token"));
+  token = stored;
+  if (!stored) throw new Error("the browser did not store a token");
+  if (page.url().includes("token=")) throw new Error("token left in the URL");
+  // the QR code is single-use: a second visit to the same link cannot pair
+  const again = await ctx.newPage();
+  await again.goto(pairLink);
+  await again.getByRole("button", { name: "Pair" }).click();
+  await again.getByText("already used or expired").waitFor({ timeout: 10000 });
+  step("the same QR link a second time: refused (single use)");
+  await again.close();
   // 3. the wolf list shows hal2, its thread list shows the home thread
   await page.goto(`${base}/wolf/hal2`);
   const link = page.locator('[data-testid="thread-list"] a').first();
@@ -59,6 +76,19 @@ try {
   step("reply still there after reload (history read back through the hub relay)");
   await shot("3-reloaded");
   await mobilePass();
+  // 6. revoke: the entrypoint runs `hubd tokens revoke` while we wait; the console must then send the browser back to /pair
+  await import("node:fs").then((fs) => fs.writeFileSync("/tmp/proof-want-revoke", "1"));
+  step("waiting for the device to be revoked on the hub");
+  for (let i = 0; i < 120 && !(await import("node:fs")).existsSync("/tmp/proof-revoked"); i++) await new Promise((r) => setTimeout(r, 500));
+  if (!(await import("node:fs")).existsSync("/tmp/proof-revoked")) throw new Error("the revoke signal never came");
+  const after = await ctx.request.get(`${base}/api/wolves`, { headers: { Authorization: `Bearer ${stored}` } });
+  step(`revoked token GET /api/wolves -> ${after.status()}`);
+  if (after.status() !== 401) throw new Error("a revoked token still works through the console");
+  await page.goto(`${base}/wolf/hal2`);
+  await page.waitForURL(/\/pair(\?|#|$)/, { timeout: 20000 });
+  await page.getByText("Sign in to the hub").waitFor({ timeout: 10000 });
+  step(`after revoke the console sent the browser to ${page.url()}`);
+  await shot("4-revoked-to-pair");
   await browser.close();
 } catch (e) {
   console.error(`[console-proof] FAIL: ${e.message}`);

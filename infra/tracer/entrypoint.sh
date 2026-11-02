@@ -42,7 +42,7 @@ trap cleanup EXIT
 # fresh PIDs and the lock dir is stale-checked the same way. Clear it like a reboot would. (Finding for H5: lock liveness is by pid only.)
 [ -z "${TRACER_DURABLE:-}" ] || find "$D" /home/wolf-hal2 -name '*.lock' -path '*run*' -delete 2>/dev/null || true
 echo "== start hubd (user hubd)"
-as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js serve --data-dir "$HUBD_DATA" --port $HUB_PORT --host 127.0.0.1 >"$D/log/hubd.log" 2>&1 &
+as hubd HOME=/home/hubd ${TRACER_CONSOLE:+HUBD_CONSOLE_URL=http://127.0.0.1:3210} node $APP/packages/hubd/dist/cli.js serve --data-dir "$HUBD_DATA" --port $HUB_PORT --host 127.0.0.1 >"$D/log/hubd.log" 2>&1 &
 wait_for "grep -q 'hubd listening' $D/log/hubd.log" || { cat $D/log/hubd.log >&2; exit 1; }
 
 code() { as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js pair --data-dir "$HUBD_DATA" "$@" | sed -n 's/^pairing code: //p'; }
@@ -139,7 +139,13 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   # Relay mode = WOLFPACK_HUB_URL set, WOLFPACK_API_URL NOT set, and a token. The token is the BROWSER's (a `hubd pair --kind browser` code traded at
   # /v1/pair, handed to the console's /pair page as #token=, exactly what the hub's own /pair page does); the console process itself holds no token.
   OUT=/out; mkdir -p "$OUT"; rm -f "$OUT"/console-proof-*.png
-  BCODE=$(code --kind browser); BTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$BCODE\",\"label\":\"tracer-browser\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
+  # P2: the browser pairs through the QR link flow: `hubd pair --kind browser --label ... ` prints the QR + link (HUBD_PUBLIC_URL); the proof opens that link
+  rm -f /tmp/proof-want-revoke /tmp/proof-revoked
+  as hubd HOME=/home/hubd HUBD_PUBLIC_URL=$HUB node $APP/packages/hubd/dist/cli.js pair --kind browser --label tracer-browser --data-dir "$HUBD_DATA" >/tmp/pair.out
+  sed -E 's/(pairing code: |code=)[A-Za-z0-9_-]+/\1<redacted>/' /tmp/pair.out
+  PAIRLINK=$(grep -o 'http[^ ]*/pair?code=[^ ]*' /tmp/pair.out | head -1)
+  [ -n "$PAIRLINK" ] || { echo "FATAL: hubd pair printed no link" >&2; exit 1; }
+  grep -q '[█▀▄]' /tmp/pair.out || { echo "FATAL: hubd pair printed no QR code" >&2; exit 1; }
   CPORT=3210; CONSOLE=http://127.0.0.1:$CPORT
   echo "== start console (user console, standalone server, RELAY mode: WOLFPACK_HUB_URL=$HUB, no WOLFPACK_API_URL, no env token)"
   ( cd /opt/console && exec runuser -u console -- env -u WOLFPACK_API_URL -u WOLFPACK_HUB_TOKEN HOME=/home/console PORT=$CPORT HOSTNAME=127.0.0.1 NODE_ENV=production WOLFPACK_HUB_URL=$HUB node server.js ) >"$D/log/console.log" 2>&1 &
@@ -151,8 +157,12 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   echo "console env (pid $CPID): WOLFPACK_API_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_API_URL=') (must be 0); WOLFPACK_HUB_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=') (must be 1)"
   [ "$(echo "$CENV" | grep -c '^WOLFPACK_API_URL=')" = 0 ] && [ "$(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=')" = 1 ] || { echo "FATAL: console is not configured for relay mode" >&2; exit 1; }
   set +e
-  ( cd /opt/proof && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node console-proof.mjs $CONSOLE "$BTOKEN" "$OUT" "${TRACER_REPLY:-tracer-pong}" ); RC=$?
-  if [ $RC -eq 0 ]; then
+  ( cd /opt/proof && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers PAIR_LINK="$PAIRLINK" node console-proof.mjs $CONSOLE "$PAIRLINK" "$OUT" "${TRACER_REPLY:-tracer-pong}" ) &
+  PROOF_PID=$!
+  # the proof pauses at /tmp/proof-want-revoke (browser paired and used); check lastUsed, revoke the device, tell it to continue
+  for _ in $(seq 1 180); do [ -e /tmp/proof-want-revoke ] || kill -0 $PROOF_PID 2>/dev/null || break; [ -e /tmp/proof-want-revoke ] && break; sleep 1; done
+  RC=0
+  if [ -e /tmp/proof-want-revoke ]; then
     # hub-side evidence that the console really went through the relay: the browser token was used by the console server on the hub
     # hubd flushes lastUsedAt to disk debounced, so poll (up to ~20s) instead of reading once
     SEEN=
@@ -162,7 +172,12 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
     done
     cat /tmp/tokens.out
     [ -n "$SEEN" ] || { echo "FAIL: hubd never saw the browser token used" >&2; RC=1; }
+    BID=$(grep 'tracer-browser' /tmp/tokens.out | awk '{print $1}' | head -1)
+    echo "== revoke device $BID (tracer-browser): hubd tokens revoke"
+    as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js tokens revoke "$BID" --data-dir "$HUBD_DATA" || RC=1
+    touch /tmp/proof-revoked
   fi
+  wait $PROOF_PID || RC=1
   set -e
   if [ $RC -eq 0 ]; then echo "CONSOLE RELAY PROOF OK: browser -> console (relay mode) -> hubd -> workerd -> wolfd hal2 -> reply rendered"; else echo "CONSOLE RELAY PROOF FAILED (screenshot in /out, i.e. infra/tracer/out)"; echo "--- logs"; tail -n 30 $D/log/*.log; fi
   exit $RC

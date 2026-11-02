@@ -120,6 +120,19 @@ runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind
    - `curl -sN -m 20 -H "$A" $H/v1/events` shows `wolf.presence` with state `online` for `1uk4`;
    - `journalctl -u hubd --since "5 min ago"` has no `rejected wolves` / `not registered` lines for `mac-1uk4`; workerd on the Mac logs `hub link: online (host mac-1uk4)`, and `ss -tnp state established '( sport = :<HUBD_PORT> )'` on the hub host (the `HUBD_PORT` you set; 3150 on sfo-01) lists the Mac's connection.
 
+## 5b. Pair a phone or laptop, revoke a device (P2)
+Each device gets its own revocable `browser` token. Set `HUBD_PUBLIC_URL` (hubd.env or the shell running `hubd pair`) to the base URL the PHONE reaches the hub at, including any prefix, e.g. `https://sfo-01.<tailnet>.ts.net/hub`; set `HUBD_CONSOLE_URL` on the serve side so the hub's `/pair` page hands the token to the console (`<console>/pair#token=...`; the fragment never reaches a server or a log).
+```
+runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind browser --label "Luka iPhone" --data-dir /var/lib/hubd
+```
+It prints a QR code and the plain link `<HUBD_PUBLIC_URL>/pair?code=<one-time code>`. Scan it (or open the link), tap Pair. The code is single-use and expires after 10 minutes; `--label` names the device (default `Browser <date>`) and shows in `hubd tokens list` with kind `browser`, `lastUsed`. `--url` overrides `HUBD_PUBLIC_URL` for one call. The code is a secret until used: do not paste the QR into chats. The hub's pairing page posts to the relative path `v1/pair`, so it works behind a proxy that strips `/hub`.
+Revoke a lost device (effective on its next request; open event streams are closed):
+```
+runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs tokens list --data-dir /var/lib/hubd
+runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs tokens revoke tok-xxxxxxxxxx --data-dir /var/lib/hubd
+```
+The console forwards each browser's own token verbatim; its own `WOLFPACK_HUB_TOKEN` is used only by `GET /api/health`. A browser without (or with a revoked) token gets 401 and is sent to `/pair`.
+
 ## 6. Rollback / removal
 - Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
 - Remove hubd (leaves Dewey, the KB and the lane dirs untouched): `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. It keeps `/var/lib/hubd`, the env file and the user; `uninstall --purge` removes them too (stop first and back the state up if it matters). **`hubd export` does not work on sfo-01**: its tree walk refuses symlinks (`refusing to export a symlink: kb/base/domains`, `export.ts walk`), so it fails safely and never reads Dewey's KB, but it also produces no backup. Back up with the service stopped; hubd is always restarted, even if tar fails:

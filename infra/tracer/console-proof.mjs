@@ -74,16 +74,20 @@ async function mobilePass() {
   const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
   const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: UA });
   const mp = await mctx.newPage();
+  const extra = []; // contexts opened only for the manifest probe; closed in finally
+  const VW = 390; // the emulated viewport width; overflow is checked against this constant, not window.innerWidth (which a wide layout can inflate)
   mp.on("pageerror", (e) => console.log(`[console-proof:mobile] pageerror: ${e.message}`));
   const mshot = (n) => mp.screenshot({ path: `${out}/console-mobile-${n}.png` }).catch(() => {});
   const noOverflow = async (where) => {
     const w = await mp.evaluate(() => ({ sw: document.documentElement.scrollWidth, bw: document.body.scrollWidth, iw: window.innerWidth }));
-    mstep(`${where}: scrollWidth=${w.sw} body=${w.bw} innerWidth=${w.iw}`);
-    if (w.sw > w.iw || w.bw > w.iw) { await mshot(`overflow-${where.replace(/\W+/g, "-")}`); throw new Error(`horizontal overflow at ${where}: ${w.sw}/${w.bw} > ${w.iw}`); }
+    mstep(`${where}: scrollWidth=${w.sw} body=${w.bw} innerWidth=${w.iw} (limit ${VW})`);
+    if (w.sw > VW || w.bw > VW || w.iw !== VW) { await mshot(`overflow-${where.replace(/\W+/g, "-")}`); throw new Error(`horizontal overflow at ${where}: ${w.sw}/${w.bw}/inner ${w.iw} vs ${VW}`); }
   };
   try {
     // manifest: public (no cookie), valid, installable fields, icons fetchable
-    const bare = await (await browser.newContext()).request.get(`${base}/manifest.webmanifest`);
+    const bctx = await browser.newContext();
+    extra.push(bctx);
+    const bare = await bctx.request.get(`${base}/manifest.webmanifest`);
     if (bare.status() !== 200) throw new Error(`manifest status ${bare.status()}`);
     const m = await bare.json();
     mstep(`manifest: ${m.name}/${m.short_name} display=${m.display} start_url=${m.start_url} theme=${m.theme_color} icons=${m.icons?.length}`);
@@ -113,14 +117,21 @@ async function mobilePass() {
     const ta = mp.locator('[data-testid="composer"] textarea').first();
     await ta.waitFor({ timeout: 30000 });
     // tap targets >= 44px in the composer
-    const small = await mp.evaluate(() => [...document.querySelectorAll('[data-testid="composer"] button, [data-testid="composer"] textarea')].map((e) => e.getBoundingClientRect()).filter((r) => r.width < 43.5 || r.height < 43.5).length);
+    const small = await mp.evaluate(() => [...document.querySelectorAll('[data-testid="composer"] button, [data-testid="composer"] textarea')].filter((e) => { const st = getComputedStyle(e); const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden" && !e.closest("[hidden],[aria-hidden=true],.hidden"); }).map((e) => e.getBoundingClientRect()).filter((r) => r.width < 43.5 || r.height < 43.5).length);
     if (small) throw new Error(`${small} composer control(s) under 44px`);
     await ta.tap();
-    await ta.fill("ping");
+    // a unique nonce, and a NEW reply after it: old history (earlier runs, the desktop pass) must not satisfy this
+    const nonce = `ping-${Math.random().toString(36).slice(2, 10)}`;
+    const countReplies = () => mp.evaluate((t) => document.body.innerText.split(t).length - 1, expect);
+    const before = await countReplies();
+    await ta.fill(nonce);
     await mshot("3-composing");
     await mp.locator('[data-testid="composer"] button[type="submit"]').tap();
-    await mp.getByText(expect, { exact: false }).first().waitFor({ timeout: 60000 });
-    mstep(`reply '${expect}' rendered`);
+    await mp.getByText(nonce, { exact: false }).first().waitFor({ timeout: 30000 });
+    await mp.waitForFunction(([t, n]) => document.body.innerText.split(t).length - 1 > n, [expect, before], { timeout: 60000 });
+    const order = await mp.evaluate(([t, nc]) => { const x = document.body.innerText; return x.lastIndexOf(t) > x.lastIndexOf(nc); }, [expect, nonce]);
+    if (!order) throw new Error("the reply does not follow the nonce message");
+    mstep(`nonce ${nonce} sent; reply '${expect}' count ${before} -> ${await countReplies()}, after the nonce`);
     await noOverflow("thread");
     await mshot("4-reply");
     // back = the visible back control returns to the list layer
@@ -128,10 +139,11 @@ async function mobilePass() {
     await mp.locator('[data-testid="sidebar"][data-mobile-list]').waitFor({ timeout: 10000 });
     await noOverflow("list after back");
     await mshot("5-back");
-    await mctx.close();
     mstep("MOBILE PASS OK");
   } catch (e) {
     await mshot("FAIL");
     throw new Error(`mobile pass: ${e.message}`);
+  } finally {
+    for (const c of [...extra, mctx]) await c.close().catch(() => {});
   }
 }

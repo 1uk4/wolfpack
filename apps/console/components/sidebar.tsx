@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
-import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
@@ -19,7 +19,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
+import { coalescedRefresh, foldWolfThreads, fuzzyScore, initialListOpen, listOpenAfterNavigation, MOBILE_BACK_LABEL, MOBILE_QUERY } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
@@ -81,9 +81,10 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
+const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean }>({
 	open: false,
 	toggle: () => {},
+	mobile: false,
 });
 
 export function useSidebar() {
@@ -96,6 +97,10 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
+	// Phone (< 768px): the sidebar is the full-screen LIST layer, not a persisted side panel (see src/core/mobile-layout.ts).
+	const [mobile, setMobile] = useState(false);
+	const pathname = usePathname();
+	const prevPath = useRef<string | null>(null);
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -119,11 +124,26 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		void window.lh?.getZoom?.().then(setZoomVar);
 
 		const stored = localStorage.getItem(STORAGE_KEY);
-		// Default: open (first run introduces the sidebar).
-		setOpen(stored === null ? true : stored === "1");
+		// Default: open (first run introduces the sidebar). A phone always starts on the list.
+		const isMobile = window.matchMedia(MOBILE_QUERY).matches;
+		setMobile(isMobile);
+		setOpen(initialListOpen(isMobile, stored));
 		setMounted(true);
-		return () => off?.();
+		const mq = window.matchMedia(MOBILE_QUERY);
+		const onMq = () => setMobile(mq.matches);
+		mq.addEventListener("change", onMq);
+		return () => {
+			off?.();
+			mq.removeEventListener("change", onMq);
+		};
 	}, []);
+
+	// list -> content: a navigation on a phone closes the list layer (never persisted).
+	useEffect(() => {
+		const prev = prevPath.current;
+		prevPath.current = pathname;
+		setOpen((o) => listOpenAfterNavigation(mobile, o, prev, pathname));
+	}, [pathname, mobile]);
 
 	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):
 	// fires only on actual resizes — a boolean compare, no layout work.
@@ -149,11 +169,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			window.lh?.expandWindow();
 			return;
 		}
+		if (mobile) return setOpen((v) => !v); // a phone's list layer is transient: no persisted preference
 		setOpen((v) => {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [narrow, open, mobile]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -169,7 +190,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider value={{ open: open && !narrow, toggle, mobile }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
@@ -189,7 +210,21 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
  *  The icon fades with the slot and is clipped by it as it collapses —
  *  no popping in either direction. */
 export function SidebarToggle() {
-	const { open, toggle } = useSidebar();
+	const { open, toggle, mobile } = useSidebar();
+	// Phone: the clear back control (list <- content). Plain 44px button, no slot animation.
+	if (mobile) {
+		return (
+			<button
+				type="button"
+				aria-label={MOBILE_BACK_LABEL}
+				data-testid="mobile-back"
+				onClick={toggle}
+				className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+			>
+				<ArrowLeftIcon className="size-5" />
+			</button>
+		);
+	}
 	return (
 		<span
 			className={cn(
@@ -744,10 +779,13 @@ export function SessionsSidebar() {
 
 	return (
 		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
+			// < md: the open sidebar is the full-screen list layer (fixed, above everything but dialogs); md+ is the original inline panel.
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "max-md:fixed max-md:inset-0 max-md:z-40 max-md:w-full md:w-72" : "w-0")}
 			aria-hidden={!open}
+			data-testid="sidebar"
+			data-mobile-list={open || undefined}
 		>
-			<div className="flex h-full w-72 flex-col border-r bg-background">
+			<div className="flex h-full w-72 flex-col border-r bg-background max-md:w-full max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
 				{/* LH wordmark — the owner's header; close toggle sits at the edge.
 				    Merged chrome (2026-09-17): in Electron this band is the
 				    window's drag surface and starts after the traffic lights

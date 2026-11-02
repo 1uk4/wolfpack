@@ -16,6 +16,7 @@ RUN npx esbuild kb-ext-entry.ts --bundle --platform=node --format=esm --packages
 COPY scripts/build-server.mjs ./scripts/build-server.mjs
 # --console payload (standalone server built IN the Linux image). NEXT_PUBLIC_WOLFPACK_HUB_URL is the only build-time console value; not needed for the tracer.
 RUN --mount=type=cache,target=/root/.npm node scripts/build-server.mjs --out /opt/console && du -sh /opt/console
-COPY infra/tracer /opt/tracer
-RUN cp /opt/tracer/console-proof.mjs /opt/proof/console-proof.mjs && chmod +x /opt/tracer/*.sh && chmod -R a+rX /opt/wolfpack /opt/tracer /opt/console /opt/proof
+# no recursive chmod over /opt (it copied the whole tree into a new 140s layer): root writes with umask 022, so everything is already world-readable
+COPY --chmod=755 infra/tracer /opt/tracer
+RUN cp /opt/tracer/console-proof.mjs /opt/proof/console-proof.mjs
 ENTRYPOINT ["/opt/tracer/entrypoint.sh"]

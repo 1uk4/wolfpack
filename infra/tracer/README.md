@@ -7,13 +7,26 @@ hubd's console relay, opens the home thread of wolf `hal2` (routing key = wolf *
 
 No secrets, no host mounts, no remote hosts. All state is under `/data` (tmpfs) and the container's `--rm` filesystem.
 
+## Running it: `scripts/verify.sh` / `run-tracer.sh` (shared base, lock, fail-fast, result file)
+**Never poll. Run it in the foreground (it is bounded) and read `infra/tracer/out/result.txt`.** The last stdout line is the same single `TRACER PASS|FAIL ...` summary.
+
+    scripts/verify.sh <branch|sha> [--console|--kb|--ro-work|--max]     # owner: <=10 line summary + log path
+    infra/tracer/run-tracer.sh [MODE] [--ref <branch|sha>] [--build-only]  # agents (default ref HEAD; modes as above, plain = stub)
+
+- **Clean export**: the image is always built from `git archive <ref>` in a fresh temp dir, never the working tree (no macOS `node_modules`/`dist` leaking in). Uncommitted changes are NOT tested; commit first.
+- **Shared base** `wolfpack-tracer-base:<12 hex of sha256(Dockerfile.base)>`: apt, claude CLI, users, Playwright + chromium; upstream `node:22-bookworm` pinned by digest; apt signature checks are never weakened (no `[trusted=yes]`/allow-insecure; do not retag node images). Built once, kept. The per-run image (`Dockerfile`) adds only the repo, with a BuildKit npm cache mount, and is removed on exit along with the run's container. Other images are never touched.
+- **Preflight (<=60s)**: Docker reachable; Docker VM free space >= `TRACER_MIN_FREE_GB` (10); apt signature check (only when the base must be built); lock (`~/.wolfpack/run/tracer.lock`, mkdir-based, stale lock from a dead pid is taken over). A second run is refused within a second, exit 2.
+- **Time limits** per step (`TRACER_TIMEOUT_PREFLIGHT` 60, `_BASE` 1800, `_BUILD` 900 (cold npm cache ~5 min, warm ~1 min), `_RUN` per mode 240-420). On timeout the container is killed and the result names the step.
+- **Result**: `out/result.json` + one-line `out/result.txt` (PASS/FAIL, mode, ref, commit, failing step, duration, base/build seconds, log path); full log `out/run-<ts>.log`.
+- Test seams: `TRACER_TEST_BREAK_APT=1` (broken keyring -> apt preflight fails), `TRACER_TIMEOUT_RUN=5` (tiny limit). If the Docker disk is full, prune only build cache and dangling images.
+
 ## Shape (a single container, on purpose)
 Everything that talks is on loopback inside one container, so there is no compose networking or startup ordering to maintain, and
 later slices can run the same image with `docker exec`/extra args. Pieces:
 
 | file | role |
 |---|---|
-| `Dockerfile` | `node:22-bookworm`, `npm ci` (the Linux lockfile check), `tsc --build`; users `hubd` and `wolf-hal2` |
+| `Dockerfile.base` / `Dockerfile` | shared base (digest-pinned node, apt, claude, chromium) / per-run: repo on the base, `npm ci` (the Linux lockfile check), `tsc --build`; users `hubd` and `wolf-hal2` |
 | `entrypoint.sh` | starts hubd (user `hubd`), registers host `docker-01` + wolf `hal2`, pairs workerd, starts workerd (user `wolf-hal2`, **not** link-only, `--wolfd` = the stub), runs the client, prints RSS |
 | `wolfd-max.sh`, `billing-proof.sh` | `--max` only: wolf launcher (loads `.env`, guards, execs the real wolfd bin); billing evidence |
 | `stub-wolfd.mjs` | the real `startWolf` (sqlite, pi-durable, /v1) with pi-ai's faux provider as the model; replies `tracer-pong` (`TRACER_REPLY` overrides). Replace this with `wolfd` itself in later slices |

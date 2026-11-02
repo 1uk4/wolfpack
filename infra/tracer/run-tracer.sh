@@ -49,7 +49,7 @@ run_step() {
   STEP="$1"; local limit="$2" killcmd="$3"; shift 3; local flag="$OUT/.timeout.$RUN_ID" pid wd rc
   rm -f "$flag"
   "$@" & pid=$!
-  ( sleep "$limit"; : > "$flag"; [ -z "$killcmd" ] || eval "$killcmd"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+  ( sleep "$limit" || exit 0; : > "$flag"; [ -z "$killcmd" ] || eval "$killcmd"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
   wait "$pid"; rc=$?
   pkill -P "$wd" 2>/dev/null; kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
   if [ -f "$flag" ]; then rm -f "$flag"; fail "step '$STEP' exceeded its ${limit}s limit and was killed"; fi

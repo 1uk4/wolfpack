@@ -14,6 +14,8 @@ export interface CliArgs {
   command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans";
   /** work-orphans: actually append the deletes (default is a dry run). */
   apply?: boolean;
+  /** work-orphans: allow --apply over the safety limit. */
+  force?: boolean;
   /** pair: what the code is for. */
   kind?: "worker" | "console" | "browser";
   hostId?: string;
@@ -60,7 +62,8 @@ const USAGE = `usage:
   hubd pair --kind worker|console|browser [--host-id <id>] [--url <base>] --data-dir <dir>
                                                               print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token.
                                                               browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
-  hubd work-orphans --data-dir <dir> [--apply]                list (dry run) or delete, via appended work.deleted events, work items that are in the ledger but have no .md (hub must be stopped)
+  hubd work-orphans --data-dir <dir> [--apply] [--force]      list (dry run, the default) or delete, via appended work.deleted events, work items that are in the ledger as a lone work.created but have no .md.
+                                                              hubd must be STOPPED even for the dry run (it takes the work-writer lock). --apply aborts when more than max(3, 10% of items) qualify, unless --force.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
@@ -92,6 +95,7 @@ export function parseArgs(argv: string[]): CliArgs {
       return v;
     };
     if (command === "work-orphans" && flag === "--apply") { out.apply = true; continue; }
+    if (command === "work-orphans" && flag === "--force") { out.force = true; continue; }
     if (command === "pair" && flag === "--url") {
       out.url = val0();
       continue;
@@ -180,10 +184,12 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     return;
   }
   if (args.command === "work-orphans") {
-    const r = cleanOrphans(args.dataDir!, { apply: !!args.apply });
+    const r = cleanOrphans(args.dataDir!, { apply: !!args.apply, force: !!args.force });
+    log(`${r.orphans.length} orphan(s) of ${r.total} items (limit without --force: ${r.limit}):`);
     for (const o of r.orphans) log(`orphan ${o.id}  ${o.domain}  ${o.title}`);
-    for (const k of r.skipped) log(`skipped ${k.id}: ${k.reason}`);
-    log(args.apply ? `hubd work-orphans: deleted ${r.deleted.length} item(s)` : `hubd work-orphans: ${r.orphans.length} orphan(s), dry run (pass --apply to delete)`);
+    for (const k of r.skipped) log(`skipped ${k.id}: ${k.reason.replace(/[\u0000-\u001f\u007f]/g, " ")}`);
+    if (r.aborted) throw new Error(r.aborted);
+    log(args.apply ? `hubd work-orphans: deleted ${r.deleted.length} item(s)` : r.orphans.length > r.limit ? "hubd work-orphans: dry run; --apply would abort without --force" : "hubd work-orphans: dry run (pass --apply to delete)");
     return;
   }
   if (args.command === "tokens") {

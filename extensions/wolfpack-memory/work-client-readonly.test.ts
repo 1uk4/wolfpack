@@ -1,6 +1,6 @@
-/** A hub that answers {code:"work_store_read_only"} reaches the model as plain words, from a write; reads are untouched. */
+/** (Tests: "create and note throw...", "a permission fault is its own typed error...") A hub that answers {code:"work_store_read_only"} reaches the model as plain words, from a write; reads are untouched. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkClient, WorkStoreReadOnlyError } from "./work-client.js";
+import { WorkClient, WorkStorePermissionError, WorkStoreReadOnlyError } from "./work-client.js";
 
 afterEach(() => vi.unstubAllGlobals());
 const hub = (status: number, body: unknown) => vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })));
@@ -15,6 +15,14 @@ describe("WorkClient on a read-only work store", () => {
     expect(e.message).toMatch(/Do not retry/);
     expect(e.message).not.toMatch(/EROFS|HTTP 5/);
     await expect(c.note("work-personal-abcd123", "x")).rejects.toBeInstanceOf(WorkStoreReadOnlyError);
+  });
+  it("a permission fault is its own typed error and never says writes are turned off", async () => {
+    hub(500, { error: "work store write was refused with a permission error", code: "work_store_permission_denied" });
+    const e = await new WorkClient("http://hub/v1/workapi", "tok").create({ kind: "task", domain: "personal", title: "t", assignee: "hal2" } as never).catch((x) => x);
+    expect(e).toBeInstanceOf(WorkStorePermissionError);
+    expect(e.message).toMatch(/permission fault/);
+    expect(e.message).toMatch(/owner to check/);
+    expect(e.message).not.toMatch(/turned off|read-only/);
   });
   it("other errors keep their message", async () => {
     hub(404, { error: "Work item not found: x" });

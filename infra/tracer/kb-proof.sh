@@ -67,9 +67,11 @@ if [ -n "${TRACER_RO_WORK:-}" ]; then
   c=$(curl -sS -o /tmp/ro-create.json -w '%{http_code}' -H "X-API-Key: $WKEY" -H 'Content-Type: application/json' -d '{"kind":"feature","domain":"tracerkb","title":"must fail","assignee":"hal2"}' $HUB/v1/workapi/work)
   echo "create through the proxy while read-only -> HTTP $c: $(cat /tmp/ro-create.json)"
   [ "$c" = 503 ] || fail "expected 503, got $c"; grep -q 'work store is read-only' /tmp/ro-create.json || fail "no clear read-only error"; grep -q '"code":"work_store_read_only"' /tmp/ro-create.json || fail "error is not typed work_store_read_only"
-  (cd / && sha256sum -c /tmp/ro-ledger.before) >/dev/null || fail "the failed create left a ledger event (ordering/compensation broken)"
+  (cd / && sha256sum -c /tmp/ro-ledger.before) >/dev/null || fail "the failed create changed the ledger (the pre-flight probe should refuse before appending)"
+  [ -n "$(findmnt -no OPTIONS $(ls -d $HD/kb/base/domains/*/work | head -1) | grep -w ro)" ] || fail "work dir is not a read-only mount"
+  grep -q 'EROFS' /data/log/hubd.log || fail "hubd log has no EROFS (the failure was not a real EROFS)"
   find $HD/kb/base/domains/*/work -printf '%p %s %T@ %m\n' | sort | cmp - /tmp/ro-work.before || fail "store changed after the failed create"
-  echo "PASS 4: preview_ready with the store read-only; no store writes; a write is refused (503) and leaves no ledger orphan"
+  echo "PASS 4: preview_ready with a REAL read-only mount (EROFS); no store writes; a write is refused (503 work_store_read_only) before the ledger is touched"
   echo "RO-WORK PROOF OK"
 fi
 echo "KB PROOF OK"

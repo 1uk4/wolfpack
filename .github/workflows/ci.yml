@@ -21,10 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+          package-manager-cache: false   # no npm install in this job: skip v6's automatic cache restore/save
       - id: a
         name: affected packages
         env:
@@ -48,6 +50,8 @@ jobs:
       A: ${{ needs.detect.outputs.affected }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: 22
@@ -87,6 +91,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: stub tracer (hubd + workerd + stub wolfd, no secrets)
         run: infra/tracer/run-tracer.sh
 
@@ -97,9 +103,12 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+          package-manager-cache: false   # no npm install in this job: skip v6's automatic cache restore/save
       - name: build wolfd release (x64, local only, not uploaded)
         run: scripts/build-wolfd-release.sh --arch x64 --out "$RUNNER_TEMP/rel"
       - name: smoke the tarball

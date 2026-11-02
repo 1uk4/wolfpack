@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; IMAGE="${TRACER_IMAGE:-wolfpack-tracer}"; N=tracer-dur-$$
 V1=$N-data; V2=$N-home
 cleanup() { docker rm -f $N >/dev/null 2>&1 || true; docker volume rm $V1 $V2 >/dev/null 2>&1 || true; }; trap cleanup EXIT
-docker build -q -f "$ROOT/infra/tracer/Dockerfile" -t "$IMAGE" "$ROOT" >/dev/null
+"$ROOT/infra/tracer/run-tracer.sh" --build-only >/dev/null || { echo "FAIL: tracer image build (see infra/tracer/out/result.txt)" >&2; exit 1; }
 docker volume create $V1 >/dev/null; docker volume create $V2 >/dev/null
 docker run -d --name $N -v $V1:/data -v $V2:/home/wolf-hal2 -e TRACER_DURABLE=up -e TRACER_SLOW_MS="${TRACER_SLOW_MS:-15000}" -e TRACER_REPLY=tracer-pong "$IMAGE" >/dev/null
 for _ in $(seq 1 90); do docker exec $N test -f /data/log/submitted 2>/dev/null && break; sleep 1; done

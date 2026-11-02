@@ -14,9 +14,13 @@ WORKDIR /opt/wolfpack
 COPY package.json package-lock.json tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
+COPY extensions ./extensions
 # `npm ci` over the whole workspace is deliberate: it is the Linux-clean-lockfile check (git+https bridge dep included).
 RUN npm ci --no-audit --no-fund
 RUN npx tsc --build
+COPY infra/tracer/kb-ext-entry.ts ./kb-ext-entry.ts
+# --kb mode: the real memory/tasks extension sources as one ESM file (packages stay external, resolved from /opt/wolfpack/node_modules)
+RUN npx esbuild kb-ext-entry.ts --bundle --platform=node --format=esm --packages=external --outfile=kb-ext.mjs --log-level=warning
 COPY infra/tracer /opt/tracer
 RUN chmod +x /opt/tracer/*.sh && chmod -R a+rX /opt/wolfpack /opt/tracer
 ENTRYPOINT ["/opt/tracer/entrypoint.sh"]

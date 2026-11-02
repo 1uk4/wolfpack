@@ -30,7 +30,34 @@ const tier = { model: scripted.modelId, modelSource: "default", provider: script
 const modelsFile = join(dirname(values.config), "models.json");
 writeFileSync(modelsFile, JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }));
 
+// TRACER_KB=1 (kb mode): the REAL memory + tasks extensions (bundled sources, see kb-ext-entry.ts) driven by a scripted memory Engine, so the
+// memory path observe -> consolidate -> promote(distill) and the graduation preview run without an LLM. Everything else (hub KB mirror,
+// contribution feeder, Work API client, routes) is the production code in wolfd.
+let extraExtensions;
+if (process.env.TRACER_KB === "1") {
+  const { createMemoryExtension, createTasksExtension, adaptToDurable } = await import(`${root}/kb-ext.mjs`);
+  const OBS = "Session lookups are cached for five minutes because the profile endpoint is the hot path (tracer-kb-observation).";
+  const engine = {
+    call: async (stepName, schema) => {
+      if (stepName === "classify") return schema.parse({ observations: [{ timestamp: "2026-10-25 10:00", content: OBS }] });
+      if (stepName === "consolidate") return schema.parse({ actions: [{ sessionTopicId: "x", action: "create", reasoning: "new", result: { id: "caching", title: "Caching", summary: "Session lookups are cached", body: "Cache session lookups for five minutes." } }] });
+      if (stepName === "distill") return schema.parse({ contributions: [{ slug: "main", title: "Caching", summary: "Session lookups are cached.", body: "## How\n\nSession lookups are cached for five minutes (tracer-kb-contribution).\n\n## History\n\n- 2026-10-28: added caching" }] });
+      if (stepName === "workRecord") return schema.parse({ decisions: [], changes: [{ text: "Cached the lookups", from: [] }], findings: [], problems: [] });
+      throw new Error(`tracer kb engine: unexpected step ${stepName}`);
+    },
+    usage: { summarize: () => ({}) },
+  };
+  extraExtensions = ({ config, den, env }) => {
+    const c = { wolfDen: den, wolfName: config.identity.name, domains: config.identity.domains, wolfConfig: {}, env };
+    const tasks = createTasksExtension({ autoShip: true, engine: () => engine }, c);
+    const memory = createMemoryExtension({ ...config.memory, engine }, c);
+    const o = { wolfDen: den, wolfName: config.identity.name };
+    return [adaptToDurable(memory, o), adaptToDurable(tasks, o)];
+  };
+}
+
 const wolf = await startWolf({
+  ...(extraExtensions ? { extraExtensions } : {}),
   configPath: values.config,
   env: { ...process.env, WOLFPACK_MODELS_FILE: modelsFile },
   models: scripted.models,

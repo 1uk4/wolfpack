@@ -19,10 +19,12 @@ if [ "$MODE" = max ]; then
   ( umask 077; printf "CLAUDE_CODE_OAUTH_TOKEN='%s'\n" "$TOK" > "$WHOME/.env" ); unset TOK
   echo "== max mode: claude $(claude --version) at $(command -v claude); .env written ($(stat -c '%a %U' "$WHOME/.env")); token not printed"
 fi
+KB="${TRACER_KB:-}"   # kb mode: memory + KB through the hub (see kb-proof.sh)
 cat > "$WOLVES/hal2/wolf.yaml" <<YAML
 name: hal2
 workspace: $WOLVES/hal2/work
 YAML
+[ -z "$KB" ] || printf "domains: [tracerkb]\nextensions: [memory]\nmemory:\n  live: true\n" >> "$WOLVES/hal2/wolf.yaml"   # memory is inert on a non-sandbox wolf unless memory.live
 if [ "$MODE" = max ]; then
   tier='{"model":"claude-haiku-5-5","modelSource":"default","provider":"claude-agent-sdk","piModel":"claude-stateless/claude-haiku-5-5"}'
   echo "{\"location\":\"local\",\"transport\":\"subscription\",\"transportSource\":\"default\",\"tiers\":{\"main\":$tier,\"smart\":$tier,\"fast\":$tier},\"steps\":{},\"warnings\":[]}" > "$WOLVES/hal2/models.json"
@@ -51,17 +53,43 @@ echo "== register host $HOST_ID and wolf hal2 (by NAME) in the hub registry"
 curl -fsS "${auth[@]}" -d "{\"name\":\"$HOST_ID\"}" $HUB/v1/registry/hosts || [ -n "${TRACER_DURABLE:-}" ]; echo
 curl -fsS "${auth[@]}" -d "{\"name\":\"hal2\",\"host\":\"$HOST_ID\"}" $HUB/v1/registry/wolves || [ -n "${TRACER_DURABLE:-}" ]; echo   # durable restart: already registered (persisted hubd data)
 
+if [ -n "$KB" ]; then
+  echo "== kb mode: domain tracerkb in the registry, hal2 subscribed; hubd KB seeded; Work API; wolf-scoped worker token in the wolf's .env"
+  curl -fsS "${auth[@]}" -d '{"name":"tracerkb"}' $HUB/v1/registry/domains >/dev/null; echo
+  curl -fsS -X PATCH "${auth[@]}" -d '{"domains":["tracerkb"]}' $HUB/v1/registry/wolves/hal2 >/dev/null
+  SEED=$HUBD_DATA/kb/base/domains/tracerkb/entries; mkdir -p "$SEED"
+  printf -- '---\nid: kb-tracerkb-aaaaaaa\ntitle: "Tracer seed"\ndomain: tracerkb\n---\n\n# Tracer seed\n\nTRACER-SEED-ENTRY served by the hub KB mirror.\n' > "$SEED/kb-tracerkb-aaaaaaa.md"
+  chown -R hubd:hubd "$HUBD_DATA/kb"; touch -d '1 hour ago' "$SEED/kb-tracerkb-aaaaaaa.md"
+  WTOKEN=tracer-work-$RANDOM$RANDOM; mkdir -p $D/work; chown wolf-hal2 $D/work
+  as wolf-hal2 HOME=$WHOME node $T/work-server.mjs $D/work 3141 "$WTOKEN" >"$D/log/work.log" 2>&1 &
+  wait_for "grep -q 'work server' $D/log/work.log"
+  w() { curl -fsS -H "X-API-Key: $WTOKEN" -H 'Content-Type: application/json' "${@:2}" "http://127.0.0.1:3141$1"; }
+  FEAT=$(w /work -d '{"kind":"feature","domain":"tracerkb","title":"Session caching","assignee":"hal2","body":"# Session caching\n\n## Plan\n\nCache it.\n"}' | sed 's/.*"id":"\([^"]*\)".*/\1/')
+  TASK=$(w /work -d "{\"kind\":\"task\",\"domain\":\"tracerkb\",\"title\":\"Task 0\",\"assignee\":\"hal2\",\"partOf\":\"$FEAT\",\"successCriteria\":\"it works\"}" | sed 's/.*"id":"\([^"]*\)".*/\1/')
+  w /work/$TASK -X PATCH -d '{"stage":"shipped"}' >/dev/null
+  echo "work items: feature=$FEAT task=$TASK"
+  KCODE=$(code --kind worker --host-id $HOST_ID)   # a SECOND token of the same host: the wolf's own (workerd's hub.json is not readable by the wolf on the VPS)
+  KTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$KCODE\",\"label\":\"hal2-wolf\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  ( umask 077; printf "TRACER_KB=1\nWOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWORK_ENDPOINT=http://127.0.0.1:3141\nWORK_TOKEN=%s\nWOLFPACK_KB_FEED_MS=1000\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KTOKEN" "$WTOKEN" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"; unset KTOKEN
+fi
+
 echo "== pair workerd (worker token for host $HOST_ID)"
 WCODE=$(code --kind worker --host-id $HOST_ID)
 WENV=(HOME=$WHOME WORKERD_CONFIG_DIR=$WHOME/.wolfpack/workerd KB_OPS=$WHOME/ops)
 as wolf-hal2 "${WENV[@]}" node $APP/packages/workerd/dist/bin/workerd.js pair $HUB "$WCODE"
 
 if [ "$MODE" = max ]; then WOLFD_CMD="$T/wolfd-max.sh"; WOLFD_PAT="bin/wolfd.js --config"; echo "== start workerd (NOT link-only) -> supervises the REAL wolfd bin on the claude bridge (user wolf-hal2)"
+elif [ -n "$KB" ]; then WOLFD_CMD="$T/wolfd-kb.sh"; WOLFD_PAT="^node /opt/tracer/stub-wolfd.mjs"; echo "== start workerd (NOT link-only) -> supervises the scripted-model wolfd with the REAL memory/tasks extensions + hub KB (user wolf-hal2)"
 else WOLFD_CMD="node $T/stub-wolfd.mjs"; WOLFD_PAT="^node /opt/tracer/stub-wolfd.mjs"; echo "== start workerd (NOT link-only) -> supervises wolfd via the scripted-model stub (user wolf-hal2)"; fi
 as wolf-hal2 "${WENV[@]}" WORKERD_FEED=0 node $APP/packages/workerd/dist/bin/workerd.js --wolves $WOLVES --port 7142 --host 127.0.0.1 --wolfd "$WOLFD_CMD" >"$D/log/workerd.log" 2>&1 &
-wait_for "grep -q 'serving' $D/log/workerd.log"
+wait_for "grep -q 'serving' $D/log/workerd.log" || { tail -n 30 $D/log/workerd.log >&2; exit 1; }
 for _ in $(seq 1 30); do curl -sf "${auth[@]}" $HUB/v1/wolves | grep -q hal2 && break; sleep 1; done
 
+if [ -n "$KB" ]; then
+  set +e; TRACER_REPLY=tracer-pong $T/kb-proof.sh $HUB "$CTOKEN" hal2 "$FEAT" "$HUBD_DATA" "$WHOME"; RC=$?; set -e
+  [ $RC -eq 0 ] || { echo "--- logs"; tail -n 30 $D/log/*.log; }
+  exit $RC
+fi
 if [ -n "${TRACER_DURABLE:-}" ]; then
   # Durability seam (see durability.sh). up: submit a slow two-step turn and idle, the host kill -9s wolfd mid-turn and restarts the container.
   # check: same persistent volumes, fresh processes: the turn must finish on its own (no resubmit) and the thread must be consistent.

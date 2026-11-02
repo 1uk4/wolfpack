@@ -387,16 +387,17 @@ export function createRegistry(opts: RegistryOptions): Registry {
  * Release every claim `wolf` holds: one work.unbound per item with boundBy === wolf, via `unclaimItem` (operator actor).
  * Run it INSIDE the hub work writer queue (`writeWork(actor, () => releaseWolfClaims(roots, wolf))`). Returns the item ids.
  */
-export function releaseWolfClaims(roots: KbRoots, wolf: string): string[] {
+export function releaseWolfClaims(roots: KbRoots, wolf: string, unclaim: typeof unclaimItem = unclaimItem): string[] {
   const held = [...loadWorkState(roots).values()].filter((i) => i.boundBy === wolf).map((i) => i.id as string);
   const released: string[] = [];
   for (const id of held) {
     // One failing item must not leave the remaining claims held: log and continue (unclaimItem is ledger-first and tolerates a read-only .md).
     try {
-      unclaimItem(roots, id, { id: "system", kind: "operator" });
+      unclaim(roots, id, { id: "system", kind: "operator" });
       released.push(id);
     } catch (e) {
-      console.error(`hubd: could not release ${wolf}'s claim on ${id}:`, e);
+      // A non-filesystem error may have appended work.unbound before throwing: the id is reported as failed though the ledger may show it released.
+      console.error(`hubd: could not release ${wolf}'s claim on ${id} (reported as not released; check the ledger):`, e);
     }
   }
   return released;

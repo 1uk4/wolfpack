@@ -115,6 +115,7 @@ export function cleanOrphans(dataDir: string, opts: { apply: boolean; force?: bo
     const orphanIds = new Set(report.orphans.flatMap((o) => subtree(o.id)));
     for (const it of items.values()) {
       if (orphanIds.has(it.id as string)) continue;
+      // The fold keeps only dependsOn/blocks (`references` is dropped, `graduated_to` becomes a date), so those are the links that can dangle.
       for (const ref of [...(it.dependsOn ?? []), ...(it.blocks ?? [])] as string[]) {
         if (orphanIds.has(ref)) report.warnings.push(`${sanitizeToken(it.id)} links to orphan ${sanitizeToken(ref)}; the link will dangle after the delete`);
       }

@@ -19,6 +19,8 @@ export interface CliArgs {
   /** pair: what the code is for. */
   kind?: "worker" | "console" | "browser";
   hostId?: string;
+  /** pair: device label recorded on the token (default for browser: `Browser <date>`). */
+  label?: string;
   /** pair: base URL the phone/browser reaches (the hub, or the console when --console-url is set on serve) for the QR code. Env HUBD_PUBLIC_URL when unset. */
   url?: string;
   /** serve/dev: the console base URL the pairing page redirects to (token in the URL fragment). Env HUBD_CONSOLE_URL when unset. */
@@ -59,9 +61,9 @@ const USAGE = `usage:
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
   hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped; creates run/ in <dir> to take the locks, so <dir> must be writable)
   hubd import --data-dir <dir> --in <file.tar>                restore into a missing or empty dir
-  hubd pair --kind worker|console|browser [--host-id <id>] [--url <base>] --data-dir <dir>
+  hubd pair --kind worker|console|browser [--host-id <id>] [--url <base>] [--label <device>] --data-dir <dir>
                                                               print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token.
-                                                              browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
+                                                              browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL, e.g. https://sfo-01.<tailnet>.ts.net/hub; no QR when neither is set). --label names the device in "tokens list"
   hubd work-orphans --data-dir <dir> [--apply] [--force]      list (dry run, the default) or delete, via appended work.deleted events, work items that are in the ledger as a lone work.created but have no .md.
                                                               hubd must be STOPPED even for the dry run (it takes the work-writer lock). --apply aborts unless --force when all items qualify, when a hub of <=10 items has >3, or above 10 items when more than max(3, 10%) qualify. A single genuine orphan on a 1-item hub needs --force (orphans >= total).
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
@@ -96,6 +98,10 @@ export function parseArgs(argv: string[]): CliArgs {
     };
     if (command === "work-orphans" && flag === "--apply") { out.apply = true; continue; }
     if (command === "work-orphans" && flag === "--force") { out.force = true; continue; }
+    if (command === "pair" && flag === "--label") {
+      out.label = val0().slice(0, 64);
+      continue;
+    }
     if (command === "pair" && flag === "--url") {
       out.url = val0();
       continue;
@@ -169,7 +175,8 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     return;
   }
   if (args.command === "pair") {
-    const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode({ kind: args.kind!, ...(args.hostId ? { hostId: args.hostId } : {}) });
+    const label = args.label ?? (args.kind === "browser" ? `Browser ${new Date().toISOString().slice(0, 10)}` : undefined);
+    const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode({ kind: args.kind!, ...(args.hostId ? { hostId: args.hostId } : {}), ...(label ? { label } : {}) });
     log(`pairing code: ${code}\nfor a ${args.kind}${args.hostId ? ` token for host ${args.hostId}` : " token"}; single-use, expires ${expiresAt} (${PAIRING_TTL_MS / 60000} minutes)`);
     if (args.kind === "browser") {
       const base = (args.url ?? env.HUBD_PUBLIC_URL)?.trim().replace(/\/+$/, "");

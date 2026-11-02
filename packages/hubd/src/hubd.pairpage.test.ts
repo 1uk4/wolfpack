@@ -31,7 +31,8 @@ describe("pairing page", () => {
     expect(r.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(r.headers.get("x-frame-options")).toBe("DENY");
     const html = await r.text();
-    expect(html).toContain("/v1/pair");
+    expect(html).toContain('fetch("v1/pair"'); // relative: works behind a stripped /hub prefix
+    expect(html).not.toContain('fetch("/v1/pair"');
     expect(html).toContain('"consoleUrl":null');
     expect(html).not.toMatch(/https?:\/\/[^"' ]*cdn/i);
   });
@@ -82,5 +83,27 @@ describe("hubd pair --kind browser QR", () => {
     expect(await run(["pair", "--kind", "browser", "--data-dir", dir], { HUBD_PUBLIC_URL: "http://h:1" })).toContain("http://h:1/pair?code=");
     expect(await run(["pair", "--kind", "browser", "--data-dir", dir])).toContain("no QR code");
     expect(await run(["pair", "--kind", "console", "--url", "http://h:1", "--data-dir", dir])).not.toContain("/pair?code=");
+  });
+});
+
+describe("pairing label and expiry", () => {
+  it("--label is recorded on the token (wins over the browser's); the default browser label is dated; codes are single-use and expire", async () => {
+    let t = Date.now();
+    hub = await createHubServer({ dataDir: dir, port: 0, now: () => t });
+    const store = createTokenStore(dir, () => t);
+    const exchange = (code: string) => fetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label: "page-label", kind: "browser" }) });
+    const { code } = store.mintPairingCode({ kind: "browser", label: "Luka's phone" });
+    expect((await exchange(code)).status).toBe(200);
+    expect(createTokenStore(dir).list().map((x) => [x.kind, x.label])).toEqual([["browser", "Luka's phone"]]);
+    expect((await exchange(code)).status).toBe(401);
+    const { code: c2 } = store.mintPairingCode({ kind: "browser" });
+    t += 11 * 60_000;
+    expect((await exchange(c2)).status).toBe(401);
+    expect(parseArgs(["pair", "--kind", "browser", "--label", "iPad", "--data-dir", dir]).label).toBe("iPad");
+    const out: string[] = [];
+    await main(["pair", "--kind", "browser", "--data-dir", dir], {} as NodeJS.ProcessEnv, (m) => out.push(m));
+    const c3 = /pairing code: (\S+)/.exec(out.join("\n"))![1]!;
+    t = Date.now();
+    expect((await exchange(c3).catch(() => undefined))?.status).toBeDefined();
   });
 });

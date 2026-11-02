@@ -64,7 +64,10 @@ export function turnElapsedMs(t: { runStartedAt?: string; finishedAt?: string; s
 
 /** The turn timer to show beside the total, or undefined when there is nothing to add (older server, or never resumed: same start). */
 export function separateTurnMs(t: { startedAt?: string; runStartedAt?: string; finishedAt?: string; state?: SubagentState }, now: number): number | undefined {
-	if (!t.runStartedAt || t.runStartedAt === t.startedAt) return undefined;
+	if (!t.runStartedAt || t.runStartedAt === t.startedAt || !t.startedAt) return undefined;
+	const run = Date.parse(t.runStartedAt);
+	const start = Date.parse(t.startedAt);
+	if (Number.isNaN(run) || Number.isNaN(start) || run < start) return undefined; // nonsense (clock skew, bad data): single timer
 	return turnElapsedMs(t, now);
 }
 

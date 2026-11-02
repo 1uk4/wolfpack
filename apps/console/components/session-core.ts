@@ -262,6 +262,8 @@ export interface SessionState {
 	messages: LhViewMessage[];
 	nativeMessages: LhMessage[];
 	status: SessionStatus;
+	/** Server start of the turn now running (ISO), when the server sent one; undefined while idle and for older servers. */
+	turnStartedAt: string | undefined;
 	error: { message: string } | null;
 	/** Steers sent but not yet drained (composer steering, 2026-10-03):
 	 *  the queued indicator's truth. An entry dies when its id lands in
@@ -340,6 +342,8 @@ export class SessionModel {
 	/** The in-flight assistant message's client id (see applyWireEvent). */
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
+	/** The running turn's server start (ISO), from its agent_start / snapshot; cleared when the turn settles. */
+	private turnStartedAtValue: string | undefined;
 	private errorValue: { message: string } | null = null;
 	// The single live consume (POST response or reattach stream): a newer
 	// consume cancels the older — one reader at a time.
@@ -378,6 +382,7 @@ export class SessionModel {
 			messages: projectView(all, live),
 			nativeMessages: all,
 			status: this.statusValue,
+			turnStartedAt: this.turnStartedAtValue,
 			error: this.errorValue,
 			steerQueue: this.steerQueueValue,
 			hasMore: this.hasMoreValue,
@@ -458,6 +463,7 @@ export class SessionModel {
 
 	private setStatus(status: SessionStatus): void {
 		this.statusValue = status;
+		if (status === "ready" || status === "error") this.turnStartedAtValue = undefined; // the next turn brings its own
 		this.readyRef = status === "ready";
 		this.onChange?.();
 	}
@@ -507,6 +513,10 @@ export class SessionModel {
 			// raw text (owner ruling, Wave D): the banner shows exactly this.
 			this.setError(String(event.errorText ?? "An error occurred."));
 			return false;
+		}
+		if ((event.type === "agent_start" || event.type === "turn_clock") && typeof event.turnStartedAt === "string" && this.turnStartedAtValue !== event.turnStartedAt) {
+			this.turnStartedAtValue = event.turnStartedAt;
+			this.onChange?.();
 		}
 		const agent = event as unknown as AgentEvent;
 		switch (agent.type) {

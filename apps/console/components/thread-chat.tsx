@@ -194,7 +194,7 @@ function ThreadChatInner({
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
 	const pageRef = useRef<(json: unknown) => void>(() => {});
 	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev), (json) => pageRef.current(json)), [wolf, slug]);
-	const { messages, status, error, send, steer, clearError, resumeStream, hasMore, loadingEarlier, earlierCount, loadEarlier } = useChatSession({
+	const { messages, status, turnStartedAt, error, send, steer, clearError, resumeStream, hasMore, loadingEarlier, earlierCount, loadEarlier } = useChatSession({
 		chatId: threadId,
 		initialMessages,
 		initialHasMore,
@@ -386,7 +386,7 @@ function ThreadChatInner({
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
-	const turnStart = useTurnStart(busy, initialTurnStartedAt);
+	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),

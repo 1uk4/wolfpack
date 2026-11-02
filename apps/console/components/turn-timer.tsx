@@ -3,34 +3,49 @@
 import { useEffect, useRef, useState } from "react";
 import { formatChildElapsed } from "@/src/core";
 
+const parse = (iso: string | undefined): number | undefined => {
+	if (!iso) return undefined;
+	const t = Date.parse(iso);
+	return Number.isNaN(t) ? undefined : t;
+};
+
 /**
- * The start (epoch ms) of the turn now running, or undefined while idle. A turn already running at page load starts at
- * the server's `turnStartedAt` (undefined from an older server: no timer for it); a turn that begins while the page is
- * open counts from the moment busy flipped on. Steers inside a turn keep `busy` true, so they never reset it.
+ * The start (epoch ms) of the turn now running, or undefined while idle / when there is nothing to count from.
+ *
+ * Preference order: the server's start of this turn (`serverStartedAt`: the turn-start event / snapshot, via the
+ * session), then — for the turn running at page load only — the detail's `initialTurnStartedAt`, then the local clock
+ * from the moment busy flipped on. The local clock is a fallback ONLY once this page has seen a server turn start
+ * value (so the server is known to send them, and the gap before its turn-start event is covered). An older server
+ * never sends one: no value is ever seen, so no timer is shown (today's display).
+ *
+ * State is per thread: a different `threadId` starts over, so a start never carries across a thread switch.
  */
-export function useTurnStart(busy: boolean, initialTurnStartedAt?: string): number | undefined {
-	const first = useRef(true);
-	const [start, setStart] = useState<number | undefined>(() => {
-		if (!busy || !initialTurnStartedAt) return undefined;
-		const t = Date.parse(initialTurnStartedAt);
-		return Number.isNaN(t) ? undefined : t;
-	});
+export function useTurnStart(threadId: string, busy: boolean, serverStartedAt?: string, initialTurnStartedAt?: string): number | undefined {
+	const memo = useRef({ threadId, seen: false, initialDone: false });
+	if (memo.current.threadId !== threadId) memo.current = { threadId, seen: false, initialDone: false };
+	const [local, setLocal] = useState<{ threadId: string; at: number } | undefined>();
+
+	const server = parse(serverStartedAt) ?? (memo.current.initialDone ? undefined : parse(initialTurnStartedAt));
+	if (server !== undefined) memo.current.seen = true;
+
 	useEffect(() => {
-		const initial = first.current;
-		first.current = false;
-		if (!busy) return setStart(undefined);
-		if (initial) return; // the initial state above covers the turn running at load
-		setStart((s) => s ?? Date.now());
-	}, [busy]);
-	return busy ? start : undefined;
+		if (!busy) {
+			memo.current.initialDone = true; // the load-time turn is over: its initial value must not seed the next one
+			setLocal(undefined);
+			return;
+		}
+		if (memo.current.seen) setLocal((s) => (s?.threadId === threadId ? s : { threadId, at: Date.now() }));
+	}, [busy, threadId]);
+
+	if (!busy) return undefined;
+	return server ?? (local?.threadId === threadId ? local.at : undefined);
 }
 
-/** Live elapsed time of the running turn, ticking every second; unmounts its interval when idle. */
+/** Live elapsed time of the running turn, ticking every second; the interval is cleared when idle or unmounted. */
 export function TurnTimer({ startedAt }: { startedAt: number | undefined }) {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (startedAt === undefined) return;
-		setNow(Date.now());
 		const t = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(t);
 	}, [startedAt]);

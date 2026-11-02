@@ -417,7 +417,7 @@ export const ThreadSummarySchema = z.object({
   /** 1-based place in the queue while `state` is `queued`. */
   queuePosition: z.number().int().positive().optional(),
   startedAt: z.iso.datetime({ offset: true }).optional(),
-  /** Additive, subagent threads: when the current run began (reset on every resume; equals `startedAt` until then). */
+  /** Additive, subagent threads: when the current run began (reset on every resume; equals `startedAt` until then). Optional: older servers do not send it. */
   runStartedAt: z.iso.datetime({ offset: true }).optional(),
   /** Additive: when the turn now running began; present only while a turn runs (steers do not reset it). */
   turnStartedAt: z.iso.datetime({ offset: true }).optional(),
@@ -680,7 +680,12 @@ export const InFlightPartialSchema = z.object({
 });
 export type InFlightPartial = z.infer<typeof InFlightPartialSchema>;
 
-export const TurnStartEventSchema = base.extend({ type: z.literal("turn-start"), turnId });
+export const TurnStartEventSchema = base.extend({
+  type: z.literal("turn-start"),
+  turnId,
+  /** Additive: the server clock when the turn began (same value as `ThreadSummary.turnStartedAt`). Absent on older servers. */
+  startedAt: IsoSchema.optional(),
+});
 export const TextDeltaEventSchema = base.extend({ type: z.literal("text-delta"), turnId, text: z.string() });
 export const ThinkingDeltaEventSchema = base.extend({ type: z.literal("thinking-delta"), turnId, text: z.string() });
 export const ToolStartEventSchema = base.extend({

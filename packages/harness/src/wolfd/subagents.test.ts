@@ -26,7 +26,7 @@ interface Call {
 }
 
 /** One scripted model for every conversation: answers by who is asking (a child's prompt says so) and what was said last. */
-function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void> } = {}): { step: FauxResponseStep; calls: Call[] } {
+function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>; answerGate?: Promise<void> } = {}): { step: FauxResponseStep; calls: Call[] } {
   const calls: Call[] = [];
   const step: FauxResponseStep = async (ctx, options) => {
     const system = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
@@ -37,6 +37,7 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
     calls.push({ child, request: JSON.stringify(ctx.messages), last: lastText });
     const tool = (name: string, args: Record<string, string>) => fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
     if (!child) {
+      if (lastText.startsWith("The user answered")) await opts.answerGate;
       if (last.role === "toolResult") return fauxAssistantMessage(`ok:${last.toolName}`);
       const spawn = /^spawn(?:\[(\w+)\])?: (.*)$/s.exec(lastText);
       if (spawn) return tool("subagent", { agent: "tester", task: spawn[2], ...(spawn[1] ? { name: spawn[1] } : {}) });
@@ -261,6 +262,58 @@ describe("resume", () => {
     openParent();
     await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).busy).toBe(false));
     await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).turnStartedAt).toBeUndefined());
+  });
+
+  it("the turn-start event carries the same server start as turnStartedAt (live and replayed)", async () => {
+    let openParent!: () => void;
+    const parentGate = new Promise<void>((r) => (openParent = r));
+    tw = await boot(scriptedAgents({ parentGate }));
+    await tw.client.submit(tw.home, "slowcard", { whenBusy: "reject" });
+    const busy = await tw.client.getThread(tw.home);
+    const seen: string[] = [];
+    for await (const ev of tw.client.watch(tw.home)) {
+      if (ev.type === "turn-start" && ev.startedAt) seen.push(ev.startedAt);
+      if (seen.length) break;
+    }
+    expect(seen[0]).toBe(busy.turnStartedAt);
+    openParent();
+    await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).busy).toBe(false));
+  });
+
+  it("a card answer: the turn it starts is busy with a turnStartedAt, the same value its turn-start event carries", async () => {
+    let openAnswer!: () => void;
+    const answerGate = new Promise<void>((r) => (openAnswer = r));
+    tw = await boot(scriptedAgents({ answerGate }));
+    await say(tw, "card");
+    const [card] = (await tw.client.getThread(tw.home)).pendingCards!;
+    expect((await tw.client.getThread(tw.home)).turnStartedAt).toBeUndefined();
+    // sample the thread all through the answer: every busy sample (the answer gap included) has a turnStartedAt
+    const samples: Array<{ status?: string; turnStartedAt?: string }> = [];
+    let sampling = true;
+    const sampler = (async () => {
+      while (sampling) {
+        const d = await tw!.client.getThread(tw!.home);
+        samples.push({ status: d.status, turnStartedAt: d.turnStartedAt });
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    })();
+    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await vi.waitFor(() => expect(samples.some((x) => x.status === "busy")).toBe(true));
+    await new Promise((r) => setTimeout(r, 30)); // sampled while the answer's turn is held
+    const events: string[] = []; // a reattach now replays the running turn's buffer, turn-start first
+    for await (const ev of tw.client.watch(tw.home)) {
+      if (ev.type === "turn-start" && ev.startedAt) events.push(ev.startedAt);
+      if (events.length) break;
+    }
+    openAnswer();
+    await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).busy).toBe(false));
+    sampling = false;
+    await sampler;
+    const busy = samples.filter((x) => x.status === "busy");
+    expect(busy.length).toBeGreaterThan(0);
+    expect(busy.every((x) => x.turnStartedAt)).toBe(true);
+    expect(new Set(busy.map((x) => x.turnStartedAt))).toEqual(new Set([events.at(-1)]));
+    expect((await tw.client.getThread(tw.home)).turnStartedAt).toBeUndefined();
   });
 
   it("the operator can type into a child: it resumes, and the parent learns of the new result", async () => {

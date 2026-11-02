@@ -214,6 +214,16 @@ describe("stall watchdog", () => {
     expect(stalled(events).length).toBe(0);
   });
 
+  it("a wolfd restart mid-turn: the engine snapshot has no start time, so turnStartedAt is the resume time, in the detail and on the replayed turn-start", async () => {
+    vi.setSystemTime(new Date("2026-10-27T12:00:00.000Z"));
+    const { rt, events } = await rig(100_000, { run: { inputs: [1] } });
+    const at = "2026-10-27T12:00:00.000Z";
+    expect(rt.detail().turnStartedAt).toBe(at);
+    expect(events.find((e) => e.type === "turn-start")).toMatchObject({ startedAt: at });
+    await tick(60_000);
+    expect(rt.detail().turnStartedAt).toBe(at); // stable while the turn runs
+  });
+
   it("close() clears the timer", async () => {
     const { rt, events } = await rig(100);
     await rt.submit("start", "steer");

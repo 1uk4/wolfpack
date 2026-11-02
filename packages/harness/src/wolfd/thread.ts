@@ -108,6 +108,8 @@ export class ThreadRuntime {
   private readonly waiters = new Set<() => void>();
   /** Answers being submitted: the thread reads busy from the claim until the next turn starts (never idle in between). */
   private answering = 0;
+  /** When the oldest in-progress card answer began: the turn it starts counts from here, so the busy gap has a start time. */
+  private answerStartedAt: string | null = null;
   /** > 0 while a batch is being applied: thread-status is announced when it ends. */
   private holdStatus = 0;
   private lastStatus: ThreadStatus = "idle";
@@ -386,6 +388,8 @@ export class ThreadRuntime {
       return;
     }
     const turnId = `turn-${Number(snap.run.inputs[0])}`;
+    // The engine snapshot's `run` is only its input ids: it exposes no start time. So after a wolfd restart mid-turn the
+    // turn's timer restarts at the resume (the first rebase), not at the original start.
     if (initial) {
       this.emit({ type: "turn-start", turnId });
       const partial = textOf(snap.generation?.message);
@@ -495,7 +499,11 @@ export class ThreadRuntime {
   private emit(draft: ThreadEventDraft): void {
     if (draft.type === "turn-start") {
       this.buffer = [];
-      this.running = { turnId: draft.turnId, startedAt: new Date().toISOString() };
+      // A card-answer turn counts from the answer (the thread was busy from then). Otherwise now. The event carries it so
+      // live and replayed streams (the buffer) give the console the server's clock.
+      const startedAt = this.answerStartedAt ?? new Date().toISOString();
+      draft = { ...draft, startedAt };
+      this.running = { turnId: draft.turnId, startedAt };
       this.turnStarts++;
       this.lastActivity = Date.now();
       this.toolsInFlight.clear();
@@ -550,8 +558,14 @@ export class ThreadRuntime {
     return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 && !this.isChild ? "needs-you" : "idle";
   }
 
+  /** `turnStartedAt`: the running turn's start, or the start of the card answer that is about to begin one. */
+  private turnStartedField(): { turnStartedAt?: string } {
+    const at = this.running?.startedAt ?? (this.answering > 0 ? this.answerStartedAt : null);
+    return at ? { turnStartedAt: at } : {};
+  }
+
   threadSummary(): ThreadSummary {
-    return { ...this.summary, status: this.status(), ...(this.running ? { turnStartedAt: this.running.startedAt } : {}), ...this.boundItemField(), ...(this.isChild ? {} : { settings: this.settings }) };
+    return { ...this.summary, status: this.status(), ...this.turnStartedField(), ...this.boundItemField(), ...(this.isChild ? {} : { settings: this.settings }) };
   }
 
   // --- feature progress: bound item ---
@@ -687,12 +701,12 @@ export class ThreadRuntime {
     }
     const ids = ready.map((r) => r.callId);
     const before = this.turnStarts;
-    this.answering++;
+    if (this.answering++ === 0 && !this.running) this.answerStartedAt = new Date().toISOString();
     this.syncStatus();
     try {
       return await this.submitAnswers(ready, ids, before);
     } finally {
-      this.answering--;
+      if (--this.answering === 0) this.answerStartedAt = null;
       this.syncStatus();
     }
   }

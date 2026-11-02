@@ -145,7 +145,8 @@ export class ThreadEventAdapter {
 				return this.applySnapshot(ev, at);
 			case "turn-start":
 				this.reset();
-				return [{ type: "agent_start" }];
+				// The server's clock for the turn rides the event (replayed from the buffer on a reattach too).
+				return [{ type: "agent_start", ...(ev.startedAt ? { turnStartedAt: ev.startedAt } : {}) }];
 			case "thinking-delta":
 				return this.grow(at, (blocks) => appendText(blocks, "thinking", ev.text));
 			case "text-delta":
@@ -196,6 +197,13 @@ export class ThreadEventAdapter {
 	 * the turn already showed). Tool-call blocks are kept. History is not rewritten here: the settle refetch owns it.
 	 */
 	private applySnapshot(ev: SnapshotEvent, at: number): WireEvent[] {
+		// A snapshot of a running turn carries the turn's server start (the detail's turnStartedAt): a mid-turn joiner
+		// gets no turn-start event, only this.
+		const clock: WireEvent[] = ev.thread.turnStartedAt ? [{ type: "turn_clock", turnStartedAt: ev.thread.turnStartedAt }] : [];
+		return [...clock, ...this.snapshotBody(ev, at)];
+	}
+
+	private snapshotBody(ev: SnapshotEvent, at: number): WireEvent[] {
 		const f = ev.inFlight;
 		if (!f) return [];
 		// Without the turn's start, what earlier messages showed is unknown: replacing would duplicate them. The

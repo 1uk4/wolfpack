@@ -133,6 +133,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 		loadEarlier,
 		nativeMessages: state.nativeMessages,
 		status: state.status,
+		turnStartedAt: state.turnStartedAt,
 		error: state.error,
 		steerQueue: state.steerQueue,
 		send,

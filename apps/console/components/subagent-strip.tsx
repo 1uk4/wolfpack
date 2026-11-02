@@ -149,7 +149,7 @@ function ElapsedCell({ c, now }: { c: ChildThread; now: number }) {
 	const turn = separateTurnMs(c, now);
 	if (turn === undefined) return <span data-testid="subagent-elapsed" className="w-14 shrink-0 text-right tabular-nums text-muted-foreground">{total}</span>;
 	return (
-		<span data-testid="subagent-elapsed" title={`turn ${formatChildElapsed(turn)} · total ${total}`} className="shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
+		<span data-testid="subagent-elapsed" title={`turn ${formatChildElapsed(turn)} · total ${total}`} className="w-40 shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
 			<span data-testid="subagent-elapsed-turn">turn {formatChildElapsed(turn)}</span>
 			<span data-testid="subagent-elapsed-total" className="opacity-60"> · {total}</span>
 		</span>

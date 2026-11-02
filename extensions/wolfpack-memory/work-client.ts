@@ -11,6 +11,15 @@ import type { RollupClient } from "@wolfpack/memory";
 /** Every Work call gives up after this long: binding self-detection must never hang a prompt or a tool. */
 export const WORK_TIMEOUT_MS = 3000;
 
+/** Thrown for a write the hub refused because its work store is read-only. The message is what the model sees. */
+export class WorkStoreReadOnlyError extends Error {
+  readonly code = "work_store_read_only";
+  constructor() {
+    super("The work store is read-only on this host: you can read work items, but creating or changing them is not possible here, and nothing was changed. Do not retry; tell the owner that work writes are turned off for this wolf.");
+    this.name = "WorkStoreReadOnlyError";
+  }
+}
+
 export class WorkClient {
   private endpoint: string;
   private token: string;
@@ -43,6 +52,8 @@ export class WorkClient {
     const data = await res.json() as Record<string, unknown>;
 
     if (!res.ok) {
+      // The hub's work store is read-only (e.g. a VPS wolf behind a sandboxed hubd): say it in plain words, the model must not retry.
+      if (data.code === "work_store_read_only") throw new WorkStoreReadOnlyError();
       throw new Error(String(data.error ?? `HTTP ${res.status}`));
     }
 

@@ -4,4 +4,5 @@
 # OUR logic (verify, unpack, switch, health decision, rollback), not systemd.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-docker run --rm -v "$ROOT/infra/release:/opt/release:ro" --entrypoint bash "${DEPLOY_PROOF_IMAGE:-node:22-bookworm}" /opt/release/deploy-proof-inner.sh
+extra=(); [ -n "${DEPLOY_PROOF_REAL:-}" ] && extra=(-v "$DEPLOY_PROOF_REAL:/real.tgz:ro")   # optional: also run the member policy on a real release tarball
+docker run --rm --cap-add SYS_ADMIN ${extra[@]+"${extra[@]}"} -v "$ROOT/infra/release:/opt/release:ro" --entrypoint bash "${DEPLOY_PROOF_IMAGE:-node:22-bookworm}" /opt/release/deploy-proof-inner.sh

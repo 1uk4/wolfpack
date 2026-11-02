@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory-panel";
-import { MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
+import { MOBILE_QUERY, MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
 
 export type PanelProps = Record<string, unknown>;
 
@@ -115,7 +115,9 @@ export function PanelHostProvider({ wolf, slug, threadId, panels = PANELS, child
 	const [st, setSt] = useState<HostState>({ selections: {}, props: {}, open: true });
 	useEffect(() => {
 		try {
-			const open = parseOpen(localStorage.getItem(MEMORY_PANEL_OPEN_KEY));
+			// Phone: the panel is a full-screen overlay, so it starts closed (the stored desktop preference is left alone).
+			const phone = typeof window.matchMedia === "function" && window.matchMedia(MOBILE_QUERY).matches;
+			const open = phone ? false : parseOpen(localStorage.getItem(MEMORY_PANEL_OPEN_KEY));
 			setSt((s) => ({ ...s, selections: readStored(), open }));
 		} catch {}
 	}, []);
@@ -189,7 +191,8 @@ export function RightPanelHost() {
 	const mounted = available.filter((p) => p.id === selected || seen.includes(p.id));
 	return (
 		<aside
-			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm" : "flex w-9 shrink-0 flex-col items-center border-l border-border py-2"}
+			// < md: open = a full-screen overlay (never a 320px column squeezing the transcript); closed = a floating 44px handle. md+ unchanged.
+			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full max-md:border-l-0 max-md:bg-background max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "flex w-9 shrink-0 flex-col items-center border-l border-border py-2 max-md:fixed max-md:right-2 max-md:top-[calc(env(safe-area-inset-top)+0.5rem)] max-md:z-30 max-md:size-11 max-md:justify-center max-md:rounded-full max-md:border max-md:bg-card/90 max-md:py-0 max-md:shadow-lg max-md:backdrop-blur"
 			data-testid="panel-host"
 			data-open={open}
 			data-panel={selected}

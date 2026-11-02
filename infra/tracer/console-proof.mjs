@@ -14,7 +14,26 @@ try {
   const anon = await ctx.request.get(`${base}/api/wolves`);
   step(`unpaired GET /api/wolves -> ${anon.status()} X-Wolfpack-Hub-Auth=${anon.headers()["x-wolfpack-hub-auth"]}`);
   if (anon.status() !== 401 || anon.headers()["x-wolfpack-hub-auth"] !== "required") throw new Error("expected 401 + X-Wolfpack-Hub-Auth: required without a token (console is not in relay mode?)");
+  // 1b. anti-framing headers on every route
+  const pairRes = await ctx.request.get(`${base}/pair`);
+  step(`/pair headers: CSP=${pairRes.headers()["content-security-policy"]} XFO=${pairRes.headers()["x-frame-options"]}`);
+  if (pairRes.headers()["content-security-policy"] !== "frame-ancestors 'none'" || pairRes.headers()["x-frame-options"] !== "DENY") throw new Error("anti-framing headers missing");
+  // 1c. a bogus token + cookie (revoked/forged): the server-rendered page fails on the hub 401, the error boundary probes /api, the
+  //     fetch wrapper clears token + cookie and lands on /pair
+  const host = new URL(base).hostname;
+  await ctx.addCookies([{ name: "wolfpack_hub_token", value: "bogus-token-0123456789", domain: host, path: "/" }]);
+  await page.goto(`${base}/pair`);
+  await page.evaluate(() => localStorage.setItem("wolfpack.hub.token", "bogus-token-0123456789"));
+  await page.goto(`${base}/wolf/hal2`);
+  await page.waitForURL(/\/pair(\?|#|$)/, { timeout: 20000 });
+  await page.getByText("Sign in to the hub").waitFor({ timeout: 10000 });
+  const left = (await ctx.cookies()).filter((c) => c.name.includes("wolfpack_hub_token"));
+  const tokLeft = await page.evaluate(() => localStorage.getItem("wolfpack.hub.token"));
+  step(`bogus token: landed on ${page.url()}, cookies left=${left.length}, localStorage token=${tokLeft}`);
+  if (left.length || tokLeft) throw new Error("bogus token/cookie were not cleared");
+  await shot("0-bogus-token-to-pair");
   // 2. pair exactly like the hub's /pair page does: land on /pair#token=...
+  await page.goto("about:blank"); // a hash-only navigation from /pair would not reload the page
   await page.goto(`${base}/pair#token=${token}`);
   await page.waitForURL(`${base}/`, { timeout: 20000 });
   step("paired: token stored by the console /pair page, redirected home");

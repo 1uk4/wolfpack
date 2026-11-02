@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkerdServer } from "./proxy.js";
@@ -238,4 +238,22 @@ describe("Supervisor (real wolfd bin)", () => {
     expect(sup.status()[0].state).toBe("stopped");
     expect(existsSync(join(root, "realwolf.sock"))).toBe(false);
   }, 40_000);
+});
+
+describe("Supervisor (stale socket in a directory workerd cannot write)", { timeout: 20_000 }, () => {
+  it.skipIf(process.getuid?.() === 0)("keeps going (no crash) and still spawns when the stale socket cannot be removed", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const sock = m.wolves[0].serve.socket;
+    writeFileSync(sock, ""); // stale: nothing answers
+    chmodSync(root, 0o555); // dir not writable: unlink fails with EACCES
+    const lines: string[] = [];
+    try {
+      sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, transport: "socket", log: (l) => lines.push(l) });
+      sup.start();
+      await until(() => lines.some((l) => l.includes("stale socket") && l.includes("left in place")), 5000, "stale socket logged");
+    } finally {
+      chmodSync(root, 0o755);
+    }
+  });
 });

@@ -7,13 +7,25 @@ import { dirname, join } from "node:path";
 
 const root = process.env.WOLFPACK_ROOT ?? "/opt/wolfpack";
 const { startWolf } = await import(`${root}/packages/harness/dist/wolfd/index.js`);
-const { createScriptedModel, fauxAssistantMessage } = await import(`${root}/packages/harness/dist/wolfd/scripted-model.js`);
+const { createScriptedModel, fauxAssistantMessage, fauxText, fauxToolCall } = await import(`${root}/packages/harness/dist/wolfd/scripted-model.js`);
 
 const { values } = parseArgs({ options: { config: { type: "string" }, socket: { type: "string" }, port: { type: "string" } } });
 if (!values.config) { console.error("usage: stub-wolfd.mjs --config wolf.yaml [--socket p | --port N]"); process.exit(2); }
 
 const reply = process.env.TRACER_REPLY ?? "tracer-pong";
-const scripted = createScriptedModel(Array.from({ length: 200 }, () => fauxAssistantMessage(reply)));
+// TRACER_SLOW_MS (durability seam): every turn is two model requests, so a kill -9 can land between/inside them. Request 1 waits that long, then
+// asks for a tool ("write"); request 2 (the context ends in a tool result) answers `reply`. Decided from the context, not a call counter,
+// so a restarted process that re-runs the turn from the store behaves identically.
+const slowMs = Number(process.env.TRACER_SLOW_MS ?? 0);
+const step = slowMs > 0
+  ? async (ctx) => {
+      const last = ctx.messages[ctx.messages.length - 1];
+      if (last?.role === "toolResult") return fauxAssistantMessage(reply);
+      await new Promise((r) => setTimeout(r, slowMs));
+      return fauxAssistantMessage([fauxText("working"), fauxToolCall("write", { path: "tracer-durable.txt", content: "x" })], { stopReason: "toolUse" });
+    }
+  : () => fauxAssistantMessage(reply);
+const scripted = createScriptedModel(Array.from({ length: 200 }, () => step));
 const tier = { model: scripted.modelId, modelSource: "default", provider: scripted.provider, piModel: `${scripted.provider}/${scripted.modelId}` };
 const modelsFile = join(dirname(values.config), "models.json");
 writeFileSync(modelsFile, JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }));

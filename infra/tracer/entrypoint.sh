@@ -36,17 +36,20 @@ wait_for() { for _ in $(seq 1 60); do eval "$1" >/dev/null 2>&1 && return 0; sle
 cleanup() { pkill -TERM -f "bin/workerd.js" 2>/dev/null || true; pkill -TERM -f "hubd/dist/cli.js" 2>/dev/null || true; }
 trap cleanup EXIT
 
+# A container restart reuses low PIDs, so the pid recorded in a kill -9 survivor's lock can name a live unrelated process; on a real host a reboot gives
+# fresh PIDs and the lock dir is stale-checked the same way. Clear it like a reboot would. (Finding for H5: lock liveness is by pid only.)
+[ -z "${TRACER_DURABLE:-}" ] || find "$D" /home/wolf-hal2 -name '*.lock' -path '*run*' -delete 2>/dev/null || true
 echo "== start hubd (user hubd)"
 as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js serve --data-dir "$HUBD_DATA" --port $HUB_PORT --host 127.0.0.1 >"$D/log/hubd.log" 2>&1 &
-wait_for "grep -q 'hubd listening' $D/log/hubd.log"
+wait_for "grep -q 'hubd listening' $D/log/hubd.log" || { cat $D/log/hubd.log >&2; exit 1; }
 
 code() { as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js pair --data-dir "$HUBD_DATA" "$@" | sed -n 's/^pairing code: //p'; }
 CCODE=$(code --kind console)
 CTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$CCODE\",\"label\":\"tracer-console\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
 auth=(-H "Authorization: Bearer $CTOKEN" -H 'Content-Type: application/json')
 echo "== register host $HOST_ID and wolf hal2 (by NAME) in the hub registry"
-curl -fsS "${auth[@]}" -d "{\"name\":\"$HOST_ID\"}" $HUB/v1/registry/hosts; echo
-curl -fsS "${auth[@]}" -d "{\"name\":\"hal2\",\"host\":\"$HOST_ID\"}" $HUB/v1/registry/wolves; echo
+curl -fsS "${auth[@]}" -d "{\"name\":\"$HOST_ID\"}" $HUB/v1/registry/hosts || [ -n "${TRACER_DURABLE:-}" ]; echo
+curl -fsS "${auth[@]}" -d "{\"name\":\"hal2\",\"host\":\"$HOST_ID\"}" $HUB/v1/registry/wolves || [ -n "${TRACER_DURABLE:-}" ]; echo   # durable restart: already registered (persisted hubd data)
 
 echo "== pair workerd (worker token for host $HOST_ID)"
 WCODE=$(code --kind worker --host-id $HOST_ID)
@@ -59,6 +62,32 @@ as wolf-hal2 "${WENV[@]}" WORKERD_FEED=0 node $APP/packages/workerd/dist/bin/wor
 wait_for "grep -q 'serving' $D/log/workerd.log"
 for _ in $(seq 1 30); do curl -sf "${auth[@]}" $HUB/v1/wolves | grep -q hal2 && break; sleep 1; done
 
+if [ -n "${TRACER_DURABLE:-}" ]; then
+  # Durability seam (see durability.sh). up: submit a slow two-step turn and idle, the host kill -9s wolfd mid-turn and restarts the container.
+  # check: same persistent volumes, fresh processes: the turn must finish on its own (no resubmit) and the thread must be consistent.
+  TH="hal2%2Fhome"; get() { curl -fsS "${auth[@]}" "$HUB/v1/threads/$TH"; }
+  if [ "$TRACER_DURABLE" = up ]; then
+    for _ in $(seq 1 40); do   # 502 until wolfd is up behind the relay
+      c=$(curl -sS -o /dev/null -w '%{http_code}' "${auth[@]}" -d '{"input":"ping","whenBusy":"reject"}' $HUB/v1/threads/$TH/submit); [ "$c" = 200 ] && break; sleep 1
+    done
+    echo "durable: turn submitted (HTTP $c)"; [ "$c" = 200 ] || exit 1
+    touch $D/log/submitted; sleep infinity & wait
+  fi
+  echo "durable: restarted; wolfd pid $(pidof_cmd wolf-hal2 "$WOLFD_PAT") (a new process); waiting for the interrupted turn to finish WITHOUT resubmitting"
+  RC=1
+  for i in $(seq 1 120); do
+    j=$(get || true)
+    if echo "$j" | grep -q "$TRACER_REPLY"; then RC=0; break; fi; sleep 1
+  done
+  echo "durable: after ${i}s thread detail: $(echo "$j" | head -c 1500)"
+  if [ $RC -eq 0 ]; then
+    users=$(echo "$j" | grep -o '"role":"user"' | wc -l); finals=$(echo "$j" | grep -o "$TRACER_REPLY" | wc -l)
+    echo "durable: user messages=$users, final replies=$finals"
+    [ "$users" = 1 ] && [ "$finals" -ge 1 ] || RC=2
+  fi
+  [ $RC -eq 0 ] && echo "DURABILITY PASS: the interrupted turn completed after kill -9 + container restart" || { echo "DURABILITY FAIL rc=$RC"; tail -n 20 $D/log/workerd.log; }
+  exit $RC
+fi
 HUBD_PID=$(pidof_cmd hubd "hubd/dist/cli.js serve"); WORKERD_PID=$(pidof_cmd wolf-hal2 "bin/workerd.js --wolves"); WOLFD_PID=$(pidof_cmd wolf-hal2 "$WOLFD_PAT")
 echo "pids: hubd=$HUBD_PID workerd=$WORKERD_PID wolfd=$WOLFD_PID"
 echo "wolfd runs as: $(ps -o user= -p "$WOLFD_PID")  workerd runs as: $(ps -o user= -p "$WORKERD_PID")"

@@ -94,6 +94,24 @@ describe("workerd CLI args", () => {
   });
 });
 
+describe("--wolfd-transport (supervising workerd)", () => {
+  it("is opt-in: absent by default, so the spawn behaviour is unchanged", () => {
+    const r = parseServeArgs(["--wolfd", "x"], {});
+    expect(r).toMatchObject({ opts: { command: ["x"] } });
+    expect(r).not.toHaveProperty("opts.transport");
+  });
+  it("flag or WORKERD_WOLFD_TRANSPORT selects socket|tcp; anything else is an error", () => {
+    expect(parseServeArgs(["--wolfd-transport", "socket"], {})).toMatchObject({ opts: { transport: "socket" } });
+    expect(parseServeArgs([], { WORKERD_WOLFD_TRANSPORT: "socket" })).toMatchObject({ opts: { transport: "socket" } });
+    expect(parseServeArgs(["--wolfd-transport", "tcp"], { WORKERD_WOLFD_TRANSPORT: "socket" })).toMatchObject({ opts: { transport: "tcp" } });
+    expect(parseServeArgs(["--wolfd-transport", "udp"], {})).toHaveProperty("error");
+  });
+  it("link-only rejects the flag and ignores the env", () => {
+    expect(parseServeArgs(["--link-only", "--port", "1", "--wolfd-transport", "socket"], {})).toHaveProperty("error");
+    expect(parseServeArgs(["--link-only", "--port", "1"], { WORKERD_WOLFD_TRANSPORT: "socket" })).not.toHaveProperty("opts.transport");
+  });
+});
+
 describe("link-only defaults from env", () => {
   it("feed is on only when explicitly enabled", async () => {
     const r: LinkRig = await startLinkRig({ wolves: ["hal"], noHub: true });

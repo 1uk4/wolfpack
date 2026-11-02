@@ -7,6 +7,7 @@ import { MOBILE_QUERY, visibleHeight } from "@/src/core";
  *  viewport when the keyboard opens, so `dvh` alone leaves the composer under it; globals.css sizes the thread to this var. */
 export function ViewportVars() {
 	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return;
 		const mq = window.matchMedia(MOBILE_QUERY);
 		const vv = window.visualViewport;
 		const root = document.documentElement;

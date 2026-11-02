@@ -144,7 +144,8 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   echo "== start console (user console, standalone server, RELAY mode: WOLFPACK_HUB_URL=$HUB, no WOLFPACK_API_URL, no env token)"
   ( cd /opt/console && exec runuser -u console -- env -u WOLFPACK_API_URL -u WOLFPACK_HUB_TOKEN HOME=/home/console PORT=$CPORT HOSTNAME=127.0.0.1 NODE_ENV=production WOLFPACK_HUB_URL=$HUB node server.js ) >"$D/log/console.log" 2>&1 &
   wait_for "curl -sf $CONSOLE/pair" || { cat $D/log/console.log >&2; exit 1; }
-  CPID=$(pgrep -u console -f server.js | head -1)
+  CPID=$(pgrep -u console -f 'next-server|server.js' | head -1)
+  [ -n "$CPID" ] || { echo "FATAL: console process not found" >&2; exit 1; }
   # read the environ AS the console user (root in the container has no CAP_SYS_PTRACE, so a root-side redirect gets EACCES)
   CENV=$(runuser -u console -- sh -c "tr '\\0' '\\n' < /proc/$CPID/environ")
   echo "console env (pid $CPID): WOLFPACK_API_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_API_URL=') (must be 0); WOLFPACK_HUB_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=') (must be 1)"

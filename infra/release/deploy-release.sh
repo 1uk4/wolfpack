@@ -139,6 +139,7 @@ USAGE
   fi
   case "$UNITSEL" in auto|link|wolves|both) ;; *) die "--unit must be link|wolves|both" 2 ;; esac
   [ "$COMP" = workerd ] || [ "$UNITSET" = 0 ] || die "--unit only applies to workerd" 2
+  [ -z "$WUSHA" ] || [ "$COMP" = workerd ] || die "--wolfd-unit-sha256 only applies to workerd" 2
   [ -z "$WUSHA" ] || [[ $WUSHA =~ ^[0-9a-f]{64}$ ]] || die "--wolfd-unit-sha256 must be 64 hex chars" 2
   [ "$UNITSEL" != auto ] || UNITSEL=link   # auto means link: workerd-wolves is only ever restarted on request
   local WOLVES_DIR="$OPT_ROOT/wolfpack-workerd-wolves"
@@ -336,12 +337,16 @@ USAGE
     # ---- supervised-wolf survival: what workerd-wolves supervises must outlive its restart (wolfd@* and wolf-*.service are their own units)
     local -a SNAP=()
     snap_take() { # "unit|InvocationID|MainPID" of every active wolfd@*.service and wolf-*.service
-      SNAP=(); local u _r
+      SNAP=(); local u _r lu
+      lu=$(sc list-units 'wolfd@*.service' 'wolf-*.service' --state=active --plain --no-legend --no-pager 2>/dev/null) || { log "cannot list the active wolfd@*/wolf-* units (systemctl list-units failed): survival cannot be verified"; return 1; }
       while read -r u _r; do
         [ -n "$u" ] || continue
         SNAP+=("$u|$(sc show -p InvocationID --value "$u" 2>/dev/null || true)|$(sc show -p MainPID --value "$u" 2>/dev/null || true)")
-      done < <(sc list-units 'wolfd@*.service' 'wolf-*.service' --state=active --plain --no-legend --no-pager 2>/dev/null)
+      done <<<"$lu"
+      ((${#SNAP[@]})) || { log "no active wolfd@*/wolf-* unit found: an empty snapshot proves nothing about survival"; return 1; }
+      return 0
     }
+    save_setup() { [ "$LINK" -ge 0 ] && { install -m 0755 "$B/setup.sh" "${U_OPT[LINK]}/setup.sh" 2>/dev/null || log "note: could not save ${U_OPT[LINK]}/setup.sh (rollback will swap links itself)"; }; return 0; }
     snap_ok() { # same units active with the same InvocationID and MainPID
       local e u iid pid ci cp rc=0
       for e in ${SNAP[@]+"${SNAP[@]}"}; do
@@ -361,8 +366,10 @@ USAGE
       [ -z "$odd" ] || { log "workerd-wolves.service's cgroup holds processes other than workerd.mjs / wolfd-unit.sh / sleep (a restart (KillMode=control-group) would kill them):"; printf '%s\n' "$odd" | head -n 5 | sed 's/^/deploy:   /'; return 1; }
     }
     if [ "$WOLVES" -ge 0 ] && [ "${U_WAS[WOLVES]}" = 1 ]; then
+      # preflight, before ANY change: refuse early. The authoritative snapshot is retaken right before the restart.
       cgls_check || die "refusing to restart workerd-wolves.service: its cgroup is not just workerd (nothing changed). Use --unit link."
-      snap_take; log "survival snapshot taken: ${#SNAP[@]} active wolfd@*/wolf-* unit(s)"
+      snap_take || die "refusing to restart workerd-wolves.service: cannot take a survival snapshot (nothing changed). Use --unit link."
+      log "survival preflight ok: ${#SNAP[@]} active wolfd@*/wolf-* unit(s)"
     fi
 
     # ---- workerd-wolves install (no setup.sh for it). rc 0 = flipped, 1 = failed with nothing left changed here.
@@ -515,23 +522,35 @@ USAGE
       elif [ "$LINK" -ge 0 ]; then log "workerd-wolves install failed: ${U_SVC[WOLVES]} is NOT restarted; undoing the link unit"; fail_rollback
       else log "workerd-wolves install failed before any change: nothing to roll back"; exit 1; fi
       if [ "${U_WAS[WOLVES]}" = 1 ]; then
+        # retake the checks right before the restart (the link install + settle may have taken a while; a wolf restarting on its own in that gap must not look like our fault)
+        if ! { cgls_check && snap_take; }; then
+          log "survival pre-restart check failed: ${U_SVC[WOLVES]} is NOT restarted; reverting its release link"
+          swap_links "${U_OPT[WOLVES]}" && U_CHG[WOLVES]=0 || log "could not swap ${U_OPT[WOLVES]} back; manual: swap current/previous"
+          if [ "$LINK" -ge 0 ]; then fail_rollback; fi
+          log "nothing else changed"; exit 1
+        fi
+        log "survival snapshot taken just before the restart: ${#SNAP[@]} unit(s)"
         since=$(date +%s)
         sc reset-failed "${U_SVC[WOLVES]}" >/dev/null 2>&1 || true
         sc restart "${U_SVC[WOLVES]}" || { log "restart of ${U_SVC[WOLVES]} failed"; fail_rollback; }
         if ! snap_ok; then
           log "SURVIVAL FAILED: the workerd-wolves restart disturbed supervised wolf units. NOT rolling back or restarting anything else (a human must decide). Releases: ${U_OPT[WOLVES]}/current is $VER, previous kept."
-          exit 4
+          save_setup; exit 4
         fi
         if [ -n "${U_IID[WOLVES]}" ] && [ "$(sc show -p InvocationID --value "${U_SVC[WOLVES]}" 2>/dev/null || true)" = "${U_IID[WOLVES]}" ]; then
           log "${U_SVC[WOLVES]} InvocationID did not change after the restart"; fail_rollback
         fi
         unit_healthy "$WOLVES" || fail_rollback
+        if ! snap_ok; then
+          log "SURVIVAL FAILED after the workerd-wolves health check: supervised wolf units changed. NOT rolling back or restarting anything (a human must decide)."
+          save_setup; exit 4
+        fi
       else
         log "${U_SVC[WOLVES]} was not running before this deploy and is left stopped: installed $VER, no health check possible. Start when ready: systemctl start ${U_SVC[WOLVES]}"
       fi
       wolves_prune
     fi
-    if [ "$LINK" -ge 0 ]; then install -m 0755 "$B/setup.sh" "${U_OPT[LINK]}/setup.sh" || log "note: could not save ${U_OPT[LINK]}/setup.sh (rollback will swap links itself)"; fi
+    save_setup
     log "OK: $COMP $VER deployed (${U_SVC[*]})"; exit 0
   fi
 

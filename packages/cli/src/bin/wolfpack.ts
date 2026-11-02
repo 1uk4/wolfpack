@@ -72,6 +72,7 @@ ${c.bold("WORKFLOW COMMANDS")}
   launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf> [--host <h>]        Deploy wolf to host (bundle)
   sync --all                      Sync every wolf on every host
+  deploy <wolf> --release wolfd/vX.Y.Z [--host h] [--dry-run]   host pulls + verifies a GitHub release, health-checks, rolls back
   sync <wolf> --release <tgz>     runtime wolfd: deploy this wolfd release tarball (or $WOLFD_RELEASE)
   sync <wolf> --reset-kb-base     Also rewrite a local wolf's KB_BASE from config (default keeps its .env value)
   list [--json]                   Show all wolves grouped by host

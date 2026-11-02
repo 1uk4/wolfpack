@@ -1,0 +1,6 @@
+# Real systemd as PID 1 for the C4 deploy proof (debian bookworm + node 22). Run with --privileged --cgroupns=host (see deploy-proof-systemd.sh).
+FROM node:22-bookworm
+ENV DEBIAN_FRONTEND=noninteractive container=docker
+RUN apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus iproute2 util-linux curl procps && rm -rf /var/lib/apt/lists/*
+STOPSIGNAL SIGRTMIN+3
+ENTRYPOINT ["/sbin/init"]

@@ -29,3 +29,25 @@ After the tag `wolfd/vX.Y.Z` has been published by CI:
     wolfpack deploy hal2 --release wolfd/vX.Y.Z --host sfo-01
 Without the CLI: `ssh root@sfo-01 'bash -s -- wolfd X.Y.Z --wolf hal2' < infra/release/deploy-release.sh`.
 Check: `ssh root@sfo-01 'systemctl is-active wolfd@hal2; cat /home/wolf-hal2/release/VERSION; journalctl -u wolfd@hal2 -p err --since -5min'`. Manual rollback if ever needed: swap `/home/wolf-hal2/release` and `release.prev`, `systemctl restart wolfd@hal2`.
+
+## hubd and workerd upgrades (C4)
+`deploy` only UPGRADES. If `/opt/wolfpack-hubd/current` (or `/opt/wolfpack-workerd/current`) is missing it refuses (rc 1) and points at `setup.sh setup`; a first install is an owner step: unpack the release, `bash <comp>/setup.sh setup ...`, then `install --bundle`.
+
+**workerd has two units on sfo-01, with separate installs.** `deploy/workerd/setup.sh` only knows the link-only `workerd.service` (`/opt/wolfpack-workerd`, `/etc/wolfpack/workerd.env`, port 7142). `workerd-wolves.service` (infra/wolves) has its own dir `/opt/wolfpack-workerd-wolves` (`releases/`, `current`, `previous`; the same `workerd.mjs` plus `wolfd-unit.sh`), env `/etc/wolfpack/workerd-wolves.env` (port 7143) and is not touched by setup.sh. So `deploy-release.sh workerd` takes `--unit auto|link|wolves|both` (default auto = both when `/opt/wolfpack-workerd-wolves/current` exists, else link):
+the link-only unit goes through the release's `setup.sh install`; for workerd-wolves the script itself installs `workerd.mjs/RUNBOOK.md/VERSION` into a new release dir, copies `wolfd-unit.sh` from the live release, smoke-tests it, flips `current` (old -> `previous`) and restarts the unit. Then BOTH units are health-checked (active, same InvocationID/NRestarts across `--settle`, no `-p err` journal, port from their env file accepts a connection). If either fails, BOTH are rolled back (installed `setup.sh rollback` for the link-only one, link swap for workerd-wolves), restarted (`reset-failed` first, a crash loop otherwise hits StartLimit) and re-checked; rc 3 = rolled back and healthy, rc 4 = needs a human. A unit that was stopped before the deploy is installed but left stopped.
+**A workerd-wolves restart briefly interrupts old Hal and Dewey, which run under it** (their wolfd survives and is re-adopted from its socket, but turns in flight can stall). Use `--unit link` for a deploy that must not touch them.
+
+**hubd health:** hubd has no health route. After the unit/port checks the script sends an unauthenticated `GET /v1/wolves` and requires HTTP 401 (every route except `POST /v1/pair` answers 401 before 404, so a 401 proves the HTTP app is up). Change that if hubd gains a real `/health`.
+
+### RUNBOOK: next hubd / workerd upgrade on sfo-01 (owner approves first; hubd listens on :3150)
+After CI has published `hubd/vX.Y.Z` / `workerd/vX.Y.Z`:
+    wolfpack deploy --component hubd --release hubd/vX.Y.Z --host sfo-01 --dry-run
+    wolfpack deploy --component hubd --release hubd/vX.Y.Z --host sfo-01
+    wolfpack deploy --component workerd --release workerd/vX.Y.Z --host sfo-01 --dry-run
+    wolfpack deploy --component workerd --release workerd/vX.Y.Z --host sfo-01 --unit link      # link-only workerd only (does not touch old Hal/Dewey)
+    wolfpack deploy --component workerd --release workerd/vX.Y.Z --host sfo-01 --unit both      # also restarts workerd-wolves (brief Hal/Dewey interruption)
+Without the CLI: `ssh root@sfo-01 'bash -s -- hubd X.Y.Z' < infra/release/deploy-release.sh`, `... 'bash -s -- workerd X.Y.Z --unit both' < ...`.
+Check: `ssh root@sfo-01 'systemctl is-active hubd workerd workerd-wolves; cat /opt/wolfpack-hubd/current/VERSION /opt/wolfpack-workerd/current/VERSION /opt/wolfpack-workerd-wolves/current/VERSION; curl -s -o /dev/null -w "%{http_code}\n" http://100.120.154.69:3150/v1/wolves; journalctl -u hubd -u workerd -u workerd-wolves -p err --since -5min'` (expect 401 from hubd). Manual rollback: `/opt/wolfpack-hubd/setup.sh rollback`, `/opt/wolfpack-workerd/setup.sh rollback`; for workerd-wolves swap `/opt/wolfpack-workerd-wolves/current` and `previous` then `systemctl restart workerd-wolves`.
+
+### Proofs
+`infra/release/deploy-proof.sh`: fake systemctl and fake setup.sh (logic only). `infra/release/deploy-proof-systemd.sh`: real systemd as PID 1 in a privileged Debian bookworm container (`Dockerfile.systemd-proof`), REAL `deploy/hubd/setup.sh` and `deploy/workerd/setup.sh`, real bundles from `scripts/release-build.sh`, both workerd units; cases: refuse without install, A->B healthy, B crashes -> rollback and running, install fails before the flip -> no rollback, one workerd unit unhealthy -> both roll back, `--unit link`. Needs Docker with `--privileged --cgroupns=host`; local only.

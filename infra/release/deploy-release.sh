@@ -446,7 +446,7 @@ USAGE
     all_rollback || { log "ROLLBACK FAILED: $COMP needs a human (see current/previous under ${U_OPT[*]})"; exit 4; }
     if [ $anyact = 0 ]; then log "units were stopped before the deploy; rolled back and left stopped"; exit 3; fi
     sleep 1; since=$(date +%s)
-    for ((i = 0; i < n; i++)); do [ "${U_WAS[i]}" = 1 ] && { sc restart "${U_SVC[i]}" || log "restart of ${U_SVC[i]} after rollback failed"; }; done
+    for ((i = 0; i < n; i++)); do [ "${U_WAS[i]}" = 1 ] && { sc reset-failed "${U_SVC[i]}" >/dev/null 2>&1 || true; sc restart "${U_SVC[i]}" || log "restart of ${U_SVC[i]} after rollback failed"; }; done
     local ok2=1
     for ((i = 0; i < n; i++)); do [ "${U_WAS[i]}" = 1 ] && { unit_healthy "$i" || ok2=0; }; done
     if [ $ok2 = 1 ]; then log "rolled back; $COMP healthy again"; exit 3; fi

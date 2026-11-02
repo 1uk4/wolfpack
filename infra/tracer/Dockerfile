@@ -3,12 +3,15 @@
 ARG BASE
 FROM ${BASE}
 WORKDIR /opt/wolfpack
-COPY package.json package-lock.json tsconfig.json ./
+# Manifests first (root package.json + lockfile + every workspace package.json, staged by run-tracer.sh via stage-manifests.mjs from the "workspaces" globs),
+# so `npm ci` is only invalidated by dependency changes, not by source edits.
+COPY .manifests/ ./
+# `npm ci` over the whole workspace is deliberate: it is the Linux-clean-lockfile check (git+https bridge dep included). The npm cache is a BuildKit cache mount.
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
 COPY extensions ./extensions
-# `npm ci` over the whole workspace is deliberate: it is the Linux-clean-lockfile check (git+https bridge dep included). The npm cache is a BuildKit cache mount.
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 RUN npx tsc --build
 COPY infra/tracer/kb-ext-entry.ts ./kb-ext-entry.ts
 # --kb mode: the real memory/tasks extension sources as one ESM file (packages stay external, resolved from /opt/wolfpack/node_modules)

@@ -1,0 +1,107 @@
+# CI: VERIFY only. No secrets, no artifacts published (release artifacts are built at release time, not here).
+# scripts/affected.mjs decides what runs: changed packages + their transitive dependents.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      affected: ${{ steps.a.outputs.affected }}
+      any: ${{ steps.flags.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: a
+        name: affected packages
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # first push / zero sha / unreachable base => affected.mjs marks everything
+          node scripts/affected.mjs "$BASE" "$HEAD" --github-output
+      - id: flags
+        run: |
+          node -e 'const a=JSON.parse(process.env.A);console.log("any="+(a.all||a.packages.length>0||a.extensionsTests||a.scriptsTests))' >> "$GITHUB_OUTPUT"
+        env:
+          A: ${{ steps.a.outputs.affected }}
+
+  verify:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      A: ${{ needs.detect.outputs.affected }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: tsc --build (affected projects)
+        run: |
+          mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
+          [ ${#P[@]} -gt 0 ] && npx tsc --build "${P[@]}" || echo "no TS projects affected"
+      - name: vitest (affected packages)
+        run: |
+          ALL=$(node -p 'JSON.parse(process.env.A).all')
+          if [ "$ALL" = true ]; then npx vitest run; exit; fi
+          mapfile -t F < <(node -e '
+            const a=JSON.parse(process.env.A);
+            const f=[...a.vitestPaths];
+            if(a.extensionsTests)f.push("extensions/");
+            if(a.scriptsTests)f.push("scripts/");
+            console.log(f.join("\n"))')
+          [ -n "${F[0]:-}" ] && npx vitest run "${F[@]}" || echo "no vitest paths affected"
+      - name: console tests
+        if: fromJSON(needs.detect.outputs.affected).consoleTests
+        run: npm test -w @wolfpack/console
+
+  tracer:
+    needs: detect
+    if: fromJSON(needs.detect.outputs.affected).tracer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: stub tracer (hubd + workerd + stub wolfd, no secrets)
+        run: infra/tracer/run-tracer.sh
+
+  release-smoke:
+    needs: detect
+    if: fromJSON(needs.detect.outputs.affected).release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: build wolfd release (x64, local only, not uploaded)
+        run: scripts/build-wolfd-release.sh --arch x64 --out "$RUNNER_TEMP/rel"
+      - name: smoke the tarball
+        run: scripts/smoke-wolfd-release.sh "$(ls "$RUNNER_TEMP"/rel/wolfd-*-linux-x64.tar.gz)"
+
+  ci:
+    if: always()
+    needs: [detect, verify, tracer, release-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: all required jobs passed or were skipped
+        run: |
+          echo '${{ toJSON(needs.*.result) }}'
+          if echo '${{ toJSON(needs.*.result) }}' | grep -Eq 'failure|cancelled'; then exit 1; fi

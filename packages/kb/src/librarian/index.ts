@@ -35,7 +35,7 @@ export {
   seenHashes,
   foldRegistry,
 } from "./ledger.js";
-export { drainInbox, countPending } from "./intake.js";
+export { drainInbox, countPending, parseContribution, DEFAULT_LANE, type LaneOptions } from "./intake.js";
 export {
   createEmbedder,
   resolveEmbedConfig,
@@ -73,6 +73,7 @@ export { drainFile, readDrain, formatDrain, type DrainState } from "./drain.js";
 export { withBudget, BudgetExceeded, park, unpark, listParked, type ParkedItem } from "./park.js";
 export {
   readDeclaredDomains,
+  describeGateSource,
   isDeclared,
   renderDomainIndex,
 } from "./domains.js";

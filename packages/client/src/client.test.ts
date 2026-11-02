@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURE_WORK } from "./fixture.js";
 import { MockConsoleClient, type ConsoleClient } from "./index.js";
-import { parseThreadEvent } from "@wolfpack/protocol";
+import { parseThreadEvent, ROUTES } from "@wolfpack/protocol";
 import { collect, homeThread, runBehaviours } from "./behaviours.js";
 
 const make = (): ConsoleClient => new MockConsoleClient({ delayMs: 1 });
@@ -18,6 +19,40 @@ describe("MockConsoleClient ↔ @wolfpack/protocol", () => {
       const parsed = parseThreadEvent(e);
       expect(parsed.kind).toBe("event");
       expect(e.actor).toEqual({ id: "1uk4", kind: "wolf" });
+    }
+  });
+});
+
+describe("MockConsoleClient work fixtures ↔ protocol schemas", () => {
+  it("listWork and getWorkRecord answer schema-valid fixtures", async () => {
+    const c = new MockConsoleClient({ delayMs: 1 });
+    const list = await c.listWork!("1uk4", { domain: "wolfpack" });
+    expect(ROUTES.listWork.response.schema.parse(list)).toEqual(list);
+    expect(list.items.map((i) => i.id)).not.toContain("work-wolfpack-old0001"); // graduated: hidden by default
+    expect((await c.listWork!("1uk4", { domain: "wolfpack", graduated: true })).items.map((i) => i.id)).toContain("work-wolfpack-old0001");
+    expect((await c.listWork!("1uk4", { domain: "nope" })).items).toEqual([]);
+    const rec = await c.getWorkRecord!("1uk4", "work-wolfpack-feat001");
+    expect(ROUTES.getWorkRecord.response.schema.parse(rec)).toEqual(rec);
+    expect(rec.children).toHaveLength(2);
+    await expect(c.getWorkRecord!("1uk4", "work-wolfpack-zzzzzzz")).rejects.toThrow();
+  });
+});
+
+describe("MockConsoleClient claimWork stages (the hub allowlist: approved and in_build only)", () => {
+  it("claims an approved item and rejects plan and non-kb stages like build", async () => {
+    const m = new MockConsoleClient({ delayMs: 1 });
+    const feat = FIXTURE_WORK.find((w) => w.id === "work-wolfpack-feat001")!;
+    const task = FIXTURE_WORK.find((w) => w.id === "work-wolfpack-task002")!;
+    const saved = feat.stage;
+    try {
+      feat.stage = "build"; // not a kb stage
+      await expect(m.claimWork(feat.id)).rejects.toMatchObject({ code: "invalid_request" });
+      await expect(m.claimWork(task.id)).rejects.toMatchObject({ code: "invalid_request" }); // plan
+      feat.stage = "approved";
+      const r = await m.claimWork(feat.id);
+      expect(r.item.stage).toBe("in_build");
+    } finally {
+      feat.stage = saved;
     }
   });
 });

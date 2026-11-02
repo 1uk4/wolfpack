@@ -15,13 +15,13 @@ import { ENTRY_KINDS, FACET_KEYS, RELATION_KINDS } from "@wolfpack/engine";
 import { DIGEST } from "@wolfpack/engine";
 import {
   type KbRoots,
-  domainsRegistryFile,
   domainIndex,
   domainDigest,
   entriesDir,
   type ContextDigest,
   type DigestSection,
 } from "../shared/index.js";
+import { resolveGateDomainsFile } from "../shared/domain-registry.js";
 import { entrySummary } from "./embed.js";
 import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
 import { readSections, getRoots, buildParentIndex } from "./sections.js";
@@ -30,10 +30,12 @@ import type { Section, SectionId, Currency } from "../schema/knowledge.js";
 /**
  * The declared domain names, or null when no registry is deployed (treated as
  * "unconstrained" for back-compat so a bare install still commits).
+ * Sources: WOLFPACK_DOMAINS_FILE, then <kbBase>/domains.yaml. NEVER the ~/.wolfpack fallback the label readers use.
+ * Throws DomainsFileError when WOLFPACK_DOMAINS_FILE is set but missing/empty (fail closed, not open).
  */
-export function readDeclaredDomains(roots: KbRoots): Set<string> | null {
-  const file = domainsRegistryFile(roots);
-  if (!existsSync(file)) return null;
+export function readDeclaredDomains(roots: KbRoots, env: NodeJS.ProcessEnv = process.env): Set<string> | null {
+  const file = resolveGateDomainsFile(roots.kbBase, env); // throws DomainsFileError for a bad WOLFPACK_DOMAINS_FILE
+  if (!file) return null;
   try {
     const parsed = (yamlParse(readFileSync(file, "utf-8")) ?? {}) as {
       domains?: Record<string, unknown>;
@@ -43,6 +45,11 @@ export function readDeclaredDomains(roots: KbRoots): Set<string> | null {
   } catch {
     return null;
   }
+}
+
+/** Which file the gate reads, for the once-per-sweep log line. */
+export function describeGateSource(roots: KbRoots, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveGateDomainsFile(roots.kbBase, env) ?? "none: unconstrained";
 }
 
 /** True when the domain is committable (declared, or no registry deployed). */

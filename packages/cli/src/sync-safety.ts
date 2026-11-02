@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 export interface SmokeResult {
   ok: boolean;
@@ -26,34 +27,76 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 
 /**
  * Load the built bundle in a child node process in smoke mode. The child gets a
- * minimal environment (no wolf secrets) and the repo's node_modules, which is
- * where the bundle's externals (grammy, the Agent SDK) resolve from on the host.
+ * minimal environment (no wolf secrets) and runs from a copy of the bundle in a
+ * fresh temp dir with only grammy resolvable (see isolate), like a VPS.
  */
 export function smokeCheckBundle(
   harnessPath: string,
   opts: { timeoutMs?: number; nodePath?: string } = {},
 ): Promise<SmokeResult> {
   return runSmoke(harnessPath, ["--smoke"], {
-    cwd: path.dirname(harnessPath),
     env: { WOLF_HARNESS_SMOKE: "1" },
     timeoutMs: opts.timeoutMs ?? 20_000,
     nodePath: opts.nodePath,
   });
 }
 
+/**
+ * Lay out a VPS-like sandbox for the bundle: <tmp>/agent/harness.cjs with <tmp>/agent/node_modules holding ONLY what the
+ * VPS installs next to the bundle (grammy: wolf-manager `npm install --prefix agent grammy`). Nothing under the repo is
+ * reachable from there, so an external the VPS cannot resolve (the Agent SDK is only a global install there, and the
+ * harness loads it itself via the engine's loadQuery) fails the smoke instead of passing on the dev machine.
+ */
+function isolate(harnessPath: string): { dir: string; harness: string; nodePath: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-smoke-iso-"));
+  const agent = path.join(dir, "agent");
+  const nodePath = path.join(agent, "node_modules");
+  fs.mkdirSync(nodePath, { recursive: true });
+  const harness = path.join(agent, "harness.cjs");
+  fs.copyFileSync(harnessPath, harness);
+  try {
+    // grammy's own deps resolve from its real path, so a symlink stands in for the VPS install.
+    // (grammy's package exports hide package.json, so find the package root from its entry file.)
+    let grammy = path.dirname(createRequire(path.join(repoRoot, "package.json")).resolve("grammy"));
+    while (path.basename(grammy) !== "grammy" && path.dirname(grammy) !== grammy) grammy = path.dirname(grammy);
+    fs.symlinkSync(grammy, path.join(nodePath, "grammy"), "dir");
+  } catch { /* grammy not installed here: a bundle that needs it fails the smoke, as it would on a VPS without it */ }
+  return { dir, harness, nodePath };
+}
+
+/**
+ * Stand-in for the VPS's global SDK install: the engine's loadQuery falls back to resolving the SDK from the process cwd
+ * (its last anchor), so link the repo's SDK under <cwd>/node_modules. The bundle's own require() resolves from the
+ * bundle's directory (agent/), never from cwd, so a plain top-level require of the SDK still fails here, as on the VPS.
+ */
+function linkSdkForLoader(cwd: string): void {
+  try {
+    let sdk = path.dirname(createRequire(path.join(repoRoot, "package.json")).resolve("@anthropic-ai/claude-agent-sdk"));
+    while (path.basename(sdk) !== "claude-agent-sdk" && path.dirname(sdk) !== sdk) sdk = path.dirname(sdk);
+    const scope = path.join(cwd, "node_modules", "@anthropic-ai");
+    fs.mkdirSync(scope, { recursive: true });
+    fs.symlinkSync(sdk, path.join(scope, "claude-agent-sdk"), "dir");
+  } catch { /* SDK not installed on this host: a bundle that loads it fails the smoke */ }
+}
+
 function runSmoke(
   harnessPath: string,
   args: string[],
-  o: { cwd: string; env: Record<string, string>; timeoutMs: number; nodePath?: string },
+  o: { cwd?: string; env: Record<string, string>; timeoutMs: number; nodePath?: string },
 ): Promise<SmokeResult> {
   const timeoutMs = o.timeoutMs;
+  const iso = isolate(harnessPath);
+  const cwd = o.cwd ?? path.join(iso.dir, "cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  linkSdkForLoader(cwd);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [harnessPath, ...args], {
-      cwd: o.cwd,
+    const child = spawn(process.execPath, [iso.harness, ...args], {
+      cwd,
+      // Cleared env (NODE_PATH included): only the sandbox's node_modules is on the resolution path.
       env: {
         PATH: process.env.PATH ?? "",
-        HOME: process.env.HOME ?? "",
-        NODE_PATH: o.nodePath ?? path.join(repoRoot, "node_modules"),
+        HOME: iso.dir,
+        NODE_PATH: o.nodePath ?? iso.nodePath,
         ...o.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -66,10 +109,12 @@ function runSmoke(
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
     child.on("error", (err) => {
       clearTimeout(timer);
+      fs.rmSync(iso.dir, { recursive: true, force: true });
       resolve({ ok: false, output: String(err) });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      fs.rmSync(iso.dir, { recursive: true, force: true });
       const said = output.split("\n").some((l) => l.trim() === "ok");
       if (timedOut) resolve({ ok: false, output: `${output}\n(smoke check timed out after ${timeoutMs}ms)`.trim() });
       else resolve({ ok: code === 0 && said, output });

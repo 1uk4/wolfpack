@@ -44,6 +44,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig, type WorkSystemHandle } from "./work-system.js";
 import { WorkClient } from "./work-client.js";
+import { writeParentBody } from "./parent-embed.js";
 import {
   getStageContext,
   summarizeTask,
@@ -1527,7 +1528,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
       try {
         // Get task body for summarization context
-        const { resolveWorkItem, commitWorkItem, loadWorkState, queryWork } = await import("@wolfpack/kb/client");
+        const { resolveWorkItem, loadWorkState, queryWork } = await import("@wolfpack/kb/client");
         const resolved = resolveWorkItem(kbRoots, item.domain as string, taskId);
         const taskBody = resolved?.body ?? "";
 
@@ -1561,7 +1562,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
               summary,
               new Date().toISOString().split("T")[0]
             );
-            commitWorkItem(kbRoots, parent, updatedBody);
+            await writeParentBody(kbRoots, parent, updatedBody, { notify: (m, level) => runtime?.notify(m, level) });
 
             // Graduating the feature is manual: `g` in /task once all its
             // tasks are done (work-system.ts).

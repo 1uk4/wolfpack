@@ -7,7 +7,7 @@
  * Every time an entry file is overwritten, its previous content is first kept
  * here; a retired entry is moved here instead of deleted. `versions/` is a
  * sibling of `entries/`, so everything that reads `entries/` never sees it,
- * and it rides the domain's Syncthing share with the rest of the folder.
+ * and it is distributed with the rest of the domain folder over the hub link.
  * Timestamps use `-` for `:` so the names are legal on every filesystem.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";

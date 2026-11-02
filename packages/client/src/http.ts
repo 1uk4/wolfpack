@@ -5,22 +5,25 @@ import {
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
   ROUTES,
+  type RouteDef,
   SSE_DONE,
   buildPath,
   parseMemoryEvent,
   parseThreadEvent,
   parseWolfEvent,
+  parseHubEvent,
   type BindThreadResponse,
   type ThreadContext,
   type ThreadSettingsPatch,
   type ThreadSettingsResponse,
   type RouteName,
+  type KbCommitRequest,
+  type KbCommitResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
   NotFoundError,
   ProtocolError,
-  type Actor,
   type CardAnswers,
   type CreateThreadBody,
   type ConsoleClient,
@@ -31,6 +34,7 @@ import {
   type MemoryTopic,
   type MemoryObservations,
   type WorkRecordResponse,
+  type WorkItemResponse,
   type GraduationJob,
   type GraduationObservations,
   type GraduationStatus,
@@ -40,6 +44,7 @@ import {
   type PromoteResponse,
   type MemoryEvent,
   type WolfEvent,
+  type HubEvent,
   type Attachment,
   type SubmitAck,
   type SubmitOptions,
@@ -56,8 +61,17 @@ import {
 export interface HttpClientOptions {
   /** Server origin (optionally with a path prefix), e.g. `http://127.0.0.1:4100`. */
   baseUrl: string;
-  /** Acting identity. Reserved: the v1 wire has no actor field yet, so it is not sent. */
-  actor?: Actor;
+  /**
+   * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
+   * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `Authorization: Bearer token` (no token = no credentials, so the hub answers 401); everything else still goes to `baseUrl`.
+   */
+  hub?: { baseUrl: string; /** Per-device bearer token. */ token?: string;
+    /**
+     * Relay mode: wolf-scoped requests (threads, memory, streams, ...) go to the HUB too, with the same credentials; the hub tunnels them to the
+     * wolf's host over its worker link. With this set `baseUrl` is not contacted (pass the hub's URL). A wolf whose host is asleep/offline
+     * fails at once with ProtocolError `engine_error` (retryable) naming the state.
+     */
+    relay?: boolean };
   /** Injectable fetch (tests, auth wrappers). Defaults to global fetch. */
   fetch?: typeof fetch;
   /** Consecutive failed stream reconnects tolerated before giving up. Default 5. */
@@ -73,15 +87,15 @@ interface Frame {
 
 /** ConsoleClient over the /v1 HTTP+SSE protocol. Interchangeable with MockConsoleClient. */
 export class HttpConsoleClient implements ConsoleClient {
-  readonly actor?: Actor;
   private readonly base: string;
+  private readonly hub?: { base: string; token?: string; relay?: boolean };
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
 
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
-    this.actor = opts.actor;
+    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), token: opts.hub.token, relay: opts.hub.relay };
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
@@ -301,6 +315,71 @@ export class HttpConsoleClient implements ConsoleClient {
     }
   }
 
+  /**
+   * The pack's hub events (`work.changed`, `kb.changed`, `wolf.presence`; `resync` = refetch). Needs `HttpClientOptions.hub`.
+   * Reconnects on a dropped stream, resuming with Last-Event-ID (the opaque `<boot>:<seq>` of the last frame, resync included);
+   * a cursor the hub cannot replay is answered with `resync`, which is yielded like any event. Never ends on its own: stop with `signal`.
+   */
+  async *watchHubEvents(opts: { from?: string; signal?: AbortSignal; idleMs?: number } = {}): AsyncGenerator<HubEvent> {
+    const { signal } = opts;
+    const idleMs = opts.idleMs ?? 60_000; // the hub sends a keepalive every 20s
+    const STABLE_MS = 10_000; // a stream that stayed up this long (or delivered STABLE_FRAMES) was healthy: reset the backoff
+    const STABLE_FRAMES = 5;
+    let cursor = opts.from;
+    let failures = 0;
+    while (!signal?.aborted) {
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener("abort", stop);
+      const startedAt = Date.now();
+      let frames = 0;
+      try {
+        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = cursor;
+        const res = await this.request("hubEvents", {}, { headers, signal: ctl.signal });
+        if (!res.body) throw new TypeError("stream response has no body");
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        const arm = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => ctl.abort(), idleMs);
+        };
+        arm();
+        try {
+          for await (const frame of sseFrames(res.body, arm)) {
+            frames++;
+            if (frames >= STABLE_FRAMES || Date.now() - startedAt >= STABLE_MS) failures = 0;
+            let json: unknown;
+            try {
+              json = JSON.parse(frame.data);
+            } catch {
+              throw new ProtocolError("invalid_request", "stream frame is not JSON", false);
+            }
+            const parsed = parseHubEvent(json);
+            if (parsed.kind === "unknown") continue;
+            if (parsed.kind === "invalid") throw new ProtocolError("invalid_request", `invalid stream event: ${parsed.error.message}`, false);
+            if (frame.id) cursor = frame.id;
+            yield parsed.event;
+          }
+        } finally {
+          clearTimeout(idle);
+        }
+        throw new TypeError("stream ended");
+      } catch (e) {
+        if (signal?.aborted) return;
+        // Busy (stream cap, hub shutting down) is retryable here, like a transport error. Other protocol errors are final.
+        if (e instanceof ProtocolError || e instanceof NotFoundError) throw e;
+        if (Date.now() - startedAt >= STABLE_MS) failures = 0;
+        failures++;
+        // Unlimited retries, capped exponential backoff 50ms -> 30s with jitter; abort cuts the wait short.
+        const base = Math.min(30_000, Math.max(1, this.retryDelayMs) * 2 ** Math.min(failures - 1, 20));
+        await abortableSleep(base / 2 + Math.random() * (base / 2), signal);
+      } finally {
+        signal?.removeEventListener("abort", stop);
+        ctl.abort();
+      }
+    }
+  }
+
   async consolidateMemory(wolf: string): Promise<ConsolidateResponse> {
     return (await this.json("consolidateMemory", { name: wolf }, ROUTES.consolidateMemory.response.schema, undefined, wolf)) as ConsolidateResponse;
   }
@@ -327,11 +406,30 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async listWork(wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {
     const query = `?domain=${encodeURIComponent(opts.domain)}${opts.graduated ? "&graduated=true" : ""}`;
+    if (this.hub) return (await this.json("hubListWork", {}, ROUTES.hubListWork.response.schema, undefined, undefined, query)) as WorkListResponse;
     return (await this.json("listWork", { name: wolf }, ROUTES.listWork.response.schema, undefined, wolf, query)) as WorkListResponse;
   }
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
+    if (this.hub) return (await this.json("hubGetWorkRecord", { id: workId }, ROUTES.hubGetWorkRecord.response.schema)) as WorkRecordResponse;
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
+  /** `wolf`: which wolf a worker token acts for (sent as the `{wolf}` body); omit for operator tokens. */
+  async claimWork(workId: string, wolf?: string): Promise<WorkItemResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "claimWork needs a hub client", false);
+    return (await this.json("hubClaimWork", { id: workId }, ROUTES.hubClaimWork.response.schema, wolf === undefined ? undefined : { wolf })) as WorkItemResponse;
+  }
+
+  /** Hub only: commit a KB batch (operator actor; the hub's all-or-nothing POST /v1/kb/commits). 409 `conflict` on a stale prevHash. */
+  async commitKb(req: KbCommitRequest): Promise<KbCommitResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "commitKb needs a hub client", false);
+    return (await this.json("hubKbCommit", {}, ROUTES.hubKbCommit.response.schema, req)) as KbCommitResponse;
+  }
+
+  async releaseWork(workId: string, wolf?: string): Promise<WorkItemResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "releaseWork needs a hub client", false);
+    return (await this.json("hubUnclaimWork", { id: workId }, ROUTES.hubUnclaimWork.response.schema, wolf === undefined ? undefined : { wolf })) as WorkItemResponse;
   }
 
   async startGraduationPreview(wolf: string, workId: string): Promise<GraduationJob> {
@@ -409,14 +507,29 @@ export class HttpConsoleClient implements ConsoleClient {
 
   // ------------------------------------------------------------ plumbing
 
+  /** Credentials for a request that goes to the hub: the bearer token only. Without one nothing is sent and the hub's 401 becomes a ProtocolError. */
+  private hubHeaders(viaHub: boolean): Record<string, string> {
+    if (!viaHub || !this.hub?.token) return {};
+    return { Authorization: `Bearer ${this.hub.token}` };
+  }
+
   private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
-    const route = ROUTES[name];
-    const res = await this.fetchFn(this.base + buildPath(name, params) + query, {
+    const route: RouteDef = ROUTES[name];
+    const hubRoute = route.scope === "hub";
+    if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
+    const viaHub = hubRoute || this.hub?.relay === true; // relay mode: every route goes through the hub
+    const origin = viaHub ? this.hub!.base : this.base;
+    const res = await this.fetchFn(origin + buildPath(name, params) + query, {
       ...init,
       method: route.method,
-      headers: { ...init.headers, [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
+    if (viaHub && res.status === 401) {
+      // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.
+      const err = await this.toError(res, threadId);
+      throw err instanceof ProtocolError && err.code === "unauthorized" ? err : new ProtocolError("unauthorized", err instanceof Error && err.message ? err.message : "hub rejected the token (HTTP 401)", false);
+    }
     throw await this.toError(res, threadId);
   }
 
@@ -461,10 +574,21 @@ export class HttpConsoleClient implements ConsoleClient {
     const { code, message, retryable, details } = env.data;
     if (code === "busy") return new BusyError(threadId ?? message, details);
     if (code === "not_found") return new NotFoundError(message);
-    return new ProtocolError(code, message, retryable);
+    return new ProtocolError(code, message, retryable, details);
   }
 }
 
+const abortableSleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(t);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Minimal SSE parser: frames separated by blank lines; `id:`/`data:` fields, comments ignored. */

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { contentHash, type KbRoots } from "../shared/index.js";
 import { emitDelta } from "./emitDelta.js";
+import { parseContribution } from "../librarian/intake.js";
 
 const WOLF = "w1";
 let root: string;
@@ -52,4 +53,19 @@ describe("emitDelta force", () => {
     expect(inbox()).toHaveLength(1);
     expect(emittedMap()).toEqual({ t: contentHash("body") });
   });
+});
+
+describe("emitDelta canonical body", () => {
+  for (const body of ["b\n", "b\n\n", "  b  ", "\n b\n"]) {
+    it(`hash, file and parsed body agree for ${JSON.stringify(body)}`, () => {
+      const c = emitDelta(input(body))!;
+      expect(c.contentHash).toBe(contentHash("b"));
+      const file = join(roots.opsRoot, "inbox", WOLF, inbox()[0]!);
+      const parsed = parseContribution(file, WOLF);
+      expect(parsed.contentHash).toBe(contentHash(parsed.body.slice("s\n\n".length)));
+      expect(readFileSync(emittedBody(), "utf-8")).toBe("b");
+      // the same body with other whitespace is an unchanged re-promote, not a new emit
+      expect(emitDelta(input("b\n"))).toBeNull();
+    });
+  }
 });

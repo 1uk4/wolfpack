@@ -8,11 +8,27 @@
  *   status            read-only health + consistency dashboard (no writes):
  *                     sweep lock, inbox backlog, and file↔ledger drift per
  *                     domain. Start here when something looks off.
- *   sweep [--drain]   one tick: route → produce → commit one contribution, then
- *                     reorg the domains it touched. Add --drain to loop ticks
+ *   sweep [--drain]   one tick: route → produce → commit one contribution (places
+ *                     it top-down; no reorg unless WOLFPACK_KB_POST_SWEEP_REORG=1). Add --drain to loop ticks
  *                     until the inbox is empty, the sweep is paused by an
  *                     outage, or a tick makes no progress (manual/dev use).
  *   history <id>      list an entry's kept versions (`--show <timestamp>` prints one)
+ *   rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse]
+ *                     development baseline: rebuild one domain's section tree in memory. --dry-run
+ *                     writes only kb-rebuild-proposal.md in the cwd. --from-current (default) keeps the
+ *                     existing sections and judges only oversized ones; --from-scratch starts at one root.
+ *                     Refinement moves apply only inside one top-level section; moves into another are
+ *                     listed in the proposal and applied only with --apply-cross-moves (all) or
+ *                     --approve-move <entryId> (repeatable: just those; the rest stay listed).
+ *                     --yes also aborts if any judged section was not in the dry-run split cache (the LLM was
+ *                     asked again, so the tree may differ from the proposal reviewed) unless --allow-uncached-split;
+ *                     --fresh-split ignores and overwrites cached proposals (for a dry run wanting new ones).
+ *                     --yes aborts if any section's split fell back to k-means (LLM call failed) unless
+ *                     --allow-kmeans-fallback; the proposal always lists fallbacks.
+ *                     --yes commits after saving timestamped backups in the den-local dir:
+ *                     sections.json.pre-rebuild-<ts> and .rebuild-old-sections-<ts>.json.
+ *                     RESTORE: `rebuild --restore <ts> --yes` puts the snapshot and every entry's old
+ *                     section: line back. An interrupted commit is finished by the next sweep/tick.
  *   rebuild-vectors   wipe + re-embed the entry-vector cache (model change etc.)
  *
  * A den-local lock (sweep.lock) guarantees a single writer — a second sweep
@@ -54,6 +70,8 @@ import { listVersions, readVersion } from "./librarian/versions.js";
 import { EntryId } from "./schema/knowledge.js";
 import { ledgeredByDomain, driftOf } from "./librarian/drift.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
+import { listRebuildBackups, rebuildJournalFile } from "./librarian/rebuild-commit.js";
+import { restoreAndRender, badJournalNote, recoveryPausedNote } from "./librarian/rebuild-recover.js";
 import { unpark, listParked } from "./librarian/park.js";
 import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
 import { countPending } from "./librarian/intake.js";
@@ -294,6 +312,11 @@ async function cmdStatus(): Promise<void> {
       pending.total ? ` — ${pending.wolves.join(", ")}` : ""
     }${oldest ? `; oldest ${oldest.wolf}/${oldest.file} waiting ${formatAge(oldest.ageMs)}` : ""}`
   );
+  const badJournal = badJournalNote(roots);
+  if (badJournal) console.log(`  ⛔ rebuild: ${badJournal}`);
+  const paused = recoveryPausedNote(roots);
+  if (paused) console.log(`  ⛔ rebuild: ${paused}`);
+  else if (existsSync(rebuildJournalFile(roots))) console.log(`  ⚠ rebuild: an unfinished rebuild journal is present; the next sweep/tick finishes it (and skips the run if it cannot)`);
   const parkedItems = listParked(roots);
   if (parkedItems.length) {
     console.log(`  ⛔ parked: ${parkedItems.length} — ${parkedItems.map((p) => `${p.wolf}/${p.file}`).join(", ")} (wolfpack-kb unpark)`);
@@ -421,14 +444,63 @@ async function cmdReorg(): Promise<void> {
 async function cmdRebuild(): Promise<void> {
   const roots = resolveRoots();
   const argv = process.argv.slice(2);
-  const domain = argv.find((a) => !a.startsWith("--") && a !== "rebuild") ?? null;
-
-  if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain>");
+  const restoreAt = argv.includes("--restore") ? argv[argv.indexOf("--restore") + 1] : null;
+  const approvedMoves: string[] = [];
+  const takesValue = (i: number) => argv[i + 1] !== undefined && !argv[i + 1].startsWith("--");
+  argv.forEach((a, i) => {
+    if (a === "--approve-move") {
+      if (takesValue(i)) approvedMoves.push(argv[i + 1]);
+      else console.error(`warning: --approve-move needs an entry id (${i === argv.length - 1 ? "it is the last argument" : `next is ${argv[i + 1]}`}); ignored`);
+    } else if (a.startsWith("--approve-move=")) {
+      const v = a.slice("--approve-move=".length);
+      if (v) approvedMoves.push(v); else console.error("warning: --approve-move= has no entry id; ignored");
+    }
+  });
+  const domain = argv.find((a, i) => !a.startsWith("--") && a !== "rebuild" && argv[i - 1] !== "--restore" && !(argv[i - 1] === "--approve-move" && takesValue(i - 1))) ?? null;
+  if (argv.includes("--apply-cross-moves") && (argv.includes("--approve-move") || argv.some((a) => a.startsWith("--approve-move=")))) {
+    console.error("--apply-cross-moves (all) and --approve-move (selected) cannot be combined; pick one");
     process.exit(1);
   }
 
-  console.log(`\n── rebuild: ${domain} (full section tree reconstruction) ──`);
+  if (restoreAt) {
+    if (!argv.includes("--yes")) {
+      console.error(`restore puts back the section: lines and the sections snapshot saved before the rebuild stamped ${restoreAt}.\nKnown backups: ${listRebuildBackups(roots).join(", ") || "none"}\nRe-run with --yes.`);
+      process.exit(2);
+    }
+    const release = acquireKbLock(roots);
+    if (!release) { console.error("a sweep is running (sweep.lock held); retry when it finishes"); process.exit(1); }
+    try {
+      // vectors let an entry whose old section is gone be re-homed on the nearest leaf instead of only reported
+      const vecs = await buildEntryVectors(roots, foldRegistry(readLedger(roots)), createEmbedder(roots)).catch(() => []);
+      const byId = new Map(vecs.map((v) => [v.entryId, v.vector]));
+      const r = restoreAndRender(roots, restoreAt, { vectorOf: (id) => byId.get(id) });
+      console.log(`restored domain "${r.domain}" from ${restoreAt}: ${r.entriesRestored} entry file(s) rewritten, ${r.sections} section(s); other domains untouched; registry/digest/INDEX re-rendered`);
+      if (r.rehomed.length) console.log(`  re-homed on the nearest leaf (their section no longer exists): ${r.rehomed.join(", ")}`);
+      if (r.unresolved.length) console.log(`  NOT re-homed (no vector); they point at a missing section: ${r.unresolved.join(", ")}`);
+    } finally { release(); }
+    return;
+  }
+
+  if (!domain) {
+    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <entryId>...] [--allow-kmeans-fallback] [--allow-uncached-split] [--fresh-split]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
+    process.exit(1);
+  }
+
+  const dryRun = argv.includes("--dry-run");
+  if (!dryRun && !argv.includes("--yes")) {
+    console.error(
+      `rebuild rewrites the section: line of every entry in "${domain}" and replaces its whole section tree.\n` +
+      `Preview it with:  wolfpack-kb rebuild ${domain} --dry-run\n` +
+      `Then run it with: wolfpack-kb rebuild ${domain} --yes   (backs up sections.json and the old section values first)`
+    );
+    process.exit(2);
+  }
+  if (argv.includes("--from-current") && argv.includes("--from-scratch")) {
+    console.error("--from-current and --from-scratch are exclusive");
+    process.exit(1);
+  }
+  const rebuildFrom = argv.includes("--from-scratch") ? "scratch" : "current";
+  console.log(`\n── rebuild${dryRun ? " (dry-run: no KB file is written; LLM label calls are made and the vector cache may be warmed)" : ""}: ${domain} (from ${rebuildFrom === "current" ? "the current tree: only oversized sections are judged" : "scratch: one root, every section judged"}) ──`);
 
   const engine = makeEngine();
   const result = await reorgFn({
@@ -436,14 +508,27 @@ async function cmdRebuild(): Promise<void> {
     roots,
     domains: [domain],
     rebuild: true,
+    rebuildFrom,
+    allowCollapse: argv.includes("--allow-collapse"),
+    allowKmeansFallback: argv.includes("--allow-kmeans-fallback"),
+    allowUncachedSplit: argv.includes("--allow-uncached-split"),
+    freshSplit: argv.includes("--fresh-split"),
+    applyCrossMoves: argv.includes("--apply-cross-moves"),
+    approvedCrossMoves: approvedMoves,
+    dryRun,
+    proposalPath: dryRun ? join(process.cwd(), "kb-rebuild-proposal.md") : undefined,
     notify: (msg) => console.log(`  ${msg}`),
   });
+  if (dryRun && result.proposal) {
+    console.log(`\n${result.proposal}`);
+    console.log(`proposal written to ${join(process.cwd(), "kb-rebuild-proposal.md")}`);
+  }
 
   console.log(
     `\nrebuild done: ${result.placements} entries placed, ` +
     `${result.labelsUpdated} sections labeled, ` +
-    `${result.splits} splits, ${result.merges} merges` +
-    (result.rebuilt ? " (full rebuild)" : "")
+    `${result.splits} splits` +
+    (result.rebuilt ? " (rebuild)" : "")
   );
 }
 
@@ -526,8 +611,8 @@ async function cmdHistory(): Promise<void> {
 
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
-  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all]\n" +
-  "  rebuild <domain> | retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <id>...] [--allow-kmeans-fallback] [--allow-uncached-split] [--fresh-split] | rebuild --restore <ts> --yes\n" +
+  "  retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 
 async function main(): Promise<void> {

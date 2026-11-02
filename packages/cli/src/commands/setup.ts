@@ -1,7 +1,7 @@
 /**
  * wolfpack setup — establish the two required roles of a pack, plus its models:
  *   • HUB      — this machine. Holds ~/wolves (location configurable) + runs the
- *                Syncthing device every wolf mirrors through.
+ *                hub link every wolf reads the KB through.
  *   • LIBRARIAN — the wolf that curates the shared KB (required for memory/KB).
  *                Runs locally (on the hub) or on a registered host.
  *   • MODELS   — the pack's `models:` block (tiers + transport defaults),
@@ -19,13 +19,12 @@ import {
   saveConfig,
   savePackModels,
   getHost,
-  kbBaseDir,
+  kbWriteBaseDir,
   librarianDir,
   localWolfDir,
   type CliConfig,
 } from "../config.js";
-import { loadDevices, saveDevices } from "../mesh.js";
-import { ensureHubDevice, gatherWolves } from "../mesh-reconcile.js";
+import { gatherWolves } from "../mesh-reconcile.js";
 import { provisionKbEngine } from "../deployer.js";
 import { installLocalLibrarian } from "../local-librarian.js";
 import { wolfAdd } from "./wolf-add.js";
@@ -41,7 +40,7 @@ export async function setupCmd(opts: { yes?: boolean }): Promise<void> {
   await setupLibrarian(loadConfig(), opts);
 
   console.log(c.bold("\n✓ Setup complete."));
-  console.log(c.dim("  Next: declare domains (wolfpack domain add <name>), then wire: wolfpack mesh"));
+  console.log(c.dim("  Next: declare domains (wolfpack domain add <name>), the hub link distributes the KB"));
 }
 
 // ── HUB ──────────────────────────────────────────────────────────────────────
@@ -68,7 +67,7 @@ async function setupHub(config: CliConfig, opts: { yes?: boolean }): Promise<voi
 
   // Create the canonical structure.
   for (const d of [
-    kbBaseDir(config),
+    kbWriteBaseDir(config),
     path.join(librarianDir(config), "inbox"),
     path.join(librarianDir(config), "receipts"),
     path.join(librarianDir(config), "rejected"),
@@ -78,21 +77,6 @@ async function setupHub(config: CliConfig, opts: { yes?: boolean }): Promise<voi
     fs.mkdirSync(d, { recursive: true });
   }
   console.log(c.dim(`  ✓ Structure: knowledge/base, librarian/{inbox,receipts,rejected}, local, _archive`));
-
-  // Register the hub Syncthing device.
-  try {
-    const reg = loadDevices();
-    await ensureHubDevice(reg);
-    saveDevices(reg);
-    console.log(c.green(`  ✓ Hub Syncthing device registered (~/.wolfpack/devices.yaml)`));
-  } catch (err) {
-    console.log(
-      c.yellow(
-        `  ! Syncthing not reachable: ${err instanceof Error ? err.message : err}\n` +
-          `    Install + start Syncthing, then re-run setup (hub mirroring needs it).`,
-      ),
-    );
-  }
 }
 
 // ── MODELS ───────────────────────────────────────────────────────────────────

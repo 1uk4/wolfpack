@@ -122,6 +122,13 @@ export const KbEventSchema = z.discriminatedUnion("t", [
   }),
   z.object({
     ...base,
+    t: z.literal("sections_replaced"),
+    /** A rebuild replaced this domain's whole tree with this snapshot. */
+    domain: z.string(),
+    sections: z.array(z.record(z.string(), z.unknown())),
+  }),
+  z.object({
+    ...base,
     t: z.literal("section_crystallized"),
     sectionId: z.string(),
     parentId: z.string(),

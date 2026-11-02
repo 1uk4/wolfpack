@@ -22,6 +22,7 @@ export {
 
 // Models — tiers, the resolver and the one loader every runtime calls
 export * from "./models.js";
+export * from "./registry-paths.js";
 
 // wolf.yaml v2 — schema, loader, discovery, tier resolution
 export * from "./wolfconfig/index.js";

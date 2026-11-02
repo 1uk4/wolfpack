@@ -77,6 +77,7 @@
  *              │
  *              ├─ SECTION_SUMMARY_SYSTEM: one-line section summary
  *              ├─ LABEL_SECTION_SYSTEM: short section title
+ *              ├─ SPLIT_SECTION_SYSTEM: categories for an oversized section
  *              │
  *              ▼
  *   ┌──────────────────────────────────────────────────────────┐
@@ -261,6 +262,24 @@ Rules:
   (e.g. "AI", "ML", "intelligent", "automated") that the entries do not use.
 
 Output valid JSON matching the schema.`;
+
+/**
+ * stage: split-section (rebuild / insert-path split) · model: fast · in: parent title + member ids, titles, summaries · out: 2-5 categories + doesnt_fit
+ *
+ * Propose how an oversized section divides. The model only PROPOSES the grouping;
+ * embedding vectors validate it afterwards and may drop members or whole categories.
+ */
+export const SPLIT_SECTION_SYSTEM = `You are organising a knowledge base. You are given the entries (id, title, summary) of one oversized section.
+
+Propose 2 to 5 sub-categories that a reader of this section would agree with, plus an explicit doesnt_fit bucket for entries that belong to no category.
+
+Rules:
+- Each category has a short, specific name (2 to 6 words, Title Case). Do NOT just restate the parent section's name.
+- Every entry id appears exactly once across the categories and doesnt_fit. Use the ids exactly as given.
+- A category needs at least 3 entries; put an entry in doesnt_fit rather than forcing it into a category it does not belong to.
+- Group by what the entries are ABOUT, not by their kind or date. Use only what the entries say.
+
+Output JSON only: {"categories":[{"name":"...","ids":["..."]}],"doesnt_fit":["id"]}.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // KB SWEEP: CONTRADICT

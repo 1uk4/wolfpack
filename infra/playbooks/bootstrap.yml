@@ -127,7 +127,7 @@
       register: final_ts_ip
       changed_when: false
 
-    - name: Get Syncthing device ID for summary
+    - name: Get Syncthing (den backup) device ID for summary
       command: syncthing --device-id
       become_user: "{{ wolf_user }}"
       register: final_st_id
@@ -178,19 +178,16 @@
           - ""
           - "  MANUAL STEPS REMAINING:"
           - ""
-          - "  1. Accept the Syncthing folders on your Mac (one-time per wolf):"
+          - "  1. Accept the den backup folder on your Mac (one-time per wolf; Syncthing"
+          - "     carries den backups only, KB distribution is hub-only):"
           - "       a. Open http://localhost:8384 on your Mac."
           - "       b. Accept the new device '{{ wolf_name }}' when it appears"
           - "          (device ID: {{ final_st_id.stdout }})"
           - "          IMPORTANT: click 'Edit' on the device after adding and"
           - "          set Addresses to:   tcp://{{ final_ts_ip.stdout }}:22000"
           - "          (dynamic discovery is unreliable over Tailscale)"
-          - "       c. Accept folder 'den-{{ wolf_name }}' → path:"
-          - "            ~/Code/wolfpack/dens/{{ wolf_name }}"
+          - "       c. Accept folder 'den-{{ syncthing_host }}-{{ wolf_id | default('<wolf-id>') }}'"
           - "          type: Send & Receive"
-          - "       d. Accept folder 'wolfpack-shared' → path:"
-          - "            ~/Code/wolfpack/shared"
-          - "          type: Send Only"
           - "     (Already accepted previously? Skip.)"
           - ""
           - "  2. Add the wolf's SSH key to GitHub (one-time per wolf):"

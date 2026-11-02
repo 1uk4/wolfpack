@@ -10,6 +10,7 @@ import type { Request, Response } from "express";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { kbBase } from "../paths.js";
+import { resolveDomainsFile } from "@wolfpack/kb/shared";
 
 const KB_BASE = kbBase();
 
@@ -276,8 +277,8 @@ export function dashboardRouter(): Router {
 
       // Read domain labels
       const labels: Record<string, string> = {};
-      const regPath = join(KB_BASE, "domains.yaml");
-      if (existsSync(regPath)) {
+      const regPath = resolveDomainsFile(KB_BASE);
+      if (regPath) {
         const raw = readFileSync(regPath, "utf-8");
         const domainBlock = raw.match(/domains:\n([\s\S]*?)(?:\n\S|\Z)/);
         if (domainBlock) {

@@ -30,10 +30,14 @@ import {
 } from "react";
 import remarkBreaks from "remark-breaks";
 import {
+  Block,
   Streamdown,
+  defaultRehypePlugins,
+  defaultRemarkPlugins,
+  type MathPlugin,
   type PluginConfig,
 } from "streamdown";
-import { mdComponents } from "@/components/md-blocks";
+import { mdComponents, mdComponentsInline } from "@/components/md-blocks";
 import { linkifyWorkIds, transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -387,6 +391,32 @@ export const MessageResponse = memo(
 );
 
 MessageResponse.displayName = "MessageResponse";
+
+// Inline markdown for text that lives INSIDE a <button> (card options): HTML allows
+// only phrasing content there, but Streamdown's root is a <div> of <p> blocks. Block
+// (not Streamdown) renders the same markdown with NO wrapper, and the inert component
+// set turns every block element (p, lists, headings, quotes, rules) and every
+// interactive one (links, copy buttons) into a <span>, so no <p>/<div>/<button>/<a>
+// can land in the option.
+const mathPlugin = (streamdownPlugins as { math: MathPlugin }).math;
+const INLINE_REMARK = [...Object.values(defaultRemarkPlugins), mathPlugin.remarkPlugin, remarkBreaks];
+const INLINE_REHYPE = [...Object.values(defaultRehypePlugins), mathPlugin.rehypePlugin];
+
+export const InlineMarkdown = memo(({ children, className }: { children: string; className?: string }) => (
+  <span className={cn("lh-prose", className)} data-testid="inline-md">
+    <Block
+      content={linkifyWorkIds(transformMathDelimiters(children))}
+      index={0}
+      isIncomplete={false}
+      shouldParseIncompleteMarkdown={false}
+      shouldNormalizeHtmlIndentation={false}
+      components={mdComponentsInline}
+      remarkPlugins={INLINE_REMARK}
+      rehypePlugins={INLINE_REHYPE}
+    />
+  </span>
+));
+InlineMarkdown.displayName = "InlineMarkdown";
 
 export type MessageToolbarProps = ComponentProps<"div">;
 

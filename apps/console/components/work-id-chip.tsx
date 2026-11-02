@@ -11,9 +11,9 @@
  *  - Open in Work: the Work view (WorkViewContext open + select).
  * Lookup: GET /api/wolves/<wolf>/work/<id>/record (fetchWorkRecord) over the librarian then other online wolves,
  * fetched on first open only, cached per id (module level, in-flight dedupe, ~60s TTL). Inside a button (card
- * options) the chip is inert plain text: InertMarkdown provides that context.
+ * options) the chip is inert plain text: the inert markdown set passes `inert`.
  */
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
@@ -22,13 +22,6 @@ import { fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "
 import { useWorkView } from "@/components/work-view-entry";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
-
-// ─── Interactive-ancestor context ────────────────────────────────────────────
-
-const InertContext = createContext(false);
-/** Wrap markdown that renders inside a <button>: links and work ids become plain text (no nested interactive). */
-export const InertMarkdown = InertContext.Provider;
-export const useInertMarkdown = (): boolean => useContext(InertContext);
 
 // ─── Lookup + cache ──────────────────────────────────────────────────────────
 
@@ -210,8 +203,7 @@ const HOVER_CLOSE_MS = 150;
 const CARD_W = 320;
 const CHIP = "inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] align-baseline";
 
-export function WorkIdChip({ id }: { id: string }) {
-	const inert = useInertMarkdown();
+export function WorkIdChip({ id, inert = false }: { id: string; inert?: boolean }) {
 	const short = shortWorkId(id);
 	if (inert) return <span className={CHIP} data-work-id={id} title={id}>{short}</span>;
 	return <InteractiveChip id={id} short={short} />;

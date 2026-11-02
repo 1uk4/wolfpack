@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readMemoryObservations, resetObservationProbeCache } from "./memory-read.js";
 
+const T0 = Date.parse("2026-10-26T10:00:00Z");
 let den: string;
 beforeEach(() => {
   resetObservationProbeCache();
@@ -53,9 +54,9 @@ describe("observations route: blocked on the Work API", () => {
   });
 
   it("reports pending counts, the oldest wait, and a model failure as its own cause", async () => {
-    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: 1_000_000, tries: 2, nextAttemptAt: 0, cause: "consolidation-failed" } }));
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: T0 + 1_000, tries: 2, nextAttemptAt: 0, cause: "consolidation-failed" } }));
     vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
-    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, 1_000_000 + 25 * 3_600_000);
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 1_000 + 25 * 3_600_000);
     expect(r.observations.find((o) => o.work)?.blocked).toBe("consolidation-failed");
     expect(r.pending).toEqual({ count: 1, oldestAgeMs: 25 * 3_600_000 });
   });
@@ -63,5 +64,27 @@ describe("observations route: blocked on the Work API", () => {
   it("flags nothing for a pool with no tagged observations", async () => {
     writeFileSync(join(den, ".memory", "pool", "observations.jsonl"), JSON.stringify({ timestamp: "t", recordedAt: "r", content: "c" }) + "\n");
     expect((await readMemoryObservations(den, undefined, {})).blocked).toBeUndefined();
+  });
+
+  it("ignores an orphan entry older than the observations: nothing blocked, no pending notice", async () => {
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: T0 - 3_600_000, tries: 2, nextAttemptAt: 0, cause: "work-api-unavailable" } }));
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 6 * 24 * 3_600_000);
+    expect(r.observations.every((o) => o.blocked === undefined)).toBe(true);
+    expect(r.pending).toBeUndefined();
+  });
+
+  it("an entry under a key the observation is not grouped under does not block it", async () => {
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-ZZZZZZZ": { firstPendingAt: T0 + 1_000, tries: 1, nextAttemptAt: 0, cause: "work-api-unavailable" } }));
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 3_600_000);
+    expect(r.pending).toBeUndefined();
+  });
+
+  it("ages the warning by the blocked observations, not the oldest state entry", async () => {
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: T0 - 5 * 24 * 3_600_000, tries: 2, nextAttemptAt: 0, cause: "work-api-unavailable" } }));
+    vi.stubGlobal("fetch", async () => { throw new Error("down"); });
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 2 * 3_600_000);
+    expect(r.pending).toEqual({ count: 1, oldestAgeMs: 2 * 3_600_000 });
   });
 });

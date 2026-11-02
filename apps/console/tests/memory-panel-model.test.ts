@@ -11,6 +11,16 @@ const obs = (threadId: string | undefined, target: unknown, summary = "s"): Memo
 const st = (state: MemoryStatus["state"]): MemoryStatus => ({ state, reason: "why", pool: null, sessionTopics: [], denTopics: [], lastPromote: null });
 const rec = (o: Partial<WorkRecordResponse>): WorkRecordResponse => ({ id: "a", title: "A", kind: "task", stage: "plan", plan: "", record: "", ...o });
 
+import { pendingWarning } from "../src/core/memory-panel-model.ts";
+
+describe("pending warning wording", () => {
+	it("says the oldest observation has waited, not that all have", () => {
+		assert.equal(pendingWarning({ count: 3, oldestAgeMs: 30 * 3_600_000 }), "3 observation(s) are waiting to be folded into a Record; the oldest has waited over 30 h");
+		assert.equal(pendingWarning({ count: 3, oldestAgeMs: 3_600_000 }), null);
+		assert.equal(pendingWarning(undefined), null);
+	});
+});
+
 describe("memory panel model", () => {
 	it("bindOffered: shown for another live task; hidden for the bound item, a feature, an archived item, a container, and without a slug", () => {
 		const t = rec({ id: "t" });

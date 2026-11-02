@@ -231,12 +231,13 @@ if [ -n "${authkey}" ]; then
 fi
 echo "    $(tailscale --version 2>/dev/null | head -1)"
 
-step "Syncthing (binary only \u2014 per-wolf instances run under each wolf)"
+# Syncthing: den backup only, removed in feature H3GuSmC (no KB or ops-lane folders).
+step "Syncthing (binary only \u2014 per-wolf den-backup instances run under each wolf)"
 if ! command -v syncthing >/dev/null 2>&1; then
   apt-get install -y -qq syncthing
 fi
 # Per-wolf model (Option 2): each wolf runs its OWN syncthing (wolf-<id>-syncthing
-# .service, provisioned by wolfpack mesh). We do NOT run a host-level
+# .service, provisioned by wolfpack mesh, den folders only). We do NOT run a host-level
 # syncthing@root \u2014 it would collide on 8384/22000 with the first per-wolf
 # instance. Retire any pre-existing one so ports are free.
 if systemctl is-enabled syncthing@root >/dev/null 2>&1 || systemctl is-active syncthing@root >/dev/null 2>&1; then

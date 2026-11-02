@@ -92,6 +92,8 @@ export const WorkItem = z.object({
   /** Length of the block in minutes. Null when unscheduled; defaults to 60
    *  when `scheduledFor` is set without an explicit duration (enforced in ops). */
   durationMinutes: z.number().int().positive().nullable().default(null),
+  /** The wolf holding this item (folded from work.bound / work.unbound); absent until first bound. Additive; not rendered to the .md. */
+  boundBy: WolfId.nullable().optional(),
   log: z.array(WorkLogEntry).default([]),
   created: IsoDate,
   updated: IsoDate,
@@ -112,11 +114,15 @@ export const LinkRel = z.enum(["references", "depends_on", "blocks", "graduated_
 export const WORK_LINK_RELS = ["depends_on", "blocks"] as const;
 export type LinkRel = z.infer<typeof LinkRel>;
 
+/** Optional attribution stamped by the hub on its writes: who (actor id), and for token-authenticated writes the token and host. */
+const ATTR = { by: z.string().max(128).optional(), tokenId: z.string().max(128).optional(), hostId: z.string().max(64).optional() };
+
 export const WorkEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("work.created"),
     id: WorkId,
     at: z.string(),
+    ...ATTR,
     kind: WorkKind,
     domain: DomainId,
     title: z.string().min(1).max(200),
@@ -128,41 +134,43 @@ export const WorkEvent = z.discriminatedUnion("type", [
     container: z.boolean().default(false),
   }),
   /** The item graduated into the KB (publishes; links nothing). */
-  z.object({ type: z.literal("work.graduated"), id: WorkId, at: z.string() }),
+  z.object({ type: z.literal("work.graduated"), id: WorkId, at: z.string(), ...ATTR }),
   /** Re-parent an item (validated against the hierarchy by moveWork). */
-  z.object({ type: z.literal("work.moved"), id: WorkId, at: z.string(), partOf: WorkId.nullable() }),
-  z.object({ type: z.literal("work.staged"), id: WorkId, at: z.string(), to: Stage }),
-  z.object({ type: z.literal("work.assigned"), id: WorkId, at: z.string(), assignee: WolfId }),
+  z.object({ type: z.literal("work.moved"), id: WorkId, at: z.string(), ...ATTR, partOf: WorkId.nullable() }),
+  z.object({ type: z.literal("work.staged"), id: WorkId, at: z.string(), ...ATTR, to: Stage }),
+  z.object({ type: z.literal("work.assigned"), id: WorkId, at: z.string(), ...ATTR, assignee: WolfId }),
   z.object({
     type: z.literal("work.criteria"),
     id: WorkId,
     at: z.string(),
+    ...ATTR,
     successCriteria: z.string().nullable(),
   }),
-  z.object({ type: z.literal("work.area"), id: WorkId, at: z.string(), area: Slug.nullable() }),
-  z.object({ type: z.literal("work.retitled"), id: WorkId, at: z.string(), title: z.string().min(1).max(200) }),
-  z.object({ type: z.literal("work.deleted"), id: WorkId, at: z.string() }),
-  z.object({ type: z.literal("work.noted"), id: WorkId, at: z.string(), text: z.string().min(1) }),
-  z.object({ type: z.literal("work.linked"), id: WorkId, at: z.string(), rel: LinkRel, target: z.string() }),
+  z.object({ type: z.literal("work.area"), id: WorkId, at: z.string(), ...ATTR, area: Slug.nullable() }),
+  z.object({ type: z.literal("work.retitled"), id: WorkId, at: z.string(), ...ATTR, title: z.string().min(1).max(200) }),
+  z.object({ type: z.literal("work.deleted"), id: WorkId, at: z.string(), ...ATTR }),
+  z.object({ type: z.literal("work.noted"), id: WorkId, at: z.string(), ...ATTR, text: z.string().min(1) }),
+  z.object({ type: z.literal("work.linked"), id: WorkId, at: z.string(), ...ATTR, rel: LinkRel, target: z.string() }),
   /** Remove a link added by work.linked. */
-  z.object({ type: z.literal("work.unlinked"), id: WorkId, at: z.string(), rel: LinkRel, target: z.string() }),
+  z.object({ type: z.literal("work.unlinked"), id: WorkId, at: z.string(), ...ATTR, rel: LinkRel, target: z.string() }),
   /** Wolf binds to this work item (starts active work session) */
-  z.object({ type: z.literal("work.bound"), id: WorkId, at: z.string(), wolf: WolfId }),
+  z.object({ type: z.literal("work.bound"), id: WorkId, at: z.string(), ...ATTR, wolf: WolfId }),
   /** Wolf unbinds from this work item (ends active work session) */
-  z.object({ type: z.literal("work.unbound"), id: WorkId, at: z.string(), wolf: WolfId }),
+  z.object({ type: z.literal("work.unbound"), id: WorkId, at: z.string(), ...ATTR, wolf: WolfId }),
   /** Summary generated (typically on completion or graduation) */
-  z.object({ type: z.literal("work.summarized"), id: WorkId, at: z.string(), summary: z.string().max(140) }),
+  z.object({ type: z.literal("work.summarized"), id: WorkId, at: z.string(), ...ATTR, summary: z.string().max(140) }),
   /** Pin the task to a calendar slot. Both fields nullable so a single event
    *  can set, update, or clear (unschedule) by sending nulls. */
   z.object({
     type: z.literal("work.scheduled"),
     id: WorkId,
     at: z.string(),
+    ...ATTR,
     scheduledFor: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/).nullable(),
     durationMinutes: z.number().int().positive().nullable(),
   }),
   /** Mark or unmark an initiative as standing (never completes). */
-  z.object({ type: z.literal("work.standing"), id: WorkId, at: z.string(), standing: z.boolean() }),
+  z.object({ type: z.literal("work.standing"), id: WorkId, at: z.string(), ...ATTR, standing: z.boolean() }),
 ]);
 export type WorkEvent = z.infer<typeof WorkEvent>;
 
@@ -260,9 +268,14 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
         }
         break;
       case "work.bound":
+        // Also informational for work memory; additionally records the holder (hub claim). LAST WRITER WINS, no origin filter:
+        // a legacy bound with no matching unbound reads as held; an operator clears it with a hub unclaim. A bind from outside
+        // the hub can displace a hub claim until wolves are repointed (JPhfaEL / cutover).
+        next.boundBy = e.wolf;
+        break;
       case "work.unbound":
-        // Informational events for work memory - no state change needed
-        // The work memory system listens for these to track active sessions
+        // Only the current holder's unbind releases (a stale unbind from a former holder is ignored).
+        if (cur.boundBy === e.wolf) next.boundBy = null;
         break;
       case "work.summarized":
         next.summary = e.summary;

@@ -1,4 +1,24 @@
 ---
+# Syncthing is installed for den backups ONLY (folder id den-<host>-<wolf>).
+# The KB and ops lanes (kb-*, ops-inbox-*, ops-receipts-*) are NOT carried by
+# Syncthing: KB distribution is hub-only (hubd + workerd link + kb-sync mirror).
+# This role goes away when feature H3GuSmC lands a backup system.
+#
+# This role NEVER creates den folders. `wolfpack mesh` is the only creator: it
+# knows the per-wolf Syncthing instances (wolf-<id>-syncthing on per-wolf GUI
+# ports), while this role only talks to the host-level :8384. The role installs
+# the binary, adds the Mac hub device, and reports whether a folder already
+# exists at the den path (matched by id or realpath, never modified).
+- name: Resolve the host part of den folder ids
+  # Needs fact gathering (ansible_facts['hostname']): do not set gather_facts:
+  # false on plays that include this role, or set `wolf_host` in the inventory.
+  # Same source as sync-wolf.sh / `wolfpack sync` (hostname -s), NOT
+  # inventory_hostname, which in this inventory names a wolf, not a host.
+  # Override with the inventory var `wolf_host` if the hostname differs from the
+  # host name used by `wolfpack mesh`.
+  set_fact:
+    syncthing_host: "{{ wolf_host | default(ansible_facts['hostname']) }}"
+
 - name: Install Syncthing
   shell: |
     curl -fsSL https://syncthing.net/release-key.gpg | gpg --dearmor -o /usr/share/keyrings/syncthing-archive-keyring.gpg
@@ -25,13 +45,16 @@
     port: 8384
     timeout: 30
 
-- name: Configure Syncthing folders and Mac hub device via REST API
+- name: Configure Mac hub device and check the den folder via REST API
   # Reads the local API key out of config.xml, then talks to the local
-  # Syncthing REST API to add the Mac as a remote device and create two
-  # folders: den-<wolf> (sendreceive) and wolfpack-shared (receiveonly),
-  # both shared with the Mac.
+  # Syncthing REST API to add the Mac as a remote device and to report on the
+  # den backup folder den-<host>-<wolf-id>.
   #
-  # Idempotent: checks for existing device/folder entries before adding.
+  # Idempotent and read-only for folders: an existing folder is matched by id or
+  # by realpath of the den and left exactly as is (id, type, path). A missing
+  # folder is NOT created here; run `wolfpack mesh`. `wolf_id` (inventory var, the
+  # wolf.yaml `id:`) is only used for the id match, never name-derived.
+  # The den path is `wolf_den` from the inventory, else the single-wolf default.
   shell: |
     python3 - <<'PY'
     import json, os, re, sys, urllib.request, urllib.error
@@ -40,6 +63,9 @@
     API_BASE   = "http://127.0.0.1:8384/rest"
     MAC_ID     = "{{ mac_syncthing_device_id }}"
     WOLF_NAME  = "{{ wolf_name }}"
+    WOLF_ID    = "{{ wolf_id | default('') }}"
+    DEN_PATH   = "{{ wolf_den | default('/home/' ~ wolf_user ~ '/workspace/den') }}"
+    HOST_NAME  = "{{ syncthing_host }}"
     WOLF_USER  = "{{ wolf_user }}"
 
     if not MAC_ID or "REPLACE_ME" in MAC_ID:
@@ -82,43 +108,19 @@
     else:
         print("mac-hub device already present")
 
-    # 2. Helper to upsert a folder
-    def upsert_folder(folder_id, label, path, folder_type, rescan):
+    # 2. Report on the den folder. Match by id (only when an id is known) OR by
+    #    realpath of the path. Never POSTs: `wolfpack mesh` is the only creator.
+    def report_folder(folder_id, path):
         existing = api("GET", "/config/folders") or []
-        if any(f.get("id") == folder_id for f in existing):
-            print(f"folder {folder_id} already present")
-            return
-        api("POST", "/config/folders", {
-            "id":                folder_id,
-            "label":             label,
-            "path":              path,
-            "type":              folder_type,
-            "rescanIntervalS":   rescan,
-            "fsWatcherEnabled":  True,
-            "fsWatcherDelayS":   10,
-            "devices": [
-                {"deviceID": MAC_ID},
-            ],
-        })
-        print(f"added folder {folder_id} ({folder_type}) at {path}")
+        real = os.path.realpath(path)
+        hit = next((f for f in existing if folder_id and f.get("id") == folder_id), None) \
+            or next((f for f in existing if os.path.realpath(f.get("path", "")) == real), None)
+        if hit:
+            print(f"folder {hit['id']} already present at {hit.get('path')}")
+        else:
+            print(f"no folder at {path}: not creating; run: wolfpack mesh")
 
-    # 3. Den — sendreceive, bidi with Mac
-    upsert_folder(
-        folder_id   = f"den-{WOLF_NAME}",
-        label       = f"{WOLF_NAME}-den",
-        path        = f"/home/{WOLF_USER}/workspace/den",
-        folder_type = "sendreceive",
-        rescan      = 60,
-    )
-
-    # 4. Shared — receiveonly, pulled from Mac
-    upsert_folder(
-        folder_id   = "wolfpack-shared",
-        label       = "wolfpack-shared",
-        path        = f"/home/{WOLF_USER}/workspace/shared",
-        folder_type = "receiveonly",
-        rescan      = 120,
-    )
+    report_folder(f"den-{HOST_NAME}-{WOLF_ID}" if WOLF_ID else "", DEN_PATH)
 
     print("OK")
     PY
@@ -146,7 +148,5 @@
       - "     Then click Edit on the new device and set Addresses to:"
       - "       tcp://{{ syncthing_ts_ip.stdout }}:22000"
       - "     (dynamic discovery is unreliable over Tailscale)"
-      - "  2. Accept folder 'den-{{ wolf_name }}' → path ~/Code/wolfpack/dens/{{ wolf_name }}"
+      - "  2. Accept folder 'den-{{ syncthing_host }}-{{ wolf_id | default('<wolf-id>') }}' (den backup only)"
       - "     Type: Send & Receive"
-      - "  3. Accept folder 'wolfpack-shared' → path ~/Code/wolfpack/shared"
-      - "     Type: Send Only"

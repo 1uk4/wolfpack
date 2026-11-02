@@ -23,6 +23,7 @@ import {
   localWolfDir,
   wolfDir,
   kbBaseDir,
+  explicitKbBase,
   librarianDir,
   type CliConfig,
   type HostEntry,
@@ -30,7 +31,6 @@ import {
 import { isLibrarian, isLibrarianConfig, writePiSettings } from "../extensions.js";
 import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
-import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { readEnvValue } from "./wolf-models.js";
@@ -40,6 +40,48 @@ import { ModelConfigError, piModelArg, type ModelTable } from "@wolfpack/engine"
 interface SyncOpts {
   host?: string;
   all?: boolean;
+  /** Rewrite a local wolf's KB_BASE from config even if its .env already has a different one. */
+  resetKbBase?: boolean;
+}
+
+/** Trim a .env value and strip one pair of matching surrounding quotes. */
+function unquoteEnv(v: string | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  let t = v.trim();
+  if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0]) t = t.slice(1, -1).trim();
+  return t || undefined;
+}
+
+/**
+ * Decide the KB_BASE a local wolf's .env gets. An explicit override (env/config)
+ * wins; otherwise an existing .env value is preserved (so a manual switch to a hub
+ * mirror survives `wolf sync`) unless `reset` is set. `notice` is set when the
+ * result differs from the configured default.
+ */
+export function resolveWolfKbBase(
+  config: CliConfig,
+  existingEnvLines: string[],
+  reset = false,
+  env: NodeJS.ProcessEnv = process.env,
+): { value: string; notice?: string } {
+  const configured = kbBaseDir(config, env);
+  const existing = unquoteEnv(existingEnvLines.find((l) => l.startsWith("KB_BASE="))?.slice("KB_BASE=".length));
+  if (!existing || existing === configured) return { value: configured };
+  if (explicitKbBase(config, env)) {
+    const src = env.WOLFPACK_KB_BASE?.trim() ? "WOLFPACK_KB_BASE" : "config kbBase";
+    return { value: configured, notice: `KB_BASE changed ${existing} -> ${configured} (${src})` };
+  }
+  if (reset) return { value: configured, notice: `KB_BASE reset ${existing} -> ${configured} (--reset-kb-base)` };
+  if (existing === path.join(config.wolvesRoot, "knowledge", "base")) {
+    return {
+      value: existing,
+      notice: `KB_BASE kept as ${existing}, a FROZEN ARCHIVE (no longer updated; the hub mirror is current). Pass --reset-kb-base to point at ${configured}`,
+    };
+  }
+  return {
+    value: existing,
+    notice: `KB_BASE kept as ${existing} (configured default is ${configured}; pass --reset-kb-base to rewrite)`,
+  };
 }
 
 /** Shape the agent returns from GET /wolves/:id (status + embedded config). */
@@ -81,7 +123,7 @@ export async function wolfSync(
   // host is set — otherwise it'd be mistaken for a remote wolf.
   const localExists = fs.existsSync(path.join(localWolfDir(config, name), "wolf.yaml"));
   if (!opts.host && localExists) {
-    syncLocal(config, name);
+    syncLocal(config, name, opts.resetKbBase);
   } else {
     const host = getHost(config, opts.host);
     if (!host) {
@@ -93,7 +135,6 @@ export async function wolfSync(
     await syncOne(config, host, hostName, name);
   }
 
-  await runMeshReconcile();
 }
 
 /**
@@ -102,7 +143,7 @@ export async function wolfSync(
  * .pi/settings.json from the declared extensions. Local wolves ride the Mac hub
  * for KB, so there is no per-wolf Syncthing to wire here.
  */
-function syncLocal(config: CliConfig, name: string): void {
+function syncLocal(config: CliConfig, name: string, resetKbBase = false): void {
   const dir = localWolfDir(config, name);
   const yamlPath = path.join(dir, "wolf.yaml");
   if (!fs.existsSync(yamlPath)) {
@@ -113,18 +154,21 @@ function syncLocal(config: CliConfig, name: string): void {
     id: string; name: string; extensions?: string[];
   };
 
+  const envPath = path.join(dir, ".env");
+  const existing: string[] = fs.existsSync(envPath)
+    ? fs.readFileSync(envPath, "utf8").split("\n").filter(Boolean)
+    : [];
+  const kb = resolveWolfKbBase(config, existing, resetKbBase);
+  if (kb.notice) console.log(c.yellow(`  ! ${kb.notice}`));
+
   // Managed env keys (regenerated from config); everything else is preserved.
   const managed: Record<string, string> = {
     WOLF_ID: wolf.id,
     WOLF_NAME: wolf.name,
     WOLF_DEN: path.join(dir, "den"),
-    KB_BASE: kbBaseDir(config),
+    KB_BASE: kb.value,
     KB_OPS: librarianDir(config),
   };
-  const envPath = path.join(dir, ".env");
-  const existing: string[] = fs.existsSync(envPath)
-    ? fs.readFileSync(envPath, "utf8").split("\n").filter(Boolean)
-    : [];
   const kept = existing.filter((l) => {
     const k = l.slice(0, l.indexOf("="));
     return k && !(k in managed);
@@ -426,7 +470,6 @@ async function syncAll(config: CliConfig): Promise<void> {
     }
   }
 
-  await runMeshReconcile();
 }
 
 async function reportDrift(
@@ -477,20 +520,6 @@ function resolveModelsOrExit(resolve: () => ModelTable): ModelTable {
   }
   for (const w of table.warnings) console.log(c.yellow(`  ! models: ${w}`));
   return table;
-}
-
-async function runMeshReconcile(): Promise<void> {
-  try {
-    console.log(c.dim("\n  Reconciling mesh..."));
-    const result = await reconcileMesh();
-    if (result.applied === 0) {
-      console.log(c.dim("  Mesh: already in sync."));
-    } else {
-      console.log(c.green(`  \u2713 Mesh: ${result.applied} folder(s) wired.`));
-    }
-  } catch (err) {
-    console.log(c.yellow(`  ! Mesh reconcile skipped: ${err instanceof Error ? err.message : err}`));
-  }
 }
 
 /** Load check, then start check (createWolfHarness against a throwaway home). */

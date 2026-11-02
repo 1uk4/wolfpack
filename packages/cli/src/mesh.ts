@@ -1,18 +1,14 @@
 /**
- * Mesh — the Syncthing connection fabric, computed from config.
+ * Mesh - den-backup Syncthing folders only.
  *
- * Topology is a STAR (see memory: wolfpack-kb-distribution):
- *   • Dewey (librarian) is the KB source — sendonly `kb-<domain>` to subscribers.
- *   • Each VPS wolf runs its OWN Syncthing (per-unix-user). It peers with exactly
- *     two devices: Dewey (receive KB) and the Mac hub (send its den backup).
- *   • The Mac hub receives every den (backup) + every declared domain (your read
- *     access + backup). Local wolves are NOT separate devices — they run as you
- *     and read the hub's shared `knowledge/base` directly.
+ * KB (kb-<domain>) and librarian-ops lane (ops-inbox/ops-receipts) folders were
+ * removed: the hub link carries them now. What remains is the per-wolf den
+ * backup, `den-<host>-<wolf>` (VPS wolf sendonly -> Mac hub receiveonly).
+ * Den backup only, removed in feature H3GuSmC.
  *
- * `devices.yaml` (~/.wolfpack) is the mesh source of truth: device ids, ports,
- * and tailnet addresses. `planMesh()` is pure — it turns the registry + wolf
- * config into the exact per-instance folder/device graph that `reconcileMesh`
- * applies idempotently (with pruning) to each live Syncthing.
+ * `devices.yaml` (~/.wolfpack) holds device ids, ports and tailnet addresses.
+ * `planMesh()` is pure; `reconcileMesh` applies it. Neither ever emits or
+ * prunes a non-den folder id.
  */
 
 import fs from "node:fs";
@@ -97,14 +93,10 @@ export interface MeshWolf {
   /** "local" or a host name */
   host: string;
   role: DeviceRole;
-  /** declared domains this wolf subscribes to */
-  domains: string[];
 }
 
 export interface PlanInput {
   registry: DeviceRegistry;
-  /** declared domain names */
-  domains: string[];
   /** every wolf across every host (local + remote) */
   wolves: MeshWolf[];
   /** Mac wolves root (for hub paths + den backups) */
@@ -131,78 +123,37 @@ export interface InstancePlan {
   folders: PlannedFolder[];
 }
 
-// Path conventions (single source — change here only).
-const vpsKbBase = (id: string) => remotePaths().kbBase(id);
+// Path conventions (single source - change here only).
 const vpsDen = (id: string) => remotePaths().den(id);
-const hubKbBase = (root: string) => path.join(root, "knowledge", "base");
 const hubDenBackup = (root: string, host: string, name: string) =>
   path.join(root, host, name, "den");
 
 export const denFolderId = (host: string, id: string) => `den-${host}-${id}`;
-export const kbFolderId = (domain: string) => `kb-${domain}`;
 
-export const opsInboxId = (wolfName: string) => `ops-inbox-${wolfName}`;
-export const opsReceiptsId = (wolfName: string) => `ops-receipts-${wolfName}`;
-
-/** Is this registry key / id a wolfpack-managed folder we may prune? */
+/** Is this a folder id the mesh may add or prune? Den folders ONLY. */
 export function isManagedFolderId(fid: string): boolean {
-  return (
-    fid.startsWith("kb-") || fid.startsWith("den-") || fid.startsWith("ops-")
-  );
+  return fid.startsWith("den-");
 }
 
 /**
- * Compute the desired per-instance Syncthing config from the registry + wolves.
- * Pure: no I/O. The returned InstancePlans are what reconcileMesh applies.
- *
- * Star rules:
- *   den-<host>-<wolf>:  owner = wolf (sendonly, VPS only), receivers = [hub]
- *   kb-<domain>:        owner = librarian (sendonly), receivers = [hub] ∪ {VPS
- *                       wolves subscribed to <domain>}
- *   Owner instance lists ALL receivers; each receiver lists only [owner, self].
+ * Compute the desired per-instance Syncthing config. Pure: no I/O.
+ *   den-<host>-<wolf>: owner = wolf (sendonly, VPS only), receiver = hub
  */
 export function planMesh(input: PlanInput): InstancePlan[] {
-  const { registry, domains, wolves, wolvesRoot } = input;
-  const librarian = wolves.find((w) => w.role === "librarian");
-  // KB source device: the librarian's own device if remote, or the HUB if the
-  // librarian runs locally (it writes the hub's KB base directly - librarian and
-  // hub collapse into one device).
-  const libKey = librarian ? (librarian.host === "local" ? "hub" : librarian.id) : null;
-  const libOps = librarian
-    ? librarian.host === "local"
-      ? `${wolvesRoot}/librarian`
-      : remotePaths().librarianOps(librarian.id)
-    : "";
-
-  // Only VPS wolves are their own Syncthing devices; local wolves ride the hub.
-  // A wolf participates only once it has a registered Syncthing device (i.e. its
-  // per-wolf instance has been provisioned) \u2014 otherwise we'd wire a folder to a
-  // device that doesn't exist.
-  const remoteWolves = wolves.filter(
-    (w) => w.host !== "local" && !!registry.devices[w.id],
-  );
-
-  // Accumulate folders per instance key.
+  const { registry, wolves, wolvesRoot } = input;
+  // Only VPS wolves with a provisioned Syncthing device take part.
+  const remoteWolves = wolves.filter((w) => w.host !== "local" && !!registry.devices[w.id]);
   const byInstance = new Map<string, PlannedFolder[]>();
   const add = (key: string, f: PlannedFolder) => {
     const list = byInstance.get(key) ?? [];
     list.push(f);
     byInstance.set(key, list);
   };
-
   const hubHasDevice = !!registry.devices["hub"];
 
-  // ── den backups: each remote wolf → hub ──
   for (const w of remoteWolves) {
     const fid = denFolderId(w.host, w.id);
-    // owner (the wolf): sendonly, knows the hub
-    add(w.id, {
-      id: fid,
-      path: vpsDen(w.id),
-      type: "sendonly",
-      deviceIds: [w.id, "hub"],
-    });
-    // hub: receiveonly backup
+    add(w.id, { id: fid, path: vpsDen(w.id), type: "sendonly", deviceIds: [w.id, "hub"] });
     if (hubHasDevice) {
       add("hub", {
         id: fid,
@@ -213,97 +164,6 @@ export function planMesh(input: PlanInput): InstancePlan[] {
     }
   }
 
-  // KB domains: source (librarian device, or hub for a local librarian) -> subs
-  if (librarian && libKey) {
-    const localLib = librarian.host === "local";
-    for (const domain of domains) {
-      const fid = kbFolderId(domain);
-      const subscribers = remoteWolves
-        .filter((w) => w.id !== librarian.id && w.domains.includes(domain))
-        .map((w) => w.id);
-      // Hub receives every domain (access + backup) UNLESS it is the source.
-      const hubReceives = hubHasDevice && !localLib;
-      const receivers = [...(hubReceives ? ["hub"] : []), ...subscribers];
-
-      add(libKey, {
-        id: fid,
-        path: localLib
-          ? path.join(hubKbBase(wolvesRoot), "domains", domain)
-          : vpsKbBase(librarian.id) + `/domains/${domain}`,
-        type: "sendonly",
-        deviceIds: [libKey, ...receivers],
-      });
-      if (hubReceives) {
-        add("hub", {
-          id: fid,
-          path: path.join(hubKbBase(wolvesRoot), "domains", domain),
-          type: "receiveonly",
-          deviceIds: ["hub", libKey],
-        });
-      }
-      for (const sid of subscribers) {
-        add(sid, {
-          id: fid,
-          path: vpsKbBase(sid) + `/domains/${domain}`,
-          type: "receiveonly",
-          deviceIds: [sid, libKey],
-        });
-      }
-    }
-  }
-
-  // ── librarian-ops lanes: wolf \u2192 Dewey (inbox) + Dewey \u2192 wolf (receipts) ──
-  //    Local wolves share the hub filesystem, so their lane endpoint is the hub
-  //    device. Remote wolves use their own device. (kb-feed is delivered inside
-  //    the domain folders, so no separate feed lane is needed.)
-  const libAvailable = !!librarian && (libKey === "hub" ? hubHasDevice : !!registry.devices[librarian!.id]);
-  if (librarian && libKey && libAvailable) {
-    for (const w of wolves) {
-      if (w.id === librarian.id) continue;
-      let senderKey: string;
-      let senderOps: string;
-      if (w.host === "local") {
-        if (!hubHasDevice) continue;
-        senderKey = "hub";
-        senderOps = `${wolvesRoot}/librarian`;
-      } else {
-        if (!registry.devices[w.id]) continue;
-        senderKey = w.id;
-        senderOps = remotePaths().librarianOps(w.id);
-      }
-      // Local wolf + local librarian = same hub device, no lane needed.
-      if (senderKey === libKey) continue;
-      const wn = w.name;
-      // inbox: sender (sendonly) -> librarian (receiveonly)
-      add(senderKey, {
-        id: opsInboxId(wn),
-        path: `${senderOps}/inbox/${wn}`,
-        type: "sendonly",
-        deviceIds: [senderKey, libKey],
-      });
-      add(libKey, {
-        id: opsInboxId(wn),
-        path: `${libOps}/inbox/${wn}`,
-        type: "receiveonly",
-        deviceIds: [libKey, senderKey],
-      });
-      // receipts: librarian (sendonly) -> sender (receiveonly)
-      add(libKey, {
-        id: opsReceiptsId(wn),
-        path: `${libOps}/receipts/${wn}`,
-        type: "sendonly",
-        deviceIds: [libKey, senderKey],
-      });
-      add(senderKey, {
-        id: opsReceiptsId(wn),
-        path: `${senderOps}/receipts/${wn}`,
-        type: "receiveonly",
-        deviceIds: [senderKey, libKey],
-      });
-    }
-  }
-
-  // ── assemble InstancePlans with resolved peers ──
   const plans: InstancePlan[] = [];
   for (const [key, folders] of byInstance) {
     const peerKeys = new Set<string>();

@@ -82,9 +82,9 @@ export interface WolfStatus {
   error?: string;
 }
 
-/** Health of a host-level service (Tailscale, Syncthing). */
+/** Health of a host-level service (Tailscale; Syncthing den backup sync). */
 export interface ServiceHealth {
-  /** Service name, e.g. "tailscale" | "syncthing" */
+  /** Service name, e.g. "tailscale" | "syncthing" (the den backup sync) */
   name: string;
   /** Overall healthy flag */
   ok: boolean;
@@ -104,7 +104,7 @@ export interface HostHealth {
   memTotal: number;
   diskPercent: number;
   wolves: WolfStatus[];
-  /** Tailscale + Syncthing health */
+  /** Tailscale + den backup sync (Syncthing) health */
   services: ServiceHealth[];
 }
 

@@ -54,7 +54,7 @@ Note: the inherited `/api/chat` routes still run a plain assistant on `pi-ai` (B
 
 ### Legacy (on `main`, to be retired at cutover)
 
-pi TUI, Telegram bridge (`extensions/wolfpack-telegram`), the vis-network dashboard, the Syncthing mesh, and `packages/agent` + `packages/cli` host management. They still exist in the tree and are unchanged by the rewrite so far.
+pi TUI, Telegram bridge (`extensions/wolfpack-telegram`), the vis-network dashboard, the legacy Syncthing mesh, and `packages/agent` + `packages/cli` host management. They still exist in the tree and are unchanged by the rewrite so far.
 
 ## Planned
 
@@ -65,7 +65,7 @@ Nothing in this section exists yet. Feature numbers refer to the initiative `wor
 - **hubd** (feature 4): pack registry, Work API and ledger, KB authority (Dewey + sweep), contributions inbox, relay, and the claim operation (moving an item to in_build assigns the wolf and binds the feature thread atomically). A role, not a fixed machine: starts on the Mac, final home a VPS.
 - **Worker link** (feature 5): workers dial out to the hub and keep the connection open (registration, presence, relay). The console talks to the hub, with an optional direct path to a local worker.
 - **Security** (feature 5): tokens always required (per device and per worker); Tailscale for the personal pack, TLS for others, unix socket / 127.0.0.1 for Mac-only. Never publicly exposed by design.
-- **KB distribution** (feature 5): workers pull the KB from the hub, which enforces domain access; replaces Syncthing.
+- **KB distribution** (feature 5): workers pull the KB from the hub, which enforces domain access; replaces the Syncthing KB and ops folders. KB distribution is hub-only (hubd serves it; `workerd` `kb-sync` mirrors it on each worker). Syncthing carries den backups only (`den-<host>-<wolf-id>`), pending feature H3GuSmC, which builds a backup system and removes it.
 - **Sequencing** (feature 2/5): conversation streams use the pi-durable event-log sequence; pack-wide streams (ledger, KB, presence) use hub-minted per-stream sequences. Same POST + SSE + `Last-Event-ID` transport.
 - **Per-conversation binding** (feature 3): today binding is per session; a feature thread binds its own conversation.
 - **Cards and structured output** (feature 7), **subagent child conversations with worktree isolation** (feature 8), **memory graph home** (feature 9), **planning and work views** (feature 10), **cutover** (feature 11).

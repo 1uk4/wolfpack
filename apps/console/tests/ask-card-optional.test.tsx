@@ -61,7 +61,7 @@ const type = (el: HTMLElement, value: string) =>
 const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 const fields = () => [...document.querySelectorAll("[data-field]")].map((e) => e.getAttribute("data-field"));
 const pick = (value: string) => click(document.querySelector(`[data-testid="card-option"][data-value="${value}"]`)!);
-const isDisabled = (el: HTMLElement | null) => el?.hasAttribute("disabled") === true;
+const isDisabled = (el: HTMLElement | null) => el?.hasAttribute("disabled") === true || el?.hasAttribute("aria-disabled") === true;
 
 
 const opt = [{ label: "A", value: "a" }, { label: "B", value: "b" }];

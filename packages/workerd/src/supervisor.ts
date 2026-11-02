@@ -83,6 +83,8 @@ class Child {
   }
 }
 
+export type SupervisorChange = { type: "add"; config: WolfConfig } | { type: "remove"; name: string };
+
 export function backoffDelay(failures: number, b: BackoffOptions): number {
   return Math.min(b.capMs, b.baseMs * 2 ** Math.max(0, failures - 1));
 }
@@ -96,6 +98,8 @@ export class Supervisor implements WolfRegistry {
   private readonly command: string[];
   private readonly transport: "socket" | "tcp";
   private stopping = false;
+  private started = false;
+  private readonly listeners = new Set<(e: SupervisorChange) => void>();
 
   constructor(private readonly opts: SupervisorOptions) {
     this.backoff = { baseMs: 500, capMs: 30_000, healthyResetMs: 60_000, ...opts.backoff };
@@ -106,7 +110,42 @@ export class Supervisor implements WolfRegistry {
     for (const w of opts.wolves) this.children.set(w.identity.name, new Child(w));
   }
 
+  /** Subscribe to wolves added / removed at runtime. Returns an unsubscribe. */
+  onChange(l: (e: SupervisorChange) => void): () => void {
+    this.listeners.add(l);
+    return () => void this.listeners.delete(l);
+  }
+  private emit(e: SupervisorChange): void {
+    for (const l of [...this.listeners]) {
+      try {
+        l(e);
+      } catch {
+        /* a listener must not break the supervisor */
+      }
+    }
+  }
+
+  /** Add a wolf at runtime (spawned at once when the supervisor is already running). */
+  addWolf(config: WolfConfig): void {
+    const name = config.identity.name;
+    if (this.children.has(name)) throw new Error(`wolf ${name} is already supervised`);
+    const c = new Child(config);
+    this.children.set(name, c);
+    if (this.started && !this.stopping) this.spawnChild(c);
+    this.emit({ type: "add", config });
+  }
+
+  /** Stop and forget a wolf. */
+  async removeWolf(name: string): Promise<void> {
+    const c = this.children.get(name);
+    if (!c) return;
+    this.children.delete(name);
+    await this.stopChild(c);
+    this.emit({ type: "remove", name });
+  }
+
   start(): void {
+    this.started = true;
     for (const c of this.children.values()) this.spawnChild(c);
   }
 
@@ -122,6 +161,9 @@ export class Supervisor implements WolfRegistry {
   // ---- WolfRegistry
   wolves(): WolfEntry[] {
     return [...this.children.values()].map((c) => ({ name: c.config.identity.name, id: c.config.identity.id, host: hostname() }));
+  }
+  configs(): WolfConfig[] {
+    return [...this.children.values()].map((c) => c.config);
   }
   has(name: string): boolean {
     return this.children.has(name);

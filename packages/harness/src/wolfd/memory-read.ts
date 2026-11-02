@@ -5,7 +5,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics, readPendingSummary, observationIds, stripSources } from "@wolfpack/memory";
+import { readDenTopics, readTopics, readPendingSummary, observationIds, shapeWorkList, shapeWorkRecord, toWorkChild, CHILDREN_CAP, LOG_TAIL, type ShapeWorkItem } from "@wolfpack/memory";
 import type { WorkListItem, BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
 import type { KbWorkSource } from "@wolfpack/kb/graph";
 import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
@@ -107,12 +107,24 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
   const api = { endpoint: work?.endpoint || process.env.WORK_ENDPOINT, token: work?.token || process.env.WORK_TOKEN };
   const unavailable = tagged.length > 0 && (await workApiUnavailable(den, tagged[0]!.work || tagged[0]!.feature!, api, now));
   const waiting = readPendingSummary(den, now);
-  const causeOf = (o: { work?: string; feature?: string }): "work-api-unavailable" | "consolidation-failed" | undefined =>
-    (o.feature && waiting.keys[o.feature]) || (o.work && waiting.keys[o.work]) || (unavailable && (o.work || o.feature) ? "work-api-unavailable" : undefined);
+  // A state entry blocks an observation only if it is not an orphan: it must be under a key the observation
+  // is grouped under (feature or work) and started after the observation was recorded. An entry older than the
+  // observation was left by an earlier grouping and is ignored (consolidation clears it on the next success).
+  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed"; since: number } | undefined => {
+    const rec = o.recordedAt ? Date.parse(o.recordedAt) : NaN;
+    for (const k of [o.feature, o.work]) {
+      const t = k ? waiting.firstPendingAt[k] : undefined;
+      if (k && t !== undefined && (Number.isNaN(rec) || t >= rec)) return { cause: waiting.keys[k]!, since: t };
+    }
+    return unavailable && (o.work || o.feature) ? { cause: "work-api-unavailable", since: Number.isNaN(rec) ? now : rec } : undefined;
+  };
+  let oldestWait: number | undefined;
   const blocked = unavailable;
   // The same ids the Records and the archive use (observationIds, in @wolfpack/memory).
   const poolIds = observationIds(pool);
   const all = pool.map((o, i): MemoryObservation & { _i: number } => {
+    const w = waitOf(o);
+    if (w) oldestWait = Math.max(oldestWait ?? 0, now - w.since);
     return {
       id: poolIds[i]!,
       timestamp: o.timestamp ?? "",
@@ -122,14 +134,14 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
       ...(o.domain ? { domain: o.domain } : {}),
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
-      ...(causeOf(o) ? { blocked: causeOf(o)! } : {}),
+      ...(w ? { blocked: w.cause } : {}),
       _i: i,
     };
   });
   const pendingCount = all.filter((o) => o.blocked).length;
   all.sort((a, b) => (b.recordedAt ?? b.timestamp).localeCompare(a.recordedAt ?? a.timestamp) || b._i - a._i);
   const kept = limit === undefined ? all : all.slice(0, limit);
-  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}), ...(pendingCount > 0 ? { pending: { count: pendingCount, ...(waiting.oldestAgeMs !== undefined ? { oldestAgeMs: waiting.oldestAgeMs } : {}) } } : {}) };
+  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}), ...(pendingCount > 0 ? { pending: { count: pendingCount, ...(oldestWait !== undefined ? { oldestAgeMs: oldestWait } : {}) } } : {}) };
 }
 
 /** One topic by id. `scope` restricts the store; otherwise den first, then session. Undefined: no such topic. */
@@ -146,22 +158,7 @@ export function readMemoryTopic(den: string, id: string, scope?: "den" | "sessio
 }
 
 /** The Work API item as far as the page data needs it (fields the server may omit are optional). */
-interface ApiWorkItem {
-  id: string;
-  title?: string;
-  kind?: string;
-  stage?: string;
-  graduated?: boolean | string;
-  domain?: string;
-  partOf?: string | null;
-  dependsOn?: string[];
-  container?: boolean;
-  successCriteria?: string;
-  updated?: string;
-  assignee?: string;
-  created?: string;
-  standing?: boolean;
-}
+type ApiWorkItem = ShapeWorkItem;
 
 type WorkFetch = { kind: "ok"; item: ApiWorkItem; body: string } | { kind: "not_found" } | { kind: "unconfigured" } | { kind: "error"; message: string };
 
@@ -213,8 +210,8 @@ export async function fetchWorkSources(endpoint: string | undefined, token: stri
   }
 }
 
-/** Children cap: a feature past it gets the first CHILDREN_CAP and `childrenTruncated`. */
-export const CHILDREN_CAP = 200;
+/** Re-exported: the shaping constants live in @wolfpack/memory (shared with hubd). */
+export { CHILDREN_CAP, LOG_TAIL };
 
 /** GET <endpoint>/work?partOf=:id: the items directly under a feature. Undefined on any failure (children are best effort). */
 async function fetchChildren(id: string, work: { endpoint?: string; token?: string }): Promise<WorkChild[] | undefined> {
@@ -227,41 +224,10 @@ async function fetchChildren(id: string, work: { endpoint?: string; token?: stri
     if (!Array.isArray(data.items)) return undefined;
     return data.items
       .filter((c) => typeof c.id === "string")
-      .map((c) => ({ id: c.id, title: c.title ?? "", kind: c.kind ?? "", stage: c.stage ?? "", dependsOn: Array.isArray(c.dependsOn) ? c.dependsOn : [] }));
+      .map(toWorkChild);
   } catch {
     return undefined;
   }
-}
-
-/** The document without its generated `## Log` section (the ledger renders it on every read; it is not plan). */
-function withoutLog(body: string): string {
-  const out: string[] = [];
-  let fence: string | null = null;
-  let skipping = false;
-  for (const line of body.split("\n")) {
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (f) fence = fence === null ? f[1][0] : f[1][0] === fence ? null : fence;
-    else if (fence === null && /^#{1,2} /.test(line)) skipping = /^## Log\s*$/.test(line);
-    if (!skipping) out.push(line);
-  }
-  return out.join("\n").trim();
-}
-
-/** How many ledger entries the record route carries (the newest). */
-export const LOG_TAIL = 10;
-
-/** The generated `## Log` section's entries ("- **when** — what" lines), the newest LOG_TAIL, oldest first. */
-function logTail(body: string): string[] {
-  const out: string[] = [];
-  let fence: string | null = null;
-  let inLog = false;
-  for (const line of body.split("\n")) {
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (f) fence = fence === null ? f[1][0] : f[1][0] === fence ? null : fence;
-    else if (fence === null && /^#{1,2} /.test(line)) inLog = /^## Log\s*$/.test(line);
-    else if (inLog && fence === null && /^- /.test(line)) out.push(line.slice(2).trim());
-  }
-  return out.slice(-LOG_TAIL);
 }
 
 export type WorkRecordResult = { kind: "ok"; value: WorkRecordResponse } | { kind: "not_found" } | { kind: "unconfigured" } | { kind: "error"; message: string };
@@ -280,26 +246,7 @@ export async function readWorkList(domain: string, includeGraduated: boolean, wo
     if (!res.ok) return { kind: "error", message: `HTTP ${res.status}` };
     const data = (await res.json()) as { items?: ApiWorkItem[] };
     if (!Array.isArray(data.items)) return { kind: "error", message: "unexpected response" };
-    const items: WorkListItem[] = [];
-    for (const w of data.items) {
-      if (typeof w.id !== "string") continue;
-      const graduated = typeof w.graduated === "string" && w.graduated ? w.graduated : w.graduated === true ? "graduated" : undefined;
-      if (!includeGraduated && (graduated !== undefined || w.stage === "archived")) continue;
-      items.push({
-        id: w.id,
-        title: w.title ?? "",
-        kind: w.kind ?? "",
-        stage: w.stage ?? "",
-        domain: w.domain ?? domain,
-        partOf: w.partOf ?? null,
-        dependsOn: Array.isArray(w.dependsOn) ? w.dependsOn : [],
-        ...(w.assignee ? { assignee: w.assignee } : {}),
-        ...(w.created ? { created: w.created } : {}),
-        ...(w.standing ? { standing: true } : {}),
-        ...(w.container ? { container: true } : {}),
-        ...(graduated !== undefined ? { graduated } : {}),
-      });
-    }
+    const items: WorkListItem[] = shapeWorkList(data.items, domain, includeGraduated);
     return { kind: "ok", items };
   } catch (e) {
     return { kind: "error", message: e instanceof Error ? e.message : String(e) };
@@ -311,34 +258,8 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
   const r = await fetchWorkItem(id, work);
   if (r.kind !== "ok") return r;
   const { item, body } = r;
-  const record = extractRecord(body);
-  const section = record === null ? null : stripSources(record); // the console reads the Record; the sources stay in the document
   const listed = item.kind === "feature" ? await fetchChildren(item.id, work) : undefined;
-  // a container (Inbox) can be huge: only its count goes out; a feature's list is capped
-  const childCount = item.container && listed ? listed.length : undefined;
-  const truncated = !item.container && listed !== undefined && listed.length > CHILDREN_CAP;
-  const children = item.container ? undefined : truncated ? listed!.slice(0, CHILDREN_CAP) : listed;
-  return {
-    kind: "ok",
-    value: {
-      id: item.id,
-      title: item.title ?? "",
-      kind: item.kind ?? "",
-      stage: item.stage ?? "",
-      ...(item.domain !== undefined ? { domain: item.domain } : {}),
-      ...(item.partOf !== undefined ? { partOf: item.partOf } : {}),
-      ...(item.dependsOn !== undefined ? { dependsOn: item.dependsOn } : {}),
-      ...(item.container ? { container: true } : {}),
-      ...(children ? { children } : {}),
-      ...(truncated ? { childrenTruncated: true } : {}),
-      ...(childCount !== undefined ? { childCount } : {}),
-      ...(item.successCriteria?.trim() ? { successCriteria: item.successCriteria } : {}),
-      plan: withoutLog(withoutRecord(body)),
-      record: section ? section.slice(RECORD_HEADING.length).trim() : "",
-      ...(logTail(body).length > 0 ? { log: logTail(body) } : {}),
-      ...(item.updated !== undefined ? { updated: item.updated } : {}),
-    },
-  };
+  return { kind: "ok", value: shapeWorkRecord(item, body, listed) };
 }
 
 /**

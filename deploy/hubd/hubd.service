@@ -1,0 +1,68 @@
+# hubd on sfo-01. Installed by deploy/hubd/setup.sh (it substitutes @NODE@; the bind comes from /etc/wolfpack/hubd.env).
+# Runs as the dedicated user "hubd", never as a wolf user. No ACLs: hubd uses the "other" permissions of Dewey's 755/777 dirs,
+# and the sandbox below is what makes the KB read-only (the dirs are world-writable).
+[Unit]
+Description=Wolfpack hub (hubd)
+Documentation=file:///opt/wolfpack-hubd/current/RUNBOOK.md
+# tailscaled first: HUBD_HOST is the Tailscale IP. ExecStartPre also waits for the address; Restart=on-failure covers the rest.
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=hubd
+Group=hubd
+# Root-owned, mode 600; systemd reads it as root before dropping privileges.
+EnvironmentFile=/etc/wolfpack/hubd.env
+# Guards (bash; $$ is a literal $ for systemd): port is numeric, 1024-65535 and not 3141 (wolfpack-agent); bind is IPv4 and not a wildcard.
+ExecStartPre=/bin/bash -c '[[ "$${HUBD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${HUBD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 )) || { echo "bad HUBD_PORT=$${HUBD_PORT} (1024-65535, not 3141)" >&2; exit 1; }; [[ "$${HUBD_HOST}" =~ ^([0-9]{1,3}[.]){3}[0-9]{1,3}$$ && "$${HUBD_HOST}" != 0.0.0.0 ]] || { echo "bad HUBD_HOST" >&2; exit 1; }'
+# Wait (up to 30 s) for the bind address to exist. Pure bash on /proc (no `ip`: it needs AF_NETLINK, which RestrictAddressFamilies denies).
+# Exact match: a fib_trie line "|-- <ip>" (dots escaped, anchored) followed by "/32 host LOCAL" (so 100.1.1.1 never matches 100.1.1.10).
+ExecStartPre=/bin/bash -c 'h=$${HUBD_HOST//./[.]}; for i in $$(seq 1 30); do grep -E -A1 "^ *[|]-- $$h$$" /proc/net/fib_trie | grep -Fq "/32 host LOCAL" && exit 0; sleep 1; done; echo "address $${HUBD_HOST} not present" >&2; exit 1'
+ExecStart=@NODE@ /opt/wolfpack-hubd/current/hubd.mjs serve --data-dir ${HUBD_DATA_DIR} --host ${HUBD_HOST} --port ${HUBD_PORT}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+# 0022, not 0077: contribution files must be readable by Dewey (writeFileSync uses the umask, 0666 & ~0022 = 644). The data dir is 0700,
+# so the 644 files inside it are not reachable by others; tokens.json is written 0600 explicitly.
+UMask=0022
+
+# State: /var/lib/hubd (ledger, registry, tokens, hub-owned kb/base, kb-rev).
+StateDirectory=hubd
+StateDirectoryMode=0700
+
+# Hardening. Home is hidden except the three Dewey paths below.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+# No "-" prefix on purpose: a missing path must fail the start, not silently run without the KB.
+# domains/ is read-only here (it is mode 777, so the sandbox is the only thing keeping hubd from writing the KB).
+BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains
+# inbox/ and receipts/ are writable (contribution intake; per-wolf lane dirs are pre-created by setup.sh).
+BindPaths=/home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
+ReadWritePaths=/var/lib/hubd /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# A filtered syscall returns EPERM instead of killing hubd with SIGSYS.
+SystemCallErrorNumber=EPERM
+# node's JIT needs W+X pages, so MemoryDenyWriteExecute stays off.
+
+[Install]
+WantedBy=multi-user.target

@@ -36,6 +36,11 @@ export interface ClaudeStatelessSeams {
   models?: Parameters<typeof createStatelessProvider>[0]["models"];
 }
 
+/** Seams for a stateless provider that must run on the host's Agent SDK `query` (its own import is stubbed in the bundle). */
+export const claudeStatelessSdkSeams = (queryFn: unknown): ClaudeStatelessSeams => ({
+  queryFn: queryFn as ClaudeStatelessSeams["queryFn"],
+});
+
 /** claude-bridge's model table re-tagged for this provider (same ids, limits and zero costs). */
 export const claudeStatelessModels = (ctx: { cwd: string; env: NodeJS.ProcessEnv }) =>
   claudeBridgeLookupModels(ctx).map((m: any) => ({ ...m, api: CLAUDE_STATELESS_ID, provider: CLAUDE_STATELESS_ID, baseUrl: CLAUDE_STATELESS_ID }));

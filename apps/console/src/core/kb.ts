@@ -61,8 +61,8 @@ export function findKbSource<W extends { name: string; status?: string; libraria
 	return mirror ? { name: mirror.name, mirror: true } : null;
 }
 
-/** The label shown when the KB is read from a wolf other than the librarian. */
-export const KB_MIRROR_LABEL = "read-only mirror (librarian offline)";
+/** The label shown when the KB is read from a wolf's read-only copy (the hub-synced mirror), not the librarian. */
+export const KB_MIRROR_LABEL = "read-only hub copy";
 
 /**
  * A memory event of a type this build does not know yet (e.g. record_written,

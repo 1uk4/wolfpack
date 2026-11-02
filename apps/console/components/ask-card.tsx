@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
-import { MessageResponse } from "@/components/ai-elements/message";
-import { InertMarkdown } from "@/components/work-id-chip";
+import { InlineMarkdown, MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
@@ -65,9 +64,13 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	const finishingRef = useRef(false);
 	// Recomputed from the mirrors at call time (after a dictation finish the render state is stale): an invalid or
 	// incomplete result aborts the submit and leaves the typed text with its inline error.
+	const [attempted, setAttempted] = useState(false);
 	const answerNow = () => {
 		const f = foldPendingOther(card, draftRef.current, typedRef.current);
-		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) return;
+		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) {
+			setAttempted(true); // never a silent no-op: the hint + highlight say what is missing
+			return;
+		}
 		onAnswer(draftAnswers(card, f.draft));
 	};
 	const submit = () => {
@@ -83,6 +86,17 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	};
 	const folded = foldPendingOther(card, draft, typed);
 	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
+	// Required fields still unanswered (visible ones only): highlighted, and named beside the disabled Submit so it is never a mystery.
+	const missingFields = visibleFields(card, folded.draft).filter((f) => !fieldsComplete([f], folded.draft));
+	const missingIds = new Set(missingFields.map((f) => f.id));
+	// Shown only after a failed Submit; clears itself once the draft is complete and valid.
+	const hasErrors = Object.keys(folded.errors).length > 0;
+	const incomplete = hasErrors || missingFields.length > 0;
+	useEffect(() => {
+		if (!incomplete) setAttempted(false);
+	}, [incomplete]);
+	const showHint = attempted && incomplete && pending && !closed && !submitting;
+	const hintId = `card-hint-${useId()}`;
 	// Stepped card: one step at a time with Back/Next; the answers stay in the draft until the single Submit on the last step.
 	// The step list follows the draft (a dependent step appears/vanishes with its controlling answer); `step` is clamped.
 	const stepped = card.steps !== undefined && !closed;
@@ -161,8 +175,20 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 					onAddCustom={f.kind === "multi" ? () => addCustomFor(f) : undefined}
 					dictation={dictationProps.field(f.id)}
 					pendingError={folded.errors[f.id]}
+					missing={showHint && missingIds.has(f.id)}
 				/>
 			))}
+			{!closed && (
+				<div id={hintId} role="status" className="mt-3 text-xs text-amber-700 empty:hidden dark:text-amber-400" data-testid="card-submit-hint">
+					{showHint &&
+						[
+							hasErrors ? "Fix the highlighted entry to submit." : "",
+							missingFields.length > 0 ? `Answer to submit: ${missingFields.map((f) => f.label.replace(/[*_`]|\[([^\]]*)\]\([^)]*\)/g, "$1")).join(", ")}` : "",
+						]
+							.filter(Boolean)
+							.join(" ")}
+				</div>
+			)}
 			{!closed && (
 				<div className="mt-3 flex justify-end gap-2">
 					{onSkip && (
@@ -180,7 +206,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 							Next
 						</Button>
 					) : (
-						<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
+						<Button type="button" size="sm" disabled={!pending || submitting || finishing} aria-disabled={!canSubmit || undefined} aria-describedby={hintId} onClick={submit} data-testid="card-submit">
 							{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
 						</Button>
 					)}
@@ -285,6 +311,7 @@ function FieldView({
 	skipped,
 	pendingError,
 	dictation,
+	missing,
 }: {
 	field: CardField;
 	value: CardFieldAnswer | undefined;
@@ -298,10 +325,12 @@ function FieldView({
 	skipped?: boolean;
 	pendingError?: string;
 	dictation: FieldDictation;
+	/** A required field with no (valid) answer yet: highlighted so it is clear what Submit is waiting for. */
+	missing?: boolean;
 }) {
 	const labelId = `card-field-${useId()}`;
 	return (
-		<div className="mb-2 last:mb-0" data-field={field.id}>
+		<div className={cn("mb-2 last:mb-0", missing && "border-l-2 border-amber-500/70 pl-2")} data-field={field.id} data-incomplete={missing || undefined}>
 			<div className="mb-2 flex flex-wrap items-baseline gap-x-2 font-medium" id={labelId}>
 				<MessageResponse>{field.label}</MessageResponse>
 				{field.optional && (
@@ -360,10 +389,10 @@ function FieldView({
 								)}
 							>
 								<Indicator shape="radio" on={sel} />
-								<InertMarkdown value={true}><span className="flex min-w-0 flex-col items-start">
-									<MessageResponse>{o.label}</MessageResponse>
-									{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
-								</span></InertMarkdown>
+								<span className="flex min-w-0 flex-col items-start">
+									<InlineMarkdown>{o.label}</InlineMarkdown>
+									{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
+								</span>
 							</button>
 						);
 					})}
@@ -484,10 +513,10 @@ function MultiView({
 						)}
 					>
 						<Indicator shape="check" on={sel} />
-						<InertMarkdown value={true}><span className="flex min-w-0 flex-col items-start">
-							<MessageResponse>{o.label}</MessageResponse>
-							{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
-						</span></InertMarkdown>
+						<span className="flex min-w-0 flex-col items-start">
+							<InlineMarkdown>{o.label}</InlineMarkdown>
+							{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
+						</span>
 					</button>
 				);
 			})}

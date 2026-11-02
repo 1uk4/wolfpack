@@ -16,7 +16,7 @@ import {
   bundleKbCli,
   KB_EMBED_MODEL,
 } from "./deployer.js";
-import { kbBaseDir, librarianDir, type CliConfig } from "./config.js";
+import { kbWriteBaseDir, librarianDir, type CliConfig } from "./config.js";
 import { c } from "./render.js";
 
 const SWEEP_INTERVAL_S = 60; // 1 min; each run sweeps one contribution
@@ -70,7 +70,7 @@ export async function installLocalLibrarian(
   if (!ollama.ok && ollama.note) notes.push(ollama.note);
 
   // 3. KB storage roots live on the hub (shared, authoritative).
-  const kbBase = kbBaseDir(config);
+  const kbBase = kbWriteBaseDir(config);
   const kbOps = librarianDir(config);
   const denLocal = path.join(config.wolvesRoot, "local", wolf.name, "den", "kb");
   const wolfDen = path.join(config.wolvesRoot, "local", wolf.name, "den");

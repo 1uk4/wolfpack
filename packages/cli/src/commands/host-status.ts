@@ -37,7 +37,7 @@ export async function hostStatus(name?: string): Promise<void> {
     console.log(`  Memory:   ${mem.percent}%`);
     console.log(`  Disk:     ${disk.percent}%`);
 
-    // Service health (Tailscale, Syncthing)
+    // Service health (Tailscale, den-backup Syncthing)
     const services =
       (health.services as Array<Record<string, unknown>>) ?? [];
     if (services.length) {

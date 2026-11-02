@@ -1,5 +1,5 @@
 /**
- * Host service health checks — Tailscale and Syncthing.
+ * Host service health checks — Tailscale and the den backup sync (Syncthing).
  *
  * These run on the VPS inside the agent and are surfaced through /health so
  * the wolfpack CLI can show tailnet + sync status alongside wolves.
@@ -51,11 +51,17 @@ export async function checkTailscale(): Promise<ServiceHealth> {
 }
 
 /**
- * Syncthing: service active + (if an API key is available) REST reachable with
- * aggregate folder completion.
+ * Den backup sync check. Syncthing now carries den backups only
+ * (den-<host>-<wolf> folders); KB distribution is hub-only and never touches it.
+ * Remains until feature H3GuSmC replaces it with a backup system.
+ * Probes: service active + (if an API key is available) REST reachable with
+ * aggregate folder completion. The reported service name stays "syncthing"
+ * so the /health shape is unchanged; consumers label it "den backup sync".
  *
  * Config via env:
- *   SYNCTHING_UNIT     systemd unit to probe (default "syncthing")
+ *   SYNCTHING_UNIT     systemd unit to probe (default "syncthing"); a per-wolf
+ *                      instance can be named, e.g. "wolf-<id>-syncthing" (the per-wolf unit
+ *                      provisioned by `wolfpack mesh`, see packages/cli deployer.ts) or the legacy "syncthing@wolf"
  *   SYNCTHING_URL      REST base (default http://127.0.0.1:8384)
  *   SYNCTHING_API_KEY  enables the deeper REST check
  */
@@ -76,7 +82,7 @@ export async function checkSyncthing(): Promise<ServiceHealth> {
   }
 
   if (!active) {
-    return { name: "syncthing", ok: false, state: "inactive", detail: `${unit} not active` };
+    return { name: "syncthing", ok: false, state: "inactive", detail: `den backup sync: ${unit} not active` };
   }
 
   // 2. Optional deeper REST check
@@ -85,7 +91,7 @@ export async function checkSyncthing(): Promise<ServiceHealth> {
       name: "syncthing",
       ok: true,
       state: "active",
-      detail: "service active (set SYNCTHING_API_KEY for folder status)",
+      detail: "den backup sync active (set SYNCTHING_API_KEY for folder status)",
     };
   }
 
@@ -121,14 +127,14 @@ export async function checkSyncthing(): Promise<ServiceHealth> {
       name: "syncthing",
       ok: true,
       state: synced ? "synced" : "syncing",
-      detail: `${connected}/${devices.length} peers · ${folders.length} folders · ${Math.floor(minCompletion)}% synced`,
+      detail: `den backup sync · ${connected}/${devices.length} peers · ${folders.length} folders · ${Math.floor(minCompletion)}% synced`,
     };
   } catch (err) {
     return {
       name: "syncthing",
       ok: true,
       state: "active",
-      detail: `service active, REST check failed: ${String(err)}`,
+      detail: `den backup sync active, REST check failed: ${String(err)}`,
     };
   }
 }

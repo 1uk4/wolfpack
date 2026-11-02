@@ -12,6 +12,7 @@
     "./shared": "./dist/shared/index.js",
     "./client": "./dist/client/index.js",
     "./librarian": "./dist/librarian/index.js",
+    "./librarian/intake": "./dist/librarian/intake.js",
     "./graph": "./dist/graph/index.js"
   },
   "scripts": {

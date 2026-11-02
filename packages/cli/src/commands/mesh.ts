@@ -1,10 +1,11 @@
 /**
  * wolfpack mesh [--check]
  *
- *   mesh           reconcile the Syncthing fabric to match config (additive)
- *   mesh --check   report drift (missing + stale managed folders) without change
+ *   mesh           reconcile den-backup Syncthing folders (additive)
+ *   mesh --check   report drift (missing + stale den folders) without change
  *
- * The star topology + per-instance plan is computed in mesh.ts; this is the
+ * Den backup only (removed in feature H3GuSmC); KB/lane folders are gone, the hub
+ * link carries them. The plan is computed in mesh.ts; this is the
  * thin command surface over reconcileMesh()/checkMesh().
  */
 
@@ -17,12 +18,13 @@ export async function meshCmd(opts: { check?: boolean; yes?: boolean }): Promise
     console.log(c.bold("\n🔎 Mesh drift check\n"));
     const drift = await checkMesh();
     if (!drift.length) {
-      console.log(c.green("  ✓ In sync — no missing or stale managed folders."));
+      console.log(c.green("  ✓ In sync — no missing or stale den folders."));
       return;
     }
     for (const d of drift) {
       console.log(c.bold(`  ${d.instance}`));
       for (const m of d.missing) console.log(c.yellow(`    - missing: ${m}`));
+      for (const ch of d.changed) console.log(c.yellow(`    - would change: ${ch}`));
       for (const s of d.stale) console.log(c.red(`    - stale:   ${s} (revoke manually until auto-prune)`));
     }
     console.log(c.dim("\n  Run `wolfpack mesh` to apply missing shares (additive)."));
@@ -38,11 +40,11 @@ export async function meshCmd(opts: { check?: boolean; yes?: boolean }): Promise
     for (const p of preview.toProvision) console.log(c.yellow(`    + ${p}`));
   }
   if (preview.shares.length) {
-    console.log(c.bold("  Folder wiring:"));
+    console.log(c.bold("  Den folder wiring:"));
     for (const s of preview.shares) console.log(c.dim(`    • ${s}`));
   }
   if (!preview.toProvision.length && !preview.shares.length) {
-    console.log(c.dim("  Nothing to wire (no remote wolves / domains)."));
+    console.log(c.dim("  Nothing to wire (no remote wolves)."));
     return;
   }
 
@@ -58,5 +60,5 @@ export async function meshCmd(opts: { check?: boolean; yes?: boolean }): Promise
   if (res.skipped.length) {
     console.log(c.yellow(`  ! Skipped: ${res.skipped.join(", ")}`));
   }
-  console.log(c.dim("\n  Syncthing connects over the tailnet; the hub mirrors into ~/wolves/."));
+  console.log(c.dim("\n  Syncthing connects over the tailnet; dens back up into ~/wolves/<host>/<wolf>/den."));
 }

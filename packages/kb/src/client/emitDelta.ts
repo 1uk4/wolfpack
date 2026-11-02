@@ -93,6 +93,11 @@ export interface EmitDeltaInput {
   force?: boolean;
 }
 
+/** The file name of a contribution: `<denTopicId>-<10 hex of the content hash>.md`. */
+export function contributionFileName(denTopicId: string, hash: string): string {
+  return `${safeSegment(denTopicId, "den topic id")}-${hashTag(hash)}.md`;
+}
+
 /**
  * Write a contribution to librarian-ops/inbox/<wolf>/, but ONLY if the content
  * actually changed since the last emit for this topic (hash guard). Returns the
@@ -106,7 +111,9 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const dir = inboxDir(roots, wolf);
   mkdirSync(dir, { recursive: true });
 
-  const hash = contentHash(input.body);
+  // Canonical body = what parseContribution reads back (it trims); hash, file and dedup all use it, whatever the caller passed.
+  const body = input.body.trim();
+  const hash = contentHash(body);
   const emitted = readEmittedMap(roots);
   const prevHash = emitted[input.denTopicId] ?? null;
   if (prevHash === hash && !input.force) return null; // unchanged re-promotion → no-op
@@ -122,7 +129,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     summary: input.summary,
     session: input.session,
     submitted: input.submitted ?? now(),
-    body: input.body,
+    body,
     sourceCreated: input.sourceCreated,
     sourceUpdated: input.sourceUpdated,
     dateBasis: input.dateBasis,
@@ -138,8 +145,8 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     source: input.source,
   };
 
-  const file = join(dir, `${safeSegment(input.denTopicId, "den topic id")}-${hashTag(hash)}.md`);
-  atomicWrite(file, render(contribution));
+  const file = join(dir, contributionFileName(input.denTopicId, hash));
+  atomicWrite(file, renderContribution(contribution));
 
   // Record what we emitted so a later unchanged re-promote is a true no-op
   // (no inbox churn for the sweep to hash-skip). Best-effort: the inbox file is
@@ -148,7 +155,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     mkdirSync(roots.denLocal, { recursive: true });
     emitted[input.denTopicId] = hash;
     mkdirSync(join(roots.denLocal, "emitted-bodies"), { recursive: true });
-    atomicWrite(emittedBodyPath(roots, input.denTopicId), input.body);
+    atomicWrite(emittedBodyPath(roots, input.denTopicId), body);
     atomicWrite(emittedMapPath(roots), JSON.stringify(emitted, null, 2) + "\n");
   } catch {
     /* dedup map is an optimization — never fail an emit over it */
@@ -171,7 +178,8 @@ export function tryEmitDelta(input: EmitDeltaInput, onSkip: (reason: string) => 
   }
 }
 
-function render(c: Contribution): string {
+/** The contribution file text (frontmatter + summary + body), exactly what the librarian intake reads. */
+export function renderContribution(c: Contribution): string {
   const fm = [
     "---",
     `from: ${c.from}`,

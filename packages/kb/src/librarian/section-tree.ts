@@ -9,6 +9,7 @@ import { SECTION_TREE } from "@wolfpack/engine";
 import { cosine, type Vector } from "./embed.js";
 import { computeCentroid, type EntryWithVector } from "./hierarchy.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
+import { hashSectionId, hashSeed, rng, unit as unitVec, meanVec, cosine as trueCosine, DEFAULT_RULES } from "./tree-rules.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types
@@ -151,6 +152,8 @@ export function buildTreeBottomUp(
   // Convert cluster tree to Section objects
   const sections: Section[] = [];
   const sectionIds = new Map<string, SectionId>();
+  const takenIds = new Set<string>();
+  const mkId = (memberIds: string[]): SectionId => mkSectionId(domain as DomainId, memberIds, takenIds);
   const today = new Date().toISOString().split("T")[0];
 
   // Convert clusters to sections.
@@ -170,40 +173,11 @@ export function buildTreeBottomUp(
     return result;
   }
 
-  // Force-split oversized leaf clusters using k-means
+  // Oversized leaf clusters are NOT split here any more: the gated, seeded
+  // split (tree-rules.chooseSplit, driven by the rebuild) decides whether a
+  // section has real substructure. The old random 2-means always split.
   function ensureSplitThreshold(leafClusters: Cluster[]): Cluster[] {
-    const result: Cluster[] = [];
-    for (const cluster of leafClusters) {
-      if (cluster.weight <= config.splitThreshold) {
-        result.push(cluster);
-        continue;
-      }
-      // Split via k-means into 2
-      const vectors = cluster.members.map((m) => m.vector);
-      const { assignment, clusters: centroids } = kMeans2(vectors);
-      const groupA: EntryWithVector[] = [];
-      const groupB: EntryWithVector[] = [];
-      for (let i = 0; i < cluster.members.length; i++) {
-        (assignment[i] === 0 ? groupA : groupB).push(cluster.members[i]);
-      }
-      // Recurse in case sub-clusters are still too large
-      const subA: Cluster = {
-        id: `split-a-${cluster.id}`,
-        centroid: centroids[0],
-        members: groupA,
-        children: [],
-        weight: groupA.length,
-      };
-      const subB: Cluster = {
-        id: `split-b-${cluster.id}`,
-        centroid: centroids[1],
-        members: groupB,
-        children: [],
-        weight: groupB.length,
-      };
-      result.push(...ensureSplitThreshold([subA, subB]));
-    }
-    return result;
+    return leafClusters;
   }
 
   function buildSection(
@@ -211,7 +185,7 @@ export function buildTreeBottomUp(
     parentId: SectionId | null,
     depth: number,
   ): void {
-    const sectionId = mkSectionId(domain as DomainId);
+    const sectionId = mkId(cluster.members.map((m) => m.entryId));
 
     if (cluster.weight <= config.splitThreshold) {
       // Leaf section — record entry assignments
@@ -251,7 +225,7 @@ export function buildTreeBottomUp(
         singletons.push(...sub.members);
         continue;
       }
-      const childId = mkSectionId(domain as DomainId);
+      const childId = mkId(sub.members.map((m) => m.entryId));
       childIds.push(childId);
       childSections.push({ id: childId, centroid: sub.centroid, members: [...sub.members] });
       for (const m of sub.members) assignments.set(m.entryId, childId);
@@ -291,37 +265,10 @@ export function buildTreeBottomUp(
       }
     }
     
-    // Final enforcement: re-split any child that exceeds threshold
-    // This handles singletons that inflated a child past the limit
-    const finalChildren: typeof childSections = [];
-    for (const child of childSections) {
-      if (child.members.length <= config.splitThreshold) {
-        finalChildren.push(child);
-        continue;
-      }
-      // Convert back to clusters and force-split
-      const oversized: Cluster = {
-        id: child.id as string,
-        centroid: child.centroid,
-        members: child.members,
-        children: [],
-        weight: child.members.length,
-      };
-      const splitResult = ensureSplitThreshold([oversized]);
-      for (const sub of splitResult) {
-        finalChildren.push({
-          id: mkSectionId(domain as DomainId),
-          centroid: sub.centroid,
-          members: sub.members,
-        });
-      }
-      // Remove the original oversized section
-      const idx = sections.findIndex((s) => s.id === child.id);
-      if (idx >= 0) sections.splice(idx, 1);
-      const cidx = childIds.indexOf(child.id);
-      if (cidx >= 0) childIds.splice(cidx, 1);
-    }
-    
+    // Children inflated past the threshold by singletons stay as they are;
+    // the rebuild's gated split looks at them afterwards.
+    const finalChildren: typeof childSections = [...childSections];
+
     // Create final child sections and record assignments
     for (const child of finalChildren) {
       if (!sections.some((s) => s.id === child.id)) {
@@ -591,11 +538,61 @@ export function placeEntry(
       return { sectionId: bestSection.id, fit: bestSim, depth: currentDepth };
     }
 
-    // Continue descending
-    return descend(children, currentDepth + 1);
+    // Stay-in-parent rule: with direct entries of its own (the "leftover group"), the parent keeps the entry unless it
+    // is coherent with one child (see chooseChild).
+    const pick = chooseChild(entryVector, bestSection, children, sections, sectionMembers);
+    if (pick === "parent") return { sectionId: bestSection.id, fit: bestSim, depth: currentDepth };
+
+    // Continue descending. A child chosen by the coherence rule that the next level then rejects as _unplaced (below the
+    // isolation threshold) must not send the entry to the classify fallback / a NEW root: it already fits this parent.
+    // The same holds when the rule did not apply (pick === null: few or no direct entries) and every child is below the threshold.
+    const below = descend(pick ? [pick] : children, currentDepth + 1);
+    return below.sectionId === "_unplaced" ? { sectionId: bestSection.id, fit: bestSim, depth: currentDepth } : below;
   }
 
   return descend(roots, 0);
+}
+
+/**
+ * The stay-in-parent rule, the same coherence test tree-rules.validatePartition applies to a proposed split:
+ * the parent's subtree vectors are centred, each child's subtree is a group, and the parent's DIRECT entries are
+ * the leftover group. The entry (centred the same way) goes into a child only if that child's centroid is the
+ * closest of the children AND closer than the leftover group's; otherwise it stays a direct entry of the parent.
+ *
+ * Returns the child to descend into, "parent" to stay, or null when the rule cannot be applied (the parent has no
+ * direct entries to be the leftover group, or no member vectors are known): the caller then descends by centroid.
+ */
+export function chooseChild(
+  entryVector: Vector,
+  parent: Section,
+  children: Section[],
+  sections: Section[],
+  sectionMembers: Map<string, EntryWithVector[]>
+): Section | "parent" | null {
+  const direct = (sectionMembers.get(String(parent.id)) ?? []).map((m) => m.vector);
+  // The direct entries are a competing group only when there are enough of them to have a meaningful centroid (minGroup,
+  // as in validatePartition); with fewer, the old rule (descend by centroid) applies.
+  if (direct.length < DEFAULT_RULES.minGroup) return null;
+  const subtree = (id: string): Vector[] => [
+    ...(sectionMembers.get(id) ?? []).map((m) => m.vector),
+    ...sections.filter((s) => String(s.parent) === id).flatMap((c) => subtree(String(c.id))),
+  ];
+  const groups = children.map((c) => ({ child: c, vecs: subtree(String(c.id)) })).filter((g) => g.vecs.length > 0);
+  if (groups.length === 0) return null;
+  const all = [...direct, ...groups.flatMap((g) => g.vecs)];
+  const mean = meanVec(all);
+  const centred = (v: Vector) => unitVec(v.map((x, i) => x - mean[i]));
+  const centroidOf = (vs: Vector[]) => unitVec(meanVec(vs.map(centred)));
+  const x = centred(entryVector);
+  const leftSim = trueCosine(centroidOf(direct), x);
+  let best: Section | null = null, bestSim = -Infinity;
+  for (const g of groups) {
+    const s = trueCosine(centroidOf(g.vecs), x);
+    if (s > bestSim) { bestSim = s; best = g.child; }
+  }
+  // NaN case: a zero vector (entry equal to the section mean after centring) gives cosine 0, never NaN (tree-rules.cosine
+  // guards zero norms), so `bestSim > leftSim` is a plain comparison; a tie stays in the parent.
+  return best && bestSim > leftSim ? best : "parent";
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -666,7 +663,7 @@ export function splitAsParentChild(
   }
 
   // Create child section
-  const childId = mkSectionId(section.domain);
+  const childId = mkSectionId(section.domain, childMembers.map((m) => m.entryId), new Set(sections.map((x) => String(x.id))));
   const today = new Date().toISOString().split("T")[0];
   
   const childSection: Section = {
@@ -819,14 +816,13 @@ export function shouldRecalculate(
 // Utilities
 // ════════════════════════════════════════════════════════════════════════════
 
-/** Generate a random section ID. */
-function mkSectionId(domain: DomainId): SectionId {
-  const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  let id = "";
-  for (let i = 0; i < 6; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return `sec-${domain}-${id}` as unknown as SectionId;
+/** Deterministic section id: hash of the member ids (salted on a collision). */
+function mkSectionId(domain: DomainId, memberIds: string[], taken: Set<string>): SectionId {
+  let parts = memberIds;
+  let id = hashSectionId(domain, parts);
+  for (let i = 0; taken.has(id); i++) id = hashSectionId(domain, [...memberIds, `~${i}`]);
+  taken.add(id);
+  return id as unknown as SectionId;
 }
 
 /** Normalize a vector to unit length. */
@@ -848,11 +844,12 @@ function normalize(v: Vector): Vector {
  * (pairwise similarity above threshold). Children that don't cluster stay
  * as direct children — no forced grouping.
  */
-function enforceBranchingFactor(
+export function enforceBranchingFactor(
   sections: Section[],
   domain: string,
   config: typeof SECTION_TREE,
 ): void {
+  const taken = new Set(sections.map((s) => String(s.id)));
   const today = new Date().toISOString().split("T")[0];
   const MIN_GROUP_SIZE = 3;
   const GROUP_SIMILARITY_THRESHOLD = 0.70;
@@ -912,7 +909,7 @@ function enforceBranchingFactor(
         }
 
         // Create wrapper section for this coherent group
-        const groupId = mkSectionId(domain as DomainId);
+        const groupId = mkSectionId(domain as DomainId, group.map((c) => String(c.id)), taken);
         const groupCentroid = computeCentroid(group.map((s) => s.centroid));
         const groupChildIds: SectionId[] = [];
         for (const child of group) {
@@ -966,11 +963,14 @@ function kMeans2(vectors: Vector[], maxIter: number = 10): {
   const n = vectors.length;
 
   // Initialize: pick two random vectors as initial centroids
-  const idx0 = Math.floor(Math.random() * n);
-  let idx1 = Math.floor(Math.random() * n);
-  while (idx1 === idx0 && n > 1) {
-    idx1 = Math.floor(Math.random() * n);
+  // Seeded from the data, so the same members always split the same way.
+  const rand = rng(hashSeed(n, ...vectors.map((v) => (v[0] ?? 0).toFixed(6))));
+  const idx0 = Math.floor(rand() * n);
+  let idx1 = Math.floor(rand() * n);
+  for (let guard = 0; idx1 === idx0 && n > 1 && guard < 50; guard++) {
+    idx1 = Math.floor(rand() * n);
   }
+  if (idx1 === idx0) idx1 = (idx0 + 1) % n;
 
   let centroids: [Vector, Vector] = [vectors[idx0], vectors[idx1]];
   let assignment = new Array(n).fill(0);

@@ -132,7 +132,7 @@ green "  ✓ .env has TAILSCALE_AUTHKEY, bot tokens, and MAC_SYNCTHING_DEVICE_ID
 echo
 
 ###############################################################################
-# 3b. Prerequisite: Syncthing installed and running on the Mac
+# 3b. Prerequisite: Syncthing (den backups only) installed and running on the Mac
 ###############################################################################
 bold "▸ Checking Syncthing on this Mac..."
 if ! command -v syncthing >/dev/null 2>&1; then
@@ -177,18 +177,15 @@ fi
 echo
 
 ###############################################################################
-# 3c. Prerequisite: Mac-side Syncthing hub folders inside the repo
+# 3c. Prerequisite: Mac-side den backup folder inside the repo
 ###############################################################################
-bold "▸ Ensuring Mac-side hub folders exist..."
+bold "▸ Ensuring Mac-side den backup folder exists..."
 
-# Both live under the repo so everything wolfpack-related is in one place.
-#   shared/   — git-tracked, hub sends to wolves
-#   dens/     — gitignored, bidi sync with wolves (living data)
-mkdir -p "$REPO_ROOT/shared"
-green "  ✓ $REPO_ROOT/shared/ ready (git-tracked, pushed to wolves)"
-
+# Syncthing carries den backups only (until feature H3GuSmC replaces it); the
+# KB goes through the hub link, not a synced folder.
+#   dens/ — gitignored, bidi sync with wolves (den backups)
 mkdir -p "$REPO_ROOT/dens"
-green "  ✓ $REPO_ROOT/dens/ ready (gitignored, bidi with wolves)"
+green "  ✓ $REPO_ROOT/dens/ ready (gitignored, den backups)"
 
 # Clean up legacy paths from the old layout, if present.
 for legacy in "$HOME/Code/wolfpack-dens" "$HOME/Code/wolfpack-shared"; do

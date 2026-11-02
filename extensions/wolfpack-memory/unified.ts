@@ -357,7 +357,7 @@ export default function createMemoryExtension(
   const consolidationTrigger = consolidation?.trigger ?? "hybrid";
 
   // Which tier each memory step uses (fixed map, STEP_TIERS in @wolfpack/engine; wolf.yaml `tiers:` overrides apply):
-  //   fast : classify (observer), contradict, classifyToSection, matchSubject, confirmSubject, sectionSummary, labelSection
+  //   fast : classify (observer), contradict, classifyToSection, matchSubject, confirmSubject, sectionSummary, labelSection, splitSection
   //   smart: consolidate, distill, workRecord (Record rewrite), produce
   // The table is context.modelTable when the host resolved one (wolfd: models file + tiers overrides), else loaded from env.
   // Models come from the wolf's resolved table (the harness points

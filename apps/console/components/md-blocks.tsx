@@ -27,7 +27,7 @@
  * EXPAND icon (opens the session overlay) when a chat page is mounted.
  */
 
-import { cloneElement, isValidElement, useEffect, useRef, useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
+import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useRef, useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, MaximizeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -37,7 +37,7 @@ import {
 	useIsCodeFenceIncomplete,
 	defaultComponents,
 } from "streamdown";
-import { InertMarkdown, useInertMarkdown, WorkIdChip } from "@/components/work-id-chip";
+import { WorkIdChip } from "@/components/work-id-chip";
 import { isFullWorkId, workIdFromHref } from "@/src/core";
 import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/mermaid-render";
@@ -370,6 +370,56 @@ export function MarkdownBlockquote(props: ComponentProps<"blockquote"> & ExtraPr
 	);
 }
 
+// ─── Paragraphs (the Streamdown `p` override) ────────────────────────────────
+
+/** Tags that may not live inside a <p> (HTML: only phrasing content may). */
+const NON_PHRASING = new Set([
+	"p", "div", "pre", "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th", "blockquote",
+	"hr", "section", "h1", "h2", "h3", "h4", "h5", "h6", "figure", "details", "dl", "form", "fieldset",
+]);
+
+const InParagraph = createContext(false);
+
+/** Does any direct child render a block element? (hast tag from props.node for
+ *  Streamdown's wrapped components, the raw type for plain elements.) */
+function hasBlockChild(children: ReactNode): boolean {
+	return Children.toArray(children).some((c) => {
+		if (!isValidElement(c)) return false;
+		const tag = markdownTag(c);
+		if (tag && NON_PHRASING.has(tag)) return true;
+		return c.type === MarkdownCode && "data-block" in (c.props as object);
+	});
+}
+
+/** Paragraph that can never produce invalid <p> nesting. Raw HTML in message
+ *  text (a prose mention like "use <p> or <div>" is parsed as real elements by
+ *  Streamdown's rehype-raw) yields a <p> inside a <p>, or a <div>/<ul> inside
+ *  one: React logs "<p> cannot be a descendant of <p>" and hydration breaks.
+ *  So: a paragraph nested in a paragraph, or holding any block child, renders
+ *  as a <div> with the same styling. Mirrors Streamdown's own unwrap of a
+ *  lone image / code block. */
+export function MarkdownParagraph(props: ComponentProps<"p"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	const nested = useContext(InParagraph);
+	const kids = Children.toArray(children).filter((c) => c !== "");
+	if (kids.length === 1 && isValidElement(kids[0])) {
+		const tag = markdownTag(kids[0]);
+		if (tag === "img" || (tag === "code" && "data-block" in (kids[0].props as object))) return <>{children}</>;
+	}
+	if (nested || hasBlockChild(children)) {
+		return (
+			<InParagraph.Provider value={true}>
+				<div {...(rest as ComponentProps<"div">)}>{children}</div>
+			</InParagraph.Provider>
+		);
+	}
+	return (
+		<InParagraph.Provider value={true}>
+			<p {...rest}>{children}</p>
+		</InParagraph.Provider>
+	);
+}
+
 // ─── Tables (the Streamdown `table` override) ────────────────────────────────
 
 /** A plain PROSE table: no wrapper box, no button rows — just the table
@@ -467,24 +517,122 @@ export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
 	);
 }
 
-/** Links: a rewritten work id (src/core/work-id-link) → chip. Inside a button (InertMarkdown) any other link is plain
- *  underlined text: Streamdown's default link is a <button>, and a button in a button is invalid HTML. */
+// ─── Inert set: markdown inside buttons (card options) ───────────────────────
+// A <button> may not contain interactive content. Streamdown 2.7.1 (and the
+// overrides above) render buttons for links (link-safety), code-fence copy,
+// table copy, display-math copy, mermaid and image download/overlay, so each
+// is replaced here by a plain, non-interactive element. Option labels are
+// still meant to be INLINE markdown (emphasis, inline code, links); the block
+// overrides are a safety net so an odd label can never nest a button.
+
+/** Links: the text styled as a link, non-interactive. The href is only
+ *  exposed as a hover `title` (never a visible URL or an anchor). */
+export function MarkdownInertLink(props: ComponentProps<"a"> & ExtraProps) {
+	const { children, className, href } = props;
+	const workId = workIdFromHref(href);
+	if (workId) return <WorkIdChip id={workId} inert />;
+	return (
+		<span data-streamdown="inert-link" className={cn("underline underline-offset-2", className)} title={href}>
+			{children}
+		</span>
+	);
+}
+
+/** Code: inline code keeps the house look; fences become a bare <code> (no copy corner, no mermaid). */
+export function InertCode(props: ComponentProps<"code"> & ExtraProps) {
+	const { children, className, node, ...rest } = props;
+	if (!("data-block" in props) && typeof children === "string" && isFullWorkId(children.trim())) return <WorkIdChip id={children.trim()} inert />;
+	return (
+		<code className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)} data-streamdown="inline-code" {...rest}>
+			{children}
+		</code>
+	);
+}
+
+/** Tables: the bare table, no copy corner. */
+export function InertTable(props: ComponentProps<"table"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	return (
+		<table className="w-full border-collapse" data-streamdown="table" {...rest}>
+			{children}
+		</table>
+	);
+}
+
+/** Spans (incl. KaTeX display math): pass through without the copy corner. */
+export function InertSpan(props: ComponentProps<"span"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	return <span {...rest}>{children}</span>;
+}
+
+/** Images: the alt text, no download/overlay buttons. */
+export function InertImage(props: ComponentProps<"img"> & ExtraProps) {
+	return <span data-streamdown="inert-image">{props.alt ?? ""}</span>;
+}
+
+/** Links: a rewritten work id (src/core/work-id-link) → chip; any other link is Streamdown's default. */
 export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
-	const inert = useInertMarkdown();
 	const id = workIdFromHref(props.href);
 	if (id) return <WorkIdChip id={id} />;
-	if (inert) return <span className="underline underline-offset-2" data-streamdown="link-inert">{props.children}</span>;
 	const Default = defaultComponents.a as ComponentType<ComponentProps<"a"> & ExtraProps>;
 	return <Default {...props} />;
 }
 
-export { InertMarkdown };
-
 export const mdComponents = {
+	p: MarkdownParagraph,
 	a: MarkdownLink,
 	code: MarkdownCode,
 	table: MarkdownTable,
 	span: MathDisplay,
 	strong: MarkdownStrong,
 	blockquote: MarkdownBlockquote,
+};
+
+/** mdComponents with every interactive element made inert, for markdown rendered inside buttons. */
+export const mdComponentsInert = {
+	...mdComponents,
+	a: MarkdownInertLink,
+	code: InertCode,
+	table: InertTable,
+	span: InertSpan,
+	img: InertImage,
+};
+
+/** Phrasing-only set for INLINE_markdown inside buttons: every block element becomes a span
+ *  (paragraphs, lists, quotes, headings, rules, code fences), so no <p>/<div> can land
+ *  inside a <button> or a <p>. Used with `Block` (no wrapper div) by InlineMarkdown. */
+function inlineTag(name: string) {
+	const C = (props: ComponentProps<"span"> & ExtraProps) => {
+		const { children, node, ...rest } = props as ComponentProps<"span"> & ExtraProps;
+		return (
+			<span data-streamdown={name} {...(rest as object)}>
+				{children}
+			</span>
+		);
+	};
+	C.displayName = `Inline(${name})`;
+	return C;
+}
+export const mdComponentsInline = {
+	...mdComponentsInert,
+	p: inlineTag("p"),
+	ul: inlineTag("ul"),
+	ol: inlineTag("ol"),
+	li: inlineTag("li"),
+	blockquote: inlineTag("blockquote"),
+	pre: inlineTag("pre"),
+	hr: inlineTag("hr"),
+	h1: inlineTag("h1"),
+	h2: inlineTag("h2"),
+	h3: inlineTag("h3"),
+	h4: inlineTag("h4"),
+	h5: inlineTag("h5"),
+	h6: inlineTag("h6"),
+	table: inlineTag("table"),
+	thead: inlineTag("thead"),
+	tbody: inlineTag("tbody"),
+	tr: inlineTag("tr"),
+	th: inlineTag("th"),
+	td: inlineTag("td"),
+	div: inlineTag("div"),
 };

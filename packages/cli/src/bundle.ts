@@ -473,7 +473,7 @@ export function stubBridgeSdkPlugin(): esbuild.Plugin {
     name: "stub-bridge-agent-sdk",
     setup(build) {
       build.onResolve({ filter: /^@anthropic-ai\/claude-agent-sdk$/ }, (args) =>
-        /[\\/]pi-claude-bridge[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
+        /[\\/]pi-claude-bridge(?:-stateless)?[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-sdk-stub" }, () => ({
         contents: 'export function query() { throw new Error("claude-bridge: the Agent SDK query function must be injected (queryFn)"); }',

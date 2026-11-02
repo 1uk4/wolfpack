@@ -7,13 +7,14 @@
 #   1. Creates the wolf's directory structure (den + runtime config dir)
 #   2. Installs the runtime (pi or claude)
 #   3. Creates and starts the systemd service
-#   4. Creates knowledge/base and librarian sync dirs if needed
+#   4. Creates any wolf_extra_dirs from the inventory
 #
 # Usage:
 #   ansible-playbook playbooks/add-wolf.yml --limit <wolf-name>
 #
-# The wolf's den content is synced from the Mac via Syncthing after this runs.
-# Bootstrap the Syncthing folders per docs/syncthing-librarian.md.
+# The den is backed up through Syncthing (folder den-<host>-<wolf>) until
+# feature H3GuSmC replaces it. The KB is NOT synced this way: it reaches the
+# wolf through the hub link (workerd + kb-sync mirror).
 
 - name: Add co-located wolf
   hosts: wolves
@@ -49,7 +50,7 @@
         group: "{{ wolf_user }}"
         force: false
 
-    - name: Create wolf-specific extra dirs (knowledge/base, librarian, etc.)
+    - name: Create wolf-specific extra dirs (from inventory wolf_extra_dirs)
       file:
         path: "{{ item }}"
         state: directory
@@ -138,6 +139,6 @@
           - "    runtime: {{ wolf_runtime | default('claude') }}"
           - ""
           - "    Next steps:"
-          - "    1. Set up Syncthing — see docs/syncthing-librarian.md"
-          - "    2. Den files will sync from the Mac once Syncthing is configured"
+          - "    1. Den backup, optional (until H3GuSmC): run `wolfpack sync {{ wolf_name }}`"
+          - "    2. The KB arrives through the hub link; no Syncthing KB folder to set up"
           - "    3. DM the bot to verify it's alive"

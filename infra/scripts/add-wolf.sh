@@ -23,7 +23,7 @@
 # There is no second copy of the den definition to drift.
 #
 # NOT done here (deliberate — these reach beyond this host):
-#   - Syncthing folder for the new den, and accepting it on the Mac
+#   - the den backup Syncthing folder (den-<host>-<wolf>), and accepting it on the Mac
 #   - Tailscale
 #   - inventory/hosts.yml and .env on the Mac
 # The script prints exactly what to add for each.
@@ -520,10 +520,11 @@ ${B}${NAME} is built.${R}  ${DIM}wolfpack status${R}
 
 ${B}Still to do — these reach past this host:${R}
 
-  ${CYA}1. Syncthing${R}  the den is not syncing to your Mac yet.
+  ${CYA}1. Den backup${R}  the den is not backed up to your Mac yet (Syncthing,
+     den backups only; the KB reaches the wolf through the hub link).
        wolfpack sync ${NAME}
-     That creates den-${NAME} here, ignores any shared kb-* corpora the den
-     symlinks, and prints exactly what to accept on the Mac.
+     That creates den-<host>-${NAME} here and prints exactly what to accept
+     on the Mac.
 
   ${CYA}2. The Mac's repo${R}  so a future ansible run knows about this wolf.
      inventory/hosts.yml, under the same host as its packmates:

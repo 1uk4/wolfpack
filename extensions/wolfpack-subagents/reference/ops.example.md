@@ -18,7 +18,7 @@ Pass this file's path in an investigator brief. Commands marked **[RO]** are rea
 Service/user/home names use the **id**, not the name: `wolf-<id>`.
 
 ## Local first (check before ssh) **[RO]**
-- Syncthing mirrors of VPS dens: `~/wolves/<host>/<wolf>/den/` e.g. `~/wolves/host-a/hal/den/`. Contains `session.sqlite` (+ `-wal`/`-shm`; open read-only, e.g. `sqlite3 -readonly`), `status.json`, `memory/`, `tasks/`, `kb/`, `usage/<YYYY-MM>.jsonl` (engine usage).
+- Den backups (Syncthing, den-backup only) of VPS dens: `~/wolves/<host>/<wolf>/den/` e.g. `~/wolves/host-a/hal/den/`. Contains `session.sqlite` (+ `-wal`/`-shm`; open read-only, e.g. `sqlite3 -readonly`), `status.json`, `memory/`, `tasks/`, `kb/`, `usage/<YYYY-MM>.jsonl` (engine usage).
 - Local wolf owner: `~/wolves/local/owner/{wolf.yaml,models.json,den/,agent/,logs/}`; den has `usage/`, `status.json`, `work-system.log`.
 - Mirror freshness: compare file mtimes (`ls -l`) with now; a stale mirror means sync is lagging, not that the wolf is idle.
 - CLI (local, talks to the agent API): `wolfpack list`, `wolfpack status`, `wolfpack logs <wolf> [--lines N] [--host host-a]` **[RO]** (do not use `--follow` unless bounded). `wolfpack restart|sync|launch|redeploy` change state — don't.
@@ -35,12 +35,12 @@ Service/user/home names use the **id**, not the name: `wolf-<id>`.
 - Unit `wolf-<id>.service` (runs `agent/launch.sh` as user `wolf-<id>`, env from `.env`).
 - `systemctl status wolf-<id> --no-pager -n 20`; `systemctl is-active wolf-<id>`
 - `journalctl -u wolf-<id> --since "1 hour ago" --no-pager -n 200` (also `-p err`, `--until`)
-- Agent API service: `wolfpack-agent` (`/opt/wolfpack-agent/wolfpack-agent.cjs`); `journalctl -u wolfpack-agent --since …`
+- Agent API service: `wolfpack-agent` (`/opt/wolfpack-agent/wolfpack-agent.cjs`; its env must set `WOLFPACK_KB_WRITER=1`: it writes the KB tree, so the worker-mirror write guard stays off there); `journalctl -u wolfpack-agent --since …`
 - Other services: `tailscaled`, `ollama` (KB embeddings). `systemctl list-units 'wolf*' --no-pager`.
 - `restart|stop|start|enable|disable|daemon-reload` change state — don't.
 
 ## Knowledge base on the VPS
-- `/var/wolfpack/kb/base` — curated KB (`domains/<domain>/entries`, `INDEX.md`, `_registry.md`); `/var/wolfpack/kb/ops` — Syncthing lanes: `inbox/<wolf>/` (contributions waiting for the next sweep), `parked/<wolf>/` (contributions that failed and need attention), `receipts/`, `rejected/`; `/var/wolfpack/kb/work` — work-item ledger. **[RO]** `ls`, `head`.
+- `/var/wolfpack/kb/base` — curated KB (`domains/<domain>/entries`, `INDEX.md`, `_registry.md`); `/var/wolfpack/kb/ops` — ops lanes (hub link, not Syncthing): `inbox/<wolf>/` (contributions waiting for the next sweep), `parked/<wolf>/` (contributions that failed and need attention), `receipts/`, `rejected/`; `/var/wolfpack/kb/work` — work-item ledger. **[RO]** `ls`, `head`.
 - KB admin CLI `/opt/wolfpack-kb/cli.cjs`, run as the librarian's user (dewey = `wolf-def456`) with its env:
   `sudo -u wolf-def456 bash -c 'node /opt/wolfpack-kb/cli.cjs status'` **[RO]** (health dashboard, lists parked items; needs the wolf's env vars exported from its `.env` — the local `wolfpack kb status` does this for you and is preferred).
   `... cli.cjs unpark --list` **[RO]**; `unpark <wolf>/<file>|--all` moves parked items back to the inbox (state change — don't). `sweep`, `reorg`, `rebuild`, `reindex`, `retire` change state — don't.

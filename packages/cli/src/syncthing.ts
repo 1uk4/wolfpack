@@ -116,8 +116,10 @@ export class SyncthingRest {
     await this.req("PUT", `/rest/config/folders/${folder.id}`, folder);
   }
 
-  async listFolders(): Promise<Array<{ id: string }>> {
-    return (await this.req("GET", "/rest/config/folders")) as Array<{ id: string }>;
+  async listFolders(): Promise<Array<{ id: string; path?: string; type?: string; devices?: Array<{ deviceID: string }> }>> {
+    return (await this.req("GET", "/rest/config/folders")) as Array<{
+      id: string; path?: string; type?: string; devices?: Array<{ deviceID: string }>;
+    }>;
   }
 
   async listDevices(): Promise<Array<{ deviceID: string }>> {

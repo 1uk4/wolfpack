@@ -1,0 +1,33 @@
+{
+  "name": "@wolfpack/hubd",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build && node -e \"import('node:fs').then(f=>f.chmodSync('dist/cli.js',0o755))\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/hubd\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/hubd/src"
+  },
+  "dependencies": {
+    "@wolfpack/engine": "*",
+    "@wolfpack/kb": "*",
+    "@wolfpack/memory": "*",
+    "@wolfpack/protocol": "*",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "~8.22.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.7.0"
+  },
+  "bin": {
+    "hubd": "dist/cli.js"
+  }
+}

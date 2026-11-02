@@ -19,6 +19,7 @@
     "esbuild": "^0.28.0",
     "@wolfpack/agents": "*",
     "@wolfpack/engine": "*",
+    "@wolfpack/kb": "*",
     "@earendil-works/pi-ai": "^1.1.0"
   },
   "devDependencies": {

@@ -1,0 +1,60 @@
+# workerd (link-and-KB-sync only) on sfo-01. Installed by deploy/workerd/setup.sh (it substitutes @NODE@).
+# It supervises NO wolves: Hal runs from his own unit. Runs as the dedicated user "workerd"; needs no access to /home.
+[Unit]
+Description=Wolfpack workerd (hub link + KB sync only)
+Documentation=file:///opt/wolfpack-workerd/current/RUNBOOK.md
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+ConditionPathExists=/var/lib/workerd/hub.json
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=workerd
+Group=workerd
+# Root-owned, mode 600; systemd reads it as root before dropping privileges.
+EnvironmentFile=/etc/wolfpack/workerd.env
+# Guards ($$ is a literal $): link-only on, a wolf to announce, feed off, loopback bind, port numeric 1024-65535 and not 3141/3150/7141.
+ExecStartPre=/bin/bash -c '[[ "$${WORKERD_LINK_ONLY}" == 1 && -n "$${WORKERD_ANNOUNCE}" && "$${WORKERD_FEED}" == 0 && "$${WORKERD_KB_LAYOUT}" == base && -n "$${WORKERD_CONFIG_DIR}" && -n "$${HOME}" ]] || { echo "workerd.env must set WORKERD_LINK_ONLY=1, WORKERD_ANNOUNCE, WORKERD_FEED=0 and WORKERD_KB_LAYOUT=base, WORKERD_CONFIG_DIR and HOME" >&2; exit 1; }; [[ "$${WORKERD_HOST}" == 127.0.0.1 ]] || { echo "WORKERD_HOST must be 127.0.0.1" >&2; exit 1; }; [[ "$${WORKERD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${WORKERD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 && p != 3150 && p != 7141 )) || { echo "bad WORKERD_PORT=$${WORKERD_PORT}" >&2; exit 1; }'
+ExecStart=@NODE@ /opt/wolfpack-workerd/current/workerd.mjs --link-only --host ${WORKERD_HOST} --port ${WORKERD_PORT}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+
+# State: /var/lib/workerd (hub.json, outbox, ops), private 0700 / files 0600 under UMask=0077.
+# The hub KB mirror is NOT in there: it is /var/lib/workerd-kb (WORKERD_KB_MIRROR_DIR), workerd:wolfpack-kb 0750 (no setgid: RestrictSUIDSGID=yes; workerd chowns files to the dir's group itself), created by setup.sh, so Hal can read it
+# via the group. It is a ReadWritePaths entry rather than a second StateDirectory= because StateDirectoryMode= is one value for every
+# StateDirectory entry (it would force 0700 on the shared dir, or loosen hub.json's); with ReadWritePaths the dir keeps the owner/mode setup.sh gave it.
+StateDirectory=workerd
+StateDirectoryMode=0700
+
+# Hardening. /home is invisible; the only writable paths are /var/lib/workerd and /var/lib/workerd-kb.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/workerd /var/lib/workerd-kb
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# AF_NETLINK is required: os.networkInterfaces() (wake.ts polls it) crashes node without it (confirmed on sfo-01).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# node's JIT needs W+X pages, so MemoryDenyWriteExecute stays off.
+
+[Install]
+WantedBy=multi-user.target

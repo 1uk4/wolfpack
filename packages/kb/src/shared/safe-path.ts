@@ -1,5 +1,5 @@
 /**
- * Safe path segments — contribution frontmatter arrives over Syncthing from
+ * Safe path segments — contribution frontmatter arrives over the hub link from
  * other wolves, so anything taken from it must be validated before it is
  * joined into a path.
  */

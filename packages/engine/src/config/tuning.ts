@@ -296,6 +296,44 @@ export const SECTION_TREE = {
    */
   rootCountFactor: 0.8,
 
+  // ── Shared tree rules (rebuild now, incremental repair later) ─────────
+  rules: {
+    /** Soft target range of children/entries per node (not enforced). */
+    softMin: 5,
+    softMax: 8,
+    /** A section is only considered for a split above this many entries. */
+    splitAbove: 10,
+    /** Every split group needs at least this many entries. */
+    minGroup: 3,
+    /** Candidate k range for a split (widened for large n, see maxKFor). */
+    kMin: 2,
+    kMax: 5,
+    /** k-means++ restarts. */
+    nInit: 20,
+    /** Permutation-null replicates and the p-value a split must beat. */
+    nullReplicates: 100,
+    nullAlpha: 0.05,
+    /** Seed/bootstrap stability: mean ARI between re-clusterings must reach this. */
+    minAri: 0.7,
+    stabilityRuns: 60,
+    /** An entry whose silhouette is below this is a leftover (stays in the parent). */
+    leftoverSilhouette: 0,
+    /** A move needs the best other section to beat the own (leave-one-out) one by this much. */
+    misplacedMargin: 0.05,
+    /** LLM-proposed split: a category survives with at least this share of leave-one-out-coherent members (and >= minGroup of them). */
+    llmMinCoherence: 0.7,
+    /** At most this many categories are taken from one LLM answer (the prompt asks for 2-5); further ones are ignored and their members become leftovers. */
+    llmMaxCategories: 5,
+    /** Child label restating the parent: token Jaccard at or above this. */
+    restateJaccard: 0.6,
+    /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */
+    reuseJaccard: 0.5,
+    /** ...and also keeps its title and summary at or above this; between the two it keeps the id and is re-named. */
+    reuseKeepLabelJaccard: 0.7,
+    /** Fixed base seed (combined with a hash of the member ids). */
+    seed: 1337,
+  },
+
 } as const;
 
 /**

@@ -380,6 +380,9 @@ cmd_sync() {
   local script="$REPO/scripts/sync-wolf.sh"
   [ -x "$script" ] || die "sync script not found at $script"
   need_root sync "$@"
+  # Single source for the host part of den-<host>-<wolf-id>: the short hostname,
+  # the same value the syncthing Ansible role uses (override via WOLF_HOST).
+  export WOLF_HOST="${WOLF_HOST:-$(hostname -s)}"
   exec "$script" "$@"
 }
 

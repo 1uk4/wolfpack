@@ -12,16 +12,15 @@
  * Subscription edits the wolf's own `domains: []` — the same list surfaced in
  * `wolfpack status` and pickable at `wolfpack add wolf`.
  *
- * This arm is the ONLY writer of ~/.wolfpack/domains.yaml. Provisioning the KB
- * base folders + Syncthing mirrors happens on deploy/sync (ensureKbMirror),
- * never by hand — so `domain add` records intent and scaffolds the hub copy;
- * `wolfpack sync` / redeploy makes it live on Dewey + subscribers.
+ * This arm is the ONLY writer of ~/.wolfpack/domains.yaml. `domain add` records
+ * intent and scaffolds the hub copy; `wolfpack sync` / redeploy makes it live
+ * on Dewey + subscribers.
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
-import { loadConfig, getHost, localHostDir, localWolfDir, kbBaseDir } from "../config.js";
+import { loadConfig, getHost, localHostDir, localWolfDir, kbWriteBaseDir } from "../config.js";
 import { AgentClient } from "../agent-client.js";
 import {
   loadRegistry,
@@ -34,6 +33,8 @@ import {
   today,
   type DomainEntry,
 } from "../domains.js";
+import { assertNotHubMirror } from "@wolfpack/kb/shared";
+import { hubFromEnv, redactUrl, getDomainOnHub, scrubHub, registerDomainOnHub, removeDomainOnHub } from "../hub-registry.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { c } from "../render.js";
 import { prompt, confirm, multiSelect } from "../prompts.js";
@@ -90,7 +91,7 @@ function subscribersOf(domain: string): string[] {
 
 /** Count curated entries for a domain in the local KB-base mirror (best effort). */
 function entryCount(domain: string): number | null {
-  const dir = path.join(kbBaseDir(loadConfig()), "domains", domain, "entries");
+  const dir = path.join(kbWriteBaseDir(loadConfig()), "domains", domain, "entries");
   try {
     return fs.readdirSync(dir).filter((f) => f.endsWith(".md")).length;
   } catch {
@@ -168,7 +169,9 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   assertValidDomainName(name);
 
   const reg = loadRegistry();
-  if (domainExists(reg, name)) {
+  const hub = hubFromEnv();
+  // With a hub, a re-run is allowed: the hub's 409 ("already registered") decides, and the local registry is brought in line.
+  if (!hub && domainExists(reg, name)) {
     console.error(c.red(`Domain "${name}" already exists.`));
     process.exit(1);
   }
@@ -186,19 +189,43 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   console.log(c.dim(`  label:       ${label}`));
   console.log(c.dim(`  description: ${description || "(none)"}`));
   console.log(c.dim(`  registry:    ${registryPath()}`));
-  console.log(c.dim(`  scaffolds:   ${path.join(kbBaseDir(loadConfig()), "domains", name)}/`));
+  if (hub) console.log(c.dim(`  hub:         ${redactUrl(hub.baseUrl)} (the hub creates the domain folder)`));
+  else console.log(c.dim(`  scaffolds:   ${path.join(kbWriteBaseDir(loadConfig()), "domains", name)}/`));
   if (!opts.yes && !(await confirm("Proceed?", true))) {
     console.log(c.dim("Aborted \u2014 no changes made."));
     return;
   }
 
   const entry: DomainEntry = { label, description, created: today() };
+  let hubResult: "created" | "exists" | undefined;
+  if (hub) {
+    // The hub owns the KB tree: register there; never scaffold into this machine's (read-only mirror) KB path.
+    try {
+      hubResult = await registerDomainOnHub(hub, { name, label, description, created: entry.created });
+    } catch (err) {
+      console.error(c.red(`✗ ${scrubHub(hub, redactUrl(err instanceof Error ? err.message : String(err)))}`));
+      process.exit(1);
+    }
+  }
   reg.domains[name] = entry;
   saveRegistry(reg);
 
+  if (hub) {
+    if (hubResult === "exists") {
+      const theirs = await getDomainOnHub(hub, name);
+      if (theirs && ((theirs.label ?? name) !== label || (theirs.description ?? "") !== description)) {
+        console.log(c.yellow(`  note: the hub has label "${theirs.label ?? name}" / description "${theirs.description ?? ""}"; yours differ and were not applied.`));
+      }
+    }
+    console.log(hubResult === "exists" ? c.yellow(`· Domain "${name}" is already registered on the hub`) : c.green(`✓ Declared domain "${name}" on the hub`));
+    console.log(c.dim("  Local scaffold skipped: the hub creates the domain folder."));
+    await offerSubscription(name, opts);
+    return;
+  }
+
   // Scaffold the hub-side KB base folder so the domain is immediately visible
-  // to `domain list` and ready to mirror. Authoritative provisioning (Dewey
-  // host + Syncthing folder) happens on deploy/sync.
+  // to `domain list`. Authoritative provisioning (Dewey host) happens on
+  // deploy/sync; the hub link distributes the KB.
   scaffoldDomainFolder(name, entry);
 
   console.log(c.green(`✓ Declared domain "${name}"`));
@@ -222,7 +249,7 @@ async function pushRegistry(): Promise<void> {
 /** Post-declare hook: offer the picker unless non-interactive. */
 async function offerSubscription(domain: string, opts: DomainOpts): Promise<void> {
   if (opts.yes || !process.stdin.isTTY) {
-    console.log(c.yellow(`  Next: wolfpack domain subscribe <wolf> ${domain}, then wolfpack mesh.`));
+    console.log(c.yellow(`  Next: wolfpack domain subscribe <wolf> ${domain}.`));
     return;
   }
   await manageDomainSubscribers(domain);
@@ -262,7 +289,7 @@ export async function manageDomainSubscribers(domain: string): Promise<void> {
   for (const w of toAdd) await applySubscription(w, domain, true);
   for (const w of toRemove) await applySubscription(w, domain, false);
   if (toAdd.length || toRemove.length) {
-    console.log(c.yellow("  Run `wolfpack mesh` to wire the Syncthing mirror."));
+    console.log(c.yellow("  Deploy/sync to apply the subscription change."));
   } else {
     console.log(c.dim("  No subscription changes."));
   }
@@ -338,13 +365,10 @@ async function applySubscription(w: SubscribableWolf, domain: string, add: boole
 }
 
 function scaffoldDomainFolder(name: string, entry: DomainEntry): void {
-  const base = kbBaseDir(loadConfig());
+  const base = kbWriteBaseDir(loadConfig());
   const domainDir = path.join(base, "domains", name);
+  assertNotHubMirror(domainDir);
   fs.mkdirSync(path.join(domainDir, "entries"), { recursive: true });
-  // Syncthing marker: without `.stfolder` the mirror errors "folder marker
-  // missing" and syncs nothing. Scaffold it now so the domain is sync-ready the
-  // moment `wolfpack mesh` wires the folder (mesh also ensures this, belt-and-braces).
-  fs.mkdirSync(path.join(domainDir, ".stfolder"), { recursive: true });
   const metaPath = path.join(domainDir, "meta.yaml");
   if (!fs.existsSync(metaPath)) fs.writeFileSync(metaPath, renderDomainMeta(name, entry));
   const indexPath = path.join(domainDir, "INDEX.md");
@@ -416,18 +440,35 @@ async function domainRm(name: string | undefined, opts: DomainOpts): Promise<voi
     return;
   }
 
+  const hub = hubFromEnv();
+  let hubResult: "removed" | "absent" | undefined;
+  if (hub) {
+    try {
+      hubResult = await removeDomainOnHub(hub, name);
+    } catch (err) {
+      console.error(c.red(`✗ ${scrubHub(hub, redactUrl(err instanceof Error ? err.message : String(err)))}`));
+      process.exit(1);
+    }
+  }
   delete reg.domains[name];
   saveRegistry(reg);
+  if (hub) {
+    if (hubResult === "absent") console.log(c.yellow(`· The hub does not know "${name}" (already removed); cleared the local declaration.`));
+    else console.log(c.green(`✓ Removed domain declaration "${name}" on the hub`));
+    console.log(c.dim("  KB base domains.yaml not touched: the hub owns it."));
+    return;
+  }
   await pushRegistry();
   // Refresh the deployed registry copy; leave the KB folder on disk for audit.
   try {
-    const base = kbBaseDir(loadConfig());
+    const base = kbWriteBaseDir(loadConfig());
+    assertNotHubMirror(path.join(base, "domains.yaml"));
     if (fs.existsSync(base)) fs.writeFileSync(path.join(base, "domains.yaml"), yamlStringify(reg));
   } catch {
     /* hub not present */
   }
   console.log(c.green(`✓ Removed domain declaration "${name}"`));
-  console.log(c.yellow("  Deploy/sync to drop the Syncthing mirror from subscribers."));
+  console.log(c.yellow("  Deploy/sync to apply the change to subscribers."));
 }
 
 async function domainSubscribe(

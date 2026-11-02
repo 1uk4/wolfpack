@@ -20,6 +20,7 @@
  */
 
 import type { ConsoleClient } from "@wolfpack/client";
+import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
@@ -38,6 +39,7 @@ const STATUS_BY_CODE: Record<string, number> = {
 	thread_closed: 409,
 	not_ready: 409,
 	preview_stale: 409,
+	conflict: 409,
 };
 
 export const PING_INTERVAL_MS = 25_000;
@@ -64,7 +66,9 @@ function failure(err: unknown): Response {
 		}
 		if (err.name === "ProtocolError") {
 			const code = (err as Error & { code?: string }).code ?? "engine_error";
-			return json({ error: err.message, code }, STATUS_BY_CODE[code] ?? 502);
+			// A hub-auth 401 (HubAuthError) is marked so the browser signs out; other 401s (a wolf host) are not its token's fault.
+			const hubAuth = (err as Error & { hubAuth?: boolean }).hubAuth === true;
+			return Response.json({ error: err.message, code }, { status: STATUS_BY_CODE[code] ?? 502, ...(hubAuth ? { headers: { [HUB_AUTH_HEADER]: "required" } } : {}) });
 		}
 		console.error("[memory-api] unexpected error:", err);
 	}
@@ -233,6 +237,10 @@ export function createMemoryApi(source: ClientSource) {
 		 * FIRST_PULL_MS: an immediate failure becomes the mapped non-200 response (the browser's hub backs
 		 * off on it); a quiet stream proceeds as a 200. A mid-stream error is a terminal `event: error`
 		 * frame carrying `{code, message}`, then the stream closes.
+		 *
+		 * HUB AUTH: this stream (and /api/events) is read by EventSource, which cannot send a bearer header, and it talks to the
+		 * WOLF host only (watchMemory), never the hub. Do NOT add a hub call here: it would have no browser token. Hub reads go
+		 * through requestScopedWork, which rejects (401) without a forwarded token; a hub stream needs fetch-based streaming.
 		 */
 		async events(wolf: string, req: Request): Promise<Response> {
 			if (req.signal?.aborted) return new Response(null, { status: 204 });

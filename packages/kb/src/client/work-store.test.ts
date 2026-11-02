@@ -10,6 +10,7 @@ import {
   appendWorkLedger,
   readWorkLedger,
   loadWorkState,
+  withLedgerAttribution,
 } from "./work-store.js";
 import { WorkId, WolfId, type WorkItem, type WorkEvent } from "../schema/work.js";
 import { DomainId, Slug, IsoDate } from "../schema/knowledge.js";
@@ -167,5 +168,36 @@ describe("generated log section", () => {
     const twice = readFileSync(resolveWorkItem(roots, item.domain, item.id)!.filePath, "utf8");
     expect(twice).toBe(once);
     expect(once.match(/^## Log$/gm)).toHaveLength(1);
+  });
+});
+
+describe("ledger attribution at append time", () => {
+  it("merges by/tokenId/hostId into each event in the single append, never over an existing field, and never rewrites", () => {
+    const roots = makeRoots();
+    const id = WorkId.parse("work-snapjack-Ft00002");
+    appendWorkLedger(roots, [{ type: "work.noted", id, at: "2026-01-01", text: "before" }]);
+    const file = join(roots.denLocal, "ledger", "work-events.jsonl");
+    const before = readFileSync(file, "utf8");
+    withLedgerAttribution({ by: "host-a", tokenId: "tok1", hostId: "h1" }, () => {
+      appendWorkLedger(roots, [
+        { type: "work.noted", id, at: "2026-01-02", text: "x" },
+        { type: "work.noted", id, at: "2026-01-03", text: "y", by: "keeps-own" },
+      ]);
+    });
+    const after = readFileSync(file, "utf8");
+    expect(after.startsWith(before)).toBe(true); // earlier bytes untouched: append only
+    const lines = after.slice(before.length).trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines[0]).toMatchObject({ by: "host-a", tokenId: "tok1", hostId: "h1" });
+    expect(lines[1]).toMatchObject({ by: "keeps-own", tokenId: "tok1", hostId: "h1" });
+    expect(JSON.parse(before.trim())).not.toHaveProperty("by");
+    // outside the scope nothing is stamped
+    appendWorkLedger(roots, [{ type: "work.noted", id, at: "2026-01-04", text: "z" }]);
+    expect(readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1)).not.toHaveProperty("by");
+  });
+});
+
+describe("withLedgerAttribution is sync-only", () => {
+  it("throws when fn returns a thenable", () => {
+    expect(() => withLedgerAttribution({ by: "x" }, (() => Promise.resolve(1)) as () => unknown)).toThrow(/synchronous/);
   });
 });

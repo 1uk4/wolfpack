@@ -113,7 +113,13 @@ Normative serving semantics (implemented by the stub, asserted by the contract):
   ```
 - Every error is an `ErrorEnvelope` with the `ERROR_HTTP_STATUS` status. `X-Protocol-Version` differing from `PROTOCOL_VERSION` -> 426 `version_mismatch`; absent is accepted.
 
-Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?})`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
+### Hub routes (hubd) and the actor
+
+Routes with `scope: "hub"` in `ROUTES` are served by hubd, the pack authority, not by a wolf host: `GET /v1/work?domain=[&graduated=true]` and `GET /v1/work/:id/record` (same response shapes as the wolf-scoped `listWork` / `getWorkRecord`). A hub requires `Authorization: Bearer <device token>` (401 `unauthorized` otherwise); there is no API key.
+
+The acting identity is the bearer token's: an operator/console token acts as the operator, a worker token acts as its host and may act for any active wolf the registry places on that host. A client cannot assert an actor (the former `X-Wolfpack-Actor` header is removed and ignored). Owner-only operations require an operator token (403 `forbidden` otherwise). `system` is reserved for the hub's own internal jobs.
+
+Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?, wolfRuntime?, headers?})` (`wolfRuntime: false` skips the wolf-runtime groups, for hubd) and `runHubSuite`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
 
 ## Stepped and conditional cards
 
@@ -164,3 +170,18 @@ Where it appears: `ThreadToolCall.closed` (history; absent while pending), `card
 Older clients keep working: `ThreadToolCall.dismissed: true` is still set for BOTH skipped and superseded, and `card-settled.outcome`
 stays `"answered" | "dismissed"` (`dismissed` for both). A skipped call's `result` is `(skipped by the user)` and has no `answer`.
 Skipping a card that is unknown, already closed, or held by a running turn is 404 `not_found` / 409 `busy`, as for answering.
+
+## Console relay (link frames, additive)
+
+The hub tunnels any wolf-scoped `/v1` request (`/v1/wolves/:name/*`, `/v1/threads/:id/*`) from a console/browser token to the host that owns the wolf, over that host's `GET /v1/link` socket. The route's wolf (`wolfForRoute`) is resolved to a host through the registry.
+
+- `req {id:"h-<n>", method, path, headers, wolf, body?}` (hub → worker; `body` is base64, ≤ `LINK_RELAY_MAX_BODY`). Credentials (`Authorization`, cookies) are never forwarded.
+- `res {id, status, headers}` then `chunk {id, seq, data, enc:"b64"}`* (each ≤ `LINK_RELAY_CHUNK_BYTES` raw) then `end {id}`; or `rerr {id, code, message?}` (worker → hub).
+- `cancel {id}` (hub → worker): the HTTP client went away. If the link drops, the hub fails every in-flight request of that link (503 before the head, a destroyed stream after) and the worker aborts its local requests.
+- A host that is not `online` fails at once with 503 `engine_error` (retryable), `details.presence` = `asleep` | `offline`; nothing is queued. No `res` within `LINK_RELAY_HEAD_TIMEOUT_MS` is 504 + `cancel`.
+- Auth: console/browser tokens (and the legacy key) may relay; a worker token gets 403 `forbidden`. A worker can only answer request ids opened on its own link.
+- Safety: only origin-form paths cross the link (the hub forwards `pathname+search` of the routed URL, never the raw request target; the worker rejects `//host`, absolute URLs and anything leaving its own origin with `rerr`, and takes host/port only from its own base URL). Response `set-cookie` and `access-control-*` and hop-by-hop headers are dropped on both sides. Chunks are ≤ `LINK_RELAY_CHUNK_BYTES` decoded; a client that makes no progress for 30 s is cut off (see Flow control for the caps).
+- **Flow control:** `pause {id}` / `resume {id}` (hub → worker, additive). The hub sends `pause` once when a client's response has more than `LINK_RELAY_PAUSE_HIGH` (256 KB) queued and `resume` when it has drained (the response's `drain`), one resume per paused state. A worker pauses/resumes reading the local response, so no chunks flow while the client is slow. A worker that ignores them (older worker) is safe: unknown frames are dropped, and the hub still cuts the request off at the hard cap (`PAUSE_HIGH + LINK_RELAY_HARD_SLACK` = 16.25 MB queued per request, `LINK_RELAY_HOST_BUFFERED` = 32 MB per host; the slack covers data already in flight when `pause` is sent, which is several MB on a fast link). The 30 s no-drain timer measures socket progress, so a paused, slowly draining client is never cut; it fires only when no bytes move for 30 s.
+- **Known limit:** request bodies are capped at 2 MB (`LINK_RELAY_MAX_BODY`, 400 `invalid_request` above it); uploads are not chunked on the link, so attachment uploads through the relay are limited to 2 MB.
+- Client: `HttpConsoleClient` option `hub: {…, relay: true}` sends every route to the hub. Console: relay is the DEFAULT when a hub URL and a token are configured and there is no `WOLFPACK_API_URL`; `WOLFPACK_HUB_RELAY=0` turns it off, `=1` forces it.
+- `GET /v1/wolves` on the hub lists the registry's non-retired wolves (`online` when the host's link is online, else `offline`); a worker token sees only its own host's wolves.

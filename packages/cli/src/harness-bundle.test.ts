@@ -92,3 +92,40 @@ describe("smokeStartBundle expectBridge", () => {
     }
   });
 });
+
+describe("the real bundle is VPS-safe (no repo node_modules, no global SDK)", () => {
+  const table = resolveModelTable({
+    pack: { main: { model: "claude-sonnet-5-5" }, smart: { model: "claude-sonnet-5-5" }, fast: { model: "claude-haiku-5-5" }, transport: { local: "subscription", vps: "subscription" } },
+    location: "vps",
+  });
+
+  it("has no top-level require of the Agent SDK, and starts in isolation", async () => {
+    const built = await buildHarnessBundle({ name: "smokey", role: "tester", extensions: [], models: table }, "abc123");
+    try {
+      const src = fs.readFileSync(built.harnessPath, "utf8");
+      expect(src).not.toMatch(/require\(["']@anthropic-ai\/claude-agent-sdk["']\)/);
+      const r = await smokeStartBundle(built, { expectBridge: true });
+      expect(r.output).not.toContain("Cannot find module");
+      expect(r.ok).toBe(true);
+    } finally {
+      fs.rmSync(built.tmpDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("the smoke fails when the bundle requires an external a VPS cannot resolve", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smoke-iso-"));
+    try {
+      const f = path.join(dir, "harness.cjs");
+      // The Agent SDK is installed in the repo's node_modules here, yet must not resolve from the isolated copy.
+      fs.writeFileSync(f, 'require("@anthropic-ai/claude-agent-sdk"); console.log("ok");');
+      const r = await smokeCheckBundle(f);
+      expect(r.ok).toBe(false);
+      expect(r.output).toContain("Cannot find module");
+      // grammy is provided the way the VPS does (agent/node_modules).
+      fs.writeFileSync(f, 'require("grammy"); console.log("ok");');
+      expect((await smokeCheckBundle(f)).ok).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

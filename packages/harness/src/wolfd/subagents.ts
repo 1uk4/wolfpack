@@ -285,6 +285,7 @@ export class SubagentManager {
       agent: r.agent,
       state: r.state,
       startedAt: r.startedAt,
+      ...(r.runStartedAt ? { runStartedAt: r.runStartedAt } : {}),
       ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
       ...(r.step ? { step: r.step } : {}),
       tokens: r.tokens,

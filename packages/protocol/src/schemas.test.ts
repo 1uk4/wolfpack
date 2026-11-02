@@ -97,6 +97,10 @@ describe("resources", () => {
   it("ThreadSummary", () => {
     expect(ThreadSummarySchema.parse(summary)).toEqual(summary);
     expect(ThreadSummarySchema.parse({ ...summary, boundWorkItem: "work-x" }).boundWorkItem).toBe("work-x");
+    // additive turn timers: optional, kept when present, absent from an older server
+    expect(ThreadSummarySchema.parse(summary).turnStartedAt).toBeUndefined();
+    const t = "2026-10-27T12:00:00.000Z";
+    expect(ThreadSummarySchema.parse({ ...summary, turnStartedAt: t, runStartedAt: t })).toMatchObject({ turnStartedAt: t, runStartedAt: t });
     expect(ThreadSummarySchema.safeParse({ ...summary, kind: "group" }).success).toBe(false);
   });
   it("ThreadMessage", () => {

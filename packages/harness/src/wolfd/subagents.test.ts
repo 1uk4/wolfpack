@@ -232,6 +232,37 @@ describe("resume", () => {
     expect((await texts(tw, child.id)).filter((t) => t.startsWith("CHILD_RESULT"))).toHaveLength(2);
   });
 
+  it("the summary carries runStartedAt, reset on resume while startedAt stays", async () => {
+    const agents = scriptedAgents();
+    tw = await boot(agents);
+    await say(tw, "spawn: first job");
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    const [first] = await kids(tw);
+    expect(first.runStartedAt).toBe(first.startedAt);
+    await new Promise((r) => setTimeout(r, 20));
+    await say(tw, "message[tester]: now the second job");
+    await parentSaw(tw, 'Sub-agent "tester" completed', 2);
+    const [again] = await kids(tw);
+    expect(again.startedAt).toBe(first.startedAt);
+    expect(Date.parse(again.runStartedAt!)).toBeGreaterThan(Date.parse(first.startedAt!));
+  });
+
+  it("the parent's thread carries turnStartedAt only while a turn runs", async () => {
+    let openParent!: () => void;
+    const parentGate = new Promise<void>((r) => (openParent = r));
+    tw = await boot(scriptedAgents({ parentGate }));
+    expect((await tw.client.getThread(tw.home)).turnStartedAt).toBeUndefined();
+    await tw.client.submit(tw.home, "slowcard", { whenBusy: "reject" });
+    const busy = await tw.client.getThread(tw.home);
+    expect(busy.busy).toBe(true);
+    expect(Number.isNaN(Date.parse(busy.turnStartedAt!))).toBe(false);
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await tw.client.getThread(tw.home)).turnStartedAt).toBe(busy.turnStartedAt); // stable within the turn
+    openParent();
+    await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).busy).toBe(false));
+    await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).turnStartedAt).toBeUndefined());
+  });
+
   it("the operator can type into a child: it resumes, and the parent learns of the new result", async () => {
     const agents = scriptedAgents();
     tw = await boot(agents);

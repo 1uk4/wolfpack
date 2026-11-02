@@ -89,7 +89,7 @@ export class ThreadRuntime {
   readonly cards: CardTracker;
   private seq = 0;
   private buffer: ThreadEvent[] = [];
-  private running: { turnId: string } | null = null;
+  private running: { turnId: string; startedAt: string } | null = null;
   private turnStarts = 0;
   private messages: ThreadMessage[] = [];
   private queuedInputs = new Set<number>();
@@ -391,7 +391,7 @@ export class ThreadRuntime {
       const partial = textOf(snap.generation?.message);
       if (partial) this.emit({ type: "text-delta", turnId, text: partial });
     } else {
-      this.running = { turnId };
+      this.running = { turnId, startedAt: this.running?.turnId === turnId ? this.running.startedAt : new Date().toISOString() };
     }
     // A tool still executing in the snapshot (reattach / resync) must not look like model silence.
     this.toolsInFlight = new Set(((snap as unknown as { tools?: Array<{ callId: string; status?: string }> }).tools ?? []).filter((t) => t.status !== "done").map((t) => t.callId));
@@ -495,7 +495,7 @@ export class ThreadRuntime {
   private emit(draft: ThreadEventDraft): void {
     if (draft.type === "turn-start") {
       this.buffer = [];
-      this.running = { turnId: draft.turnId };
+      this.running = { turnId: draft.turnId, startedAt: new Date().toISOString() };
       this.turnStarts++;
       this.lastActivity = Date.now();
       this.toolsInFlight.clear();
@@ -551,7 +551,7 @@ export class ThreadRuntime {
   }
 
   threadSummary(): ThreadSummary {
-    return { ...this.summary, status: this.status(), ...this.boundItemField(), ...(this.isChild ? {} : { settings: this.settings }) };
+    return { ...this.summary, status: this.status(), ...(this.running ? { turnStartedAt: this.running.startedAt } : {}), ...this.boundItemField(), ...(this.isChild ? {} : { settings: this.settings }) };
   }
 
   // --- feature progress: bound item ---

@@ -355,6 +355,7 @@ export function threadListItem(
 		...(thread.state !== undefined ? { state: thread.state } : {}),
 		...(thread.queuePosition !== undefined ? { queuePosition: thread.queuePosition } : {}),
 		...(thread.startedAt !== undefined ? { startedAt: thread.startedAt } : {}),
+		...(thread.runStartedAt !== undefined ? { runStartedAt: thread.runStartedAt } : {}),
 		...(thread.finishedAt !== undefined ? { finishedAt: thread.finishedAt } : {}),
 		...(thread.step !== undefined ? { step: thread.step } : {}),
 		...(thread.tokens !== undefined ? { tokens: thread.tokens } : {}),

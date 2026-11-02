@@ -28,6 +28,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				threadId={thread.id}
 				title={threadLabel(name, thread)}
 				workspace={thread.workspace}
+				initialTurnStartedAt={thread.turnStartedAt}
 				initialMessages={withHistoryAttachments(threadMessagesToNative(thread.messages), thread.messages)}
 				initialHasMore={thread.hasMore}
 				initiallyInFlight={thread.busy}

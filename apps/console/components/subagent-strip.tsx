@@ -8,7 +8,7 @@ import { useSubagentModal } from "@/components/subagent-modal";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
 import { formatTokens } from "@/components/usage-format";
-import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, partitionChildren, stateLabel, threadSlug, upsertChild, type ChildThread } from "@/src/core";
+import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, partitionChildren, separateTurnMs, stateLabel, threadSlug, upsertChild, type ChildThread } from "@/src/core";
 
 /** A strip row's height, for the composer reserve (see ThreadChat). */
 export const STRIP_ROW_PX = 28;
@@ -92,7 +92,7 @@ export function SubagentStripView({
 						<span data-testid="subagent-title" className="min-w-0 flex-1 truncate font-prose">{c.title}</span>
 						{c.step && c.state === "running" && <span data-testid="subagent-step" className="max-w-40 truncate text-muted-foreground">{c.step}</span>}
 						<span data-testid="subagent-state" className={cn("shrink-0", c.state === "failed" ? "text-destructive" : "text-muted-foreground")}>{stateLabel(c)}</span>
-						<span data-testid="subagent-elapsed" className="w-14 shrink-0 text-right tabular-nums text-muted-foreground">{c.startedAt ? formatChildElapsed(elapsedMs(c, now)) : "—"}</span>
+						<ElapsedCell c={c} now={now} />
 						<span data-testid="subagent-tokens" className="w-12 shrink-0 text-right tabular-nums text-muted-foreground">{c.tokens === undefined ? "—" : formatTokens(c.tokens)}</span>
 					</button>
 					{canStop(c) && (
@@ -140,5 +140,18 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: strin
 				</div>
 			)}
 		</>
+	);
+}
+
+/** The strip's time cell: `turn 1m 12s · 14m` after a resume (turn first, the total muted), else the single total as before. */
+function ElapsedCell({ c, now }: { c: ChildThread; now: number }) {
+	const total = c.startedAt ? formatChildElapsed(elapsedMs(c, now)) : "—";
+	const turn = separateTurnMs(c, now);
+	if (turn === undefined) return <span data-testid="subagent-elapsed" className="w-14 shrink-0 text-right tabular-nums text-muted-foreground">{total}</span>;
+	return (
+		<span data-testid="subagent-elapsed" title={`turn ${formatChildElapsed(turn)} · total ${total}`} className="shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
+			<span data-testid="subagent-elapsed-turn">turn {formatChildElapsed(turn)}</span>
+			<span data-testid="subagent-elapsed-total" className="opacity-60"> · {total}</span>
+		</span>
 	);
 }

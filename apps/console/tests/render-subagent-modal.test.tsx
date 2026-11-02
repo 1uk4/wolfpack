@@ -133,6 +133,12 @@ describe("subagent modal", () => {
 		assert.equal(formatTokens(12_345), "12k");
 	});
 
+	it("a resumed child shows the turn time beside the total; without runStartedAt only the total", async () => {
+		const f = fake({ startedAt: new Date(Date.now() - 14 * 60_000).toISOString(), runStartedAt: new Date(Date.now() - 72_000).toISOString() });
+		await mount(f);
+		assert.match(q('[data-testid="subagent-elapsed"]')!.textContent!, /^turn 1m \d+s · total 14m \d+s$/);
+	});
+
 	it("running: header facts, Stop aborts, transcript, ledger in order", async () => {
 		const f = fake({});
 		await mount(f);

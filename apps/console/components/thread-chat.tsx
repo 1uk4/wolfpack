@@ -14,6 +14,7 @@ import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } fr
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
+import { TurnTimer, useTurnStart } from "@/components/turn-timer";
 import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -161,6 +162,7 @@ function ThreadChatInner({
 	threadId,
 	title,
 	workspace,
+	initialTurnStartedAt,
 	initialMessages,
 	initialHasMore,
 	initiallyInFlight,
@@ -175,6 +177,8 @@ function ThreadChatInner({
 	title: string;
 	/** Header git tree: the thread's git workspace (absent for a non-git thread). */
 	workspace?: ThreadWorkspace;
+	/** When the turn running at page load began (ThreadDetail.turnStartedAt); absent from an older server. */
+	initialTurnStartedAt?: string;
 	initialMessages: LhMessage[];
 	/** Only the newest page is loaded: a "Show earlier" divider tops the list. */
 	initialHasMore?: boolean;
@@ -382,6 +386,7 @@ function ThreadChatInner({
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
+	const turnStart = useTurnStart(busy, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
@@ -483,6 +488,7 @@ function ThreadChatInner({
 				<TopBar>
 					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground">{wolf}</span>
+					<TurnTimer startedAt={turnStart} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}

@@ -417,6 +417,10 @@ export const ThreadSummarySchema = z.object({
   /** 1-based place in the queue while `state` is `queued`. */
   queuePosition: z.number().int().positive().optional(),
   startedAt: z.iso.datetime({ offset: true }).optional(),
+  /** Additive, subagent threads: when the current run began (reset on every resume; equals `startedAt` until then). */
+  runStartedAt: z.iso.datetime({ offset: true }).optional(),
+  /** Additive: when the turn now running began; present only while a turn runs (steers do not reset it). */
+  turnStartedAt: z.iso.datetime({ offset: true }).optional(),
   /** Set once the child is done, failed or stopped; cleared when it is resumed. */
   finishedAt: z.iso.datetime({ offset: true }).optional(),
   /** What it is doing now (the tool it last started), for the status strip. */

@@ -8,16 +8,30 @@ const TAG_START = /<(?=[A-Za-z/!?])/g;
 const AUTOLINK = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[^\s<>@]+@[^\s<>@]+)>/;
 const FENCE = /^[ \t>]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(`{3,}|~{3,})/;
 
+/** Math spans stay verbatim so KaTeX sees a literal `<`: $$..$$, $..$, \\(..\\), \\[..\\]. */
+const MATH = /\$\$[\s\S]+?\$\$|\$(?!\s)[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]/g;
+
 function escapeSegment(text: string): string {
 	let out = "";
 	let last = 0;
 	for (const m of text.matchAll(TAG_START)) {
 		const at = m.index!;
 		if (AUTOLINK.test(text.slice(at))) continue;
+		if (text.slice(Math.max(0, at - 2), at) === "](") continue;
 		out += text.slice(last, at) + "&lt;";
 		last = at + 1;
 	}
 	return out + text.slice(last);
+}
+
+function escapeNonMath(text: string): string {
+	let out = "";
+	let last = 0;
+	for (const m of text.matchAll(MATH)) {
+		out += escapeSegment(text.slice(last, m.index!)) + m[0];
+		last = m.index! + m[0].length;
+	}
+	return out + escapeSegment(text.slice(last));
 }
 
 /** Escape within a run of non-fence text, skipping inline code spans. */
@@ -40,7 +54,7 @@ function escapeOutsideSpans(text: string): string {
 		}
 		let j = text.indexOf("`", i);
 		if (j === -1) j = text.length;
-		out += escapeSegment(text.slice(i, j));
+		out += escapeNonMath(text.slice(i, j));
 		i = j;
 	}
 	return out;

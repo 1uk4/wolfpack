@@ -32,6 +32,10 @@ describe("escapeRawHtml", () => {
 		assert.equal(escapeRawHtml("a <button> b"), "a &lt;button> b");
 		assert.equal(escapeRawHtml("`<b>` and <Foo bar>"), "`<b>` and &lt;Foo bar>");
 		assert.equal(escapeRawHtml("```\n<div>\n```\n<i>"), "```\n<div>\n```\n&lt;i>");
+		assert.equal(escapeRawHtml("$a<b$ and <i>"), "$a<b$ and &lt;i>");
+		assert.equal(escapeRawHtml("$$x<y$$"), "$$x<y$$");
+		assert.equal(escapeRawHtml("\\(a<b\\) <i>"), "\\(a<b\\) &lt;i>");
+		assert.equal(escapeRawHtml("[x](<a b.md>) <i>"), "[x](<a b.md>) &lt;i>");
 		assert.equal(escapeRawHtml("<https://x.io> 1 < 2"), "<https://x.io> 1 < 2");
 	});
 });

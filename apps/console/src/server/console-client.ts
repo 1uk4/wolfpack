@@ -130,12 +130,34 @@ export async function hubHealth(env: Record<string, string | undefined> = proces
 	}
 }
 
+/** hubHealth cached for `ttlMs` (default 5s) with concurrent calls sharing one outbound request; the reason is logged server-side only (`log`), never returned. */
+export function cachedHubHealth(env: Record<string, string | undefined> = process.env, o: { ttlMs?: number; now?: () => number; fetchImpl?: typeof fetch; log?: (m: string) => void } = {}): () => Promise<{ ok: boolean; status: number }> {
+	const ttl = o.ttlMs ?? 5000;
+	const now = o.now ?? Date.now;
+	const log = o.log ?? ((m: string) => console.warn(m));
+	let at = -Infinity;
+	let last: { ok: boolean; status: number } | undefined;
+	let pending: Promise<{ ok: boolean; status: number }> | undefined;
+	return () => {
+		if (last && now() - at < ttl) return Promise.resolve(last);
+		pending ??= hubHealth(env, o.fetchImpl).then((h) => {
+			if (!h.ok && h.reason) log(`console: health check failed: ${h.reason}`);
+			last = { ok: h.ok, status: h.status };
+			at = now();
+			return last;
+		}).finally(() => {
+			pending = undefined;
+		});
+		return pending;
+	};
+}
+
 const STREAMS = new Set(["watch", "watchMemory", "watchActivity", "watchHubEvents"]);
 
 /**
  * RELAY MODE: the whole ConsoleClient (threads, chat, streams, memory, KB, work) talks to the HUB only, which tunnels wolf-scoped requests
- * to the wolf's host over its worker link. Credentials are per request exactly as in `requestScopedWork` (a request scope with no token is
- * 401; the env token serves only scope-less callers). One HttpConsoleClient per token, cached.
+ * to the wolf's host over its worker link. Credentials are per request exactly as in `requestScopedWork`: with a resolver, no token (or no scope) is a 401 and
+ * the client holds no token of its own (createConsoleClient strips the env token); a resolver-less client uses `hub.token`. One HttpConsoleClient per token, cached.
  */
 export function relayClient(hub: { baseUrl: string; token?: string }, requestToken?: RequestToken): ConsoleClient {
 	const clients = new Map<string, ConsoleClient>();
@@ -201,12 +223,14 @@ export function relayClient(hub: { baseUrl: string; token?: string }, requestTok
 export function createConsoleClient(env: Record<string, string | undefined> = process.env, requestToken?: RequestToken): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
-	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
+	// With a per-request resolver the client holds NO hub token at all (no super-token by construction); WOLFPACK_HUB_TOKEN is read only by hubHealth()
+	// and, for resolver-less callers (scripts, tests), here.
+	const hub = hubUrl ? { baseUrl: hubUrl, token: requestToken ? undefined : env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
 	if (env.WOLFPACK_HUB_KEY?.trim()) console.warn("console: WOLFPACK_HUB_KEY is no longer supported and is ignored; set WOLFPACK_HUB_TOKEN (from `hubd pair`)");
 	const flag = env.WOLFPACK_HUB_RELAY?.trim() ?? "";
 	const off = /^(0|false|no|off)$/i.test(flag);
 	const forced = /^(1|true|yes|on)$/i.test(flag);
-	const haveToken = !!(hub?.token || requestToken);
+	const haveToken = !!requestToken || !!hub?.token;
 	if (hub && !off && (forced || (!baseUrl && haveToken))) return relayClient(hub, requestToken);
 	const withToken = (c: ConsoleClient): ConsoleClient => (hub && requestToken ? composeWorkReads(c, requestScopedWork(hub, requestToken)) : c);
 	if (baseUrl) return withToken(new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) }));

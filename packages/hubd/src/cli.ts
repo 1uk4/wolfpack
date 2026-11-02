@@ -63,7 +63,7 @@ const USAGE = `usage:
                                                               print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token.
                                                               browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
   hubd work-orphans --data-dir <dir> [--apply] [--force]      list (dry run, the default) or delete, via appended work.deleted events, work items that are in the ledger as a lone work.created but have no .md.
-                                                              hubd must be STOPPED even for the dry run (it takes the work-writer lock). --apply aborts unless --force when all items qualify, when a hub of <=10 items has >3, or above 10 items when more than max(3, 10%) qualify.
+                                                              hubd must be STOPPED even for the dry run (it takes the work-writer lock). --apply aborts unless --force when all items qualify, when a hub of <=10 items has >3, or above 10 items when more than max(3, 10%) qualify. A single genuine orphan on a 1-item hub needs --force (orphans >= total).
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)

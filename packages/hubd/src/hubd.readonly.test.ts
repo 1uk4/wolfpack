@@ -215,6 +215,53 @@ describe("claim / unclaim on a read-only store", () => {
   });
 });
 
+describe("releaseWolfClaims keeps going", () => {
+  it("releaseWolfClaims: the first unclaim throws (non-fs error after the append) and the remaining claims are still released; the failed id is reported and logged", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "hubd-rel-"));
+    tmp.push(dataDir);
+    const r = roots(dataDir);
+    const a = createWork(r, { kind: "feature", domain: "personal", title: "A", assignee: "wa", stage: "in_build" } as never).id as string;
+    const b = createWork(r, { kind: "feature", domain: "personal", title: "B", assignee: "wa", stage: "in_build" } as never).id as string;
+    claimItem(r, a, "wa" as never);
+    claimItem(r, b, "wa" as never);
+    // A's unclaim appends work.unbound and THEN throws a plain (non-fs) error, like a bug after the append would.
+    const flaky: typeof unclaimItem = (rr, id, actor) => {
+      const out = unclaimItem(rr, id, actor);
+      if (id === a) throw new Error("boom after the append");
+      return out;
+    };
+    const before = ledgerOf(dataDir);
+    const errs: string[] = [];
+    const spy = (await import("vitest")).vi.spyOn(console, "error").mockImplementation((...x: unknown[]) => void errs.push(x.map(String).join(" ")));
+    let released: string[];
+    try {
+      released = releaseWolfClaims(r, "wa", flaky);
+    } finally {
+      spy.mockRestore();
+    }
+    const unbound = (ledgerOf(dataDir).slice(before.length).match(/"work\.unbound"/g) ?? []).length;
+    expect(released).toEqual([b]);
+    expect(unbound).toBe(2); // A's unbound WAS appended before its render threw: reported as failed, but the ledger shows it released
+    expect([...loadWorkState(r).values()].filter((i) => i.boundBy === "wa")).toEqual([]);
+    expect(errs.join("\n")).toContain(a);
+    expect(errs.join("\n")).toMatch(/reported as not released/);
+  });
+});
+
+describe("probe domain names", () => {
+  it("probe: a dot in the middle is allowed; leading dot, '..' anywhere and separators are refused; a bad name from ledger state is engine_error", () => {
+    const d = mkdtempSync(join(tmpdir(), "hubd-dom-"));
+    tmp.push(d);
+    const r = hubRoots(d);
+    mkdirSync(join(r.kbBase, "domains"), { recursive: true });
+    for (const ok of ["personal", "snapjack", "wolfpack", "my.domain", "a_b-c"]) expect(() => probeWorkStore(r, ok), ok).not.toThrow();
+    for (const bad of [".hidden", "a..b", "..", "a/b", "a\\b", ""]) {
+      expect(() => probeWorkStore(r, bad), bad).toThrow(/invalid domain name/);
+      try { probeWorkStore(r, bad, "ledger"); } catch (e) { expect((e as { code: string }).code).toBe("engine_error"); expect((e as Error).message).toBe("internal hub error"); }
+    }
+  });
+});
+
 describe("work-orphans", () => {
   type Ev = Record<string, unknown>;
   /** Append a lone `work.created` (the old-ordering orphan) or any raw event to the ledger of a STOPPED hub. */

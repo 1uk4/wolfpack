@@ -75,6 +75,18 @@ try {
   await page.getByText(expect, { exact: false }).first().waitFor({ timeout: 30000 });
   step("reply still there after reload (history read back through the hub relay)");
   await shot("3-reloaded");
+  // 5b. trailing slash: the hub pairing page opened as /pair/?code=... (a proxy or a QR scanner may add the slash) must pair too
+  if (process.env.PAIR_LINK_SLASH) {
+    const sctx = await browser.newContext();
+    const sp = await sctx.newPage();
+    await sp.goto(process.env.PAIR_LINK_SLASH);
+    if (!(await sp.locator("#code").inputValue())) throw new Error("trailing-slash link did not prefill the code");
+    await sp.getByRole("button", { name: "Pair" }).click();
+    await sp.waitForURL(`${base}/`, { timeout: 20000 });
+    if (!(await sp.evaluate(() => localStorage.getItem("wolfpack.hub.token")))) throw new Error("trailing-slash pairing stored no token");
+    step(`TRAILING-SLASH PAIR OK: ${process.env.PAIR_LINK_SLASH.replace(/code=.*/, "code=<redacted>")} paired`);
+    await sctx.close();
+  }
   await mobilePass();
   // 6. revoke: the entrypoint runs `hubd tokens revoke` while we wait; the console must then send the browser back to /pair
   await import("node:fs").then((fs) => fs.writeFileSync("/tmp/proof-want-revoke", "1"));

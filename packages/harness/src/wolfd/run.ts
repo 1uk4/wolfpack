@@ -144,7 +144,8 @@ async function startConfigured(
   if (!env.WOLFPACK_MODELS_FILE) {
     try {
       const r = regenerateWolfModelsFile({ wolfYaml: config.file, models: config.capability.models });
-      if (r.status === "written") log(`models: regenerated ${r.path} from wolf.yaml models:`);
+      if (r.status === "written" && r.replaced) log(`models: ${r.path} differed from wolf.yaml models:, regenerated from wolf.yaml`);
+      else if (r.status === "written") log(`models: generated ${r.path} from wolf.yaml models:`);
     } catch (e) {
       log(`warning: could not regenerate models.json from wolf.yaml models: ${(e as Error).message}`);
     }

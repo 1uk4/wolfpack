@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
 import { applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
-import { STARTER_PACK_MODELS, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
+import { STARTER_PACK_MODELS, detectWolfLocation, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
 
 let tmp: string;
 beforeEach(() => {
@@ -226,7 +226,6 @@ describe("applyWolfTierOverrides", () => {
   });
 });
 
-
 describe("wolf.yaml models:", () => {
   const YAML = "name: m\nmodels:\n  smart:\n    provider: claude-stateless\n    model: claude-sonnet-5-5\n";
   const packFile = () => {
@@ -246,7 +245,7 @@ describe("wolf.yaml models:", () => {
   });
 
   it("regenerates models.json: writes, then is idempotent", () => {
-    const file = wolf("rg", YAML);
+    const file = wolf("local/rg", YAML);
     const cfg = loadWolfConfig(file, { home: "/h" }).config;
     const pack = packFile();
     const first = regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: pack });
@@ -260,11 +259,90 @@ describe("wolf.yaml models:", () => {
   });
 
   it("leaves models.json alone without a models: block", () => {
-    const file = wolf("nb", "name: n\n");
+    const file = wolf("local/nb", "name: n\n");
     const mj = path.join(path.dirname(file), "models.json");
     fs.writeFileSync(mj, "keep");
     const cfg = loadWolfConfig(file, { home: "/h" }).config;
     expect(regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: packFile() }).status).toBe("no-models-block");
     expect(fs.readFileSync(mj, "utf8")).toBe("keep");
+  });
+
+  it("never rewrites models.json for a non-local or undetectable wolf", () => {
+    const pack = packFile();
+    const cases: [string, "vps" | undefined][] = [["vps/x", undefined], ["home/wolf-abc", undefined], ["local/forced", "vps"]];
+    for (const [name, loc] of cases) {
+      const file = wolf(name, YAML);
+      const mj = path.join(path.dirname(file), "models.json");
+      fs.writeFileSync(mj, '{"location":"vps"}');
+      const cfg = loadWolfConfig(file, { home: "/h" }).config;
+      const r = regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: pack, ...(loc ? { location: loc } : {}) });
+      expect(r.status).toBe("not-local");
+      expect(fs.readFileSync(mj, "utf8")).toBe('{"location":"vps"}');
+    }
+  });
+
+  it("detects location from the layout, and a shipped vps table wins", () => {
+    expect(detectWolfLocation(wolf("local/d", "name: d\n"))).toBe("local");
+    const v = wolf("local/v", "name: v\n");
+    fs.writeFileSync(path.join(path.dirname(v), "models.json"), '{"location":"vps"}');
+    expect(detectWolfLocation(v)).toBe("vps");
+    expect(detectWolfLocation(wolf("elsewhere/e", "name: e\n"))).toBe("unknown");
+  });
+
+  it("keeps the old file byte-identical when resolving throws (no pack config)", () => {
+    const file = wolf("local/th", YAML);
+    const mj = path.join(path.dirname(file), "models.json");
+    fs.writeFileSync(mj, "old\n");
+    const cfg = loadWolfConfig(file, { home: "/h" }).config;
+    expect(() => regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: path.join(tmp, "missing.yaml") })).toThrow();
+    expect(fs.readFileSync(mj, "utf8")).toBe("old\n");
+    expect(fs.readdirSync(path.dirname(file)).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("keeps the existing mode and reports a replacement", () => {
+    const file = wolf("local/md", YAML);
+    const mj = path.join(path.dirname(file), "models.json");
+    fs.writeFileSync(mj, "old\n");
+    fs.chmodSync(mj, 0o640);
+    const cfg = loadWolfConfig(file, { home: "/h" }).config;
+    const r = regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: packFile() });
+    expect(r).toMatchObject({ status: "written", replaced: true });
+    expect(fs.statSync(mj).mode & 0o777).toBe(0o640);
+  });
+
+  it("owner-shaped wolf.yaml resolves to the current models.json: unchanged", () => {
+    // Shape of ~/wolves/local/1uk4/models.json + ~/.wolfpack/config.yaml models: (no secrets there).
+    const tier = (model: string, modelSource: string, piProvider: string) => ({
+      model, modelSource, provider: "claude-agent-sdk", piModel: `${piProvider}/${model}`, piProvider,
+    });
+    const fast = { tier: "fast" }, smart = { tier: "smart" };
+    const current = {
+      location: "local",
+      transport: "subscription",
+      transportSource: "pack",
+      tiers: {
+        main: tier("claude-opus-5-5", "pack", "claude-bridge"),
+        smart: tier("claude-sonnet-5-5", "wolf", "claude-stateless"),
+        fast: tier("claude-haiku-5-5", "pack", "claude-bridge"),
+      },
+      steps: {
+        classify: fast, consolidate: smart, distill: smart, workRecord: smart, produce: smart, contradict: fast,
+        classifyToSection: fast, matchSubject: fast, confirmSubject: fast, sectionSummary: fast, labelSection: fast,
+      },
+      warnings: [],
+    };
+    const file = wolf("local/owner", "name: 1uk4\n" + YAML.split("\n").slice(1).join("\n"));
+    const mj = path.join(path.dirname(file), "models.json");
+    const cfg = loadWolfConfig(file, { home: "/h" }).config;
+    const regen = () => regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: packFile() });
+    // The owner's file today predates the `splitSection` step: the first start adds it (the ONLY difference), then it is stable.
+    fs.writeFileSync(mj, JSON.stringify(current, null, 2) + "\n");
+    expect(regen().status).toBe("written");
+    const after = JSON.parse(fs.readFileSync(mj, "utf8")) as typeof current & { steps: Record<string, unknown> };
+    expect(after.steps.splitSection).toEqual({ tier: "fast" });
+    delete after.steps.splitSection;
+    expect(after).toEqual(current);
+    // With that step present (the current shape) it is `unchanged`.
+    expect(regen().status).toBe("unchanged");
   });
 });

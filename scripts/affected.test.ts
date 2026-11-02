@@ -16,7 +16,8 @@ describe("affected", () => {
   it("shared package change marks dependents transitively and their components", () => {
     const r = run(["packages/protocol/src/x.ts"]);
     for (const p of ["@wolfpack/protocol", "@wolfpack/client", "@wolfpack/harness", "@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/console"]) expect(r.packages).toContain(p);
-    expect(r.packages).not.toContain("@wolfpack/cli");
+    // @wolfpack/kb depends on protocol and cli depends on kb, so cli is a transitive dependent
+    expect(r.packages).toContain("@wolfpack/cli");
     expect(r.components.sort()).toEqual(["console", "hubd", "wolfd", "workerd"]);
     expect(r.tracer).toBe(true);
   });

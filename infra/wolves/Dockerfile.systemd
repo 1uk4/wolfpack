@@ -1,0 +1,9 @@
+# systemd-as-PID-1 test image for the wolves units. Build ON TOP of the tracer image:
+#   docker build -q -f infra/tracer/Dockerfile -t wolfpack-tracer . && docker build -f infra/wolves/Dockerfile.systemd -t wolfpack-systemd .
+FROM wolfpack-tracer
+ENV DEBIAN_FRONTEND=noninteractive container=docker
+RUN apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus polkitd libpam-systemd && rm -rf /var/lib/apt/lists/*
+COPY infra/wolves /opt/wolves
+RUN chmod +x /opt/wolves/*.sh
+ENTRYPOINT ["/sbin/init"]
+STOPSIGNAL SIGRTMIN+3

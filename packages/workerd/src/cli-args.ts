@@ -14,6 +14,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
         port: { type: "string", short: "p" },
         only: { type: "string", multiple: true },
         wolfd: { type: "string" },
+        "wolfd-transport": { type: "string" },
         host: { type: "string" },
         "link-only": { type: "boolean" },
         announce: { type: "string", multiple: true },
@@ -29,6 +30,9 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
   if (linkOnly && values.wolfd !== undefined) return { error: "--wolfd is not allowed with --link-only (link-only spawns nothing)" };
   if (linkOnly && values.only?.length) return { error: "--only is not allowed with --link-only (link-only supervises nothing)" };
   if (linkOnly && values.port === undefined && !env.WORKERD_PORT) return { error: "link-only needs an explicit port: --port N or WORKERD_PORT (no fallback to 7141)" };
+  const wt = values["wolfd-transport"] ?? (linkOnly ? undefined : env.WORKERD_WOLFD_TRANSPORT || undefined);
+  if (wt !== undefined && wt !== "socket" && wt !== "tcp") return { error: `invalid --wolfd-transport ${JSON.stringify(wt)} (expected socket or tcp)` };
+  if (linkOnly && values["wolfd-transport"] !== undefined) return { error: "--wolfd-transport is not allowed with --link-only (link-only spawns nothing)" };
   const host = values.host ?? (linkOnly ? env.WORKERD_HOST || undefined : undefined);
   if (linkOnly && host && !isLoopbackHost(host)) return { error: `link-only only listens on loopback (127.0.0.1, ::1, localhost), not ${host}` };
   const port = values.port === undefined ? (linkOnly ? Number(env.WORKERD_PORT) : 7141) : Number(values.port);
@@ -41,6 +45,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
       linkOnly: linkOnly || undefined,
       announce: values.announce?.length ? values.announce : undefined,
       only: values.only,
+      ...(wt ? { transport: wt } : {}),
       command: values.wolfd ? values.wolfd.split(/\s+/) : undefined,
     },
   };

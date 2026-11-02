@@ -7,7 +7,7 @@ import { parseServeArgs } from "../cli-args.js";
 import { pairWithHub } from "../hub-config.js";
 import { runWorkerd } from "../run.js";
 
-const USAGE = "usage: workerd pair <hub-url> <code>\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)";
+const USAGE = "usage: workerd pair <hub-url> <code>\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>] [--wolfd-transport socket|tcp]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)";
 
 async function main(): Promise<void> {
   if (process.argv[2] === "pair") {

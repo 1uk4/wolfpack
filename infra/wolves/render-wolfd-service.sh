@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Regenerates infra/release/wolfd.service (placeholder form shipped in the tarball) from the template unit.
+cd "$(dirname "$0")/../.." && { echo "# GENERATED from infra/wolves/wolfd@.service by infra/wolves/render-wolfd-service.sh (do not edit). Placeholders: @NAME@ wolf name, @USER@ wolf-<name>, @HOME@ its home, @RELEASE@ unpacked release dir, @MEMORY_MAX@ (default 700M)."; sed -e '/^# /d' -e 's#/home/wolf-%i/release#@RELEASE@#g' -e 's#/home/wolf-%i#@HOME@#g' -e 's#wolf-%i#@USER@#g' -e 's#%i#@NAME@#g' -e 's#^MemoryMax=.*#MemoryMax=@MEMORY_MAX@#' 'infra/wolves/wolfd@.service'; } > infra/release/wolfd.service

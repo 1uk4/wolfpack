@@ -32,6 +32,7 @@ import {
 	type QuestionMode,
 	type QuizToolInput,
 	type SelectMode,
+	escapeRawHtml,
 } from "@/src/core";
 import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-rail";
 
@@ -494,11 +495,11 @@ function QuestionDockForm({
 					{qd.mode === "multi-select" && " · select all that apply"}
 				</div>
 				<div className="mb-3 font-medium">
-					<MessageResponse>{qd.question}</MessageResponse>
+					<MessageResponse>{escapeRawHtml(qd.question)}</MessageResponse>
 				</div>
 				{qd.context && (
 					<div className="mb-3 text-sm text-muted-foreground">
-						<MessageResponse>{qd.context}</MessageResponse>
+						<MessageResponse>{escapeRawHtml(qd.context)}</MessageResponse>
 					</div>
 				)}
 

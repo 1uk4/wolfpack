@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { InlineMarkdown, MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
+import { addCustomEntry, escapeRawHtml, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
 
@@ -332,7 +332,7 @@ function FieldView({
 	return (
 		<div className={cn("mb-2 last:mb-0", missing && "border-l-2 border-amber-500/70 pl-2")} data-field={field.id} data-incomplete={missing || undefined}>
 			<div className="mb-2 flex flex-wrap items-baseline gap-x-2 font-medium" id={labelId}>
-				<MessageResponse>{field.label}</MessageResponse>
+				<MessageResponse>{escapeRawHtml(field.label)}</MessageResponse>
 				{field.optional && (
 					<span className="text-xs font-normal text-muted-foreground" data-testid="card-optional">
 						(optional)
@@ -341,7 +341,7 @@ function FieldView({
 			</div>
 			{field.description && (
 				<div className="mb-3 text-sm text-muted-foreground">
-					<MessageResponse>{field.description}</MessageResponse>
+					<MessageResponse>{escapeRawHtml(field.description)}</MessageResponse>
 				</div>
 			)}
 			{skipped ? (

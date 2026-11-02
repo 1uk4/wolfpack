@@ -38,7 +38,7 @@ import {
   type PluginConfig,
 } from "streamdown";
 import { mdComponents, mdComponentsInline } from "@/components/md-blocks";
-import { linkifyWorkIds, transformMathDelimiters } from "@/src/core";
+import { escapeRawHtml, linkifyWorkIds, transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: LhViewMessage["role"];
@@ -405,7 +405,7 @@ const INLINE_REHYPE = [...Object.values(defaultRehypePlugins), mathPlugin.rehype
 export const InlineMarkdown = memo(({ children, className }: { children: string; className?: string }) => (
   <span className={cn("lh-prose", className)} data-testid="inline-md">
     <Block
-      content={linkifyWorkIds(transformMathDelimiters(children))}
+      content={linkifyWorkIds(transformMathDelimiters(escapeRawHtml(children)))}
       index={0}
       isIncomplete={false}
       shouldParseIncompleteMarkdown={false}

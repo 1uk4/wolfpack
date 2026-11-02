@@ -7,7 +7,7 @@ import { ThinkingBlock } from "@/components/thinking-block";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
-import { parseAskInput, parseQuizInput } from "@/src/core";
+import { escapeRawHtml, parseAskInput, parseQuizInput } from "@/src/core";
 
 /**
  * Static rendering of an answered question (tool part in `output-available`).
@@ -71,13 +71,13 @@ export function AnsweredCard({ answer, input }: { answer: QuestionAnswerData; in
 					))}
 			</div>
 			<div className="mb-3 font-medium">
-				<MessageResponse>{answer.questionText}</MessageResponse>
+				<MessageResponse>{escapeRawHtml(answer.questionText)}</MessageResponse>
 			</div>
 			{parsedDetails && (
 				// The details line, same paint as the pending dock (owner,
 				// 2026-10-12): full markdown, LaTeX included.
 				<div className="mb-3 text-sm text-muted-foreground">
-					<MessageResponse>{parsedDetails}</MessageResponse>
+					<MessageResponse>{escapeRawHtml(parsedDetails)}</MessageResponse>
 				</div>
 			)}
 
@@ -116,13 +116,13 @@ export function AnsweredCard({ answer, input }: { answer: QuestionAnswerData; in
 									</span>
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
-									<MessageResponse>{opt.label}</MessageResponse>
+									<MessageResponse>{escapeRawHtml(opt.label)}</MessageResponse>
 									{descByIndex.get(opt.index) && (
 										// Ask-option subtext (owner, 2026-10-12): same markdown path
 										// as the pending dock — LaTeX included. Quiz options carry
 										// none (owner ruling 2026-09-26); the map stays empty for them.
 										<MessageResponse className="lh-prose block text-xs text-muted-foreground">
-											{descByIndex.get(opt.index)}
+											{escapeRawHtml(descByIndex.get(opt.index) ?? "")}
 										</MessageResponse>
 									)}
 								</span>

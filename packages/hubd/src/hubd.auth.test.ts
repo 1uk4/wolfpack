@@ -53,6 +53,15 @@ describe("hubd token auth", () => {
     expect((await fetch(`${hub.url}/v1/nothing`)).status).toBe(401);
   });
 
+  it("never authenticates from a cookie (the console mirrors its token into a cookie; only the Authorization bearer counts, relay.ts also drops Cookie)", async () => {
+    const { token } = await mint("browser");
+    for (const name of ["wolfpack_hub_token", "__Host-wolfpack_hub_token", "token", "session"]) {
+      const r = await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { Cookie: `${name}=${token}` } });
+      expect(r.status, name).toBe(401);
+    }
+    expect((await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { Authorization: `Bearer ${token}` } })).status).toBeLessThan(400);
+  });
+
   it("pairing: code is single-use, expires, and the store keeps only hashes", async () => {
     const { code } = store.mintPairingCode(CON);
     const ok = await pairVia({ label: "laptop", kind: "console" }, code);

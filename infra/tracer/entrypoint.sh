@@ -47,7 +47,7 @@ wait_for "grep -q 'hubd listening' $D/log/hubd.log" || { cat $D/log/hubd.log >&2
 
 code() { as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js pair --data-dir "$HUBD_DATA" "$@" | sed -n 's/^pairing code: //p'; }
 CCODE=$(code --kind console)
-CTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$CCODE\",\"label\":\"tracer-console\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+CTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$CCODE\",\"label\":\"tracer-console\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
 auth=(-H "Authorization: Bearer $CTOKEN" -H 'Content-Type: application/json')
 echo "== register host $HOST_ID and wolf hal2 (by NAME) in the hub registry"
 curl -fsS "${auth[@]}" -d "{\"name\":\"$HOST_ID\"}" $HUB/v1/registry/hosts || [ -n "${TRACER_DURABLE:-}" ]; echo
@@ -63,7 +63,7 @@ if [ -n "$KB" ]; then
   # The wolf's OWN hub token (a second worker token of the same host; workerd's hub.json is unreadable to the wolf on the VPS). It is also the Work API
   # key: hubd proxies /v1/workapi/work (scoped to this host's wolves), so there is no separate work server.
   KCODE=$(code --kind worker --host-id $HOST_ID)
-  KTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$KCODE\",\"label\":\"hal2-wolf\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  KTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$KCODE\",\"label\":\"hal2-wolf\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
   w() { curl -fsS -H "X-API-Key: $KTOKEN" -H 'Content-Type: application/json' "${@:2}" "$HUB/v1/workapi/work$1"; }
   FEAT=$(w "" -d '{"kind":"feature","domain":"tracerkb","title":"Session caching","assignee":"hal2","body":"# Session caching\n\n## Plan\n\nCache it.\n"}' | sed 's/.*"id":"\([^"]*\)".*/\1/')
   TASK=$(w "" -d "{\"kind\":\"task\",\"domain\":\"tracerkb\",\"title\":\"Task 0\",\"assignee\":\"hal2\",\"partOf\":\"$FEAT\",\"successCriteria\":\"it works\"}" | sed 's/.*"id":"\([^"]*\)".*/\1/')
@@ -86,7 +86,7 @@ if [ -n "$KB" ]; then
   fi
   ( umask 077; printf "TRACER_KB=1\nWOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWORK_ENDPOINT=%s/v1/workapi\nWORK_TOKEN=%s\nWOLFPACK_KB_FEED_MS=1000\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KTOKEN" "$HUB" "$KTOKEN" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"
   # scope check from the host side: another host's token must not see the item
-  OCODE=$(code --kind worker --host-id other-host); OTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$OCODE\",\"label\":\"other\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  OCODE=$(code --kind worker --host-id other-host); OTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$OCODE\",\"label\":\"other\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
   c=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $OTOKEN" $HUB/v1/workapi/work/$FEAT); echo "scope: a worker token of another host reads the item -> HTTP $c"; [ "$c" = 404 ] || [ "$c" = 403 ] || { echo "FAIL: scope leak ($c)" >&2; exit 1; }
   unset KTOKEN OTOKEN
 fi
@@ -139,12 +139,14 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   # Relay mode = WOLFPACK_HUB_URL set, WOLFPACK_API_URL NOT set, and a token. The token is the BROWSER's (a `hubd pair --kind browser` code traded at
   # /v1/pair, handed to the console's /pair page as #token=, exactly what the hub's own /pair page does); the console process itself holds no token.
   OUT=/out; mkdir -p "$OUT"; rm -f "$OUT"/console-proof-*.png
-  BCODE=$(code --kind browser); BTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$BCODE\",\"label\":\"tracer-browser\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  BCODE=$(code --kind browser); BTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$BCODE\",\"label\":\"tracer-browser\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
   CPORT=3210; CONSOLE=http://127.0.0.1:$CPORT
   echo "== start console (user console, standalone server, RELAY mode: WOLFPACK_HUB_URL=$HUB, no WOLFPACK_API_URL, no env token)"
   ( cd /opt/console && exec runuser -u console -- env -u WOLFPACK_API_URL -u WOLFPACK_HUB_TOKEN HOME=/home/console PORT=$CPORT HOSTNAME=127.0.0.1 NODE_ENV=production WOLFPACK_HUB_URL=$HUB node server.js ) >"$D/log/console.log" 2>&1 &
   wait_for "curl -sf $CONSOLE/pair" || { cat $D/log/console.log >&2; exit 1; }
-  CPID=$(pgrep -u console | head -1); CENV=$(runuser -u console -- tr '\0' '\n' < /proc/$CPID/environ 2>/dev/null || runuser -u console -- sh -c "tr '\\0' '\\n' < /proc/$CPID/environ")
+  CPID=$(pgrep -u console -f server.js | head -1)
+  # read the environ AS the console user (root in the container has no CAP_SYS_PTRACE, so a root-side redirect gets EACCES)
+  CENV=$(runuser -u console -- sh -c "tr '\\0' '\\n' < /proc/$CPID/environ")
   echo "console env (pid $CPID): WOLFPACK_API_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_API_URL=') (must be 0); WOLFPACK_HUB_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=') (must be 1)"
   [ "$(echo "$CENV" | grep -c '^WOLFPACK_API_URL=')" = 0 ] && [ "$(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=')" = 1 ] || { echo "FATAL: console is not configured for relay mode" >&2; exit 1; }
   set +e

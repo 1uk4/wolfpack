@@ -50,6 +50,8 @@ export interface DeployRequest {
   host?: string;
   dryRun?: boolean;
   healthTimeout?: number;
+  /** workerd only: link | wolves | both | auto (default). */
+  unit?: string;
 }
 
 export interface DeployPlan extends ReleaseRef {
@@ -85,6 +87,11 @@ export function planDeploy(req: DeployRequest, ctx: { defaultHost?: string; host
   if (!host || host === "local") throw new Error("deploy needs a remote host: pass --host <host> (or set a default host)");
   const scriptArgs = [ref.component, ref.version];
   if (ref.component === "wolfd") scriptArgs.push("--wolf", req.wolf!);
+  if (req.unit !== undefined) {
+    if (ref.component !== "workerd") throw new Error("--unit only applies to --component workerd");
+    if (!["auto", "link", "wolves", "both"].includes(req.unit)) throw new Error("--unit must be auto, link, wolves or both");
+    scriptArgs.push("--unit", req.unit);
+  }
   if (req.healthTimeout !== undefined) {
     if (!Number.isInteger(req.healthTimeout) || req.healthTimeout < 1) throw new Error("--health-timeout must be a positive integer (seconds)");
     scriptArgs.push("--health-timeout", String(req.healthTimeout));

@@ -31,8 +31,12 @@ describe("pairing page", () => {
     expect(r.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(r.headers.get("x-frame-options")).toBe("DENY");
     const html = await r.text();
-    expect(html).toContain('fetch("v1/pair"'); // relative: works behind a stripped /hub prefix
+    expect(html).toContain('location.pathname.replace(/\\/pair\\/?$/,"/v1/pair")'); // derived from the page path: works behind a stripped /hub prefix, with or without a trailing slash
     expect(html).not.toContain('fetch("/v1/pair"');
+    expect(r.headers.get("referrer-policy")).toBe("no-referrer");
+    // the derivation itself
+    const derive = (p: string) => p.replace(/\/pair\/?$/, "/v1/pair");
+    expect([derive("/pair"), derive("/hub/pair"), derive("/hub/pair/")]).toEqual(["/v1/pair", "/hub/v1/pair", "/hub/v1/pair"]);
     expect(html).toContain('"consoleUrl":null');
     expect(html).not.toMatch(/https?:\/\/[^"' ]*cdn/i);
   });
@@ -105,5 +109,29 @@ describe("pairing label and expiry", () => {
     const c3 = /pairing code: (\S+)/.exec(out.join("\n"))![1]!;
     t = Date.now();
     expect((await exchange(c3).catch(() => undefined))?.status).toBeDefined();
+  });
+});
+
+describe("pairing concurrency and logging", () => {
+  it("two parallel exchanges of one code give exactly one 200; the log carries the stored label, never the token", async () => {
+    hub = await createHubServer({ dataDir: dir, port: 0 });
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.join(" "));
+    try {
+      const { code } = createTokenStore(dir).mintPairingCode({ kind: "browser", label: "Stored label" });
+      const post = () => fetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label: "Client label", kind: "browser" }) });
+      const rs = await Promise.all([post(), post()]);
+      const ok = rs.filter((r) => r.status === 200);
+      expect(ok).toHaveLength(1);
+      expect(rs.filter((r) => r.status !== 200).every((r) => [401, 409].includes(r.status))).toBe(true);
+      const { token } = (await ok[0]!.json()) as { token: string };
+      const line = logs.find((l) => l.includes("paired token"))!;
+      expect(line).toContain('label="Stored label"');
+      expect(line).not.toContain("Client label");
+      expect(logs.join("\n")).not.toContain(token);
+    } finally {
+      console.log = orig;
+    }
   });
 });

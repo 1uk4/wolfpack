@@ -93,8 +93,9 @@ scan(path.join(APP, ".next", "server"), false);
 //   /pipeline    static shell, data via /api
 //   /settings    static shell, data via /api
 //   /_not-found, /_global-error   Next's framework error pages
+// /manifest.webmanifest is app/manifest.ts: a constant object (name, icons, colours), no env or hub read, and it must be public.
 // Any new prerendered route (a page that forgot `dynamic = "force-dynamic"`) fails the build until it is reviewed and added here.
-const PRERENDER_ALLOWLIST = new Set(["/", "/pair", "/pipeline", "/settings", "/_not-found", "/_global-error"]);
+const PRERENDER_ALLOWLIST = new Set(["/", "/pair", "/pipeline", "/settings", "/_not-found", "/_global-error", "/manifest.webmanifest"]);
 {
 	const mf = path.join(APP, ".next", "prerender-manifest.json");
 	if (!fs.existsSync(mf)) die(".next/prerender-manifest.json missing");

@@ -282,7 +282,7 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
      * CODE; `kind` / `hostId` in the request are optional and must match it. 401 for unknown/used/expired/mismatched (a mismatch
      * does not consume the code).
      */
-    redeem(code: string, label: string, kind?: TokenKind, hostId?: string): { token: string; tokenId: string; kind: TokenKind; hostId?: string } {
+    redeem(code: string, label: string, kind?: TokenKind, hostId?: string): { token: string; tokenId: string; kind: TokenKind; label: string; hostId?: string } {
       const token = randomBytes(32).toString("base64url");
       const tokenId = `tok-${randomBytes(5).toString("hex")}`;
       const h = sha256(code);
@@ -295,7 +295,7 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
           throw new HubError("unauthorized", "this pairing code was issued for a different kind or host");
         s.pairings = live.filter((p) => p !== hit);
         s.tokens.push({ id: tokenId, hash: sha256(token), label: hit.label ?? label, kind: hit.kind, ...(hit.hostId ? { hostId: hit.hostId } : {}), owner: OWNER, createdAt: new Date(now()).toISOString() });
-        return { token, tokenId, kind: hit.kind, ...(hit.hostId ? { hostId: hit.hostId } : {}) };
+        return { token, tokenId, kind: hit.kind, label: hit.label ?? label, ...(hit.hostId ? { hostId: hit.hostId } : {}) };
       });
     },
     /** Resolve a bearer token (cached by file stamp, so a revoke is seen on the next request). Corrupt file = undefined (401). */

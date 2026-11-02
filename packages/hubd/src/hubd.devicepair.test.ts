@@ -1,6 +1,6 @@
 /** P2 end to end against a REAL hubd process (compiled CLI, temp data dir) behind a prefix-stripping proxy: pair -> exchange -> forwarded call -> revoke -> 401. */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as netServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ const run = (...a: string[]) => spawnSync(process.execPath, [cli, ...a], { encod
 const freePort = () => new Promise<number>((res) => { const s = netServer().listen(0, "127.0.0.1", () => { const p = (s.address() as { port: number }).port; s.close(() => res(p)); }); });
 
 beforeAll(async () => {
+  if (!existsSync(cli)) throw new Error(`${cli} is missing: run \`npx tsc --build\` first`);
   dir = mkdtempSync(join(tmpdir(), "hubd-devpair-"));
   seedFixture(dir);
   hubPort = await freePort();
@@ -52,10 +53,10 @@ describe("device pairing against a real hubd", () => {
     expect(p.status).toBe(0);
     const link = /(http\S+\/hub\/pair\?code=\S+)/.exec(p.stdout)![1]!;
     expect(p.stdout).toMatch(/[█▀▄]/);
-    // the QR link opens the pairing page through the stripped prefix; the page posts to the RELATIVE v1/pair
+    // the QR link opens the pairing page through the stripped prefix; the page posts to <page path>/../v1/pair
     const page = await fetch(link);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain('fetch("v1/pair"');
+    expect(await page.text()).toContain('location.pathname.replace(/\\/pair\\/?$/,"/v1/pair")');
     const code = new URL(link).searchParams.get("code")!;
     const ex = await fetch(new URL("v1/pair", link.split("?")[0]!.replace(/pair$/, "")), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label: "ignored", kind: "browser" }) });
     expect(ex.status).toBe(200);
@@ -67,7 +68,6 @@ describe("device pairing against a real hubd", () => {
     expect(list).toContain(tokenId);
     expect(list).toMatch(/browser\s+Luka's phone/);
     expect(list).not.toContain(token);
-    expect((await fetch(link.replace(/code=.*/, "code=" + code), { method: "GET" })).status).toBe(200); // page is static; the code itself is spent
     expect((await fetch(`${publicUrl}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label: "x", kind: "browser" }) })).status).toBe(401);
     expect(run("tokens", "revoke", tokenId, "--data-dir", dir).status).toBe(0);
     expect((await call()).status).toBe(401);

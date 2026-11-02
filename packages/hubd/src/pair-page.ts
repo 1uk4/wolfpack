@@ -3,7 +3,7 @@
  * inline script/style and same-origin fetch). Flow: code (prefilled from ?code=) + label -> POST /v1/pair {kind:"browser"} -> token.
  * With a console URL configured the token travels to the console in the URL FRAGMENT (`<console>/pair#token=...`): a fragment is never
  * sent to any server or logged, works across origins, and the console's /pair page stores it in localStorage and strips it from the URL.
- * The POST path is RELATIVE (`v1/pair`), so the page works behind a reverse proxy that strips a prefix (served at /hub/pair it posts to /hub/v1/pair).
+ * The POST path is derived from the page's own path (`/hub/pair` and `/hub/pair/` both post to `/hub/v1/pair`), so the page works behind a reverse proxy that strips a prefix.
  * Without one, the token is saved in this origin's localStorage ("wolfpack.hub.token") and a message says so.
  */
 
@@ -49,7 +49,7 @@ if(q)history.replaceState(null,"",location.pathname);
 $("f").addEventListener("submit",function(e){
 e.preventDefault();
 msg("Pairing...");
-fetch("v1/pair",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:$("code").value.trim(),label:$("label").value.trim().slice(0,64),kind:"browser"})})
+fetch(location.pathname.replace(/\\/pair\\/?$/,"/v1/pair"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:$("code").value.trim(),label:$("label").value.trim().slice(0,64),kind:"browser"})})
 .then(function(r){return r.json().catch(function(){return{}}).then(function(b){return{s:r.status,b:b}})})
 .then(function(x){
 if(x.s===200&&x.b.token){

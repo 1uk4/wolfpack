@@ -228,6 +228,10 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
   } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
+  if (env.HUBD_CONSOLE_URL?.trim() || args.consoleUrl) {
+    const cu = new URL(args.consoleUrl ?? env.HUBD_CONSOLE_URL!.trim());
+    if (cu.protocol === "http:" && !isLoopback(cu.hostname)) log(`warning: the console URL ${cu.origin} is plain http on a non-loopback host; paired tokens travel to it in the clear. Use https (tailscale serve).`);
+  }
   const socket = args.socket ?? (env.HUBD_SOCKET?.trim() || undefined);
   if (socket !== undefined && args.command !== "serve") throw new Error("a unix socket is only supported by serve");
   if (socket !== undefined && args.tcpExplicit) throw new Error("HUBD_SOCKET cannot be combined with --port/--host: pick TCP or a unix socket");

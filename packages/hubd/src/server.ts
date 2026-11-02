@@ -581,6 +581,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubPair": {
           const addr = req.socket.remoteAddress ?? "?"; // the socket peer; X-Forwarded-For is deliberately NOT trusted
           const t = (opts.now ?? Date.now)();
+          // NOTE: the failure bucket is keyed on the socket peer. Behind a local reverse proxy (tailscale serve) every request is 127.0.0.1, so the bucket is GLOBAL (see RUNBOOK 5b).
           if (pairFailureCount(addr, t) >= PAIR_FAILS_PER_MIN) {
             res.setHeader("Retry-After", "60");
             return send(res, 429, { code: "busy", message: "too many failed pairing attempts; retry in a minute", retryable: true } satisfies ErrorEnvelope);
@@ -588,7 +589,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const body = parseBody(PairRequestSchema, await readBody(req));
           try {
             const out = tokens.redeem(body.code, body.label, body.kind, body.hostId);
-            console.log(`hubd: paired token ${out.tokenId} kind=${out.kind} label=${JSON.stringify(body.label)}${out.hostId ? ` hostId=${out.hostId}` : ""}`);
+            console.log(`hubd: paired token ${out.tokenId} kind=${out.kind} label=${JSON.stringify(out.label)}${out.hostId ? ` hostId=${out.hostId}` : ""}`);
             return send(res, 200, { token: out.token, tokenId: out.tokenId, ...(out.hostId ? { hostId: out.hostId } : {}) });
           } catch (e) {
             if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);

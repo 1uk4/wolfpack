@@ -69,6 +69,14 @@ if [ -n "$KB" ]; then
   TASK=$(w "" -d "{\"kind\":\"task\",\"domain\":\"tracerkb\",\"title\":\"Task 0\",\"assignee\":\"hal2\",\"partOf\":\"$FEAT\",\"successCriteria\":\"it works\"}" | sed 's/.*"id":"\([^"]*\)".*/\1/')
   w /$TASK -X PATCH -d '{"stage":"shipped"}' >/dev/null
   echo "work items (created through the hub proxy with the wolf's token): feature=$FEAT task=$TASK"
+  if [ -n "${TRACER_RO_WORK:-}" ]; then
+    # H6b: mirror sfo-01 (ProtectSystem=strict): from here on hubd cannot write under domains/*/work (the seeded items stay readable). The ledger
+    # (<data>/ledger) stays writable, as on the host. hubd runs as a non-root user, so mode 555/444 makes every .md write fail like EROFS does.
+    for d in "$HUBD_DATA"/kb/base/domains/*/work; do [ -d "$d" ] && { chmod 444 "$d"/*.md 2>/dev/null || true; chmod 555 "$d"; }; done
+    find "$HUBD_DATA"/kb/base/domains/*/work -printf '%p %s %T@ %m\n' | sort > /tmp/ro-work.before
+    sha256sum "$HUBD_DATA/ledger/work-events.jsonl" > /tmp/ro-ledger.before
+    echo "== ro-work: domains/*/work is now read-only for hubd ($(wc -l < /tmp/ro-work.before) entries snapshotted)"
+  fi
   ( umask 077; printf "TRACER_KB=1\nWOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWORK_ENDPOINT=%s/v1/workapi\nWORK_TOKEN=%s\nWOLFPACK_KB_FEED_MS=1000\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KTOKEN" "$HUB" "$KTOKEN" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"
   # scope check from the host side: another host's token must not see the item
   OCODE=$(code --kind worker --host-id other-host); OTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$OCODE\",\"label\":\"other\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')

@@ -531,6 +531,9 @@ export const GUARD_MESSAGES: readonly { name: string; re: RegExp; code: ErrorCod
 ];
 
 /** Map a work-ops failure to a protocol error via GUARD_MESSAGES. Everything else is `engine_error` (generic message, detail logged). */
+/** The typed code the work proxy adds to its `{error}` body when the store cannot be written (EROFS and friends). */
+export const WORK_STORE_READ_ONLY = "work_store_read_only";
+
 /** A failed filesystem write (EROFS, EACCES, EPERM, ENOSPC, EDQUOT, EIO): the .md could not be written after the ledger append. */
 export function isFsWriteFailure(e: unknown): boolean {
   const c = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
@@ -543,7 +546,7 @@ export function mapWorkError(e: unknown): HubError {
   const errno = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
   if (errno === "EROFS" || errno === "EACCES" || errno === "EPERM") {
     console.error("hubd: work store is not writable:", e);
-    return new HubError("memory_unavailable", "work store is read-only: this hub cannot write work items (nothing was changed)");
+    return new HubError("memory_unavailable", "work store is read-only: this hub cannot write work items (nothing was changed)", { code: WORK_STORE_READ_ONLY });
   }
   const m = e instanceof Error && typeof (e as NodeJS.ErrnoException).code !== "string" ? e.message : undefined;
   const hit = m === undefined ? undefined : GUARD_MESSAGES.find((g) => g.re.test(m));

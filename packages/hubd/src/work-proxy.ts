@@ -120,7 +120,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     throw new HubError(rest.length <= 2 ? "invalid_request" : "not_found", rest.length <= 2 ? `method ${method} is not available through the work proxy` : `no route ${url.pathname}`);
   } catch (e) {
     const err = e instanceof HubError ? e : mapWorkError(e);
-    if (!res.headersSent) respond(res, STATUS[err.code] ?? 500, { error: err.message });
+    if (!res.headersSent) respond(res, STATUS[err.code] ?? 500, { error: err.message, ...(err.details?.code ? { code: err.details.code } : {}) });
     else res.end();
   }
 }

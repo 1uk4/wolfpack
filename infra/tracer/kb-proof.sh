@@ -58,4 +58,18 @@ IT=$(curl -fsS -H "X-API-Key: $(sed -n 's/^WORK_TOKEN=//p' $WH/.env)" $HUB/v1/wo
 echo "$IT" | grep -q '"graduated":true' && fail "item graduated by a preview"; echo "$IT" | grep -q '"stage":"archived"' && fail "item archived by a preview"
 echo "work item after preview: not graduated, not archived; hub store still $N2 contribution(s)"
 echo "PASS 3: graduation preview ran, nothing sent"
+if [ -n "${TRACER_RO_WORK:-}" ]; then
+  echo "== 4. ro-work: the store stayed read-only and untouched"
+  find $HD/kb/base/domains/*/work -printf '%p %s %T@ %m\n' | sort > /tmp/ro-work.after
+  cmp /tmp/ro-work.before /tmp/ro-work.after || fail "domains/*/work changed during the run"
+  (cd / && sha256sum -c /tmp/ro-ledger.before) >/dev/null || fail "work ledger changed during the run"
+  WKEY=$(sed -n 's/^WORK_TOKEN=//p' $WH/.env)
+  c=$(curl -sS -o /tmp/ro-create.json -w '%{http_code}' -H "X-API-Key: $WKEY" -H 'Content-Type: application/json' -d '{"kind":"feature","domain":"tracerkb","title":"must fail","assignee":"hal2"}' $HUB/v1/workapi/work)
+  echo "create through the proxy while read-only -> HTTP $c: $(cat /tmp/ro-create.json)"
+  [ "$c" = 503 ] || fail "expected 503, got $c"; grep -q 'work store is read-only' /tmp/ro-create.json || fail "no clear read-only error"; grep -q '"code":"work_store_read_only"' /tmp/ro-create.json || fail "error is not typed work_store_read_only"
+  (cd / && sha256sum -c /tmp/ro-ledger.before) >/dev/null || fail "the failed create left a ledger event (ordering/compensation broken)"
+  find $HD/kb/base/domains/*/work -printf '%p %s %T@ %m\n' | sort | cmp - /tmp/ro-work.before || fail "store changed after the failed create"
+  echo "PASS 4: preview_ready with the store read-only; no store writes; a write is refused (503) and leaves no ledger orphan"
+  echo "RO-WORK PROOF OK"
+fi
 echo "KB PROOF OK"

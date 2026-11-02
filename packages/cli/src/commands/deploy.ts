@@ -1,10 +1,11 @@
 /**
  * wolfpack deploy <wolf> --release <wolfd/vX.Y.Z|vX.Y.Z|X.Y.Z> [--host h] [--dry-run] [--health-timeout s]
- * wolfpack deploy --component hubd|workerd --release <tag|version> --host <h> [--unit link|wolves|both] [--dry-run]
+ * wolfpack deploy --component hubd|workerd --release <tag|version> --host <h> [--unit link|wolves|both] (default link; wolves/both restart workerd-wolves) [--dry-run]
  * Runs infra/release/deploy-release.sh on the host over ssh (script piped on stdin) and streams its output.
  * The host downloads the GitHub release, verifies sha256, switches, health-checks and rolls back by itself.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,7 +48,11 @@ function hostsHavingWolf(config: CliConfig, wolf: string): string[] {
 export async function deployCmd(req: DeployRequest, deps: DeployDeps = {}): Promise<number> {
   const config = deps.config ?? loadConfig();
   const log = deps.log ?? ((s: string) => console.log(s));
-  const plan = planDeploy(req, {
+  let wolfdUnitSha256: string | undefined;
+  if (req.component === "workerd" && (req.unit === "wolves" || req.unit === "both")) {
+    try { wolfdUnitSha256 = createHash("sha256").update(fs.readFileSync(path.resolve(path.dirname(scriptPath()), "../wolves/wolfd-unit.sh"))).digest("hex"); } catch { /* no checkout next to the CLI: the host only logs the hash */ }
+  }
+  const plan = planDeploy({ ...req, wolfdUnitSha256 }, {
     defaultHost: config.defaultHost,
     hostsWithWolf: req.wolf ? (deps.hostsWithWolf ?? hostsHavingWolf)(config, req.wolf) : [],
   });

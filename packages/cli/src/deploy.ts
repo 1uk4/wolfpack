@@ -52,6 +52,8 @@ export interface DeployRequest {
   healthTimeout?: number;
   /** workerd only: link | wolves | both | auto (default). */
   unit?: string;
+  /** sha256 of infra/wolves/wolfd-unit.sh (workerd wolves/both): the host warns when the live copy differs. */
+  wolfdUnitSha256?: string;
 }
 
 export interface DeployPlan extends ReleaseRef {
@@ -89,8 +91,9 @@ export function planDeploy(req: DeployRequest, ctx: { defaultHost?: string; host
   if (ref.component === "wolfd") scriptArgs.push("--wolf", req.wolf!);
   if (req.unit !== undefined) {
     if (ref.component !== "workerd") throw new Error("--unit only applies to --component workerd");
-    if (!["auto", "link", "wolves", "both"].includes(req.unit)) throw new Error("--unit must be auto, link, wolves or both");
+    if (!["link", "wolves", "both"].includes(req.unit)) throw new Error("--unit must be link (default), wolves or both");
     scriptArgs.push("--unit", req.unit);
+    if (req.wolfdUnitSha256 && (req.unit === "wolves" || req.unit === "both")) scriptArgs.push("--wolfd-unit-sha256", req.wolfdUnitSha256);
   }
   if (req.healthTimeout !== undefined) {
     if (!Number.isInteger(req.healthTimeout) || req.healthTimeout < 1) throw new Error("--health-timeout must be a positive integer (seconds)");

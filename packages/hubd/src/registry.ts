@@ -389,6 +389,15 @@ export function createRegistry(opts: RegistryOptions): Registry {
  */
 export function releaseWolfClaims(roots: KbRoots, wolf: string): string[] {
   const held = [...loadWorkState(roots).values()].filter((i) => i.boundBy === wolf).map((i) => i.id as string);
-  for (const id of held) unclaimItem(roots, id, { id: "system", kind: "operator" });
-  return held;
+  const released: string[] = [];
+  for (const id of held) {
+    // One failing item must not leave the remaining claims held: log and continue (unclaimItem is ledger-first and tolerates a read-only .md).
+    try {
+      unclaimItem(roots, id, { id: "system", kind: "operator" });
+      released.push(id);
+    } catch (e) {
+      console.error(`hubd: could not release ${wolf}'s claim on ${id}:`, e);
+    }
+  }
+  return released;
 }

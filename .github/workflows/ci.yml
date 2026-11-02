@@ -52,6 +52,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: test environment (git identity + pack models block; no secrets)
+        # Some suites commit in temp repos and resolve models from ~/.wolfpack/config.yaml, which a dev box has and a runner does not.
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          git config --global init.defaultBranch main
+          mkdir -p ~/.wolfpack
+          printf 'models:\n  main:  { model: claude-opus-5-5 }\n  smart: { model: claude-sonnet-5-5 }\n  fast:  { model: claude-haiku-5-5 }\n  transport:\n    local: subscription\n    vps: api\n' > ~/.wolfpack/config.yaml
       - name: tsc --build (affected projects)
         run: |
           mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')

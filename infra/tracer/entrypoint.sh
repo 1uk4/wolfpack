@@ -145,6 +145,9 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   sed -E 's/(pairing code: |code=)[A-Za-z0-9_-]+/\1<redacted>/' /tmp/pair.out
   PAIRLINK=$(grep -o 'http[^ ]*/pair?code=[^ ]*' /tmp/pair.out | head -1)
   [ -n "$PAIRLINK" ] || { echo "FATAL: hubd pair printed no link" >&2; exit 1; }
+  # a second code for the trailing-slash proof step: the same link with `/pair/?code=`
+  SCODE=$(code --kind browser --label tracer-slash)
+  PAIRLINK_SLASH="$HUB/pair/?code=$SCODE"
   grep -q '[█▀▄]' /tmp/pair.out || { echo "FATAL: hubd pair printed no QR code" >&2; exit 1; }
   CPORT=3210; CONSOLE=http://127.0.0.1:$CPORT
   echo "== start console (user console, standalone server, RELAY mode: WOLFPACK_HUB_URL=$HUB, no WOLFPACK_API_URL, no env token)"
@@ -157,7 +160,7 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   echo "console env (pid $CPID): WOLFPACK_API_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_API_URL=') (must be 0); WOLFPACK_HUB_URL set: $(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=') (must be 1)"
   [ "$(echo "$CENV" | grep -c '^WOLFPACK_API_URL=')" = 0 ] && [ "$(echo "$CENV" | grep -c '^WOLFPACK_HUB_URL=')" = 1 ] || { echo "FATAL: console is not configured for relay mode" >&2; exit 1; }
   set +e
-  ( cd /opt/proof && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers PAIR_LINK="$PAIRLINK" node console-proof.mjs $CONSOLE "$PAIRLINK" "$OUT" "${TRACER_REPLY:-tracer-pong}" ) &
+  ( cd /opt/proof && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers PAIR_LINK="$PAIRLINK" PAIR_LINK_SLASH="$PAIRLINK_SLASH" node console-proof.mjs $CONSOLE "$PAIRLINK" "$OUT" "${TRACER_REPLY:-tracer-pong}" ) &
   PROOF_PID=$!
   # the proof pauses at /tmp/proof-want-revoke (browser paired and used); check lastUsed, revoke the device, tell it to continue
   for _ in $(seq 1 180); do [ -e /tmp/proof-want-revoke ] || kill -0 $PROOF_PID 2>/dev/null || break; [ -e /tmp/proof-want-revoke ] && break; sleep 1; done

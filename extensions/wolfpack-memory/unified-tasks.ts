@@ -802,7 +802,7 @@ export default function createTasksExtension(
 
 Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
-Domains: ${domainList}\n\nAlways write a work item as its full \`work-<domain>-<id>\` id (e.g. \`work-wolfpack-cEg92qS\`), never a bare short id.${quiet ? "" : `\n\n${BINDING_RULES}`}`;
+Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<id>\` (e.g. \`work-wolfpack-cEg92qS\`), never the bare short id (\`cEg92qS\`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (\`work-wolfpack-cEg92qS.md\`). Write every ID in full, even in lists of several items.${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context

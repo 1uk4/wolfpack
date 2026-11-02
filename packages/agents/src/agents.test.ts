@@ -85,5 +85,9 @@ describe("orchestrator work-id rule", () => {
   it("tells agents to write full work ids", async () => {
     const { orchestratorRules } = await import("./orchestrator.js");
     expect(orchestratorRules({ opsRef: "x", surface: "wolfd" })).toMatch(/full `work-<domain>-<id>`/);
+    const rules = orchestratorRules({ opsRef: "x", surface: "wolfd" });
+    expect(rules).toContain("chip with a hover card");
+    expect(rules).toContain("NOT linked inside a fenced code block");
+    expect(rules).toContain("even in lists of several items");
   });
 });

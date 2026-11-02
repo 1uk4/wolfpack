@@ -30,7 +30,7 @@ export function orchestratorRules(opts: OrchestratorRulesOptions): string {
 - independent pieces → spawn in parallel
 Reuse before you spawn: for follow-ups on work a subagent already did (review fixes, iterations, retries, "also handle X"), message that subagent (subagent_message) so it keeps its context and branch; spawn fresh only for independent tasks.
 Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
-Always write a work item as its full \`work-<domain>-<id>\` id (e.g. \`work-wolfpack-cEg92qS\`), never a bare short id.
+Work item IDs: always write the full \`work-<domain>-<id>\` (e.g. \`work-wolfpack-cEg92qS\`), never the bare short id (\`cEg92qS\`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (\`work-wolfpack-cEg92qS.md\`). Write every ID in full, even in lists of several items.
 Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
 Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.
 Use the \`model\` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. ${PANE_NOTE[opts.surface]}`;

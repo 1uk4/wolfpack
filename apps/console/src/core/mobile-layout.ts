@@ -19,9 +19,10 @@ export function listOpenAfterNavigation(mobile: boolean, open: boolean, prevPath
 	return prevPath !== null && prevPath !== path ? false : open;
 }
 
-/** Initial list state: a phone starts on the list (the home screen of the app); desktop uses the persisted preference. */
-export function initialListOpen(mobile: boolean, stored: string | null): boolean {
-	return mobile ? true : stored === null ? true : stored === "1";
+/** Initial list state: a phone starts on the list only at "/" (the app's home); a deep link or reload on a thread/wolf page shows that
+ *  content, and back returns to the list. Desktop uses the persisted preference. */
+export function initialListOpen(mobile: boolean, stored: string | null, path = "/"): boolean {
+	return mobile ? path === "/" : stored === null ? true : stored === "1";
 }
 
 /** Height of the visible area above the on-screen keyboard (visualViewport), px; falls back to the layout height. */

@@ -125,16 +125,16 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
 		const stored = localStorage.getItem(STORAGE_KEY);
 		// Default: open (first run introduces the sidebar). A phone always starts on the list.
-		const isMobile = window.matchMedia(MOBILE_QUERY).matches;
+		const mq = typeof window.matchMedia === "function" ? window.matchMedia(MOBILE_QUERY) : null; // absent in the DOM test shims
+		const isMobile = mq?.matches ?? false;
 		setMobile(isMobile);
-		setOpen(initialListOpen(isMobile, stored));
+		setOpen(initialListOpen(isMobile, stored, pathname ?? "/"));
 		setMounted(true);
-		const mq = window.matchMedia(MOBILE_QUERY);
-		const onMq = () => setMobile(mq.matches);
-		mq.addEventListener("change", onMq);
+		const onMq = () => setMobile(mq?.matches ?? false);
+		mq?.addEventListener("change", onMq);
 		return () => {
 			off?.();
-			mq.removeEventListener("change", onMq);
+			mq?.removeEventListener("change", onMq);
 		};
 	}, []);
 

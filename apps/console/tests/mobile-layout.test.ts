@@ -13,6 +13,7 @@ test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CS
 
 test("a phone starts on the list; desktop follows the stored preference", () => {
 	assert.equal(initialListOpen(true, "0"), true);
+	assert.equal(initialListOpen(true, null, "/wolf/hal2/thread/t1"), false, "a deep link shows the content, not the list");
 	assert.equal(initialListOpen(false, "0"), false);
 	assert.equal(initialListOpen(false, "1"), true);
 	assert.equal(initialListOpen(false, null), true);

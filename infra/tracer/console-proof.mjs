@@ -58,6 +58,7 @@ try {
   await page.getByText(expect, { exact: false }).first().waitFor({ timeout: 30000 });
   step("reply still there after reload (history read back through the hub relay)");
   await shot("3-reloaded");
+  await mobilePass();
   await browser.close();
 } catch (e) {
   console.error(`[console-proof] FAIL: ${e.message}`);
@@ -65,4 +66,72 @@ try {
   console.error(`[console-proof] url=${page.url()} screenshot=${out}/console-proof-FAIL.png`);
   await browser.close();
   process.exit(1);
+}
+
+// ---- MOBILE PASS (P3): iPhone-sized touch viewport. Kept as one function so it merges cleanly with other edits to this file. ----
+async function mobilePass() {
+  const mstep = (m) => console.log(`[console-proof:mobile] ${m}`);
+  const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+  const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: UA });
+  const mp = await mctx.newPage();
+  mp.on("pageerror", (e) => console.log(`[console-proof:mobile] pageerror: ${e.message}`));
+  const mshot = (n) => mp.screenshot({ path: `${out}/console-mobile-${n}.png` }).catch(() => {});
+  const noOverflow = async (where) => {
+    const w = await mp.evaluate(() => ({ sw: document.documentElement.scrollWidth, bw: document.body.scrollWidth, iw: window.innerWidth }));
+    mstep(`${where}: scrollWidth=${w.sw} body=${w.bw} innerWidth=${w.iw}`);
+    if (w.sw > w.iw || w.bw > w.iw) { await mshot(`overflow-${where.replace(/\W+/g, "-")}`); throw new Error(`horizontal overflow at ${where}: ${w.sw}/${w.bw} > ${w.iw}`); }
+  };
+  try {
+    // manifest: public (no cookie), valid, installable fields, icons fetchable
+    const bare = await (await browser.newContext()).request.get(`${base}/manifest.webmanifest`);
+    if (bare.status() !== 200) throw new Error(`manifest status ${bare.status()}`);
+    const m = await bare.json();
+    mstep(`manifest: ${m.name}/${m.short_name} display=${m.display} start_url=${m.start_url} theme=${m.theme_color} icons=${m.icons?.length}`);
+    if (!m.name || !m.short_name || m.display !== "standalone" || m.start_url !== "/" || !m.theme_color || !m.background_color) throw new Error("manifest missing required fields");
+    if (!m.icons?.some((i) => i.sizes === "192x192") || !m.icons?.some((i) => i.sizes === "512x512")) throw new Error("manifest needs 192 and 512 icons");
+    for (const i of m.icons) {
+      const r = await mctx.request.get(new URL(i.src, base).href);
+      if (r.status() !== 200 || !(r.headers()["content-type"] ?? "").includes("image/png")) throw new Error(`icon ${i.src} -> ${r.status()} ${r.headers()["content-type"]}`);
+    }
+    // pair, then the home screen on a phone is the LIST layer
+    await mp.goto(`${base}/pair#token=${token}`);
+    await mp.waitForURL(`${base}/`, { timeout: 20000 });
+    const link = await mp.locator('link[rel="manifest"]').getAttribute("href");
+    if (!link) throw new Error("page has no <link rel=manifest>");
+    await mp.locator('[data-testid="sidebar"][data-mobile-list]').waitFor({ timeout: 20000 });
+    mstep("home on a phone = the full-screen list layer");
+    await noOverflow("list");
+    await mshot("1-list");
+    // open hal2: the wolf list page (thread links), tap = touch
+    await mp.goto(`${base}/wolf/hal2`);
+    if (await mp.locator('[data-testid="sidebar"][data-mobile-list]').count()) throw new Error("deep link to /wolf/hal2 still shows the list layer");
+    const tl = mp.locator('[data-testid="thread-list"] a').first();
+    await tl.waitFor({ timeout: 30000 });
+    await noOverflow("wolf list");
+    await mshot("2-wolf-hal2");
+    await tl.tap();
+    const ta = mp.locator('[data-testid="composer"] textarea').first();
+    await ta.waitFor({ timeout: 30000 });
+    // tap targets >= 44px in the composer
+    const small = await mp.evaluate(() => [...document.querySelectorAll('[data-testid="composer"] button, [data-testid="composer"] textarea')].map((e) => e.getBoundingClientRect()).filter((r) => r.width < 43.5 || r.height < 43.5).length);
+    if (small) throw new Error(`${small} composer control(s) under 44px`);
+    await ta.tap();
+    await ta.fill("ping");
+    await mshot("3-composing");
+    await mp.locator('[data-testid="composer"] button[type="submit"]').tap();
+    await mp.getByText(expect, { exact: false }).first().waitFor({ timeout: 60000 });
+    mstep(`reply '${expect}' rendered`);
+    await noOverflow("thread");
+    await mshot("4-reply");
+    // back = the visible back control returns to the list layer
+    await mp.locator('[data-testid="mobile-back"]').tap();
+    await mp.locator('[data-testid="sidebar"][data-mobile-list]').waitFor({ timeout: 10000 });
+    await noOverflow("list after back");
+    await mshot("5-back");
+    await mctx.close();
+    mstep("MOBILE PASS OK");
+  } catch (e) {
+    await mshot("FAIL");
+    throw new Error(`mobile pass: ${e.message}`);
+  }
 }

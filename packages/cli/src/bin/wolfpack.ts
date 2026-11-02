@@ -16,6 +16,7 @@ import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
+import { releaseCmd } from "../commands/release.js";
 import { workDoctor } from "../commands/work-doctor.js";
 import { workBackfillFeatureStages } from "../commands/work-backfill.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
@@ -47,6 +48,7 @@ ${c.bold("COMMANDS")}
   usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|use|day)
   work backfill-feature-stages    Move features whose tasks all shipped to shipped (--dry-run, --domain d)
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
+  release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -377,6 +379,19 @@ async function main(): Promise<void> {
         if (sub !== "doctor") throw new Error("Usage: wolfpack work doctor [--domain d] [--json] | work backfill-feature-stages [--dry-run]");
         await workDoctor({ domain: flags.domain as string | undefined, json: flags.json as boolean | undefined });
         break;
+
+      case "release": {
+        const a = process.argv.slice(3);
+        const vi = a.indexOf("--version");
+        await releaseCmd({
+          only: a.filter((x, i) => !x.startsWith("-") && a[i - 1] !== "--version"),
+          bump: a.includes("--major") ? "major" : a.includes("--minor") ? "minor" : "patch",
+          version: vi >= 0 ? a[vi + 1] : undefined,
+          dryRun: a.includes("--dry-run"),
+          yes: a.includes("--yes") || a.includes("-y"),
+        });
+        break;
+      }
 
       case "config":
         await wolfConfig(positional[1], {

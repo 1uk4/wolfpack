@@ -3,6 +3,7 @@
 name: ci
 on:
   push:
+    branches: ['**']   # tag pushes (<component>/vX.Y.Z) are release.yml's, not CI's
   pull_request:
 permissions:
   contents: read

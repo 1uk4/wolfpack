@@ -33,7 +33,7 @@
  *
  * There is NO `runtime` field: durable is the engine. Unknown keys (runtime,
  * profile, role, transport, models, …) are accepted, ignored, and
- * reported in `warnings`. `den` is derived: <dir>/den.
+ * reported in `warnings`. (`models:` is known: per-tier provider/model/thinking that wolfd regenerates models.json from.) `den` is derived: <dir>/den.
  */
 import { z } from "zod";
 
@@ -49,6 +49,11 @@ const TierOverride = z
   .object({ model: z.string().min(1).optional(), thinking: z.string().min(1).optional() })
   .passthrough();
 
+/** One tier of the wolf.yaml `models:` block: pi provider id, model id, thinking level. */
+const ModelTierSetting = z
+  .object({ provider: z.string().min(1).optional(), model: z.string().min(1).optional(), thinking: z.string().min(1).optional() })
+  .passthrough();
+
 export const WolfFileSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -56,6 +61,10 @@ export const WolfFileSchema = z.object({
   tools: z.array(z.string().min(1)).default([...DEFAULT_TOOLS]),
   tiers: z
     .object({ main: TierOverride.optional(), smart: TierOverride.optional(), fast: TierOverride.optional() })
+    .passthrough()
+    .optional(),
+  models: z
+    .object({ main: ModelTierSetting.optional(), smart: ModelTierSetting.optional(), fast: ModelTierSetting.optional() })
     .passthrough()
     .optional(),
   workspace: z.string().min(1).optional(),
@@ -107,6 +116,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "domains",
   "tools",
   "tiers",
+  "models",
   "workspace",
   "extensions",
   "serve",
@@ -136,6 +146,8 @@ export interface WolfConfig {
   capability: {
     tools: string[];
     tiers?: Partial<Record<"main" | "smart" | "fast", TierOverrideConfig>>;
+    /** wolf.yaml `models:`; when present wolfd regenerates the wolf's models.json from it at start. */
+    models?: Partial<Record<"main" | "smart" | "fast", { provider?: string; model?: string; thinking?: string }>>;
     /** Absolute path. Default: the directory holding wolf.yaml. */
     workspace: string;
   };

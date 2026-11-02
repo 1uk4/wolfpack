@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { applyWolfTierOverrides, assertSandboxed, loadModelTable, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   objectsExtension,
   openWolfEngine,
@@ -139,6 +139,16 @@ async function startConfigured(
 ): Promise<RunningWolf> {
   if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, kbBase: env.KB_BASE, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
 
+  // wolf.yaml `models:` is the source of truth for a wolfd wolf's models.json: regenerate it (only if changed) before
+  // reading it. A handed-over WOLFPACK_MODELS_FILE wins and is never rewritten; no `models:` block leaves the file alone.
+  if (!env.WOLFPACK_MODELS_FILE) {
+    try {
+      const r = regenerateWolfModelsFile({ wolfYaml: config.file, models: config.capability.models });
+      if (r.status === "written") log(`models: regenerated ${r.path} from wolf.yaml models:`);
+    } catch (e) {
+      log(`warning: could not regenerate models.json from wolf.yaml models: ${(e as Error).message}`);
+    }
+  }
   const { table: fileTable } = loadModelTable({ env, wolfYaml: config.file });
   // The wolf's table: models file + wolf.yaml `tiers:`. Handed to extensions so memory's engine steps use the same models.
   const table = applyWolfTierOverrides(fileTable, config);

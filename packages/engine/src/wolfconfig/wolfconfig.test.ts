@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
 import { applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
-import { STARTER_PACK_MODELS, resolveModelTable, type ModelTable } from "../models.js";
+import { STARTER_PACK_MODELS, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
 
 let tmp: string;
 beforeEach(() => {
@@ -226,3 +226,45 @@ describe("applyWolfTierOverrides", () => {
   });
 });
 
+
+describe("wolf.yaml models:", () => {
+  const YAML = "name: m\nmodels:\n  smart:\n    provider: claude-stateless\n    model: claude-sonnet-5-5\n";
+  const packFile = () => {
+    const f = path.join(tmp, "pack.yaml");
+    fs.writeFileSync(f, "models:\n  main: { model: claude-opus-5-5 }\n  smart: { model: claude-sonnet-5-5 }\n  fast: { model: claude-haiku-5-5 }\n  transport: { local: subscription, vps: api }\n");
+    return f;
+  };
+
+  it("is a known key: typed, no unknown-field warning", () => {
+    const r = loadWolfConfig(wolf("mk", YAML), { home: "/h" });
+    expect(r.warnings).toEqual([]);
+    expect(r.config.capability.models).toEqual({ smart: { provider: "claude-stateless", model: "claude-sonnet-5-5" } });
+  });
+
+  it("rejects a non-string provider", () => {
+    expect(() => loadWolfConfig(wolf("bad", "name: b\nmodels:\n  smart:\n    provider: 3\n"), { home: "/h" })).toThrow(WolfConfigError);
+  });
+
+  it("regenerates models.json: writes, then is idempotent", () => {
+    const file = wolf("rg", YAML);
+    const cfg = loadWolfConfig(file, { home: "/h" }).config;
+    const pack = packFile();
+    const first = regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: pack });
+    expect(first.status).toBe("written");
+    const written = JSON.parse(fs.readFileSync(first.path, "utf8")) as ModelTable;
+    expect(written.tiers.smart.piModel).toBe("claude-stateless/claude-sonnet-5-5");
+    const mtime = fs.statSync(first.path).mtimeMs;
+    expect(regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: pack }).status).toBe("unchanged");
+    expect(fs.statSync(first.path).mtimeMs).toBe(mtime);
+    expect(fs.readdirSync(path.dirname(file)).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("leaves models.json alone without a models: block", () => {
+    const file = wolf("nb", "name: n\n");
+    const mj = path.join(path.dirname(file), "models.json");
+    fs.writeFileSync(mj, "keep");
+    const cfg = loadWolfConfig(file, { home: "/h" }).config;
+    expect(regenerateWolfModelsFile({ wolfYaml: file, models: cfg.capability.models, packConfigFile: packFile() }).status).toBe("no-models-block");
+    expect(fs.readFileSync(mj, "utf8")).toBe("keep");
+  });
+});

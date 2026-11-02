@@ -376,6 +376,39 @@ export function writeModelTable(file: string, table: ModelTable): void {
   fs.writeFileSync(file, JSON.stringify(table, null, 2) + "\n");
 }
 
+/**
+ * Regenerate a wolf's models.json from the `models:` block of its wolf.yaml (pack `models:` < wolf.yaml), for wolves
+ * wolfd starts without the CLI's launch/sync step. No block: nothing happens (the file is left alone). The file is
+ * rewritten only when the content differs, via a temp file + rename so a reader never sees a partial table.
+ */
+export function regenerateWolfModelsFile(opts: {
+  wolfYaml: string;
+  models: WolfModels["models"] | undefined;
+  packConfigFile?: string;
+  location?: WolfLocation;
+}): { path: string; status: "no-models-block" | "unchanged" | "written" } {
+  const file = path.join(path.dirname(opts.wolfYaml), "models.json");
+  if (!opts.models || Object.keys(opts.models).length === 0) return { path: file, status: "no-models-block" };
+  const table = resolveModelTable({
+    pack: readPackModels(opts.packConfigFile ?? packConfigPath()),
+    wolf: { transport: readWolfModels(opts.wolfYaml)?.transport, models: opts.models },
+    location: opts.location ?? "local",
+  });
+  const next = JSON.stringify(table, null, 2) + "\n";
+  let current: string | undefined;
+  try {
+    current = fs.readFileSync(file, "utf8");
+  } catch {
+    current = undefined;
+  }
+  if (current === next) return { path: file, status: "unchanged" };
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(tmp, next);
+  fs.renameSync(tmp, file);
+  return { path: file, status: "written" };
+}
+
 export function readModelTable(file: string): ModelTable {
   const table = JSON.parse(fs.readFileSync(file, "utf8")) as ModelTable;
   if (!table?.tiers || !table.steps || !table.transport) {

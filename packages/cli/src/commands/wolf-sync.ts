@@ -29,19 +29,22 @@ import {
   type HostEntry,
 } from "../config.js";
 import { isLibrarian, isLibrarianConfig, writePiSettings } from "../extensions.js";
+import { buildWolfdSyncBody } from "../wolfd-release.js";
 import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { c } from "../render.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { readEnvValue } from "./wolf-models.js";
 import { ingestUsageQuietly } from "./usage.js";
-import { ModelConfigError, piModelArg, type ModelTable } from "@wolfpack/engine";
+import { ModelConfigError, piModelArg, writeModelTable, type ModelTable } from "@wolfpack/engine";
 
 interface SyncOpts {
   host?: string;
   all?: boolean;
   /** Rewrite a local wolf's KB_BASE from config even if its .env already has a different one. */
   resetKbBase?: boolean;
+  /** runtime wolfd: path to the release tarball to deploy (default $WOLFD_RELEASE). */
+  release?: string;
 }
 
 /** Trim a .env value and strip one pair of matching surrounding quotes. */
@@ -132,7 +135,7 @@ export async function wolfSync(
     }
 
     const hostName = opts.host ?? config.defaultHost!;
-    await syncOne(config, host, hostName, name);
+    await syncOne(config, host, hostName, name, opts.release);
   }
 
 }
@@ -186,6 +189,35 @@ function syncLocal(config: CliConfig, name: string, resetKbBase = false): void {
   console.log(c.dim(`  Model:   ${piModelArg(table.tiers.main)} (pi settings.json default)`));
   if (missing.length) {
     console.log(c.yellow(`  ! Not installed: ${missing.join(", ")}`));
+  }
+}
+
+/** Ship a wolfd release tarball to one runtime-wolfd wolf (the agent unpacks it and restarts). No build here. */
+async function syncWolfd(config: CliConfig, host: HostEntry, hostName: string, wolf: RemoteWolf, release?: string): Promise<void> {
+  const cfg = wolf.config!;
+  console.log(c.bold(`Syncing ${cfg.name} (wolfd) on ${hostName}...`));
+  const models = resolveModelsOrExit(() => resolveRemoteWolfModels(config, cfg));
+  const env: Record<string, string> = {};
+  if (models.transport === "subscription") {
+    const token = readEnvValue(path.join(os.homedir(), ".wolfpack", ".env"), "CLAUDE_CODE_OAUTH_TOKEN");
+    if (!token) {
+      console.error(c.red(`${cfg.name} is on transport: subscription, but ~/.wolfpack/.env has no CLAUDE_CODE_OAUTH_TOKEN.`));
+      process.exit(1);
+    }
+    env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wolfd-models-"));
+  try {
+    const modelsPath = path.join(tmp, "models.json");
+    writeModelTable(modelsPath, models);
+    const body = buildWolfdSyncBody(release ?? process.env.WOLFD_RELEASE ?? "", { modelsJson: fs.readFileSync(modelsPath, "utf8"), env });
+    await new AgentClient(host).updateWolfBundle(wolf.id, body);
+    console.log(c.green(`✓ Deployed wolfd release to ${cfg.name} — restarted`));
+  } catch (err) {
+    console.error(c.red(`Sync failed: ${err instanceof Error ? err.message : err}`));
+    process.exit(1);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -370,6 +402,7 @@ async function syncOne(
   host: HostEntry,
   hostName: string,
   nameOrId: string,
+  release?: string,
 ): Promise<void> {
   const client = new AgentClient(host);
 
@@ -389,6 +422,11 @@ async function syncOne(
   
   // Report extension drift before syncing
   await reportDrift(cfg.extensions ?? [], wolf);
+
+  if ((cfg as Record<string, unknown>).runtime === "wolfd") {
+    await syncWolfd(config, host, hostName, wolf, release);
+    return;
+  }
 
   // Use pi-durable sync for pi-durable wolves
   if ((cfg as Record<string, unknown>).runtime === "pi-durable") {

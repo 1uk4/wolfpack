@@ -60,8 +60,10 @@ export async function deployCmd(req: DeployRequest, deps: DeployDeps = {}): Prom
   const msg: Record<number, string> = {
     0: "done",
     1: "refused or failed before anything changed",
+    2: "bad arguments for the host script",
     3: "FAILED health check; rolled back to the previous release (unit healthy again)",
-    4: "FAILED and the rollback is unhealthy: needs a human",
+    4: "FAILED and the rollback is unhealthy (or recovery needed): needs a human",
+    255: "ssh itself failed (connection, key or host); nothing was run, or the connection dropped (the host script keeps going and logs to /var/log/deploy-release.log: re-run to see the state)",
   };
   log(code === 0 ? c.green(`✓ ${msg[0]}`) : c.red(`✗ exit ${code}: ${msg[code] ?? "deploy script failed"}`));
   return code;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSshArgv, parseReleaseRef, planDeploy } from "./deploy.js";
+import { buildSshArgv, parseReleaseRef, planDeploy, shellQuote } from "./deploy.js";
 import { deployCmd } from "./commands/deploy.js";
 import type { CliConfig, HostEntry } from "./config.js";
 
@@ -44,11 +44,30 @@ describe("planDeploy", () => {
 describe("buildSshArgv", () => {
   it("pipes the script to sudo bash -s, key-only", () => {
     const a = buildSshArgv(host, ["wolfd", "0.1.1", "--wolf", "hal2"]);
-    expect(a.at(-1)).toBe("sudo bash -s -- wolfd 0.1.1 --wolf hal2");
+    expect(a.at(-1)).toBe("sudo bash -s -- 'wolfd' '0.1.1' '--wolf' 'hal2'");
+    expect(a.at(-2)).toBe("deploy@10.0.0.5");
+    expect(a.at(-3)).toBe("--");
     expect(a).toContain("deploy@10.0.0.5");
     expect(a).toContain("IdentityAgent=none");
-    expect(buildSshArgv({ ...host, ssh: { ...host.ssh, user: "root" } }, ["hubd", "1.0.0"]).at(-1)).toBe("bash -s -- hubd 1.0.0");
+    expect(buildSshArgv({ ...host, ssh: { ...host.ssh, user: "root" } }, ["hubd", "1.0.0"]).at(-1)).toBe("bash -s -- 'hubd' '1.0.0'");
     expect(a.join(" ")).not.toContain("SECRET-API");
+  });
+});
+
+describe("buildSshArgv hostile config", () => {
+  const mk = (address: string, user = "deploy"): HostEntry => ({ ...host, address, ssh: { ...host.ssh, user } });
+  it("refuses option-like or shell-ish addresses and users", () => {
+    for (const bad of ["-oProxyCommand=evil", "host;rm -rf /", "a b", "$(id)", "h`id`", "x\ny", "", "[::1]"]) {
+      expect(() => buildSshArgv(mk(bad), ["hubd", "1.0.0"]), bad).toThrow(/refusing ssh address/);
+    }
+    for (const bad of ["-oProxyCommand=x", "root;id", "a@b", "u u", "$(id)"]) {
+      expect(() => buildSshArgv(mk("10.0.0.5", bad), ["hubd", "1.0.0"]), bad).toThrow(/refusing ssh user/);
+    }
+  });
+  it("accepts ordinary names and quotes hostile script args", () => {
+    expect(buildSshArgv(mk("sfo-01.example.net", "ops_1"), ["x"]).at(-2)).toBe("ops_1@sfo-01.example.net");
+    expect(shellQuote("a'b; rm -rf /")).toBe("'a'\\''b; rm -rf /'");
+    expect(shellQuote("$(id)")).toBe("'$(id)'");
   });
 });
 
@@ -63,7 +82,7 @@ describe("deployCmd (ssh mocked)", () => {
     expect(code).toBe(0);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.stdin).toContain("echo hi");
-    expect(calls[0]!.argv.at(-1)).toBe("sudo bash -s -- wolfd 0.1.1 --wolf hal2 --dry-run");
+    expect(calls[0]!.argv.at(-1)).toBe("sudo bash -s -- 'wolfd' '0.1.1' '--wolf' 'hal2' '--dry-run'");
     expect(out.join("\n")).toContain("dry run");
   });
   it("propagates a rollback exit code and rejects unknown hosts without calling ssh", async () => {

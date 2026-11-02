@@ -54,7 +54,7 @@ echo "$S" | grep -q '"token"' || fail "preview has no confirmation token"
 echo "$S" | grep -q 'tracer-kb-contribution' || fail "preview does not carry the distilled contribution"
 N2=$(ls $CONTRIB/*.md | wc -l); [ "$N1" = "$N2" ] || fail "hub contribution store changed during preview ($N1 -> $N2)"
 [ -z "$(ls $LANE/*.md 2>/dev/null)" ] || fail "preview left a file in the inbox lane"
-IT=$(curl -fsS -H "X-API-Key: $(sed -n 's/^WORK_TOKEN=//p' $WH/.env)" http://127.0.0.1:3141/work/$FEAT)
+IT=$(curl -fsS -H "X-API-Key: $(sed -n 's/^WORK_TOKEN=//p' $WH/.env)" $HUB/v1/workapi/work/$FEAT)
 echo "$IT" | grep -q '"graduated":true' && fail "item graduated by a preview"; echo "$IT" | grep -q '"stage":"archived"' && fail "item archived by a preview"
 echo "work item after preview: not graduated, not archived; hub store still $N2 contribution(s)"
 echo "PASS 3: graduation preview ran, nothing sent"

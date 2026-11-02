@@ -60,17 +60,20 @@ if [ -n "$KB" ]; then
   SEED=$HUBD_DATA/kb/base/domains/tracerkb/entries; mkdir -p "$SEED"
   printf -- '---\nid: kb-tracerkb-aaaaaaa\ntitle: "Tracer seed"\ndomain: tracerkb\n---\n\n# Tracer seed\n\nTRACER-SEED-ENTRY served by the hub KB mirror.\n' > "$SEED/kb-tracerkb-aaaaaaa.md"
   chown -R hubd:hubd "$HUBD_DATA/kb"; touch -d '1 hour ago' "$SEED/kb-tracerkb-aaaaaaa.md"
-  WTOKEN=tracer-work-$RANDOM$RANDOM; mkdir -p $D/work; chown wolf-hal2 $D/work
-  as wolf-hal2 HOME=$WHOME node $T/work-server.mjs $D/work 3141 "$WTOKEN" >"$D/log/work.log" 2>&1 &
-  wait_for "grep -q 'work server' $D/log/work.log"
-  w() { curl -fsS -H "X-API-Key: $WTOKEN" -H 'Content-Type: application/json' "${@:2}" "http://127.0.0.1:3141$1"; }
-  FEAT=$(w /work -d '{"kind":"feature","domain":"tracerkb","title":"Session caching","assignee":"hal2","body":"# Session caching\n\n## Plan\n\nCache it.\n"}' | sed 's/.*"id":"\([^"]*\)".*/\1/')
-  TASK=$(w /work -d "{\"kind\":\"task\",\"domain\":\"tracerkb\",\"title\":\"Task 0\",\"assignee\":\"hal2\",\"partOf\":\"$FEAT\",\"successCriteria\":\"it works\"}" | sed 's/.*"id":"\([^"]*\)".*/\1/')
-  w /work/$TASK -X PATCH -d '{"stage":"shipped"}' >/dev/null
-  echo "work items: feature=$FEAT task=$TASK"
-  KCODE=$(code --kind worker --host-id $HOST_ID)   # a SECOND token of the same host: the wolf's own (workerd's hub.json is not readable by the wolf on the VPS)
+  # The wolf's OWN hub token (a second worker token of the same host; workerd's hub.json is unreadable to the wolf on the VPS). It is also the Work API
+  # key: hubd proxies /v1/workapi/work (scoped to this host's wolves), so there is no separate work server.
+  KCODE=$(code --kind worker --host-id $HOST_ID)
   KTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$KCODE\",\"label\":\"hal2-wolf\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
-  ( umask 077; printf "TRACER_KB=1\nWOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWORK_ENDPOINT=http://127.0.0.1:3141\nWORK_TOKEN=%s\nWOLFPACK_KB_FEED_MS=1000\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KTOKEN" "$WTOKEN" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"; unset KTOKEN
+  w() { curl -fsS -H "X-API-Key: $KTOKEN" -H 'Content-Type: application/json' "${@:2}" "$HUB/v1/workapi/work$1"; }
+  FEAT=$(w "" -d '{"kind":"feature","domain":"tracerkb","title":"Session caching","assignee":"hal2","body":"# Session caching\n\n## Plan\n\nCache it.\n"}' | sed 's/.*"id":"\([^"]*\)".*/\1/')
+  TASK=$(w "" -d "{\"kind\":\"task\",\"domain\":\"tracerkb\",\"title\":\"Task 0\",\"assignee\":\"hal2\",\"partOf\":\"$FEAT\",\"successCriteria\":\"it works\"}" | sed 's/.*"id":"\([^"]*\)".*/\1/')
+  w /$TASK -X PATCH -d '{"stage":"shipped"}' >/dev/null
+  echo "work items (created through the hub proxy with the wolf's token): feature=$FEAT task=$TASK"
+  ( umask 077; printf "TRACER_KB=1\nWOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWORK_ENDPOINT=%s/v1/workapi\nWORK_TOKEN=%s\nWOLFPACK_KB_FEED_MS=1000\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KTOKEN" "$HUB" "$KTOKEN" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"
+  # scope check from the host side: another host's token must not see the item
+  OCODE=$(code --kind worker --host-id other-host); OTOKEN=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$OCODE\",\"label\":\"other\"}" $HUB/v1/pair | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  c=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $OTOKEN" $HUB/v1/workapi/work/$FEAT); echo "scope: a worker token of another host reads the item -> HTTP $c"; [ "$c" = 404 ] || [ "$c" = 403 ] || { echo "FAIL: scope leak ($c)" >&2; exit 1; }
+  unset KTOKEN OTOKEN
 fi
 
 echo "== pair workerd (worker token for host $HOST_ID)"

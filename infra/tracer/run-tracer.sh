@@ -75,6 +75,8 @@ COMMIT="$(git -C "$ROOT" rev-parse --verify --short=12 "$REF^{commit}" 2>/dev/nu
 EXPORT="$(mktemp -d "${TMPDIR:-/tmp}/wolfpack-tracer-export.XXXXXX")"
 git -C "$ROOT" archive "$REF" | tar -x -C "$EXPORT" || fail "git archive $REF failed"
 [ -f "$EXPORT/infra/tracer/Dockerfile.base" ] || fail "ref $REF has no infra/tracer/Dockerfile.base"
+# manifests-only dir for the cached `npm ci` layer (workspace list derived from the ref's own package.json globs)
+node "$ROOT/infra/tracer/stage-manifests.mjs" "$EXPORT" > "$EXPORT/.manifests.list" 2>>"$LOG" || fail "staging workspace manifests failed (see log)"
 if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -v '^??' | head -1)" ] && [ "$REF" = HEAD ]; then log "note: working tree has uncommitted changes; only commit $COMMIT is tested"; fi
 BASE_HASH="$(shasum -a 256 "$EXPORT/infra/tracer/Dockerfile.base" | cut -c1-12)"; BASE_TAG="wolfpack-tracer-base:$BASE_HASH"
 UPSTREAM="$(sed -n 's/^FROM \(node:[^ ]*\).*/\1/p' "$EXPORT/infra/tracer/Dockerfile.base" | head -1)"

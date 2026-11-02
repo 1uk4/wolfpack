@@ -9,7 +9,7 @@
  * - The write queue serialises every mutation in this process (hubd also holds the work-writer lock across processes).
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, truncateSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   appendWorkLedger,
@@ -531,8 +531,20 @@ export const GUARD_MESSAGES: readonly { name: string; re: RegExp; code: ErrorCod
 ];
 
 /** Map a work-ops failure to a protocol error via GUARD_MESSAGES. Everything else is `engine_error` (generic message, detail logged). */
+/** A failed filesystem write (EROFS, EACCES, EPERM, ENOSPC, EDQUOT, EIO): the .md could not be written after the ledger append. */
+export function isFsWriteFailure(e: unknown): boolean {
+  const c = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+  return typeof c === "string" && ["EROFS", "EACCES", "EPERM", "ENOSPC", "EDQUOT", "EIO"].includes(c);
+}
+
 export function mapWorkError(e: unknown): HubError {
   if (e instanceof HubError) return e;
+  // A read-only work store (EROFS, or EACCES/EPERM on the item file): say so, instead of a generic internal error.
+  const errno = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+  if (errno === "EROFS" || errno === "EACCES" || errno === "EPERM") {
+    console.error("hubd: work store is not writable:", e);
+    return new HubError("memory_unavailable", "work store is read-only: this hub cannot write work items (nothing was changed)");
+  }
   const m = e instanceof Error && typeof (e as NodeJS.ErrnoException).code !== "string" ? e.message : undefined;
   const hit = m === undefined ? undefined : GUARD_MESSAGES.find((g) => g.re.test(m));
   if (hit) return new HubError(hit.code, m!);
@@ -642,15 +654,31 @@ export function createWorkWriter(opts: WorkWriterOptions) {
       const probeFailed = before === undefined;
       let result: T | undefined;
       let failure: HubError | undefined;
+      let compensated = false;
       try {
         result = withLedgerAttribution(opts.stamp?.(actor), fn);
       } catch (e) {
         failure = mapWorkError(e);
+        // COMPENSATE (only for a filesystem write failure; a guard error thrown after a partial append keeps its announced events, see the post-append hook test): an op appends its ledger events first and writes the item .md after, so a failed .md write (EROFS, ENOSPC...)
+        // would leave a ledger-only item. A failed write must leave nothing behind: cut the ledger back to where it was. Safe
+        // because this queue + the writer lock make hubd the only appender, so every byte past `before` is this op's. Done before
+        // the hook diff, so subscribers never hear about events that no longer exist.
+        if (before !== undefined && isFsWriteFailure(e)) {
+          try {
+            if (ledgerSize(roots) > before) {
+              truncateSync(workLedgerFile(roots), before);
+              compensated = true;
+            }
+          } catch (te) {
+            console.error("hubd: could not roll back the ledger after a failed write:", te);
+            appendFailed();
+          }
+        }
       }
       // The hook diff must never mask the write's own result or error. It also runs when the op threw after appending.
       // INVARIANT: hubd is the SOLE writer of the ledger (writer lock + this queue), so every byte appended between `before` and
       // now belongs to this write; with any other writer the diff would misattribute their events to this actor.
-      if (before !== undefined) {
+      if (before !== undefined && !compensated) {
         try {
           const { events } = readLedgerSince(roots, before);
           if (events.length > 0) {

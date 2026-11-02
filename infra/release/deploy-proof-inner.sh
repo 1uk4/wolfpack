@@ -165,7 +165,7 @@ run D hubd 0.2.1 $T; rc=$?; [ $rc = 1 ] && [ "$(cur)" = 0.2.0 ] && ! grep -q rol
 run D hubd 0.2.2 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.0 ] && grep -q "rollback via the installed /opt/wolfpack-hubd/setup.sh" <<<"$out" && ok "install fails AFTER the flip -> health/rollback path (rc 3) with the installed setup.sh, back on 0.2.0" || bad "failflip rc=$rc"
 run D hubd 0.2.3 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.0 ] && systemctl is-active --quiet hubd.service && ok "service dies after install -> rolled back (rc 3) and restarted: hubd active again" || bad "crash rc=$rc"
 sed -i 's/HUBD_PORT=8099/HUBD_PORT=8097/' /etc/wolfpack/hubd.env
-run D hubd 0.2.4 $T; rc=$?; [ $rc = 4 ] && [ "$(cur)" = 0.2.0 ] && echo "$out" | grep -q "nothing is listening" && echo "$out" | grep -q "ROLLBACK UNHEALTHY" && ok "active but not listening -> rolled back, re-check also fails (shared bad port) -> rc 4 flagged for a human" || bad "listen rc=$rc"
+run D hubd 0.2.4 $T; rc=$?; [ $rc = 4 ] && [ "$(cur)" = 0.2.0 ] && echo "$out" | grep -q "nothing is listening" && echo "$out" | grep -q "ROLLBACK INCOMPLETE OR UNHEALTHY" && ok "active but not listening -> rolled back, re-check also fails (shared bad port) -> rc 4 flagged for a human" || bad "listen rc=$rc"
 sed -i 's/HUBD_PORT=8097/HUBD_PORT=8099/' /etc/wolfpack/hubd.env
 rm -f $S/hubd.service.active
 run D hubd 0.2.5 $T; rc=$?; [ $rc = 0 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" | grep -q "not running" && ! systemctl is-active --quiet hubd.service && ok "service was stopped: installed, reported, left stopped, not treated as a failure" || bad "stopped rc=$rc"

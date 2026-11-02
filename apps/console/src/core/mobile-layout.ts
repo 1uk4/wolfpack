@@ -12,17 +12,20 @@ export const MOBILE_QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`;
 
 export const isMobileWidth = (width: number): boolean => width < MOBILE_BREAKPOINT;
 
-/** Should the list layer (sidebar) be open after the route changed? A phone navigates list -> content, so any real navigation
- *  closes the list; the first render and same-path updates leave it alone. Desktop: never touched. */
-export function listOpenAfterNavigation(mobile: boolean, open: boolean, prevPath: string | null, path: string): boolean {
-	if (!mobile) return open;
-	return prevPath !== null && prevPath !== path ? false : open;
+/** Open state after the user SELECTS something in the list (a row, a nav link, New session). A phone navigates list -> content, so a
+ *  selection closes the list; this is called from the click handlers themselves, not inferred from a pathname change (a tap on the
+ *  route you are already on changes no path and must still reveal the content). Desktop: never touched. */
+export function listOpenAfterSelect(mobile: boolean, open: boolean): boolean {
+	return mobile ? false : open;
 }
+
+/** The stored desktop preference ("1"/"0"/null), as an open flag. */
+export const storedListOpen = (stored: string | null): boolean => (stored === null ? true : stored === "1");
 
 /** Initial list state: a phone starts on the list only at "/" (the app's home); a deep link or reload on a thread/wolf page shows that
  *  content, and back returns to the list. Desktop uses the persisted preference. */
 export function initialListOpen(mobile: boolean, stored: string | null, path = "/"): boolean {
-	return mobile ? path === "/" : stored === null ? true : stored === "1";
+	return mobile ? path === "/" : storedListOpen(stored);
 }
 
 /** Height of the visible area above the on-screen keyboard (visualViewport), px; falls back to the layout height. */
@@ -33,3 +36,6 @@ export function visibleHeight(vv: { height: number; offsetTop?: number } | null 
 
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
+
+/** The fixed back-to-list control is needed only on a phone, with the list closed, on a page that mounts no SidebarToggle of its own. */
+export const needsFloatingBack = (mobile: boolean, listOpen: boolean, toggles: number): boolean => mobile && !listOpen && toggles === 0;

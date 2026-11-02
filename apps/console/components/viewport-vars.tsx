@@ -11,9 +11,15 @@ export function ViewportVars() {
 		const mq = window.matchMedia(MOBILE_QUERY);
 		const vv = window.visualViewport;
 		const root = document.documentElement;
+		let last = "";
 		const apply = () => {
-			if (!mq.matches) return void root.style.removeProperty("--lh-vvh");
-			root.style.setProperty("--lh-vvh", `${visibleHeight(vv, window.innerHeight)}px`);
+			if (!mq.matches) {
+				last = "";
+				return void root.style.removeProperty("--lh-vvh");
+			}
+			const next = `${visibleHeight(vv, window.innerHeight)}px`;
+			if (next !== last) root.style.setProperty("--lh-vvh", next); // skip no-op writes (scroll events fire often)
+			last = next;
 			if (vv && vv.offsetTop > 0) window.scrollTo(0, 0); // iOS pans the page under the keyboard; the shell is fixed-height
 		};
 		apply();

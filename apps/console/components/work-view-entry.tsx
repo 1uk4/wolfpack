@@ -11,6 +11,7 @@ import { usePathname } from "next/navigation";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime.js";
 import { ListTreeIcon } from "lucide-react";
 import type { WorkRouteView } from "@/src/core";
+import { useSidebar } from "@/components/sidebar";
 
 /** A row the table selected; `seq` makes re-selecting the same row a new request. */
 export interface WorkSelection {
@@ -80,10 +81,12 @@ export function WorkButton() {
 /** The sidebar nav's Work entry: the same overlay as the graph header's button. */
 export function WorkNavEntry() {
 	const { open, isOpen } = useWorkView();
+	const { closeList } = useSidebar();
 	const router = useContext(AppRouterContext);
 	const pathname = usePathname();
 	// Selecting a row splits the view over the graph, so the nav opens the graph page when you're elsewhere.
 	const onClick = () => {
+		closeList();
 		if (pathname != null && pathname !== "/") router?.push("/");
 		open();
 	};

@@ -536,9 +536,13 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   // The LLM's domain is only a hint, and Dewey quarantines undeclared domains
   // as unclassified. Observers on single-domain wolves get no domain list and
   // invent tags ("fitness", "telegram"), so only a subscribed domain survives;
-  // anything else falls back to the wolf's default domain.
+  // anything else falls back to the wolf's default domain, or, when the default is
+  // itself not subscribed (e.g. "wolfpack" on a personal-only wolf), to its first
+  // subscribed domain: the emit guard refuses any other hint, so the topic would
+  // otherwise be skipped forever.
   const allowedDomains = new Set(config.domains?.length ? config.domains : [defaultDomain]);
-  const domainOf = (d: string | undefined) => (d && allowedDomains.has(d) ? d : defaultDomain);
+  const fallbackDomain = allowedDomains.has(defaultDomain) ? defaultDomain : [...allowedDomains][0]!;
+  const domainOf = (d: string | undefined) => (d && allowedDomains.has(d) ? d : fallbackDomain);
 
   for (const action of result.actions) {
     if (action.action === "skip" || !action.result) {

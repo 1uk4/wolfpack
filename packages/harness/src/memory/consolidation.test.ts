@@ -103,6 +103,24 @@ describe("consolidatePool reconcile (pi-durable promote)", () => {
     expect(hints).toEqual(["personal", "personal"]);
     expect(readFileSync(join(den, "memory", "topics", "lift.md"), "utf8")).toContain("domain: personal");
   });
+
+  it("a personal-only wolf whose default is wolfpack: a wolfpack hint is emitted under personal, not skipped", async () => {
+    pool(6);
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { prompt: string }) =>
+        step === "distill"
+          ? schema.parse({ contributions: [{ slug: "main", title: /^TOPIC TITLE: (.*)$/m.exec(opts.prompt)?.[1] ?? "Topic", summary: "s", body: "## Details\nbody" }] })
+          : schema.parse({ actions: [
+          { sessionTopicId: "hint", action: "create", reasoning: "r", result: { id: "hint", title: "Hint", summary: "s", body: "b1", domain: "wolfpack" } },
+        ] }),
+    } as unknown as Engine;
+
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, kbRoots: roots, defaultDomain: "wolfpack", domains: ["personal"], engine });
+
+    const inbox = join(roots.opsRoot, "inbox", WOLF);
+    const hints = readdirSync(inbox).map((f) => /domain_hint: (\S+)/.exec(readFileSync(join(inbox, f), "utf8"))?.[1]);
+    expect(hints).toEqual(["personal"]);
+  });
 });
 
 

@@ -13,7 +13,8 @@
     "./client": "./dist/client/index.js",
     "./librarian": "./dist/librarian/index.js",
     "./librarian/intake": "./dist/librarian/intake.js",
-    "./graph": "./dist/graph/index.js"
+    "./graph": "./dist/graph/index.js",
+    "./sync": "./dist/sync/index.js"
   },
   "scripts": {
     "build": "tsc --build",
@@ -23,6 +24,7 @@
   },
   "dependencies": {
     "@wolfpack/engine": "*",
+    "@wolfpack/protocol": "*",
     "yaml": "^2.6.0",
     "zod": "^3.24.0"
   },

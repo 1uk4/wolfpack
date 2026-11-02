@@ -3,7 +3,9 @@
 # built by scripts/release-build.sh. Local only. Prints SYSTEMD DEPLOY PROOF OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-W=$(mktemp -d); trap 'docker rm -f c4-systemd-proof >/dev/null 2>&1 || true; rm -rf "$W"' EXIT
+# NOTE: the container runs --privileged with the host cgroup namespace (systemd as PID 1 needs it on Docker Desktop). It is throw-away: it mounts only
+# read-only copies of this repo's deploy/, infra/release and infra/wolves, and the container AND the image are removed on exit.
+W=$(mktemp -d); trap 'docker rm -f c4-systemd-proof >/dev/null 2>&1 || true; docker rmi wolfpack-deploy-systemd >/dev/null 2>&1 || true; rm -rf "$W"' EXIT
 docker build -q -f "$ROOT/infra/release/Dockerfile.systemd-proof" -t wolfpack-deploy-systemd "$ROOT/infra/release" >/dev/null
 # A=0.9.1, B=0.9.2 (real, healthy). C=0.9.3: a real bundle whose entrypoint passes setup.sh's smoke test but crashes when run as a service.
 for c in hubd workerd; do for v in 0.9.1 0.9.2; do "$ROOT/scripts/release-build.sh" $c $v "$W/rel" >/dev/null; done

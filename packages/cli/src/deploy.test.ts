@@ -27,6 +27,11 @@ describe("planDeploy", () => {
     expect(() => planDeploy({ component: "hubd", release: "hubd/v0.2.0", host: "h", unit: "link" }, {})).toThrow(/--unit/);
     expect(() => planDeploy({ component: "workerd", release: "workerd/v0.2.0", host: "h", unit: "x" }, {})).toThrow(/--unit/);
   });
+  it("passes the wolfd-unit.sh hash only for wolves/both", () => {
+    const h = "a".repeat(64);
+    expect(planDeploy({ component: "workerd", release: "workerd/v0.2.0", host: "h", unit: "both", wolfdUnitSha256: h }, {}).scriptArgs).toEqual(["workerd", "0.2.0", "--unit", "both", "--wolfd-unit-sha256", h]);
+    expect(planDeploy({ component: "workerd", release: "workerd/v0.2.0", host: "h", unit: "link", wolfdUnitSha256: h }, {}).scriptArgs).toEqual(["workerd", "0.2.0", "--unit", "link"]);
+  });
   it("wolf deploy -> wolfd args on the default host", () => {
     const p = planDeploy({ wolf: "hal2", release: "wolfd/v0.1.1" }, { defaultHost: "sfo-01" });
     expect(p).toMatchObject({ host: "sfo-01", component: "wolfd", scriptArgs: ["wolfd", "0.1.1", "--wolf", "hal2"] });

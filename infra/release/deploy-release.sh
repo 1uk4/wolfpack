@@ -457,7 +457,7 @@ USAGE
       if [ "$LINK" -ge 0 ] && [ "${U_CHG[LINK]}" = 1 ]; then
         o=${U_OPT[LINK]}
         if [ -f "$o/setup.sh" ]; then
-          log "rollback ${U_SVC[LINK]} via the installed $o/setup.sh"
+          log "rollback via the installed $o/setup.sh (${U_SVC[LINK]})"
           if bash "$o/setup.sh" rollback </dev/null 9>&-; then RB+=("$LINK")
           else log "installed setup.sh rollback failed; swapping links myself"; if swap_links "$o"; then RB+=("$LINK"); else log "link swap failed for $o"; rc=1; fi; fi
         else

@@ -14,7 +14,8 @@ RUN mkdir /stage && cp package.json package-lock.json /stage/ \
  && for p in packages/*; do mkdir -p /stage/$p && cp $p/package.json /stage/$p/ && { [ ! -d $p/dist ] || cp -r $p/dist /stage/$p/; }; done
 RUN for a in apps/*; do mkdir -p /stage/$a && cp $a/package.json /stage/$a/; done \
  && cd /stage && npm ci --omit=dev --workspace=@wolfpack/harness --no-audit --no-fund \
- && rm -rf /stage/apps && rm -f /stage/package-lock.json
+ && rm -rf /stage/apps && rm -f /stage/package-lock.json \
+ && find /stage/packages -type f \( -name '*.test.js' -o -name '*.test.d.ts' -o -name '*.test.js.map' \) -delete  # compiled tests carry fake-token fixtures and are not runtime
 # glibc targets only: the musl SDK native package is another ~270 MB.
 RUN rm -rf /stage/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 # claude CLI for operators / the billing probe. Default (small): tools/bin/claude -> the SDK's own native binary (same code the wolf

@@ -23,7 +23,8 @@ const fake = {
   anthropic: "sk-ant-" + "api03-" + "A".repeat(40),
   ghp: "ghp_" + "a1B2".repeat(10),
   pat: "github_pat_" + "11AAAA".repeat(8),
-  key: "-----BEGIN " + "OPENSSH PRIVATE KEY-----",
+  key: "-----BEGIN " + "OPENSSH PRIVATE KEY-----\n" + "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+  aws: "AKIA" + "ABCDEFGHIJKLMNOP",
 };
 
 describe("isEnvFile", () => {
@@ -37,6 +38,8 @@ describe("scanContent", () => {
   it.each(Object.entries(fake))("detects %s", (_k, v) => expect(scanContent(Buffer.from(`x=${v}\n`)).length).toBe(1));
   it("passes ordinary text and short prefixes", () => {
     expect(scanContent(Buffer.from("prefix sk-ant- is documented; ghp_ too; BEGIN PRIVATE"))).toEqual([]);
+    expect(scanContent(Buffer.from('const h = "-----BEGIN ' + 'PRIVATE KEY-----"; // pem header literal in a parser'))).toEqual([]);
+    expect(scanContent(Buffer.from("AKIA" + "IOSFODNN7EXAMPLE"))).toEqual([]);
   });
 });
 

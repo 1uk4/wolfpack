@@ -12,8 +12,9 @@ export const TOKEN_PATTERNS = [
   ["anthropic key", /sk-ant-[A-Za-z0-9_-]{16,}/],
   ["github token", /\bgh[pousr]_[A-Za-z0-9]{30,}/],
   ["github fine-grained pat", /github_pat_[A-Za-z0-9_]{30,}/],
-  ["private key block", /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/],
-  ["aws access key", /\bAKIA[0-9A-Z]{16}\b/],
+  // a real PEM has a base64 body right after the header; bare header literals (parsers, vendored binaries) do not count
+  ["private key block", /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----\s*(?:[A-Za-z0-9+\/=]+:?[^\n]*\n\s*)?[A-Za-z0-9+\/]{40,}/],
+  ["aws access key", /\bAKIA(?![0-9A-Z]*EXAMPLE)[0-9A-Z]{16}\b/],
   ["slack token", /\bxox[abprs]-[A-Za-z0-9-]{20,}/],
 ];
 

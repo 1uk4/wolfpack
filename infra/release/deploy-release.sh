@@ -20,11 +20,12 @@ trap '' PIPE HUP   # an ssh disconnect must not kill a half-done switch
 
 main() {
   local PROD_URL="https://github.com/1uk4/wolfpack/releases/download"
-  local BASE_URL="$PROD_URL" HOME_ROOT=/home OPT_ROOT=/opt ENV_DIR=/etc/wolfpack LOGF=/var/log/deploy-release.log
+  local BASE_URL="$PROD_URL" HOME_ROOT=/home OPT_ROOT=/opt ENV_DIR=/etc/wolfpack LOGF=/var/log/deploy-release.log TMPROOT=/tmp LOCKDIR=/run
   local SYSTEMCTL=systemctl JOURNALCTL=journalctl PROTO='=https'
   if [ "${DEPLOY_TEST:-}" = 1 ]; then
     BASE_URL="${DEPLOY_BASE_URL:-$PROD_URL}"; HOME_ROOT="${DEPLOY_HOME_ROOT:-/home}"; OPT_ROOT="${DEPLOY_OPT_ROOT:-/opt}"
     ENV_DIR="${DEPLOY_ENV_DIR:-/etc/wolfpack}"; LOGF="${DEPLOY_LOG:-$LOGF}"
+    TMPROOT="${DEPLOY_TMP:-/tmp}"; LOCKDIR="${DEPLOY_LOCK_DIR:-/run}"
     SYSTEMCTL="${DEPLOY_SYSTEMCTL:-systemctl}"; JOURNALCTL="${DEPLOY_JOURNALCTL:-journalctl}"; PROTO='=http,https'
   fi
   local COMP="" VER="" WOLF="" DRY=0 HTIMEOUT=60 SETTLE=6
@@ -37,11 +38,71 @@ usage: deploy-release.sh <wolfd|hubd|workerd> <X.Y.Z> [--wolf <name>] [--dry-run
 USAGE
     exit 2
   }
-  sc() { "$SYSTEMCTL" "$@" </dev/null; }
-  jc() { "$JOURNALCTL" "$@" </dev/null; }
+  sc() { "$SYSTEMCTL" "$@" </dev/null 9>&-; }   # 9>&-: children never inherit the deploy lock
+  jc() { "$JOURNALCTL" "$@" </dev/null 9>&-; }
 
+  # Member policy (see README). Prints OK, or "BAD: <why>". Input: a tarball path.
+  inspect_tar() {
+    local listing
+    listing=$(tar --quoting-style=escape --numeric-owner -tvzf "$1" </dev/null 9>&-) || { echo "BAD: cannot list the tarball"; return 0; }
+    printf '%s\n' "$listing" | awk '
+      function bad(m) { print "BAD: " m; failed = 1; exit 1 }
+      function count(str, pat,   c, i) { c = 0; while ((i = index(str, pat)) > 0) { c++; str = substr(str, i + length(pat)) } return c }
+      function resolve(dir, t,   p, n, i, st, sp, seg, out) {
+        if (t ~ /^\//) return "!"
+        n = split(dir "/" t, p, "/"); sp = 0
+        for (i = 1; i <= n; i++) { seg = p[i]
+          if (seg == "" || seg == ".") continue
+          if (seg == "..") { if (sp == 0) return "!"; sp-- } else st[++sp] = seg }
+        out = ""; for (i = 1; i <= sp; i++) out = out (i > 1 ? "/" : "") st[i]
+        return out
+      }
+      {
+        t = substr($0, 1, 1)
+        if (t == "c" || t == "b" || t == "p" || t == "s") bad("device/fifo/socket member")
+        line = $0; sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ /, "", line)
+        if (line ~ /\\/) bad("member name with escaped or control characters")
+        name = line; target = ""
+        arrows = count(line, " -> ") + count(line, " link to ")
+        if (t == "l" || t == "h") {
+          if (arrows != 1) bad("ambiguous link line (more than one link separator)")
+          if (t == "l") { i = index(line, " -> "); if (!i) bad("unparsable symlink line"); name = substr(line, 1, i - 1); target = substr(line, i + 4) }
+          else { i = index(line, " link to "); if (!i) bad("unparsable hardlink line"); name = substr(line, 1, i - 1); target = substr(line, i + 9) }
+          if (name ~ / /) bad("link member name contains a space")
+        } else if (arrows > 0) bad("member name looks like a link line")
+        sub(/^\.\//, "", name); sub(/\/$/, "", name)
+        if (name == "" || name == ".") next
+        if (name ~ /^\// || name ~ /(^|\/)\.\.(\/|$)/) bad("absolute or parent-relative member name")
+        if (name ~ /\/\// || name ~ /(^|\/)\.(\/|$)/) bad("non-canonical member name (// or . component)")
+        n = split(name, pp, "/"); pre = ""
+        for (j = 1; j < n; j++) { pre = pre (j > 1 ? "/" : "") pp[j]; if (pre in sym) bad("member written beneath a symlink") }
+        if (t == "l") {
+          dir = name; if (dir ~ /\//) sub(/\/[^\/]*$/, "", dir); else dir = ""
+          if (resolve(dir, target) == "!") bad("symlink target is absolute or escapes the tree")
+          sym[name] = 1
+        } else if (t == "h") {
+          tn = target; sub(/^\.\//, "", tn)
+          if (tn ~ /^\// || tn ~ /(^|\/)\.\.(\/|$)/ || !(tn in files)) bad("hardlink target is not an earlier member of this archive")
+          files[name] = 1
+        } else if (t == "-") files[name] = 1
+      }
+      END { if (!failed) print "OK" }'
+  }
+  # After extraction: every symlink must canonicalise (readlink -m, so dangling-but-inside links are fine) to a path under the extraction dir.
+  contained_check() { # <dir>; 0 = ok
+    local xr l r
+    xr=$(readlink -f "$1") || return 1
+    while IFS= read -r -d '' l; do
+      r=$(readlink -m "$l" </dev/null 9>&-) || return 1
+      [[ $r == "$xr" || $r == "$xr"/* ]] || { echo "symlink ${l#"$xr"/} resolves outside the release"; return 1; }
+    done < <(find "$xr" -type l -print0 </dev/null)
+    return 0
+  }
+
+  local INSPECT=""
   while (($#)); do
     case "$1" in
+      --inspect-only) [ "${DEPLOY_TEST:-}" = 1 ] || usage; INSPECT="${2:-}"; shift ;;
       --wolf) WOLF="${2:-}"; shift ;;
       --dry-run) DRY=1 ;;
       --health-timeout) HTIMEOUT="${2:-}"; shift ;;
@@ -52,6 +113,12 @@ USAGE
     esac
     shift
   done
+  if [ -n "$INSPECT" ]; then # test-only (DEPLOY_TEST=1): run the member policy + extraction containment on a tarball, change nothing
+    local iv it; iv=$(inspect_tar "$INSPECT"); echo "inspect: $iv"; [ "$iv" = OK ] || exit 1
+    it=$(mktemp -d "$TMPROOT/deploy-inspect.XXXXXX") || exit 1
+    tar -xzf "$INSPECT" --no-same-owner --no-same-permissions --no-overwrite-dir -C "$it" </dev/null 9>&- && contained_check "$it"; iv=$?
+    rm -rf --one-file-system -- "$it"; echo "contained: rc=$iv"; exit "$iv"
+  fi
   [ -n "$COMP" ] && [ -n "$VER" ] || usage
   VER="${VER#v}"
   case "$COMP" in wolfd|hubd|workerd) ;; *) die "unknown component '$COMP' (wolfd|hubd|workerd)" 2 ;; esac
@@ -78,6 +145,24 @@ USAGE
     local f=$1/VERSION v; [ -f "$f" ] || return 1
     v=$(head -n1 "$f" </dev/null); [[ $v =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
     echo "${BASH_REMATCH[1]}"
+  }
+
+  local -a SEL=()
+  # SEL = full paths of release.<kind>-<ver>-<UTC ts> dirs in the wolf home, newest first BY THE TIMESTAMP IN THE NAME (not mtime).
+  # Bash glob + strict name regex + real dirs only (no symlinks): a wolf-writable home can hold any name, including ones with newlines.
+  sel_dirs() { # <prev|failed>
+    local d b k
+    local -a keyed=()
+    SEL=()
+    for d in "$HOME_DIR"/release."$1"-*; do
+      [ -d "$d" ] && [ ! -L "$d" ] || continue
+      b=${d##*/}
+      [[ $b =~ ^release\.(prev|failed)-[0-9A-Za-z.]+-([0-9]{8}T[0-9]{6}Z)$ ]] || continue
+      [ "${BASH_REMATCH[1]}" = "$1" ] || continue
+      keyed+=("${BASH_REMATCH[2]} $d")
+    done
+    ((${#keyed[@]})) || return 0
+    while IFS= read -r k; do SEL+=("${k#* }"); done < <(printf '%s\n' "${keyed[@]}" | LC_ALL=C sort -r)
   }
 
   if ((DRY)); then
@@ -112,12 +197,15 @@ USAGE
     echo "deploy: WARNING cannot write $LOGF; continuing without a log file" >&2
   fi
 
+  command -v flock >/dev/null || die "flock (util-linux) is required"
+  exec 9>"$LOCKDIR/deploy-release-$COMP-${WOLF:-host}.lock" || die "cannot open the lock file in $LOCKDIR"
+  flock -n 9 || die "deploy already running for $COMP${WOLF:+ $WOLF} (lock $LOCKDIR/deploy-release-$COMP-${WOLF:-host}.lock)"
   command -v curl >/dev/null && command -v sha256sum >/dev/null && command -v tar >/dev/null || die "need curl, sha256sum, tar"
   local tv; tv=$(tar --version </dev/null 2>&1 | head -n1)
   [[ $tv == *"GNU tar"* ]] || die "GNU tar required to inspect archive members (got: $tv)"
 
-  local TMP="" STAGE="" SAVED="" HAD_REL=0
-  cleanup() { [ -n "$TMP" ] && rm -rf "$TMP"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
+  local TMP="" STAGE="" SAVED="" HAD_REL=0 cm=""
+  cleanup() { [ -n "$TMP" ] && rm -rf --one-file-system -- "$TMP"; [ -n "$STAGE" ] && rm -rf --one-file-system -- "$STAGE"; return 0; }
   trap cleanup EXIT
 
   # ---- wolfd: preconditions + crash recovery (before anything is downloaded)
@@ -132,18 +220,15 @@ USAGE
     fi
     local lo
     for lo in "$HOME_DIR"/.release.new.* "$HOME_DIR"/.deploy-stage-"$WOLF".* "$HOME_ROOT"/.deploy-stage-"$WOLF".*; do
-      [ -e "$lo" ] && { log "removing leftover $lo"; rm -rf "$lo"; }
+      if [ -e "$lo" ] || [ -L "$lo" ]; then log "removing leftover $lo"; rm -rf --one-file-system -- "$lo"; fi
     done
     if [ ! -e "$REL" ]; then
       local cand=""
-      if [ -d "$PREV" ]; then cand=$PREV
-      else
-        # shellcheck disable=SC2012
-        cand=$(ls -1dt "$HOME_DIR"/release.prev-* 2>/dev/null </dev/null | head -n1)
-      fi
+      if [ -d "$PREV" ] && [ ! -L "$PREV" ]; then cand=$PREV
+      else sel_dirs prev; cand=${SEL[0]:-}; fi
       if [ -n "$cand" ] && [ -f "$cand/launch.sh" ]; then
         log "RECOVERY: $REL is missing (an earlier run died mid-switch); restoring $(basename "$cand")"
-        mv "$cand" "$REL" || { log "recovery mv failed; manual: mv $cand $REL"; exit 4; }
+        mv -T "$cand" "$REL" || { log "recovery mv failed; manual: mv -T $cand $REL"; exit 4; }
         sc restart "$UNIT" || log "WARNING: restart after recovery failed"
       else
         log "$REL is missing and there is nothing to recover from (first install)"
@@ -159,7 +244,7 @@ USAGE
     log "$WOLF: ${have:-none} -> $VER"
   fi
 
-  TMP=$(mktemp -d "${TMPDIR:-/tmp}/deploy-release.XXXXXX") || die "mktemp failed"
+  TMP=$(mktemp -d "$TMPROOT/deploy-release.XXXXXX") || die "mktemp failed"
   fetch() { curl -fsSL --proto "$PROTO" --proto-redir "$PROTO" --tlsv1.2 --max-time 120 -o "$2" "$1" </dev/null; }
   log "download $URL"
   fetch "$URL" "$TMP/$ASSET" || die "download failed: $URL"
@@ -177,63 +262,25 @@ USAGE
   # ---- member inspection (GNU tar listing). Real releases DO contain relative symlinks (node_modules/.bin -> ../x) and hardlinks (esbuild),
   # so links are validated, not banned: no devices/fifos/sockets; a symlink must be relative and stay inside the tree; a hardlink must name an
   # EARLIER regular member of the same archive; no member may be written beneath a symlink; no absolute or `..` member names; no escaped/odd names.
-  local listing verdict
-  listing=$(tar --quoting-style=escape --numeric-owner -tvzf "$TMP/$ASSET" </dev/null) || die "cannot list the tarball"
-  verdict=$(printf '%s\n' "$listing" | awk '
-    function bad(m) { print "BAD: " m; exit 1 }
-    function resolve(dir, t,   p, n, i, st, sp, seg, out) {
-      if (t ~ /^\//) return "!"
-      n = split(dir "/" t, p, "/"); sp = 0
-      for (i = 1; i <= n; i++) { seg = p[i]
-        if (seg == "" || seg == ".") continue
-        if (seg == "..") { if (sp == 0) return "!"; sp-- } else st[++sp] = seg }
-      out = ""; for (i = 1; i <= sp; i++) out = out (i > 1 ? "/" : "") st[i]
-      return out
-    }
-    {
-      t = substr($0, 1, 1)
-      if (t == "c" || t == "b" || t == "p" || t == "s") bad("device/fifo/socket member")
-      line = $0; sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ /, "", line)
-      if (line ~ /\\/) bad("member name with escaped or control characters")
-      name = line; target = ""
-      if (t == "l") { i = index(line, " -> "); if (!i) bad("unparsable symlink line"); name = substr(line, 1, i - 1); target = substr(line, i + 4) }
-      else if (t == "h") { i = index(line, " link to "); if (!i) bad("unparsable hardlink line"); name = substr(line, 1, i - 1); target = substr(line, i + 9) }
-      else if (index(name, " -> ") || index(name, " link to ")) bad("member name looks like a link line")
-      sub(/^\.\//, "", name); sub(/\/$/, "", name)
-      if (name == "" || name == ".") next
-      if (name ~ /^\// || name ~ /(^|\/)\.\.(\/|$)/) bad("absolute or parent-relative member name")
-      n = split(name, pp, "/"); pre = ""
-      for (j = 1; j < n; j++) { pre = pre (j > 1 ? "/" : "") pp[j]; if (pre in sym) bad("member written beneath a symlink") }
-      if (t == "l") {
-        dir = name; if (dir ~ /\//) sub(/\/[^\/]*$/, "", dir); else dir = ""
-        if (resolve(dir, target) == "!") bad("symlink target is absolute or escapes the tree")
-        sym[name] = 1
-      } else if (t == "h") {
-        tn = target; sub(/^\.\//, "", tn)
-        if (tn ~ /^\// || tn ~ /(^|\/)\.\.(\/|$)/ || !(tn in files)) bad("hardlink target is not an earlier member of this archive")
-        files[name] = 1
-      } else if (t == "-") files[name] = 1
-    }
-    END { print "OK" }') || true
+  local verdict
+  verdict=$(inspect_tar "$TMP/$ASSET")
   [ "$verdict" = OK ] || die "unsafe tar member (${verdict#BAD: })"
 
   # ---- stage: root-owned 0700, same filesystem as the wolf home when possible, then chown and rename into place
   if [ "$COMP" = wolfd ]; then
-    local sd; sd=$(stat -c %d "$HOME_ROOT" </dev/null)
-    if [ "$sd" = "$(stat -c %d "$HOME_DIR" </dev/null)" ]; then
-      STAGE=$(mktemp -d "$HOME_ROOT/.deploy-stage-$WOLF.XXXXXX")
-    else
-      STAGE=$(mktemp -d "$HOME_DIR/.deploy-stage-$WOLF.XXXXXX")
-    fi
+    [ "$(stat -c %d "$HOME_ROOT" </dev/null)" = "$(stat -c %d "$HOME_DIR" </dev/null)" ] \
+      || die "$HOME_DIR is on a different filesystem than $HOME_ROOT (a separate mount): an atomic same-filesystem staging rename is impossible; refusing rather than staging inside the wolf-writable home"
+    STAGE=$(mktemp -d "$HOME_ROOT/.deploy-stage-$WOLF.XXXXXX")
     [ -n "$STAGE" ] && [ -d "$STAGE" ] || die "cannot create a staging dir"
     chmod 700 "$STAGE"
     local X="$STAGE/rel"; mkdir "$X"
   else
-    STAGE=$(mktemp -d "${TMPDIR:-/tmp}/deploy-stage.XXXXXX") || die "mktemp failed"
+    STAGE=$(mktemp -d "$TMPROOT/deploy-stage.XXXXXX") || die "mktemp failed"
     chmod 700 "$STAGE"; local X="$STAGE/x"; mkdir "$X"
   fi
   tar -xzf "$TMP/$ASSET" --no-same-owner --no-same-permissions --no-overwrite-dir -C "$X" </dev/null || die "unpack failed"
   [ -z "$(find "$X" ! -type f ! -type d ! -type l -print -quit </dev/null)" ] || die "unpacked tree has special files"
+  cm=$(contained_check "$X") || die "unsafe symlink after extraction (${cm:-unresolvable})"
   check_version() { # <dir>
     [ -f "$1/VERSION" ] || die "VERSION missing in the release"
     local v; v=$(head -n1 "$1/VERSION" </dev/null)
@@ -246,18 +293,23 @@ USAGE
     [ -f "$B/setup.sh" ] || die "$COMP/setup.sh not in the release"
     check_version "$B"
     chmod -R u-s,g-s "$X"
-    local was_active=0 cur_before="" cur_after="" flipped=0 irc=0 since
+    local was_active=0 cur_before="" cur_after="" flipped=0 irc=0 since iid_before="" iid_after="" norestart=0
     sc is-active --quiet "$SVC" 2>/dev/null && was_active=1
     cur_before=$(readlink -f "$OPT/current" 2>/dev/null || true)
+    [ $was_active = 1 ] && iid_before=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true)
     log "$SVC was $([ $was_active = 1 ] && echo active || echo NOT active) before the deploy"
     log "setup.sh install (keeps previous for rollback)"
-    bash "$B/setup.sh" install --bundle "$B" </dev/null || irc=$?
+    bash "$B/setup.sh" install --bundle "$B" </dev/null 9>&- || irc=$?
     cur_after=$(readlink -f "$OPT/current" 2>/dev/null || true)
     [ "$cur_before" != "$cur_after" ] && flipped=1
     if [ $irc != 0 ] && [ $flipped = 0 ]; then
       log "install failed (rc=$irc) and $OPT/current did not change: the old release is still live; nothing to roll back"; exit 1
     fi
     [ $irc = 0 ] || log "install exited rc=$irc AFTER flipping $OPT/current: treating the deploy as failed"
+    if [ $irc = 0 ] && [ $was_active = 1 ] && [ -n "$iid_before" ]; then
+      iid_after=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true)
+      if [ "$iid_after" = "$iid_before" ]; then norestart=1; log "$SVC was active but its InvocationID did not change: install did not restart it, so the new release is not running. Treating the deploy as failed."; fi
+    fi
 
     hub_port_ok() {
       local f="$ENV_DIR/$COMP.env" h p
@@ -287,7 +339,7 @@ USAGE
     }
     hub_rollback() {
       if [ -f "$OPT/setup.sh" ]; then
-        log "rollback via the installed $OPT/setup.sh"; bash "$OPT/setup.sh" rollback </dev/null && return 0
+        log "rollback via the installed $OPT/setup.sh"; bash "$OPT/setup.sh" rollback </dev/null 9>&- && return 0
         log "installed setup.sh rollback failed; swapping links myself"
       else
         log "no installed setup.sh yet; swapping $OPT/current and previous myself"
@@ -304,7 +356,7 @@ USAGE
       install -m 0755 "$B/setup.sh" "$OPT/setup.sh" 2>/dev/null || true
       exit 0
     fi
-    if [ $irc = 0 ] && hub_healthy; then
+    if [ $irc = 0 ] && [ $norestart = 0 ] && hub_healthy; then
       install -m 0755 "$B/setup.sh" "$OPT/setup.sh" || log "note: could not save $OPT/setup.sh (rollback will swap links itself)"
       log "OK: $COMP $VER deployed and healthy"; exit 0
     fi
@@ -333,15 +385,15 @@ USAGE
     SAVED="$HOME_DIR/release.prev-$pv-$TS"
   fi
   # -------- the switch: three renames, each checked
-  if [ -n "$SAVED" ]; then mv "$PREV" "$SAVED" || die "cannot set aside $PREV (nothing changed)"; fi
+  if [ -n "$SAVED" ]; then mv -T "$PREV" "$SAVED" || die "cannot set aside $PREV (nothing changed)"; fi
   if [ -d "$REL" ]; then
     HAD_REL=1
-    mv "$REL" "$PREV" || { [ -n "$SAVED" ] && mv "$SAVED" "$PREV"; die "cannot move $REL aside (nothing changed)"; }
+    mv -T "$REL" "$PREV" || { [ -n "$SAVED" ] && mv -T "$SAVED" "$PREV"; die "cannot move $REL aside (nothing changed)"; }
   fi
-  if ! mv "$X" "$REL"; then
+  if ! mv -T "$X" "$REL"; then
     log "FATAL: cannot move the staged release into place"
-    [ $HAD_REL = 1 ] && { mv "$PREV" "$REL" || { log "manual: mv $PREV $REL"; exit 4; }; }
-    [ -n "$SAVED" ] && { mv "$SAVED" "$PREV" || log "manual: mv $SAVED $PREV"; }
+    [ $HAD_REL = 1 ] && { mv -T "$PREV" "$REL" || { log "manual: mv -T $PREV $REL"; exit 4; }; }
+    [ -n "$SAVED" ] && { mv -T "$SAVED" "$PREV" || log "manual: mv -T $SAVED $PREV"; }
     exit 4
   fi
   log "switched: release=$VER, release.prev=$oldver${SAVED:+ (older prev kept as $(basename "$SAVED"))}"
@@ -374,11 +426,11 @@ USAGE
     done
     log "no serving line within ${to}s (unit ${st:-unknown})"; return 1
   }
-  prune() { # keep the newest 2 of release.prev-* and release.failed-*
-    local pat d
-    for pat in release.prev- release.failed-; do
-      # shellcheck disable=SC2012
-      ls -1dt "$HOME_DIR/$pat"* 2>/dev/null </dev/null | tail -n +3 | while read -r d; do rm -rf "$d"; done
+  prune() { # keep the newest 2 of release.prev-* and release.failed-* (by the timestamp in the name)
+    local k i
+    for k in prev failed; do
+      sel_dirs "$k"
+      for ((i = 2; i < ${#SEL[@]}; i++)); do rm -rf --one-file-system -- "${SEL[i]}"; done
     done
   }
 
@@ -389,9 +441,9 @@ USAGE
   fi
   log "FAILED: rolling back to $oldver"
   local BAD="$HOME_DIR/release.failed-$VER-$TS"
-  mv "$REL" "$BAD" || { log "FATAL: cannot move the failed release aside; manual: swap $REL and $PREV"; exit 4; }
-  if [ $HAD_REL = 1 ]; then mv "$PREV" "$REL" || { log "FATAL: cannot restore; manual: mv $PREV $REL"; exit 4; }; fi
-  if [ -n "$SAVED" ]; then mv "$SAVED" "$PREV" || log "WARNING: could not restore the older prev; manual: mv $SAVED $PREV"; fi
+  mv -T "$REL" "$BAD" || { log "FATAL: cannot move the failed release aside; manual: swap $REL and $PREV"; exit 4; }
+  if [ $HAD_REL = 1 ]; then mv -T "$PREV" "$REL" || { log "FATAL: cannot restore; manual: mv -T $PREV $REL"; exit 4; }; fi
+  if [ -n "$SAVED" ]; then mv -T "$SAVED" "$PREV" || log "WARNING: could not restore the older prev; manual: mv -T $SAVED $PREV"; fi
   log "failed release kept for inspection at $BAD"
   if [ $HAD_REL = 0 ]; then log "no previous release to restore; $UNIT is down"; exit 4; fi
   sleep 1   # journalctl --since has 1 s resolution

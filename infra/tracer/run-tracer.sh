@@ -4,7 +4,7 @@
 #   MODE: (none)=stub scripted model, --kb, --ro-work (kb + read-only work dirs), --console (browser round-trip), --max (real wolfd + claude, Max token)
 #   --build-only   ensure the base, build the per-run image and keep it tagged $TRACER_IMAGE (default wolfpack-tracer) for durability.sh / sim scripts.
 # Steps: lock -> preflight -> [base-build, only if wolfpack-tracer-base:<hash> is missing] -> build (git archive export, never the working tree) -> run-<mode>.
-# Env: TRACER_TIMEOUT_{PREFLIGHT,BASE,BUILD,RUN} (seconds; defaults 60/1800/600/mode-specific), TRACER_MIN_FREE_GB (10), TRACER_OUT (result dir),
+# Env: TRACER_TIMEOUT_{PREFLIGHT,BASE,BUILD,RUN} (seconds; defaults 60/1800/900/mode-specific), TRACER_MIN_FREE_GB (10), TRACER_OUT (result dir),
 #      TRACER_LOCK_DIR, TRACER_DOCKER_ARGS. Test seams: TRACER_TEST_BREAK_APT=1 (forces the base apt check with a broken keyring).
 # Portable: bash 3.2 (macOS), no flock/timeout needed. Exit code: 0 PASS, 1 FAIL, 2 usage/lock refused.
 set -uo pipefail
@@ -109,7 +109,7 @@ if [ -n "$NEED_BASE" ] && [ -z "${TRACER_TEST_BREAK_APT:-}" ]; then
 fi
 # ---- per-run image: repo only ----
 log "== building per-run image from $COMMIT on $BASE_TAG"; t0=$(date +%s)
-run_step build "${TRACER_TIMEOUT_BUILD:-600}" "" docker build --progress=plain --build-arg "BASE=$BASE_TAG" -f "$EXPORT/infra/tracer/Dockerfile" -t "$RUN_IMAGE" "$EXPORT" >> "$LOG" 2>&1 || fail "per-run image build failed (see log)"
+run_step build "${TRACER_TIMEOUT_BUILD:-900}" "" docker build --progress=plain --build-arg "BASE=$BASE_TAG" -f "$EXPORT/infra/tracer/Dockerfile" -t "$RUN_IMAGE" "$EXPORT" >> "$LOG" 2>&1 || fail "per-run image build failed (see log)"
 BUILD_S=$(( $(date +%s) - t0 )); log "build: ${BUILD_S}s"
 if [ -n "$BUILD_ONLY" ]; then docker tag "$RUN_IMAGE" "${TRACER_IMAGE:-wolfpack-tracer}" && RESULT=PASS; exit 0; fi
 

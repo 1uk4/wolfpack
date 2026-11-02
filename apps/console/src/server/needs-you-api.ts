@@ -119,8 +119,10 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 					if (ev.type === "thread-updated") emitThread(wolf, ev.thread);
 					else poke(wolf, changeOf(ev));
 				}
-			} catch {
-				/* retry below */
+			} catch (err) {
+				// A hub-auth failure (no/revoked token) cannot fix itself by retrying: stop following instead of backing off forever.
+				if ((err as { hubAuth?: boolean } | undefined)?.hubAuth === true) break;
+				/* anything else: retry below */
 			}
 			if (signal.aborted) break;
 			await abortableSleep(backoff[Math.min(attempt++, backoff.length - 1)]!, signal);

@@ -38,7 +38,7 @@ install)
   mkdir -p \$OPT/releases/\$v; cp \$B/VERSION \$OPT/releases/\$v/
   [ -L \$OPT/current ] && ln -sfn "\$(readlink -f \$OPT/current)" \$OPT/previous
   ln -sfn \$OPT/releases/\$v \$OPT/current
-  if [ -f \$S/\$U.active ]; then echo \$RANDOM\$RANDOM > \$S/\$U.iid; [ \$MODE = crash ] && rm -f \$S/\$U.active; fi
+  if [ -f \$S/\$U.active ]; then [ \$MODE = norestart ] || echo \$RANDOM\$RANDOM > \$S/\$U.iid; [ \$MODE = crash ] && rm -f \$S/\$U.active; fi
   [ \$MODE = failflip ] && { echo "install: simulated failure after the flip"; exit 1; }
   exit 0;;
 rollback)
@@ -53,12 +53,14 @@ EOS
 }
 mkw 0.1.0 good; mkw 0.1.1 good; mkw 0.1.2 good; mkw 0.1.3 crash; mkw 0.1.4 good; mkw 0.1.5 good; mkw 0.1.6 good; mkw 0.1.8 flap; mkw 0.1.9 good; mkw 0.1.10 good; mkw 0.1.11 good
 mkevil 0.1.7 good-links
-i=0; for k in hardlink-abs hardlink-escape symlink-abs symlink-escape symwrite chardev fifo dotdot absname; do i=$((i+1)); mkevil 0.3.$i $k; done
+EVIL="hardlink-abs hardlink-escape symlink-abs symlink-escape symwrite chardev fifo dotdot absname arrow-sym arrow-hard dot1 dot2 dot3"
+i=0; for k in $EVIL; do i=$((i+1)); mkevil 0.3.$i $k; done
+mkevil 0.4.1 chain
 echo "0000000000000000000000000000000000000000000000000000000000000000  wolfd-v0.1.2-linux-x64.tar.gz" > /srv/www/wolfd/v0.1.2/wolfd-v0.1.2-linux-x64.tar.gz.sha256
 rm /srv/www/wolfd/v0.1.4/*.sha256
 sed -i 's/wolfd-v0.1.5/hubd-v0.1.5/' /srv/www/wolfd/v0.1.5/wolfd-v0.1.5-linux-x64.tar.gz.sha256
 for v in 0.2.0:good 0.2.1:failnoflip 0.2.2:failflip 0.2.3:crash 0.2.4:good 0.2.5:good 0.2.6:failflip 0.2.7:crash; do mkhub hubd ${v%%:*} ${v#*:}; done
-mkhub workerd 0.2.0 good
+mkhub hubd 0.2.8 norestart; mkhub workerd 0.2.0 good
 ( cd /srv/www && node -e 'const h=require("http"),fs=require("fs");h.createServer((q,r)=>{try{r.end(fs.readFileSync("/srv/www"+q.url))}catch{r.statusCode=404;r.end()}}).listen(8099,"127.0.0.1")' >/dev/null 2>&1 </dev/null & ); sleep 1
 
 T="--health-timeout 8 --settle 2"
@@ -79,6 +81,14 @@ run D wolfd 0.1.0 --wolf own $T; [ $? = 1 ] && echo "$out" | grep -q "not owned"
 echo "--- test seams are off without DEPLOY_TEST"
 out=$(env -u DEPLOY_TEST bash -s -- wolfd 9.9.9 --wolf hal2 $T < /opt/release/deploy-release.sh 2>&1); rc=$?
 [ $rc = 1 ] && echo "$out" | grep -q "https://github.com/1uk4/wolfpack/releases/download/wolfd/v9.9.9" && ! echo "$out" | grep -q 127.0.0.1 && ok "DEPLOY_BASE_URL ignored in production mode (url is github https)" || { echo "$out"; bad "seam leak"; }
+echo "--- lock: a concurrent deploy for the same wolf is refused"
+exec 8>/run/deploy-release-wolfd-hal2.lock; flock -n 8 || bad "proof could not take the lock"
+run D wolfd 0.1.0 --wolf hal2 $T; rc=$?; exec 8>&-
+[ $rc = 1 ] && echo "$out" | grep -q "deploy already running" && ! echo "$out" | grep -q "download" && [ ! -e $H/release ] && ok "second deploy refused while the lock is held (before any download)" || bad "lock rc=$rc"
+echo "--- cross-filesystem wolf home is refused (no staging inside the wolf-writable home)"
+useradd -M wolf-xfs; mkdir /home/wolf-xfs; mount -t tmpfs tmpfs /home/wolf-xfs && chown wolf-xfs:wolf-xfs /home/wolf-xfs && echo "CLAUDE_CODE_OAUTH_TOKEN=x" > /home/wolf-xfs/.env && chmod 600 /home/wolf-xfs/.env && chown wolf-xfs:wolf-xfs /home/wolf-xfs/.env || bad "cannot mount tmpfs (needs --cap-add SYS_ADMIN)"
+run D wolfd 0.1.0 --wolf xfs $T; rc=$?
+[ $rc = 1 ] && echo "$out" | grep -q "different filesystem" && [ -z "$(ls -A /home/wolf-xfs | grep -v '^.env$')" ] && ok "different-filesystem home refused (rc 1), nothing staged in it" || bad "xfs rc=$rc"
 echo "--- deploy v0.1.0 (first install)"
 run D wolfd v0.1.0 --wolf hal2 $T || bad "first deploy"; [ "$(ver)" = 0.1.0 ] && [ "$(stat -c %U $H/release/launch.sh)" = wolf-hal2 ] && ok "v0.1.0 live, owned by wolf-hal2" || bad "first deploy state"
 grep -q "deploy wolfd/v0.1.0 wolf=hal2" /var/log/deploy-test.log && ok "output teed to the log file"
@@ -92,12 +102,14 @@ for c in "0.1.2|sha256 mismatch" "0.1.4|no .*sha256 published" "0.1.5|mismatch" 
   run D wolfd $v --wolf hal2 $T; rc=$?; echo "$out" | grep -qi "REFUSED.*$m" && [ $rc = 1 ] && [ "$(ver)" = 0.1.1 ] && ok "v$v refused ($m); release still 0.1.1" || bad "refusal $v rc=$rc"
 done
 echo "--- hostile tar members are refused before anything changes"
-i=0; for k in hardlink-abs hardlink-escape symlink-abs symlink-escape symwrite chardev fifo dotdot absname; do i=$((i+1))
+i=0; for k in $EVIL; do i=$((i+1))
   before=$(ls $H | tr '\n' ' ')
   run D wolfd 0.3.$i --wolf hal2 $T; rc=$?
   echo "$out" | grep -q "unsafe tar member" && [ $rc = 1 ] && [ "$(ver)" = 0.1.1 ] && [ "$(ls $H | tr '\n' ' ')" = "$before" ] && [ -z "$(leftovers)" ] && ok "$k refused (rc 1), home untouched, no temp dirs" || bad "evil $k rc=$rc"
 done
 [ ! -e /tmp/abs-escape ] && [ ! -e /srv/escape ] && ok "nothing was written outside the staging dir"
+before=$(ls $H | tr '\n' ' '); run D wolfd 0.4.1 --wolf hal2 $T; rc=$?
+echo "$out" | grep -q "unsafe symlink after extraction" && [ $rc = 1 ] && [ "$(ver)" = 0.1.1 ] && [ "$(ls $H | tr '\n' ' ')" = "$before" ] && [ -z "$(leftovers)" ] && ok "lexically-inside symlink chain that really escapes is refused after extraction (rc 1), staging removed" || bad "chain rc=$rc"
 echo "--- a release with ordinary relative symlinks + an in-archive hardlink (like the real wolfd tarball) is accepted"
 run D wolfd 0.1.7 --wolf hal2 $T || bad "good-links"; [ "$(ver)" = 0.1.7 ] && [ -L $H/release/tools/bin/claude ] && [ "$(stat -c %U $H/release/node_modules/x/claude)" = wolf-hal2 ] && ok "v0.1.7 (symlink + hardlink) deployed, links kept, owned by wolf-hal2"
 echo "--- ANTHROPIC_API_KEY refused (name only)"
@@ -129,6 +141,19 @@ run D wolfd 0.1.11 --wolf hal2 $T; rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q "RECOVERY" && [ "$(ver)" = 0.1.11 ] && active && ok "recovered from the newest release.prev-* then deployed 0.1.11" || bad "recovery 2 rc=$rc"
 n1=$(ls -d $H/release.prev-* 2>/dev/null | wc -l); n2=$(ls -d $H/release.failed-* 2>/dev/null | wc -l)
 [ $n1 -le 2 ] && [ $n2 -le 2 ] && ok "old release.prev-*/release.failed-* pruned to the newest 2 ($n1/$n2)" || bad "prune $n1/$n2"
+echo "--- prev/failed selection: bash glob + strict name + timestamp order; hostile names and symlinks are ignored"
+mkdir /srv/sentinel; echo keep > /srv/sentinel/keep
+mkdir "$H/release.prev-x"$'\n'"foo" "$H/release.prev-notatimestamp"; ln -s /srv/sentinel "$H/release.prev-9.9.9-20190101T000000Z"
+for t in 20200101T000000Z 20200102T000000Z 20200103T000000Z; do mkdir "$H/release.prev-0.0.1-$t"; done      # valid names, OLD timestamps, FRESH mtime
+for dd in $(ls -d $H/release.prev-*2026* $H/release.failed-* 2>/dev/null); do touch -d 2001-01-01 "$dd"; done   # new releases get OLD mtime: ls -t would keep the wrong ones
+mkw 0.1.12 good; run D wolfd 0.1.12 --wolf hal2 $T || bad "deploy 0.1.12"
+nv=$(for dd in "$H"/release.prev-*; do [[ ${dd##*/} =~ ^release\.prev-[0-9A-Za-z.]+-[0-9]{8}T[0-9]{6}Z$ ]] && [ -d "$dd" ] && [ ! -L "$dd" ] && echo x; done | wc -l)
+[ "$nv" = 2 ] && ! ls -d $H/release.prev-0.0.1-* >/dev/null 2>&1 && ls -d $H/release.prev-*2026* >/dev/null && ok "pruned by the timestamp in the name (2020 dirs gone although freshest by mtime), 2 newest kept" || bad "prune order nv=$nv"
+[ -d "$H/release.prev-x"$'\n'"foo" ] && [ -d "$H/release.prev-notatimestamp" ] && [ -L "$H/release.prev-9.9.9-20190101T000000Z" ] && [ -f /srv/sentinel/keep ] && ok "newline-named dir, non-matching name and a symlink named like a release were ignored; nothing outside the home touched" || bad "hostile names touched"
+printf '6.6.6+evil\n' > "$H/release.prev-notatimestamp/VERSION"; printf '#!/bin/sh\nexit 0\n' > "$H/release.prev-notatimestamp/launch.sh"; chmod +x "$H/release.prev-notatimestamp/launch.sh"
+rm -rf "$H/release" "$H/release.prev"; mkw 0.1.13 good
+run D wolfd 0.1.13 --wolf hal2 $T; rc=$?
+[ $rc = 0 ] && echo "$out" | grep -q RECOVERY && [ "$(ver)" = 0.1.13 ] && [ "$(head -c5 $H/release.prev/VERSION)" != 6.6.6 ] && ok "recovery picks only strictly-named dirs (the launch.sh-bearing 'release.prev-notatimestamp' was not restored)" || bad "recovery selection rc=$rc"
 echo "--- hubd via setup.sh (fake unit flag; env file points at the listening http server)"
 install -d /etc/wolfpack /opt/wolfpack-hubd/releases /opt/wolfpack-workerd/releases
 printf 'HUBD_HOST=127.0.0.1\nHUBD_PORT=8099\nWORKERD_HOST=127.0.0.1\nWORKERD_PORT=8099\n' > /etc/wolfpack/hubd.env; cp /etc/wolfpack/hubd.env /etc/wolfpack/workerd.env
@@ -146,7 +171,13 @@ run D hubd 0.2.5 $T; rc=$?; [ $rc = 0 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" |
 run D hubd 0.2.6 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" | grep -q "left stopped" && ok "stopped service + install fails after flip -> rolled back, left stopped (rc 3)" || bad "stopped failflip rc=$rc"
 touch $S/hubd.service.active; rm -f /opt/wolfpack-hubd/setup.sh
 run D hubd 0.2.7 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" | grep -q "swapping /opt/wolfpack-hubd/current and previous myself" && ok "no installed setup.sh yet -> script swaps the links itself (rc 3)" || bad "native rollback rc=$rc"
+run D hubd 0.2.8 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" | grep -q "InvocationID did not change" && systemctl is-active --quiet hubd.service && ok "active service whose install did not restart it (InvocationID unchanged) -> rolled back and restarted (rc 3)" || bad "norestart rc=$rc"
 touch $S/workerd.service.active; echo 1 > $S/workerd.service.iid
 run D workerd 0.2.0 $T || bad "workerd"; [ "$(basename "$(readlink -f /opt/wolfpack-workerd/current)" | cut -d+ -f1)" = 0.2.0 ] && ok "workerd 0.2.0 installed through the same path"
 [ -z "$(leftovers)" ] && ok "no temp dirs left behind"
+if [ -f /real.tgz ]; then
+  echo "--- the REAL published wolfd tarball passes the member policy and symlink containment"
+  out=$(env DEPLOY_TEST=1 bash -s -- --inspect-only /real.tgz < /opt/release/deploy-release.sh 2>&1); rc=$?; echo "$out" | sed 's/^/    /'
+  [ $rc = 0 ] && echo "$out" | grep -q "^inspect: OK" && echo "$out" | grep -q "contained: rc=0" && ok "real wolfd release accepted (31 relative symlinks, 1 hardlink)" || bad "real tarball rejected rc=$rc"
+fi
 echo "DEPLOY PROOF OK"

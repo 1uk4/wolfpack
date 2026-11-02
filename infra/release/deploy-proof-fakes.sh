@@ -57,6 +57,13 @@ elif kind == "chardev": node("./dev0", tarfile.CHRTYPE, "", 1, 3)
 elif kind == "fifo": node("./fifo0", tarfile.FIFOTYPE)
 elif kind == "dotdot": add("../escape", b"x")
 elif kind == "absname": add("/tmp/abs-escape", b"x")
+elif kind == "arrow-sym": node("./x -> y", tarfile.SYMTYPE, "/etc")           # name contains " -> ": listing 'x -> y -> /etc'
+elif kind == "arrow-hard": add("./z", b"zz"); node("./a link to b", tarfile.LNKTYPE, "./z")
+elif kind == "dot1": node("./d", tarfile.SYMTYPE, "."); add("././d/x", b"x")
+elif kind == "dot2": node("./d", tarfile.SYMTYPE, "."); add("./a/./d/x", b"x")
+elif kind == "dot3": node("./d", tarfile.SYMTYPE, "."); add("./d//x", b"x")
+elif kind == "chain":   # lexically inside, really escapes: q -> ../.. is the root, z -> deep/er/q/.. is the root's parent
+    node("./deep/er/q", tarfile.SYMTYPE, "../.."); node("./z", tarfile.SYMTYPE, "deep/er/q/..")
 tf.close()
 F
 chmod +x /opt/fakes/journalctl /opt/fakes/systemctl

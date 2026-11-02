@@ -1,6 +1,6 @@
 /**
  * wolfpack deploy <wolf> --release <wolfd/vX.Y.Z|vX.Y.Z|X.Y.Z> [--host h] [--dry-run] [--health-timeout s]
- * wolfpack deploy --component hubd|workerd --release <tag|version> --host <h> [--dry-run]
+ * wolfpack deploy --component hubd|workerd --release <tag|version> --host <h> [--unit link|wolves|both] [--dry-run]
  * Runs infra/release/deploy-release.sh on the host over ssh (script piped on stdin) and streams its output.
  * The host downloads the GitHub release, verifies sha256, switches, health-checks and rolls back by itself.
  */

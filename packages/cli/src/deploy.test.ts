@@ -22,6 +22,11 @@ describe("parseReleaseRef", () => {
 });
 
 describe("planDeploy", () => {
+  it("passes --unit for workerd only", () => {
+    expect(planDeploy({ component: "workerd", release: "workerd/v0.2.0", host: "h", unit: "wolves" }, {}).scriptArgs).toEqual(["workerd", "0.2.0", "--unit", "wolves"]);
+    expect(() => planDeploy({ component: "hubd", release: "hubd/v0.2.0", host: "h", unit: "link" }, {})).toThrow(/--unit/);
+    expect(() => planDeploy({ component: "workerd", release: "workerd/v0.2.0", host: "h", unit: "x" }, {})).toThrow(/--unit/);
+  });
   it("wolf deploy -> wolfd args on the default host", () => {
     const p = planDeploy({ wolf: "hal2", release: "wolfd/v0.1.1" }, { defaultHost: "sfo-01" });
     expect(p).toMatchObject({ host: "sfo-01", component: "wolfd", scriptArgs: ["wolfd", "0.1.1", "--wolf", "hal2"] });

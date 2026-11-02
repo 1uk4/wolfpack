@@ -386,7 +386,7 @@ async function main(): Promise<void> {
       case "deploy": {
         const a = process.argv.slice(3);
         const opt = (n: string) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : undefined; };
-        const vals = new Set(["--release", "--component", "--host", "--health-timeout"].map((n) => a.indexOf(n) + 1).filter((i) => i > 0));
+        const vals = new Set(["--release", "--component", "--host", "--health-timeout", "--unit"].map((n) => a.indexOf(n) + 1).filter((i) => i > 0));
         const ht = opt("--health-timeout");
         const code = await deployCmd({
           wolf: a.find((x, i) => !x.startsWith("-") && !vals.has(i)),
@@ -394,6 +394,7 @@ async function main(): Promise<void> {
           release: opt("--release") ?? "",
           host: opt("--host"),
           dryRun: a.includes("--dry-run"),
+          unit: opt("--unit"),
           healthTimeout: ht === undefined ? undefined : Number(ht),
         });
         if (code !== 0) process.exit(code);

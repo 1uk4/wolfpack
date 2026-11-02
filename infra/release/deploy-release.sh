@@ -28,13 +28,13 @@ main() {
     TMPROOT="${DEPLOY_TMP:-/tmp}"; LOCKDIR="${DEPLOY_LOCK_DIR:-/run}"
     SYSTEMCTL="${DEPLOY_SYSTEMCTL:-systemctl}"; JOURNALCTL="${DEPLOY_JOURNALCTL:-journalctl}"; PROTO='=http,https'
   fi
-  local COMP="" VER="" WOLF="" DRY=0 HTIMEOUT=60 SETTLE=6
+  local COMP="" VER="" WOLF="" UNITSEL=auto DRY=0 HTIMEOUT=60 SETTLE=6
   log() { echo "deploy: $*"; }
   die() { echo "deploy: REFUSED: $1" >&2; exit "${2:-1}"; }
   usage() {
     cat >&2 <<'USAGE'
-usage: deploy-release.sh <wolfd|hubd|workerd> <X.Y.Z> [--wolf <name>] [--dry-run] [--health-timeout SEC] [--settle SEC]
-  wolfd needs --wolf <name>; hubd/workerd must not have it. Run as root (not needed for --dry-run).
+usage: deploy-release.sh <wolfd|hubd|workerd> <X.Y.Z> [--wolf <name>] [--unit auto|link|wolves|both] [--dry-run] [--health-timeout SEC] [--settle SEC]
+  wolfd needs --wolf <name>; hubd/workerd must not have it. --unit (workerd only): link = workerd, wolves = workerd-wolves, both, auto (default) = both when /opt/wolfpack-workerd-wolves/current exists else link. Run as root (not needed for --dry-run).
 USAGE
     exit 2
   }
@@ -104,6 +104,7 @@ USAGE
     case "$1" in
       --inspect-only) [ "${DEPLOY_TEST:-}" = 1 ] || usage; INSPECT="${2:-}"; shift ;;
       --wolf) WOLF="${2:-}"; shift ;;
+      --unit) UNITSEL="${2:-}"; shift ;;
       --dry-run) DRY=1 ;;
       --health-timeout) HTIMEOUT="${2:-}"; shift ;;
       --settle) SETTLE="${2:-}"; shift ;;
@@ -134,6 +135,19 @@ USAGE
   else
     [ -z "$WOLF" ] || die "--wolf only applies to wolfd" 2
     SVC="$COMP.service"; OPT="$OPT_ROOT/wolfpack-$COMP"
+  fi
+  case "$UNITSEL" in auto|link|wolves|both) ;; *) die "--unit must be auto|link|wolves|both" 2 ;; esac
+  [ "$COMP" = workerd ] || [ "$UNITSEL" = auto ] || die "--unit only applies to workerd" 2
+  if [ "$COMP" = workerd ]; then
+    if [ "$UNITSEL" = auto ]; then if [ -L "$OPT_ROOT/wolfpack-workerd-wolves/current" ]; then UNITSEL=both; else UNITSEL=link; fi; fi
+  fi
+  if [ "$COMP" != wolfd ] && ((!DRY)); then # deploy only upgrades: refuse a host that was never set up (first install is `setup.sh setup`, an owner step)
+    if [ "$UNITSEL" != wolves ] && ! { [ -L "$OPT/current" ] && [ -e "$OPT/current" ]; }; then
+      die "no existing $COMP install ($OPT/current is missing): deploy only upgrades. First install: unpack the release and run 'bash $COMP/setup.sh setup' then 'install --bundle' yourself (see infra/release/README.md)"
+    fi
+    if [ "$UNITSEL" != link ] && [ "$COMP" = workerd ] && ! { [ -L "$OPT_ROOT/wolfpack-workerd-wolves/current" ] && [ -e "$OPT_ROOT/wolfpack-workerd-wolves/current" ]; }; then
+      die "no existing workerd-wolves install ($OPT_ROOT/wolfpack-workerd-wolves/current is missing): not set up (infra/wolves/README.md); use --unit link"
+    fi
   fi
   ((DRY)) || [ "$(id -u)" = 0 ] || die "run as root (or --dry-run)" 2
 
@@ -180,6 +194,7 @@ USAGE
       log "  failure   swap back, restart, re-check, exit 3"
     else
       log "  install   bash <unpacked>/$COMP/setup.sh install --bundle <unpacked>/$COMP   (keeps 'previous'); service was-active is recorded first"
+      [ "$COMP" = workerd ] && log "  units     --unit $UNITSEL: link = workerd.service (setup.sh), wolves = workerd-wolves.service (own /opt/wolfpack-workerd-wolves; same workerd.mjs, wolfd-unit.sh carried over, restarted by this script); a real run refuses when the install dir has no 'current' (first install is setup.sh setup)"
       log "  health    $SVC active, no err journal, stable for ${SETTLE}s, port accepts a connection <= ${HTIMEOUT}s; failure after the flip -> rollback, exit 3"
     fi
     exit 0
@@ -293,80 +308,149 @@ USAGE
     [ -f "$B/setup.sh" ] || die "$COMP/setup.sh not in the release"
     check_version "$B"
     chmod -R u-s,g-s "$X"
-    local was_active=0 cur_before="" cur_after="" flipped=0 irc=0 since iid_before="" iid_after="" norestart=0
-    sc is-active --quiet "$SVC" 2>/dev/null && was_active=1
-    cur_before=$(readlink -f "$OPT/current" 2>/dev/null || true)
-    [ $was_active = 1 ] && iid_before=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true)
-    log "$SVC was $([ $was_active = 1 ] && echo active || echo NOT active) before the deploy"
-    log "setup.sh install (keeps previous for rollback)"
-    bash "$B/setup.sh" install --bundle "$B" </dev/null 9>&- || irc=$?
-    cur_after=$(readlink -f "$OPT/current" 2>/dev/null || true)
-    [ "$cur_before" != "$cur_after" ] && flipped=1
-    if [ $irc != 0 ] && [ $flipped = 0 ]; then
-      log "install failed (rc=$irc) and $OPT/current did not change: the old release is still live; nothing to roll back"; exit 1
+    local since irc=0 flipped=0 n i
+    # Per-unit state, index-aligned. Unit 0 is the component's own service (hubd, or the link-only workerd) and is installed by the release's
+    # setup.sh. For workerd, the optional unit 1 is workerd-wolves: its own install dir, env file and port, NOT known to setup.sh, so this script
+    # installs the same workerd.mjs there itself (keeping its wolfd-unit.sh) and restarts it. Any unit failing rolls ALL of them back.
+    local -a U_SVC=("$SVC") U_OPT=("$OPT") U_ENV=("$ENV_DIR/$COMP.env") U_PFX=("${COMP^^}") U_HOST=("") U_WAS=() U_IID=() U_CURB=() U_NOREST=()
+    if [ "$UNITSEL" != link ] && [ "$COMP" = workerd ]; then
+      U_SVC+=(workerd-wolves.service); U_OPT+=("$OPT_ROOT/wolfpack-workerd-wolves"); U_ENV+=("$ENV_DIR/workerd-wolves.env"); U_PFX+=(WORKERD); U_HOST+=(127.0.0.1)
     fi
-    [ $irc = 0 ] || log "install exited rc=$irc AFTER flipping $OPT/current: treating the deploy as failed"
-    if [ $irc = 0 ] && [ $was_active = 1 ] && [ -n "$iid_before" ]; then
-      iid_after=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true)
-      if [ "$iid_after" = "$iid_before" ]; then norestart=1; log "$SVC was active but its InvocationID did not change: install did not restart it, so the new release is not running. Treating the deploy as failed."; fi
+    [ "$UNITSEL" != wolves ] || { U_SVC=("${U_SVC[1]}"); U_OPT=("${U_OPT[1]}"); U_ENV=("${U_ENV[1]}"); U_PFX=("${U_PFX[1]}"); U_HOST=("${U_HOST[1]}"); }
+    n=${#U_SVC[@]}
+    for ((i = 0; i < n; i++)); do
+      U_WAS[i]=0; U_NOREST[i]=0; U_IID[i]=""
+      sc is-active --quiet "${U_SVC[i]}" 2>/dev/null && U_WAS[i]=1
+      U_CURB[i]=$(readlink -f "${U_OPT[i]}/current" 2>/dev/null || true)
+      [ "${U_WAS[i]}" = 1 ] && U_IID[i]=$(sc show -p InvocationID --value "${U_SVC[i]}" 2>/dev/null || true)
+      log "${U_SVC[i]} was $([ "${U_WAS[i]}" = 1 ] && echo active || echo NOT active) before the deploy"
+    done
+    local LINK=-1 WOLVES=-1
+    for ((i = 0; i < n; i++)); do case "${U_SVC[i]}" in workerd-wolves.service) WOLVES=$i ;; *) LINK=$i ;; esac; done
+
+    # workerd-wolves install: same files as setup.sh install, plus the wolfd-unit.sh carried over from the live release. rc 0 = flipped,
+    # 1 = failed before any change here.
+    wolves_install() {
+      local o=${U_OPT[WOLVES]} ver rel live node out old cur prev
+      ver=$(head -n1 "$B/VERSION" </dev/null); rel="$o/releases/$(date -u +%Y%m%dT%H%M%SZ)-$ver"
+      live=$(readlink -f "$o/current") || return 1
+      [ -f "$live/wolfd-unit.sh" ] || { log "no wolfd-unit.sh in the live workerd-wolves release ($live)"; return 1; }
+      node=$(command -v node || true); [ -n "$node" ] || { log "node not found"; return 1; }
+      install -d -m 0755 "$rel" && install -m 0644 "$B/workerd.mjs" "$B/RUNBOOK.md" "$B/VERSION" "$rel/" && install -m 0755 "$live/wolfd-unit.sh" "$rel/" \
+        || { rm -rf "$rel"; log "cannot populate $rel"; return 1; }
+      out=$("$node" "$rel/workerd.mjs" --help 2>&1 </dev/null || true)
+      [[ $out == usage:* ]] || { rm -rf "$rel"; log "workerd-wolves bundle failed its smoke test; nothing changed there"; return 1; }
+      ln -sfn "$live" "$o/previous.new" && mv -T "$o/previous.new" "$o/previous" || return 1
+      ln -sfn "$rel" "$o/current.new" && mv -T "$o/current.new" "$o/current" || return 1
+      cur=$(readlink -f "$o/current"); prev=$(readlink -f "$o/previous")
+      # shellcheck disable=SC2012
+      ls -1dt "$o"/releases/* 2>/dev/null </dev/null | tail -n +6 | while read -r old; do [ "$old" = "$cur" ] || [ "$old" = "$prev" ] || rm -rf "$old"; done
+      return 0
+    }
+
+    if [ "$LINK" -ge 0 ]; then
+      log "setup.sh install (keeps previous for rollback)"
+      bash "$B/setup.sh" install --bundle "$B" </dev/null 9>&- || irc=$?
+      [ "$(readlink -f "${U_OPT[LINK]}/current" 2>/dev/null || true)" != "${U_CURB[LINK]}" ] && flipped=1
+      if [ $irc != 0 ] && [ $flipped = 0 ]; then
+        log "install failed (rc=$irc) and ${U_OPT[LINK]}/current did not change: the old release is still live; nothing to roll back"; exit 1
+      fi
+      [ $irc = 0 ] || log "install exited rc=$irc AFTER flipping ${U_OPT[LINK]}/current: treating the deploy as failed"
+    fi
+    local wflip=0
+    if [ "$WOLVES" -ge 0 ] && [ $irc = 0 ]; then
+      if wolves_install; then wflip=1; log "workerd-wolves: ${U_OPT[WOLVES]}/current -> $(basename "$(readlink -f "${U_OPT[WOLVES]}/current")")"
+      elif [ "$LINK" -ge 0 ]; then irc=1; log "workerd-wolves install failed: treating the deploy as failed"
+      else log "workerd-wolves install failed before any change: nothing to roll back"; exit 1; fi
+    fi
+    if [ $irc = 0 ]; then
+      [ "$WOLVES" -ge 0 ] && [ $wflip = 1 ] && [ "${U_WAS[WOLVES]}" = 1 ] && { sc restart "${U_SVC[WOLVES]}" || log "restart of ${U_SVC[WOLVES]} failed"; }
+      for ((i = 0; i < n; i++)); do
+        if [ "${U_WAS[i]}" = 1 ] && [ -n "${U_IID[i]}" ] && [ "$(sc show -p InvocationID --value "${U_SVC[i]}" 2>/dev/null || true)" = "${U_IID[i]}" ]; then
+          U_NOREST[i]=1; log "${U_SVC[i]} was active but its InvocationID did not change: the new release is not running. Treating the deploy as failed."
+        fi
+      done
     fi
 
-    hub_port_ok() {
-      local f="$ENV_DIR/$COMP.env" h p
+    unit_port_ok() { # <i>: port from the unit's env file accepts a connection; hubd additionally must answer HTTP 401 to an unauthenticated /v1/wolves
+      local f=${U_ENV[$1]} pf=${U_PFX[$1]} h p code
       if [ ! -r "$f" ]; then log "note: $f not readable; listening check skipped"; return 0; fi
-      h=$(sed -n "s/^${COMP^^}_HOST=//p" "$f" </dev/null | tail -n1); p=$(sed -n "s/^${COMP^^}_PORT=//p" "$f" </dev/null | tail -n1)
+      h=$(sed -n "s/^${pf}_HOST=//p" "$f" </dev/null | tail -n1); p=$(sed -n "s/^${pf}_PORT=//p" "$f" </dev/null | tail -n1)
+      [ -n "$h" ] || h=${U_HOST[$1]}
       [[ $h =~ ^[0-9.]+$ && $p =~ ^[0-9]+$ ]] || { log "note: no usable host/port in $f; listening check skipped"; return 0; }
       (exec 3<>"/dev/tcp/$h/$p") 2>/dev/null </dev/null || { log "nothing is listening on $h:$p"; return 1; }
+      if [ "$COMP" = hubd ] && command -v curl >/dev/null; then
+        # hubd has no health route; every route but POST /v1/pair answers 401 before 404, so an unauthenticated GET proves the HTTP app is up.
+        code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://$h:$p/v1/wolves" </dev/null 9>&- 2>/dev/null || true)
+        [ "$code" = 401 ] || [ "$code" = 200 ] || { log "hubd on $h:$p answered HTTP '${code:-none}' to /v1/wolves (expected 401)"; return 1; }
+      fi
+      return 0
     }
-    hub_healthy() {
-      local t=0 iid iid2 nr1 nr2 errs
+    unit_healthy() { # <i>
+      local svc=${U_SVC[$1]} t=0 iid iid2 nr1 nr2 errs
       while ((t <= HTIMEOUT)); do
-        if sc is-active --quiet "$SVC" 2>/dev/null; then
-          iid=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true); nr1=$(sc show -p NRestarts --value "$SVC" 2>/dev/null || true)
+        if sc is-active --quiet "$svc" 2>/dev/null; then
+          iid=$(sc show -p InvocationID --value "$svc" 2>/dev/null || true); nr1=$(sc show -p NRestarts --value "$svc" 2>/dev/null || true)
           sleep "$SETTLE"
-          sc is-active --quiet "$SVC" 2>/dev/null || { log "$SVC died during settle"; return 1; }
-          iid2=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true); nr2=$(sc show -p NRestarts --value "$SVC" 2>/dev/null || true)
-          [ "$iid" = "$iid2" ] && [ "$nr1" = "$nr2" ] || { log "$SVC restarted during settle (crash loop)"; return 1; }
+          sc is-active --quiet "$svc" 2>/dev/null || { log "$svc died during settle"; return 1; }
+          iid2=$(sc show -p InvocationID --value "$svc" 2>/dev/null || true); nr2=$(sc show -p NRestarts --value "$svc" 2>/dev/null || true)
+          [ "$iid" = "$iid2" ] && [ "$nr1" = "$nr2" ] || { log "$svc restarted during settle (crash loop)"; return 1; }
           if [ -n "$iid" ]; then errs=$(jc "_SYSTEMD_INVOCATION_ID=$iid" -p err --no-pager -q 2>/dev/null || true)
-          else errs=$(jc -u "$SVC" -p err --since "@$since" --no-pager -q 2>/dev/null || true); fi
-          [ -z "$errs" ] || { log "journal has errors for this invocation"; return 1; }
-          hub_port_ok || return 1
+          else errs=$(jc -u "$svc" -p err --since "@$since" --no-pager -q 2>/dev/null || true); fi
+          [ -z "$errs" ] || { log "journal has errors for $svc's invocation"; return 1; }
+          unit_port_ok "$1" || return 1
           return 0
         fi
         sleep 1; t=$((t + 1))
       done
-      log "$SVC not active within ${HTIMEOUT}s"; return 1
+      log "$svc not active within ${HTIMEOUT}s"; return 1
     }
-    hub_rollback() {
-      if [ -f "$OPT/setup.sh" ]; then
-        log "rollback via the installed $OPT/setup.sh"; bash "$OPT/setup.sh" rollback </dev/null 9>&- && return 0
-        log "installed setup.sh rollback failed; swapping links myself"
-      else
-        log "no installed setup.sh yet; swapping $OPT/current and previous myself"
+    all_healthy() { local k rc=0; for ((k = 0; k < n; k++)); do unit_healthy "$k" || rc=1; done; return $rc; }
+    swap_links() { # <opt>: swap current/previous by hand
+      local o=$1 cur prev
+      [ -L "$o/previous" ] || { log "no $o/previous"; return 1; }
+      cur=$(readlink -f "$o/current"); prev=$(readlink -f "$o/previous")
+      ln -sfn "$prev" "$o/current.new" && mv -T "$o/current.new" "$o/current" || return 1
+      ln -sfn "$cur" "$o/previous.new" && mv -T "$o/previous.new" "$o/previous" || return 1
+    }
+    all_rollback() {
+      local rc=0
+      if [ "$LINK" -ge 0 ] && [ "${U_CURB[LINK]}" != "$(readlink -f "${U_OPT[LINK]}/current" 2>/dev/null || true)" ]; then
+        local o=${U_OPT[LINK]}
+        if [ -f "$o/setup.sh" ]; then
+          log "rollback via the installed $o/setup.sh"
+          bash "$o/setup.sh" rollback </dev/null 9>&- || { log "installed setup.sh rollback failed; swapping links myself"; swap_links "$o" || rc=1; }
+        else log "no installed setup.sh yet; swapping $o/current and previous myself"; swap_links "$o" || rc=1; fi
       fi
-      local cur prev
-      [ -L "$OPT/previous" ] || { log "no $OPT/previous"; return 1; }
-      cur=$(readlink -f "$OPT/current"); prev=$(readlink -f "$OPT/previous")
-      ln -sfn "$prev" "$OPT/current.new" && mv -T "$OPT/current.new" "$OPT/current" || return 1
-      ln -sfn "$cur" "$OPT/previous.new" && mv -T "$OPT/previous.new" "$OPT/previous" || return 1
+      if [ "$WOLVES" -ge 0 ] && [ $wflip = 1 ]; then log "rolling back ${U_OPT[WOLVES]}"; swap_links "${U_OPT[WOLVES]}" || rc=1; fi
+      return $rc
     }
     since=$(date +%s)
-    if [ $irc = 0 ] && [ $was_active = 0 ]; then
-      log "$SVC was not running before this deploy and is left stopped: installed $VER, no health check possible. Start it when ready: systemctl start $SVC"
-      install -m 0755 "$B/setup.sh" "$OPT/setup.sh" 2>/dev/null || true
+    local anyact=0 allact=1
+    for ((i = 0; i < n; i++)); do if [ "${U_WAS[i]}" = 1 ]; then anyact=1; else allact=0; fi; done
+    if [ $irc = 0 ] && [ $anyact = 0 ]; then
+      log "no unit was running before this deploy; left stopped: installed $VER, no health check possible. Start when ready: systemctl start ${U_SVC[*]}"
+      [ "$LINK" -ge 0 ] && { install -m 0755 "$B/setup.sh" "${U_OPT[LINK]}/setup.sh" 2>/dev/null || true; }
       exit 0
     fi
-    if [ $irc = 0 ] && [ $norestart = 0 ] && hub_healthy; then
-      install -m 0755 "$B/setup.sh" "$OPT/setup.sh" || log "note: could not save $OPT/setup.sh (rollback will swap links itself)"
-      log "OK: $COMP $VER deployed and healthy"; exit 0
+    local nr=0; for ((i = 0; i < n; i++)); do [ "${U_NOREST[i]}" = 1 ] && nr=1; done
+    if [ $irc = 0 ] && [ $nr = 0 ]; then
+      local ok=1
+      for ((i = 0; i < n; i++)); do [ "${U_WAS[i]}" = 1 ] || { log "${U_SVC[i]} was not running: not health-checked, left stopped"; continue; }; unit_healthy "$i" || ok=0; done
+      if [ $ok = 1 ]; then
+        [ "$LINK" -ge 0 ] && { install -m 0755 "$B/setup.sh" "${U_OPT[LINK]}/setup.sh" || log "note: could not save ${U_OPT[LINK]}/setup.sh (rollback will swap links itself)"; }
+        log "OK: $COMP $VER deployed and healthy (${U_SVC[*]})"; exit 0
+      fi
     fi
-    log "FAILED; rolling back"
-    hub_rollback || { log "ROLLBACK FAILED: $COMP needs a human (see $OPT/current and previous)"; exit 4; }
-    if [ $was_active = 0 ]; then log "$SVC was stopped before the deploy; rolled back and left stopped"; exit 3; fi
+    log "FAILED; rolling back ${U_SVC[*]}"
+    all_rollback || { log "ROLLBACK FAILED: $COMP needs a human (see current/previous under ${U_OPT[*]})"; exit 4; }
+    if [ $anyact = 0 ]; then log "units were stopped before the deploy; rolled back and left stopped"; exit 3; fi
     sleep 1; since=$(date +%s)
-    sc restart "$SVC" || log "restart after rollback failed"
-    if hub_healthy; then log "rolled back; $COMP healthy again"; exit 3; fi
-    log "ROLLBACK UNHEALTHY: $SVC needs a human"; exit 4
+    for ((i = 0; i < n; i++)); do [ "${U_WAS[i]}" = 1 ] && { sc restart "${U_SVC[i]}" || log "restart of ${U_SVC[i]} after rollback failed"; }; done
+    local ok2=1
+    for ((i = 0; i < n; i++)); do [ "${U_WAS[i]}" = 1 ] && { unit_healthy "$i" || ok2=0; }; done
+    if [ $ok2 = 1 ]; then log "rolled back; $COMP healthy again"; exit 3; fi
+    log "ROLLBACK UNHEALTHY: ${U_SVC[*]} need a human"; exit 4
   fi
 
   # ======================================================================== wolfd

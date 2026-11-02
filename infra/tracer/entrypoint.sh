@@ -154,8 +154,14 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   ( cd /opt/proof && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node console-proof.mjs $CONSOLE "$BTOKEN" "$OUT" "${TRACER_REPLY:-tracer-pong}" ); RC=$?
   if [ $RC -eq 0 ]; then
     # hub-side evidence that the console really went through the relay: the browser token was used by the console server on the hub
-    as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js tokens list --data-dir "$HUBD_DATA" | tee /tmp/tokens.out
-    grep 'tracer-browser' /tmp/tokens.out | grep -vq 'lastUsed=never' || { echo "FAIL: hubd never saw the browser token used" >&2; RC=1; }
+    # hubd flushes lastUsedAt to disk debounced, so poll (up to ~20s) instead of reading once
+    SEEN=
+    for _ in $(seq 1 20); do
+      as hubd HOME=/home/hubd node $APP/packages/hubd/dist/cli.js tokens list --data-dir "$HUBD_DATA" > /tmp/tokens.out
+      if grep 'tracer-browser' /tmp/tokens.out | grep -vq 'lastUsed=never'; then SEEN=1; break; fi; sleep 1
+    done
+    cat /tmp/tokens.out
+    [ -n "$SEEN" ] || { echo "FAIL: hubd never saw the browser token used" >&2; RC=1; }
   fi
   set -e
   if [ $RC -eq 0 ]; then echo "CONSOLE RELAY PROOF OK: browser -> console (relay mode) -> hubd -> workerd -> wolfd hal2 -> reply rendered"; else echo "CONSOLE RELAY PROOF FAILED (screenshot in /out, i.e. infra/tracer/out)"; echo "--- logs"; tail -n 30 $D/log/*.log; fi

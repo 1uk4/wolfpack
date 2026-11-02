@@ -64,14 +64,15 @@ const walk = (dir, fn) => {
 const VALUE_NEEDLES = [
 	["a literal bearer token", /Bearer [A-Za-z0-9._~+\/=-]{16,}/], // `Bearer ${token}` in the fetch wrapper is not followed by a literal
 	["an sk-ant- key", /sk-ant-[A-Za-z0-9_-]{16,}/],
-	["an sk- key", /\bsk-[A-Za-z0-9_-]{20,}/],
+	["an sk- key", /(?<![A-Za-z0-9_-])sk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/],
 	["a GitHub token (ghp_)", /ghp_[A-Za-z0-9]{20,}/],
 	["a GitHub fine-grained token (github_pat_)", /github_pat_[A-Za-z0-9_]{20,}/],
 	["an AWS access key id (AKIA)", /AKIA[0-9A-Z]{16}/],
 ];
 // NAME needles: the env var names of our credentials. Legitimate in SERVER code (console-client reads WOLFPACK_HUB_TOKEN, the engine reads
 // OAUTH_TOKEN), so they are checked in the browser bundle only, where their presence means a build-time inline.
-const NAME_NEEDLES = ["WOLFPACK_HUB_TOKEN", "OAUTH_TOKEN", "sk-ant-", "ghp_", "github_pat_", "AKIA"];
+// (ghp_ / github_pat_ / AKIA are prefixes, not names: bare substrings occur in library code, so they are matched only in VALUE form above.)
+const NAME_NEEDLES = ["WOLFPACK_HUB_TOKEN", "OAUTH_TOKEN", "sk-ant-"];
 const SCAN_EXT = /\.(js|mjs|cjs|css|html|rsc|body|json|map|txt|segment)$/;
 const scan = (root, names) => {
 	if (!fs.existsSync(root)) return;

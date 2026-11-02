@@ -100,12 +100,12 @@ describe("server: forwarded token", () => {
 			hub.close();
 		}
 	});
-	it("with no request scope at all, the env token is used", async () => {
+	it("with no request scope at all there is NO env fallback: 401, nothing reaches the hub", async () => {
 		const { hub, seen, url } = await startHub();
 		try {
 			const c = createConsoleClient({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "env" }, async () => undefined);
-			await c.listWork!("w", { domain: "d" });
-			assert.deepEqual(seen, ["Bearer env"]);
+			await assert.rejects(c.listWork!("w", { domain: "d" }), (e: Error & { hubAuth?: boolean }) => e.hubAuth === true);
+			assert.deepEqual(seen, []);
 		} finally {
 			hub.close();
 		}

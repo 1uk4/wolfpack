@@ -10,7 +10,7 @@
  */
 
 import { HttpConsoleClient, MockConsoleClient, type ConsoleClient } from "@wolfpack/client";
-import { bearerOf } from "../core/hub-auth.ts";
+import { bearerOf, cookieTokenOf } from "../core/hub-auth.ts";
 
 const KEY = Symbol.for("wolfpack.console.client");
 
@@ -53,7 +53,7 @@ export function makeRequestToken(getHeaders: () => Promise<Headers>): RequestTok
 		} catch (e) {
 			return isOutsideRequestScope(e) ? undefined : null;
 		}
-		return bearerOf(h.get("authorization")) ?? null;
+		return bearerOf(h.get("authorization")) ?? cookieTokenOf(h.get("cookie")) ?? null;
 	};
 }
 

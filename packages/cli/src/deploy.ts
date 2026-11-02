@@ -93,11 +93,25 @@ export function planDeploy(req: DeployRequest, ctx: { defaultHost?: string; host
   return { ...ref, host, wolf: req.wolf, dryRun: !!req.dryRun, scriptArgs };
 }
 
+const SAFE_TOKEN = /^[A-Za-z0-9._-]+$/;
+
+/** POSIX single-quote a word for the remote shell. */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function assertSafeSshField(what: string, v: string): void {
+  if (!SAFE_TOKEN.test(v) || v.startsWith("-")) throw new Error(`refusing ssh ${what} ${JSON.stringify(v)}: must match ^[A-Za-z0-9._-]+$ and not start with "-"`);
+}
+
 /**
  * ssh argv that runs the script from stdin as root: no scp, no copy left on the host, nothing to keep in sync.
- * Every script arg is validated by planDeploy (names, X.Y.Z, integers), so plain joining is safe.
+ * The destination is validated (no leading "-", no shell/ssh-option characters; IPv6 literals are not supported, use a name),
+ * `--` precedes it, and every script arg is shell-quoted.
  */
 export function buildSshArgv(host: HostEntry, scriptArgs: string[]): string[] {
+  assertSafeSshField("user", host.ssh.user);
+  assertSafeSshField("address", host.address);
   const sudo = host.ssh.user === "root" ? "" : "sudo ";
   return [
     ...sshKeyArgs(host.ssh.key),
@@ -105,7 +119,8 @@ export function buildSshArgv(host: HostEntry, scriptArgs: string[]): string[] {
     String(host.ssh.port),
     "-o",
     "BatchMode=yes",
+    "--",
     `${host.ssh.user}@${host.address}`,
-    `${sudo}bash -s -- ${scriptArgs.join(" ")}`,
+    `${sudo}bash -s -- ${scriptArgs.map(shellQuote).join(" ")}`,
   ];
 }

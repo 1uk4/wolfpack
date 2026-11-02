@@ -612,14 +612,12 @@ body {
 	main {
 		overflow-x: clip;
 	}
-	[data-testid="thread-chat"] {
+	[data-lh-shell] {
 		height: var(--lh-vvh, 100dvh);
-		padding-bottom: env(safe-area-inset-bottom);
 	}
-	header {
-		padding-top: env(safe-area-inset-top);
-		height: auto;
-		min-height: 3.75rem;
+	[data-testid="thread-chat"] {
+		height: calc(var(--lh-vvh, 100dvh) - env(safe-area-inset-top));
+		padding-bottom: env(safe-area-inset-bottom);
 	}
 	/* composer + card answers + list rows: >= 44px tap targets */
 	[data-testid="composer"] button,

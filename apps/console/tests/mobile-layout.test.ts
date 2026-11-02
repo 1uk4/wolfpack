@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterNavigation, MOBILE_BREAKPOINT, MOBILE_QUERY, visibleHeight } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_BREAKPOINT, MOBILE_QUERY, visibleHeight } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -19,13 +19,25 @@ test("a phone starts on the list; desktop follows the stored preference", () => 
 	assert.equal(initialListOpen(false, null), true);
 });
 
-test("navigating on a phone closes the list; first render, same path and desktop do not", () => {
-	assert.equal(listOpenAfterNavigation(true, true, null, "/"), true);
-	assert.equal(listOpenAfterNavigation(true, true, "/", "/"), true);
-	assert.equal(listOpenAfterNavigation(true, true, "/", "/wolf/hal2/thread/t1"), false);
-	assert.equal(listOpenAfterNavigation(true, true, "/wolf/hal2/thread/t1", "/pipeline"), false);
-	assert.equal(listOpenAfterNavigation(false, true, "/", "/wolf/hal2/thread/t1"), true);
-	assert.equal(listOpenAfterNavigation(false, false, "/", "/x"), false);
+test("selecting in the list closes it on a phone even when the route does not change; desktop is untouched", () => {
+	// the same-route tap: no pathname change is involved at all, the click handler decides
+	assert.equal(listOpenAfterSelect(true, true), false);
+	assert.equal(listOpenAfterSelect(false, true), true);
+	assert.equal(listOpenAfterSelect(false, false), false);
+});
+
+test("rotation / resize: crossing 768 recomputes; desktop restores the stored preference", () => {
+	assert.equal(initialListOpen(true, "0", "/"), true); // desktop(closed) -> phone at "/"
+	assert.equal(initialListOpen(false, "0", "/x"), false); // phone -> desktop restores the stored "closed"
+	assert.equal(initialListOpen(false, "1", "/x"), true);
+	assert.equal(storedListOpen(null), true);
+});
+
+test("the floating back control shows only on a phone, list closed, with no SidebarToggle on the page", () => {
+	assert.equal(needsFloatingBack(true, false, 0), true);
+	assert.equal(needsFloatingBack(true, false, 1), false);
+	assert.equal(needsFloatingBack(true, true, 0), false);
+	assert.equal(needsFloatingBack(false, false, 0), false);
 });
 
 test("visibleHeight prefers the visualViewport (keyboard) and falls back to innerHeight", () => {

@@ -19,7 +19,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { coalescedRefresh, foldWolfThreads, fuzzyScore, initialListOpen, listOpenAfterNavigation, MOBILE_BACK_LABEL, MOBILE_QUERY } from "@/src/core";
+import { coalescedRefresh, foldWolfThreads, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
@@ -81,10 +81,12 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean }>({
+const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean; closeList: () => void; registerToggle: () => () => void }>({
 	open: false,
 	toggle: () => {},
 	mobile: false,
+	closeList: () => {},
+	registerToggle: () => () => {},
 });
 
 export function useSidebar() {
@@ -99,8 +101,10 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [mounted, setMounted] = useState(false);
 	// Phone (< 768px): the sidebar is the full-screen LIST layer, not a persisted side panel (see src/core/mobile-layout.ts).
 	const [mobile, setMobile] = useState(false);
+	const [toggles, setToggles] = useState(0);
 	const pathname = usePathname();
-	const prevPath = useRef<string | null>(null);
+	const pathRef = useRef(pathname);
+	pathRef.current = pathname;
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -123,14 +127,19 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		const off = window.lh?.onZoom?.(setZoomVar);
 		void window.lh?.getZoom?.().then(setZoomVar);
 
-		const stored = localStorage.getItem(STORAGE_KEY);
-		// Default: open (first run introduces the sidebar). A phone always starts on the list.
+		// Default: open (first run introduces the sidebar). A phone starts on the list at "/".
 		const mq = typeof window.matchMedia === "function" ? window.matchMedia(MOBILE_QUERY) : null; // absent in the DOM test shims
-		const isMobile = mq?.matches ?? false;
-		setMobile(isMobile);
-		setOpen(initialListOpen(isMobile, stored, pathname ?? "/"));
+		// This effect runs once, so `pathname` here is the FIRST render's value (deliberately: it only decides the initial state);
+		// later reads go through pathRef, which tracks the current route.
+		const apply = (path: string) => {
+			const isMobile = mq?.matches ?? false;
+			setMobile(isMobile);
+			setOpen(initialListOpen(isMobile, localStorage.getItem(STORAGE_KEY), path));
+		};
+		apply(pathname ?? "/");
 		setMounted(true);
-		const onMq = () => setMobile(mq?.matches ?? false);
+		// Rotation / resize across 768px: recompute (back to >= 768 restores the stored desktop preference).
+		const onMq = () => apply(pathRef.current ?? "/");
 		mq?.addEventListener("change", onMq);
 		return () => {
 			off?.();
@@ -138,12 +147,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		};
 	}, []);
 
-	// list -> content: a navigation on a phone closes the list layer (never persisted).
-	useEffect(() => {
-		const prev = prevPath.current;
-		prevPath.current = pathname;
-		setOpen((o) => listOpenAfterNavigation(mobile, o, prev, pathname));
-	}, [pathname, mobile]);
+	// Selecting something in the list on a phone closes it (never persisted); called from the click handlers.
+	const closeList = useCallback(() => setOpen((o) => listOpenAfterSelect(mobile, o)), [mobile]);
+	const registerToggle = useCallback(() => {
+		setToggles((n) => n + 1);
+		return () => setToggles((n) => n - 1);
+	}, []);
 
 	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):
 	// fires only on actual resizes — a boolean compare, no layout work.
@@ -190,10 +199,29 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle, mobile }}>
+		<SidebarContext.Provider value={{ open: open && !narrow, toggle, mobile, closeList, registerToggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
-			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			{/* phone: the shell owns the top safe-area inset (pages without a header must not draw under the notch) */}
+			<div data-lh-shell className={cn("flex h-dvh max-md:pt-[env(safe-area-inset-top)]", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			<FloatingBack toggles={toggles} open={open && !narrow} mobile={mobile} onClick={toggle} />
 		</SidebarContext.Provider>
+	);
+}
+
+/** Phone only: a fixed back-to-list button for pages that render no SidebarToggle (graph "/", pipeline). */
+function FloatingBack({ toggles, open, mobile, onClick }: { toggles: number; open: boolean; mobile: boolean; onClick: () => void }) {
+	if (!needsFloatingBack(mobile, open, toggles)) return null;
+	return (
+		<button
+			type="button"
+			aria-label={MOBILE_BACK_LABEL}
+			data-testid="mobile-back"
+			onClick={onClick}
+			className="fixed left-2 z-30 flex size-11 items-center justify-center rounded-full border bg-card/90 text-muted-foreground shadow-lg backdrop-blur"
+			style={{ top: "calc(env(safe-area-inset-top) + 0.5rem)" }}
+		>
+			<ArrowLeftIcon className="size-5" />
+		</button>
 	);
 }
 
@@ -210,7 +238,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
  *  The icon fades with the slot and is clipped by it as it collapses —
  *  no popping in either direction. */
 export function SidebarToggle() {
-	const { open, toggle, mobile } = useSidebar();
+	const { open, toggle, mobile, registerToggle } = useSidebar();
+	useEffect(() => registerToggle(), [registerToggle]);
 	// Phone: the clear back control (list <- content). Plain 44px button, no slot animation.
 	if (mobile) {
 		return (
@@ -471,14 +500,17 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 }
 
 export function SessionsSidebar() {
-	const { open, toggle } = useSidebar();
+	const { open, toggle, closeList, mobile } = useSidebar();
 	const [chats, setChats] = useState<SessionItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
 	const { openSubagent } = useSubagentModal();
 	/** A subagent opens its modal over this page; anything else navigates. */
-	const openItem = (c: SessionItem) => (isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c)));
+	const openItem = (c: SessionItem) => {
+		closeList();
+		return isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c));
+	};
 	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
@@ -486,8 +518,9 @@ export function SessionsSidebar() {
 	   message is sent (and that message becomes its title). Search: a
 	   client-side filter over the poll snapshot — no server round trip. */
 	const newSession = useCallback(() => {
+		closeList();
 		router.push("/chat/new"); // redirects to a thread (see app/chat/new)
-	}, [router]);
+	}, [router, closeList]);
 
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
 	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
@@ -780,10 +813,10 @@ export function SessionsSidebar() {
 	return (
 		<aside
 			// < md: the open sidebar is the full-screen list layer (fixed, above everything but dialogs); md+ is the original inline panel.
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "max-md:fixed max-md:inset-0 max-md:z-40 max-md:w-full md:w-72" : "w-0")}
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full md:w-72" : "w-0")}
 			aria-hidden={!open}
 			data-testid="sidebar"
-			data-mobile-list={open || undefined}
+			data-mobile-list={(open && mobile) || undefined}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background max-md:w-full max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
 				{/* LH wordmark — the owner's header; close toggle sits at the edge.
@@ -808,6 +841,7 @@ export function SessionsSidebar() {
 					>
 						<Link
 							href="/"
+							onClick={closeList}
 							aria-label="Home"
 							className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
 						>
@@ -839,6 +873,7 @@ export function SessionsSidebar() {
 					</button>
 					<Link
 						href="/"
+						onClick={closeList}
 						data-testid="nav-graph"
 						aria-current={pathname === "/" ? "page" : undefined}
 						className={cn(
@@ -851,6 +886,7 @@ export function SessionsSidebar() {
 					</Link>
 					<Link
 						href="/pipeline"
+						onClick={closeList}
 						data-testid="nav-pipeline"
 						aria-current={pathname === "/pipeline" ? "page" : undefined}
 						className={cn(
@@ -978,7 +1014,10 @@ export function SessionsSidebar() {
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
-								onClick={() => openSettings()}
+								onClick={() => {
+									closeList(); // the dialog must not open behind the full-screen list
+									openSettings();
+								}}
 								data-testid="settings-entry"
 								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 							>

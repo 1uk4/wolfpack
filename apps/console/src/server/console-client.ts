@@ -37,7 +37,7 @@ export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleC
  * The bearer the browser forwarded on the current request:
  *   string    a token was sent
  *   null      there IS a request scope but no (usable) Authorization header: the caller is not paired
- *   undefined NO request scope at all (background/server jobs, tests, startup): only then may the env token be used
+ *   undefined NO request scope at all (background/server jobs, startup): also unpaired; the env token never stands in
  */
 export type RequestToken = () => Promise<string | null | undefined>;
 
@@ -81,7 +81,8 @@ export class HubAuthError extends Error {
 /**
  * Work reads against the hub with a PER-REQUEST token. Inside a request scope only the browser's forwarded token is used; no token
  * rejects (the route answers 401, the browser goes to /pair): the env token/key never stands in for a request that did not authenticate.
- * The env credentials serve only callers with NO request scope (background jobs). One small client per token, cached: each client
+ * With a `requestToken` resolver there is NO fallback at all (no scope = unpaired = 401); the env token (WOLFPACK_HUB_TOKEN) is used by
+ * `hubHealth` alone. Only a resolver-less client (tests, scripts) sends the env token. One small client per token, cached: each client
  * holds nothing but its own base URL and token (no response or per-user state), so the cache cannot carry data between tokens.
  */
 export function requestScopedWork(hub: { baseUrl: string; token?: string }, requestToken: RequestToken): WorkReads {
@@ -98,7 +99,7 @@ export function requestScopedWork(hub: { baseUrl: string; token?: string }, requ
 	};
 	const run = async <T>(fn: (c: ConsoleClient) => Promise<T>): Promise<T> => {
 		const t = await requestToken();
-		if (t === null) throw new HubAuthError("this browser is not paired with the hub (no bearer token)");
+		if (!t) throw new HubAuthError("this browser is not paired with the hub (no bearer token)"); // no scope counts as unpaired too: the env token never serves a user call
 		try {
 			return await fn(forToken(t));
 		} catch (err) {
@@ -110,6 +111,23 @@ export function requestScopedWork(hub: { baseUrl: string; token?: string }, requ
 		listWork: (wolf, q) => run((c) => c.listWork!(wolf, q)),
 		getWorkRecord: (wolf, id) => run((c) => c.getWorkRecord!(wolf, id)),
 	};
+}
+
+/**
+ * The ONE use of the console's own hub token (WOLFPACK_HUB_TOKEN): a liveness check of the hub (GET /v1/wolves, which any token may call).
+ * Never reached from a user request path; the answer carries no hub data (status only).
+ */
+export async function hubHealth(env: Record<string, string | undefined> = process.env, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; status: number; reason?: string }> {
+	const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
+	if (!base) return { ok: false, status: 503, reason: "WOLFPACK_HUB_URL is not set" };
+	const token = env.WOLFPACK_HUB_TOKEN?.trim();
+	try {
+		const r = await fetchImpl(`${base}/v1/wolves`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000) });
+		await r.body?.cancel();
+		return r.ok ? { ok: true, status: 200 } : { ok: false, status: 503, reason: `hub answered ${r.status}${r.status === 401 ? " (the console's own token is missing or revoked)" : ""}` };
+	} catch {
+		return { ok: false, status: 503, reason: "hub unreachable" };
+	}
 }
 
 const STREAMS = new Set(["watch", "watchMemory", "watchActivity", "watchHubEvents"]);
@@ -134,8 +152,8 @@ export function relayClient(hub: { baseUrl: string; token?: string }, requestTok
 	};
 	const resolve = async (): Promise<ConsoleClient> => {
 		const t = requestToken ? await requestToken() : undefined;
-		if (t === null) throw new HubAuthError("this browser is not paired with the hub (no bearer token)");
-		return forToken(t);
+		if (requestToken && !t) throw new HubAuthError("this browser is not paired with the hub (no bearer token)");
+		return forToken(t ?? undefined);
 	};
 	const mapAuth = (err: unknown): never => {
 		if (err instanceof Error && err.name === "ProtocolError" && (err as Error & { code?: string }).code === "unauthorized") throw new HubAuthError(err.message);

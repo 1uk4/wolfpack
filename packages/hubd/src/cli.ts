@@ -3,6 +3,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
+import { cleanOrphans } from "./work-orphans.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
@@ -10,7 +11,9 @@ import { assertSocketPath, parseSocketMode } from "./socket.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
-  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens";
+  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans";
+  /** work-orphans: actually append the deletes (default is a dry run). */
+  apply?: boolean;
   /** pair: what the code is for. */
   kind?: "worker" | "console" | "browser";
   hostId?: string;
@@ -57,6 +60,7 @@ const USAGE = `usage:
   hubd pair --kind worker|console|browser [--host-id <id>] [--url <base>] --data-dir <dir>
                                                               print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token.
                                                               browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
+  hubd work-orphans --data-dir <dir> [--apply]                list (dry run) or delete, via appended work.deleted events, work items that are in the ledger but have no .md (hub must be stopped)
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
@@ -65,7 +69,7 @@ env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; no
 
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest0] = argv;
-  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens") throw new Error(USAGE);
+  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans") throw new Error(USAGE);
   let rest = rest0;
   let sub: CliArgs["sub"];
   let tokenId: string | undefined;
@@ -87,6 +91,7 @@ export function parseArgs(argv: string[]): CliArgs {
       if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);
       return v;
     };
+    if (command === "work-orphans" && flag === "--apply") { out.apply = true; continue; }
     if (command === "pair" && flag === "--url") {
       out.url = val0();
       continue;
@@ -135,7 +140,7 @@ export function parseArgs(argv: string[]): CliArgs {
     if (out.kind === "worker" && !out.hostId) throw new Error("pair --kind worker requires --host-id <id>");
     if (out.kind !== "worker" && out.hostId) throw new Error("--host-id is only for --kind worker");
   }
-  if ((command === "pair" || command === "tokens") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
+  if ((command === "pair" || command === "tokens" || command === "work-orphans") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
   if (out.socket !== undefined) {
     if (out.tcpExplicit) throw new Error("--socket cannot be combined with --port/--host: pick TCP or a unix socket");
@@ -172,6 +177,13 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
         log(`${art}\n${link}`);
       }
     }
+    return;
+  }
+  if (args.command === "work-orphans") {
+    const r = cleanOrphans(args.dataDir!, { apply: !!args.apply });
+    for (const o of r.orphans) log(`orphan ${o.id}  ${o.domain}  ${o.title}`);
+    for (const k of r.skipped) log(`skipped ${k.id}: ${k.reason}`);
+    log(args.apply ? `hubd work-orphans: deleted ${r.deleted.length} item(s)` : `hubd work-orphans: ${r.orphans.length} orphan(s), dry run (pass --apply to delete)`);
     return;
   }
   if (args.command === "tokens") {

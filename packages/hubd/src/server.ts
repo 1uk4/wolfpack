@@ -64,6 +64,7 @@ import { createLink, type Link, type LinkTimers } from "./link.js";
 import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
 import { createRelay, type Relay } from "./relay.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
+import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
 type RegRoute = { c: Collection; op: "list" | "get" | "create" | "update" | "delete" | "retire" };
@@ -558,6 +559,18 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
+      // Hub-proxied Work API for VPS wolves (work-proxy.ts): the wolf's own hub token arrives as X-API-Key (what the Work clients send).
+      // Mapped to a bearer for THIS prefix only; everything else still needs Authorization: Bearer.
+      if (isWorkProxyPath(url.pathname)) {
+        const key = req.headers["x-api-key"];
+        if (typeof key === "string" && key.trim() && typeof req.headers.authorization !== "string") req.headers.authorization = `Bearer ${key.trim()}`;
+        const id = authenticate(req);
+        if (!id) throw new HubError("unauthorized", "missing or invalid token");
+        return handleWorkProxy(
+          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n) },
+          req, res, url, id, writeActor(req),
+        );
+      }
       const m = matchRoute(req.method ?? "GET", url.pathname);
       const isPublic = typeof m === "object" && m.route.public === true;
       let tokenId: string | undefined;

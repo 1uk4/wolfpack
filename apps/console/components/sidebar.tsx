@@ -352,8 +352,11 @@ export function SessionRow({
 	nested = false,
 	indented = false,
 	offline = false,
+	wolfStatus,
 }: {
 	chat: SessionItem;
+	/** The wolf's liveness, drawn as a badge on its group header (the Home row). */
+	wolfStatus?: WolfStatus;
 	/** Its wolf is offline: the row we still hold is greyed and says so. */
 	offline?: boolean;
 	/** A subagent row under its feature: two steps in, compact single line. */
@@ -454,6 +457,7 @@ export function SessionRow({
 					) : null;
 				})()}
 			</span>
+			{home && wolfStatus && <WolfBadge wolf={wolfStatus} />}
 		</button>
 	);
 }
@@ -508,13 +512,35 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	);
 }
 
-/** One row per known wolf: a status dot and an explicit label, so an offline wolf stays visible. 44px target on phones. */
-export function WolfStatusRow({ wolf }: { wolf: WolfStatus }) {
+/** The wolf's liveness on its own group header: a dot plus an explicit word (never colour-only). Compact on phones. */
+export function WolfBadge({ wolf }: { wolf: WolfStatus }) {
 	return (
-		<div data-testid="wolf-status" data-wolf={wolf.name} data-online={wolf.online} className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-xs", !wolf.online && "text-muted-foreground")}>
-			<span aria-hidden className={cn("size-2 shrink-0 rounded-full", wolf.online ? "bg-emerald-500" : "bg-muted-foreground/40")} />
-			<span className="min-w-0 flex-1 truncate font-medium">{wolf.name}</span>
-			<span className="shrink-0 text-muted-foreground">{wolf.online ? "online" : "offline"}</span>
+		<span
+			data-testid="wolf-badge"
+			data-wolf={wolf.name}
+			data-online={wolf.online}
+			role="status"
+			aria-label={`${wolf.name}, ${wolf.online ? "online" : "offline"}`}
+			className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+		>
+			<span aria-hidden className={cn("size-2 rounded-full", wolf.online ? "bg-emerald-500" : "bg-muted-foreground/40")} />
+			<span aria-hidden>{wolf.online ? "online" : "offline"}</span>
+		</span>
+	);
+}
+
+/** Header for a known wolf with no Home thread held (zero threads, or only features): same look as the Home row. */
+export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
+	return (
+		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
+			<span className="min-w-0 flex-1">
+				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--lh-prose-size)">
+					<WorkflowIcon aria-hidden className="size-[1em] shrink-0 text-muted-foreground" />
+					<span className="truncate">{wolf.name}</span>
+				</span>
+				<span className="block truncate text-xs text-muted-foreground">orchestrator</span>
+			</span>
+			<WolfBadge wolf={wolf} />
 		</div>
 	);
 }
@@ -528,6 +554,7 @@ export function SessionsSidebar() {
 	const [roster, setRoster] = useState<WolfStatus[]>([]);
 	const rosterRef = useRef(roster);
 	rosterRef.current = roster;
+	const rosterByName = useMemo(() => new Map(roster.map((w) => [w.name, w] as const)), [roster]);
 	const offlineWolves = useMemo(() => new Set(roster.filter((w) => !w.online).map((w) => w.name)), [roster]);
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
@@ -598,6 +625,7 @@ export function SessionsSidebar() {
 										nested={nested}
 										indented={indented}
 										offline={offlineWolves.has(rowWolf(c))}
+										wolfStatus={rosterByName.get(rowWolf(c))}
 										active={pathname === itemHref(c)}
 										kbdSelected={at === kbdIndex}
 										onOpen={() => {
@@ -1016,19 +1044,17 @@ export function SessionsSidebar() {
 				</div>
 
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
-					{roster.length > 0 && (
-						<div data-testid="wolf-roster" role="status" aria-label="Wolves" className="sticky top-0 z-10 -mx-2 -mt-2 mb-2 border-b border-border bg-background px-2 pb-1 pt-2">
-							{roster.map((w) => <WolfStatusRow key={w.name} wolf={w} />)}
-						</div>
-					)}
 					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
-					) : shown.length === 0 && archived.length === 0 ? (
+					) : shown.length === 0 && archived.length === 0 && (searching || roster.length === 0) ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top))))
+						[
+							...groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
+							...(searching ? [] : roster.filter((w) => !homeWolves.has(w.name)).map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} />)),
+						]
 					)}
 					{archived.length > 0 && (
 						<>

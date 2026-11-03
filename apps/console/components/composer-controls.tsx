@@ -87,7 +87,7 @@ export function ComposerControls({
 	}, [open]);
 
 	return (
-		<div data-testid="composer-controls" className="flex shrink-0 items-center gap-2 self-center text-xs">
+		<div data-testid="composer-controls" className="flex shrink-0 items-center gap-2 self-center text-xs max-md:gap-3">
 			{error && (
 				<span role="alert" data-testid="composer-controls-error" className="max-w-48 truncate text-destructive" title={error}>
 					{error}
@@ -102,7 +102,7 @@ export function ComposerControls({
 					aria-label={`Model tier: ${settings.tier}`}
 					title={model ? `${settings.tier} → ${model}` : settings.tier}
 					onClick={() => setOpen((o) => !o)}
-					className="flex items-center gap-1 rounded-full border bg-card/85 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
+					className="flex items-center gap-1 rounded-full border bg-card/85 px-2.5 py-1 max-md:h-8 max-md:py-0 transition-colors hover:border-border hover:bg-muted"
 				>
 					<span className="text-card-foreground">{settings.tier}</span>
 					<span aria-hidden className="text-muted-foreground">▾</span>
@@ -120,7 +120,7 @@ export function ComposerControls({
 				)}
 			</div>
 			<label className="flex items-center gap-1.5 text-muted-foreground" title="task_done ships without asking in this thread">
-				<span>Auto-ship</span>
+				<span className="max-md:hidden">Auto-ship</span><span className="md:hidden">Auto</span>
 				<Toggle checked={settings.autoShip} onChange={(next) => onChange({ autoShip: next })} label="Auto-ship" />
 			</label>
 		</div>

@@ -620,9 +620,21 @@ body {
 		padding-bottom: env(safe-area-inset-bottom);
 	}
 	/* composer + card answers + list rows: >= 44px tap targets */
-	[data-testid="composer"] button,
+	[data-testid="composer"] > button,
 	[data-testid="composer"] textarea {
 		min-width: 44px;
+		min-height: 44px;
+	}
+	/* the per-thread controls (model picker, Auto-ship) are compact: a blanket 44px min made the picker a tall pill and the
+	   switch a 44px disc. The switch keeps a 44px tap row through its label instead. */
+	[data-testid="composer-controls"] button {
+		min-width: 0;
+		min-height: 0;
+	}
+	[data-testid="composer-controls"] [data-testid="tier-trigger"] {
+		min-height: 32px;
+	}
+	[data-testid="composer-controls"] label {
 		min-height: 44px;
 	}
 	/* the textarea gets its own full-width row; attach / model / auto-ship / send wrap beneath it */
@@ -633,6 +645,15 @@ body {
 	[data-testid="composer"] textarea {
 		order: -1;
 		flex: 1 1 100%;
+	}
+	[data-testid="composer"] [data-testid="composer-controls"] {
+		flex: 1 1 0;
+		min-width: 0;
+		justify-content: flex-end;
+	}
+	[data-testid="thread-header-row2"] {
+		overflow: hidden;
+		min-width: 0;
 	}
 	[data-testid="composer"] {
 		padding-left: max(0.375rem, env(safe-area-inset-left));

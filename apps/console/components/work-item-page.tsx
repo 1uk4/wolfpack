@@ -4,6 +4,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { XIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { TaskGraph } from "@/components/task-graph";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb-client";
@@ -19,7 +21,7 @@ export type WorkPageState =
 	| { kind: "error"; message: string }
 	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[] };
 
-export function WorkItemPage({ id }: { id: string }) {
+export function WorkItemPage({ id, onClose, onOpenTask }: { id: string; /** Reader-panel mode: draws a close button and fills its container. */ onClose?: () => void; /** Overrides the default navigation to the full page (the reader switches item in place). */ onOpenTask?: (id: string) => void }) {
 	const { librarian, loading } = useLibrarian();
 	const router = useRouter();
 	const [fetched, setFetched] = useState<{ id: string; state: WorkPageState } | null>(null);
@@ -59,18 +61,23 @@ export function WorkItemPage({ id }: { id: string }) {
 		if (r.ok) router.push(threadHref(wolf, r.data.id));
 		else setThreadError(r.message);
 	};
-	return <WorkItemView id={id} state={state} onOpenTask={(taskId) => router.push(workHref(taskId))} onOpenThread={openThread} threadError={threadError} />;
+	return <WorkItemView id={id} state={state} onOpenTask={onOpenTask ?? ((taskId) => router.push(workHref(taskId)))} onOpenThread={openThread} threadError={threadError} onClose={onClose} />;
 }
 
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
 
 /** Presentational half (SSR-testable). */
-export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError }: { id: string; state: WorkPageState; onOpenTask?: (id: string) => void; onOpenThread?: (wolf: string) => void; threadError?: string | null }) {
+export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError, onClose }: { id: string; onClose?: () => void; state: WorkPageState; onOpenTask?: (id: string) => void; onOpenThread?: (wolf: string) => void; threadError?: string | null }) {
 	const item = state.kind === "ready" ? state.item : null;
 	return (
-		<div className="flex h-dvh flex-col" data-testid="work-item-page" data-work={id} data-state={state.kind}>
+		<div className={onClose ? "flex h-full min-h-0 flex-col" : "flex h-dvh flex-col"} data-testid="work-item-page" data-work={id} data-state={state.kind}>
 			<TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{item?.title ?? id}</h1>
+				{onClose && (
+					<Button size="icon-xs" variant="ghost" className="ml-auto shrink-0 max-md:size-11" aria-label="Close" data-testid="work-reader-close" onClick={onClose}>
+						<XIcon />
+					</Button>
+				)}
 			</TopBar>
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-3xl px-6 py-8">

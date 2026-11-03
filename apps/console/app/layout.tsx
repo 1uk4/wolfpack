@@ -5,11 +5,12 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { SubagentModalProvider } from "@/components/subagent-modal";
-import { WorkViewProvider } from "@/components/work-view";
+import { GraduateToasts } from "@/components/graduate-dialog";
 import { ActivityProvider } from "@/components/activity-dock";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
+import { NavTracker } from "@/components/nav-tracker";
 import HubAuth from "@/components/hub-auth";
 import UpdateBanner from "@/components/update-banner";
 import { ViewportVars } from "@/components/viewport-vars";
@@ -44,15 +45,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 				 and pages all subscribe as the polls retire (push S3, 2026-10-02). */}
 			<HubAuth />
 			<ViewportVars />
+			<NavTracker />
 			<ServerEventsProvider>
 				<MemoryEventsProvider>
 					<AppearanceProvider>
 						<SidebarProvider>
 							<ActivityProvider>
 								<SubagentModalProvider>
-									<WorkViewProvider>
-										<AppShell>{children}</AppShell>
-									</WorkViewProvider>
+									<AppShell>{children}</AppShell>
+									<GraduateToasts />
 								</SubagentModalProvider>
 							</ActivityProvider>
 						</SidebarProvider>

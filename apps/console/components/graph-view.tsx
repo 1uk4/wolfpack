@@ -50,7 +50,7 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
-import { WorkButton, useWorkView } from "./work-view-entry.tsx";
+import { useWorkReader } from "./work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 
 /** The default node look when a node carries no colour of its own. */
@@ -157,7 +157,6 @@ export function GraphChromeRow({
 				</div>
 			)}
 			<div className="graph-chrome-fade-in flex shrink-0 items-center gap-2">
-				<WorkButton />
 				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} />
 			</div>
 		</>
@@ -194,6 +193,9 @@ export function GraphView({
 	const graphRef = useRef(graph);
 	graphRef.current = graph;
 	const router = useRouter();
+	const reader = useWorkReader();
+	const openWorkRef = useRef(reader.open);
+	openWorkRef.current = reader.open;
 
 	// Search: the query text; ⌘F (shortcut wave C) focuses it — the find
 	// event is surface-scoped, dispatched as lh:kbd-find (only this page
@@ -285,6 +287,7 @@ export function GraphView({
 					// instead of re-targeting the route.
 					const raw = rawWorkId(nodeId);
 					if (raw && collapsedRef.current.has(raw)) setExpanded((prev) => ({ id: selectedIdRef.current, set: new Set([...(prev.id === selectedIdRef.current ? prev.set : []), raw]) }));
+					else if (raw) openWorkRef.current(raw); // a work node opens the reader straight away
 					else setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
@@ -492,41 +495,7 @@ export function GraphView({
 		return () => cancelAnimationFrame(raf);
 	}, [focusId, isEmpty, storedLoaded, canvasData, hiddenBySearch]);
 
-	// ---- The Work view's split --------------------------------------------
-	// The table (a left column over this page) selects THROUGH the graph's own selection: a request becomes
-	// setSelected, so the route, the physics and the pane follow exactly as for a click on the map. The route the
-	// table lights is published back from this same computation.
-	const work = useWorkView();
-	const workSel = work.selection;
-	const handledSeq = useRef<number | null>(null);
-	useEffect(() => {
-		if (!workSel) {
-			// The Work list closed: a later pick of the same row is a new request. The graph keeps its own selection.
-			handledSeq.current = null;
-			return;
-		}
-		if (handledSeq.current === workSel.seq || isEmpty || !storedLoaded) return;
-		const gid = `work:${workSel.id}`;
-		if (!graph.nodes.some((n) => n.id === gid)) return;
-		handledSeq.current = workSel.seq;
-		setSelected({ id: gid });
-		// The column narrows the canvas first; pan once the renderer has re-fitted.
-		requestAnimationFrame(() => requestAnimationFrame(() => rendererRef.current?.focusOn([gid], 3)));
-	}, [workSel, graph, isEmpty, storedLoaded]);
-	const publishRoute = work.publishRoute;
-	useEffect(() => {
-		const raw = selectedId ? rawWorkId(selectedId) : null;
-		publishRoute(raw ? workRouteView(selectedRoute, raw, cursor?.node ?? null) : null);
-	}, [publishRoute, selectedId, selectedRoute, cursor?.node]);
-	useEffect(() => () => publishRoute(null), [publishRoute]);
-	// The column covers the page's left edge: inset the graph past it so the canvas (and its fit) is the visible part.
 	const rootRef = useRef<HTMLDivElement | null>(null);
-	const [inset, setInset] = useState(0);
-	const splitWidth = work.isOpen && !work.expanded ? work.colWidth : 0;
-	useEffect(() => {
-		const left = rootRef.current?.getBoundingClientRect().left ?? 0;
-		setInset(Math.max(0, splitWidth - left));
-	}, [splitWidth]);
 
 	// The pane's details follow the route cursor's node (when a route is selected).
 	const card = useMemo(
@@ -546,14 +515,9 @@ export function GraphView({
 	}, [graph, selectedRoute, cursor, selectedId]);
 	shownNodeRef.current = card?.id ?? null;
 	const paneOpen = !!(selected && card && !isEmpty);
-	const publishPane = work.publishPane;
-	useEffect(() => {
-		publishPane(paneOpen);
-		return () => publishPane(false);
-	}, [publishPane, paneOpen]);
 
 	return (
-		<div ref={rootRef} className="flex h-full w-full" style={inset > 0 ? { paddingLeft: inset } : undefined}>
+		<div ref={rootRef} className="flex h-full w-full">
 			<div className="relative h-full min-w-0 flex-1">
 				{isEmpty ? (
 					<div className="flex h-full w-full items-center justify-center px-4">
@@ -602,7 +566,9 @@ export function GraphView({
 						onClose={() => setOverlayId(null)}
 						onSelectNode={(id) => {
 							setOverlayId(null);
-							focusNodeRef.current(id);
+							const raw = rawWorkId(id);
+							if (raw) openWorkRef.current(raw);
+							else focusNodeRef.current(id);
 						}}
 					/>
 				)}

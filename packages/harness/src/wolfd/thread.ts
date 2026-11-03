@@ -45,7 +45,7 @@ import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, recordSubmission } from "./attachments.js";
 import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
-import { CardTracker, answerText, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
+import { CardTracker, answerText, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
 
@@ -85,6 +85,17 @@ const SYSTEM: Actor = { id: "wolfd", kind: "system" };
 
 type Sub = (ev: ThreadEvent) => void;
 
+/** An owner submission the engine accepted as queued: a chat message (text, refs) or a card answer (cardAnswers). */
+interface QueuedOwner {
+  text: string;
+  refs: readonly AttachmentRef[];
+  cardAnswers?: ReadyAnswer[];
+}
+
+const cardAnswersOf = (ready: readonly ReadyAnswer[]) => ({
+  cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })),
+});
+
 export class ThreadRuntime {
   readonly cards: CardTracker;
   private seq = 0;
@@ -94,11 +105,11 @@ export class ThreadRuntime {
   private messages: ThreadMessage[] = [];
   private queuedInputs = new Set<number>();
   /** Owner steers/follow-ups the engine accepted as queued (submission id -> what was sent), until placed or withdrawn. */
-  private readonly ownerQueued = new Map<number, { text: string; refs: readonly AttachmentRef[] }>();
+  private readonly ownerQueued = new Map<number, QueuedOwner>();
   /** Submission ids the engine has placed (or finished): a submit that returns late must not track these. */
   private readonly settledIds = new Map<number, { status: string; reason?: string }>();
   /** Owner messages withdrawn by an abort, waiting to be re-submitted as the next turn (original order). */
-  private withdrawn: Array<{ text: string; refs: readonly AttachmentRef[]; tries?: number }> = [];
+  private withdrawn: Array<QueuedOwner & { tries?: number }> = [];
   private resubmitting = false;
   private lastActivity = Date.now();
   private toolsInFlight = new Set<string>();
@@ -329,6 +340,26 @@ export class ThreadRuntime {
   /** After an abort settled (nothing running), send the withdrawn owner messages as one next message. */
   private maybeResubmit(): void {
     if (this.withdrawn.length === 0 || this.running || this.resubmitting || this.host.closing()) return;
+    // Withdrawn card answers go back as card answers (the model must still get them as the card's answer), ahead of text.
+    const answerItem = this.withdrawn.find((i) => i.cardAnswers);
+    if (answerItem) {
+      this.withdrawn = this.withdrawn.filter((i) => i !== answerItem);
+      this.resubmitting = true;
+      const cardAnswers = answerItem.cardAnswers!;
+      setTimeout(() => {
+        this.resubmitCardAnswers(cardAnswers)
+          .catch((e) => {
+            this.host.onError(e);
+            this.emit({ type: "error", ...(this.running ? { turnId: this.running.turnId } : {}), message: `Could not re-send your card answer after the abort${(answerItem.tries ?? 0) < 1 ? " (will retry once)" : ""}.` });
+            if ((answerItem.tries ?? 0) < 1) this.withdrawn.unshift({ ...answerItem, tries: (answerItem.tries ?? 0) + 1 });
+          })
+          .finally(() => {
+            this.resubmitting = false;
+            this.maybeResubmit();
+          });
+      }, 0);
+      return;
+    }
     const items = this.withdrawn;
     this.withdrawn = [];
     this.resubmitting = true;
@@ -349,6 +380,26 @@ export class ThreadRuntime {
           this.maybeResubmit();
         });
     }, 0);
+  }
+
+  private async resubmitCardAnswers(ready: ReadyAnswer[]): Promise<void> {
+    const r = await this.conv.submit({ input: answerText(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
+    this.trackQueued(r, { text: "", refs: [], cardAnswers: ready });
+  }
+
+  /** Remember an accepted steer/queue so an abort's withdrawal can re-send it (shared by chat messages and card answers). */
+  private trackQueued(r: { messageId: string; disposition: string }, item: QueuedOwner): void {
+    if (r.disposition !== "steered" && r.disposition !== "queued") return;
+    const id = Number(r.messageId);
+    if (!Number.isFinite(id)) return;
+    const settled = this.settledIds.get(id);
+    this.settledIds.delete(id);
+    if (!settled) this.ownerQueued.set(id, item);
+    else if (settled.status === "unanswered" && settled.reason === "aborted") {
+      // The withdrawal was pumped before this submit returned.
+      this.withdrawn.push(item);
+      this.maybeResubmit();
+    }
   }
 
   // --- stall watchdog ---
@@ -648,19 +699,10 @@ export class ThreadRuntime {
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }
     notice?.commit();
-    if (!opts.internal && (r.disposition === "steered" || r.disposition === "queued")) {
-      const id = Number(r.messageId);
-      if (Number.isFinite(id)) {
-        const settled = this.settledIds.get(id);
-        this.settledIds.delete(id);
-        if (!settled) this.ownerQueued.set(id, { text: textOnly, refs });
-        else if (settled.status === "unanswered" && settled.reason === "aborted") {
-          // The withdrawal was pumped before this submit returned.
-          this.withdrawn.push({ text: textOnly, refs });
-          this.maybeResubmit();
-        }
-      }
-    }
+    if (!opts.internal) this.trackQueued(r, { text: textOnly, refs });
+    // An owner message typed mid-turn supersedes the pending cards now (the engine places it later, after the tool round).
+    // Only once the engine accepted it: a rejected submit must leave the cards answerable.
+    if (!opts.internal && !opts.resubmit && (r.disposition === "steered" || r.disposition === "queued")) this.supersedePending();
     if (refs.length > 0 && this.host.den) {
       try {
         recordSubmission(this.host.den, this.summary.id, r.messageId, refs);
@@ -672,13 +714,20 @@ export class ThreadRuntime {
     return { messageId: r.messageId, disposition: r.disposition };
   }
 
+  /** Close every pending card as superseded, now (the later pi.user entry then finds nothing to dismiss). */
+  private supersedePending(): void {
+    const ids = this.cards.dismissAll();
+    if (ids.length === 0) return;
+    this.syncCards(new Map(ids.map((id): [string, CardClosed] => [id, "superseded"])));
+    this.notify();
+  }
+
   /**
    * Answer a pending card. The answer is a submission placed as a card-answer entry: the next turn starts with it as
    * input, and the history folds it onto the call that raised the card. While sibling cards of the turn still wait
    * the answer is held and the ack is `queued`.
    */
   async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
-    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
     const bad = validateAnswers(pending.card, rawAnswers);
@@ -690,7 +739,6 @@ export class ThreadRuntime {
 
   /** Skip a pending card: the agent is told, and a skip counts as the card's resolution among its siblings. */
   async skipCard(callId: string): Promise<SubmitAck> {
-    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
     // A repeated skip of an already held-skipped card changes nothing: no second announcement.
@@ -720,17 +768,16 @@ export class ThreadRuntime {
   private async submitAnswers(ready: ReturnType<CardTracker["answer"]> & object, ids: string[], before: number): Promise<SubmitAck> {
     let r;
     try {
-      r = await this.conv.submit({
-        input: answerText(ready),
-        whenBusy: "reject",
-        cardAnswers: { cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })) },
-      });
+      // Mid-turn the answer is steered like a chat message typed then (the engine queues it for the turn's next
+      // boundary or its end); idle it starts the turn. "reject" would only matter if a turn began between the two.
+      r = await this.conv.submit({ input: answerText(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
     } catch (e) {
       this.cards.release(ids);
       if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }
     this.cards.settle(ids);
+    this.trackQueued(r, { text: "", refs: [], cardAnswers: ready });
     this.syncCards(new Map(ready.map((c): [string, CardClosed] => [c.callId, c.skipped ? "skipped" : "answered"])));
     if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
     return { messageId: r.messageId, disposition: r.disposition };

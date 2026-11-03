@@ -116,14 +116,14 @@ export function OverlayShell({
 		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose, column, yieldEsc]);
 	const close = (
-		<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid={closeTestId} onClick={onClose}>
+		<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto shrink-0 max-md:size-11" aria-label="Close" data-testid={closeTestId} onClick={onClose}>
 			<XIcon />
 		</Button>
 	);
 	return (
 		<div
 			ref={dialogRef}
-			className={column !== undefined ? "fixed inset-y-0 left-0 z-50 flex flex-col border-r bg-background" : `fixed inset-0 z-50 flex flex-col bg-background${bleed ? "" : " p-4"}`}
+			className={column !== undefined ? "fixed inset-y-0 left-0 z-50 flex flex-col border-r bg-background" : `fixed inset-0 z-50 flex h-dvh max-h-dvh flex-col overflow-hidden bg-background${bleed ? "" : " px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]"}`}
 			style={column !== undefined ? { width: column } : undefined}
 			role="dialog"
 			aria-modal={column === undefined}

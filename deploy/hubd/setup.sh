@@ -196,7 +196,8 @@ cmd_setup() {
     # Work writes (POST /v1/work ...) render domains/<d>/work/<id>.md; with domains/ read-only they fail. Make just those dirs writable.
     local rw=()
     while IFS= read -r d; do rw+=("$d"); done < <(find -L "$DOMAINS" -mindepth 2 -maxdepth 2 -type d -name work 2>/dev/null | sort)
-    echo "hub-writes (UNTESTED under real systemd): work dirs writable: ${rw[*]:-none found}"
+    echo "hub-writes: work dirs writable: ${rw[*]:-none found}"
+    echo "NOTE: systemd does not expand globs: this list is fixed now. A domain (or work dir) added later stays READ-ONLY until you re-run: setup.sh setup --hub-writes, then systemctl daemon-reload && systemctl restart hubd"
     if ((${#rw[@]} == 0)); then
       warn "no domains/*/work dirs found; NOT writing the drop-in (an empty BindPaths= would reset the unit's inbox/receipts binds)"
       if [[ -e $DROPIN_DIR/work-writes.conf ]]; then
@@ -206,10 +207,15 @@ cmd_setup() {
     elif ((DRY)); then echo "DRY-RUN: write $DROPIN_DIR/work-writes.conf (BindPaths= and ReadWritePaths= for ${#rw[@]} work dir(s); systemd does not expand globs, re-run after adding a domain or work dir)"; else
       install -d -m 0755 "$DROPIN_DIR"
       # BindPaths= is a list: the drop-in must repeat the unit's own entries, or it would replace them.
-      printf '[Service]\nBindPaths=%s %s %s\nReadWritePaths=%s\n' "$INBOX" "$RECEIPTS" "${rw[*]}" "${rw[*]}" >"$DROPIN_DIR/work-writes.conf"
+      printf '[Service]\nBindPaths=%s %s %s\nReadWritePaths=%s\n' "$INBOX" "$RECEIPTS" "${rw[*]}" "${rw[*]}" >"$DROPIN_DIR/work-writes.conf.tmp"
+      mv "$DROPIN_DIR/work-writes.conf.tmp" "$DROPIN_DIR/work-writes.conf"
     fi
   else
     echo "domains/ stays read-only for hubd: work-item writes and KB commits fail by design (use --hub-writes to allow work/ dirs)"
+    if [[ -e $DROPIN_DIR/work-writes.conf ]]; then
+      warn "removing $DROPIN_DIR/work-writes.conf left by an earlier --hub-writes run: work writes are turned OFF again (restart hubd to apply)"
+      run rm -f "$DROPIN_DIR/work-writes.conf"
+    fi
   fi
   run systemctl daemon-reload
   run systemctl enable hubd.service

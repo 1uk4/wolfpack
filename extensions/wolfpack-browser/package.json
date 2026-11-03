@@ -6,7 +6,7 @@
   "description": "pi-durable extension: a guarded headless Chromium (Playwright) for wolves. Written from scratch; OFF unless wolf.yaml `browser: { enabled: true }`.",
   "keywords": ["wolfpack", "browser"],
   "dependencies": {
-    "playwright-core": "^1.63.0"
+    "playwright-core": "1.63.0"
   },
   "wolfpack": {
     "playwrightCore": true,

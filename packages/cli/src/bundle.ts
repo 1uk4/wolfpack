@@ -25,7 +25,6 @@ import { wolfDenDir, writeModelTable, type ModelTable } from "@wolfpack/engine";
 import {
   getExtension,
   extensionsDir,
-  repoRoot,
   type WolfExtension,
 } from "./extensions.js";
 import { buildDenExtension, findDenExtension } from "./den-extensions.js";
@@ -416,43 +415,67 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
   }
 
   const extOutDir = path.join(extDir, ext.dir);
-  fs.mkdirSync(extOutDir, { recursive: true });
-  // playwright-core resolves its package root as `__dirname/..` and reads its package.json there. Bundled, that would be
-  // the den's extensions/ dir; point it at the extension's own dir instead and ship a package.json that answers it.
-  const playwrightRoot: esbuild.Plugin[] = pkg.wolfpack?.playwrightCore
-    ? [
+
+  // playwright-core resolves its package root as `__dirname/..` and reads package.json / browsers.json there. Bundled,
+  // that would be the den's extensions/ dir; point it at the extension's own dir and ship the two files beside index.js.
+  // Everything playwright-specific is best effort: if it can't be done, THIS extension is skipped with a warning and the
+  // build for every other extension (and wolf) is unaffected.
+  let playwrightRoot: esbuild.Plugin[] = [];
+  let playwrightFiles: { pkgJson: string; browsersJson: string } | undefined;
+  if (pkg.wolfpack?.playwrightCore) {
+    try {
+      const pwPkg = createRequire(import.meta.url).resolve("playwright-core/package.json");
+      const pwDir = path.dirname(pwPkg);
+      const browsersJson = path.join(pwDir, "browsers.json");
+      if (!fs.existsSync(browsersJson)) throw new Error(`browsers.json not found in ${pwDir}`);
+      const version = (JSON.parse(fs.readFileSync(pwPkg, "utf8")) as { version: string }).version;
+      playwrightFiles = { pkgJson: JSON.stringify({ name: "playwright-core", version }) + "\n", browsersJson };
+      playwrightRoot = [
         {
           name: "playwright-core-root",
           setup(b) {
-            b.onLoad({ filter: /playwright-core[\\/]lib[\\/]coreBundle\.js$/ }, (a) => ({
-              contents: fs.readFileSync(a.path, "utf8").replace('packageRoot = import_path9.default.join(__dirname, "..");', "packageRoot = __dirname;"),
-              loader: "js",
-              resolveDir: path.dirname(a.path),
-            }));
+            b.onLoad({ filter: /playwright-core[\\/]lib[\\/]coreBundle\.js$/ }, (a) => {
+              const src = fs.readFileSync(a.path, "utf8");
+              const re = /packageRoot\s*=\s*(\w+)\.default\.join\(__dirname,\s*"\.\."\)/;
+              if (!re.test(src)) throw new Error("playwright-core: packageRoot assignment not found (unsupported version)");
+              return { contents: src.replace(re, "packageRoot = __dirname"), loader: "js", resolveDir: path.dirname(a.path) };
+            });
           },
         },
-      ]
-    : [];
-  await esbuild.build({
-    entryPoints: [entryFile],
-    outfile: path.join(extOutDir, "index.js"),
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    target: "node20",
-    plugins: playwrightRoot,
-    external: [
-      "@earendil-works/pi-coding-agent",
-      "@earendil-works/pi-tui",
-      "grammy",
-      ...(pkg.wolfpack?.externals ?? []),
-    ],
-    logLevel: "silent",
-  });
-  if (pkg.wolfpack?.playwrightCore) {
-    fs.copyFileSync(path.join(repoRoot(), "node_modules", "playwright-core", "browsers.json"), path.join(extOutDir, "browsers.json"));
-    const pw = JSON.parse(fs.readFileSync(path.join(repoRoot(), "node_modules", "playwright-core", "package.json"), "utf8")) as { version: string };
-    fs.writeFileSync(path.join(extOutDir, "package.json"), JSON.stringify({ name: "playwright-core", version: pw.version }) + "\n");
+      ];
+    } catch (err) {
+      console.warn(`Extension ${key}: skipped (playwright-core unavailable): ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
+  }
+
+  fs.mkdirSync(extOutDir, { recursive: true });
+  try {
+    await esbuild.build({
+      entryPoints: [entryFile],
+      outfile: path.join(extOutDir, "index.js"),
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      target: "node20",
+      plugins: playwrightRoot,
+      external: [
+        "@earendil-works/pi-coding-agent",
+        "@earendil-works/pi-tui",
+        "grammy",
+        ...(pkg.wolfpack?.externals ?? []),
+      ],
+      logLevel: "silent",
+    });
+    if (playwrightFiles) {
+      fs.copyFileSync(playwrightFiles.browsersJson, path.join(extOutDir, "browsers.json"));
+      fs.writeFileSync(path.join(extOutDir, "package.json"), playwrightFiles.pkgJson);
+    }
+  } catch (err) {
+    if (!playwrightFiles) throw err; // other extensions keep their existing failure behaviour
+    fs.rmSync(extOutDir, { recursive: true, force: true });
+    console.warn(`Extension ${key}: skipped (build failed): ${err instanceof Error ? err.message.split("\n")[0] : err}`);
+    return false;
   }
   return true;
 }

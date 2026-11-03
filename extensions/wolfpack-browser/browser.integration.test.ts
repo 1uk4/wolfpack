@@ -3,10 +3,12 @@
  * 127.0.0.1 is allowlisted, which also proves the allowlist reaches the live navigation path.
  */
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WebSocketServer } from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import createBrowserExtension from "./durable.js";
 import { BrowserSession, findBrowser } from "./session.js";
@@ -19,6 +21,7 @@ d("browser extension (live)", () => {
   let base = "";
   let den = "";
   let session: BrowserSession;
+  const wsHits: string[] = [];
 
   beforeAll(async () => {
     den = mkdtempSync(join(tmpdir(), "wolf-browser-den-"));
@@ -33,6 +36,13 @@ d("browser extension (live)", () => {
       }
       res.writeHead(200, { "content-type": "text/html" });
       res.end(`<title>hello</title><h1 id=h>Hi</h1><input id=i><script>console.log("from-page");fetch("/api",{headers:{authorization:"Bearer TOPSECRET"}})</script>`);
+    });
+    // Minimal RFC 6455 handshake: enough for the page to see onopen. Records every upgrade that reaches it.
+    server.on("upgrade", (req, socket) => {
+      wsHits.push(String(req.headers.host));
+      const key = String(req.headers["sec-websocket-key"]);
+      const accept = createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -68,6 +78,45 @@ d("browser extension (live)", () => {
     expect(existsSync(shot)).toBe(true);
     await session.close();
     expect(existsSync(shot)).toBe(false);
+  }, 60000);
+});
+
+d("browser extension (live): WebSockets", () => {
+  it("blocks a ws:// to an internal host from a page; an allowlisted one is not blocked", async () => {
+    const den = mkdtempSync(join(tmpdir(), "wolf-browser-den-"));
+    const hits: string[] = [];
+    const srv = createServer((_q, res) => { res.writeHead(200, { "content-type": "text/html" }); res.end("<title>p</title>"); });
+    const wss = new WebSocketServer({ server: srv });
+    wss.on("connection", (_sock, req) => { hits.push(String(req.headers.host)); });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as AddressInfo).port;
+    // The page host (localhost) is allowlisted; the ws target 127.0.0.1 is NOT: it must be refused.
+    const s = new BrowserSession(den, { allowHosts: ["localhost"], timeoutMs: 15000 });
+    const probe = (u: string) => `new Promise(r => { const w = new WebSocket(${JSON.stringify(u)}); w.onopen = () => r("open"); w.onclose = () => r("closed"); w.onerror = () => r("error"); setTimeout(() => r("timeout"), 5000); })`;
+    try {
+      await s.run(() => s.goto(`http://localhost:${port}/`));
+      const blocked = await s.run(() => s.evaluate(probe(`ws://127.0.0.1:${port}/`)));
+      expect(blocked).not.toBe("open");
+      expect(hits).toHaveLength(0);
+      expect(s.blockedRequests().join("\n")).toMatch(/ws:\/\/127\.0\.0\.1/);
+      // Positive control: with 127.0.0.1 allowlisted the same socket opens (so the block above is the policy's doing).
+      await s.close();
+      const s2 = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 15000 });
+      try {
+        await s2.run(() => s2.goto(`http://127.0.0.1:${port}/`));
+        const got = await s2.run(() => s2.evaluate(probe(`ws://127.0.0.1:${port}/`)));
+        // Chromium's own local-network check may still refuse a fulfilled page's socket (got "error"), so assert only
+        // that OUR policy let it through: nothing recorded as blocked.
+        expect(got).toBeTypeOf("string");
+        expect(s2.blockedRequests()).toEqual([]);
+      } finally {
+        await s2.close();
+      }
+    } finally {
+      await s.close();
+      await new Promise((r) => srv.close(r));
+      rmSync(den, { recursive: true, force: true });
+    }
   }, 60000);
 });
 

@@ -27,21 +27,50 @@ export interface PendingAttachment {
 export type AttachmentInfo = UiAttachment;
 
 /** The client-side precheck (same limits as the wolf): the chip's error text, or undefined when the file may upload. */
-export function precheckFile(file: { type: string; size: number }): string | undefined {
+export function precheckFile(file: { type: string; size: number }, maxBytes: number = ATTACHMENT_MAX_BYTES, relay = false): string | undefined {
 	const mime = file.type.split(";")[0]!.trim().toLowerCase();
 	if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(mime)) {
 		return `Unsupported type ${mime || "(unknown)"}: images only (${ATTACHMENT_IMAGE_TYPES.map((t) => t.slice(6)).join(", ")}).`;
 	}
 	if (file.size === 0) return "The file is empty.";
-	if (file.size > ATTACHMENT_MAX_BYTES) return `Too large (${(file.size / 1024 / 1024).toFixed(1)} MB; limit ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB).`;
+	if (file.size > maxBytes) return tooLargeMessage(maxBytes, relay, file.size);
 	return undefined;
 }
 
+const mb = (n: number) => (n / 1024 / 1024).toFixed(1).replace(/\.0$/, "");
+
+/** The composer's text for a file over the budget. */
+export function tooLargeMessage(maxBytes: number, relay: boolean, size?: number): string {
+	const got = size ? ` (${mb(size)} MB)` : "";
+	return relay ? `Photo too large to send over the hub${got}, max ${mb(maxBytes)} MB.` : `Too large${got}; limit ${mb(maxBytes)} MB.`;
+}
+
+/** A server/relay refusal for size ("request body too large for the relay", 413) as the friendly text; other errors pass through. */
+export function friendlyUploadError(message: string, status: number | undefined, maxBytes: number, relay: boolean): string {
+	return status === 413 || /too large/i.test(message) ? tooLargeMessage(maxBytes, relay) : message;
+}
+
 /** The chip for a file about to upload, or an error chip (nothing to upload) when the precheck refuses it. */
-export function chipFor(file: File, key: string): { chip: PendingAttachment; upload: boolean } {
+export function chipFor(file: File, key: string, maxBytes: number = ATTACHMENT_MAX_BYTES, relay = false): { chip: PendingAttachment; upload: boolean } {
 	const name = file.name || "pasted image";
-	const error = precheckFile(file);
+	const error = precheckFile(file, maxBytes, relay);
 	return error ? { chip: { key, name, status: "error", error }, upload: false } : { chip: { key, name, status: "uploading", mimeType: file.type, size: file.size }, upload: true };
+}
+
+export interface AttachmentLimit {
+	mode: "local" | "relay";
+	maxBytes: number;
+}
+
+/** The console's per-file budget (/api/attachment-limit); on failure the local cap (the server still refuses honestly). */
+export async function fetchAttachmentLimit(fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<AttachmentLimit> {
+	try {
+		const j = (await (await fetchFn("/api/attachment-limit")).json()) as Partial<AttachmentLimit>;
+		if ((j.mode === "local" || j.mode === "relay") && typeof j.maxBytes === "number" && j.maxBytes > 0) return { mode: j.mode, maxBytes: j.maxBytes };
+	} catch {
+		/* fall through */
+	}
+	return { mode: "local", maxBytes: ATTACHMENT_MAX_BYTES };
 }
 
 /** `accept` for the file picker input. */
@@ -73,6 +102,12 @@ export function pastedImages(data: ClipboardLike | null | undefined): File[] {
 	return out;
 }
 
+export class UploadError extends Error {
+	constructor(message: string, readonly status: number) {
+		super(message);
+	}
+}
+
 /** POST the file's bytes to the thread's upload route; resolves with the wolf's attachment id. */
 export async function uploadFile(
 	uploadUrl: string,
@@ -89,7 +124,7 @@ export async function uploadFile(
 	} catch {
 		/* non-JSON failure body */
 	}
-	if (!res.ok) throw new Error(typeof body.error === "string" ? body.error : text || `Upload failed (${res.status}).`);
+	if (!res.ok) throw new UploadError(typeof body.error === "string" ? body.error : text || `Upload failed (${res.status}).`, res.status);
 	if (typeof body.id !== "string") throw new Error("Upload failed: unexpected response.");
 	const b = body as { mimeType?: unknown; size?: unknown };
 	return {

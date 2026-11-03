@@ -60,8 +60,8 @@ echo "0000000000000000000000000000000000000000000000000000000000000000  wolfd-v0
 rm /srv/www/wolfd/v0.1.4/*.sha256
 sed -i 's/wolfd-v0.1.5/hubd-v0.1.5/' /srv/www/wolfd/v0.1.5/wolfd-v0.1.5-linux-x64.tar.gz.sha256
 for v in 0.2.0:good 0.2.1:failnoflip 0.2.2:failflip 0.2.3:crash 0.2.4:good 0.2.5:good 0.2.6:failflip 0.2.7:crash; do mkhub hubd ${v%%:*} ${v#*:}; done
-mkhub hubd 0.2.8 norestart; mkhub workerd 0.2.0 good
-( cd /srv/www && node -e 'const h=require("http"),fs=require("fs");h.createServer((q,r)=>{if(q.url==="/v1/wolves"){r.statusCode=401;return r.end("{}")}try{r.end(fs.readFileSync("/srv/www"+q.url))}catch{r.statusCode=404;r.end()}}).listen(8099,"127.0.0.1")' >/dev/null 2>&1 </dev/null & ); sleep 1
+mkhub hubd 0.2.8 norestart; mkhub workerd 0.2.0 good; mkhub console 0.2.0 good; mkhub console 0.2.1 crash
+( cd /srv/www && node -e 'const h=require("http"),fs=require("fs");h.createServer((q,r)=>{if(q.url==="/v1/wolves"){r.statusCode=401;return r.end("{}")}if(q.url==="/"){return r.end("<html>console</html>")}try{r.end(fs.readFileSync("/srv/www"+q.url))}catch{r.statusCode=404;r.end()}}).listen(8099,"127.0.0.1")' >/dev/null 2>&1 </dev/null & ); sleep 1
 
 T="--health-timeout 8 --settle 2"
 D() { bash -s -- "$@" < /opt/release/deploy-release.sh; }       # exactly how the CLI feeds it
@@ -175,6 +175,14 @@ run D hubd 0.2.7 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" |
 run D hubd 0.2.8 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" | grep -q "InvocationID did not change" && systemctl is-active --quiet hubd.service && ok "active service whose install did not restart it (InvocationID unchanged) -> rolled back and restarted (rc 3)" || bad "norestart rc=$rc"
 touch $S/workerd.service.active; echo 1 > $S/workerd.service.iid
 run D workerd 0.2.0 $T || bad "workerd"; [ "$(basename "$(readlink -f /opt/wolfpack-workerd/current)" | cut -d+ -f1)" = 0.2.0 ] && ok "workerd 0.2.0 installed through the same path"
+echo "--- console via setup.sh (HTTP 200 on / from the fake server; /api/health is 404 there, so the fallback to / is what passes)"
+install -d /opt/wolfpack-console/releases/seed; echo 0.0.1 > /opt/wolfpack-console/releases/seed/VERSION; ln -sfn /opt/wolfpack-console/releases/seed /opt/wolfpack-console/current
+printf 'CONSOLE_HOST=127.0.0.1\nCONSOLE_PORT=8099\n' > /etc/wolfpack/console.env
+touch $S/console.service.active; echo 1 > $S/console.service.iid
+run D console 0.2.0 $T; rc=$?; [ $rc = 0 ] && [ "$(basename "$(readlink -f /opt/wolfpack-console/current)" | cut -d+ -f1)" = 0.2.0 ] && ok "console 0.2.0 installed, unit active, HTTP 200 probe passed" || bad "console 0.2.0 rc=$rc"
+sed -i 's/CONSOLE_PORT=8099/CONSOLE_PORT=8097/' /etc/wolfpack/console.env
+run D console 0.2.1 $T; rc=$?; [ $rc = 3 ] || [ $rc = 4 ] && ok "console 0.2.1 (crashes after the flip) -> rolled back (rc $rc)" || bad "console crash rc=$rc"
+sed -i 's/CONSOLE_PORT=8097/CONSOLE_PORT=8099/' /etc/wolfpack/console.env
 [ -z "$(leftovers)" ] && ok "no temp dirs left behind"
 if [ -f /real.tgz ]; then
   echo "--- the REAL published wolfd tarball passes the member policy and symlink containment"

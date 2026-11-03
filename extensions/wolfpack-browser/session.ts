@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSetCookie, selectCookies, fetchSite, type FetchSite, type JarCookie } from "./cookies.js";
+import { parseSetCookie, selectCookies, fetchSite, worstSite, type FetchSite, type JarCookie } from "./cookies.js";
 import { guardedFetch, HOP_BY_HOP } from "./fetcher.js";
 import { capText, checkUrlResolved, guardedLookup, lastN, redactHeaders, redactUrl, type Resolver } from "./policy.js";
 
@@ -103,6 +103,8 @@ export class BrowserSession {
   private readonly resolver?: Resolver;
   /** True while openPage creates the working page, so the popup-closer leaves it alone. */
   private opening = false;
+  /** Set while browser_goto navigates: that request is user-typed ("none"); redirect hops are judged against the chain. */
+  private gotoNav?: { url: string; prev: string; tainted: boolean };
 
   constructor(
     private readonly den: string,
@@ -224,10 +226,7 @@ export class BrowserSession {
           return await route.abort("failed").catch(() => undefined);
         }
         const topLevel = req.isNavigationRequest() && !req.frame().parentFrame();
-        const header = rawHeaders["sec-fetch-site"];
-        const site: FetchSite = header === "same-origin" || header === "same-site" || header === "cross-site" || header === "none"
-          ? header
-          : fetchSite(url, topLevel ? this.page?.url() : req.frame().url(), topLevel && !this.page?.url());
+        const site = this.siteFor(url, req, rawHeaders["sec-fetch-site"], topLevel);
         const jar = (await ctx.cookies(url)) as JarCookie[];
         const cookies = selectCookies(jar, { requestUrl: url, site, method, topLevelNavigation: topLevel });
         if (cookies.length) headers["cookie"] = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
@@ -278,6 +277,29 @@ export class BrowserSession {
   }
 
   /** Open the single working page; pages restored from the profile and later popups are closed. */
+  /** Sec-Fetch-Site for a request: user navigations are "none"; frames are judged against EVERY ancestor. */
+  private siteFor(url: string, req: any, header: string | undefined, topLevel: boolean): FetchSite {
+    const valid = (h?: string): h is FetchSite => h === "same-origin" || h === "same-site" || h === "cross-site" || h === "none";
+    if (topLevel) {
+      const nav = this.gotoNav;
+      if (nav) {
+        if (url === nav.url && nav.prev === "") { nav.prev = url; return "none"; }
+        // redirect hop: relative to the previous hop; once any hop is cross-site the rest of the chain is too
+        const rel = fetchSite(url, nav.prev, false);
+        nav.prev = url;
+        if (rel === "cross-site") nav.tainted = true;
+        return nav.tainted ? "cross-site" : rel === "same-origin" ? "none" : rel;
+      }
+      if (valid(header)) return header;
+      return fetchSite(url, this.page?.url(), !this.page?.url());
+    }
+    const sites: FetchSite[] = valid(header) ? [header] : [];
+    let f = req.frame();
+    sites.push(fetchSite(url, f.url(), false));
+    while ((f = f.parentFrame())) sites.push(fetchSite(url, f.url(), false));
+    return worstSite(sites);
+  }
+
   private async openPage(): Promise<void> {
     const ctx = this.ctx;
     this.opening = true;
@@ -325,6 +347,7 @@ export class BrowserSession {
     const page = await this.ready();
     const before = this.blocked.length;
     let status: number | undefined;
+    this.gotoNav = { url: new URL(url).toString(), prev: "", tainted: false };
     try {
       const go = () => page.goto(url, { waitUntil, timeout: timeoutMs ?? this.timeout });
       // A reset to about:blank after an earlier blocked navigation can still be settling: retry once.
@@ -343,6 +366,8 @@ export class BrowserSession {
         throw new Error(`Navigation blocked: ${newly.join("; ")}`);
       }
       throw err;
+    } finally {
+      this.gotoNav = undefined;
     }
     // Belt and braces: whatever we ended on (redirects, JS) must pass too.
     const final = page.url();
@@ -415,13 +440,25 @@ export class BrowserSession {
 
   /** Close the browser and delete the session's screenshots. Safe to call repeatedly. */
   async close(): Promise<void> {
-    if (this.launching) await this.launching.catch(() => undefined);
+    if (this.launching) await Promise.race([this.launching.catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
     const ctx = this.ctx;
     this.ctx = undefined;
     this.page = undefined;
     this.consoleLog = [];
     this.netLog = [];
-    if (ctx) await Promise.race([ctx.close().catch(() => undefined), new Promise((r) => setTimeout(r, 10_000))]);
+    if (ctx) {
+      let timer: NodeJS.Timeout | undefined;
+      const timedOut = await Promise.race([
+        ctx.close().then(() => false, () => false),
+        new Promise<boolean>((r) => { timer = setTimeout(() => r(true), 10_000); }),
+      ]);
+      clearTimeout(timer);
+      if (timedOut) {
+        // A wedged Chromium: kill the process itself rather than leak it.
+        try { ctx.browser()?.process?.()?.kill("SIGKILL"); } catch { /* best effort */ }
+        try { (ctx as any)._browser?._connection?.close?.(); } catch { /* best effort */ }
+      }
+    }
     this.removeShotDir();
   }
 }

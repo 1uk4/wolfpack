@@ -31,6 +31,7 @@ export const HOP_BY_HOP = ["host", "content-length", "connection", "keep-alive",
 
 /** Decode a (possibly chained) content-encoding, bounded by maxBytes. Unknown encodings throw. */
 export function decodeBody(body: Buffer, encoding: string | undefined, maxBytes: number): Buffer {
+  if (body.length === 0) return body; // HEAD / 204 / 304 may still name an encoding
   const encs = (encoding ?? "").split(",").map((e) => e.trim().toLowerCase()).filter((e) => e && e !== "identity").reverse();
   let out = body;
   for (const e of encs) {

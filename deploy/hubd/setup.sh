@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent hubd setup/install for sfo-01. Run as root ON the host, after the owner confirms.
-#   setup.sh [--dry-run] setup    [--bind IP] [--port N] [--wolf NAME]... [--hub-writes]
+#   setup.sh [--dry-run] setup    [--bind IP] [--port N] [--wolf NAME]... [--hub-writes [--work-user USER]...]
 #   setup.sh [--dry-run] install  --bundle <dir with hubd.mjs, RUNBOOK.md, VERSION>
 #   setup.sh [--dry-run] rollback
 #   setup.sh [--dry-run] uninstall [--purge]
@@ -10,6 +10,8 @@ set -euo pipefail
 
 DRY=0 CMD="" BUNDLE="" BIND="" PORT=3150 HUB_WRITES=0 PURGE=0
 WOLVES=()
+WORK_USERS=()
+WORK_GROUP=wolfpack-work
 HUBD_USER=hubd
 HUBD_GROUP=hubd
 WOLF_USER=wolf-W1hOrJ
@@ -58,6 +60,7 @@ while (($#)); do
     --port) PORT="${2:?--port needs a number}"; shift ;;
     --wolf) valid_wolf "${2:?--wolf needs a name}" || die "bad wolf name $2"; WOLVES+=("$2"); shift ;;
     --hub-writes) HUB_WRITES=1 ;;
+    --work-user) [[ ${2:?--work-user needs a user name} =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "bad user name $2"; WORK_USERS+=("$2"); shift ;;
     --purge) PURGE=1 ;;
     setup | install | rollback | uninstall) CMD="$1" ;;
     *) die "unknown argument $1" ;;
@@ -198,14 +201,33 @@ cmd_setup() {
     while IFS= read -r d; do rw+=("$d"); done < <(find -L "$DOMAINS" -mindepth 2 -maxdepth 2 -type d -name work 2>/dev/null | sort)
     echo "hub-writes: work dirs writable: ${rw[*]:-none found}"
     echo "NOTE: systemd does not expand globs: this list is fixed now. A domain (or work dir) added later stays READ-ONLY until you re-run: setup.sh setup --hub-writes, then systemctl daemon-reload && systemctl restart hubd"
-    # The bind only lifts the read-only mount. Dewey creates work/ at 755 (owner wolf-W1hOrJ), so hubd (a different user) still gets EACCES
-    # (work_store_permission_denied) until the dir is 777, like the lane dirs. Found by hub-writes-proof.sh under real systemd.
-    for d in "${rw[@]}"; do
-      if hubd_user_exists && as_hubd test -w "$d" -a -x "$d"; then echo "exists: $d (writable by $HUBD_USER)"; else
-        echo "making $d writable by $HUBD_USER (chmod 777; the sandbox, not the mode, keeps the rest of domains/ read-only)"
-        run chmod 0777 "$d"
+    # The bind only lifts the read-only mount; hubd (its own user) must also be allowed to write the dir (work/ is root:root 755 or 755 owned by
+    # Dewey, so it would get EACCES = work_store_permission_denied). Never chmod 777: that lets every local user (each wolf's Linux user) write
+    # work items and bypass hubd's auth. hubd writes items as temp file + rename (atomicWrite), so write access to the DIRECTORY is enough
+    # to rewrite an item owned by someone else (no sticky bit on these dirs).
+    #  1. setfacl present (package 'acl'): a user ACL for hubd (access + default) on each dir. Nothing else changes.
+    #  2. otherwise (stock Debian has no setfacl): group $WORK_GROUP; hubd (+ any --work-user) is a member; dirs are chgrp'd to it and chmod 2775
+    #     (setgid, so files created later inherit the group). Other users get no write access.
+    if ((${#rw[@]})); then
+      if command -v setfacl >/dev/null 2>&1; then
+        for d in "${rw[@]}"; do
+          echo "ACL: $HUBD_USER may rwx $d (access + default ACL; no other user gains write)"
+          run setfacl -m "u:$HUBD_USER:rwx" "$d"
+          run setfacl -d -m "u:$HUBD_USER:rwx" "$d"
+        done
+      else
+        echo "setfacl not installed: using group $WORK_GROUP (members: $HUBD_USER ${WORK_USERS[*]-}) with setgid 2775 on the work dirs"
+        getent group "$WORK_GROUP" >/dev/null 2>&1 || run groupadd --system "$WORK_GROUP"
+        for u in "$HUBD_USER" ${WORK_USERS[@]+"${WORK_USERS[@]}"}; do
+          if id "$u" >/dev/null 2>&1; then run usermod -aG "$WORK_GROUP" "$u"; elif [[ $u == "$HUBD_USER" ]] && ((DRY)); then echo "DRY-RUN: usermod -aG $WORK_GROUP $u (user created earlier in this run)"; else warn "user $u does not exist; not added to $WORK_GROUP"; fi
+        done
+        for d in "${rw[@]}"; do
+          run chgrp "$WORK_GROUP" "$d"
+          run chmod 2775 "$d"
+        done
+        echo "NOTE: group membership applies when hubd starts; restart hubd after this run (the runbook does)."
       fi
-    done
+    fi
     if ((${#rw[@]} == 0)); then
       warn "no domains/*/work dirs found; NOT writing the drop-in (an empty BindPaths= would reset the unit's inbox/receipts binds)"
       if [[ -e $DROPIN_DIR/work-writes.conf ]]; then

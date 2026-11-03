@@ -92,14 +92,15 @@ export function openFeatureThread(wolf: string, workItemId: string): Promise<KbR
 	});
 }
 
-export function fetchKbGraph(librarian: string, opts: KbGraphOptions = {}): Promise<KbResult<KbGraph>> {
+/** The graph; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */
+export function fetchKbGraph(opts: KbGraphOptions = {}): Promise<KbResult<KbGraph>> {
 	const p = new URLSearchParams();
 	if (opts.domain) p.set("domain", opts.domain);
 	for (const k of ["archivedWork", "denTopics"] as const) {
 		if (opts[k] !== undefined) p.set(k, opts[k] ? "1" : "0");
 	}
 	const q = p.size ? `?${p}` : "";
-	return request(`/api/wolves/${seg(librarian)}/kb/graph${q}`);
+	return request(`/api/kb/graph${q}`);
 }
 
 export function fetchKbEntry(librarian: string, id: string): Promise<KbResult<KbEntryDetail>> {

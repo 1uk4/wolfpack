@@ -32,9 +32,9 @@ export interface KbGraphState {
 	refetch: () => void;
 }
 
-/** `librarian` null = no librarian known (after wolves loaded) → unavailable;
- *  pass `loading: true` while that is still being resolved. */
-export function useKbGraph(librarian: string | null, loading: boolean, query: KbGraphOptions): KbGraphState {
+/** The server picks the source (hub copy in relay mode, else a KB wolf); "unavailable" comes back from it (409).
+ *  Pass `loading: true` while the view's own settings are still loading. */
+export function useKbGraph(loading: boolean, query: KbGraphOptions): KbGraphState {
 	const [state, setState] = useState<Omit<KbGraphState, "refetch" | "isStale">>({ status: "loading", graph: null, message: null });
 	// The query key the current `graph` was fetched with.
 	const [settledKey, setSettledKey] = useState<string | null>(null);
@@ -47,12 +47,8 @@ export function useKbGraph(librarian: string | null, loading: boolean, query: Kb
 
 	useEffect(() => {
 		if (loading) return;
-		if (!librarian) {
-			setState({ status: "unavailable", graph: null, message: "No wolf can read the knowledge base." });
-			return;
-		}
 		let cancelled = false;
-		void fetchKbGraph(librarian, queryRef.current).then((res) => {
+		void fetchKbGraph(queryRef.current).then((res) => {
 			if (cancelled) return;
 			// Failures settle the key too: nothing newer is coming, so
 			// waiters must not wait forever.
@@ -64,7 +60,7 @@ export function useKbGraph(librarian: string | null, loading: boolean, query: Kb
 		return () => {
 			cancelled = true;
 		};
-	}, [librarian, loading, queryKey, tick]);
+	}, [loading, queryKey, tick]);
 
 	return { ...state, isStale: settledKey !== queryKey, refetch };
 }

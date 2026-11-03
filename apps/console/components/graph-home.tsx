@@ -115,14 +115,14 @@ function useActivityWolves(librarian: string | null): { wolves: string[]; refres
 function GraphHomeInner() {
 	const router = useRouter();
 	const params = useSearchParams();
-	const { librarian, kbSource, loading: librarianLoading } = useLibrarian();
+	const { librarian, kbSource } = useLibrarian();
 	const { settings, loaded, changeSettings } = useGraphSettings();
 
 	// Transient view changes a `/?focus=` target asked for (archived work,
 	// den topics, no domain filter). Never persisted into the settings.
 	const [forced, setForced] = useState<FocusRemedy>({});
 	const focusParam = parseFocusParam(params);
-	const kb = useKbGraph(kbSource?.name ?? null, librarianLoading || !loaded, {
+	const kb = useKbGraph(!loaded, {
 		domain: forced.allDomains ? undefined : (settings.domain ?? undefined),
 		archivedWork: settings.layers.archivedWork || !!forced.archivedWork,
 		denTopics: settings.layers.denTopics || !!forced.denTopics,

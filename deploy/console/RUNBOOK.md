@@ -12,6 +12,7 @@ Files: `deploy/console/{setup.sh,console.service,console.env.example}`, `deploy/
 | `WOLFPACK_CONSOLE_PUBLIC_ORIGIN` | `https://<host>.ts.net`, required; decides the `__Host-` cookie names (the unit refuses a non-https value) |
 | `WOLFPACK_HUB_URL` | where the **server** reaches hubd (today `http://100.120.154.69:3150`) |
 | `HUBD_PUBLIC_URL` | `https://<host>.ts.net/hub`, for the `/pair` link and the Devices panel's pairing link. Read **at runtime** (`/api/hub-url`, `src/server/hub-public-url.ts`); `NEXT_PUBLIC_WOLFPACK_HUB_URL` is no longer needed at build time (still honoured as a last fallback) |
+| `LH_DATA_DIR` | `/var/lib/console/data`: the console's own state (settings, KB graph cache). `setup.sh` creates it `console:console 0700` if missing (the `/var/lib/console` home is created the same way) |
 | `WOLFPACK_HUB_TOKEN` | optional, `/api/health` hub probe only. The console forwards only the browser's device token |
 
 hubd's own `/etc/wolfpack/hubd.env` gets the same two public values: `HUBD_PUBLIC_URL=https://<host>.ts.net/hub` (pairing QR) and `HUBD_CONSOLE_URL=https://<host>.ts.net` (where the pairing page redirects with `#token=`), then `systemctl restart hubd`.

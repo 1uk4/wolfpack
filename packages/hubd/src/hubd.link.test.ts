@@ -139,6 +139,22 @@ describe("hubd worker link: hello and registration", () => {
     expect(seen).toEqual([["box", "online"]]);
   });
 
+  it("GET /v1/wolves returns the librarian/kbReadable the worker reported (old-shape wolves claim nothing; offline claims nothing)", async () => {
+    await register("dewey");
+    await register("mirror");
+    await register("plain");
+    const flags = async () => Object.fromEntries(((await (await fetch(`${hub.url}/v1/wolves`, { headers: OP })).json()) as any).wolves.map((w: any) => [w.name, [w.status, w.librarian, w.kbReadable]]));
+    const c = await join_((await mint("worker", "box")).token, "box", {
+      wolves: [{ name: "dewey", domains: [], librarian: true }, { name: "mirror", domains: [], kbReadable: true }, { name: "plain", domains: [] }],
+    });
+    expect(await flags()).toEqual({ dewey: ["online", true, true], mirror: ["online", false, true], plain: ["online", false, false] });
+    c.send({ t: "wolf.add", wolf: { name: "plain", domains: [], kbReadable: true } }); // a later wolf.add updates the flags
+    await c.until(async () => (await flags()).plain[2] === true, "wolf.add flags");
+    c.ws.close();
+    await c.until(async () => (await flags()).dewey[0] === "offline", "offline");
+    expect((await flags()).dewey).toEqual(["offline", false, false]);
+  });
+
   it("an unknown wolf is not created (no name squatting): rejected in welcome, and on wolf.add", async () => {
     await register("alpha");
     const c = await join_((await mint("worker", "box")).token, "box", { wolves: [{ name: "alpha", domains: [] }, { name: "squat", domains: [] }] });

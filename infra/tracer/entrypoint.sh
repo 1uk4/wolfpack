@@ -94,6 +94,8 @@ fi
 echo "== pair workerd (worker token for host $HOST_ID)"
 WCODE=$(code --kind worker --host-id $HOST_ID)
 WENV=(HOME=$WHOME WORKERD_CONFIG_DIR=$WHOME/.wolfpack/workerd KB_OPS=$WHOME/ops)
+# P7: console mode gives hal2 KB roots (an empty mirror) so workerd reports kbReadable in its hello and wolfd serves /kb/graph; the console proof asserts both through the relay.
+if [ -n "${TRACER_CONSOLE:-}" ] && [ -z "$KB" ]; then mkdir -p "$WHOME/kb-mirror/domains" "$WHOME/ops"; chown -R wolf-hal2:wolf-hal2 "$WHOME/kb-mirror" "$WHOME/ops"; WENV+=(KB_BASE=$WHOME/kb-mirror); fi
 as wolf-hal2 "${WENV[@]}" node $APP/packages/workerd/dist/bin/workerd.js pair $HUB "$WCODE"
 
 if [ "$MODE" = max ]; then WOLFD_CMD="$T/wolfd-max.sh"; WOLFD_PAT="bin/wolfd.js --config"; echo "== start workerd (NOT link-only) -> supervises the REAL wolfd bin on the claude bridge (user wolf-hal2)"

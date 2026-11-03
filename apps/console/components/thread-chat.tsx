@@ -11,6 +11,7 @@ import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
 import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/feature-progress";
+import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
@@ -514,7 +515,9 @@ function ThreadChatInner({
 								)}
 								{messages.map((m, mi) => (
 									<Fragment key={m.id || `m-${mi}`}>
-										{m.role === "user" && subagentOrigins[mi] ? (
+										{m.role === "user" && m.parts.some((p) => p.type === THREAD_COMPACTION_PART) ? (
+											<ThreadCompactionDivider data={m.parts.find((p) => p.type === THREAD_COMPACTION_PART)!.data as ThreadCompactionData} />
+										) : m.role === "user" && subagentOrigins[mi] ? (
 											<SubagentMessage origin={subagentOrigins[mi]!} children={subagents} wolf={wolf} />
 										) : m.role === "user" ? (
 											<div

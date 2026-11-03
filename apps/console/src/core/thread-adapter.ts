@@ -67,6 +67,20 @@ const trimSeam = (t: string): string => t.replace(/^\n\n/, "").replace(/\n\n$/, 
 export function threadMessagesToNative(messages: readonly ThreadMessage[]): LhMessage[] {
 	return messages.flatMap((m): LhMessage[] => {
 		const timestamp = Date.parse(m.at) || 0;
+		if (m.compaction) {
+			// A wolfd compaction marker: the transcript divider (summary collapsed). Older servers never send one.
+			return [
+				{
+					id: m.id,
+					role: "custom",
+					customType: "thread-compaction",
+					content: m.compaction.summary,
+					display: true,
+					details: { at: m.at, ...(m.compaction.reason ? { reason: m.compaction.reason } : {}) },
+					timestamp,
+				} as LhMessage,
+			];
+		}
 		if (m.role === "user") {
 			return [{ id: m.id, role: "user", content: m.text, timestamp } as UserMessage & { id: string }];
 		}

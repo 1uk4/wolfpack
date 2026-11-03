@@ -63,4 +63,28 @@ describe("hub KB graph", () => {
     expect(((await (await call("GET", "/v1/kb/graph?domain=beta", OP_HEADERS)).json()) as G).domain).toBe("beta");
     void hub;
   });
+
+  it("GET /v1/kb/entries/:id: owner reads either domain; a worker gets 404 outside its grant; 401 without a token; traversal rejected", async () => {
+    const { dir, call } = await setup();
+    expect((await call("GET", "/v1/kb/entries/kb-alpha-aaaaaaa", {})).status).toBe(401);
+    for (const [id, dom] of [["kb-alpha-aaaaaaa", "alpha"], ["kb-beta-bbbbbbb", "beta"]]) {
+      const r = await call("GET", `/v1/kb/entries/${id}`, OP_HEADERS);
+      expect(r.status).toBe(200);
+      const e = (await r.json()) as { id: string; domain: string; body: string };
+      expect([e.id, e.domain]).toEqual([id, dom]);
+    }
+    for (const d of ["alpha", "beta"]) expect((await call("POST", "/v1/registry/domains", OP_HEADERS, { name: d })).status).toBe(201);
+    expect((await call("POST", "/v1/registry/hosts", OP_HEADERS, { name: "h1" })).status).toBe(201);
+    expect((await call("POST", "/v1/registry/wolves", OP_HEADERS, { name: "w1", host: "h1", domains: ["alpha"] })).status).toBe(201);
+    const store = createTokenStore(dir);
+    const r = await call("POST", "/v1/pair", {}, { code: store.mintPairingCode({ kind: "worker", hostId: "h1" }).code, label: "t", kind: "worker", hostId: "h1" });
+    const w1 = { Authorization: `Bearer ${((await r.json()) as { token: string }).token}` };
+    expect((await call("GET", "/v1/kb/entries/kb-alpha-aaaaaaa", w1)).status).toBe(200);
+    const forbidden = await call("GET", "/v1/kb/entries/kb-beta-bbbbbbb", w1);
+    const missing = await call("GET", "/v1/kb/entries/kb-nope-zzzzzzz", w1);
+    expect([forbidden.status, missing.status]).toEqual([404, 404]);
+    expect(await forbidden.text()).toBe((await missing.text()).replace("kb-nope-zzzzzzz", "kb-beta-bbbbbbb")); // same body: nothing to probe
+    for (const bad of ["..%2F..%2Fdomains.yaml", "%2e%2e", ".hidden", "a%2Fb"]) expect([400, 404], bad).toContain((await call("GET", `/v1/kb/entries/${bad}`, OP_HEADERS)).status);
+    expect((await call("GET", "/v1/kb/entries/..%2F..%2Fdomains.yaml", OP_HEADERS)).status).not.toBe(200);
+  });
 });

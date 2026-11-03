@@ -11,12 +11,13 @@ import type { KbBacklink, KbEntryDetail } from "./types.js";
  * The entry `id` (the frontmatter id the graph emits, else the filename), or null when the id is not a safe segment
  * or no domain holds it. The id is only compared against what was read, never joined into a path.
  */
-export function readKbEntry(roots: Pick<KbRoots, "kbBase">, id: string): KbEntryDetail | null {
+export function readKbEntry(roots: Pick<KbRoots, "kbBase">, id: string, opts: { onlyDomains?: readonly string[] } = {}): KbEntryDetail | null {
   if (!isSafeSegment(id)) return null;
   const known = new Set<string>();
   const all: Array<{ id: string; domain: string; title: string; body: string; meta: Record<string, unknown> }> = [];
 
-  for (const domain of listDomainDirs(roots.kbBase)) {
+  const allow = opts.onlyDomains ? new Set(opts.onlyDomains) : undefined;
+  for (const domain of listDomainDirs(roots.kbBase).filter((d) => !allow || allow.has(d))) {
     const dir = join(roots.kbBase, "domains", domain);
     // same filters as the graph builder: a file without parseable frontmatter is not an entry
     for (const e of readMarkdownDir(join(dir, "entries"))) {

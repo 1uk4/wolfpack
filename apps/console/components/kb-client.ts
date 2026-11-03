@@ -103,8 +103,9 @@ export function fetchKbGraph(opts: KbGraphOptions = {}): Promise<KbResult<KbGrap
 	return request(`/api/kb/graph${q}`);
 }
 
-export function fetchKbEntry(librarian: string, id: string): Promise<KbResult<KbEntryDetail>> {
-	return request(`/api/wolves/${seg(librarian)}/kb/entries/${seg(id)}`);
+/** The entry; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */
+export function fetchKbEntry(id: string): Promise<KbResult<KbEntryDetail>> {
+	return request(`/api/kb/entries/${seg(id)}`);
 }
 
 export function postConsolidate(wolf: string): Promise<KbResult<ConsolidateResponse>> {

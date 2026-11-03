@@ -203,6 +203,8 @@ export interface ConsoleClient {
   readonly kbFromHub?: boolean;
   /** The KB graph from the hub's read-only KB copy, limited to the domains the token may read. */
   getHubKbGraph?(opts?: { domain?: string; archivedWork?: boolean }): Promise<KbGraph>;
+  /** One KB entry from the hub's read-only KB copy, scoped to the token's readable domains. */
+  getHubKbEntry?(id: string): Promise<KbEntryDetail>;
   /** One KB entry with its body, wikilinks and backlinks (librarian only). Rejects NotFoundError for an unknown entry. */
   getKbEntry?(wolf: string, id: string): Promise<KbEntryDetail>;
 }

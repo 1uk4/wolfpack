@@ -419,6 +419,12 @@ export const ROUTES = {
    * `archivedWork` (true/false). Never writes. Same shape as a wolf's kb/graph.
    */
   hubKbGraph: { scope: "hub", method: "GET", path: "/v1/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
+  /**
+   * One KB entry (body, wikilinks, backlinks; same shape as a wolf's kb/entries/:id) from the hub's read-only KB copy. Scoped like the graph:
+   * console/browser tokens read every domain, a worker token only its host's subscribed domains (backlinks too). An entry in a domain the
+   * token may not read answers 404, exactly like a missing one. A malformed id is 400.
+   */
+  hubKbEntry: { scope: "hub", method: "GET", path: "/v1/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
   /** KB sync: the hub's path -> contentHash manifest of one domain, with epoch, revision and the retention floor. Same domain filtering as changes. */
   hubKbManifest: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/manifest", response: { kind: "json", schema: KbManifestResponseSchema }, status: [200], error: err },
   /** KB sync: send the worker's path -> hash manifest; get the differing files (up to maxBytes), the paths to delete, and `pending` paths that did not fit. */

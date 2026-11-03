@@ -31,4 +31,15 @@ describe("browser extension bundling", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/browser: skipped/));
     expect(fs.readFileSync(path.join(dir, "index.js"), "utf8")).toBe("// working install");
   });
+
+  it("sweeps staging dirs a crashed build left behind and replaces an old install wholesale", async () => {
+    const out = tmp();
+    fs.mkdirSync(path.join(out, ".wolfpack-browser-build-dead"), { recursive: true });
+    fs.mkdirSync(path.join(out, "wolfpack-browser"), { recursive: true });
+    fs.writeFileSync(path.join(out, "wolfpack-browser", "stale.txt"), "old");
+    expect(await buildDurableExtension("browser", out)).toBe(true);
+    expect(fs.readdirSync(out).filter((n) => n.startsWith("."))).toEqual([]);
+    expect(fs.existsSync(path.join(out, "wolfpack-browser", "stale.txt"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "wolfpack-browser", "index.js"))).toBe(true);
+  }, 120000);
 });

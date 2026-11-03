@@ -20,6 +20,7 @@
     "@wolfpack/kb": "*",
     "esbuild": "^0.28.0",
     "nanoid": "^5.1.0",
+    "tldts": "7.4.19",
     "yaml": "^2.6.0"
   },
   "devDependencies": {

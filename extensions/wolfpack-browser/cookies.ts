@@ -4,6 +4,7 @@
  * Pure functions, no Playwright.
  */
 import { isIP } from "node:net";
+import { getDomain, getPublicSuffix } from "tldts";
 import { normalizeHost } from "./policy.js";
 
 export interface JarCookie {
@@ -18,32 +19,28 @@ export interface JarCookie {
 
 export type FetchSite = "same-origin" | "same-site" | "cross-site" | "none";
 
-// A small built-in public-suffix list (multi-label and hosting suffixes that matter); single labels are rejected anyway.
-const PUBLIC_SUFFIXES = new Set([
-  "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp", "ne.jp", "or.jp",
-  "com.br", "com.cn", "com.mx", "com.tr", "com.tw", "com.hk", "com.sg", "co.in", "co.za", "co.kr", "co.il",
-  "github.io", "gitlab.io", "herokuapp.com", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app",
-  "firebaseapp.com", "appspot.com", "blogspot.com", "cloudfront.net", "amazonaws.com", "azurewebsites.net",
-  "ts.net", "ngrok.io", "ngrok-free.app", "trycloudflare.com", "fly.dev", "onrender.com", "glitch.me", "repl.co",
-]);
-
-/** Is `d` a public suffix (or a single label)? Cookies may not be scoped to one. */
+/**
+ * Is `d` a public suffix (or a single label)? Cookies may not be scoped to one. Uses the bundled Public Suffix List
+ * (tldts, ICANN + private sections, so github.io / ts.net / vercel.app count too) plus a "no single label" rule.
+ */
 export function isPublicSuffix(d: string): boolean {
   const dom = normalizeHost(d).replace(/^\./, "");
-  return !dom.includes(".") || PUBLIC_SUFFIXES.has(dom);
+  if (!dom || !dom.includes(".")) return true;
+  const registrable = getDomain(dom, { allowPrivateDomains: true });
+  return registrable === null;
 }
 
-/** Registrable-domain approximation: the public suffix plus one label (an IP is its own site). */
+/** Registrable domain (eTLD+1) of a host; an IP or single label is its own site. */
 export function siteOf(host: string): string {
   const h = normalizeHost(host);
   if (isIP(h) || h.includes(":") || !h.includes(".")) return h;
-  const labels = h.split(".");
-  // longest known public suffix, else the last label
-  let suffixLen = 1;
-  for (let n = labels.length - 1; n >= 2; n--) {
-    if (PUBLIC_SUFFIXES.has(labels.slice(-n).join("."))) { suffixLen = n; break; }
-  }
-  return labels.slice(-Math.min(labels.length, suffixLen + 1)).join(".");
+  return getDomain(h, { allowPrivateDomains: true }) ?? h;
+}
+
+/** Most restrictive of several relationships (an ancestor frame that is cross-site makes the request cross-site). */
+export function worstSite(sites: readonly FetchSite[]): FetchSite {
+  for (const w of ["cross-site", "same-site", "same-origin", "none"] as const) if (sites.includes(w)) return w;
+  return "cross-site";
 }
 
 const originOf = (u: URL) => `${u.protocol}//${u.host}`;
@@ -90,8 +87,8 @@ function pathMatches(reqPath: string, cookiePath: string): boolean {
 
 /**
  * Which jar cookies may this request carry? Mirrors the browser's own SameSite and third-party rules, conservatively:
- *  - same-origin and user-typed ("none") requests: everything that domain/path/secure/expiry allow;
- *  - same-site or cross-site: never SameSite=Strict; Lax only on a top-level GET navigation;
+ *  - same-origin, same-site and user-typed ("none") requests: everything domain/path/secure/expiry allow;
+ *  - cross-site top-level navigation: never SameSite=Strict; Lax only on GET/HEAD; None always;
  *  - cross-site non-navigation (third-party subresources, fetch/XHR, iframes): no cookies at all.
  * Playwright does not expose `credentials: "omit"`, so cross-site non-navigation requests default to no cookies.
  */
@@ -105,11 +102,13 @@ export function selectCookies(jar: readonly JarCookie[], ctx: SelectContext): Ja
     if (c.expires !== undefined && c.expires > 0 && c.expires < now) return false;
     if (c.secure && u.protocol !== "https:") return false;
     if (!domainMatches(host, c.domain) || !pathMatches(u.pathname || "/", c.path || "/")) return false;
-    if (ctx.site === "same-origin" || ctx.site === "none") return true;
+    // same-origin, same-site and user-typed requests carry Strict and Lax cookies too (www.x.com -> api.x.com logins).
+    if (ctx.site !== "cross-site") return true;
+    // cross-site (top-level navigation only, see above): Strict never, Lax on GET navigations, None always
     const ss = c.sameSite ?? "Lax";
     if (ss === "Strict") return false;
     if (ss === "Lax") return getNav;
-    return true; // SameSite=None
+    return true;
   });
 }
 
@@ -124,6 +123,10 @@ export interface ParsedCookie {
   httpOnly: boolean;
   sameSite?: "Strict" | "Lax" | "None";
   expires?: number;
+}
+
+function isLoopback(host: string): boolean {
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127\./.test(host);
 }
 
 /** RFC 6265 5.1.4 default-path. */
@@ -184,6 +187,8 @@ export function parseSetCookie(header: string, requestUrl: string, now = Date.no
     out.domain = "." + d;
   }
   if (out.sameSite === "None" && !out.secure) return undefined;
+  // A Secure cookie may not be set over plain http (loopback excepted, as browsers treat it as a secure context).
+  if (out.secure && u.protocol !== "https:" && !isLoopback(host)) return undefined;
   if (/^__secure-/i.test(name) && !(out.secure && u.protocol === "https:")) return undefined;
   if (/^__host-/i.test(name) && !(out.secure && u.protocol === "https:" && out.domain === undefined && out.path === "/")) return undefined;
   return out;

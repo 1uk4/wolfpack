@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultPath, fetchSite, isPublicSuffix, parseSetCookie, selectCookies, siteOf, type JarCookie } from "./cookies.js";
+import { defaultPath, fetchSite, isPublicSuffix, parseSetCookie, selectCookies, siteOf, worstSite, type JarCookie } from "./cookies.js";
 
 const ck = (o: Partial<JarCookie> & { name: string }): JarCookie => ({ value: "v", domain: ".example.com", path: "/", ...o });
 const names = (c: JarCookie[]) => c.map((x) => x.name).sort();
@@ -11,14 +11,13 @@ describe("selectCookies", () => {
     expect(names(selectCookies(jar, { ...base, site: "same-origin", topLevelNavigation: false }))).toEqual(["lax", "none", "strict", "unset"]);
     expect(names(selectCookies(jar, { ...base, site: "none", topLevelNavigation: true }))).toEqual(["lax", "none", "strict", "unset"]);
   });
-  it("same-site/cross-site never send Strict", () => {
-    for (const site of ["same-site", "cross-site"] as const) {
-      expect(selectCookies(jar, { ...base, site, topLevelNavigation: true })).not.toContainEqual(expect.objectContaining({ name: "strict" }));
+  it("same-site requests (www -> api) send Strict and Lax cookies too, navigation or not", () => {
+    for (const topLevelNavigation of [true, false]) {
+      expect(names(selectCookies(jar, { ...base, site: "same-site", topLevelNavigation }))).toEqual(["lax", "none", "strict", "unset"]);
     }
   });
-  it("Lax only on a top-level GET navigation", () => {
-    expect(names(selectCookies(jar, { ...base, site: "same-site", topLevelNavigation: true }))).toEqual(["lax", "none", "unset"]);
-    expect(names(selectCookies(jar, { ...base, site: "same-site", topLevelNavigation: false }))).toEqual(["none"]);
+  it("cross-site navigations never send Strict; Lax only on GET", () => {
+    expect(names(selectCookies(jar, { ...base, site: "cross-site", topLevelNavigation: true }))).toEqual(["lax", "none", "unset"]);
     expect(names(selectCookies(jar, { ...base, site: "cross-site", topLevelNavigation: true, method: "POST" }))).toEqual(["none"]);
   });
   it("cross-site subresources carry NO cookies (third-party blocking)", () => {
@@ -94,5 +93,36 @@ describe("parseSetCookie", () => {
   it("a bare IP host may only scope to itself", () => {
     expect(parseSetCookie("a=b; Domain=10.0.0.5", "http://10.0.0.5/")?.domain).toBe(".10.0.0.5");
     expect(parseSetCookie("a=b; Domain=0.5", "http://10.0.0.5/")).toBeUndefined();
+  });
+});
+
+describe("ancestor frames", () => {
+  it("worstSite: any cross-site ancestor makes the request cross-site", () => {
+    expect(worstSite(["same-origin", "cross-site", "same-site"])).toBe("cross-site");
+    expect(worstSite(["same-origin", "same-site"])).toBe("same-site");
+    expect(worstSite(["same-origin"])).toBe("same-origin");
+  });
+});
+
+describe("public suffix list (tldts)", () => {
+  it("covers suffixes the old hand list missed", () => {
+    for (const d of ["com.ua", "co.id", "com.ar", "com.pl", "co.uk", "github.io", "vercel.app"]) expect(isPublicSuffix(d)).toBe(true);
+    expect(isPublicSuffix("evil.com.ua")).toBe(false);
+  });
+  it("evil.com.ua cannot set Domain=com.ua; siteOf uses eTLD+1", () => {
+    expect(parseSetCookie("a=b; Domain=com.ua", "https://evil.com.ua/")).toBeUndefined();
+    expect(parseSetCookie("a=b; Domain=evil.com.ua", "https://www.evil.com.ua/")?.domain).toBe(".evil.com.ua");
+    expect(siteOf("a.b.evil.com.ua")).toBe("evil.com.ua");
+    expect(siteOf("x.example.com")).toBe("example.com");
+    expect(fetchSite("https://a.com.ua/", "https://b.com.ua/", false)).toBe("cross-site");
+  });
+});
+
+describe("Secure over http", () => {
+  it("rejects Secure cookies from http: responses, except loopback", () => {
+    expect(parseSetCookie("a=b; Secure", "http://www.example.com/")).toBeUndefined();
+    expect(parseSetCookie("a=b; Secure", "https://www.example.com/")).toBeDefined();
+    expect(parseSetCookie("a=b; Secure", "http://127.0.0.1:3000/")).toBeDefined();
+    expect(parseSetCookie("a=b; Secure", "http://localhost/")).toBeDefined();
   });
 });

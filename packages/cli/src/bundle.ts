@@ -461,7 +461,12 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
   }
 
   // Build beside the target and swap in only on success: a failed rebuild must not delete a working install.
+  // (Beside the target, not in os.tmpdir(): rename across filesystems fails with EXDEV.) Staging dirs a crashed build
+  // left behind are swept first.
   fs.mkdirSync(path.dirname(extOutDir), { recursive: true });
+  for (const n of fs.readdirSync(path.dirname(extOutDir))) {
+    if (n.startsWith(`.${ext.dir}-build-`)) fs.rmSync(path.join(path.dirname(extOutDir), n), { recursive: true, force: true });
+  }
   const stage = fs.mkdtempSync(path.join(path.dirname(extOutDir), `.${ext.dir}-build-`));
   try {
     await esbuild.build({
@@ -484,6 +489,9 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
       fs.copyFileSync(playwrightFiles.browsersJson, path.join(stage, "browsers.json"));
       fs.writeFileSync(path.join(stage, "package.json"), playwrightFiles.pkgJson);
     }
+    // Swap in (same cleanup path as a failure): the old install is only removed once the new one is complete.
+    fs.rmSync(extOutDir, { recursive: true, force: true });
+    fs.renameSync(stage, extOutDir);
   } catch (err) {
     fs.rmSync(stage, { recursive: true, force: true });
     if (!playwrightFiles) throw err; // other extensions keep their existing failure behaviour
@@ -492,8 +500,6 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
     console.warn(`Extension ${key}: skipped (${why})`);
     return false;
   }
-  fs.rmSync(extOutDir, { recursive: true, force: true });
-  fs.renameSync(stage, extOutDir);
   return true;
 }
 

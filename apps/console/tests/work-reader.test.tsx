@@ -216,11 +216,20 @@ describe("decoupling", () => {
 	});
 });
 
-describe("a graph node click", () => {
-	it("opens the reader for a work node, selects a KB entry, and expands a collapsed feature", () => {
-		assert.deepEqual(nodeClickAction("work:t1", new Set()), { kind: "open-work", id: "t1" });
-		assert.deepEqual(nodeClickAction("ent:x", new Set()), { kind: "select" });
-		assert.deepEqual(nodeClickAction("work:f1", new Set(["f1"])), { kind: "expand", id: "f1" });
+describe("a graph node click: the reader only", () => {
+	it("any work node, a collapsed feature included, opens the reader; KB entries still select", () => {
+		for (const id of ["work:t1", "work:f1", "work:i1"]) assert.deepEqual(nodeClickAction(id), { kind: "open-work", id: id.slice(5) });
+		assert.deepEqual(nodeClickAction("ent:x"), { kind: "select" });
+		assert.deepEqual(nodeClickAction("fac:d"), { kind: "select" });
+	});
+	it("the click handler neither expands collapsed features nor selects for a work node; no double-click overlay competes", () => {
+		const g = src("../components/graph-view.tsx");
+		const handler = g.slice(g.indexOf("onSelect: (nodeId)"), g.indexOf("onStageClick"));
+		assert.match(handler, /openWorkRef\.current\(act\.id\)/);
+		assert.ok(!/setExpanded|expanded/.test(g), "the expand-in-place state is gone");
+		assert.ok(!g.includes("collapsedRef") && !g.includes("onNodeDoubleClick") && !g.includes("FeatureTaskOverlay"));
+		// setSelected sits only on the non-work branch
+		assert.match(handler, /else setSelected\(\{ id: nodeId \}\)/);
 	});
 });
 

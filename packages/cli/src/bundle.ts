@@ -25,6 +25,7 @@ import { wolfDenDir, writeModelTable, type ModelTable } from "@wolfpack/engine";
 import {
   getExtension,
   extensionsDir,
+  repoRoot,
   type WolfExtension,
 } from "./extensions.js";
 import { buildDenExtension, findDenExtension } from "./den-extensions.js";
@@ -402,6 +403,8 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
   const pkgPath = path.join(srcDir, "package.json");
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
     "pi-durable"?: { extensions?: string[] };
+    /** Optional dynamic requires the bundle never reaches (kept out of the bundle instead of failing the build). */
+    wolfpack?: { externals?: string[]; playwrightCore?: boolean };
   };
   const durableEntries = pkg["pi-durable"]?.extensions;
   if (!durableEntries || durableEntries.length === 0) return false;
@@ -414,6 +417,22 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
 
   const extOutDir = path.join(extDir, ext.dir);
   fs.mkdirSync(extOutDir, { recursive: true });
+  // playwright-core resolves its package root as `__dirname/..` and reads its package.json there. Bundled, that would be
+  // the den's extensions/ dir; point it at the extension's own dir instead and ship a package.json that answers it.
+  const playwrightRoot: esbuild.Plugin[] = pkg.wolfpack?.playwrightCore
+    ? [
+        {
+          name: "playwright-core-root",
+          setup(b) {
+            b.onLoad({ filter: /playwright-core[\\/]lib[\\/]coreBundle\.js$/ }, (a) => ({
+              contents: fs.readFileSync(a.path, "utf8").replace('packageRoot = import_path9.default.join(__dirname, "..");', "packageRoot = __dirname;"),
+              loader: "js",
+              resolveDir: path.dirname(a.path),
+            }));
+          },
+        },
+      ]
+    : [];
   await esbuild.build({
     entryPoints: [entryFile],
     outfile: path.join(extOutDir, "index.js"),
@@ -421,13 +440,20 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
     platform: "node",
     format: "cjs",
     target: "node20",
+    plugins: playwrightRoot,
     external: [
       "@earendil-works/pi-coding-agent",
       "@earendil-works/pi-tui",
       "grammy",
+      ...(pkg.wolfpack?.externals ?? []),
     ],
     logLevel: "silent",
   });
+  if (pkg.wolfpack?.playwrightCore) {
+    fs.copyFileSync(path.join(repoRoot(), "node_modules", "playwright-core", "browsers.json"), path.join(extOutDir, "browsers.json"));
+    const pw = JSON.parse(fs.readFileSync(path.join(repoRoot(), "node_modules", "playwright-core", "package.json"), "utf8")) as { version: string };
+    fs.writeFileSync(path.join(extOutDir, "package.json"), JSON.stringify({ name: "playwright-core", version: pw.version }) + "\n");
+  }
   return true;
 }
 

@@ -156,10 +156,26 @@ export class BrowserSession {
     await this.ctx.route("**/*", async (route: any) => {
       const req = route.request();
       const v = await this.verdict(req.url(), req.isNavigationRequest());
-      if (v.ok) return route.continue();
-      this.blocked.push(`${redactUrl(req.url())}: ${v.reason}`);
-      if (this.blocked.length > 50) this.blocked.shift();
-      return route.abort("blockedbyclient");
+      const block = (why?: string) => {
+        this.blocked.push(`${redactUrl(req.url())}: ${why}`);
+        if (this.blocked.length > 50) this.blocked.shift();
+        return route.abort("blockedbyclient");
+      };
+      if (!v.ok) return block(v.reason);
+      // Redirects are resolved here, not by the network stack: fetch one hop, vet its Location, hand the 3xx to the
+      // browser (which re-enters this handler for the next hop). Otherwise a 302 to an internal host is never seen.
+      try {
+        const res = await route.fetch({ maxRedirects: 0 });
+        const loc = res.headers()["location"];
+        if (res.status() >= 300 && res.status() < 400 && loc) {
+          const target = new URL(loc, req.url()).toString();
+          const rv = await this.verdict(target, req.isNavigationRequest());
+          if (!rv.ok) return block(`redirect to ${redactUrl(target)}: ${rv.reason}`);
+        }
+        return route.fulfill({ response: res });
+      } catch {
+        return route.abort("failed").catch(() => undefined);
+      }
     });
     this.page = this.ctx.pages()[0] ?? (await this.ctx.newPage());
     this.page.setDefaultTimeout(this.timeout);
@@ -203,7 +219,12 @@ export class BrowserSession {
       status = res?.status();
     } catch (err) {
       const newly = this.blocked.slice(before);
-      if (newly.length) throw new Error(`Navigation blocked: ${newly.join("; ")}`);
+      if (newly.length) {
+        // Leave the error page behind so it cannot interrupt the next navigation.
+        await new Promise((r) => setTimeout(r, 150));
+        await page.goto("about:blank").catch(() => undefined);
+        throw new Error(`Navigation blocked: ${newly.join("; ")}`);
+      }
       throw err;
     }
     // Belt and braces: whatever we ended on (redirects, JS) must pass too.

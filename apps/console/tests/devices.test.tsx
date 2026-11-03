@@ -262,7 +262,7 @@ describe("events channel: auth loss is terminal", () => {
 	/** An EventSource stand-in: reconnects after every server close until the client calls close(). */
 	function autoReconnecting(open: () => Response) {
 		let closed = false, connects = 0;
-		const handlers = new Map<string, () => void>();
+		const handlers = new Map<string, (data: string) => void>();
 		const run = async () => {
 			while (!closed) {
 				connects++;
@@ -271,7 +271,7 @@ describe("events channel: auth loss is terminal", () => {
 				for (;;) {
 					const r = await reader.read();
 					if (r.done) break;
-					for (const m of dec.decode(r.value).matchAll(/^event: (\S+)$/gm)) handlers.get(m[1]!)?.();
+					for (const m of dec.decode(r.value).matchAll(/^event: (\S+)$/gm)) handlers.get(m[1]!)?.("{}");
 					if (closed) return;
 				}
 				await new Promise((r) => setTimeout(r, 5)); // EventSource's own retry delay

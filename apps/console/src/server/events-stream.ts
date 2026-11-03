@@ -27,6 +27,7 @@
 import { subscribe, type ServerEvent } from "../core/events.ts";
 import type { ConsoleClient } from "@wolfpack/client";
 import { createConsoleClient, getConsoleClient, nextRequestToken } from "./console-client.ts";
+import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { createActivityBridge } from "./needs-you-api.ts";
 
 /**
@@ -76,6 +77,9 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 			};
 			/** This connection's token was rejected: end the connection (the browser signs itself out on its next /api 401). */
 			const authLost = () => {
+				// A TERMINAL frame first: EventSource reconnects after a clean close, so without it a revoked tab would come back every ~3s
+				// forever. The client closes its EventSource on `auth-lost` and goes to /pair.
+				frame("event: auth-lost\ndata: {}\n\n");
 				stop();
 				try {
 					controller.close();
@@ -141,4 +145,22 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 			"X-Accel-Buffering": "no",
 		},
 	});
+}
+
+/**
+ * The framework route's entry: no device token on the connect request = 401 right away (+ the hub-auth marker). A non-200 response is
+ * terminal for EventSource (it does not reconnect), and the console's fetch wrapper sends the browser to /pair on its next /api call.
+ * With a token, the connection's bridge is pinned to it; a token the hub later rejects ends in the `auth-lost` frame (see eventsResponse).
+ */
+export async function eventsRoute(env: Record<string, string | undefined> = process.env): Promise<Response> {
+	// No hub configured (mock / direct-wolf dev): there is no pairing, so nothing to be unauthorized against.
+	if (!env.WOLFPACK_HUB_URL?.trim()) return eventsResponse();
+	let token: string | null | undefined;
+	try {
+		token = await nextRequestToken();
+	} catch {
+		token = null;
+	}
+	if (!token) return Response.json({ error: "this browser is not paired with the hub (no bearer token)", code: "unauthorized" }, { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });
+	return eventsResponse({ clientFor: async () => createConsoleClient(env, async () => token) });
 }

@@ -182,8 +182,11 @@ async function mobilePass() {
     const ta = mp.locator('[data-testid="composer"] textarea').first();
     await ta.waitFor({ timeout: 30000 });
     // tap targets >= 44px in the composer
-    const small = await mp.evaluate(() => [...document.querySelectorAll('[data-testid="composer"] button, [data-testid="composer"] textarea')].filter((e) => { const st = getComputedStyle(e); const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden" && !e.closest("[hidden],[aria-hidden=true],.hidden"); }).map((e) => e.getBoundingClientRect()).filter((r) => r.width < 43.5 || r.height < 43.5).length);
+    const small = await mp.evaluate(() => [...document.querySelectorAll('[data-testid="composer"] > button, [data-testid="composer"] textarea')].filter((e) => { const st = getComputedStyle(e); const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden" && !e.closest("[hidden],[aria-hidden=true],.hidden"); }).map((e) => e.getBoundingClientRect()).filter((r) => r.width < 43.5 || r.height < 43.5).length);
     if (small) throw new Error(`${small} composer control(s) under 44px`);
+    // P10: the per-thread controls are compact by design: the model picker is >= 32px, the Auto-ship switch's tap area is its 44px label
+    const ctl = await mp.evaluate(() => ({ tier: document.querySelector('[data-testid="tier-trigger"]')?.getBoundingClientRect().height ?? 99, label: document.querySelector('[data-testid="composer-controls"] label')?.getBoundingClientRect().height ?? 99 }));
+    if (ctl.tier < 31.5 || ctl.tier > 40 || ctl.label < 43.5) throw new Error(`composer controls sized wrong: ${JSON.stringify(ctl)}`);
     await ta.tap();
     // a unique nonce, and a NEW reply after it: old history (earlier runs, the desktop pass) must not satisfy this
     const nonce = `ping-${Math.random().toString(36).slice(2, 10)}`;

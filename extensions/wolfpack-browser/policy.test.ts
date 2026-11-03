@@ -191,3 +191,8 @@ describe("output caps", () => {
     expect(lastN(items, -5, 200)).toHaveLength(50);
   });
 });
+
+describe("extra vectors", () => {
+  it.each(["http://[64:ff9b::7f00:1]/", "http://[2002:7f00:1::]/", "http://224.0.0.1/"])("blocks %s", (u) => expect(checkUrl(u).ok).toBe(false));
+  it("redacts x-auth-token", () => expect(redactHeaders({ "x-auth-token": "s" })["x-auth-token"]).toBe(REDACTED));
+});

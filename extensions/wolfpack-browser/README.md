@@ -51,3 +51,18 @@ text-only), browser_console, browser_network, browser_close. One page, calls ser
   goes: allowlist only hosts you control.
 - Redaction is cosmetic against `browser_eval`: the model can run JS that reads cookies, storage or tokens from the page
   and return them. Do not treat the logs' redaction as a security boundary against a hostile or prompt-injected page.
+
+## Fetch path details and residual risks
+- Cookies: the Node path applies the browser's rules itself. Per request: `Sec-Fetch-Site` (or computed from the
+  initiator); never SameSite=Strict across sites; Lax only on top-level GET navigations; no cookies at all on
+  cross-site non-navigation requests (Playwright does not expose `credentials: "omit"`, so this is the default).
+  Set-Cookie is validated (Domain must domain-match, no public-suffix/dotless Domain, `__Host-`/`__Secure-` rules,
+  SameSite=None needs Secure) before it reaches the jar.
+- Responses: capped at `maxResponseBytes` (default 25 MB, also after decompression); idle-based timeout (`timeoutMs`
+  without any progress); gzip/br/deflate bodies are decoded; `text/event-stream` is refused; request bodies that
+  Playwright cannot read (file/blob uploads) abort instead of being sent empty.
+- Not covered: Node's TLS/CA store is used (not Chromium's, so private CAs the browser trusts may fail), HTTP/1.1
+  only, no proxy support, no WebTransport or preconnect/prefetch coverage, and WebSockets are resolved by us and then
+  connected by Chromium, leaving a DNS-rebinding race for ws only.
+- `browser_eval` busy loops hit `timeoutMs`, after which the page is closed and the next call opens a fresh one;
+  `browser_close` is not queued, so it works even when a call is stuck.

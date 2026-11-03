@@ -86,7 +86,15 @@ export default function createBrowserExtension(config: BrowserConfig | undefined
         name: "browser_close",
         description: "Close the browser and delete its screenshots. The next browser_* call relaunches it.",
         parameters: Type.Object({}),
-        execute: guarded(async () => { await session.close(); return "Browser closed."; }),
+        // Not queued: it must work even when an earlier call is stuck.
+        execute: async () => {
+          try {
+            await session.close();
+            return text("Browser closed.");
+          } catch (err) {
+            return fail(err);
+          }
+        },
       }),
     ],
     lifecycle: {

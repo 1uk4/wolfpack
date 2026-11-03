@@ -377,12 +377,21 @@ export interface BuiltHarnessBundle {
   tmpDir: string;
 }
 
+/** Why an extension was skipped by the last buildDurableExtension call (key -> reason); `wolfpack sync` prints it. */
+export const skipReasons = new Map<string, string>();
+
+export interface BuildDurableOptions {
+  /** Test seam: how `playwright-core/package.json` is resolved (default: Node resolution from this module). */
+  resolvePackage?: (id: string) => string;
+}
+
 /**
  * Build one pi-durable extension into `<extDir>/<dir>/index.js` (the layout `wolfpack sync` ships and wolfd/harness
  * load from `<den>/extensions/`). A repo extension is bundled from its package.json `pi-durable` entrypoint; any other
  * key is an owner extension looked up in `denExtensionsDir`. Returns false (skipped) when it can't be built.
  */
-export async function buildDurableExtension(key: string, extDir: string, denExtensionsDir?: string): Promise<boolean> {
+export async function buildDurableExtension(key: string, extDir: string, denExtensionsDir?: string, opts: BuildDurableOptions = {}): Promise<boolean> {
+  skipReasons.delete(key);
   const ext = getExtension(key);
   if (!ext) {
     // Not a repo extension: an owner extension from the wolf's den?
@@ -424,7 +433,7 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
   let playwrightFiles: { pkgJson: string; browsersJson: string } | undefined;
   if (pkg.wolfpack?.playwrightCore) {
     try {
-      const pwPkg = createRequire(import.meta.url).resolve("playwright-core/package.json");
+      const pwPkg = (opts.resolvePackage ?? ((id: string) => createRequire(import.meta.url).resolve(id)))("playwright-core/package.json");
       const pwDir = path.dirname(pwPkg);
       const browsersJson = path.join(pwDir, "browsers.json");
       if (!fs.existsSync(browsersJson)) throw new Error(`browsers.json not found in ${pwDir}`);
@@ -444,16 +453,20 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
         },
       ];
     } catch (err) {
-      console.warn(`Extension ${key}: skipped (playwright-core unavailable): ${err instanceof Error ? err.message : err}`);
+      const why = `playwright-core unavailable: ${err instanceof Error ? err.message.split("\n")[0] : err}`;
+      skipReasons.set(key, why);
+      console.warn(`Extension ${key}: skipped (${why})`);
       return false;
     }
   }
 
-  fs.mkdirSync(extOutDir, { recursive: true });
+  // Build beside the target and swap in only on success: a failed rebuild must not delete a working install.
+  fs.mkdirSync(path.dirname(extOutDir), { recursive: true });
+  const stage = fs.mkdtempSync(path.join(path.dirname(extOutDir), `.${ext.dir}-build-`));
   try {
     await esbuild.build({
       entryPoints: [entryFile],
-      outfile: path.join(extOutDir, "index.js"),
+      outfile: path.join(stage, "index.js"),
       bundle: true,
       platform: "node",
       format: "cjs",
@@ -468,15 +481,19 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
       logLevel: "silent",
     });
     if (playwrightFiles) {
-      fs.copyFileSync(playwrightFiles.browsersJson, path.join(extOutDir, "browsers.json"));
-      fs.writeFileSync(path.join(extOutDir, "package.json"), playwrightFiles.pkgJson);
+      fs.copyFileSync(playwrightFiles.browsersJson, path.join(stage, "browsers.json"));
+      fs.writeFileSync(path.join(stage, "package.json"), playwrightFiles.pkgJson);
     }
   } catch (err) {
+    fs.rmSync(stage, { recursive: true, force: true });
     if (!playwrightFiles) throw err; // other extensions keep their existing failure behaviour
-    fs.rmSync(extOutDir, { recursive: true, force: true });
-    console.warn(`Extension ${key}: skipped (build failed): ${err instanceof Error ? err.message.split("\n")[0] : err}`);
+    const why = `build failed: ${err instanceof Error ? err.message.split("\n")[0] : err}`;
+    skipReasons.set(key, why);
+    console.warn(`Extension ${key}: skipped (${why})`);
     return false;
   }
+  fs.rmSync(extOutDir, { recursive: true, force: true });
+  fs.renameSync(stage, extOutDir);
   return true;
 }
 

@@ -333,10 +333,10 @@ describe("subagent modal", () => {
 		assert.equal(closed.length, 2);
 	});
 
-	it("the header row is title, then Stop, then close", async () => {
+	it("the header row is title, then Stop, then close (the switch wraps below on a phone)", async () => {
 		await mount(fake({}));
 		const row = q('[data-testid="subagent-title"]')!.parentElement!;
-		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-meta", "subagent-stop", "subagent-modal-close"]);
+		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-meta", "subagent-stop", "subagent-modal-close", "subagent-switch"]);
 		assert.match(q('[data-testid="subagent-title"]')!.className, /truncate/);
 		assert.match(q('[data-testid="subagent-meta"]')!.className, /flex-wrap/);
 		assert.match(q('[data-testid="subagent-modal-close"]')!.className, /shrink-0/);

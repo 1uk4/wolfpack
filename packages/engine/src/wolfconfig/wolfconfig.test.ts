@@ -41,6 +41,10 @@ describe("loadWolfConfig", () => {
     expect(extra.config.prompts).toEqual({ structuredOutput: "custom" });
   });
 
+  it("memory.hubKb: true loads as config.memory.hubKb; absent leaves it unset", () => {
+    expect(loadWolfConfig(wolf("hk", "name: hk\nextensions: [memory]\nmemory:\n  live: true\n  hubKb: true\n"), { home: "/h" }).config.memory.hubKb).toBe(true);
+    expect(loadWolfConfig(wolf("nk", "name: nk\nextensions: [memory]\nmemory:\n  live: true\n"), { home: "/h" }).config.memory.hubKb).toBeUndefined();
+  });
   it("warns when memory settings exist but the memory extension is not listed", () => {
     const warn = (yaml: string) => loadWolfConfig(wolf("w", yaml), { home: "/h" }).warnings.filter((w) => w.includes("memory configured but not in extensions: memory is off"));
     expect(warn("name: w\nmemory:\n  defaultDomain: x\ndomains: [x]\n")).toHaveLength(1);

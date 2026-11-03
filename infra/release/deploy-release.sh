@@ -3,14 +3,15 @@
 # Designed to be piped: `ssh host sudo bash -s -- wolfd 0.1.2 --wolf hal2 < deploy-release.sh`. All code is inside main() and `main "$@"` is the
 # last line, so bash has parsed the whole script before running anything; nothing inside reads stdin (every external command gets </dev/null).
 #
-#   deploy-release.sh <wolfd|hubd|workerd> <X.Y.Z> [--wolf <name>] [--dry-run] [--health-timeout SEC] [--settle SEC]
+#   deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--dry-run] [--health-timeout SEC] [--settle SEC]
 #
 # wolfd (needs --wolf): download -> verify sha256 -> inspect tar members -> unpack into a root-owned 0700 staging dir -> chown -> VERSION check
 #   -> switch (release -> release.prev -> older prev kept as release.prev-<ver>-<ts>) -> restart wolfd@<name> -> health check -> automatic swap-back.
 # hubd|workerd: same download/verify/inspect/VERSION steps, then the release's own `setup.sh install --bundle` (it keeps `previous`);
 #   rollback uses the setup.sh installed by an earlier deploy ($OPT/setup.sh), or swaps current/previous itself when there is none.
 # Health (wolfd): unit active, serving line `wolfd: <name> serving unix:/run/wolfd-<name>/serve.sock` in THIS invocation's journal, `-p err` empty,
-#   InvocationID and NRestarts unchanged across a settle (a crash loop fails). hubd/workerd: active + same checks + the port accepts a connection.
+#   InvocationID and NRestarts unchanged across a settle (a crash loop fails). hubd/workerd: active + same checks + the port accepts a connection. console: same, plus HTTP 200 on /api/health or / from localhost.
+# console is a hubd/workerd-style bundle (its own setup.sh install --bundle).
 # Exit: 0 ok / no-op, 1 refused or failed before any change, 2 usage, 3 deploy failed and rolled back, 4 failed AND rollback unhealthy / manual recovery.
 # Recovery: a run that finds `release` missing (killed mid-swap) restores release.prev (or the newest release.prev-*) first.
 # Test seams (DEPLOY_BASE_URL, DEPLOY_SYSTEMCTL, DEPLOY_JOURNALCTL, DEPLOY_HOME_ROOT, DEPLOY_OPT_ROOT, DEPLOY_ENV_DIR, DEPLOY_LOG) are honoured ONLY when DEPLOY_TEST=1.
@@ -33,8 +34,8 @@ main() {
   die() { echo "deploy: REFUSED: $1" >&2; exit "${2:-1}"; }
   usage() {
     cat >&2 <<'USAGE'
-usage: deploy-release.sh <wolfd|hubd|workerd> <X.Y.Z> [--wolf <name>] [--unit link|wolves|both] [--wolfd-unit-sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
-  wolfd needs --wolf <name>; hubd/workerd must not have it. --unit (workerd only): link = workerd.service (default; auto means link), wolves = workerd-wolves.service, both. wolves/both restart workerd-wolves and are opt-in. Run as root (not needed for --dry-run).
+usage: deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--unit link|wolves|both] [--wolfd-unit-sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
+  wolfd needs --wolf <name>; hubd/workerd/console must not have it. --unit (workerd only): link = workerd.service (default; auto means link), wolves = workerd-wolves.service, both. wolves/both restart workerd-wolves and are opt-in. Run as root (not needed for --dry-run).
 USAGE
     exit 2
   }
@@ -123,7 +124,7 @@ USAGE
   fi
   [ -n "$COMP" ] && [ -n "$VER" ] || usage
   VER="${VER#v}"
-  case "$COMP" in wolfd|hubd|workerd) ;; *) die "unknown component '$COMP' (wolfd|hubd|workerd)" 2 ;; esac
+  case "$COMP" in wolfd|hubd|workerd|console) ;; *) die "unknown component '$COMP' (wolfd|hubd|workerd|console)" 2 ;; esac
   [[ $VER =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version must be X.Y.Z, got '$VER'" 2
   [[ $HTIMEOUT =~ ^[0-9]+$ && $SETTLE =~ ^[0-9]+$ ]] || die "--health-timeout/--settle must be integers" 2
   local USR="" HOME_DIR="" UNIT="" REL="" PREV="" ENVF="" SOCK="" OPT="" SVC=""
@@ -426,6 +427,20 @@ USAGE
           tries=$((tries + 1)); sleep 1
         done
         log "hubd on $h:$p answered HTTP '${code:-none}' to an unauthenticated /v1/wolves (expected 401)"; return 1
+      fi
+      if [ "$COMP" = console ]; then
+        # The console serves /api/health (200 when its hub link is healthy, else 502/503) and the shell at / (200, no hub needed). Either 200 proves the Next server is up.
+        command -v curl >/dev/null 2>&1 || { log "note: curl is missing; console HTTP probe skipped (port check only)"; return 0; }
+        local path
+        tries=0
+        while ((tries < 8)); do
+          for path in /api/health /; do
+            code=$(curl --noproxy '*' -s -o /dev/null -m 5 -w '%{http_code}' "http://$h:$p$path" </dev/null 9>&- 2>/dev/null || true)
+            [ "$code" = 200 ] && return 0
+          done
+          tries=$((tries + 1)); sleep 1
+        done
+        log "console on $h:$p answered HTTP '${code:-none}' to /api/health and / (expected 200)"; return 1
       fi
       return 0
     }

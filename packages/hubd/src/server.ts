@@ -779,8 +779,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           if (aw !== null && aw !== "true" && aw !== "false" && aw !== "1" && aw !== "0") throw new HubError("invalid_request", "archivedWork must be true or false");
           const readable = readableKbDomains(identity);
           if (domain !== undefined) {
+            requireKbDomain(identity, domain); // first: a worker cannot probe which domains exist
             if (!listDomainDirs(roots.kbBase).includes(domain)) throw new HubError("not_found", `domain ${domain.slice(0, 60)}`);
-            requireKbDomain(identity, domain);
           }
           try {
             const body = kbGraphBody(readable, domain, aw === "true" || aw === "1");

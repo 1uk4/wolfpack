@@ -22,6 +22,7 @@
     "sandbox:stack:desktop": "WOLVES_DIR=$HOME/wolves/dev STACK_APP=desktop bash scripts/dev-stack.sh"
   },
   "devDependencies": {
+    "playwright-core": "^1.63.0",
     "turbo": "^2.11.10",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

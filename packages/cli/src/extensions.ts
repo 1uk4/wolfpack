@@ -86,6 +86,13 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     dir: "wolfpack-visual-tools",
     runtimes: ["pi"],
   },
+  {
+    key: "browser",
+    label: "Browser",
+    description: "Guarded headless Chromium (Playwright) tools; off unless wolf.yaml `browser: { enabled: true }` (wolfpack-browser)",
+    dir: "wolfpack-browser",
+    runtimes: ["pi-durable"],
+  },
 ];
 
 /** Extension keys bundled into each profile. */

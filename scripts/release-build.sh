@@ -2,7 +2,7 @@
 # Build ONE component's linux-x64 release asset, version-stamped. Runs at release time only (release.yml) or by hand.
 #   scripts/release-build.sh <component> <version X.Y.Z> <out-dir>
 # Writes <out>/<asset> and <out>/<asset>.sha256 (sha256sum format). VERSION inside the artifact: "<version>+<short sha>".
-# Asset names come from scripts/release-components.json. To add `console`: add it there and add a case below.
+# Asset names come from scripts/release-components.json. 
 set -euo pipefail
 COMP=${1:?component}; VER=${2:?version}; OUT=${3:?out dir}
 cd "$(dirname "$0")/.."
@@ -22,6 +22,23 @@ case "$COMP" in
     cp "deploy/$COMP"/{setup.sh,"$COMP.service","$COMP.env.example"} "$STAGE/$COMP/"
     printf '%s\n' "$STAMP" > "$STAGE/$COMP/VERSION"
     tar -czf "$OUT/$ASSET" -C "$STAGE" "$COMP"
+    rm -rf "$STAGE"
+    ;;
+  console)
+    # Next standalone server + .next/static + public + traced node_modules (scripts/build-server.mjs), wrapped in the bundle layout deploy/console/setup.sh expects:
+    #   console/{setup.sh,console.service,console.env.example,RUNBOOK.md,VERSION,app/{server.js,apps/,node_modules/,...}}
+    # node_modules are traced from the BUILD host, so this must run on linux-x64 (release.yml's ubuntu runner). A Mac build would ship darwin natives.
+    if [ "$(uname -s)-$(uname -m)" != Linux-x86_64 ] && [ "${CONSOLE_ALLOW_FOREIGN_BUILD:-}" != 1 ]; then
+      echo "console must be built on linux-x86_64 (got $(uname -s)-$(uname -m)); CONSOLE_ALLOW_FOREIGN_BUILD=1 overrides for local proofs only" >&2; exit 2
+    fi
+    npx tsc --build
+    STAGE=$(mktemp -d)
+    node scripts/build-server.mjs --out "$STAGE/console/app"
+    cp deploy/console/{setup.sh,console.service,console.env.example,RUNBOOK.md} "$STAGE/console/"
+    printf '%s\n' "$STAMP" > "$STAGE/console/VERSION"
+    rm -f "$STAGE/console/app/VERSION"; printf '%s\n' "$STAMP" > "$STAGE/console/app/VERSION"
+    scripts/smoke-console-release.sh "$STAGE/console/app"
+    tar -czf "$OUT/$ASSET" -C "$STAGE" console
     rm -rf "$STAGE"
     ;;
   *) echo "no build recipe for $COMP" >&2; exit 2;;

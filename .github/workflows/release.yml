@@ -1,4 +1,4 @@
-# Release: push a tag <component>/vX.Y.Z (component = wolfd | workerd | hubd) -> build ONLY that component
+# Release: push a tag <component>/vX.Y.Z (component = wolfd | workerd | hubd | console) -> build ONLY that component
 # for linux-x64 on a native x64 runner, guard against secrets, smoke (wolfd), publish a GitHub Release.
 # No secrets besides the built-in GITHUB_TOKEN (contents: write). Components: scripts/release-components.json.
 name: release

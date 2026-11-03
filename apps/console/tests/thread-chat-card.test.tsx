@@ -90,9 +90,9 @@ class CardClient extends MockConsoleClient {
 	notFoundNext = false;
 	/** The next answer/skip is steered into a running turn (the ack says steered; no turn starts). */
 	steerNext = false;
-	submits: string[] = [];
-	override async submit(threadId: string, text: string, opts?: Parameters<MockConsoleClient["submit"]>[2]) {
-		this.submits.push(text);
+	submitTexts: string[] = [];
+	override async submit(threadId: string, text: string, opts?: import("@wolfpack/client").SubmitOptions) {
+		this.submitTexts.push(text);
 		return super.submit(threadId, text, opts);
 	}
 	constructor(private readonly card: Card, delayMs = 0) {
@@ -347,7 +347,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		});
 
 	it("a steered answer while this console streams the turn: card answered, pending line, no error, no new turn started", async () => {
-		const client = new CardClient(SINGLE, 120);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await answerSingle();
@@ -356,11 +356,11 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.equal(q('[data-testid="pending-card"]'), null);
 		assert.equal(q('[data-testid="card-error"]'), null);
 		assert.match(pendingLine()?.textContent ?? "", /will send when the turn finishes/i);
-		assert.equal(client.submits.filter((t) => t === "answer").length, 0, "the answer did not start a turn itself");
+		assert.equal(client.submitTexts.filter((t) => t === "answer").length, 0, "the answer did not start a turn itself");
 	});
 
 	it("a steered skip while streaming behaves the same", async () => {
-		const client = new CardClient(FREE, 120);
+		const client = new CardClient(FREE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await click(q('[data-testid="card-skip"]')!);
@@ -371,19 +371,19 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 	});
 
 	it("when the turn ends the pending line clears and the follow-on turn the answer started is attached", async () => {
-		const client = new CardClient(SINGLE, 300);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await answerSingle();
 		assert.ok(pendingLine());
 		const before = streamHits;
-		await settle(450);
+		await settle(700);
 		assert.equal(pendingLine(), null, "cleared at the turn end");
 		assert.ok(streamHits > before, "attached to the follow-on turn");
 	});
 
 	it("a steered ack on a console that sees no running turn (reload mid-turn, second client) attaches instead of waiting", async () => {
-		const client = new CardClient(SINGLE, 200);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		streamHits = 0;
 		await client.submit(FIXTURE_THREAD.id, "go", { whenBusy: "reject" }); // running when the page loads, status "ready"
@@ -404,7 +404,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 	});
 
 	it("sending a chat message clears the pending line", async () => {
-		const client = new CardClient(SINGLE, 120);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await answerSingle();
@@ -416,7 +416,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 	});
 
 	it("a stream error clears the pending line", async () => {
-		const client = new CardClient(SINGLE, 120);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await answerSingle();
@@ -431,7 +431,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 	});
 
 	it("Stop (abort) clears the pending line", async () => {
-		const client = new CardClient(SINGLE, 120);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await answerSingle();
@@ -443,7 +443,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 	});
 
 	it("the cards being superseded clears the pending line", async () => {
-		const client = new CardClient(SINGLE, 120);
+		const client = new CardClient(SINGLE, 500);
 		client.steerNext = true;
 		await mountStreaming(client);
 		await answerSingle();

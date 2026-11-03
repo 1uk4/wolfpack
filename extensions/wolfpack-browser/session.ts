@@ -5,7 +5,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { capText, checkUrlResolved, lastN, redactHeaders, redactUrl, type Resolver } from "./policy.js";
+import { guardedFetch } from "./fetcher.js";
+import { capText, checkUrlResolved, guardedLookup, lastN, redactHeaders, redactUrl, type Resolver } from "./policy.js";
 
 export interface BrowserConfig {
   /** Master switch. Default false: no tools are registered. */
@@ -20,9 +21,11 @@ export interface BrowserConfig {
   timeoutMs?: number;
   /** Cap on characters returned by eval / console / network. Default 20000. */
   maxOutputChars?: number;
+  /** Largest response body the browser may receive, bytes. Default 25 MB. */
+  maxResponseBytes?: number;
 }
 
-export const DEFAULTS = { timeoutMs: 30_000, maxOutputChars: 20_000, logCap: 500 };
+export const DEFAULTS = { timeoutMs: 30_000, maxOutputChars: 20_000, maxResponseBytes: 25 * 1024 * 1024, logCap: 500 };
 
 export const INSTALL_HINT =
   "No browser binary found. Install one without touching your own profile: `npx playwright-core install chromium` " +
@@ -128,7 +131,30 @@ export class BrowserSession {
     await this.launching;
   }
 
+  private ensureShotDir(): string {
+    if (!this.shotDir || !existsSync(this.shotDir)) {
+      sweepStaleShotDirs();
+      this.shotDir = mkdtempSync(join(tmpdir(), `wolf-browser-${process.pid}-`));
+    }
+    return this.shotDir;
+  }
+
+  private removeShotDir() {
+    if (this.shotDir) rmSync(this.shotDir, { recursive: true, force: true });
+    this.shotDir = undefined;
+  }
+
+  private blockRecord(url: string, why: string | undefined) {
+    this.blocked.push(`${redactUrl(url)}: ${why}`);
+    if (this.blocked.length > 50) this.blocked.shift();
+  }
+
   private async doLaunch(): Promise<void> {
+    if (!this.ctx) await this.launchContext();
+    if (!this.page) await this.openPage();
+  }
+
+  private async launchContext(): Promise<void> {
     const headless = !this.cfg.headed;
     const found = findBrowser(this.cfg, headless);
     if (!found) throw new Error(INSTALL_HINT);
@@ -136,66 +162,124 @@ export class BrowserSession {
     mkdirSync(join(this.den, "state"), { recursive: true });
     mkdirSync(this.profileDir, { recursive: true, mode: 0o700 });
     chmodSync(this.profileDir, 0o700);
-    this.shotDir = mkdtempSync(join(tmpdir(), "wolf-browser-"));
+    this.ensureShotDir();
+    let ctx: any;
     try {
-      this.ctx = await chromium.launchPersistentContext(this.profileDir, {
+      ctx = await chromium.launchPersistentContext(this.profileDir, {
         headless,
         ...(found.executablePath ? { executablePath: found.executablePath } : {}),
         ...(found.channel ? { channel: found.channel } : {}),
         viewport: { width: 1280, height: 800 },
         acceptDownloads: false,
         serviceWorkers: "block",
-        args: ["--no-first-run", "--no-default-browser-check", "--disable-extensions"],
+        args: [
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-extensions",
+          // WebRTC would otherwise reach hosts (and leak LAN addresses) outside the request policy.
+          "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+          "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ],
       });
     } catch (err) {
-      rmSync(this.shotDir, { recursive: true, force: true });
-      this.shotDir = undefined;
+      this.removeShotDir();
       throw new Error(`Browser failed to launch: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}. ${INSTALL_HINT}`);
     }
-    // Every request the page makes (navigations, redirects, subresources) passes the URL policy.
-    await this.ctx.route("**/*", async (route: any) => {
+    this.ctx = ctx;
+    ctx.on("close", () => {
+      if (this.ctx === ctx) { this.ctx = undefined; this.page = undefined; }
+      this.removeShotDir();
+    });
+    const allowHosts = this.cfg.allowHosts;
+    const lookup = guardedLookup(allowHosts, this.resolver);
+    // Every HTTP(S) request the page makes is performed in Node over a connect-time-vetted lookup (see fetcher.ts).
+    await ctx.route(/.*/, async (route: any) => {
       const req = route.request();
-      const v = await this.verdict(req.url(), req.isNavigationRequest());
-      const block = (why?: string) => {
-        this.blocked.push(`${redactUrl(req.url())}: ${why}`);
-        if (this.blocked.length > 50) this.blocked.shift();
-        return route.abort("blockedbyclient");
-      };
-      if (!v.ok) return block(v.reason);
-      // Redirects are resolved here, not by the network stack: fetch one hop, vet its Location, hand the 3xx to the
-      // browser (which re-enters this handler for the next hop). Otherwise a 302 to an internal host is never seen.
+      const url: string = req.url();
+      const v = await this.verdict(url, req.isNavigationRequest());
+      if (!v.ok) {
+        this.blockRecord(url, v.reason);
+        return route.abort("blockedbyclient").catch(() => undefined);
+      }
+      if (!/^https?:/i.test(url)) return route.continue().catch(() => undefined);
       try {
-        const res = await route.fetch({ maxRedirects: 0 });
-        const loc = res.headers()["location"];
-        if (res.status() >= 300 && res.status() < 400 && loc) {
-          const target = new URL(loc, req.url()).toString();
-          const rv = await this.verdict(target, req.isNavigationRequest());
-          if (!rv.ok) return block(`redirect to ${redactUrl(target)}: ${rv.reason}`);
+        const headers: Record<string, string> = {};
+        for (const [k, val] of Object.entries(await req.allHeaders() as Record<string, string>)) {
+          if (!["host", "content-length", "connection", "accept-encoding", "cookie", "transfer-encoding"].includes(k.toLowerCase())) headers[k] = val;
         }
-        return route.fulfill({ response: res });
-      } catch {
-        return route.abort("failed").catch(() => undefined);
+        headers["accept-encoding"] = "identity";
+        const jar: { name: string; value: string }[] = await ctx.cookies(url);
+        if (jar.length) headers["cookie"] = jar.map((c) => `${c.name}=${c.value}`).join("; ");
+        const res = await guardedFetch({
+          url,
+          method: req.method(),
+          headers,
+          body: req.postDataBuffer(),
+          lookup,
+          maxBytes: this.cfg.maxResponseBytes ?? DEFAULTS.maxResponseBytes,
+          timeoutMs: this.timeout,
+        });
+        const loc = res.headers["location"];
+        if (res.status >= 300 && res.status < 400 && typeof loc === "string") {
+          const target = new URL(loc, url).toString();
+          const rv = await this.verdict(target, req.isNavigationRequest());
+          if (!rv.ok) {
+            this.blockRecord(url, `redirect to ${redactUrl(target)}: ${rv.reason}`);
+            return route.abort("blockedbyclient").catch(() => undefined);
+          }
+        }
+        const setCookies = res.headers["set-cookie"];
+        if (setCookies) await storeCookies(ctx, url, Array.isArray(setCookies) ? setCookies : [setCookies]);
+        const out: Record<string, string> = {};
+        for (const [k, val] of Object.entries(res.headers)) {
+          if (["set-cookie", "content-encoding", "transfer-encoding", "connection", "content-length"].includes(k)) continue;
+          out[k] = Array.isArray(val) ? val.join(", ") : String(val);
+        }
+        return route.fulfill({ status: res.status, headers: out, body: res.body }).catch(() => undefined);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.startsWith("blocked:")) this.blockRecord(url, msg.slice(8).trim());
+        return route.abort(msg.startsWith("blocked:") ? "blockedbyclient" : "failed").catch(() => undefined);
       }
     });
-    this.page = this.ctx.pages()[0] ?? (await this.ctx.newPage());
-    this.page.setDefaultTimeout(this.timeout);
-    this.page.on("console", (m: any) => this.push(this.consoleLog, { t: new Date().toISOString(), type: m.type(), text: m.text() }));
-    this.page.on("pageerror", (e: Error) => this.push(this.consoleLog, { t: new Date().toISOString(), type: "pageerror", text: String(e.message) }));
-    const byReq = new Map<any, NetEntry>();
-    this.page.on("request", (r: any) => {
+    // WebSockets bypass context.route: same policy, applied before the page may talk to the server.
+    await ctx.routeWebSocket(/.*/, async (ws: any) => {
+      const url: string = ws.url();
+      const v = await checkUrlResolved(url, { allowHosts, websocket: true }, this.resolver);
+      if (!v.ok) {
+        this.blockRecord(url, v.reason);
+        await ws.close({ code: 1008, reason: "blocked by browser policy" }).catch(() => undefined);
+        return;
+      }
+      ws.connectToServer();
+    });
+  }
+
+  /** Open the single working page; pages restored from the profile and later popups are closed. */
+  private async openPage(): Promise<void> {
+    const ctx = this.ctx;
+    const page = await ctx.newPage();
+    this.page = page;
+    for (const old of ctx.pages()) if (old !== page) await old.close().catch(() => undefined);
+    ctx.on("page", (p: any) => { if (p !== this.page) p.close().catch(() => undefined); });
+    page.setDefaultTimeout(this.timeout);
+    page.on("close", () => { if (this.page === page) this.page = undefined; });
+    page.on("console", (m: any) => this.push(this.consoleLog, { t: new Date().toISOString(), type: m.type(), text: redactText(m.text()) }));
+    page.on("pageerror", (e: Error) => this.push(this.consoleLog, { t: new Date().toISOString(), type: "pageerror", text: redactText(String(e.message)) }));
+    const byReq = new WeakMap<object, NetEntry>();
+    page.on("request", (r: any) => {
       const e: NetEntry = { method: r.method(), url: redactUrl(r.url()), requestHeaders: redactHeaders(r.headers()) };
       byReq.set(r, e);
       this.push(this.netLog, e);
     });
-    this.page.on("response", (r: any) => {
+    page.on("response", (r: any) => {
       const e = byReq.get(r.request());
       if (e) { e.status = r.status(); e.responseHeaders = redactHeaders(r.headers()); }
     });
-    this.page.on("requestfailed", (r: any) => {
+    page.on("requestfailed", (r: any) => {
       const e = byReq.get(r);
       if (e) e.failure = r.failure()?.errorText ?? "failed";
     });
-    this.ctx.on("close", () => { this.ctx = undefined; this.page = undefined; });
   }
 
   private push<T>(arr: T[], item: T) {
@@ -215,7 +299,13 @@ export class BrowserSession {
     const before = this.blocked.length;
     let status: number | undefined;
     try {
-      const res = await page.goto(url, { waitUntil, timeout: timeoutMs ?? this.timeout });
+      const go = () => page.goto(url, { waitUntil, timeout: timeoutMs ?? this.timeout });
+      // A reset to about:blank after an earlier blocked navigation can still be settling: retry once.
+      const res = await go().catch(async (e: Error) => {
+        if (!/interrupted by another navigation/.test(e.message) || this.blocked.length > before) throw e;
+        await new Promise((r) => setTimeout(r, 250));
+        return go();
+      });
       status = res?.status();
     } catch (err) {
       const newly = this.blocked.slice(before);
@@ -263,7 +353,7 @@ export class BrowserSession {
 
   async screenshot(fullPage = false): Promise<string> {
     const page = await this.ready();
-    const file = join(this.shotDir!, `shot-${++this.shots}.png`);
+    const file = join(this.ensureShotDir(), `shot-${++this.shots}.png`);
     await page.screenshot({ path: file, fullPage });
     return file;
   }
@@ -293,7 +383,50 @@ export class BrowserSession {
     this.consoleLog = [];
     this.netLog = [];
     if (ctx) await ctx.close().catch(() => undefined);
-    if (this.shotDir) rmSync(this.shotDir, { recursive: true, force: true });
-    this.shotDir = undefined;
+    this.removeShotDir();
+  }
+}
+
+/** Mask URL-ish secrets inside free text (console output may echo URLs with tokens). */
+function redactText(t: string): string {
+  return t.replace(/https?:\/\/[^\s"'<>)]+/g, (u) => redactUrl(u));
+}
+
+/** Remove screenshot dirs left by wolfd processes that no longer exist. */
+function sweepStaleShotDirs() {
+  let names: string[] = [];
+  try { names = readdirSync(tmpdir()); } catch { return; }
+  for (const n of names) {
+    const m = /^wolf-browser-(\d+)-/.exec(n);
+    if (!m || Number(m[1]) === process.pid) continue;
+    try { process.kill(Number(m[1]), 0); } catch (e: any) {
+      if (e?.code === "ESRCH") rmSync(join(tmpdir(), n), { recursive: true, force: true });
+    }
+  }
+}
+
+/** Minimal Set-Cookie to cookie-jar bridge (the response is fulfilled by us, so the browser never sees the header). */
+async function storeCookies(ctx: any, url: string, headers: string[]) {
+  for (const h of headers) {
+    const [pair, ...attrs] = h.split(";").map((x) => x.trim());
+    const eq = pair.indexOf("=");
+    if (eq < 1) continue;
+    const cookie: Record<string, unknown> = { name: pair.slice(0, eq), value: pair.slice(eq + 1) };
+    let domain: string | undefined;
+    let path: string | undefined;
+    for (const a of attrs) {
+      const [k, v = ""] = a.split("=");
+      const key = k.toLowerCase();
+      if (key === "domain") domain = v.replace(/^\./, "") ? "." + v.replace(/^\./, "") : undefined;
+      else if (key === "path") path = v;
+      else if (key === "secure") cookie.secure = true;
+      else if (key === "httponly") cookie.httpOnly = true;
+      else if (key === "max-age" && Number.isFinite(Number(v))) cookie.expires = Math.floor(Date.now() / 1000) + Number(v);
+      else if (key === "expires" && cookie.expires === undefined && !Number.isNaN(Date.parse(v))) cookie.expires = Math.floor(Date.parse(v) / 1000);
+      else if (key === "samesite" && /^(strict|lax|none)$/i.test(v)) cookie.sameSite = v[0].toUpperCase() + v.slice(1).toLowerCase();
+    }
+    if (domain || path) Object.assign(cookie, { domain: domain ?? new URL(url).hostname, path: path ?? "/" });
+    else cookie.url = url;
+    await ctx.addCookies([cookie]).catch(() => undefined);
   }
 }

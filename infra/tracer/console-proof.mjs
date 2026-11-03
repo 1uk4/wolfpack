@@ -88,6 +88,7 @@ try {
     await sctx.close();
   }
   await mobilePass();
+  await devicesPass();
   // 6. revoke: the entrypoint runs `hubd tokens revoke` while we wait; the console must then send the browser back to /pair
   await import("node:fs").then((fs) => fs.writeFileSync("/tmp/proof-want-revoke", "1"));
   step("waiting for the device to be revoked on the hub");
@@ -187,5 +188,45 @@ async function mobilePass() {
     throw new Error(`mobile pass: ${e.message}`);
   } finally {
     for (const c of [...extra, mctx]) await c.close().catch(() => {});
+  }
+}
+
+// ---- DEVICES PASS (P4): two devices, list, revoke one, its next request is 401, the other still works. Runs before the entrypoint's own revoke. ----
+async function devicesPass() {
+  const dstep = (m) => console.log(`[console-proof:devices] ${m}`);
+  const hubBase = pairLink.slice(0, pairLink.lastIndexOf("/pair")); // the hub (with its public prefix) the QR link points at
+  const as = (t) => ({ Authorization: `Bearer ${t}` });
+  try {
+    // device B: a code minted through the console by device A (the paired browser), redeemed at the hub like a second phone would
+    const mint = await ctx.request.post(`${base}/api/devices/pairing-code`, { headers: { ...as(token), "content-type": "application/json" }, data: { label: "proof-second-device" } });
+    if (mint.status() !== 200) throw new Error(`mint pairing code -> ${mint.status()}`);
+    const { code } = await mint.json();
+    const paired = await ctx.request.post(`${hubBase}/v1/pair`, { headers: { "content-type": "application/json" }, data: { code, label: "proof-second-device" } });
+    if (paired.status() !== 200) throw new Error(`redeem at ${hubBase}/v1/pair -> ${paired.status()}`);
+    const b = await paired.json();
+    dstep(`paired a second device ${b.tokenId}`);
+    // list through the console as A: both devices, A marked self, no secrets
+    const listRes = await ctx.request.get(`${base}/api/devices`, { headers: as(token) });
+    const text = await listRes.text();
+    if (listRes.status() !== 200) throw new Error(`list -> ${listRes.status()}`);
+    if (text.includes(token) || text.includes(b.token) || /hash/i.test(text)) throw new Error("the device list leaks a secret");
+    const devices = JSON.parse(text).devices;
+    const me = devices.find((d) => d.self);
+    const other = devices.find((d) => d.id === b.tokenId);
+    if (!me || !other || other.self) throw new Error(`list shape wrong: ${text}`);
+    dstep(`list: ${devices.map((d) => `${d.label}${d.self ? " (this device)" : ""}`).join(", ")}`);
+    // B works, then A revokes B
+    const okB = await ctx.request.get(`${base}/api/wolves`, { headers: as(b.token) });
+    if (okB.status() !== 200) throw new Error(`device B before revoke -> ${okB.status()}`);
+    const rev = await ctx.request.delete(`${base}/api/devices/${encodeURIComponent(b.tokenId)}`, { headers: as(token) });
+    if (rev.status() !== 200) throw new Error(`revoke B -> ${rev.status()}`);
+    const afterB = await ctx.request.get(`${base}/api/wolves`, { headers: as(b.token) });
+    const afterA = await ctx.request.get(`${base}/api/wolves`, { headers: as(token) });
+    dstep(`after revoking B: B -> ${afterB.status()}, A -> ${afterA.status()}`);
+    if (afterB.status() !== 401) throw new Error("revoked device B still works");
+    if (afterA.status() !== 200) throw new Error("device A broke when B was revoked");
+    dstep("DEVICES PASS OK");
+  } catch (e) {
+    throw new Error(`devices pass: ${e.message}`);
   }
 }

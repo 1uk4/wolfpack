@@ -428,7 +428,7 @@ export const ROUTES = {
   /**
    * Device management. Callers: console/browser tokens (a worker token gets 403). `hubListDevices`: console/browser devices with
    * label, createdAt, lastUsedAt (about 5s stale) and `self`; never a token or hash. `hubRevokeDevice`: revokes one device (404 for an
-   * unknown id or a worker token); a device MAY revoke itself (sign out; its own next request is 401). `hubMintPairingCode`: a
+   * unknown id or a worker token); a device MAY revoke itself (sign out; its own next request is 401). `?cascade=1` also revokes the devices it added (transitively). Refused with 409 `busy` when it would leave no console-kind token. `hubMintPairingCode`: a
    * single-use 10-minute code for a new BROWSER device (the same thing `hubd pair --kind browser --label` mints); at most 10 mints+revokes a minute per token (409 busy, retryable).
    * Revokes and mints are audit-logged (token id, never a secret).
    */

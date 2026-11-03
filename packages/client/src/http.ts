@@ -423,10 +423,10 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("hubListDevices", {}, ROUTES.hubListDevices.response.schema)) as DeviceList;
   }
 
-  /** Hub only: revoke a device (may be this one). */
-  async revokeDevice(id: string): Promise<{ revoked: string; self: boolean }> {
+  /** Hub only: revoke a device (may be this one); `cascade` also revokes the devices it added. 409 `conflict` when it would remove the last console token. */
+  async revokeDevice(id: string, opts: { cascade?: boolean } = {}): Promise<{ revoked: string; self: boolean; cascaded: string[] }> {
     if (!this.hub) throw new ProtocolError("invalid_request", "revokeDevice needs a hub client", false);
-    return (await this.json("hubRevokeDevice", { id }, ROUTES.hubRevokeDevice.response.schema)) as { revoked: string; self: boolean };
+    return (await this.json("hubRevokeDevice", { id }, ROUTES.hubRevokeDevice.response.schema, undefined, undefined, opts.cascade ? "?cascade=1" : "")) as { revoked: string; self: boolean; cascaded: string[] };
   }
 
   /** Hub only: mint a single-use browser pairing code for a new device. */

@@ -31,6 +31,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
+const { resolveConsoleTarget, errorPageHtml } = require("./remote.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -207,6 +208,7 @@ function killServer() {
  *    default, we do not);
  *  - will-navigate pinned to the app origin; window.open always denied —
  *    external links go to the real browser via shell.openExternal. */
+let remoteTarget = false; // set in main(); remote mode adds the unreachable page
 function createWindow(url) {
 	const win = new BrowserWindow({
 		width: 1440,
@@ -279,6 +281,7 @@ function createWindow(url) {
 	});
 
 	win.webContents.on("will-navigate", (event, target) => {
+		if (remoteTarget && target.startsWith("lh-retry:")) return;
 		if (new URL(target).origin !== allowedOrigin()) {
 			event.preventDefault();
 			void shell.openExternal(target);
@@ -290,6 +293,23 @@ function createWindow(url) {
 	});
 
 	void win.loadURL(url);
+	if (remoteTarget) {
+		// Remote unreachable (Tailscale off…): swap the blank window for a local
+		// static page. did-fail-load fires for the main frame only when errorCode
+		// != -3 (aborted); sub-frame failures are ignored.
+		win.webContents.on("did-fail-load", (_e, code, _desc, failedUrl, isMainFrame) => {
+			if (!isMainFrame || code === -3 || failedUrl.startsWith("data:")) return;
+			log(`remote unreachable (${code}): ${failedUrl}`);
+			void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorPageHtml(url))}`);
+		});
+		// The error page's Retry link (lh-retry://) is intercepted: reload the remote.
+		win.webContents.on("will-navigate", (event, target) => {
+			if (target.startsWith("lh-retry:")) {
+				event.preventDefault();
+				void win.loadURL(url);
+			}
+		});
+	}
 	// Zoom truth reaches the renderer for EVERY load (reload, nav): the
 	// renderer's --lh-zoom must never go stale. The fallback catcher below
 	// covers ⌘= / layout variants the menu's ⌘Plus may not claim — menu-
@@ -512,9 +532,15 @@ async function main() {
 	// Dev mode: point at a running `next dev` server (LH_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies
 	// (guards, menu, single instance).
+	// Remote mode (LH_CONSOLE_URL / console.json consoleUrl, see remote.cjs):
+	// no server spawn, no DATA_DIR/auth.json. LH_DEV_URL takes precedence.
 	const devUrl = process.env.LH_DEV_URL;
-	const url = devUrl ?? `http://127.0.0.1:${await freePort()}`;
-	if (!devUrl) {
+	const target = devUrl ? { mode: "local" } : resolveConsoleTarget({ env: process.env, userDataDir: app.getPath("userData"), log });
+	remoteTarget = target.mode === "remote";
+	const url = devUrl ?? (remoteTarget ? target.url : `http://127.0.0.1:${await freePort()}`);
+	if (remoteTarget) {
+		log(`remote mode: ${url} (from ${target.source})`);
+	} else if (!devUrl) {
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
 		await startServer(new URL(url).port);

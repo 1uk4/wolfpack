@@ -28,7 +28,7 @@ function windowOptions(platform: string) {
 	};
 	const context = {
 		require: (id: string) =>
-			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : require(id),
+			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : id === "./remote.cjs" ? require("../../desktop/electron/remote.cjs") : require(id),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};

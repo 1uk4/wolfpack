@@ -207,7 +207,13 @@ function ThreadChatInner({
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
 	// An answer steered into the turn that is still running: shown until that turn ends (not an error).
-	const [sendPending, setSendPending] = useState(false);
+	const [sendPending, setSendPendingState] = useState(false);
+	const sendPendingRef = useRef(false);
+	const statusRef = useRef<string>("ready");
+	const setSendPending = useCallback((v: boolean) => {
+		sendPendingRef.current = v;
+		setSendPendingState(v);
+	}, []);
 	// Feature progress: bumped when a turn ends, so the panel's live data refetches.
 	const [progressTick, setProgressTick] = useState(0);
 	// The thread record is the truth for cards: refetched whenever a turn settles (a turn that ended on a card), and
@@ -275,6 +281,8 @@ function ThreadChatInner({
 		cardEventRef.current = (ev) => {
 			cardEpoch.current++;
 			setCards((c) => foldCardEvent(c, ev));
+			// A chat message superseded the cards: nothing of ours is waiting to send any more.
+			if (ev.type === "card-settled" && ev.closed === "superseded") setSendPending(false);
 			// Answered or skipped: the record carries the result text.
 			if (ev.type === "card-settled" && (ev.outcome === "answered" || ev.closed === "skipped")) void refreshCards();
 		};
@@ -296,19 +304,24 @@ function ThreadChatInner({
 		if (running) return;
 		void refreshCards(); // idle: a held answer given from the sidebar, a card answered elsewhere
 	});
+	statusRef.current = status;
 	const prevStatus = useRef(status);
 	useEffect(() => {
 		const was = prevStatus.current;
 		prevStatus.current = status;
 		const wasRunning = was === "submitted" || was === "streaming";
 		if (wasRunning && status === "ready") {
+			// A steered answer is placed when the turn ends and starts the next turn: attach to it.
+			const followOn = sendPendingRef.current;
 			setSendPending(false);
 			void refreshCards();
 			setProgressTick((n) => n + 1);
 			if (busyMissed.current) resumeStream();
+			else if (followOn) resumeStream(true); // only if the record shows a turn running
 		}
+		if (status === "error") setSendPending(false);
 		if (status === "ready" || status === "error") busyMissed.current = false;
-	}, [status, refreshCards, resumeStream]);
+	}, [status, refreshCards, resumeStream, setSendPending]);
 	const answerInFlight = useRef(false);
 	// An answer (answers given) or a skip (no answers) of one card: the same POST/ack handling.
 	const resolveCard = useCallback(
@@ -337,7 +350,10 @@ function ThreadChatInner({
 				// Otherwise the answer starts the next turn: attach to it.
 				if (ack.disposition === "steered") {
 					setCards((c) => (answers ? withAnswer(c, callId, answers) : withSkip(c, callId)));
-					setSendPending(true);
+					// This console sees no running turn (a reload mid-turn, a second client): attach to the turn the
+					// answer joined instead of waiting for a transition that will not come.
+					if (statusRef.current === "ready" || statusRef.current === "error") resumeStream(true);
+					else setSendPending(true);
 				} else if (ack.disposition === "queued") {
 					setCards((c) => (answers ? withHeld(c, callId, answers) : withHeldSkip(c, callId)));
 					void refreshCards();
@@ -352,7 +368,7 @@ function ThreadChatInner({
 				setAnswering(null);
 			}
 		},
-		[wolf, slug, resumeStream, refreshCards],
+		[wolf, slug, resumeStream, refreshCards, setSendPending],
 	);
 	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
@@ -443,13 +459,14 @@ function ThreadChatInner({
 		if (!canSendWith(t, attachments)) return;
 		const refs = readyInfos(attachments);
 		applyText("");
+		setSendPending(false);
 		beginSend(t, busy); // a failed send/steer puts the text back (unless the user typed anew)
 		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
 		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
 		// whenBusy "steer"); Stop is the abort.
 		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
-	}, [busy, send, steer, attachments, applyText, beginSend]);
+	}, [busy, send, steer, attachments, applyText, beginSend, setSendPending]);
 	// Finish a live dictation first: the spoken tail must be in the message. One send in flight at a time (a second
 	// Enter/click during the finish must not send twice); doSend runs through a ref so it sees the settled state, and
 	// does nothing (composer untouched) when the finish left no text and no ready attachment.
@@ -467,10 +484,11 @@ function ThreadChatInner({
 	}, [dictation, doSend]);
 
 	const onStop = useCallback(() => {
+		setSendPending(false);
 		void fetch(transport.abortUrl!, { method: "POST" }).catch(() => {
 			/* the turn settles on its own */
 		});
-	}, [transport]);
+	}, [transport, setSendPending]);
 
 	return (
 		<div

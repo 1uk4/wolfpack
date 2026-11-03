@@ -75,7 +75,7 @@ describe("PUT then GET round-trip under LH_DATA_DIR", () => {
 		delete process.env.LH_AUTH_FILE;
 		delete process.env.DEEPGRAM_API_KEY;
 		process.env.LH_DATA_DIR = dataDir;
-		const { saveKey, keyStatuses, keyValue } = await import("../src/server/keys.ts?roundtrip");
+		const { saveKey, keyStatuses, keyValue } = (await import("../src/server/keys.ts")) as typeof import("../src/server/keys.ts");
 		const dummy = "dg_dummy_0123456789abcdef0123456789abcdef";
 		const r = saveKey("DEEPGRAM_API_KEY", dummy);
 		assert.equal(r.ok, true);
@@ -83,7 +83,7 @@ describe("PUT then GET round-trip under LH_DATA_DIR", () => {
 		assert.ok(fs.existsSync(file), "auth.json should live under LH_DATA_DIR");
 		assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 		assert.equal(keyValue("DEEPGRAM_API_KEY"), dummy);
-		const status = keyStatuses().find((s) => s.id === "DEEPGRAM_API_KEY");
+		const status = keyStatuses().find((s: { id: string }) => s.id === "DEEPGRAM_API_KEY");
 		assert.ok(status);
 		const json = JSON.stringify(keyStatuses());
 		assert.ok(!json.includes(dummy), "plaintext leaked in status");

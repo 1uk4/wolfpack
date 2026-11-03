@@ -61,6 +61,8 @@ export interface BridgeOptions {
 	idleMs?: number;
 	/** Where a wolf's `thread-updated` goes (default: the event bus). */
 	emitThread?: (wolf: string, thread: ServerEvents["thread-updated"]["thread"]) => void;
+	/** The hub rejected this bridge's token (401, e.g. the device was revoked). Terminal: the bridge has stopped for good. Called once. */
+	onAuthLost?: () => void;
 }
 
 /** What a wolf event says about who changed (resync: nothing, so consumers refetch everything). */
@@ -102,6 +104,12 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 	const emitThread = opts.emitThread ?? ((wolf, thread) => emit("thread-updated", { wolf, thread }));
 	const following = new Set<string>();
 	const ctl = new AbortController();
+	/** A hub 401 ends the bridge for good (nothing retries a revoked token). */
+	const authLost = () => {
+		if (ctl.signal.aborted) return;
+		ctl.abort();
+		opts.onAuthLost?.();
+	};
 	let wolves: string[] = [];
 	let wolvesAt = 0;
 	let wolvesPending: Promise<void> | undefined;
@@ -121,7 +129,10 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 				}
 			} catch (err) {
 				// A hub-auth failure (no/revoked token) cannot fix itself by retrying: stop following instead of backing off forever.
-				if ((err as { hubAuth?: boolean } | undefined)?.hubAuth === true) break;
+				if ((err as { hubAuth?: boolean } | undefined)?.hubAuth === true) {
+					authLost();
+					break;
+				}
 				/* anything else: retry below */
 			}
 			if (signal.aborted) break;
@@ -138,7 +149,9 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 				wolves = list.map((w) => w.name);
 				wolvesAt = Date.now();
 			})
-			.catch(() => {})
+			.catch((err) => {
+				if ((err as { hubAuth?: boolean } | undefined)?.hubAuth === true) authLost();
+			})
 			.finally(() => {
 				wolvesPending = undefined;
 			});
@@ -149,6 +162,7 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 		ensure(client: ConsoleClient): void {
 			if (!client.watchActivity || ctl.signal.aborted) return;
 			const start = () => {
+				if (ctl.signal.aborted) return; // stopped (or token lost) while the wolf list was loading
 				for (const [wolf, stop] of stops) if (!wolves.includes(wolf)) stop.abort(); // no longer listed
 				for (const wolf of wolves) {
 					if (following.has(wolf)) continue;
@@ -181,7 +195,7 @@ export function activityBridge(): ReturnType<typeof createActivityBridge> {
 	return (g[BRIDGE] ??= createActivityBridge());
 }
 
-/** The api bound to the process-wide client; listing also (re)starts the activity bridge. */
+/** The api bound to the process-wide client; the activity bridge is per SSE connection now (events-stream.ts), never started from here. */
 export function needsYouApi() {
-	return createNeedsYouApi(getConsoleClient, { onList: (client) => activityBridge().ensure(client) });
+	return createNeedsYouApi(getConsoleClient);
 }

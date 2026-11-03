@@ -2,7 +2,8 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbPipelineResponse, GraduationJob, GraduationObservations, GraduationStatus } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbPipelineResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
+export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -177,6 +178,10 @@ export interface ConsoleClient {
   claimWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
   /** Hub only: release a claim (the holder or the operator). Leaves the stage alone. Rejects `conflict` for anyone else. */
   releaseWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
+  /** Hub only: paired devices / revoke one / mint a pairing code for a new one (device management routes). Optional like watchMemory. */
+  listDevices?(): Promise<DeviceList>;
+  revokeDevice?(id: string): Promise<{ revoked: string; self: boolean }>;
+  mintPairingCode?(label?: string): Promise<MintPairingCodeResponse>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
   /**

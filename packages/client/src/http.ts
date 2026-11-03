@@ -19,6 +19,8 @@ import {
   type RouteName,
   type KbCommitRequest,
   type KbCommitResponse,
+  DeviceList,
+  MintPairingCodeResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -413,6 +415,24 @@ export class HttpConsoleClient implements ConsoleClient {
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
     if (this.hub) return (await this.json("hubGetWorkRecord", { id: workId }, ROUTES.hubGetWorkRecord.response.schema)) as WorkRecordResponse;
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
+  /** Hub only: the paired console/browser devices (label, lastUsedAt, `self`; never a secret). */
+  async listDevices(): Promise<DeviceList> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "listDevices needs a hub client", false);
+    return (await this.json("hubListDevices", {}, ROUTES.hubListDevices.response.schema)) as DeviceList;
+  }
+
+  /** Hub only: revoke a device (may be this one). */
+  async revokeDevice(id: string): Promise<{ revoked: string; self: boolean }> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "revokeDevice needs a hub client", false);
+    return (await this.json("hubRevokeDevice", { id }, ROUTES.hubRevokeDevice.response.schema)) as { revoked: string; self: boolean };
+  }
+
+  /** Hub only: mint a single-use browser pairing code for a new device. */
+  async mintPairingCode(label?: string): Promise<MintPairingCodeResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "mintPairingCode needs a hub client", false);
+    return (await this.json("hubMintPairingCode", {}, ROUTES.hubMintPairingCode.response.schema, label ? { label } : {})) as MintPairingCodeResponse;
   }
 
   /** `wolf`: which wolf a worker token acts for (sent as the `{wolf}` body); omit for operator tokens. */

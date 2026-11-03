@@ -84,6 +84,7 @@ export const WolfFileSchema = z.object({
     .object({
       live: z.boolean().optional(),
       librarian: z.boolean().optional(),
+      hubKb: z.boolean().optional(),
       defaultDomain: z.string().min(1).optional(),
       sweepInterval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30s", "1m", "1h"').optional(),
       consolidation: z
@@ -161,6 +162,8 @@ export interface WolfConfig {
     live: boolean;
     /** Librarian mode (mutates KB_BASE); in a sandbox only on a KB copy (`<root>/kb-base`), otherwise refused. */
     librarian: boolean;
+    /** Declaration for the hub/workerd only: this wolf runs in hub-KB mode (its .env has WOLFPACK_HUB_KB=1), so workerd reports it kbReadable. wolfd ignores it and keeps reading its own env. */
+    hubKb?: boolean;
     /** Librarian sweep interval (e.g. "1m"); default 1m. */
     sweepInterval?: string;
     /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */

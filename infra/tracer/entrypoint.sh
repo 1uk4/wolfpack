@@ -99,6 +99,8 @@ WENV=(HOME=$WHOME WORKERD_CONFIG_DIR=$WHOME/.wolfpack/workerd KB_OPS=$WHOME/ops)
 CONSOLE_HUBKB=
 if [ -n "${TRACER_CONSOLE:-}" ] && [ -z "$KB" ] && [ "$MODE" != max ]; then
   CONSOLE_HUBKB=1
+  # the hub-facing declaration lives in wolf.yaml (644, readable by workerd); the .env (600, secrets) stays unreadable to workerd and is read only by wolfd
+  printf "memory:\n  hubKb: true\n" >> "$WOLVES/hal2/wolf.yaml"; chown wolf-hal2:wolf-hal2 "$WOLVES/hal2/wolf.yaml"; chmod 644 "$WOLVES/hal2/wolf.yaml"
   KC=$(code --kind worker --host-id $HOST_ID); KT=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$KC\",\"label\":\"hal2-wolf\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
   ( umask 077; printf "WOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KT" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"; unset KC KT
 fi

@@ -8,7 +8,7 @@ import { Outbox, writeReceiptFile } from "./outbox.js";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, isAbsolute, sep } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
-import { wolfEnvHubKb } from "./wolf-env.js";
+import { toLinkWolf } from "./link-wolf.js";
 import type { LinkWelcome, LinkWolf } from "@wolfpack/protocol";
 import { WorkerRelay } from "./relay.js";
 import { KbSync, type KbSyncOptions } from "./kb-sync.js";
@@ -168,14 +168,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     supervisor.addWolf = refuse;
   }
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
-  // KB capability from config + the env the children inherit (same rule as wolfd's roots: KB_BASE+KB_OPS, or hub-KB mode). Link-only announces claim nothing.
-  const childEnv = opts.env ?? process.env;
-  const hubKbOn = /^(1|true|yes|on)$/i.test((childEnv.WOLFPACK_HUB_KB ?? "").trim());
-  const linkWolf = (c: { identity: { name: string; domains: string[] }; memory?: { librarian?: boolean }; file?: string }): LinkWolf => {
-    const librarian = c.memory?.librarian === true;
-    const kbReadable = librarian || hubKbOn || (!!childEnv.KB_BASE && !!childEnv.KB_OPS) || (c.file !== undefined && wolfEnvHubKb(c.file)); // the wolf's own .env (systemd EnvironmentFile) is not in workerd's env
-    return { name: c.identity.name, domains: c.identity.domains, librarian, kbReadable };
-  };
+  const linkWolf = (c: Parameters<typeof toLinkWolf>[0]): LinkWolf => toLinkWolf(c, opts.env ?? process.env); // link-only announces below claim nothing
   const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));
   let link: HubLink | undefined;
   let kbSync: KbSync | undefined;

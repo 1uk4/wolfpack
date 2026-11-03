@@ -31,7 +31,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
-const { resolveConsoleTarget, errorPageHtml } = require("./remote.cjs");
+const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -208,6 +208,7 @@ function killServer() {
  *    default, we do not);
  *  - will-navigate pinned to the app origin; window.open always denied —
  *    external links go to the real browser via shell.openExternal. */
+let remoteUrl = ""; // remote console URL (remote mode)
 let remoteTarget = false; // set in main(); remote mode adds the unreachable page
 function createWindow(url) {
 	const win = new BrowserWindow({
@@ -474,6 +475,17 @@ function installMenu() {
 				// Manual check (Wave C): answers via native dialog — no renderer
 				// round-trip. The 24h automatic checks stay silent.
 				{ label: "Check for Updates…", click: () => checkForUpdates({ manual: true }) },
+				// Remote mode only: open hubd's pairing page (code input) on the
+				// console origin; it redirects to /pair#token=… (same origin).
+				...(remoteTarget
+					? [{
+						label: "Pair this app…",
+						click: () => {
+							const w = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+							if (w) void w.loadURL(pairUrl(new URL(remoteUrl).origin));
+						},
+					}]
+					: []),
 				{ type: "separator" },
 				{ role: "hide" },
 				{ role: "hideOthers" },
@@ -537,6 +549,7 @@ async function main() {
 	const devUrl = process.env.LH_DEV_URL;
 	const target = devUrl ? { mode: "local" } : resolveConsoleTarget({ env: process.env, userDataDir: app.getPath("userData"), log });
 	remoteTarget = target.mode === "remote";
+	if (remoteTarget) remoteUrl = target.url;
 	const url = devUrl ?? (remoteTarget ? target.url : `http://127.0.0.1:${await freePort()}`);
 	if (remoteTarget) {
 		log(`remote mode: ${url} (from ${target.source})`);

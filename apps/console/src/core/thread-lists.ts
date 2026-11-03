@@ -28,3 +28,23 @@ export function foldWolfRoster(
 	if (!wolves) return (prev ?? []).map((w) => ({ name: w.name, online: false }));
 	return wolves.map((w) => ({ name: w.name, online: w.status !== "offline" && threadsOk[w.name] !== false }));
 }
+
+/**
+ * The light liveness tick: exactly ONE `/api/wolves` call, no per-wolf thread fetches. `recovered` lists wolves that were
+ * offline (or unknown) and are online now; only those get a threads fetch. Server unreachable: last roster, all offline.
+ */
+export async function checkRoster(
+	fetchFn: (url: string, init?: { cache?: "no-store" }) => Promise<{ json(): Promise<unknown> }>,
+	prev: readonly WolfStatus[],
+): Promise<{ roster: WolfStatus[]; recovered: string[] }> {
+	let wolves: { name: string; status?: string }[] | undefined;
+	try {
+		const d = (await (await fetchFn("/api/wolves", { cache: "no-store" })).json()) as { wolves?: { name: string; status?: string }[] };
+		wolves = Array.isArray(d.wolves) ? d.wolves : undefined;
+	} catch {
+		wolves = undefined;
+	}
+	const roster = foldWolfRoster(prev, wolves);
+	const wasOnline = new Set(prev.filter((w) => w.online).map((w) => w.name));
+	return { roster, recovered: roster.filter((w) => w.online && !wasOnline.has(w.name)).map((w) => w.name) };
+}

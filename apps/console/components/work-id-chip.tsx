@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { cn } from "@/lib/utils";
 import { fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "@/components/kb-client";
-import { useWorkView } from "@/components/work-view-entry";
+import { openReaderVia, readerUrl } from "@/components/work-reader-nav";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
 
@@ -215,7 +215,6 @@ type OpenedBy = "hover" | "focus" | "click" | "key";
 function InteractiveChip({ id, short }: { id: string; short: string }) {
 	const router = useContext(AppRouterContext);
 	const currentWolf = currentWolfOf(usePathname());
-	const workView = useWorkView();
 	const ref = useRef<HTMLSpanElement>(null);
 	const cardRef = useRef<HTMLDivElement>(null);
 	const [open, setOpen] = useState(false);
@@ -317,8 +316,9 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 	const go = (href: string) => (router ? router.push(href) : window.location.assign(href));
 	const openWork = () => {
 		close(false);
-		workView.open();
-		workView.select(id);
+		const params = new URLSearchParams(window.location.search);
+		if (router) openReaderVia(router, window.location.pathname, params.toString(), params.get("item") || null, id);
+		else window.location.assign(readerUrl(window.location.pathname, params.toString(), id));
 	};
 	const openThread = async () => {
 		if (!lookup || lookup.kind !== "ok") return;

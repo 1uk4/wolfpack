@@ -49,7 +49,8 @@ ex console 0.9.1; bash /opt/deploy/console/setup.sh setup >/tmp/cs.log 2>&1 || {
 [ "$(stat -c %a /etc/wolfpack/console.env)" = 600 ] && ok "console.env written 600" || bad "console.env mode"
 bash /opt/deploy/console/setup.sh install --bundle /tmp/x-console-0.9.1/console >/tmp/ci.log 2>&1 || { tail -8 /tmp/ci.log; bad "console install A"; }
 systemctl start console; wait_active console 20 || { journalctl -u console --no-pager | tail -8; bad "console did not start"; }
-[ "$(ver /opt/wolfpack-console)" = 0.9.1 ] && ss -ltnH | grep -q '127.0.0.1:3200 ' && ! ss -ltnH | grep -qE '(0.0.0.0|\*|\[::\]):3200 ' && ok "console 0.9.1 running under real systemd, bound to 127.0.0.1:3200 only" || bad "console bind"
+for _ in $(seq 1 20); do ss -ltnH | grep -q '127.0.0.1:3200 ' && break; sleep 0.5; done
+[ "$(ver /opt/wolfpack-console)" = 0.9.1 ] && ss -ltnH | grep -q '127.0.0.1:3200 ' && ! ss -ltnH | grep -qE '(0.0.0.0|\*|\[::\]):3200 ' && ok "console 0.9.1 running under real systemd, bound to 127.0.0.1:3200 only" || { ss -ltnH; journalctl -u console --no-pager | tail -5; bad "console bind"; }
 run console 0.9.2 --settle 3; rc=$?
 [ $rc = 0 ] && [ "$(ver /opt/wolfpack-console)" = 0.9.2 ] && [ "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1:3200/api/health)" = 200 ] && ok "console A->B healthy (rc 0), HTTP 200 probe" || bad "console A->B rc=$rc"
 run console 0.9.3 --settle 3 --health-timeout 20; rc=$?

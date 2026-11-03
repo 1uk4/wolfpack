@@ -201,6 +201,16 @@ async function mobilePass() {
     if (!order) throw new Error("the reply does not follow the nonce message");
     mstep(`nonce ${nonce} sent; reply '${expect}' count ${before} -> ${await countReplies()}, after the nonce`);
     await noOverflow("thread");
+    // P12: the document must not scroll (iOS would rubber-band it), and the composer must sit on the viewport bottom
+    const pin = await mp.evaluate(() => {
+      const se = document.scrollingElement; const c = document.querySelector('[data-testid="composer"]')?.getBoundingClientRect();
+      const log = document.querySelector('[data-testid="thread-chat"] [role="log"] > div');
+      return { sh: se.scrollHeight, ih: window.innerHeight, bottom: c ? c.bottom : -1, logScrolls: log ? log.scrollHeight >= log.clientHeight : false, ov: getComputedStyle(document.body).overflow };
+    });
+    mstep(`pinned composer: scrollHeight=${pin.sh} innerHeight=${pin.ih} composerBottom=${pin.bottom} body.overflow=${pin.ov}`);
+    if (pin.sh > pin.ih) throw new Error(`document scrolls on a thread page: ${pin.sh} > ${pin.ih}`);
+    if (pin.bottom > pin.ih + 0.5 || pin.bottom < pin.ih - 40) throw new Error(`composer not pinned to the bottom: ${pin.bottom} vs ${pin.ih}`);
+    if (!pin.logScrolls) throw new Error("message list is not a scroll container");
     await mshot("4-reply");
     // back = the visible back control returns to the list layer
     await mp.locator('[data-testid="mobile-back"]').tap();

@@ -604,13 +604,35 @@ body {
    the thread sized to the VISIBLE viewport (--lh-vvh from components/viewport-vars.tsx, so the composer clears the keyboard),
    safe-area insets for the iOS notch / home bar. */
 @media (max-width: 767px) {
+	/* P12: the document never scrolls on a phone (no iOS rubber-band, no gap under the composer). The shell is a fixed-height
+	   column; <main> is the one scroll container, so list/settings/pair pages scroll inside it and a thread's own message list
+	   scrolls inside the thread (whose height equals main's, so main itself has nothing to scroll). */
 	html,
 	body {
-		overflow-x: hidden;
+		height: 100%;
+		overflow: hidden;
+		overscroll-behavior: none;
 		max-width: 100vw;
 	}
 	main {
 		overflow-x: clip;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		min-height: 0;
+	}
+	/* the message list (StickToBottom's scroller) is the thread's only scroller and never chains into the page */
+	[data-testid="thread-chat"] [role="log"] > div {
+		overscroll-behavior: contain;
+	}
+	/* pages that size themselves to h-dvh fill main instead (main is shorter by the top safe-area inset) */
+	main > [class~="h-dvh"],
+	main > [class~="min-h-dvh"] {
+		height: 100%;
+		min-height: 0;
+	}
+	main > [class~="min-h-dvh"] {
+		height: auto;
+		min-height: 100%;
 	}
 	[data-lh-shell] {
 		height: var(--lh-vvh, 100dvh);

@@ -15,7 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/subagent-strip";
-import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
+import { PanelFloatingHandle, PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
@@ -476,9 +476,10 @@ function ThreadChatInner({
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
 				<div className="relative flex min-h-0 flex-1">
+					<PanelFloatingHandle />
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4"}`}>
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}

@@ -192,7 +192,7 @@ export function RightPanelHost() {
 	// < md: open = a full-screen overlay (never a 320px column squeezing the transcript); closed = a floating 44px handle. md+ unchanged.
 	return (
 		<aside
-			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full max-md:border-l-0 max-md:bg-background max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "flex w-9 shrink-0 flex-col items-center border-l border-border py-2 max-md:fixed max-md:right-2 max-md:top-[calc(env(safe-area-inset-top)+0.5rem)] max-md:z-30 max-md:size-11 max-md:justify-center max-md:rounded-full max-md:border max-md:bg-card/90 max-md:py-0 max-md:shadow-lg max-md:backdrop-blur"}
+			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full max-md:border-l-0 max-md:bg-background max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "hidden"}
 			data-testid="panel-host"
 			data-open={open}
 			data-panel={selected}
@@ -237,5 +237,28 @@ export function RightPanelHost() {
 				);
 			})}
 		</aside>
+	);
+}
+
+/**
+ * The closed-panel handle: a floating button anchored to the top-right of the chat area (render it inside the
+ * conversation wrapper, a sibling of the scroller, so it stays put while the list scrolls). Hidden while the panel
+ * is open or when no panel is available. 44px tap target on the phone, 32px from md up.
+ */
+export function PanelFloatingHandle() {
+	const actions = useContext(ActionsContext);
+	const state = useContext(StateContext);
+	if (!actions || !state || !state.selected || state.open) return null;
+	return (
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label="Open side panel"
+			data-testid="panel-handle"
+			className="absolute right-2 top-2 z-20 size-11 rounded-full border border-border bg-card/90 shadow-md backdrop-blur md:size-8 md:right-3 md:top-3"
+			onClick={actions.toggle}
+		>
+			<ChevronsLeftIcon />
+		</Button>
 	);
 }

@@ -19,7 +19,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { coalescedRefresh, foldWolfThreads, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
+import { coalescedRefresh, foldWolfRoster, foldWolfThreads, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
@@ -499,9 +499,24 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	);
 }
 
+/** One row per known wolf: a status dot and an explicit label, so an offline wolf stays visible. 44px target on phones. */
+export function WolfStatusRow({ wolf }: { wolf: WolfStatus }) {
+	return (
+		<div data-testid="wolf-status" data-wolf={wolf.name} data-online={wolf.online} className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-xs max-md:min-h-11", !wolf.online && "text-muted-foreground")}>
+			<span aria-hidden className={cn("size-2 shrink-0 rounded-full", wolf.online ? "bg-emerald-500" : "bg-muted-foreground/40")} />
+			<span className="min-w-0 flex-1 truncate font-medium">{wolf.name}</span>
+			<span className="shrink-0 text-muted-foreground">{wolf.online ? "online" : "offline"}</span>
+		</div>
+	);
+}
+
+/** Re-check liveness this often while the tab is visible (/api/wolves only; no SSE event fires on presence change). */
+const ROSTER_POLL_MS = 20_000;
+
 export function SessionsSidebar() {
 	const { open, toggle, closeList, mobile } = useSidebar();
 	const [chats, setChats] = useState<SessionItem[] | null>(null);
+	const [roster, setRoster] = useState<WolfStatus[]>([]);
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
@@ -592,8 +607,9 @@ export function SessionsSidebar() {
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
 			const wolves = (await (await fetch("/api/wolves", { cache: "no-store" })).json()) as {
-				wolves: { name: string }[];
+				wolves: { name: string; status?: string }[];
 			};
+			if (!Array.isArray(wolves.wolves)) throw new Error("bad roster");
 			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {
 					try {
@@ -606,8 +622,10 @@ export function SessionsSidebar() {
 				}),
 			);
 			setChats((prev) => foldWolfThreads(prev, results));
+			setRoster((prev) => foldWolfRoster(prev, wolves.wolves, Object.fromEntries(results.map((r) => [r.wolf, r.threads !== undefined]))));
 		} catch {
-			// a transient failure keeps the last snapshot
+			// a transient failure keeps the last snapshot; the server is unreachable, so every known wolf reads offline
+			setRoster((prev) => foldWolfRoster(prev, undefined));
 			setChats((prev) => prev ?? []);
 		}
 	}), []);
@@ -685,6 +703,18 @@ export function SessionsSidebar() {
 	useServerEvent("needs-you-changed", scheduleEventRefresh);
 	useServerEvent("thread-updated", scheduleEventRefresh);
 	useServerResync(() => void refreshRef.current());
+	/* Presence changes fire no event, so re-check liveness on a timer (paused while the tab is hidden). */
+	useEffect(() => {
+		const tick = () => {
+			if (document.visibilityState === "visible") void refreshRef.current();
+		};
+		const id = setInterval(tick, ROSTER_POLL_MS);
+		document.addEventListener("visibilitychange", tick);
+		return () => {
+			clearInterval(id);
+			document.removeEventListener("visibilitychange", tick);
+		};
+	}, []);
 	useEffect(
 		() => () => {
 			if (eventDebounceRef.current) clearTimeout(eventDebounceRef.current);
@@ -965,6 +995,11 @@ export function SessionsSidebar() {
 				</div>
 
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
+					{roster.length > 0 && (
+						<div data-testid="wolf-roster" className="mb-2 border-b border-border pb-1">
+							{roster.map((w) => <WolfStatusRow key={w.name} wolf={w} />)}
+						</div>
+					)}
 					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
 					) : shown.length === 0 && archived.length === 0 ? (

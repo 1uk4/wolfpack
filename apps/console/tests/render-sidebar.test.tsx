@@ -13,7 +13,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SessionRow, timeAgo } from "../components/sidebar.tsx";
+import { SessionRow, WolfStatusRow, timeAgo } from "../components/sidebar.tsx";
 import type { ChatListItem } from "../src/core/index.ts";
 
 function item(overrides: Partial<ChatListItem>): ChatListItem {
@@ -151,5 +151,14 @@ describe("timeAgo", () => {
 
 	it("negative drift (clock skew) reads as just now, never a future date", () => {
 		assert.equal(timeAgo("2026-01-02T12:01:00.000Z", now), "just now");
+	});
+});
+
+describe("WolfStatusRow", () => {
+	it("labels an offline wolf offline and an online wolf online", () => {
+		const off = renderToStaticMarkup(<WolfStatusRow wolf={{ name: "hal2", online: false }} />);
+		assert.ok(off.includes("hal2") && off.includes("offline") && off.includes('data-online="false"'));
+		const on = renderToStaticMarkup(<WolfStatusRow wolf={{ name: "1uk4", online: true }} />);
+		assert.ok(on.includes(">online<") && !on.includes(">offline<"));
 	});
 });

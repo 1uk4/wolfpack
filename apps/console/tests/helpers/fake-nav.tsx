@@ -6,10 +6,24 @@ const { PathnameContext, SearchParamsContext } = await import("next/dist/shared/
 
 export interface NavLog {
 	stack: string[];
+	/** history.state per entry (Next owns it; the reader stamps a marker into it with replaceState). */
+	states: unknown[];
 	index: number;
 }
 
-export const navLog: NavLog = { stack: [], index: 0 };
+export const navLog: NavLog = { stack: [], states: [], index: 0 };
+// window.history over the same stack: `state` is the current entry's, replaceState rewrites it.
+Object.defineProperty(window, "history", {
+	configurable: true,
+	value: {
+		get state() {
+			return navLog.states[navLog.index] ?? null;
+		},
+		replaceState(st: unknown) {
+			navLog.states[navLog.index] = st;
+		},
+	},
+});
 export const currentUrl = (): string => navLog.stack[navLog.index]!;
 let setIdx: ((i: number) => void) | null = null;
 /** Browser Back / Forward. */
@@ -19,6 +33,7 @@ export const historyForward = () => { if (navLog.index < navLog.stack.length - 1
 export function FakeNav({ start, children }: { start: string; children: ReactNode }) {
 	useState(() => {
 		navLog.stack = [start];
+		navLog.states = [null];
 		navLog.index = 0;
 	});
 	const [, setTick] = useState(0);
@@ -27,10 +42,12 @@ export function FakeNav({ start, children }: { start: string; children: ReactNod
 	const router = {
 		push: (h: string) => {
 			navLog.stack = [...navLog.stack.slice(0, navLog.index + 1), h];
+			navLog.states = [...navLog.states.slice(0, navLog.index + 1), null];
 			setIndex(navLog.stack.length - 1);
 		},
 		replace: (h: string) => {
 			navLog.stack[navLog.index] = h;
+			navLog.states[navLog.index] = null; // Next writes fresh state on replace: any marker is lost
 			setIndex(navLog.index);
 		},
 		back: historyBack,

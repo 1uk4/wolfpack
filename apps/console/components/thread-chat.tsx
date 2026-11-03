@@ -20,7 +20,8 @@ import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
-import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
+import { fitImage, browserFitDeps } from "@/components/image-fit";
+import { canSendWith, chipFor, dragHasFiles, droppedFiles, fetchAttachmentLimit, friendlyUploadError, readyInfos, tooLargeMessage, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
@@ -385,17 +386,30 @@ function ThreadChatInner({
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
+	// The per-file budget for this console's mode (relay cap or local cap), fetched once.
+	const limitRef = useRef<Promise<AttachmentLimit>>(undefined);
 	const onFiles = useCallback(
 		(files: File[]) => {
+			limitRef.current ??= fetchAttachmentLimit();
 			for (const file of files) {
 				const key = `att-${Math.random().toString(36).slice(2)}`;
-				const { chip, upload } = chipFor(file, key);
+				const { chip, upload } = chipFor(file, key, Infinity);
 				setAttachments((prev) => [...prev, chip]);
 				if (!upload) continue;
-				uploadFile(transport.uploadUrl!, file).then(
-					({ id, name, mimeType, size }) => patchAttachment(key, { status: "ready", id, name, mimeType, size }),
-					(err: Error) => patchAttachment(key, { status: "error", error: err.message }),
-				);
+				// Each file is its own upload request, so the budget is per file (no combined limit).
+				void (async () => {
+					const limit = await limitRef.current!;
+					const relay = limit.mode === "relay";
+					try {
+						const fitted = await fitImage(file, limit.maxBytes, browserFitDeps());
+						if (!fitted) return patchAttachment(key, { status: "error", error: tooLargeMessage(limit.maxBytes, relay, file.size) });
+						const { id, name, mimeType, size } = await uploadFile(transport.uploadUrl!, fitted);
+						patchAttachment(key, { status: "ready", id, name, mimeType, size });
+					} catch (err) {
+						const e = err as Error;
+						patchAttachment(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, relay) });
+					}
+				})();
 			}
 		},
 		[transport, patchAttachment],

@@ -19,7 +19,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
+import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
@@ -511,7 +511,7 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 /** One row per known wolf: a status dot and an explicit label, so an offline wolf stays visible. 44px target on phones. */
 export function WolfStatusRow({ wolf }: { wolf: WolfStatus }) {
 	return (
-		<div data-testid="wolf-status" data-wolf={wolf.name} data-online={wolf.online} className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-xs max-md:min-h-11", !wolf.online && "text-muted-foreground")}>
+		<div data-testid="wolf-status" data-wolf={wolf.name} data-online={wolf.online} className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-xs", !wolf.online && "text-muted-foreground")}>
 			<span aria-hidden className={cn("size-2 shrink-0 rounded-full", wolf.online ? "bg-emerald-500" : "bg-muted-foreground/40")} />
 			<span className="min-w-0 flex-1 truncate font-medium">{wolf.name}</span>
 			<span className="shrink-0 text-muted-foreground">{wolf.online ? "online" : "offline"}</span>
@@ -619,7 +619,11 @@ export function SessionsSidebar() {
 		// fetch follows, so the final event of a burst is never lost.
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
-			const wolves = (await (await fetch("/api/wolves", { cache: "no-store" })).json()) as {
+			const wolvesRes = await fetch("/api/wolves", { cache: "no-store" });
+			// 401 = auth lost, not offline: the fetch wrapper sends the browser to /pair; leave the list as it is.
+			if (wolvesRes.status === 401) return;
+			if (!wolvesRes.ok) throw new Error(`roster ${wolvesRes.status}`);
+			const wolves = (await wolvesRes.json()) as {
 				wolves: { name: string; status?: string }[];
 			};
 			if (!Array.isArray(wolves.wolves)) throw new Error("bad roster");
@@ -635,7 +639,7 @@ export function SessionsSidebar() {
 				}),
 			);
 			setChats((prev) => foldWolfThreads(prev, results));
-			setRoster((prev) => foldWolfRoster(prev, wolves.wolves, Object.fromEntries(results.map((r) => [r.wolf, r.threads !== undefined]))));
+			setRoster((prev) => foldWolfRoster(prev, wolves.wolves));
 		} catch {
 			// a transient failure keeps the last snapshot; the server is unreachable, so every known wolf reads offline
 			setRoster((prev) => foldWolfRoster(prev, undefined));
@@ -720,7 +724,6 @@ export function SessionsSidebar() {
 	   /api/wolves call; threads are fetched only for a wolf that just came back online (the SSE/resync paths cover the rest). */
 	useEffect(() => {
 		const tick = async () => {
-			if (document.visibilityState !== "visible") return;
 			const { roster: next, recovered } = await checkRoster((u, i) => fetch(u, i), rosterRef.current);
 			setRoster(next);
 			if (recovered.length === 0) return;
@@ -731,20 +734,13 @@ export function SessionsSidebar() {
 						const d = (await res.json()) as { threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] };
 						return { wolf, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
 					} catch {
-						return { wolf, threads: undefined };
+						return { wolf, threads: undefined }; // keeps its stale rows; the roster status is untouched
 					}
 				}),
 			);
-			setChats((prev) => foldWolfThreads(prev, next.map((w) => got.find((g) => g.wolf === w.name) ?? { wolf: w.name })));
-			setRoster((r) => r.map((w) => (got.some((g) => g.wolf === w.name && g.threads === undefined) ? { ...w, online: false } : w)));
+			setChats((prev) => foldWolfThreads(prev, next.map((w) => got.find((g) => g.wolf === w.name) ?? { wolf: w.name, threads: undefined })));
 		};
-		const id = setInterval(() => void tick(), ROSTER_POLL_MS);
-		const onVisible = () => void tick();
-		document.addEventListener("visibilitychange", onVisible);
-		return () => {
-			clearInterval(id);
-			document.removeEventListener("visibilitychange", onVisible);
-		};
+		return startVisibleTimer(() => void tick(), ROSTER_POLL_MS, document);
 	}, []);
 
 	/* ── Keyboard seams (shortcut wave A, 2026-09-17; search-walk round
@@ -1021,7 +1017,7 @@ export function SessionsSidebar() {
 
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
 					{roster.length > 0 && (
-						<div data-testid="wolf-roster" className="mb-2 border-b border-border pb-1">
+						<div data-testid="wolf-roster" role="status" aria-label="Wolves" className="sticky top-0 z-10 -mx-2 -mt-2 mb-2 border-b border-border bg-background px-2 pb-1 pt-2">
 							{roster.map((w) => <WolfStatusRow key={w.name} wolf={w} />)}
 						</div>
 					)}

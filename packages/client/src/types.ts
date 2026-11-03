@@ -180,7 +180,7 @@ export interface ConsoleClient {
   releaseWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
   /** Hub only: paired devices / revoke one / mint a pairing code for a new one (device management routes). Optional like watchMemory. */
   listDevices?(): Promise<DeviceList>;
-  revokeDevice?(id: string): Promise<{ revoked: string; self: boolean }>;
+  revokeDevice?(id: string, opts?: { cascade?: boolean }): Promise<{ revoked: string; self: boolean; cascaded: string[] }>;
   mintPairingCode?(label?: string): Promise<MintPairingCodeResponse>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;

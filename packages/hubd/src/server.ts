@@ -542,11 +542,15 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!allowed) throw new HubError("forbidden", `this worker is not subscribed to KB domain ${domain.slice(0, 60)}`);
     }
 
-    /** Device management is for console/browser tokens; a worker token (a VPS host) never manages devices. */
-    function requireDeviceCaller(identity: AuthIdentity | undefined): void {
-      if (!identity || identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot manage devices");
+    /** Device management is an ALLOWLIST: console and browser tokens only (a worker token, or any future kind, gets 403). Returns the verified identity. */
+    function deviceCaller(identity: AuthIdentity | undefined): AuthIdentity & { tokenId: string } {
+      if (!identity || (identity.kind !== "console" && identity.kind !== "browser")) throw new HubError("forbidden", "only a console or browser token can manage devices");
+      if (!identity.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a 500, never a silent fallback
+      return { ...identity, tokenId: identity.tokenId };
     }
-    /** Mints and revokes: at most DEVICE_MUTATIONS_PER_MIN a minute per calling token (429 busy, retryable). */
+    /** A label for a log line: bounded, JSON-escaped (no control characters or line breaks reach the log). */
+    const auditLabel = (l: string) => JSON.stringify(l.slice(0, 40));
+    /** Mints and revokes: at most DEVICE_MUTATIONS_PER_MIN a minute per calling token (409 busy, retryable). */
     const deviceMutations = new Map<string, number[]>();
     function deviceMutationLimit(tokenId: string, t: number): void {
       const cur = (deviceMutations.get(tokenId) ?? []).filter((x) => t - x < 60_000);
@@ -626,25 +630,31 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           }
         }
         case "hubListDevices": {
-          requireDeviceCaller(identity);
-          const devices = tokens.list().filter((t) => t.kind !== "worker").map((t) => ({ id: t.id, label: t.label, kind: t.kind as "console" | "browser", createdAt: t.createdAt, lastUsedAt: t.lastUsedAt, self: t.id === identity!.tokenId }));
+          const caller = deviceCaller(identity);
+          const all = tokens.list();
+          const labelOf = new Map(all.map((t) => [t.id, t.label]));
+          const devices = all.filter((t) => t.kind !== "worker").map((t) => ({ id: t.id, label: t.label, kind: t.kind as "console" | "browser", createdAt: t.createdAt, lastUsedAt: t.lastUsedAt, self: t.id === caller.tokenId, addedBy: (t.mintedBy && labelOf.get(t.mintedBy)) || null, addedById: t.mintedBy ?? null }));
           return send(res, 200, { devices });
         }
         case "hubRevokeDevice": {
-          requireDeviceCaller(identity);
-          deviceMutationLimit(identity!.tokenId ?? "", (opts.now ?? Date.now)());
+          const caller = deviceCaller(identity);
+          deviceMutationLimit(caller.tokenId, (opts.now ?? Date.now)());
+          const cascade = url.searchParams.get("cascade") === "1";
           const target = tokens.list().find((t) => t.id === params.id && t.kind !== "worker");
           if (!target) throw new HubError("not_found", "no such device");
-          tokens.revoke(target.id);
-          console.log(`hubd: token ${identity!.tokenId} revoked device ${target.id} label=${JSON.stringify(target.label)}${target.id === identity!.tokenId ? " (itself)" : ""}`);
-          return send(res, 200, { revoked: target.id, self: target.id === identity!.tokenId });
+          const gone = tokens.revokeDevice(target.id, cascade); // 409 conflict when it would remove the last console token
+          const ids = gone.map((t) => t.id);
+          console.log(`hubd: token ${caller.tokenId} revoked ${ids.length} device(s) ${ids.join(",")} label=${auditLabel(target.label)}${cascade ? " (cascade)" : ""}${ids.includes(caller.tokenId) ? " (incl. itself)" : ""}`);
+          return send(res, 200, { revoked: target.id, self: ids.includes(caller.tokenId), cascaded: ids.filter((i) => i !== target.id) });
         }
         case "hubMintPairingCode": {
-          requireDeviceCaller(identity);
-          deviceMutationLimit(identity!.tokenId ?? "", (opts.now ?? Date.now)());
+          // CSRF: a cross-site page cannot call this. It needs `Authorization: Bearer` (never a cookie, see authenticate) and the body must be JSON
+          // (readBody), so a plain cross-origin form/fetch cannot attach the credential; the console also requires its own bearer on /api/devices/pairing-code.
+          const caller = deviceCaller(identity);
+          deviceMutationLimit(caller.tokenId, (opts.now ?? Date.now)());
           const body = parseBody(MintPairingCodeRequestSchema, await readBody(req));
-          const out = tokens.mintPairingCode({ kind: "browser", ...(body.label ? { label: body.label } : {}) });
-          console.log(`hubd: token ${identity!.tokenId} minted a browser pairing code label=${JSON.stringify(body.label ?? "")} expires ${out.expiresAt}`);
+          const out = tokens.mintPairingCode({ kind: "browser", mintedBy: caller.tokenId, ...(body.label ? { label: body.label } : {}) });
+          console.log(`hubd: token ${caller.tokenId} minted a browser pairing code label=${auditLabel(body.label ?? "")} expires ${out.expiresAt}`);
           return send(res, 200, out);
         }
         case "listWolves":

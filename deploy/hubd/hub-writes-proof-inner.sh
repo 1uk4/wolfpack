@@ -20,9 +20,9 @@ bash $S install --bundle /srv/bundle >/tmp/i1.log 2>&1 || { tail -8 /tmp/i1.log;
 [ ! -e $DROP ] || bad "drop-in present without the flag"
 systemctl start hubd; wait_active hubd 20 || bad "hubd did not start"
 for _ in $(seq 1 20); do curl -s -o /dev/null $U/v1/work && break; sleep 1; done
-code=$(node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --data-dir /var/lib/hubd | sed -n 's/^pairing code: //p')
-TOK=$(curl -s -X POST $U/v1/pair -H 'Content-Type: application/json' -d "{\"code\":\"$code\",\"kind\":\"console\"}" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).token))')
-[ -n "$TOK" ] && [ "$TOK" != undefined ] || bad "could not mint a token"
+code=$(runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --data-dir /var/lib/hubd 2>&1 | tee /tmp/pair.log | sed -n 's/^pairing code: //p')
+TOK=$(curl -s -X POST $U/v1/pair -H 'Content-Type: application/json' -d "{\"code\":\"$code\",\"kind\":\"console\",\"label\":\"proof\"}" | tee /tmp/pair.out | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).token))')
+[ -n "$TOK" ] && [ "$TOK" != undefined ] || { cat /tmp/pair.log /tmp/pair.out; bad "could not mint a token"; }
 api() { # api METHOD PATH [json] -> body in $B, status in $C
   local o; o=$(curl -s -w '\n%{http_code}' -X "$1" "$U$2" -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' ${3:+-d "$3"}); C=${o##*$'\n'}; B=${o%$'\n'*}; }
 mk() { api POST /v1/work "{\"kind\":\"idea\",\"domain\":\"$1\",\"title\":\"$2\",\"assignee\":\"1uk4\"}"; }
@@ -41,6 +41,9 @@ ID=$(node -e 'console.log(JSON.parse(process.argv[1]).id)' "$B")
 [ -f $DOM/wolfpack/work/$ID.md ] && ok "flag: POST /v1/work -> $C, $ID.md on disk" || bad "file missing for $ID"
 api PATCH /v1/work/$ID '{"note":"patched"}'
 [ "$C" = 200 ] && grep -q patched $DOM/wolfpack/work/$ID.md && ok "PATCH -> 200, note in the file" || bad "patch $C $B"
+chown wolf-W1hOrJ:wolf-W1hOrJ $DOM/wolfpack/work/$ID.md; chmod 644 $DOM/wolfpack/work/$ID.md   # as if Dewey had written it
+api PATCH /v1/work/$ID '{"note":"patched dewey-owned"}'
+[ "$C" = 200 ] && grep -q "patched dewey-owned" $DOM/wolfpack/work/$ID.md && ok "PATCH of a Dewey-owned 644 item -> 200" || bad "patch dewey-owned $C $B"
 mk personal "second bound domain"; [ "$C" = 201 ] || [ "$C" = 200 ] && ok "second bound domain also writable" || bad "personal $C $B"
 PID=$(systemctl show -p MainPID --value hubd)
 nsenter -t "$PID" -m -- sh -c "echo x > $DOM/wolfpack/entries/new.md" 2>/dev/null && bad "entries/ writable inside the unit" || ok "entries/ in a bound domain stays read-only inside the unit namespace"
@@ -62,5 +65,5 @@ bash $S setup --bind 127.0.0.1 --port 3150 >/tmp/s4.log 2>&1 || bad "rerun setup
 [ ! -e $DROP ] && grep -q "removing" /tmp/s4.log && ok "setup without the flag deleted $DROP and said so" || bad "drop-in still there"
 restart || bad "restart 3"
 mk wolfpack "after rollback"
-grep -q work_store_read_only <<<"$B" && ok "after rollback: writes refused again ($C work_store_read_only); earlier items still readable: $(api GET /v1/work/$ID >/dev/null; echo $C)" || bad "rollback write: $C $B"
+grep -q work_store_read_only <<<"$B" && ok "after rollback: writes refused again ($C work_store_read_only)" || bad "rollback write: $C $B"
 echo "HUB WRITES PROOF OK"

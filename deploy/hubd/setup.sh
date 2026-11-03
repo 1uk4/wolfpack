@@ -198,6 +198,14 @@ cmd_setup() {
     while IFS= read -r d; do rw+=("$d"); done < <(find -L "$DOMAINS" -mindepth 2 -maxdepth 2 -type d -name work 2>/dev/null | sort)
     echo "hub-writes: work dirs writable: ${rw[*]:-none found}"
     echo "NOTE: systemd does not expand globs: this list is fixed now. A domain (or work dir) added later stays READ-ONLY until you re-run: setup.sh setup --hub-writes, then systemctl daemon-reload && systemctl restart hubd"
+    # The bind only lifts the read-only mount. Dewey creates work/ at 755 (owner wolf-W1hOrJ), so hubd (a different user) still gets EACCES
+    # (work_store_permission_denied) until the dir is 777, like the lane dirs. Found by hub-writes-proof.sh under real systemd.
+    for d in "${rw[@]}"; do
+      if hubd_user_exists && as_hubd test -w "$d" -a -x "$d"; then echo "exists: $d (writable by $HUBD_USER)"; else
+        echo "making $d writable by $HUBD_USER (chmod 777; the sandbox, not the mode, keeps the rest of domains/ read-only)"
+        run chmod 0777 "$d"
+      fi
+    done
     if ((${#rw[@]} == 0)); then
       warn "no domains/*/work dirs found; NOT writing the drop-in (an empty BindPaths= would reset the unit's inbox/receipts binds)"
       if [[ -e $DROPIN_DIR/work-writes.conf ]]; then

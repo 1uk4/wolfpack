@@ -167,7 +167,14 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     supervisor.addWolf = refuse;
   }
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
-  const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
+  // KB capability from config + the env the children inherit (same rule as wolfd's roots: KB_BASE+KB_OPS, or hub-KB mode). Link-only announces claim nothing.
+  const childEnv = opts.env ?? process.env;
+  const hubKbOn = /^(1|true|yes|on)$/i.test((childEnv.WOLFPACK_HUB_KB ?? "").trim());
+  const linkWolf = (c: { identity: { name: string; domains: string[] }; memory?: { librarian?: boolean } }): LinkWolf => {
+    const librarian = c.memory?.librarian === true;
+    const kbReadable = librarian || hubKbOn || (!!childEnv.KB_BASE && !!childEnv.KB_OPS);
+    return { name: c.identity.name, domains: c.identity.domains, librarian, kbReadable };
+  };
   const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));
   let link: HubLink | undefined;
   let kbSync: KbSync | undefined;

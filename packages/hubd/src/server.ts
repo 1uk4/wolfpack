@@ -660,7 +660,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "listWolves":
           // The pack's wolf list from the registry: online when the owning host's link is online (asleep/offline hosts show offline; the relay names the state).
           // A worker token sees only its own host's wolves (it must not enumerate other hosts).
-          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
+          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => {
+            const online = !!w.host && link.presence(w.host) === "online";
+            const f = online ? registry.kbFlags(w.name) : { librarian: false, kbReadable: false }; // flags only from a live link: an offline host claims nothing
+            return { id: w.name, name: w.name, host: w.host ?? "", status: online ? "online" : "offline", librarian: f.librarian, kbReadable: f.kbReadable };
+          }) });
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");

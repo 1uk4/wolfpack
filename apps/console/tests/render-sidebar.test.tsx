@@ -159,7 +159,7 @@ describe("WolfStatusRow", () => {
 		const off = renderToStaticMarkup(<WolfStatusRow wolf={{ name: "hal2", online: false }} />);
 		assert.ok(off.includes("hal2") && off.includes("offline") && off.includes('data-online="false"'));
 		const on = renderToStaticMarkup(<WolfStatusRow wolf={{ name: "1uk4", online: true }} />);
-		assert.ok(on.includes(">online<") && !on.includes(">offline<"));
+		assert.ok(/data-online="true"/.test(on) && /online<\/span>/.test(on) && !/offline/.test(on));
 	});
 });
 

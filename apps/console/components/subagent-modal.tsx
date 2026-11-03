@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { SquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
@@ -81,9 +82,8 @@ export function PaneSwitch({ value, onChange }: { value: SubagentPane; onChange:
 	);
 }
 
-function Header({ summary, now, titleId, close, onStop, pane, onPane }: { summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; onStop?: () => void; pane: SubagentPane; onPane: (v: SubagentPane) => void }) {
+function Header({ summary, now, titleId, close, pane, onPane }: { summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; pane: SubagentPane; onPane: (v: SubagentPane) => void }) {
 	const state = summary?.state;
-	const stoppable = (state === "running" || state === "queued") && onStop !== undefined;
 	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
 	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
 	const turnMs = summary ? separateTurnMs(summary, now) : undefined;
@@ -112,11 +112,6 @@ function Header({ summary, now, titleId, close, onStop, pane, onPane }: { summar
 						</a>
 					)}
 				</div>
-			)}
-			{stoppable && (
-				<button type="button" data-testid="subagent-stop" className={`shrink-0 rounded border border-border px-2 py-0.5 text-xs hover:bg-accent ${summary ? "" : "ml-auto"}`} onClick={onStop}>
-					Stop
-				</button>
 			)}
 			{close}
 			<PaneSwitch value={pane} onChange={onPane} />
@@ -242,7 +237,7 @@ interface Loaded {
 	messages: LhMessage[];
 }
 
-function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, pane }: { pane: SubagentPane; wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void }) {
+function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop, pane }: { onStop: () => void; pane: SubagentPane; wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void }) {
 	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
 	const { messages, status, error, clearError, resumeStream } = useChatSession({
 		chatId: childThreadId,
@@ -272,6 +267,8 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, pane }: {
 	// from the wrong guess is retried once the other way.
 	const hint = messageHint(busy ? "running" : state);
 	const [text, setText] = useState("");
+	// One action button: Stop while the child runs and the field is empty, Steer (or Resume) once there is text.
+	const stopMode = hint.mode === "steer" && !text.trim();
 	const [sendError, setSendError] = useState<string | null>(null);
 	const sending = useRef(false);
 	const post = (input: string, whenBusy: "steer" | "reject") =>
@@ -341,9 +338,16 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, pane }: {
 							}
 						}}
 					/>
-					<button type="button" data-testid="subagent-send" disabled={!text.trim()} className="self-end rounded border border-border px-2 py-0.5 hover:bg-accent disabled:opacity-50" onClick={() => void submit()}>
-						{hint.mode === "steer" ? "Steer" : "Resume"}
-					</button>
+					{stopMode ? (
+						<button type="button" data-testid="subagent-stop" aria-label="Stop subagent" className="flex min-w-[4.5rem] items-center justify-center gap-1 self-end rounded border border-border px-2 py-0.5 hover:bg-accent" onClick={onStop}>
+							<SquareIcon className="size-3" aria-hidden="true" fill="currentColor" />
+							Stop
+						</button>
+					) : (
+						<button type="button" data-testid="subagent-send" aria-label={hint.mode === "steer" ? "Steer subagent" : "Resume subagent"} disabled={!text.trim()} className="flex min-w-[4.5rem] items-center justify-center self-end rounded border border-border px-2 py-0.5 hover:bg-accent disabled:opacity-50" onClick={() => void submit()}>
+							{hint.mode === "steer" ? "Steer" : "Resume"}
+						</button>
+					)}
 				</div>
 			</section>
 		</div>
@@ -462,7 +466,7 @@ function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; c
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-view" data-child={childThreadId}>
 			{/* One Header for every state, so the close button keeps its place (and focus) through loading. */}
-			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} onStop={loaded ? stop : undefined} pane={pane} onPane={setPane} />
+			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} pane={pane} onPane={setPane} />
 			{(note ?? stopNote) && (
 				<div className="mb-2 text-xs text-destructive" data-testid="subagent-note">
 					{note ?? stopNote}
@@ -475,7 +479,7 @@ function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; c
 			) : !loaded ? (
 				<div className="text-xs text-muted-foreground">Loading…</div>
 			) : (
-				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} pane={pane} />
+				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} onStop={stop} pane={pane} />
 			)}
 		</div>
 	);
@@ -502,7 +506,7 @@ export function useSubagentModal(): SubagentOpener {
 /** The wolf a child thread id is prefixed with ("wolf/slug"): the fallback when the caller does not know it. */
 export const wolfOfThread = (threadId: string): string => threadId.split("/")[0] ?? "";
 
-/** The modal: the task graph's full-screen overlay holding the header (title, Stop, close), ledger, transcript and the steer/resume field. */
+/** The modal: the task graph's full-screen overlay holding the header (title, close), ledger, transcript and the steer/resume field. */
 export function SubagentModal({ wolf, childThreadId, onClose }: { wolf: string; childThreadId: string; onClose: () => void }) {
 	const titleId = useId();
 	return (

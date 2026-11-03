@@ -14,6 +14,7 @@ import type { AddressInfo } from "node:net";
 import {
   CreateWorkRequestSchema,
   PairRequestSchema,
+  MintPairingCodeRequestSchema,
   PatchWorkBatchSchema,
   PatchWorkOpSchema,
   KbCommitRequestSchema,
@@ -173,6 +174,7 @@ const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const PAIR_FAILS_PER_MIN = 10;
+const DEVICE_MUTATIONS_PER_MIN = 10;
 const PAIR_LIMITER_MAX_KEYS = 10_000;
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
@@ -540,6 +542,23 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!allowed) throw new HubError("forbidden", `this worker is not subscribed to KB domain ${domain.slice(0, 60)}`);
     }
 
+    /** Device management is for console/browser tokens; a worker token (a VPS host) never manages devices. */
+    function requireDeviceCaller(identity: AuthIdentity | undefined): void {
+      if (!identity || identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot manage devices");
+    }
+    /** Mints and revokes: at most DEVICE_MUTATIONS_PER_MIN a minute per calling token (429 busy, retryable). */
+    const deviceMutations = new Map<string, number[]>();
+    function deviceMutationLimit(tokenId: string, t: number): void {
+      const cur = (deviceMutations.get(tokenId) ?? []).filter((x) => t - x < 60_000);
+      if (cur.length >= DEVICE_MUTATIONS_PER_MIN) {
+        deviceMutations.set(tokenId, cur);
+        throw new HubError("busy", "too many device changes; retry in a minute");
+      }
+      cur.push(t);
+      deviceMutations.set(tokenId, cur);
+      if (deviceMutations.size > 1000) deviceMutations.delete(deviceMutations.keys().next().value as string);
+    }
+
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
@@ -605,6 +624,28 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);
             throw e;
           }
+        }
+        case "hubListDevices": {
+          requireDeviceCaller(identity);
+          const devices = tokens.list().filter((t) => t.kind !== "worker").map((t) => ({ id: t.id, label: t.label, kind: t.kind as "console" | "browser", createdAt: t.createdAt, lastUsedAt: t.lastUsedAt, self: t.id === identity!.tokenId }));
+          return send(res, 200, { devices });
+        }
+        case "hubRevokeDevice": {
+          requireDeviceCaller(identity);
+          deviceMutationLimit(identity!.tokenId ?? "", (opts.now ?? Date.now)());
+          const target = tokens.list().find((t) => t.id === params.id && t.kind !== "worker");
+          if (!target) throw new HubError("not_found", "no such device");
+          tokens.revoke(target.id);
+          console.log(`hubd: token ${identity!.tokenId} revoked device ${target.id} label=${JSON.stringify(target.label)}${target.id === identity!.tokenId ? " (itself)" : ""}`);
+          return send(res, 200, { revoked: target.id, self: target.id === identity!.tokenId });
+        }
+        case "hubMintPairingCode": {
+          requireDeviceCaller(identity);
+          deviceMutationLimit(identity!.tokenId ?? "", (opts.now ?? Date.now)());
+          const body = parseBody(MintPairingCodeRequestSchema, await readBody(req));
+          const out = tokens.mintPairingCode({ kind: "browser", ...(body.label ? { label: body.label } : {}) });
+          console.log(`hubd: token ${identity!.tokenId} minted a browser pairing code label=${JSON.stringify(body.label ?? "")} expires ${out.expiresAt}`);
+          return send(res, 200, out);
         }
         case "listWolves":
           // The pack's wolf list from the registry: online when the owning host's link is online (asleep/offline hosts show offline; the relay names the state).

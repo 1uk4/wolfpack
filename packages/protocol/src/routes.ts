@@ -44,7 +44,7 @@ import {
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
-import { PairRequestSchema, PairResponseSchema } from "./pairing.js";
+import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
@@ -389,6 +389,16 @@ export const ROUTES = {
    */
   hubPair: { scope: "hub", public: true, method: "POST", path: "/v1/pair", body: PairRequestSchema, response: { kind: "json", schema: PairResponseSchema }, status: [200], error: err },
   /** The hub's browser pairing page (static HTML + JS, public like hubPair): code + label form that POSTs hubPair with kind browser. `?code=` prefills. */
+  /**
+   * Device management. Callers: console/browser tokens (a worker token gets 403). `hubListDevices`: console/browser devices with
+   * label, createdAt, lastUsedAt (about 5s stale) and `self`; never a token or hash. `hubRevokeDevice`: revokes one device (404 for an
+   * unknown id or a worker token); a device MAY revoke itself (sign out; its own next request is 401). `hubMintPairingCode`: a
+   * single-use 10-minute code for a new BROWSER device (the same thing `hubd pair --kind browser --label` mints); at most 10 mints+revokes a minute per token (409 busy, retryable).
+   * Revokes and mints are audit-logged (token id, never a secret).
+   */
+  hubListDevices: { scope: "hub", method: "GET", path: "/v1/tokens", response: { kind: "json", schema: DeviceListSchema }, status: [200], error: err },
+  hubRevokeDevice: { scope: "hub", method: "DELETE", path: "/v1/tokens/:id", response: { kind: "json", schema: RevokeDeviceResponseSchema }, status: [200], error: err },
+  hubMintPairingCode: { scope: "hub", method: "POST", path: "/v1/tokens/pairing-codes", body: MintPairingCodeRequestSchema, response: { kind: "json", schema: MintPairingCodeResponseSchema }, status: [200], error: err },
   hubPairPage: { scope: "hub", public: true, method: "GET", path: "/pair", response: { kind: "bytes" }, status: [200], error: err },
   /**
    * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger

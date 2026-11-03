@@ -211,6 +211,17 @@ async function mobilePass() {
     if (pin.sh > pin.ih) throw new Error(`document scrolls on a thread page: ${pin.sh} > ${pin.ih}`);
     if (pin.bottom > pin.ih + 0.5 || pin.bottom < pin.ih - 40 /* 16px dock padding + safe area */) throw new Error(`composer not pinned to the bottom: ${pin.bottom} vs ${pin.ih}`);
     if (!pin.logScrolls) throw new Error("message list is not a scroll container");
+    // P13: the memory handle floats in the top-right of the chat area, >=44px, over no compaction marker and not inside the scroller
+    const hd = await mp.evaluate(() => {
+      const h = document.querySelector('[data-testid="panel-handle"]'); const area = document.querySelector('[data-testid="thread-chat"] [role="log"]')?.parentElement;
+      if (!h || !area) return null;
+      const r = h.getBoundingClientRect(), a = area.getBoundingClientRect();
+      const hit = (e) => { const b = e.getBoundingClientRect(); return !(b.right <= r.left || b.left >= r.right || b.bottom <= r.top || b.top >= r.bottom); };
+      const marker = [...document.querySelectorAll('[data-testid*="compaction"]')].filter(hit).length;
+      return { w: r.width, h: r.height, inQuadrant: r.left >= a.left + a.width / 2 && r.bottom <= a.top + a.height / 2 + 0.5 && r.top >= a.top - 0.5, inScroller: !!h.closest('[role="log"] > div'), marker };
+    });
+    mstep(`memory handle: ${JSON.stringify(hd)}`);
+    if (!hd || hd.w < 43.5 || hd.h < 43.5 || !hd.inQuadrant || hd.inScroller || hd.marker) throw new Error(`memory handle misplaced: ${JSON.stringify(hd)}`);
     await mshot("4-reply");
     // back = the visible back control returns to the list layer
     await mp.locator('[data-testid="mobile-back"]').tap();

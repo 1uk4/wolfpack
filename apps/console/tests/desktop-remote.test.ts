@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 const require = createRequire(import.meta.url);
-const { parseConsoleUrl, resolveConsoleTarget, sameOrigin, errorPageHtml } = require("../../desktop/electron/remote.cjs");
+const { parseConsoleUrl, resolveConsoleTarget, sameOrigin, errorPageHtml, pairUrl } = require("../../desktop/electron/remote.cjs");
 
 describe("parseConsoleUrl", () => {
 	it("accepts https and normalizes to origin + path", () => {
@@ -41,6 +41,14 @@ describe("resolveConsoleTarget", () => {
 		const d = mkdtempSync(join(tmpdir(), "lh-remote-"));
 		writeFileSync(join(d, "console.json"), "{oops");
 		assert.deepEqual(resolveConsoleTarget({ env: {}, userDataDir: d }), { mode: "local" });
+	});
+});
+
+describe("pairUrl", () => {
+	it("is /hub/pair on the origin, ignoring any console path", () => {
+		const r = parseConsoleUrl("https://h.ts.net/c/");
+		assert.equal(pairUrl(r.origin), "https://h.ts.net/hub/pair");
+		assert.equal(sameOrigin(pairUrl(r.origin), r.origin), true);
 	});
 });
 

@@ -86,4 +86,7 @@ div{max-width:460px;text-align:center}a{display:inline-block;margin-top:16px;pad
 <div><p>Can't reach <b>${escapeHtml(url)}</b>.<br>Is Tailscale connected?</p><a href="lh-retry://now">Retry</a></div>`;
 }
 
-module.exports = { parseConsoleUrl, resolveConsoleTarget, sameOrigin, errorPageHtml };
+/** hubd's pairing page lives at <origin>/hub/pair (same origin as the console, never under the console's path prefix). */
+const pairUrl = (origin) => `${origin}/hub/pair`;
+
+module.exports = { pairUrl, parseConsoleUrl, resolveConsoleTarget, sameOrigin, errorPageHtml };

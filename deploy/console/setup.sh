@@ -77,6 +77,7 @@ cmd_setup() {
 
   log "directories"
   run install -d -o "$USER_" -g "$GROUP_" -m 0700 "$DATA_DIR"
+  run install -d -o "$USER_" -g "$GROUP_" -m 0700 "$DATA_DIR/data" # LH_DATA_DIR (console.env)
   run install -d -o root -g root -m 0755 "$OPT" "$OPT/releases" "$ENV_DIR"
 
   log "env file (written only if missing)"

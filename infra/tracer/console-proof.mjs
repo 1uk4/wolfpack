@@ -60,6 +60,16 @@ try {
   await link.waitFor({ timeout: 30000 });
   step(`hal2 thread list: ${(await page.locator('[data-testid="thread-list"] a').allInnerTexts()).join(" | ").replace(/\s+/g, " ")}`);
   await shot("1-thread-list");
+  // 3b. P7: the KB graph in relay mode. hubd carries the worker-reported flags in /v1/wolves; the console finds a KB source; the wolf-scoped graph route tunnels to hal2.
+  const auth = { Authorization: `Bearer ${token}` };
+  const wl = await (await ctx.request.get(`${base}/api/wolves`, { headers: auth })).json();
+  const hal = (wl.wolves ?? wl).find?.((w) => w.name === "hal2");
+  step(`hal2 flags via console: librarian=${hal?.librarian} kbReadable=${hal?.kbReadable} status=${hal?.status}`);
+  if (!hal || hal.kbReadable !== true || hal.status === "offline") throw new Error("hal2 is not reported kbReadable through hubd (flags missing from /v1/wolves in relay mode)");
+  const gr = await ctx.request.get(`${base}/api/wolves/hal2/kb/graph`, { headers: auth });
+  const gj = await gr.json().catch(() => ({}));
+  step(`GET /api/wolves/hal2/kb/graph -> ${gr.status()} nodes=${Array.isArray(gj.nodes) ? gj.nodes.length : "n/a"}`);
+  if (gr.status() !== 200 || !Array.isArray(gj.nodes)) throw new Error(`kb/graph through the relay console failed: ${gr.status()} ${JSON.stringify(gj).slice(0, 200)}`);
   await link.click();
   const ta = page.locator('[data-testid="composer"] textarea').first();
   await ta.waitFor({ timeout: 30000 });

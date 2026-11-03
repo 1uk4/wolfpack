@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LINK_RELAY_CHUNK_BYTES, LINK_RELAY_HARD_SLACK, LINK_RELAY_PAUSE_HIGH, encodeLinkFrame, parseLinkFrame } from "./link.js";
+import { LINK_RELAY_CHUNK_BYTES, LINK_RELAY_HARD_SLACK, LINK_RELAY_PAUSE_HIGH, encodeLinkFrame, parseLinkFrame, LinkWolfSchema } from "./link.js";
 
 describe("relay flow-control frames", () => {
   it("pause and resume round-trip and need a non-empty id", () => {
@@ -13,5 +13,15 @@ describe("relay flow-control frames", () => {
   it("thresholds are ordered and a chunk always fits under the pause point plus slack", () => {
     expect(LINK_RELAY_CHUNK_BYTES).toBeLessThanOrEqual(LINK_RELAY_PAUSE_HIGH);
     expect(LINK_RELAY_HARD_SLACK).toBeGreaterThan(LINK_RELAY_CHUNK_BYTES);
+  });
+});
+
+describe("hello wolves: additive KB flags", () => {
+  it("old shape parses with no flags; new shape keeps them; non-boolean is refused", () => {
+    expect(LinkWolfSchema.parse({ name: "a" })).toEqual({ name: "a", domains: [] });
+    expect(LinkWolfSchema.parse({ name: "a", librarian: true, kbReadable: false })).toMatchObject({ librarian: true, kbReadable: false });
+    expect(LinkWolfSchema.safeParse({ name: "a", librarian: "yes" }).success).toBe(false);
+    const hello = { t: "hello", v: 1, hostId: "box", laptop: false, wolves: [{ name: "a", domains: [], kbReadable: true }], kbRevisions: {} };
+    expect(parseLinkFrame(JSON.stringify(hello)).ok).toBe(true);
   });
 });

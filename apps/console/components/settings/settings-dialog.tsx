@@ -48,6 +48,7 @@ import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";
 import { AppearanceSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
+import { DevicesSection } from "./devices-section.tsx";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining
  *  prose is out; only the keyboard note stays (storage location is a
@@ -57,6 +58,7 @@ const SECTIONS = [
 	{ id: "keys", label: "Keys" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
+	{ id: "devices", label: "Devices" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -297,13 +299,13 @@ export function SettingsDialogBody({
 					</Hint>
 			</header>
 
-			<div className="flex min-h-0 flex-1">
+			<div className="flex min-h-0 flex-1 max-md:flex-col">
 				{/* Left nav — text-only, the session-list mono language,
 					    active = bg-accent. */}
 				<nav
 					aria-label="Settings sections"
 					data-testid="settings-nav"
-					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2"
+					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:border-b max-md:border-r-0"
 				>
 					{SECTIONS.map((s) => (
 						<button
@@ -410,6 +412,11 @@ export function SettingsDialogBody({
 											void write("appearance", next)
 										}
 									/>
+								</SettingsSection>
+							)}
+							{active === "devices" && (
+								<SettingsSection title="Devices" hint="Browsers paired with this hub" testid="section-devices">
+									<DevicesSection />
 								</SettingsSection>
 							)}
 							{active === "keyboard" && (

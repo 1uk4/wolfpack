@@ -48,3 +48,4 @@ export * from "./thread-api.ts";
 export * from "./memory-api.ts";
 export * from "./pipeline-api.ts";
 export * from "./needs-you-api.ts";
+export * from "./devices-api.ts";

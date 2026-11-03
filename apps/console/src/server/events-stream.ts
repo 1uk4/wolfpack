@@ -25,25 +25,38 @@
  * ui-stream subscribe() pattern.
  */
 import { subscribe, type ServerEvent } from "../core/events.ts";
-import { getConsoleClient } from "./console-client.ts";
-import { activityBridge } from "./needs-you-api.ts";
+import type { ConsoleClient } from "@wolfpack/client";
+import { createConsoleClient, getConsoleClient, nextRequestToken } from "./console-client.ts";
+import { createActivityBridge } from "./needs-you-api.ts";
 
 /**
- * The activity bridge is what turns a wolf's thread-status into needs-you-changed on this channel. It used to start
- * only when /api/needs-you was listed, so a window that never listed (or listed before the wolf was up) got ': connected'
- * and pings and nothing else. Opening the channel starts it, and every ping re-ensures it (idempotent and cheap: the
- * wolf list is cached), so a wolf that appears later is followed too.
+ * PER-CONNECTION BRIDGE (owner decision): every SSE connection runs its OWN activity bridge on THAT connection's device token; there is
+ * no shared super-token and no process-wide loop. The token is read once, at connect (the request scope is gone by the time the bridge
+ * loops run). Revoking a device ends its bridge (a hub 401 is terminal: the connection closes) and touches nobody else's; closing the
+ * tab (cancel) stops the bridge with it.
+ *
+ * No token on the connection (unpaired, or a non-request caller such as a test) falls back to the process client, whose per-request
+ * resolver answers 401 for it: the bridge then ends at once. The env token never stands in.
  */
-function ensureBridge(): void {
+async function connectionClient(): Promise<ConsoleClient> {
+	let token: string | null | undefined;
 	try {
-		activityBridge().ensure(getConsoleClient());
+		token = await nextRequestToken();
 	} catch {
-		/* the channel works without it; the next ping retries */
+		token = null;
 	}
+	return token ? createConsoleClient(process.env, async () => token) : getConsoleClient();
+}
+
+export interface EventsOptions {
+	/** The client this connection's bridge follows wolves with (default: pinned to the connection's own device token). */
+	clientFor?: () => Promise<ConsoleClient>;
+	/** Bridge tuning (tests). */
+	bridge?: Parameters<typeof createActivityBridge>[1];
 }
 
 /** One window's subscription as an SSE Response. */
-export function eventsResponse(): Response {
+export function eventsResponse(eo: EventsOptions = {}): Response {
 	const encoder = new TextEncoder();
 	let teardown: (() => void) | undefined;
 	const stream = new ReadableStream<Uint8Array>({
@@ -51,12 +64,32 @@ export function eventsResponse(): Response {
 			let closed = false;
 			let heartbeat: ReturnType<typeof setInterval> | undefined;
 			let unsubscribe: (() => void) | undefined;
+			let bridge: ReturnType<typeof createActivityBridge> | undefined;
+			let client: ConsoleClient | undefined;
 
 			const stop = () => {
 				if (closed) return;
 				closed = true;
 				unsubscribe?.();
 				if (heartbeat) clearInterval(heartbeat);
+				bridge?.stop(); // no leaked loops: this connection's wolf streams end with it
+			};
+			/** This connection's token was rejected: end the connection (the browser signs itself out on its next /api 401). */
+			const authLost = () => {
+				stop();
+				try {
+					controller.close();
+				} catch {
+					/* already closed */
+				}
+			};
+			const ensureBridge = () => {
+				if (closed || !client) return;
+				try {
+					bridge?.ensure(client);
+				} catch {
+					/* the channel works without it; the next ping retries */
+				}
 			};
 			// Enqueue is the ONLY place the socket can reject us (the reader
 			// died) — any failure routes through stop() so the listener and
@@ -80,7 +113,14 @@ export function eventsResponse(): Response {
 			// Flush the headers now so EventSource.onopen fires immediately,
 			// not at the first ping 25s later.
 			frame(": connected\n\n");
-			ensureBridge();
+			bridge = createActivityBridge(undefined, { ...eo.bridge, onAuthLost: authLost });
+			void (eo.clientFor ?? connectionClient)().then(
+				(c) => {
+					client = c;
+					ensureBridge();
+				},
+				() => {},
+			);
 			heartbeat = setInterval(() => {
 				frame(": ping\n\n");
 				ensureBridge();

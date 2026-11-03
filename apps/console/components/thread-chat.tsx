@@ -20,7 +20,7 @@ import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
-import { fitImage, browserFitDeps } from "@/components/image-fit";
+import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
@@ -402,7 +402,7 @@ function ThreadChatInner({
 				const fit = fitChain.current.then(async () => {
 					limitRef.current ??= await fetchAttachmentLimit();
 					const limit = limitRef.current ?? FALLBACK_LIMIT;
-					return { limit, result: await fitImage(file, limit.maxBytes, browserFitDeps()) };
+					return { limit, result: await fitImageWithTimeout(file, limit.maxBytes, browserFitDeps()) };
 				});
 				fitChain.current = fit.catch(() => {});
 				// Uploads of the fitted files run in parallel.

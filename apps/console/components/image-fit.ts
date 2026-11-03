@@ -130,3 +130,23 @@ export function browserFitDeps(): FitDeps {
 		},
 	};
 }
+
+/** Fit timeout: a stuck decode must not block the files queued behind it. */
+export const FIT_TIMEOUT_MS = 30_000;
+
+/** `fitImage` that gives up after `ms` as "undecodable" (the late result is ignored). */
+export function fitImageWithTimeout(file: File, budget: number, deps: FitDeps, ms = FIT_TIMEOUT_MS): Promise<FitResult> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve({ ok: false, reason: "undecodable" }), ms);
+		fitImage(file, budget, deps).then(
+			(r) => {
+				clearTimeout(timer);
+				resolve(r);
+			},
+			() => {
+				clearTimeout(timer);
+				resolve({ ok: false, reason: "undecodable" });
+			},
+		);
+	});
+}

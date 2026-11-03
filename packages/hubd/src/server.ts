@@ -688,7 +688,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");
-          if (!DOMAIN_RE.test(domain)) throw new HubError("invalid_request", "domain must be lower-case letters and digits");
+          if (!DOMAIN_RE.test(domain)) throw new HubError("invalid_request", "domain must be lower-case letters, digits and hyphens");
           const flag = url.searchParams.get("graduated");
           if (flag !== null && flag !== "true" && flag !== "false") throw new HubError("invalid_request", "graduated must be true or false");
           return send(res, 200, listWorkItems(roots, domain, flag === "true"));

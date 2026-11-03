@@ -154,7 +154,7 @@ describe("hub work reads: precedence, caching, errors", () => {
     seedTokens(dataDir, []);
     const hub = await createHubServer({ dataDir });
     servers.push(hub);
-    for (const d of ["../..", "a/b", "Wolfpack", "x-y"]) expect((await fetch(`${hub.url}/v1/work?domain=${encodeURIComponent(d)}`, { headers: OP })).status).toBe(400);
+    for (const d of ["../..", "a/b", "Wolfpack", "-x", "a..b"]) expect((await fetch(`${hub.url}/v1/work?domain=${encodeURIComponent(d)}`, { headers: OP })).status).toBe(400);
     expect(() => listWorkItems(hubRoots(dataDir), "../..", false)).toThrow();
     const none = await fetch(`${hub.url}/v1/work?domain=nothing`, { headers: OP });
     expect(none.status).toBe(200);

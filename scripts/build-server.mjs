@@ -4,7 +4,6 @@
  * plain `node server.js` on node 22 (linux or mac, same arch as the build host for native deps).
  *
  *   node scripts/build-server.mjs [--out <dir>] [--skip-build]      default out: dist/console
- *   NEXT_PUBLIC_WOLFPACK_HUB_URL=https://host/hub node scripts/build-server.mjs   (build-time only, see below)
  *
  * Output layout (the monorepo trace is rooted at the repo root):
  *   <out>/server.js                      shim: loads apps/console/server.js (so `node server.js` works from <out>)
@@ -15,9 +14,8 @@
  *   <out>/VERSION                        "<console version>+<short sha>"
  * Run:  PORT=3210 HOSTNAME=127.0.0.1 WOLFPACK_HUB_URL=http://127.0.0.1:3150 node server.js
  *
- * Configuration is RUNTIME env except one build-time value:
+ * Configuration is all RUNTIME env (the /pair link reads HUBD_PUBLIC_URL via /api/hub-url; nothing host-specific is baked in):
  *   WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN / WOLFPACK_API_URL ... read by the server at runtime (nothing is baked in; no secrets here).
- *   NEXT_PUBLIC_WOLFPACK_HUB_URL ... only the /pair page's "open the hub pairing page" link; inlined by Next at BUILD time.
  * No base path: the console uses absolute "/api/..." and "/" URLs, so it must be served at the root of its origin.
  * `next dev` for local work is untouched (this script only adds a build step and a copy).
  */
@@ -45,7 +43,6 @@ if (!flag("--skip-build")) {
 	fs.rmSync(path.join(APP, ".next"), { recursive: true, force: true }); // deterministic: never reuse a stale trace
 	// Scrubbed env: nothing from the caller's shell (tokens, API keys, WOLFPACK_*) can be inlined into the client bundle.
 	const env = { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1" };
-	if (process.env.NEXT_PUBLIC_WOLFPACK_HUB_URL) env.NEXT_PUBLIC_WOLFPACK_HUB_URL = process.env.NEXT_PUBLIC_WOLFPACK_HUB_URL;
 	execFileSync("npx", ["next", "build"], { cwd: APP, stdio: "inherit", env });
 }
 const srv = path.join(STANDALONE, "apps", "console");

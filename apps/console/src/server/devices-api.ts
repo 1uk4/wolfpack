@@ -6,6 +6,7 @@
 import type { ConsoleClient } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { getConsoleClient } from "./console-client.ts";
+import { hubPublicUrl } from "./hub-public-url.ts";
 import type { ClientSource } from "./thread-api.ts";
 
 const STATUS: Record<string, number> = { unauthorized: 401, forbidden: 403, not_found: 404, invalid_request: 400, busy: 409, conflict: 409 };
@@ -24,7 +25,7 @@ function fail(err: unknown): Response {
 const unsupported = () => Response.json({ error: "devices need a hub (WOLFPACK_HUB_URL)", code: "invalid_request" }, { status: 501 });
 
 /** The hub's pairing page for `code` (what a phone opens or scans), when the console knows the hub's public URL. */
-export function pairLink(code: string, hubUrl = process.env.NEXT_PUBLIC_WOLFPACK_HUB_URL): string | undefined {
+export function pairLink(code: string, hubUrl = hubPublicUrl()): string | undefined {
 	const base = hubUrl?.trim().replace(/\/+$/, "");
 	return base ? `${base}/pair?code=${encodeURIComponent(code)}` : undefined;
 }
@@ -57,7 +58,7 @@ export function createDevicesApi(source: ClientSource, o: { hubUrl?: string } = 
 				const f = need("mintPairingCode");
 				if (!f) return unsupported();
 				const out = await f(label?.trim().slice(0, 64) || undefined);
-				const url = pairLink(out.code, o.hubUrl ?? process.env.NEXT_PUBLIC_WOLFPACK_HUB_URL);
+				const url = pairLink(out.code, o.hubUrl ?? hubPublicUrl());
 				return Response.json({ ...out, ...(url ? { url } : {}) });
 			} catch (err) {
 				return fail(err);

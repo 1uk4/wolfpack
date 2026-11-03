@@ -593,6 +593,17 @@ export const AttachmentSchema = z.object({
 });
 export type Attachment = z.infer<typeof AttachmentSchema>;
 
+/**
+ * A compaction marker (additive, optional): the thread was compacted at this point. Such a message has role
+ * "assistant" and empty `text` (an older client shows an empty assistant row); clients render a divider instead.
+ * `summary` is the summary text without pi-durable's wrapper; `reason` is why it ran ("manual", "threshold", ...).
+ */
+export const ThreadCompactionSchema = z.object({
+  summary: z.string(),
+  reason: z.string().optional(),
+});
+export type ThreadCompaction = z.infer<typeof ThreadCompactionSchema>;
+
 export const ThreadMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant"]),
@@ -609,6 +620,8 @@ export const ThreadMessageSchema = z.object({
    * show the attachments (fetch bytes with `getAttachment`) and may strip those lines from the displayed text.
    */
   attachments: z.array(AttachmentSchema).optional(),
+  /** Additive, optional: this entry marks a compaction (see ThreadCompactionSchema); older servers never send it. */
+  compaction: ThreadCompactionSchema.optional(),
 });
 export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
 

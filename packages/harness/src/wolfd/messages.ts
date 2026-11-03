@@ -14,6 +14,7 @@
  *   objectId, holding the latest rev's data. Objects are created when the call's RESULT lands, and only for a
  *   successful one (rev = successful completed calls with that id: the same rule as the live events). The full
  *   (uncapped) args are kept aside for it, since the call's own `args` are capped.
+ * - A `pi.compaction` entry becomes its own assistant-role row with empty text and `compaction: {summary, reason}`.
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
@@ -23,6 +24,20 @@ import { answerValue } from "./cards.js";
 import { stripSupersededNotes, stripTaskNotice, type SupersededCard } from "../superseded-note.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
+
+const COMPACTION_KIND = "pi.compaction";
+const SUMMARY_OPEN = "<summary>\n";
+const SUMMARY_CLOSE = "\n</summary>";
+
+/** The summary text of a compaction entry, pi-durable's wrapper (prefix + <summary> tags) removed. */
+function compactionSummary(entry: Entry): string {
+  const msg = entry.model?.[0] as { content?: unknown } | undefined;
+  const raw = typeof msg?.content === "string" ? msg.content : Array.isArray(msg?.content) ? (msg!.content as Array<{ type: string; text?: string }>).filter((b) => b.type === "text").map((b) => b.text ?? "").join("") : "";
+  const a = raw.indexOf(SUMMARY_OPEN);
+  if (a < 0) return raw.trim();
+  const body = raw.slice(a + SUMMARY_OPEN.length);
+  return (body.endsWith(SUMMARY_CLOSE) ? body.slice(0, -SUMMARY_CLOSE.length) : body).trim();
+}
 
 const SKIPPED_RESULT = "(skipped by the user)";
 
@@ -112,6 +127,19 @@ const callFullArgs = new WeakMap<object, unknown>();
 
 /** Fold one engine entry into the list: user/assistant messages (rounds merged), tool results onto their call. */
 export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date = () => new Date()): void {
+  if (entry.kind === COMPACTION_KIND) {
+    // A compaction marker: its own row (assistant role, empty text) so paging and ordering need no new machinery.
+    const msg = entry.model?.[0] as { timestamp?: number } | undefined;
+    const reason = (entry.data as { reason?: unknown } | undefined)?.reason;
+    list.push({
+      id: `entry-${entry.id}`,
+      role: "assistant",
+      text: "",
+      at: (typeof msg?.timestamp === "number" ? new Date(msg.timestamp) : now()).toISOString(),
+      compaction: { summary: compactionSummary(entry), ...(typeof reason === "string" ? { reason } : {}) },
+    });
+    return;
+  }
   if (entry.kind === "pi.assistant") {
     const msg = entry.model?.[0] as { timestamp?: number } | undefined;
     if (!msg) return;
@@ -128,7 +156,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     if (roundText === "" && calls.length === 0) return;
     const last = list.at(-1);
     const target: ThreadMessage =
-      last && last.role === "assistant"
+      last && last.role === "assistant" && !last.compaction
         ? last
         : { id: `entry-${entry.id}`, role: "assistant", text: "", at: (typeof msg.timestamp === "number" ? new Date(msg.timestamp) : now()).toISOString() };
     if (target !== last) list.push(target);

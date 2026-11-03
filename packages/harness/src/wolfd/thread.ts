@@ -285,11 +285,17 @@ export class ThreadRuntime {
       if (ev.type === "tool_execution_start") this.toolsInFlight.add(String((ev as { toolCallId?: unknown }).toolCallId));
       else if (ev.type === "tool_execution_end") this.toolsInFlight.delete(String((ev as { toolCallId?: unknown }).toolCallId));
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
-      else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
-        this.seenEntries.add(ev.entry.id);
-        applyEntry(this.messages, ev.entry);
+      else if (
+        ((ev.type === "message_end" || ev.type === "tool_execution_end" || (ev as { entry?: { kind?: string } }).entry?.kind === "pi.compaction") &&
+          (ev as Extract<typeof ev, { type: "message_end" }>).entry) &&
+        !this.seenEntries.has((ev as Extract<typeof ev, { type: "message_end" }>).entry.id)
+      ) {
+        // (a compaction entry may arrive on any entry-carrying event; it is applied once, like a message)
+        const entry = (ev as Extract<typeof ev, { type: "message_end" }>).entry;
+        this.seenEntries.add(entry.id);
+        applyEntry(this.messages, entry);
         // A dismissal (a skip, or a plain submit superseding cards) changes thread status: wake waiters.
-        const closed = this.cards.apply(ev.entry);
+        const closed = this.cards.apply(entry);
         this.syncCards(closed);
         if ([...closed.values()].some((c) => c !== "answered")) this.notify();
       }

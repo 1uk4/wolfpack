@@ -14,6 +14,15 @@ for c in hubd workerd; do for v in 0.9.1 0.9.2; do "$ROOT/scripts/release-build.
   printf 'if (process.argv.length < 3 || process.argv.includes("--help")) { console.log("usage: broken"); process.exit(1); }\nconsole.error("boom: cannot start"); process.exit(1);\n' > "$t/$c/$c.mjs"
   tar -czf "$W/rel/$c-v0.9.3-linux-x64.tar.gz" -C "$t" $c; (cd "$W/rel" && sha256sum $c-v0.9.3-linux-x64.tar.gz > $c-v0.9.3-linux-x64.tar.gz.sha256); rm -rf "$t"
 done
+# console: the REAL deploy/console setup.sh + console.service around a STUB app (a 20-line node http server): the real Next payload is covered by
+# scripts/smoke-console-release.sh; here the point is systemd (hardening, guards, loopback bind) + deploy-release.sh's HTTP probe. 0.9.3 listens then dies.
+for v in 0.9.1 0.9.2 0.9.3; do
+  t=$(mktemp -d); mkdir -p "$t/console/app"; cp "$ROOT"/deploy/console/{setup.sh,console.service,console.env.example,RUNBOOK.md} "$t/console/"; echo "$v+proof" > "$t/console/VERSION"
+  if [ $v = 0.9.3 ]; then body='require("http").createServer((q,r)=>r.end("x")).listen(+process.env.PORT,process.env.HOSTNAME);setTimeout(()=>process.exit(1),1500);'
+  else body='require("http").createServer((q,r)=>{if(q.url==="/api/hub-url"||q.url==="/"||q.url==="/api/health")return r.end("{}");r.statusCode=404;r.end()}).listen(+process.env.PORT,process.env.HOSTNAME);'; fi
+  printf '%s\n' "$body" > "$t/console/app/server.js"
+  mkdir -p "$W/rel"; tar -czf "$W/rel/console-v$v-linux-x64.tar.gz" -C "$t" console; (cd "$W/rel" && sha256sum console-v$v-linux-x64.tar.gz > console-v$v-linux-x64.tar.gz.sha256); rm -rf "$t"
+done
 docker run -d --name c4-systemd-proof --privileged --cgroupns=host --tmpfs /run --tmpfs /run/lock -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
   -v "$W/rel:/srv/rel:ro" -v "$ROOT/infra/release:/opt/release:ro" -v "$ROOT/deploy:/opt/deploy:ro" -v "$ROOT/infra/wolves:/opt/wolves-src:ro" wolfpack-deploy-systemd >/dev/null
 for i in $(seq 1 30); do s=$(docker exec c4-systemd-proof systemctl is-system-running 2>/dev/null || true); case "$s" in running|degraded) break ;; esac; sleep 1; done

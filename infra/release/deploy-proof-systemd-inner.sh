@@ -43,6 +43,21 @@ run hubd 0.9.4 --settle 3; rc=$?
 echo "--- --unit is rejected for hubd (workerd only)"
 run hubd 0.9.2 --unit link; rc=$?; [ $rc = 2 ] && ok "hubd --unit link -> rc 2" || bad "hubd --unit rc=$rc"
 
+echo "--- console: real setup.sh + unit (loopback bind, https origin guard), A->B healthy, crash -> rolled back"
+run console 0.9.2; rc=$?; [ $rc = 1 ] && grep -q "no existing console install" <<<"$out" && ok "console: no install -> refused (rc 1)" || bad "console refuse rc=$rc"
+ex console 0.9.1; bash /opt/deploy/console/setup.sh setup >/tmp/cs.log 2>&1 || { tail -15 /tmp/cs.log; bad "console setup"; }
+[ "$(stat -c %a /etc/wolfpack/console.env)" = 600 ] && ok "console.env written 600" || bad "console.env mode"
+bash /opt/deploy/console/setup.sh install --bundle /tmp/x-console-0.9.1/console >/tmp/ci.log 2>&1 || { tail -8 /tmp/ci.log; bad "console install A"; }
+systemctl start console; wait_active console 20 || { journalctl -u console --no-pager | tail -8; bad "console did not start"; }
+[ "$(ver /opt/wolfpack-console)" = 0.9.1 ] && ss -ltnH | grep -q '127.0.0.1:3200 ' && ! ss -ltnH | grep -qE '(0.0.0.0|\*|\[::\]):3200 ' && ok "console 0.9.1 running under real systemd, bound to 127.0.0.1:3200 only" || bad "console bind"
+run console 0.9.2 --settle 3; rc=$?
+[ $rc = 0 ] && [ "$(ver /opt/wolfpack-console)" = 0.9.2 ] && [ "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1:3200/api/health)" = 200 ] && ok "console A->B healthy (rc 0), HTTP 200 probe" || bad "console A->B rc=$rc"
+run console 0.9.3 --settle 3 --health-timeout 20; rc=$?
+[ $rc = 3 ] && [ "$(ver /opt/wolfpack-console)" = 0.9.2 ] && systemctl is-active --quiet console && ok "console C (dies after listening) -> rolled back to 0.9.2 (rc 3), running again" || { journalctl -u console --no-pager | tail -5; bad "console rollback rc=$rc"; }
+sed -i 's/^CONSOLE_HOST=.*/CONSOLE_HOST=0.0.0.0/' /etc/wolfpack/console.env; systemctl restart console 2>/dev/null; sleep 2
+! systemctl is-active --quiet console && ok "unit guard: CONSOLE_HOST=0.0.0.0 refuses to start" || bad "console started on a wildcard bind"
+sed -i 's/^CONSOLE_HOST=.*/CONSOLE_HOST=127.0.0.1/' /etc/wolfpack/console.env; systemctl reset-failed console 2>/dev/null; systemctl restart console; wait_active console 20 || bad "console did not come back"
+
 echo "--- workerd: two units (link-only workerd + workerd-wolves) and supervised-wolf stand-ins"
 clone() { # <comp> <from> <new> [hook run inside the unpacked <comp> dir]: a new release from an existing tarball
   local c=$1 f=$2 n=$3 hook=${4:-:} t; t=$(mktemp -d)

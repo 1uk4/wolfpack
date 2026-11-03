@@ -66,7 +66,7 @@ import { createLinkContributions, type LinkContributions } from "./link-contribu
 import { createLink, type Link, type LinkTimers } from "./link.js";
 import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
 import { createRelay, type Relay } from "./relay.js";
-import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
+import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
@@ -718,6 +718,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");
+          if (!DOMAIN_RE.test(domain)) throw new HubError("invalid_request", "domain must be lower-case letters and digits");
           const flag = url.searchParams.get("graduated");
           if (flag !== null && flag !== "true" && flag !== "false") throw new HubError("invalid_request", "graduated must be true or false");
           return send(res, 200, listWorkItems(roots, domain, flag === "true"));

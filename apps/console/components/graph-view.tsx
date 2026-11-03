@@ -27,9 +27,8 @@
  */
 
 import type { DepRouteSelection } from "../src/core/dep-draw-list.ts";
-import { featureTaskModel, reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
+import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
 import { startCursor, type RouteCursor } from "../src/core/work-route.ts";
-import { TaskGraphOverlay } from "./task-graph.tsx";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -52,11 +51,11 @@ import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "./work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 
-/** What a click on a map node does: a work node opens the reader, a collapsed feature on the route expands, anything else selects (side pane). */
-export function nodeClickAction(nodeId: string, collapsed: ReadonlySet<string>): { kind: "expand" | "open-work"; id: string } | { kind: "select" } {
+/** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
+ *  route, camera and pane are untouched. Anything else (KB entries, the factory...) selects into the side pane. */
+export function nodeClickAction(nodeId: string): { kind: "open-work"; id: string } | { kind: "select" } {
 	const raw = rawWorkId(nodeId);
-	if (!raw) return { kind: "select" };
-	return collapsed.has(raw) ? { kind: "expand", id: raw } : { kind: "open-work", id: raw };
+	return raw ? { kind: "open-work", id: raw } : { kind: "select" };
 }
 
 /** The default node look when a node carries no colour of its own. */
@@ -98,16 +97,6 @@ export interface GraphViewController {
 interface Selection {
 	id: string;
 }
-
-/** A feature's task-graph overlay, built from the payload (double-click on a feature). */
-export function FeatureTaskOverlay({ graph, featureId, onClose, onSelectNode }: { graph: KbGraph; featureId: string; onClose: () => void; onSelectNode: (nodeId: string) => void }) {
-	const model = useMemo(() => featureTaskModel(graph, featureId), [graph, featureId]);
-	if (!model) return null;
-	return <TaskGraphOverlay model={model} onClose={onClose} onSelect={(taskId) => onSelectNode(`work:${taskId}`)} />;
-}
-
-/** Whether double-clicking this node opens a task-graph overlay. */
-export const opensTaskOverlay = (graph: KbGraph, nodeId: string): boolean => featureTaskModel(graph, nodeId) !== null;
 
 // ---- Chrome ---------------------------------------------------------------
 
@@ -195,7 +184,6 @@ export function GraphView({
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
-	const [overlayId, setOverlayId] = useState<string | null>(null);
 	const graphRef = useRef(graph);
 	graphRef.current = graph;
 	const router = useRouter();
@@ -289,17 +277,11 @@ export function GraphView({
 			canvas,
 			{
 				onSelect: (nodeId) => {
-					// A collapsed feature on the selected route expands in place
-					// instead of re-targeting the route.
-					const act = nodeClickAction(nodeId, collapsedRef.current);
-					if (act.kind === "expand") setExpanded((prev) => ({ id: selectedIdRef.current, set: new Set([...(prev.id === selectedIdRef.current ? prev.set : []), act.id]) }));
-					else if (act.kind === "open-work") openWorkRef.current(act.id); // a work node opens the reader straight away
+					const act = nodeClickAction(nodeId);
+					if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
 					else setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
-				onNodeDoubleClick: (nodeId) => {
-					if (opensTaskOverlay(graphRef.current, nodeId)) setOverlayId(nodeId);
-				},
 				// (Debounced) remember where the camera stands.
 				onCameraMove: persistCamera,
 				// Live physics settled: remember the new rest state. The store
@@ -368,14 +350,7 @@ export function GraphView({
 	// the card's cursor on it. The cursor restarts at the first unfinished
 	// step whenever the route is recomputed; clearing the selection clears both.
 	const selectedId = selected?.id ?? null;
-	// Features the user expanded on this selection (reset on a new selection).
-	const [expanded, setExpanded] = useState<{ id: string | null; set: ReadonlySet<string> }>({ id: null, set: new Set() });
-	const expandedSet = expanded.id === selectedId ? expanded.set : undefined;
-	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId, { expanded: expandedSet }) : null), [graph, selectedId, expandedSet]);
-	const collapsedRef = useRef<ReadonlySet<string>>(new Set());
-	collapsedRef.current = new Set(Object.keys(selectedRoute?.collapsed ?? {}));
-	const selectedIdRef = useRef<string | null>(null);
-	selectedIdRef.current = selectedId;
+	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId) : null), [graph, selectedId]);
 	// Keyed by the selected id: a refetch recomputes the route but the cursor
 	// stays on its node (reconcileCursor); a new selection starts fresh.
 	const [cursorState, setCursorState] = useState<{ id: string; cursor: RouteCursor } | null>(null);
@@ -563,19 +538,6 @@ export function GraphView({
 					</div>
 				</div>
 
-				{overlayId && (
-					<FeatureTaskOverlay
-						graph={graph}
-						featureId={overlayId}
-						onClose={() => setOverlayId(null)}
-						onSelectNode={(id) => {
-							setOverlayId(null);
-							const raw = rawWorkId(id);
-							if (raw) openWorkRef.current(raw);
-							else focusNodeRef.current(id);
-						}}
-					/>
-				)}
 			</div>
 			{selected && card && !isEmpty && (
 				<GraphPane

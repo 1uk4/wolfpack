@@ -377,6 +377,12 @@ export const ROUTES = {
    * Worker tokens may read only domains their host's wolves subscribe to (403 otherwise). 404 on a subscribed domain means "not scanned yet, retry shortly" (the hub creates a domain's revision log on its first scan or commit), NOT "deleted".
    */
   hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
+  /**
+   * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker
+   * token: the domains its host's wolves subscribe to). Query `domain` (one domain; 403 when the token may not read it, 404 when unknown),
+   * `archivedWork` (true/false). Never writes. Same shape as a wolf's kb/graph.
+   */
+  hubKbGraph: { scope: "hub", method: "GET", path: "/v1/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
   /** KB sync: the hub's path -> contentHash manifest of one domain, with epoch, revision and the retention floor. Same domain filtering as changes. */
   hubKbManifest: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/manifest", response: { kind: "json", schema: KbManifestResponseSchema }, status: [200], error: err },
   /** KB sync: send the worker's path -> hash manifest; get the differing files (up to maxBytes), the paths to delete, and `pending` paths that did not fit. */

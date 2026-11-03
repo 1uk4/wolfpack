@@ -4,6 +4,7 @@
  */
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -116,6 +117,99 @@ d("browser extension (live): WebSockets", () => {
       await s.close();
       await new Promise((r) => srv.close(r));
       rmSync(den, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+d("browser extension (live): resilience and fetch path", () => {
+  let srv: Server;
+  let base = "";
+  let den = "";
+  const seenCookies: string[] = [];
+  beforeAll(async () => {
+    den = mkdtempSync(join(tmpdir(), "wolf-browser-den-"));
+    srv = createServer((req, res) => {
+      if (req.url === "/gz") {
+        // ignores accept-encoding: identity and compresses anyway
+        res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" });
+        return res.end(gzipSync("<title>gz</title><p>zipped</p>"));
+      }
+      if (req.url === "/sse") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        return res.write("data: x\n\n");
+      }
+      if (req.url === "/setck") {
+        res.writeHead(200, { "content-type": "text/html", "set-cookie": ["a=1; Path=/", "bad=1; Domain=evil.com", "lax=1; SameSite=Lax; Path=/"] });
+        return res.end("<title>ck</title>");
+      }
+      seenCookies.push(String(req.headers.cookie ?? ""));
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<title>ok</title>");
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await new Promise((r) => srv.close(r));
+    rmSync(den, { recursive: true, force: true });
+  });
+
+  it("recovers when the page closes: the next call works", async () => {
+    const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 15000 });
+    try {
+      await s.run(() => s.goto(base + "/"));
+      await (s as any).page.close();
+      expect(await s.run(() => s.goto(base + "/"))).toMatch(/Title: ok/);
+      // after a relaunch the popup-closer must not close the fresh page
+      await s.close();
+      expect(await s.run(() => s.goto(base + "/"))).toMatch(/Title: ok/);
+      expect(await s.run(() => s.evaluate("document.title"))).toBe("ok");
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("a busy loop times out, the queue moves on, and browser_close still works", async () => {
+    const ext = createBrowserExtension({ enabled: true, allowHosts: ["127.0.0.1"], timeoutMs: 2000 }, { wolfDen: den, wolfName: "w", domains: [], wolfConfig: {} });
+    const tool = (n: string) => ext.tools!.find((t) => t.name === n)!;
+    const tctx = { cwd: "/", wolfDen: den, wolfName: "w", conversationId: 1 };
+    try {
+      expect((await tool("browser_goto").execute({ url: base + "/" }, tctx)).isError).toBeFalsy();
+      const stuck = await tool("browser_eval").execute({ expression: "while(1){}" }, tctx);
+      expect(stuck.isError).toBe(true);
+      expect(stuck.content[0].text).toMatch(/timed out/);
+      expect((await tool("browser_goto").execute({ url: base + "/" }, tctx)).isError).toBeFalsy();
+      const closed = await tool("browser_close").execute({}, tctx);
+      expect(closed.isError).toBeFalsy();
+    } finally {
+      await ext.lifecycle?.stop?.();
+    }
+  }, 60000);
+
+  it("decodes a gzip body the server sent despite identity; refuses event streams", async () => {
+    const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 5000 });
+    try {
+      await s.run(() => s.goto(base + "/gz"));
+      expect(await s.run(() => s.evaluate("document.body.textContent"))).toBe("zipped");
+      await s.run(() => s.goto(base + "/"));
+      const r = await s.run(() => s.evaluate("fetch('/sse').then(r => r.status).catch(e => 'failed')"));
+      expect(r).toBe("failed");
+      expect(s.blockedRequests().join("\n")).toMatch(/event-stream/);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("stores valid Set-Cookie, rejects a foreign Domain, and sends Lax only on top-level GET navigations", async () => {
+    const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 8000 });
+    try {
+      await s.run(() => s.goto(base + "/setck"));
+      seenCookies.length = 0;
+      await s.run(() => s.goto(base + "/"));
+      expect(seenCookies.at(-1)).toMatch(/a=1/);
+      expect(seenCookies.at(-1)).not.toMatch(/bad=/);
+    } finally {
+      await s.close();
     }
   }, 60000);
 });

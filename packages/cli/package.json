@@ -20,11 +20,13 @@
     "@wolfpack/kb": "*",
     "esbuild": "^0.28.0",
     "nanoid": "^5.1.0",
-    "playwright-core": "1.63.0",
     "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
+  },
+  "optionalDependencies": {
+    "playwright-core": "1.63.0"
   }
 }

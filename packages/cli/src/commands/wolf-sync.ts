@@ -16,7 +16,7 @@ import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
 import { smokeCheckBundle, smokeStartBundle, watchAfterRestart } from "../sync-safety.js";
-import { buildRemoteBundle, buildHarnessBundle, stampExtension } from "../bundle.js";
+import { buildRemoteBundle, buildHarnessBundle, stampExtension, skipReasons } from "../bundle.js";
 import {
   loadConfig,
   getHost,
@@ -301,7 +301,7 @@ async function syncPiDurable(
   );
 
   if (built.missing.length) {
-    console.log(c.yellow(`  ! Skipped extensions: ${built.missing.join(", ")}`));
+    console.log(c.yellow(`  ! Skipped extensions: ${built.missing.map((m) => (skipReasons.has(m) ? `${m} (${skipReasons.get(m)})` : m)).join(", ")}`));
   }
 
   // Never upload a bundle that does not even load: run it locally in smoke mode.

@@ -5,7 +5,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { guardedFetch } from "./fetcher.js";
+import { parseSetCookie, selectCookies, fetchSite, type FetchSite, type JarCookie } from "./cookies.js";
+import { guardedFetch, HOP_BY_HOP } from "./fetcher.js";
 import { capText, checkUrlResolved, guardedLookup, lastN, redactHeaders, redactUrl, type Resolver } from "./policy.js";
 
 export interface BrowserConfig {
@@ -100,6 +101,8 @@ export class BrowserSession {
   private netLog: NetEntry[] = [];
   private blocked: string[] = [];
   private readonly resolver?: Resolver;
+  /** True while openPage creates the working page, so the popup-closer leaves it alone. */
+  private opening = false;
 
   constructor(
     private readonly den: string,
@@ -186,6 +189,10 @@ export class BrowserSession {
       throw new Error(`Browser failed to launch: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}. ${INSTALL_HINT}`);
     }
     this.ctx = ctx;
+    // Pages restored from the profile exist before any route is installed: close them first.
+    for (const old of ctx.pages()) await old.close().catch(() => undefined);
+    // Popups (window.open, target=_blank) are closed; registered ONCE per context, not per page.
+    ctx.on("page", (p: any) => { if (!this.opening && p !== this.page) p.close().catch(() => undefined); });
     ctx.on("close", () => {
       if (this.ctx === ctx) { this.ctx = undefined; this.page = undefined; }
       this.removeShotDir();
@@ -196,25 +203,39 @@ export class BrowserSession {
     await ctx.route(/.*/, async (route: any) => {
       const req = route.request();
       const url: string = req.url();
-      const v = await this.verdict(url, req.isNavigationRequest());
-      if (!v.ok) {
-        this.blockRecord(url, v.reason);
-        return route.abort("blockedbyclient").catch(() => undefined);
-      }
-      if (!/^https?:/i.test(url)) return route.continue().catch(() => undefined);
       try {
+        const v = await this.verdict(url, req.isNavigationRequest());
+        if (!v.ok) {
+          this.blockRecord(url, v.reason);
+          return await route.abort("blockedbyclient").catch(() => undefined);
+        }
+        if (!/^https?:/i.test(url)) return await route.continue().catch(() => undefined);
+        const method: string = req.method();
+        const rawHeaders = (await req.allHeaders()) as Record<string, string>;
         const headers: Record<string, string> = {};
-        for (const [k, val] of Object.entries(await req.allHeaders() as Record<string, string>)) {
-          if (!["host", "content-length", "connection", "accept-encoding", "cookie", "transfer-encoding"].includes(k.toLowerCase())) headers[k] = val;
+        for (const [k, val] of Object.entries(rawHeaders)) {
+          const lk = k.toLowerCase();
+          if (!HOP_BY_HOP.includes(lk) && lk !== "accept-encoding" && lk !== "cookie") headers[k] = val;
         }
         headers["accept-encoding"] = "identity";
-        const jar: { name: string; value: string }[] = await ctx.cookies(url);
-        if (jar.length) headers["cookie"] = jar.map((c) => `${c.name}=${c.value}`).join("; ");
+        const body: Buffer | null = req.postDataBuffer();
+        if (!["GET", "HEAD"].includes(method.toUpperCase()) && !body && /multipart|octet-stream/i.test(rawHeaders["content-type"] ?? "")) {
+          this.blockRecord(url, "unsupported request body (file/blob upload cannot be read); aborted instead of sending it empty");
+          return await route.abort("failed").catch(() => undefined);
+        }
+        const topLevel = req.isNavigationRequest() && !req.frame().parentFrame();
+        const header = rawHeaders["sec-fetch-site"];
+        const site: FetchSite = header === "same-origin" || header === "same-site" || header === "cross-site" || header === "none"
+          ? header
+          : fetchSite(url, topLevel ? this.page?.url() : req.frame().url(), topLevel && !this.page?.url());
+        const jar = (await ctx.cookies(url)) as JarCookie[];
+        const cookies = selectCookies(jar, { requestUrl: url, site, method, topLevelNavigation: topLevel });
+        if (cookies.length) headers["cookie"] = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
         const res = await guardedFetch({
           url,
-          method: req.method(),
+          method,
           headers,
-          body: req.postDataBuffer(),
+          body,
           lookup,
           maxBytes: this.cfg.maxResponseBytes ?? DEFAULTS.maxResponseBytes,
           timeoutMs: this.timeout,
@@ -225,20 +246,21 @@ export class BrowserSession {
           const rv = await this.verdict(target, req.isNavigationRequest());
           if (!rv.ok) {
             this.blockRecord(url, `redirect to ${redactUrl(target)}: ${rv.reason}`);
-            return route.abort("blockedbyclient").catch(() => undefined);
+            return await route.abort("blockedbyclient").catch(() => undefined);
           }
         }
         const setCookies = res.headers["set-cookie"];
         if (setCookies) await storeCookies(ctx, url, Array.isArray(setCookies) ? setCookies : [setCookies]);
         const out: Record<string, string> = {};
         for (const [k, val] of Object.entries(res.headers)) {
-          if (["set-cookie", "content-encoding", "transfer-encoding", "connection", "content-length"].includes(k)) continue;
+          if (["set-cookie", "content-encoding", "connection", "keep-alive", "te", "trailer", "upgrade", "proxy-connection", "transfer-encoding", "content-length"].includes(k)) continue;
           out[k] = Array.isArray(val) ? val.join(", ") : String(val);
         }
-        return route.fulfill({ status: res.status, headers: out, body: res.body }).catch(() => undefined);
+        return await route.fulfill({ status: res.status, headers: out, body: res.body }).catch(() => undefined);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.startsWith("blocked:")) this.blockRecord(url, msg.slice(8).trim());
+        else this.blockRecord(url, `request failed: ${msg}`);
         return route.abort(msg.startsWith("blocked:") ? "blockedbyclient" : "failed").catch(() => undefined);
       }
     });
@@ -258,10 +280,15 @@ export class BrowserSession {
   /** Open the single working page; pages restored from the profile and later popups are closed. */
   private async openPage(): Promise<void> {
     const ctx = this.ctx;
-    const page = await ctx.newPage();
-    this.page = page;
+    this.opening = true;
+    let page: any;
+    try {
+      page = await ctx.newPage();
+      this.page = page;
+    } finally {
+      this.opening = false;
+    }
     for (const old of ctx.pages()) if (old !== page) await old.close().catch(() => undefined);
-    ctx.on("page", (p: any) => { if (p !== this.page) p.close().catch(() => undefined); });
     page.setDefaultTimeout(this.timeout);
     page.on("close", () => { if (this.page === page) this.page = undefined; });
     page.on("console", (m: any) => this.push(this.consoleLog, { t: new Date().toISOString(), type: m.type(), text: redactText(m.text()) }));
@@ -341,7 +368,18 @@ export class BrowserSession {
 
   async evaluate(expression: string): Promise<string> {
     const page = await this.ready();
-    const result = await page.evaluate(expression);
+    // A busy loop wedges the renderer and page.evaluate never settles: race it, and drop the page so the queue moves on.
+    let timer: NodeJS.Timeout | undefined;
+    const result = await Promise.race([
+      page.evaluate(expression),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          if (this.page === page) this.page = undefined;
+          page.close({ runBeforeUnload: false }).catch(() => undefined);
+          reject(new Error(`browser_eval timed out after ${this.timeout}ms; the page was closed (the next call opens a fresh one)`));
+        }, this.timeout);
+      }),
+    ]).finally(() => clearTimeout(timer));
     let text: string;
     try {
       text = result === undefined ? "undefined" : typeof result === "string" ? result : JSON.stringify(result, null, 2);
@@ -377,12 +415,13 @@ export class BrowserSession {
 
   /** Close the browser and delete the session's screenshots. Safe to call repeatedly. */
   async close(): Promise<void> {
+    if (this.launching) await this.launching.catch(() => undefined);
     const ctx = this.ctx;
     this.ctx = undefined;
     this.page = undefined;
     this.consoleLog = [];
     this.netLog = [];
-    if (ctx) await ctx.close().catch(() => undefined);
+    if (ctx) await Promise.race([ctx.close().catch(() => undefined), new Promise((r) => setTimeout(r, 10_000))]);
     this.removeShotDir();
   }
 }
@@ -400,33 +439,29 @@ function sweepStaleShotDirs() {
     const m = /^wolf-browser-(\d+)-/.exec(n);
     if (!m || Number(m[1]) === process.pid) continue;
     try { process.kill(Number(m[1]), 0); } catch (e: any) {
-      if (e?.code === "ESRCH") rmSync(join(tmpdir(), n), { recursive: true, force: true });
+      if (e?.code === "ESRCH") {
+        try { rmSync(join(tmpdir(), n), { recursive: true, force: true }); } catch { /* best effort */ }
+      }
     }
   }
 }
 
-/** Minimal Set-Cookie to cookie-jar bridge (the response is fulfilled by us, so the browser never sees the header). */
+/** Validate each Set-Cookie (see cookies.ts) and store the survivors in the context's jar. */
 async function storeCookies(ctx: any, url: string, headers: string[]) {
+  const host = new URL(url).hostname;
   for (const h of headers) {
-    const [pair, ...attrs] = h.split(";").map((x) => x.trim());
-    const eq = pair.indexOf("=");
-    if (eq < 1) continue;
-    const cookie: Record<string, unknown> = { name: pair.slice(0, eq), value: pair.slice(eq + 1) };
-    let domain: string | undefined;
-    let path: string | undefined;
-    for (const a of attrs) {
-      const [k, v = ""] = a.split("=");
-      const key = k.toLowerCase();
-      if (key === "domain") domain = v.replace(/^\./, "") ? "." + v.replace(/^\./, "") : undefined;
-      else if (key === "path") path = v;
-      else if (key === "secure") cookie.secure = true;
-      else if (key === "httponly") cookie.httpOnly = true;
-      else if (key === "max-age" && Number.isFinite(Number(v))) cookie.expires = Math.floor(Date.now() / 1000) + Number(v);
-      else if (key === "expires" && cookie.expires === undefined && !Number.isNaN(Date.parse(v))) cookie.expires = Math.floor(Date.parse(v) / 1000);
-      else if (key === "samesite" && /^(strict|lax|none)$/i.test(v)) cookie.sameSite = v[0].toUpperCase() + v.slice(1).toLowerCase();
-    }
-    if (domain || path) Object.assign(cookie, { domain: domain ?? new URL(url).hostname, path: path ?? "/" });
-    else cookie.url = url;
+    const c = parseSetCookie(h, url);
+    if (!c) continue;
+    const cookie: Record<string, unknown> = {
+      name: c.name,
+      value: c.value,
+      domain: c.domain ?? host,
+      path: c.path,
+      secure: c.secure,
+      httpOnly: c.httpOnly,
+      ...(c.sameSite ? { sameSite: c.sameSite } : {}),
+      ...(c.expires !== undefined ? { expires: c.expires } : {}),
+    };
     await ctx.addCookies([cookie]).catch(() => undefined);
   }
 }

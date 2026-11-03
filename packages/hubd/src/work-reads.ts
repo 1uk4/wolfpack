@@ -17,8 +17,8 @@ export { CHILDREN_CAP, LOG_TAIL } from "@wolfpack/memory";
 
 type Item = WorkItem;
 
-/** Domains are lower-case alphanumerics (no hyphen); checked before any path is built from one. */
-export const DOMAIN_RE = /^[a-z0-9]+$/;
+/** The kb DomainId shape (lower-case alphanumerics and inner hyphens): no dot, slash or backslash, so no path escape. Checked before any path is built from a domain. */
+export const DOMAIN_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Parsed KB work files by path, valid while mtime+size match. Cached items are shared between calls: READ-ONLY (shallow-frozen). */
 const fileCache = new Map<string, { sig: string; item: Item | null }>();
@@ -43,7 +43,7 @@ function sigOf(path: string): string | undefined {
 }
 
 function assertDomain(domain: string): void {
-  if (!DOMAIN_RE.test(domain)) throw new HubError("invalid_request", "domain must be lower-case letters and digits");
+  if (!DOMAIN_RE.test(domain)) throw new HubError("invalid_request", "domain must be lower-case letters, digits and hyphens");
 }
 
 /** The KB copy's work items for a domain. `cacheable` is false when the dir is absent or any file could not be read (errors are never cached). */
@@ -174,7 +174,7 @@ function recordBody(roots: KbRoots, item: Item): string {
 
 /** Undefined when the item is unknown. */
 export function readWorkRecordFor(roots: KbRoots, id: string): WorkRecordResponse | undefined {
-  // The domain is the id's middle segment; this assumes domains contain no hyphen (DOMAIN_RE).
+  // The domain is the id's middle segment; this assumes domains contain no hyphen (work ids are work-<alnum domain>-<7 id>, see WorkId).
   const domain = /^work-([a-z0-9]+)-/.exec(id)?.[1];
   if (!domain) return undefined;
   const all = loadMergedWorkState(roots, domain);

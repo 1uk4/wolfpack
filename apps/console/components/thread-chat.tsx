@@ -469,8 +469,8 @@ function ThreadChatInner({
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<TopBar>
-					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
-					<span className="text-xs uppercase tracking-wide text-muted-foreground">{wolf}</span>
+					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
+					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}

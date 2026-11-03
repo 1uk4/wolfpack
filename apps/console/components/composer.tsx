@@ -1,6 +1,6 @@
 "use client";
 
-import { CornerDownLeftIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } from "@/components/attachments";
 
@@ -133,7 +133,7 @@ export function Composer({
 							type="button"
 							aria-label="Attach images"
 							onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.click()}
-							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground"
 						>
 							<PaperclipIcon className="size-4" />
 						</button>
@@ -187,13 +187,20 @@ export function Composer({
 					aria-label={busy && !canSend ? "Stop" : "Send"}
 					disabled={!busy && !canSend}
 					className={cn(
-						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
+						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
 						busy && !canSend
-							? "bg-secondary text-foreground hover:bg-accent"
+							? "bg-secondary text-foreground hover:bg-accent max-md:bg-primary max-md:text-primary-foreground"
 							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
 					)}
 				>
-					{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
+					{busy && !canSend ? (
+						<SquareIcon className="size-4 max-md:fill-current" />
+					) : (
+						<>
+							<CornerDownLeftIcon className="size-5 max-md:hidden" />
+							<ArrowUpIcon className="size-5 md:hidden" />
+						</>
+					)}
 				</button>
 			</form>
 		</>

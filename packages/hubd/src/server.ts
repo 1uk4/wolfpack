@@ -60,6 +60,7 @@ import { createEventBus } from "./events.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
+import { UnknownDomainError, buildKbGraph, listDomainDirs } from "@wolfpack/kb/graph";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
@@ -572,6 +573,25 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!allowed) throw new HubError("forbidden", `this worker is not subscribed to KB domain ${domain.slice(0, 60)}`);
     }
 
+    /** Domains this caller may read: every domain of the hub's KB copy for console/browser/owner tokens; a worker token only its host's subscribed ones. */
+    function readableKbDomains(id: AuthIdentity | undefined): string[] {
+      const all = listDomainDirs(roots.kbBase);
+      if (!id || id.kind !== "worker") return all;
+      return all.filter((d) => { try { requireKbDomain(id, d); return true; } catch { return false; } });
+    }
+    const kbGraphCache = new Map<string, string>();
+    /** The graph of the hub's read-only KB copy for `domains`, cached on the per-domain revisions (a changed domain rebuilds). */
+    function kbGraphBody(domains: string[], domain: string | undefined, archivedWork: boolean): string {
+      const rev = domains.map((d) => { try { const h = revisions.head(d); return `${d}:${h.epoch}:${h.revision}`; } catch { return d; } }).join(",");
+      const key = JSON.stringify([domains, domain ?? null, archivedWork, rev]);
+      const hit = kbGraphCache.get(key);
+      if (hit !== undefined) return hit;
+      const body = JSON.stringify(buildKbGraph(roots, { onlyDomains: domains, ...(domain ? { domain } : {}), archivedWork }));
+      if (kbGraphCache.size >= 16) kbGraphCache.delete(kbGraphCache.keys().next().value as string);
+      kbGraphCache.set(key, body);
+      return body;
+    }
+
     /** Device management is an ALLOWLIST: console and browser tokens only (a worker token, or any future kind, gets 403). Returns the verified identity. */
     function deviceCaller(identity: AuthIdentity | undefined): AuthIdentity & { tokenId: string } {
       if (!identity || (identity.kind !== "console" && identity.kind !== "browser")) throw new HubError("forbidden", "only a console or browser token can manage devices");
@@ -796,6 +816,25 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const mb = q.get("maxBytes");
           if (mb !== null && !/^[1-9]\d{0,12}$/.test(mb)) throw new HubError("invalid_request", "maxBytes must be a positive integer");
           return send(res, 200, revisions.changesSince(params.domain, sinceRaw === null ? 0 : Number(sinceRaw), q.get("epoch") ?? undefined, mb === null ? undefined : Math.min(Number(mb), KB_COMMIT_BODY_LIMIT)));
+        }
+        case "hubKbGraph": {
+          const q = url.searchParams;
+          const domain = q.get("domain") ?? undefined;
+          const aw = q.get("archivedWork");
+          if (aw !== null && aw !== "true" && aw !== "false" && aw !== "1" && aw !== "0") throw new HubError("invalid_request", "archivedWork must be true or false");
+          const readable = readableKbDomains(identity);
+          if (domain !== undefined) {
+            if (!listDomainDirs(roots.kbBase).includes(domain)) throw new HubError("not_found", `domain ${domain.slice(0, 60)}`);
+            requireKbDomain(identity, domain);
+          }
+          try {
+            const body = kbGraphBody(readable, domain, aw === "true" || aw === "1");
+            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+            return void res.end(body);
+          } catch (e) {
+            if (e instanceof UnknownDomainError) throw new HubError("not_found", `domain ${e.domain.slice(0, 60)}`);
+            throw e;
+          }
         }
         case "hubKbManifest": {
           requireKbDomain(identity, params.domain);

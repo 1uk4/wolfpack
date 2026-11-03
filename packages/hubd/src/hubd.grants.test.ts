@@ -25,6 +25,7 @@ function setup() {
     applyHello: async () => ({ retired: [], rejected: [], domainMismatch: [] }),
     addWolf: async () => "ok",
     removeWolf: async () => {},
+    kbFlags: () => ({ librarian: false, kbReadable: false }),
     get: () => ({}),
   } as unknown as Registry;
   const link = createLink({ authenticate: () => ({ kind: "worker", hostId: "h", tokenId: "t" }) as never, registry, log: () => {} });

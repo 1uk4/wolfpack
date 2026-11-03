@@ -57,7 +57,12 @@ export const LINK_CLOSE = {
 const Id = z.string().min(1).max(64);
 const Revisions = z.record(z.string(), z.number().int().nonnegative());
 
-export const LinkWolfSchema = z.object({ name: z.string().min(1).max(64), domains: z.array(z.string().min(1).max(64)).max(LINK_MAX_DOMAINS).default([]) });
+export const LinkWolfSchema = z.object({ name: z.string().min(1).max(64), domains: z.array(z.string().min(1).max(64)).max(LINK_MAX_DOMAINS).default([]),
+  /** Additive: this wolf is the pack's librarian (serves the KB). Absent = false / not reported (older worker). */
+  librarian: z.boolean().optional(),
+  /** Additive: this wolf has KB roots and can serve the read-only KB graph/entry routes. Absent = false / not reported. */
+  kbReadable: z.boolean().optional(),
+});
 export type LinkWolf = z.infer<typeof LinkWolfSchema>;
 
 export const LinkErrorCodeSchema = z.enum(["version_mismatch", "unauthorized", "bad_frame", "replaced", "rejected", "internal"]);

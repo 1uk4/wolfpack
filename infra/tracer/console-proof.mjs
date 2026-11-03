@@ -78,6 +78,10 @@ try {
   if (hg.status() !== 200 || !Array.isArray(hj.nodes) || hj.nodes.length === 0) throw new Error(`hub kb graph failed: ${hg.status()} ${JSON.stringify(hj).slice(0, 200)}`);
   if (doms.length < 2 || !doms.includes("gphalpha") || !doms.includes("gphbeta")) throw new Error(`hub kb graph shows ${doms.length} domain(s), want >1 incl. gphalpha+gphbeta`);
   if (hj.nodes.filter((n) => n.kind === "domain").length < 2) throw new Error("hub kb graph has fewer than 2 domain nodes");
+  const er = await ctx.request.get(`${base}/api/kb/entries/kb-gphbeta-aaaaaaa`, { headers: auth });
+  const ej = await er.json().catch(() => ({}));
+  step(`GET /api/kb/entries/kb-gphbeta-aaaaaaa (domain hal2 is not subscribed to) -> ${er.status()} domain=${ej.domain} title=${ej.title}`);
+  if (er.status() !== 200 || ej.domain !== "gphbeta" || !String(ej.body ?? "").includes("Seed entry of gphbeta")) throw new Error(`hub kb entry failed: ${er.status()} ${JSON.stringify(ej).slice(0, 200)}`);
   await link.click();
   const ta = page.locator('[data-testid="composer"] textarea').first();
   await ta.waitFor({ timeout: 30000 });

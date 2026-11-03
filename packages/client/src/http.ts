@@ -494,6 +494,11 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("hubKbGraph", {}, ROUTES.hubKbGraph.response.schema, undefined, undefined, q.size ? `?${q}` : "")) as KbGraph;
   }
 
+  /** One KB entry from the HUB's read-only KB copy (GET /v1/kb/entries/:id), scoped to the token's readable domains. */
+  async getHubKbEntry(id: string): Promise<KbEntryDetail> {
+    return (await this.json("hubKbEntry", { id }, ROUTES.hubKbEntry.response.schema)) as KbEntryDetail;
+  }
+
   async getKbEntry(wolf: string, id: string): Promise<KbEntryDetail> {
     return (await this.json("getKbEntry", { name: wolf, id }, ROUTES.getKbEntry.response.schema, undefined, wolf)) as KbEntryDetail;
   }

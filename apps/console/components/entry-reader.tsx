@@ -10,7 +10,6 @@ import { useWorkView } from "@/components/work-view-entry";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
-import { useLibrarian } from "@/components/use-librarian";
 import {
 	entryBreadcrumb,
 	entryFacts,
@@ -42,25 +41,20 @@ export interface ReaderOverlayProps {
 }
 
 export function EntryReader({ id, overlay }: { id: string; overlay?: ReaderOverlayProps }) {
-	const { kbSource, loading } = useLibrarian();
-	const librarian = kbSource?.name ?? null;
 	const [fetched, setFetched] = useState<{ id: string; state: EntryReaderState } | null>(null);
 
 	useEffect(() => {
-		if (!librarian) return;
 		let cancelled = false;
-		void fetchKbEntry(librarian, id).then((res) => {
+		void fetchKbEntry(id).then((res) => {
 			if (!cancelled) setFetched({ id, state: entryReaderState(res) });
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [librarian, id]);
+	}, [id]);
 
 	let state: EntryReaderState;
-	if (loading) state = { kind: "loading" };
-	else if (!librarian) state = { kind: "unavailable" };
-	else state = fetched?.id === id ? fetched.state : { kind: "loading" };
+	state = fetched?.id === id ? fetched.state : { kind: "loading" };
 	return <EntryReaderView id={id} state={state} overlay={overlay} />;
 }
 

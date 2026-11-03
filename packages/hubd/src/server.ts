@@ -57,7 +57,7 @@ import { createEventBus } from "./events.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
-import { UnknownDomainError, buildKbGraph, listDomainDirs } from "@wolfpack/kb/graph";
+import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
@@ -790,6 +790,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             if (e instanceof UnknownDomainError) throw new HubError("not_found", `domain ${e.domain.slice(0, 60)}`);
             throw e;
           }
+        }
+        case "hubKbEntry": {
+          if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(params.id)) throw new HubError("invalid_request", "malformed entry id");
+          // Only the readable domains are even read, so a forbidden entry is indistinguishable from a missing one (and backlinks never cross the grant).
+          const entry = readKbEntry(roots, params.id, { onlyDomains: readableKbDomains(identity) });
+          if (!entry) throw new HubError("not_found", "no such entry");
+          return send(res, 200, entry);
         }
         case "hubKbManifest": {
           requireKbDomain(identity, params.domain);

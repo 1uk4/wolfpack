@@ -233,7 +233,7 @@ function GraphHomeInner() {
 	return (
 		<div className="relative h-full w-full">
 			{body}
-			{kbSource?.mirror && kb.status !== "unavailable" && <KbMirrorLabel />}
+			{(kbSource?.mirror || (kb.graph as { hubCopy?: boolean } | null)?.hubCopy === true) && kb.status !== "unavailable" && <KbMirrorLabel />}
 			{activity.map((w) => (
 				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={onResync} />
 			))}

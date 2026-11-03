@@ -162,3 +162,11 @@ describe("WolfStatusRow", () => {
 		assert.ok(on.includes(">online<") && !on.includes(">offline<"));
 	});
 });
+
+describe("SessionRow offline", () => {
+	it("greys a held row of an offline wolf and labels it offline", () => {
+		const html = renderToStaticMarkup(<SessionRow chat={item({})} active={false} offline onOpen={() => {}} />);
+		assert.ok(html.includes("opacity-50") && html.includes('title="offline"') && html.includes("(offline)"));
+		assert.ok(!render(item({})).includes("opacity-50"));
+	});
+});

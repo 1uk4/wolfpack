@@ -19,7 +19,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { coalescedRefresh, foldWolfRoster, foldWolfThreads, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
+import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
@@ -351,8 +351,11 @@ export function SessionRow({
 	onContextMenu,
 	nested = false,
 	indented = false,
+	offline = false,
 }: {
 	chat: SessionItem;
+	/** Its wolf is offline: the row we still hold is greyed and says so. */
+	offline?: boolean;
 	/** A subagent row under its feature: two steps in, compact single line. */
 	nested?: boolean;
 	/** A feature thread (or archived one) under Home: one step in, with a left guide line. */
@@ -374,7 +377,9 @@ export function SessionRow({
 		const running = chat.state === "running";
 		return (
 			<div
+				title={offline ? "offline" : undefined}
 				className={cn(
+					offline && "opacity-50",
 					"relative mb-px ml-8 flex w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border-l border-border pl-2 pr-2 text-xs leading-5 text-muted-foreground transition-colors hover:bg-accent",
 					active && "bg-accent text-foreground",
 					kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
@@ -414,7 +419,11 @@ export function SessionRow({
 			onClick={onOpen}
 			onContextMenu={onContextMenu}
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
+			data-offline={offline || undefined}
+			title={offline ? "offline" : undefined}
+			aria-label={offline ? `${chat.title} (offline)` : undefined}
 			className={cn(
+				offline && "opacity-50",
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
 				active && "bg-accent",
@@ -517,6 +526,9 @@ export function SessionsSidebar() {
 	const { open, toggle, closeList, mobile } = useSidebar();
 	const [chats, setChats] = useState<SessionItem[] | null>(null);
 	const [roster, setRoster] = useState<WolfStatus[]>([]);
+	const rosterRef = useRef(roster);
+	rosterRef.current = roster;
+	const offlineWolves = useMemo(() => new Set(roster.filter((w) => !w.online).map((w) => w.name)), [roster]);
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
@@ -585,6 +597,7 @@ export function SessionsSidebar() {
 										chat={c}
 										nested={nested}
 										indented={indented}
+										offline={offlineWolves.has(rowWolf(c))}
 										active={pathname === itemHref(c)}
 										kbdSelected={at === kbdIndex}
 										onOpen={() => {
@@ -703,24 +716,36 @@ export function SessionsSidebar() {
 	useServerEvent("needs-you-changed", scheduleEventRefresh);
 	useServerEvent("thread-updated", scheduleEventRefresh);
 	useServerResync(() => void refreshRef.current());
-	/* Presence changes fire no event, so re-check liveness on a timer (paused while the tab is hidden). */
+	/* Presence changes fire no event, so re-check liveness on a timer (paused while the tab is hidden). The tick is ONE
+	   /api/wolves call; threads are fetched only for a wolf that just came back online (the SSE/resync paths cover the rest). */
 	useEffect(() => {
-		const tick = () => {
-			if (document.visibilityState === "visible") void refreshRef.current();
+		const tick = async () => {
+			if (document.visibilityState !== "visible") return;
+			const { roster: next, recovered } = await checkRoster((u, i) => fetch(u, i), rosterRef.current);
+			setRoster(next);
+			if (recovered.length === 0) return;
+			const got = await Promise.all(
+				recovered.map(async (wolf) => {
+					try {
+						const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`, { cache: "no-store" });
+						const d = (await res.json()) as { threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] };
+						return { wolf, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+					} catch {
+						return { wolf, threads: undefined };
+					}
+				}),
+			);
+			setChats((prev) => foldWolfThreads(prev, next.map((w) => got.find((g) => g.wolf === w.name) ?? { wolf: w.name })));
+			setRoster((r) => r.map((w) => (got.some((g) => g.wolf === w.name && g.threads === undefined) ? { ...w, online: false } : w)));
 		};
-		const id = setInterval(tick, ROSTER_POLL_MS);
-		document.addEventListener("visibilitychange", tick);
+		const id = setInterval(() => void tick(), ROSTER_POLL_MS);
+		const onVisible = () => void tick();
+		document.addEventListener("visibilitychange", onVisible);
 		return () => {
 			clearInterval(id);
-			document.removeEventListener("visibilitychange", tick);
+			document.removeEventListener("visibilitychange", onVisible);
 		};
 	}, []);
-	useEffect(
-		() => () => {
-			if (eventDebounceRef.current) clearTimeout(eventDebounceRef.current);
-		},
-		[],
-	);
 
 	/* ── Keyboard seams (shortcut wave A, 2026-09-17; search-walk round
 	   2026-10-10) ── ⌘⇧F focuses the search field — and THE SEARCH OWNS THE

@@ -1,7 +1,7 @@
 /** The sidebar's needs-you dot is a pure function of the thread status: appears for a pending card, clears when idle, survives one bad wolf. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { foldWolfRoster, foldWolfThreads as fold, threadListItem } from "../src/core/index.ts";
+import { checkRoster, foldWolfRoster, foldWolfThreads as fold, threadListItem } from "../src/core/index.ts";
 
 type Row = ReturnType<typeof threadListItem>;
 const foldWolfThreads = (prev: Row[] | null, r: Parameters<typeof fold>[1]) => fold<Row>(prev, r) as Row[];
@@ -52,5 +52,30 @@ describe("foldWolfRoster", () => {
 		const prev = foldWolfRoster(null, [{ name: "a", status: "online" }, { name: "b", status: "online" }]);
 		assert.deepEqual(foldWolfRoster(prev, undefined), [{ name: "a", online: false }, { name: "b", online: false }]);
 		assert.deepEqual(foldWolfRoster(null, undefined), []);
+	});
+});
+
+describe("checkRoster (the 20s tick)", () => {
+	const stub = (body: unknown, urls: string[]) => async (u: string) => {
+		urls.push(u);
+		return { json: async () => body };
+	};
+	it("makes exactly one /api/wolves call and no thread fetches", async () => {
+		const urls: string[] = [];
+		const prev = foldWolfRoster(null, [{ name: "a", status: "online" }, { name: "b", status: "online" }]);
+		const r = await checkRoster(stub({ wolves: [{ name: "a", status: "online" }, { name: "b", status: "online" }] }, urls), prev);
+		assert.deepEqual(urls, ["/api/wolves"]);
+		assert.deepEqual(r.recovered, []);
+	});
+	it("reports only offline->online wolves as recovered", async () => {
+		const prev = foldWolfRoster(null, [{ name: "a", status: "online" }, { name: "b", status: "offline" }]);
+		const r = await checkRoster(stub({ wolves: [{ name: "a", status: "online" }, { name: "b", status: "online" }] }, []), prev);
+		assert.deepEqual(r.recovered, ["b"]);
+	});
+	it("unreachable server: last roster, all offline, nothing recovered", async () => {
+		const prev = foldWolfRoster(null, [{ name: "a", status: "online" }]);
+		const r = await checkRoster(async () => { throw new Error("down"); }, prev);
+		assert.deepEqual(r.roster, [{ name: "a", online: false }]);
+		assert.deepEqual(r.recovered, []);
 	});
 });

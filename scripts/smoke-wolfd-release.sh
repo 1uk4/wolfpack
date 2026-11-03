@@ -16,6 +16,8 @@ tar -xzf /in/release.tgz -C /opt/wolfd
 test -z "$(tar -tzf /in/release.tgz | grep -E "(^|/)\.env$" || true)" || { echo "FAIL .env in tarball"; exit 1; }
 echo "== unpacked: $(cat /opt/wolfd/VERSION), $(du -sh /opt/wolfd | cut -f1)"
 ls -d /opt/wolfd/node_modules/@anthropic-ai/claude-agent-sdk-linux-* && echo "claude cli: $(/opt/wolfd/tools/bin/claude --version)"
+echo "== roster: bundled agent profiles present"
+node --input-type=module -e "const m=await import(\"/opt/wolfd/packages/agents/dist/index.js\");const a=m.discoverAgents({cwd:\"/tmp\",agentDir:\"/tmp/none\"}).map(x=>x.name);console.log(\"roster:\",a.join(\",\"));if(!a.includes(\"worker\")){console.error(\"FAIL roster empty or worker missing\");process.exit(1)}"
 H=/home/wolf-hal2
 cp /opt/wolfd/templates/models.json $H/models.json
 printf "name: hal2\nworkspace: $H/work\n" > $H/wolf.yaml; mkdir -p $H/work

@@ -11,7 +11,8 @@ COPY apps ./apps
 RUN npm ci --no-audit --no-fund && npx tsc --build
 # Production-only install of the wolfd closure (no devDependencies, no apps/*): same lockfile, workspace-scoped.
 RUN mkdir /stage && cp package.json package-lock.json /stage/ \
- && for p in packages/*; do mkdir -p /stage/$p && cp $p/package.json /stage/$p/ && { [ ! -d $p/dist ] || cp -r $p/dist /stage/$p/; }; done
+ && for p in packages/*; do mkdir -p /stage/$p && cp $p/package.json /stage/$p/ && { [ ! -d $p/dist ] || cp -r $p/dist /stage/$p/; } \
+ && node -e 'const fs=require("fs"),path=require("path");const [src,dst]=process.argv.slice(1);for(const f of require(path.resolve(src,"package.json")).files??[]){if(f==="dist"||f.includes("*"))continue;if(fs.existsSync(path.join(src,f)))fs.cpSync(path.join(src,f),path.join(dst,f),{recursive:true})}' $p /stage/$p; done  # runtime assets the code reads relative to dist (packages/agents/agents/*.md): everything a package lists in package.json "files"
 RUN for a in apps/*; do mkdir -p /stage/$a && cp $a/package.json /stage/$a/; done \
  && cd /stage && npm ci --omit=dev --workspace=@wolfpack/harness --no-audit --no-fund \
  && rm -rf /stage/apps && rm -f /stage/package-lock.json \

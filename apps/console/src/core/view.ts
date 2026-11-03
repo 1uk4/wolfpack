@@ -391,6 +391,14 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "thread-compaction": {
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-thread-compaction", id: `tc_${marker.id}`, data: { summary: marker.content, ...(marker.details as { at: string; reason?: string }) } }],
+			});
+			return;
+		}
 		case "compaction": {
 			// THE MOMENT DIVIDER (owner round 14): minimal centered small
 			// text at the compaction moment — where the user currently is

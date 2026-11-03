@@ -1,6 +1,6 @@
 /** Ask card end to end over /v1: real pi-durable turns, scripted model (no LLM). */
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { BusyError, HttpConsoleClient, NotFoundError, ProtocolError } from "@wolfpack/client";
 import type { Card } from "@wolfpack/protocol";
@@ -211,25 +211,84 @@ describe("ask card (tool-raised, two-turn)", () => {
     });
   });
 
-  it("answering while a turn runs is 409 busy; the superseded card is then 404", async () => {
+  /** A wolf whose first turn raises an ask card and then waits on a gated sibling tool: the turn is still running with the card pending. */
+  const gatedAsk = async (rest: Parameters<typeof wolfWithAsk>[0], questions = 1) => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const slow = defineExtension({
       name: "gate",
       tools: [defineTool({ name: "gate", description: "wait", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { await gate; return { output: [{ type: "text" as const, text: "open" }] }; } })],
     });
-    tw = await wolfWithAsk([toolUse(fauxToolCall("ask_user_question", { question: "Q" })), toolUse(fauxToolCall("gate", {})), fauxAssistantMessage("done")], [slow]);
-    await tw.submit("go");
-    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
-    await tw.client.submit(tw.home, "actually do this", { whenBusy: "reject" });
-    expect((await tw.client.getThread(tw.home)).busy).toBe(true);
-    await expect(tw.client.answerCard!(tw.home, p.callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(BusyError);
-    release();
-    await drain(tw);
-    const d = await tw.client.getThread(tw.home);
+    const asks = Array.from({ length: questions }, (_, i) => fauxToolCall("ask_user_question", { question: `Q${i}` }));
+    tw = await wolfWithAsk([toolUse(...asks, fauxToolCall("gate", {})), ...rest], [slow]);
+    await tw.client.submit(tw.home, "go", { whenBusy: "reject" });
+    const w = tw;
+    // The turn stays open on the gated sibling while the cards are already pending.
+    await vi.waitFor(async () => expect((await w.client.getThread(w.home)).pendingCards).toHaveLength(questions));
+    const detail = await tw.client.getThread(tw.home);
+    expect(detail.busy).toBe(true);
+    return { release, cards: detail.pendingCards! };
+  };
+
+  it("answering while a turn runs is accepted (steered), not 409; the model gets it in the same turn", async () => {
+    let seen = "";
+    const g = await gatedAsk([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("done"); }]);
+    expect(g.cards).toHaveLength(1);
+    const ack = await tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "blue" } });
+    expect(["steered", "queued"]).toContain(ack.disposition);
+    expect((await tw!.client.getThread(tw!.home)).pendingCards).toBeUndefined();
+    g.release();
+    await drain(tw!);
+    const d = await tw!.client.getThread(tw!.home);
     expect(d.status).toBe("idle");
-    expect(d.messages.flatMap((m) => m.tools ?? []).find((t) => t.callId === p.callId)).toMatchObject({ dismissed: true });
-    await expect(tw.client.answerCard!(tw.home, p.callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
+    expect(seen).toContain("blue");
+    expect(d.messages.flatMap((m) => m.tools ?? []).find((t) => t.callId === g.cards[0].callId)).toMatchObject({ answer: { answer: { value: "blue" } } });
+    await expect(tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("skipping while a turn runs is accepted and the model is told", async () => {
+    let seen = "";
+    const g = await gatedAsk([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("done"); }]);
+    const ack = await tw!.client.skipCard!(tw!.home, g.cards[0].callId);
+    expect(["steered", "queued"]).toContain(ack.disposition);
+    g.release();
+    await drain(tw!);
+    expect((await tw!.client.getThread(tw!.home)).status).toBe("idle");
+    expect(seen).toContain("skipped");
+  });
+
+  it("a held sibling answer still works mid-turn: ack queued, delivered once the last sibling is answered", async () => {
+    let seen = "";
+    const g = await gatedAsk([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("done"); }], 2);
+    expect(g.cards).toHaveLength(2);
+    const first = await tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "one" } });
+    expect(first.disposition).toBe("queued");
+    expect((await tw!.client.getThread(tw!.home)).pendingCards!.find((c) => c.callId === g.cards[0].callId)).toMatchObject({ heldAnswer: { answer: { value: "one" } } });
+    await tw!.client.answerCard!(tw!.home, g.cards[1].callId, { answer: { value: "two" } });
+    g.release();
+    await drain(tw!);
+    expect((await tw!.client.getThread(tw!.home)).status).toBe("idle");
+    expect(seen).toContain("one");
+    expect(seen).toContain("two");
+  });
+
+  it("a chat message mid-turn supersedes the card at once; a later answer is 404", async () => {
+    const g = await gatedAsk([fauxAssistantMessage("done")]);
+    const settled: string[] = [];
+    await tw!.client.submit(tw!.home, "actually do this", { whenBusy: "steer" });
+    // Immediately, while the gated tool is still running and the engine has not placed the steer.
+    const d = await tw!.client.getThread(tw!.home);
+    expect(d.busy).toBe(true);
+    expect(d.pendingCards).toBeUndefined();
+    expect(await tw!.client.listCards!("testwolf")).toEqual([]);
+    await expect(tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(tw!.client.skipCard!(tw!.home, g.cards[0].callId)).rejects.toBeInstanceOf(NotFoundError);
+    void settled;
+    g.release();
+    await drain(tw!);
+    const end = await tw!.client.getThread(tw!.home);
+    expect(end.status).toBe("idle");
+    expect(end.messages.flatMap((m) => m.tools ?? []).find((t) => t.callId === g.cards[0].callId)).toMatchObject({ dismissed: true });
   });
 
   it("a concurrent double answer for the same card starts exactly one turn", async () => {

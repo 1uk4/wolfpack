@@ -417,6 +417,10 @@ export const ThreadSummarySchema = z.object({
   /** 1-based place in the queue while `state` is `queued`. */
   queuePosition: z.number().int().positive().optional(),
   startedAt: z.iso.datetime({ offset: true }).optional(),
+  /** Additive, subagent threads: when the current run began (reset on every resume; equals `startedAt` until then). Optional: older servers do not send it. */
+  runStartedAt: z.iso.datetime({ offset: true }).optional(),
+  /** Additive: when the turn now running began; present only while a turn runs (steers do not reset it). */
+  turnStartedAt: z.iso.datetime({ offset: true }).optional(),
   /** Set once the child is done, failed or stopped; cleared when it is resumed. */
   finishedAt: z.iso.datetime({ offset: true }).optional(),
   /** What it is doing now (the tool it last started), for the status strip. */
@@ -589,6 +593,17 @@ export const AttachmentSchema = z.object({
 });
 export type Attachment = z.infer<typeof AttachmentSchema>;
 
+/**
+ * A compaction marker (additive, optional): the thread was compacted at this point. Such a message has role
+ * "assistant" and empty `text` (an older client shows an empty assistant row); clients render a divider instead.
+ * `summary` is the summary text without pi-durable's wrapper; `reason` is why it ran ("manual", "threshold", ...).
+ */
+export const ThreadCompactionSchema = z.object({
+  summary: z.string(),
+  reason: z.string().optional(),
+});
+export type ThreadCompaction = z.infer<typeof ThreadCompactionSchema>;
+
 export const ThreadMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant"]),
@@ -605,6 +620,8 @@ export const ThreadMessageSchema = z.object({
    * show the attachments (fetch bytes with `getAttachment`) and may strip those lines from the displayed text.
    */
   attachments: z.array(AttachmentSchema).optional(),
+  /** Additive, optional: this entry marks a compaction (see ThreadCompactionSchema); older servers never send it. */
+  compaction: ThreadCompactionSchema.optional(),
 });
 export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
 
@@ -676,7 +693,12 @@ export const InFlightPartialSchema = z.object({
 });
 export type InFlightPartial = z.infer<typeof InFlightPartialSchema>;
 
-export const TurnStartEventSchema = base.extend({ type: z.literal("turn-start"), turnId });
+export const TurnStartEventSchema = base.extend({
+  type: z.literal("turn-start"),
+  turnId,
+  /** Additive: the server clock when the turn began (same value as `ThreadSummary.turnStartedAt`). Absent on older servers. */
+  startedAt: IsoSchema.optional(),
+});
 export const TextDeltaEventSchema = base.extend({ type: z.literal("text-delta"), turnId, text: z.string() });
 export const ThinkingDeltaEventSchema = base.extend({ type: z.literal("thinking-delta"), turnId, text: z.string() });
 export const ToolStartEventSchema = base.extend({

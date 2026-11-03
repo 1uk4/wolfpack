@@ -10,7 +10,7 @@ import { useOptionalServerEvent, useOptionalServerResync } from "@/components/se
 import { useChatSession } from "@/components/session";
 import { threadBase, threadTransport } from "@/components/thread-transport";
 import { SPEAKER, speakerBlock, type Speaker } from "@/components/speaker-colors";
-import { PROSE_BLOCK_CLASS, renderItems, threadSlug, workHref, type LhMessage } from "@/src/core";
+import { PROSE_BLOCK_CLASS, renderItems, separateTurnMs, threadSlug, workHref, type LhMessage } from "@/src/core";
 
 const STATE_CLASS: Record<SubagentState, string> = {
 	queued: "text-muted-foreground",
@@ -86,6 +86,7 @@ function Header({ summary, now, titleId, close, onStop, pane, onPane }: { summar
 	const stoppable = (state === "running" || state === "queued") && onStop !== undefined;
 	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
 	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
+	const turnMs = summary ? separateTurnMs(summary, now) : undefined;
 	return (
 		<OverlayHeader className="mb-3 flex items-center gap-x-3 gap-y-2 pr-4 max-md:-ml-0 max-md:flex-wrap max-md:pr-0" data-testid="subagent-header">
 			<div id={titleId} className="min-w-0 shrink truncate font-sans text-sm font-medium max-md:flex-1" title={summary?.title} data-testid="subagent-title">
@@ -99,7 +100,11 @@ function Header({ summary, now, titleId, close, onStop, pane, onPane }: { summar
 							{state === "queued" && summary.queuePosition ? `queued #${summary.queuePosition}` : state}
 						</span>
 					)}
-					{started !== undefined && <span data-testid="subagent-elapsed">{formatElapsed(ended - started)}</span>}
+					{started !== undefined && (
+						<span data-testid="subagent-elapsed">
+							{turnMs === undefined ? formatElapsed(ended - started) : `turn ${formatElapsed(turnMs)} · total ${formatElapsed(ended - started)}`}
+						</span>
+					)}
 					{summary.tokens !== undefined && <span data-testid="subagent-tokens">{formatTokens(summary.tokens)} tokens</span>}
 					{summary.taskId && (
 						<a data-testid="subagent-task" href={workHref(summary.taskId)} className="underline underline-offset-2">

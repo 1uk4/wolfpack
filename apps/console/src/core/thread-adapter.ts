@@ -67,6 +67,20 @@ const trimSeam = (t: string): string => t.replace(/^\n\n/, "").replace(/\n\n$/, 
 export function threadMessagesToNative(messages: readonly ThreadMessage[]): LhMessage[] {
 	return messages.flatMap((m): LhMessage[] => {
 		const timestamp = Date.parse(m.at) || 0;
+		if (m.compaction) {
+			// A wolfd compaction marker: the transcript divider (summary collapsed). Older servers never send one.
+			return [
+				{
+					id: m.id,
+					role: "custom",
+					customType: "thread-compaction",
+					content: m.compaction.summary,
+					display: true,
+					details: { at: m.at, ...(m.compaction.reason ? { reason: m.compaction.reason } : {}) },
+					timestamp,
+				} as LhMessage,
+			];
+		}
 		if (m.role === "user") {
 			return [{ id: m.id, role: "user", content: m.text, timestamp } as UserMessage & { id: string }];
 		}
@@ -145,7 +159,8 @@ export class ThreadEventAdapter {
 				return this.applySnapshot(ev, at);
 			case "turn-start":
 				this.reset();
-				return [{ type: "agent_start" }];
+				// The server's clock for the turn rides the event (replayed from the buffer on a reattach too).
+				return [{ type: "agent_start", ...(ev.startedAt ? { turnStartedAt: ev.startedAt } : {}) }];
 			case "thinking-delta":
 				return this.grow(at, (blocks) => appendText(blocks, "thinking", ev.text));
 			case "text-delta":
@@ -196,6 +211,13 @@ export class ThreadEventAdapter {
 	 * the turn already showed). Tool-call blocks are kept. History is not rewritten here: the settle refetch owns it.
 	 */
 	private applySnapshot(ev: SnapshotEvent, at: number): WireEvent[] {
+		// A snapshot of a running turn carries the turn's server start (the detail's turnStartedAt): a mid-turn joiner
+		// gets no turn-start event, only this.
+		const clock: WireEvent[] = ev.thread.turnStartedAt ? [{ type: "turn_clock", turnStartedAt: ev.thread.turnStartedAt }] : [];
+		return [...clock, ...this.snapshotBody(ev, at)];
+	}
+
+	private snapshotBody(ev: SnapshotEvent, at: number): WireEvent[] {
 		const f = ev.inFlight;
 		if (!f) return [];
 		// Without the turn's start, what earlier messages showed is unknown: replacing would duplicate them. The
@@ -355,6 +377,7 @@ export function threadListItem(
 		...(thread.state !== undefined ? { state: thread.state } : {}),
 		...(thread.queuePosition !== undefined ? { queuePosition: thread.queuePosition } : {}),
 		...(thread.startedAt !== undefined ? { startedAt: thread.startedAt } : {}),
+		...(thread.runStartedAt !== undefined ? { runStartedAt: thread.runStartedAt } : {}),
 		...(thread.finishedAt !== undefined ? { finishedAt: thread.finishedAt } : {}),
 		...(thread.step !== undefined ? { step: thread.step } : {}),
 		...(thread.tokens !== undefined ? { tokens: thread.tokens } : {}),

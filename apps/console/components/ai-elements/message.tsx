@@ -38,7 +38,7 @@ import {
   type PluginConfig,
 } from "streamdown";
 import { mdComponents, mdComponentsInline } from "@/components/md-blocks";
-import { transformMathDelimiters } from "@/src/core";
+import { escapeRawHtml, linkifyWorkIds, transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: LhViewMessage["role"];
@@ -366,7 +366,7 @@ export const MessageResponse = memo(
     // legacy spans are left for a later render when their closer arrives.
     const content =
       typeof children === "string"
-        ? transformMathDelimiters(children)
+        ? linkifyWorkIds(transformMathDelimiters(children))
         : children;
 
     return (
@@ -405,7 +405,7 @@ const INLINE_REHYPE = [...Object.values(defaultRehypePlugins), mathPlugin.rehype
 export const InlineMarkdown = memo(({ children, className }: { children: string; className?: string }) => (
   <span className={cn("lh-prose", className)} data-testid="inline-md">
     <Block
-      content={transformMathDelimiters(children)}
+      content={linkifyWorkIds(transformMathDelimiters(escapeRawHtml(children)))}
       index={0}
       isIncomplete={false}
       shouldParseIncompleteMarkdown={false}

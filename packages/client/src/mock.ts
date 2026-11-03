@@ -216,7 +216,8 @@ export class MockConsoleClient implements ConsoleClient {
     this.pendingCards.splice(at, 1);
     this.emitActivity({ type: "card-settled", threadId, callId, outcome: "answered" });
     this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
-    return { messageId: `card-${callId}`, disposition: "started" };
+    // A running turn takes the answer as a steer (like the server); idle, it would start one.
+    return { messageId: `card-${callId}`, disposition: t.running ? "steered" : "started" };
   }
 
   /** Skips a card raised through `raiseCard` (no next turn is started); any other card is unknown. */
@@ -228,7 +229,8 @@ export class MockConsoleClient implements ConsoleClient {
     this.pendingCards.splice(at, 1);
     this.emitActivity({ type: "card-settled", threadId, callId, outcome: "dismissed", closed: "skipped" });
     this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
-    return { messageId: `card-${callId}`, disposition: "started" };
+    // A running turn takes the answer as a steer (like the server); idle, it would start one.
+    return { messageId: `card-${callId}`, disposition: t.running ? "steered" : "started" };
   }
 
   readonly settings = new Map<string, ThreadSettings>();

@@ -109,6 +109,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
     capability: {
       tools: v.tools,
       ...(v.tiers ? { tiers: v.tiers as WolfConfig["capability"]["tiers"] } : {}),
+      ...(v.models ? { models: definedModels(v.models) } : {}),
       workspace: v.workspace ? expand(v.workspace, dir, home) : dir,
     },
     serve: {
@@ -144,6 +145,16 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
 /** Drop undefined keys so an omitted yaml field never overrides a default. */
 function definedOnly<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+/** The typed tiers of a `models:` block, undefined fields dropped; passthrough extras are not carried. */
+function definedModels(models: Record<string, unknown>): NonNullable<WolfConfig["capability"]["models"]> {
+  const out: NonNullable<WolfConfig["capability"]["models"]> = {};
+  for (const tier of ["main", "smart", "fast"] as const) {
+    const t = models[tier] as { provider?: string; model?: string; thinking?: string } | undefined;
+    if (t) out[tier] = definedOnly({ provider: t.provider, model: t.model, thinking: t.thinking });
+  }
+  return out;
 }
 
 export interface DiscoveredWolves {

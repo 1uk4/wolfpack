@@ -57,3 +57,11 @@ Live proof (tagged, never in CI): `WOLFD_LIVE=1 npm test -w @wolfpack/harness --
 3. **ADRs are append-only; `architecture.md` is current state only.** Decisions go in `docs/decisions/` (see its README) and are never rewritten. `architecture.md` describes what exists now, with unbuilt work clearly marked *Planned*.
 
 `docs/vision.md` is a living summary; the work-item system holds the full history.
+
+## models.json is generated from wolf.yaml `models:`
+
+When a **local** wolf's `wolf.yaml` has a `models:` block, wolfd regenerates the `models.json` beside it at start
+(pack `models:` < wolf.yaml), only when the content differs, atomically, keeping the file's mode. Hand edits to that
+file are overwritten (one log line says so). No `models:` block, a `WOLFPACK_MODELS_FILE` handover, a VPS wolf (its
+table is shipped by `wolfpack sync`) or an undetectable location: the file is left alone. A local wolf is one whose
+dir is `<wolvesRoot>/local/<name>`.

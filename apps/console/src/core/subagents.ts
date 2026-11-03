@@ -14,6 +14,8 @@ export interface ChildThread {
 	state?: SubagentState;
 	queuePosition?: number;
 	startedAt?: string;
+	/** Additive: when the current run began (reset on resume). Absent on older servers. */
+	runStartedAt?: string;
 	finishedAt?: string;
 	step?: string;
 	tokens?: number;
@@ -49,6 +51,24 @@ export function elapsedMs(t: { startedAt?: string; finishedAt?: string; state?: 
 	if (Number.isNaN(start)) return 0;
 	const end = isSettled(t) && t.finishedAt ? Date.parse(t.finishedAt) : now;
 	return Math.max(0, (Number.isNaN(end) ? now : end) - start);
+}
+
+/** Milliseconds of the current run (since the last resume): `runStartedAt` to finish when settled, else to `now`. Undefined when the server sends no `runStartedAt`. */
+export function turnElapsedMs(t: { runStartedAt?: string; finishedAt?: string; state?: SubagentState }, now: number): number | undefined {
+	if (!t.runStartedAt) return undefined;
+	const start = Date.parse(t.runStartedAt);
+	if (Number.isNaN(start)) return undefined;
+	const end = isSettled(t) && t.finishedAt ? Date.parse(t.finishedAt) : now;
+	return Math.max(0, (Number.isNaN(end) ? now : end) - start);
+}
+
+/** The turn timer to show beside the total, or undefined when there is nothing to add (older server, or never resumed: same start). */
+export function separateTurnMs(t: { startedAt?: string; runStartedAt?: string; finishedAt?: string; state?: SubagentState }, now: number): number | undefined {
+	if (!t.runStartedAt || t.runStartedAt === t.startedAt || !t.startedAt) return undefined;
+	const run = Date.parse(t.runStartedAt);
+	const start = Date.parse(t.startedAt);
+	if (Number.isNaN(run) || Number.isNaN(start) || run < start) return undefined; // nonsense (clock skew, bad data): single timer
+	return turnElapsedMs(t, now);
 }
 
 /** "42s", "3m 05s", "1h 02m". */

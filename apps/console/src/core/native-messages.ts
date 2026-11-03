@@ -58,7 +58,7 @@ export interface LhMarkerMessage {
 	/** Record identity (pi messages carry no id — see the file header). */
 	id: string;
 	role: "custom";
-	customType: "subagent-steer" | "subagent-abort" | "compaction";
+	customType: "subagent-steer" | "subagent-abort" | "compaction" | "thread-compaction";
 	/** The model-facing text. */
 	content: string;
 	display: boolean;

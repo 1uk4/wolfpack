@@ -77,6 +77,27 @@ export class CardTracker {
     return ids;
   }
 
+  /**
+   * A chat message accepted mid-turn supersedes the cards still waiting. Claimed cards (an answer is being submitted)
+   * are left alone: their closure is answered/skipped, and the model must not get both. Returns the closed ids and
+   * which of them had a held answer or skip (discarded).
+   */
+  dismissUnclaimed(): { ids: string[]; heldDiscarded: string[] } {
+    const ids = [...this.raised.keys()].filter((id) => !this.claimed.has(id));
+    const heldDiscarded = ids.filter((id) => this.held.has(id));
+    for (const id of ids) this.drop(id);
+    return { ids, heldDiscarded };
+  }
+
+  /** The re-send of a withdrawn answer failed for good: the card is pending again, unanswered, so the owner can answer it. */
+  reraise(cards: readonly ReadyAnswer[]): void {
+    for (const c of cards) {
+      this.claimed.delete(c.callId);
+      this.held.delete(c.callId);
+      if (!this.raised.has(c.callId)) this.raised.set(c.callId, { card: c.card, raisedAt: new Date().toISOString() });
+    }
+  }
+
   /** Cards waiting for the operator, oldest first; a held one carries its answer. */
   pending(): PendingCard[] {
     return this.raisedCards().filter((p) => !this.claimed.has(p.callId));

@@ -88,8 +88,15 @@ class CardClient extends MockConsoleClient {
 	holdNext = false;
 	/** The next answer fails as an unknown card. */
 	notFoundNext = false;
-	constructor(private readonly card: Card) {
-		super({ delayMs: 0, script: [{ kind: "text", text: "Shipping from the answer." }] });
+	/** The next answer/skip is steered into a running turn (the ack says steered; no turn starts). */
+	steerNext = false;
+	submitTexts: string[] = [];
+	override async submit(threadId: string, text: string, opts?: import("@wolfpack/client").SubmitOptions) {
+		this.submitTexts.push(text);
+		return super.submit(threadId, text, opts);
+	}
+	constructor(private readonly card: Card, delayMs = 0) {
+		super({ delayMs, script: [{ kind: "text", text: "Shipping from the answer." }] });
 	}
 	override async getThread(id: string): Promise<ThreadDetail> {
 		const base = await super.getThread(id);
@@ -118,6 +125,12 @@ class CardClient extends MockConsoleClient {
 			return { messageId: `card-${callId}`, disposition: "queued" as const };
 		}
 		this.skippedState = true;
+		if (this.steerNext) {
+			this.steerNext = false;
+			// wolfd places the steered answer when the turn ends, and that starts a follow-on turn.
+			await super.submit(threadId, "steered answer", { whenBusy: "followUp" });
+			return { messageId: "7", disposition: "steered" as const };
+		}
 		return this.submit(threadId, "skipped");
 	}
 	async answerCard(threadId: string, callId: string, answers: CardAnswers) {
@@ -138,6 +151,12 @@ class CardClient extends MockConsoleClient {
 			return { messageId: `card-${callId}`, disposition: "queued" as const };
 		}
 		this.answered = answers;
+		if (this.steerNext) {
+			this.steerNext = false;
+			// wolfd places the steered answer when the turn ends, and that starts a follow-on turn.
+			await super.submit(threadId, "steered answer", { whenBusy: "followUp" });
+			return { messageId: "7", disposition: "steered" as const };
+		}
 		return this.submit(threadId, "answer");
 	}
 }
@@ -153,12 +172,22 @@ function routeFetch(client: CardClient): typeof fetch {
 		if (answer && req.method === "POST") return api.answerCard(ref, decodeURIComponent(answer[1]!), req);
 		const skip = url.pathname.match(/\/cards\/([^/]+)\/skip$/);
 		if (skip && req.method === "POST") return api.skipCard(ref, decodeURIComponent(skip[1]!));
-		if (url.pathname.endsWith("/stream")) return api.stream(ref, req);
+		if (url.pathname.endsWith("/stream")) {
+			streamHits++;
+			return api.stream(ref, req);
+		}
+		if (url.pathname.endsWith("/abort") && req.method === "POST") {
+			aborts++;
+			return api.abort(ref);
+		}
+		if (url.pathname.endsWith("/threads/home") && req.method === "POST") return api.submit(ref, req);
 		if (url.pathname.endsWith("/threads/home")) return api.thread(ref);
 		return new Response("{}", { status: 404 });
 	}) as typeof fetch;
 }
 
+let streamHits = 0;
+let aborts = 0;
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
 
@@ -284,6 +313,146 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await click(q('[data-testid="card-submit"]')!);
 		await settle();
 		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "main" } } }]);
+	});
+
+	/** A thread whose turn is running (slow script) and that this console is streaming: status "streaming". */
+	async function mountStreaming(client: CardClient) {
+		streamHits = 0;
+		aborts = 0;
+		await client.submit(FIXTURE_THREAD.id, "go", { whenBusy: "reject" });
+		await mount(client);
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "1uk4", threadId: FIXTURE_THREAD.id, kind: "status", status: "busy" })));
+		await settle(30);
+		assert.ok(streamHits > 0, "attached to the running turn");
+	}
+	const pendingLine = () => q('[data-testid="card-send-pending"]');
+	const answerSingle = async () => {
+		await click(document.querySelectorAll('[data-testid="card-option"]')[1]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle(30);
+	};
+	const composerOf = () => document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement;
+	const typeInto = (v: string) =>
+		act(async () => {
+			const ta = composerOf();
+			ta.value = v;
+			const key = Object.keys(ta).find((k) => k.startsWith("__reactProps$"))!;
+			(ta as any)[key].onChange({ target: ta, currentTarget: ta });
+		});
+	const pressEnter = () =>
+		act(async () => {
+			const ta = composerOf();
+			const key = Object.keys(ta).find((k) => k.startsWith("__reactProps$"))!;
+			(ta as any)[key].onKeyDown({ key: "Enter", shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, stopPropagation() {}, nativeEvent: {} });
+		});
+
+	it("a steered answer while this console streams the turn: card answered, pending line, no error, no new turn started", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await answerSingle();
+		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "develop" } } }]);
+		assert.ok(q('[data-testid="answered-card"]'));
+		assert.equal(q('[data-testid="pending-card"]'), null);
+		assert.equal(q('[data-testid="card-error"]'), null);
+		assert.match(pendingLine()?.textContent ?? "", /will send when the turn finishes/i);
+		assert.equal(client.submitTexts.filter((t) => t === "answer").length, 0, "the answer did not start a turn itself");
+	});
+
+	it("a steered skip while streaming behaves the same", async () => {
+		const client = new CardClient(FREE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await click(q('[data-testid="card-skip"]')!);
+		await settle(30);
+		assert.deepEqual(client.skips, [CALL]);
+		assert.equal(q('[data-testid="card-error"]'), null);
+		assert.ok(pendingLine());
+	});
+
+	it("when the turn ends the pending line clears and the follow-on turn the answer started is attached", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await answerSingle();
+		assert.ok(pendingLine());
+		const before = streamHits;
+		await settle(700);
+		assert.equal(pendingLine(), null, "cleared at the turn end");
+		assert.ok(streamHits > before, "attached to the follow-on turn");
+	});
+
+	it("a steered ack on a console that sees no running turn (reload mid-turn, second client) attaches instead of waiting", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		streamHits = 0;
+		await client.submit(FIXTURE_THREAD.id, "go", { whenBusy: "reject" }); // running when the page loads, status "ready"
+		await mount(client);
+		await answerSingle();
+		assert.equal(pendingLine(), null, "no stuck pending line");
+		assert.equal(q('[data-testid="card-error"]'), null);
+		assert.ok(q('[data-testid="answered-card"]'));
+		assert.ok(streamHits > 0, "attached to the running turn");
+	});
+
+	it("a steered ack with the thread already idle does not leave a pending line", async () => {
+		const client = new CardClient(SINGLE);
+		client.steerNext = true;
+		await mount(client);
+		await answerSingle();
+		assert.equal(pendingLine(), null);
+	});
+
+	it("sending a chat message clears the pending line", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await answerSingle();
+		assert.ok(pendingLine());
+		await typeInto("never mind");
+		await pressEnter();
+		await settle(20);
+		assert.equal(pendingLine(), null);
+	});
+
+	it("a stream error clears the pending line", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await answerSingle();
+		assert.ok(pendingLine());
+		const real = globalThis.fetch;
+		globalThis.fetch = (async (i: RequestInfo | URL, init?: RequestInit) => (String(i).endsWith("/stream") || (init?.method === "POST" && String(i).endsWith("/threads/home")) ? new Response("boom", { status: 500 }) : real(i, init))) as typeof fetch;
+		await typeInto("again");
+		await pressEnter();
+		await settle(60);
+		globalThis.fetch = real;
+		assert.equal(pendingLine(), null);
+	});
+
+	it("Stop (abort) clears the pending line", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await answerSingle();
+		assert.ok(pendingLine());
+		await pressEnter(); // empty composer while busy = stop
+		await settle(20);
+		assert.ok(aborts > 0);
+		assert.equal(pendingLine(), null);
+	});
+
+	it("the cards being superseded clears the pending line", async () => {
+		const client = new CardClient(SINGLE, 500);
+		client.steerNext = true;
+		await mountStreaming(client);
+		await answerSingle();
+		assert.ok(pendingLine());
+		// The server's card-settled rides the thread stream the console is attached to.
+		const anyClient = client as any;
+		await act(async () => anyClient.emit(anyClient.threads.get(FIXTURE_THREAD.id), { type: "card-settled", callId: CALL, outcome: "dismissed", closed: "superseded" }));
+		await settle(30);
+		assert.equal(pendingLine(), null);
 	});
 
 	it("a queued answer stays pending and shows as held", async () => {

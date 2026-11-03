@@ -27,7 +27,7 @@
  * EXPAND icon (opens the session overlay) when a chat page is mounted.
  */
 
-import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useRef, useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, MaximizeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -35,7 +35,10 @@ import {
 	extractTableDataFromElement,
 	tableDataToMarkdown,
 	useIsCodeFenceIncomplete,
+	defaultComponents,
 } from "streamdown";
+import { WorkIdChip } from "@/components/work-id-chip";
+import { isFullWorkId, workIdFromHref } from "@/src/core";
 import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/mermaid-render";
 import { MermaidError } from "@/components/mermaid-error";
@@ -239,6 +242,7 @@ export function MarkdownCode(props: ComponentProps<"code"> & ExtraProps) {
 
 	// Inline code: no data-block (the pre handler stamps block fences only).
 	if (!("data-block" in props)) {
+		if (typeof children === "string" && isFullWorkId(children.trim())) return <WorkIdChip id={children.trim()} />;
 		return (
 			<code className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)} data-streamdown="inline-code" {...rest}>
 				{children}
@@ -525,6 +529,8 @@ export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
  *  exposed as a hover `title` (never a visible URL or an anchor). */
 export function MarkdownInertLink(props: ComponentProps<"a"> & ExtraProps) {
 	const { children, className, href } = props;
+	const workId = workIdFromHref(href);
+	if (workId) return <WorkIdChip id={workId} inert />;
 	return (
 		<span data-streamdown="inert-link" className={cn("underline underline-offset-2", className)} title={href}>
 			{children}
@@ -535,6 +541,7 @@ export function MarkdownInertLink(props: ComponentProps<"a"> & ExtraProps) {
 /** Code: inline code keeps the house look; fences become a bare <code> (no copy corner, no mermaid). */
 export function InertCode(props: ComponentProps<"code"> & ExtraProps) {
 	const { children, className, node, ...rest } = props;
+	if (!("data-block" in props) && typeof children === "string" && isFullWorkId(children.trim())) return <WorkIdChip id={children.trim()} inert />;
 	return (
 		<code className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)} data-streamdown="inline-code" {...rest}>
 			{children}
@@ -563,8 +570,17 @@ export function InertImage(props: ComponentProps<"img"> & ExtraProps) {
 	return <span data-streamdown="inert-image">{props.alt ?? ""}</span>;
 }
 
+/** Links: a rewritten work id (src/core/work-id-link) → chip; any other link is Streamdown's default. */
+export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
+	const id = workIdFromHref(props.href);
+	if (id) return <WorkIdChip id={id} />;
+	const Default = defaultComponents.a as ComponentType<ComponentProps<"a"> & ExtraProps>;
+	return <Default {...props} />;
+}
+
 export const mdComponents = {
 	p: MarkdownParagraph,
+	a: MarkdownLink,
 	code: MarkdownCode,
 	table: MarkdownTable,
 	span: MathDisplay,

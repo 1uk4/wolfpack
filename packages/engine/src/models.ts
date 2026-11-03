@@ -376,6 +376,81 @@ export function writeModelTable(file: string, table: ModelTable): void {
   fs.writeFileSync(file, JSON.stringify(table, null, 2) + "\n");
 }
 
+/**
+ * Where a wolf runs, from its on-disk layout: a local wolf's dir is `<wolvesRoot>/local/<name>` (the CLI's LOCAL_HOST
+ * layout); a VPS wolf lives in `<WOLFPACK_HOME_ROOT>/wolf-<id>`. An existing models.json that says `vps` wins.
+ * Anything else is "unknown" (callers must not write).
+ */
+export function detectWolfLocation(wolfYaml: string): WolfLocation | "unknown" {
+  const dir = path.dirname(path.resolve(wolfYaml));
+  try {
+    const existing = JSON.parse(fs.readFileSync(path.join(dir, "models.json"), "utf8")) as { location?: unknown };
+    if (existing.location === "vps") return "vps";
+  } catch {
+    /* no readable file: fall through to the layout */
+  }
+  return path.basename(path.dirname(dir)) === "local" ? "local" : "unknown";
+}
+
+export type RegenerateStatus = "no-models-block" | "not-local" | "unchanged" | "written";
+
+/**
+ * Regenerate a wolf's models.json from the `models:` block of its wolf.yaml (pack `models:` < wolf.yaml), for wolves
+ * wolfd starts without the CLI's launch/sync step. models.json is therefore GENERATED whenever wolf.yaml has `models:`:
+ * hand edits are overwritten. Nothing happens without a block, or unless the wolf is local (a VPS wolf's table is
+ * shipped by the CLI with location vps/api and must never be rebuilt here; an undetectable location counts as not
+ * local). Rewritten only when the content differs, via tmp file + rename (existing mode and, best effort, owner kept).
+ * A resolve error throws before anything is touched.
+ */
+export function regenerateWolfModelsFile(opts: {
+  wolfYaml: string;
+  models: WolfModels["models"] | undefined;
+  packConfigFile?: string;
+  /** Override detection (tests). */
+  location?: WolfLocation | "unknown";
+}): { path: string; status: RegenerateStatus; replaced?: boolean } {
+  const file = path.join(path.dirname(path.resolve(opts.wolfYaml)), "models.json");
+  if (!opts.models || Object.keys(opts.models).length === 0) return { path: file, status: "no-models-block" };
+  const location = opts.location ?? detectWolfLocation(opts.wolfYaml);
+  if (location !== "local") return { path: file, status: "not-local" };
+  const table = resolveModelTable({
+    pack: readPackModels(opts.packConfigFile ?? packConfigPath()),
+    wolf: { transport: readWolfModels(opts.wolfYaml)?.transport, models: opts.models },
+    location,
+  });
+  const next = JSON.stringify(table, null, 2) + "\n";
+  let current: string | undefined;
+  let st: fs.Stats | undefined;
+  try {
+    current = fs.readFileSync(file, "utf8");
+    st = fs.statSync(file);
+  } catch {
+    current = undefined;
+  }
+  if (current === next) return { path: file, status: "unchanged" };
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, next);
+    if (st) {
+      fs.chmodSync(tmp, st.mode & 0o7777);
+      try {
+        fs.chownSync(tmp, st.uid, st.gid);
+      } catch {
+        /* best effort: not permitted unless root */
+      }
+    }
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* already gone */
+    }
+    throw e;
+  }
+  return { path: file, status: "written", replaced: current !== undefined };
+}
+
 export function readModelTable(file: string): ModelTable {
   const table = JSON.parse(fs.readFileSync(file, "utf8")) as ModelTable;
   if (!table?.tiers || !table.steps || !table.transport) {

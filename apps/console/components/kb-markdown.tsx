@@ -10,9 +10,12 @@ import Link from "next/link";
 import { isValidElement, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { mdComponents } from "@/components/md-blocks";
-import { UNRESOLVED_HREF, headingSlug } from "@/src/core";
+import { WorkIdChip } from "@/components/work-id-chip";
+import { UNRESOLVED_HREF, headingSlug, workIdFromHref } from "@/src/core";
 
 function KbAnchor({ href, children, node: _node, target: _target, rel: _rel, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown }) {
+	const workId = workIdFromHref(href);
+	if (workId) return <WorkIdChip id={workId} />;
 	if (href === UNRESOLVED_HREF) {
 		return (
 			<span

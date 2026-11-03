@@ -71,7 +71,7 @@ describe("device management routes", () => {
     expect((await list(b.token)).status).toBe(200);
     const r = await fetch(`${hub.url}/v1/tokens/${b.tokenId}`, { method: "DELETE", headers: auth(a.token) });
     expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ revoked: b.tokenId, self: false });
+    expect(await r.json()).toEqual({ revoked: b.tokenId, self: false, cascaded: [] });
     expect((await list(b.token)).status).toBe(401);
     expect((await list(a.token)).status).toBe(200);
   });
@@ -83,7 +83,7 @@ describe("device management routes", () => {
     expect((await fetch(`${hub.url}/v1/tokens/${w.tokenId}`, { method: "DELETE", headers: auth(a.token) })).status).toBe(404);
     expect((await fetch(`${hub.url}/v1/work?domain=x`, { headers: auth(w.token) })).status).not.toBe(401); // worker still valid
     const r = await fetch(`${hub.url}/v1/tokens/${a.tokenId}`, { method: "DELETE", headers: auth(a.token) });
-    expect(await r.json()).toEqual({ revoked: a.tokenId, self: true });
+    expect(await r.json()).toEqual({ revoked: a.tokenId, self: true, cascaded: [] });
     expect((await list(a.token)).status).toBe(401);
   });
 
@@ -126,5 +126,72 @@ describe("device management routes", () => {
     expect((await r.json()).retryable).toBe(true);
     clock += 61_000;
     expect((await fetch(`${hub.url}/v1/tokens/pairing-codes`, { method: "POST", headers: auth(a.token) })).status).toBe(200);
+  });
+
+  const mint = (t: string, body: unknown = {}) => fetch(`${hub.url}/v1/tokens/pairing-codes`, { method: "POST", headers: { ...auth(t), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const redeem = async (code: string, label: string) => ((await (await fetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label }) })).json()) as { token: string; tokenId: string });
+  const del = (t: string, id: string, q = "") => fetch(`${hub.url}/v1/tokens/${id}${q}`, { method: "DELETE", headers: auth(t) });
+  const devs = async (t: string) => ((await (await list(t)).json()) as { devices: { id: string; label: string; addedBy: string | null; addedById: string | null }[] }).devices;
+
+  it("a mint body naming kind or hostId (or anything else) is rejected 400, nothing minted", async () => {
+    const a = await device("browser", "A");
+    for (const body of [{ kind: "worker" }, { kind: "console" }, { hostId: "vps-1" }, { label: "x", extra: 1 }]) expect((await mint(a.token, body)).status, JSON.stringify(body)).toBe(400);
+        expect(store.list().length).toBe(1);
+  });
+
+  it("records provenance: addedBy is the minting device's label; CLI-minted and pre-provenance tokens show null and keep working", async () => {
+    const a = await device("browser", "Phone"); // CLI-style mint (no mintedBy)
+    const b = await redeem(((await (await mint(a.token, { label: "Tablet" })).json()) as { code: string }).code, "x");
+    const rows = await devs(a.token);
+    expect(rows.find((d) => d.id === a.tokenId)).toMatchObject({ addedBy: null, addedById: null });
+    expect(rows.find((d) => d.id === b.tokenId)).toMatchObject({ label: "Tablet", addedBy: "Phone", addedById: a.tokenId });
+    expect((await list(b.token)).status).toBe(200);
+    await del(b.token, a.tokenId); // the minter is gone: the child keeps its id, loses the label
+    expect((await devs(b.token)).find((d) => d.id === b.tokenId)).toMatchObject({ addedBy: null, addedById: a.tokenId });
+  });
+
+  it("cascade revokes the devices it added, transitively, only when asked", async () => {
+    const root = await device("browser", "Root");
+    const child = await redeem(((await (await mint(root.token, { label: "Child" })).json()) as { code: string }).code, "x");
+    const grand = await redeem(((await (await mint(child.token, { label: "Grand" })).json()) as { code: string }).code, "x");
+    const other = await device("browser", "Other");
+    const plain = await del(other.token, child.tokenId); // no cascade: only the child
+    expect(await plain.json()).toEqual({ revoked: child.tokenId, self: false, cascaded: [] });
+    expect((await list(grand.token)).status).toBe(200);
+    const child2 = await redeem(((await (await mint(root.token, { label: "Child2" })).json()) as { code: string }).code, "x");
+    const grand2 = await redeem(((await (await mint(child2.token, { label: "Grand2" })).json()) as { code: string }).code, "x");
+    const r = await (await del(other.token, root.tokenId, "?cascade=1")).json();
+    expect(r.revoked).toBe(root.tokenId);
+    expect(r.cascaded.sort()).toEqual([child2.tokenId, grand2.tokenId].sort());
+    expect((await list(grand2.token)).status).toBe(401);
+    expect((await list(other.token)).status).toBe(200);
+    expect((await list(grand.token)).status).toBe(200); // orphaned by the earlier plain revoke: not reachable through root
+  });
+
+  it("refuses to revoke the last console-kind token (409, nothing revoked), also through a cascade; allowed while another remains", async () => {
+    const c1 = await device("console", "Console 1");
+    const b = await device("browser", "B");
+    const r = await del(b.token, c1.tokenId);
+    expect(r.status).toBe(409);
+    expect((await r.json()).message).toMatch(/last console token/);
+    expect((await list(c1.token)).status).toBe(200);
+    const c2 = await device("console", "Console 2");
+    expect((await del(b.token, c1.tokenId)).status).toBe(200);
+    expect((await del(b.token, c2.tokenId)).status).toBe(409);
+    // via cascade: b was minted by c2's chain?  c2 mints d; revoking c2 with cascade would still remove the last console
+    expect((await del(b.token, c2.tokenId, "?cascade=1")).status).toBe(409);
+    expect((await list(c2.token)).status).toBe(200);
+  });
+
+  it("mints and revokes share ONE per-token budget of 10 a minute", async () => {
+    const a = await device("browser", "A");
+    const victims = await Promise.all(Array.from({ length: 5 }, (_, i) => device("browser", `v${i}`)));
+    for (const v of victims) expect((await del(a.token, v.tokenId)).status).toBe(200); // 5 revokes
+    for (let i = 0; i < 5; i++) expect((await mint(a.token)).status).toBe(200); // 5 mints = 10
+    expect((await mint(a.token)).status).toBe(409);
+    const extra = await device("browser", "late");
+    expect((await del(a.token, extra.tokenId)).status).toBe(409); // a revoke is refused by the same bucket
+    const other = await device("browser", "other");
+    expect((await mint(other.token)).status).toBe(200); // another token has its own
   });
 });

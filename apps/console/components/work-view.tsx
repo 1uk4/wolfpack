@@ -21,7 +21,6 @@ import { TopBar } from "@/components/top-bar";
 import { useWorkReader } from "./work-reader";
 import {
 	DEFAULT_WORK_SORT,
-	ancestorKeys,
 	LANE_COLOR,
 	WORK_ROW_H,
 	buildWorkTable,
@@ -30,9 +29,7 @@ import {
 	lanePath,
 	laneState,
 	nextWorkSort,
-	rowRouteState,
 	type Chip,
-	type WorkRouteView,
 	type TableRow,
 	type WorkListItem,
 	type WorkSort,
@@ -133,10 +130,6 @@ interface RowCtx {
 	expanded: ReadonlySet<string>;
 	onToggle: (key: string) => void;
 	onSelect: (id: string) => void;
-	/** The graph's selected route (split view), null in the full-screen table. */
-	view: WorkRouteView | null;
-	/** The split's narrow column: only Name and Stage (plus the step number). */
-	compact: boolean;
 	/** The item the reader shows (its row is marked). */
 	openId: string | null;
 	/** The group's gutter width (px), added to the indent of the rows below the group row. */
@@ -145,33 +138,25 @@ interface RowCtx {
 	graduate: GraduateClient;
 }
 
-/** A row shows its children when it has some, is not a collapsed-route stand-in, and is open (by hand or by search). */
-function isOpenRow(row: TableRow, ctx: Pick<RowCtx, "expanded" | "view">): boolean {
-	const stood = row.id && ctx.view ? ctx.view.collapsed[row.id] : undefined;
-	return row.children.length > 0 && stood === undefined && (row.autoExpand || ctx.expanded.has(row.key));
+/** A row shows its children when it has some and is open (by hand or by search). */
+function isOpenRow(row: TableRow, ctx: Pick<RowCtx, "expanded">): boolean {
+	return row.children.length > 0 && (row.autoExpand || ctx.expanded.has(row.key));
 }
 
 function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
-	const { onToggle, onSelect, view, compact } = ctx;
-	const rr = rowRouteState(view, row.id);
-	// A collapsed done feature is one row standing in for N route tasks ("+N"); expanding it on the map opens it here too.
-	const stood = row.id && view ? view.collapsed[row.id] : undefined;
-	const hasKids = row.children.length > 0 && stood === undefined;
+	const { onToggle, onSelect } = ctx;
+	const hasKids = row.children.length > 0;
 	const open = isOpenRow(row, ctx);
-	const lit = rr.mode === "on";
 	return (
 		<>
 			<div
 				data-testid={`work-row-${row.key}`}
 				data-kind={row.kind}
 				data-graduated={row.graduated || undefined}
-				data-route={rr.mode === "none" ? undefined : rr.mode}
-				data-step={rr.mode !== "none" && rr.step !== null ? rr.step : undefined}
-				data-selected={(rr.selected || ctx.openId === row.id) || undefined}
-				data-cursor={view && rr.cursor ? true : undefined}
+				data-selected={ctx.openId === row.id || undefined}
 				onClick={row.id ? () => onSelect(row.id) : undefined}
 				style={{ height: WORK_ROW_H, paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
-				className={`flex items-center gap-1 pr-3 ${row.graduated ? "opacity-50" : ""} ${rr.mode === "off" ? "opacity-35" : ""} ${lit ? "bg-emerald-500/10" : ""} ${view && rr.cursor ? "bg-accent ring-1 ring-inset ring-ring/60" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
+				className={`flex items-center gap-1 pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
 				{hasKids ? (
 					<button
@@ -190,15 +175,6 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				) : (
 					<span className="size-3.5 shrink-0" />
 				)}
-				{view && (
-					<span
-						data-testid={`work-step-${row.key}`}
-						aria-label={rr.mode !== "none" && rr.step !== null ? `Step ${rr.step}${rr.parallel ? " (parallel)" : ""}` : undefined}
-						className={`w-5 shrink-0 text-center text-[11px] font-medium tabular-nums ${rr.mode === "on" ? "text-emerald-400" : "text-transparent"}`}
-					>
-						{rr.mode !== "none" && rr.step !== null ? rr.step : ""}
-					</span>
-				)}
 				<span className="min-w-0 flex-1">
 					{row.kind === "initiative" ? (
 						<span className={`truncate text-sm font-medium ${row.id ? "" : "text-muted-foreground"}`}>{row.title}</span>
@@ -207,23 +183,16 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					)}
 				</span>
 				<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
-				{stood !== undefined && (
-					<span data-testid={`work-collapsed-${row.key}`} title={`${stood} shipped tasks, collapsed on the route`} className="shrink-0 rounded border border-border/70 px-1 text-[11px] tabular-nums text-muted-foreground">
-						+{stood}
-					</span>
-				)}
-				<span data-testid={`work-stage-${row.key}`} className={`${compact ? "w-32 shrink-0" : COLS.stage} truncate text-xs text-muted-foreground`}>
+				<span data-testid={`work-stage-${row.key}`} className={`${COLS.stage} truncate text-xs text-muted-foreground`}>
 					{row.stageLabel}
 				</span>
-				{!compact && (
-					<>
+				<>
 						<span data-testid={`work-progress-${row.key}`} className={`${COLS.progress} text-xs tabular-nums text-muted-foreground`}>
 							{row.progress?.label ?? ""}
 						</span>
 						<span className={`${COLS.assignee} truncate text-xs text-muted-foreground`}>{row.assignee}</span>
 						<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
-					</>
-				)}
+				</>
 			</div>
 			{open && row.children.map((c) => <RowView key={c.key} row={c} ctx={ctx} />)}
 		</>
@@ -233,7 +202,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 /** One group: its rows plus the gutter SVG with the group's dependency lanes (none while the group is collapsed). */
 function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 	const gc = groupConnectors(group, (r) => isOpenRow(r, ctx));
-	const states = gc.edges.map((e) => laneState(e, ctx.view));
+	const states = gc.edges.map((e) => laneState(e, null));
 	// Muted lanes first, lit ones last, so a lit lane is never painted over by a shared trunk.
 	const order = gc.edges.map((_, i) => i).sort((a, b) => ["done", "plain", "lit"].indexOf(states[a]!) - ["done", "plain", "lit"].indexOf(states[b]!));
 	return (
@@ -276,7 +245,6 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 
 export function WorkList({ client: injected, graduate: injectedGraduate }: { client?: WorkClient; graduate?: GraduateClient }) {
 	const { open: openItem, itemId } = useWorkReader();
-	const view: WorkRouteView | null = null; // no graph route to mirror: the list stands alone
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
 	const [domains, setDomains] = useState<WorkDomain[]>([]);
@@ -316,14 +284,14 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 
 	const items = load.state === "ready" ? load.items : null;
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, view, compact: false, gutter: 0, graduate: graduateClient, openId: itemId };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 
+	// A direct child of AppShell's <main>: on phones globals.css sizes `main > .h-dvh` to main, under the shell's safe-area inset.
 	return (
-		<main data-testid="work-view" className="flex h-dvh min-h-0 flex-col bg-background">
-			{(
-				<div className="flex h-full min-h-0 flex-1 flex-col">
+		<div data-testid="work-view" className="flex h-dvh min-h-0 flex-col bg-background">
+			<div className="flex h-full min-h-0 flex-1 flex-col">
 					<TopBar>
 						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{table ? `${table.count} ${table.count === 1 ? "item" : "items"}` : ""}
@@ -393,7 +361,6 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 						))}
 					</div>
 				</div>
-			)}
-		</main>
+		</div>
 	);
 }

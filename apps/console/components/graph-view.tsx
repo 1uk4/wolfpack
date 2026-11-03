@@ -37,7 +37,6 @@ import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
 	GRAPH_CAMERA_KEY,
 	describeNode,
-	workRouteView,
 	parseCamera,
 	resolvePositions,
 	sanitizePositions,
@@ -502,8 +501,6 @@ export function GraphView({
 		return () => cancelAnimationFrame(raf);
 	}, [focusId, isEmpty, storedLoaded, canvasData, hiddenBySearch]);
 
-	const rootRef = useRef<HTMLDivElement | null>(null);
-
 	// The pane's details follow the route cursor's node (when a route is selected).
 	const card = useMemo(
 		() => (selected ? (describeNode(graph, cursorNodeId ?? selected.id) ?? describeNode(graph, selected.id)) : null),
@@ -524,7 +521,7 @@ export function GraphView({
 	const paneOpen = !!(selected && card && !isEmpty);
 
 	return (
-		<div ref={rootRef} className="flex h-full w-full">
+		<div className="flex h-full w-full">
 			<div className="relative h-full min-w-0 flex-1">
 				{isEmpty ? (
 					<div className="flex h-full w-full items-center justify-center px-4">

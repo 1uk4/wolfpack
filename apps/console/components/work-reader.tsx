@@ -5,16 +5,20 @@
  * `?item=<id>` on the page you are on. Opening pushes that URL (Back closes, Forward re-opens), the page underneath
  * stays mounted so closing returns to it exactly as it was. Neither page knows about the other.
  * Desktop: a right-side panel. Phone (<768px, Tailwind `max-md`): full screen, h-dvh, safe-area padded.
- * Esc closes only the reader (window capture), then the page's own Esc behaviour applies.
+ * Esc closes only the reader (window capture), unless a dialog is open above it; then the page's own Esc behaviour applies.
  */
-import { Suspense, useCallback, useEffect } from "react";
+import { Suspense, useCallback, useEffect, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { WorkItemPage } from "@/components/work-item-page";
 
 export const ITEM_PARAM = "item";
 
-/** Readers opened in-app since load: while > 0, closing is history.back() (a real Back); else (deep link) it replaces the URL. */
-let appOpened = 0;
+/** Marker in the history entry's state: this entry was created by opening the reader in-app, so Back leaves the reader and stays on the page. */
+const MARK = "wolfpackReader";
+const hist = (): { state: unknown; replaceState: (s: unknown, t: string) => void } | null => (typeof window === "undefined" ? null : (window.history as never));
+const isMarked = (): boolean => !!(hist()?.state as Record<string, unknown> | null)?.[MARK];
+/** Set when this tab opens (or switches) the reader in-app; the next committed URL change stamps it into the history entry. */
+let pendingMark = false;
 
 /** The URL for `path` with the reader on `id` (or closed when null), keeping the page's other params. */
 export function readerUrl(path: string, search: string, id: string | null): string {
@@ -31,32 +35,43 @@ export function useWorkReader(): { itemId: string | null; open: (id: string) => 
 	const params = useSearchParams();
 	const search = params?.toString() ?? "";
 	const itemId = params?.get(ITEM_PARAM) || null;
-	// Whatever closed the reader (X, Esc, browser Back), the next one starts from a clean slate.
+	// Stamp the entry the router just created (push) or rewrote (replace on a marked entry). Next owns history.state, so
+	// the marker is added with replaceState once the navigation has committed.
 	useEffect(() => {
-		if (itemId === null) appOpened = 0;
-	}, [itemId]);
+		if (!pendingMark || itemId === null) return;
+		pendingMark = false;
+		const h = hist();
+		if (h) h.replaceState({ ...((h.state as object | null) ?? {}), [MARK]: true }, "");
+	}, [itemId, search]);
 	const open = useCallback(
 		(id: string) => {
+			const url = readerUrl(pathname, search, id);
 			if (itemId === null) {
-				appOpened++;
-				router.push(readerUrl(pathname, search, id), { scroll: false });
-			} else router.replace(readerUrl(pathname, search, id), { scroll: false }); // switching item inside the reader: Back still closes it
+				pendingMark = true;
+				router.push(url, { scroll: false });
+			} else {
+				pendingMark = isMarked(); // switching item inside the reader keeps the entry's in-app mark: Back still closes it
+				router.replace(url, { scroll: false });
+			}
 		},
 		[router, pathname, search, itemId],
 	);
 	const close = useCallback(() => {
-		if (appOpened > 0) {
-			router.back();
-		} else router.replace(readerUrl(pathname, search, null), { scroll: false });
+		if (isMarked()) router.back();
+		else router.replace(readerUrl(pathname, search, null), { scroll: false });
 	}, [router, pathname, search]);
 	return { itemId, open, close };
 }
 
 /** Presentational shell (SSR-testable): the panel itself. */
 export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClose: () => void; onOpenTask?: (id: string) => void }) {
+	const panelRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape") return;
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			// A dialog above the reader (the graduate dialog from the visible list, a popover) owns this Esc.
+			const own = panelRef.current;
+			for (const d of Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],[aria-modal="true"]'))) if (d !== own) return;
 			e.preventDefault();
 			e.stopPropagation();
 			onClose();
@@ -66,6 +81,7 @@ export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClo
 	}, [onClose]);
 	return (
 		<div
+			ref={panelRef}
 			role="dialog"
 			aria-label="Work item reader"
 			data-testid="work-reader"

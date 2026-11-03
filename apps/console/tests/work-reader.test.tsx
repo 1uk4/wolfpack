@@ -7,7 +7,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -25,10 +25,11 @@ Object.assign(globalThis, {
 	fetch: async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => "" }),
 });
 
-const { FakeNav } = await import("./helpers/fake-nav.tsx");
-const { WorkReaderPanel, readerUrl } = await import("../components/work-reader.tsx");
+const { FakeNav, navLog, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
+const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../components/work-reader.tsx");
 const { nodeClickAction } = await import("../components/graph-view.tsx");
-const { WorkNavEntry } = await import("../components/work-view-entry.tsx");
+const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
+const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
 const { WorkItemView } = await import("../components/work-item-page.tsx");
 const { EntryReaderView } = await import("../components/entry-reader.tsx");
 
@@ -98,6 +99,110 @@ describe("phones", () => {
 	});
 });
 
+
+// ---- behaviour: useWorkReader through FakeNav ------------------------------------------------------------------
+
+let api!: ReturnType<typeof useWorkReader>;
+function Probe() {
+	api = useWorkReader();
+	return <span data-testid="probe">{api.itemId ?? ""}</span>;
+}
+const mountProbe = async (start: string, extra: React.ReactNode = null) => {
+	const host = document.createElement("div");
+	document.body.appendChild(host);
+	root = createRoot(host);
+	await act(async () => root!.render(<FakeNav start={start}><Probe />{extra}</FakeNav>));
+};
+const stack = () => navLog.stack.slice();
+
+describe("useWorkReader history", () => {
+	it("open pushes ?item=; switching items replaces; close goes Back", async () => {
+		await mountProbe("/work");
+		await act(async () => api.open("a"));
+		assert.deepEqual(stack(), ["/work", "/work?item=a"]);
+		assert.equal(api.itemId, "a");
+		await act(async () => api.open("b"));
+		assert.deepEqual(stack(), ["/work", "/work?item=b"], "switching replaces the entry");
+		await act(async () => api.close());
+		assert.equal(currentUrl(), "/work");
+		assert.equal(api.itemId, null);
+		assert.deepEqual(stack(), ["/work", "/work?item=b"], "closing was a real Back: Forward can re-open");
+	});
+	it("Forward re-opens, and closing then still goes Back: no duplicate entry", async () => {
+		await mountProbe("/work");
+		await act(async () => api.open("a"));
+		await act(async () => historyBack());
+		await act(async () => historyForward());
+		assert.equal(api.itemId, "a");
+		await act(async () => api.close());
+		assert.equal(currentUrl(), "/work");
+		assert.deepEqual(stack(), ["/work", "/work?item=a"], "no [A, A]");
+		assert.equal(navLog.index, 0);
+	});
+	it("a deep link closes with replace (nothing to go Back to inside the console)", async () => {
+		await mountProbe("/work?item=zz");
+		assert.equal(api.itemId, "zz");
+		await act(async () => api.close());
+		assert.deepEqual(stack(), ["/work"]);
+		assert.equal(api.itemId, null);
+	});
+	it("opening from a different page later is not fooled by an earlier in-app open (no stale counter)", async () => {
+		await mountProbe("/work");
+		await act(async () => api.open("a"));
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		await mountProbe("/?item=q"); // a fresh deep link
+		await act(async () => api.close());
+		assert.deepEqual(stack(), ["/"], "replaced, not Back");
+	});
+	it("keeps the page's other params", async () => {
+		await mountProbe("/?focus=x");
+		await act(async () => api.open("a"));
+		assert.equal(currentUrl(), "/?focus=x&item=a");
+		await act(async () => api.close());
+		assert.equal(currentUrl(), "/?focus=x");
+	});
+});
+
+describe("Esc and dialogs above the reader", () => {
+	const esc = (target: EventTarget = window) =>
+		act(async () => {
+			const ev = new dom.window.Event("keydown", { bubbles: true, cancelable: true });
+			Object.defineProperty(ev, "key", { value: "Escape" });
+			target.dispatchEvent(ev);
+		});
+	it("a dialog open above the reader (e.g. the graduate dialog) keeps its own Esc; the reader stays", async () => {
+		let closed = 0;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => closed++} /></FakeNav>));
+		const dlg = document.createElement("div");
+		dlg.setAttribute("role", "dialog");
+		dlg.setAttribute("aria-modal", "true");
+		document.body.appendChild(dlg);
+		await esc();
+		assert.equal(closed, 0, "the dialog owns this Esc");
+		dlg.remove();
+		await esc();
+		assert.equal(closed, 1);
+	});
+	it("an Esc another layer already claimed (defaultPrevented) is left alone", async () => {
+		let closed = 0;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => closed++} /></FakeNav>));
+		await act(async () => {
+			const ev = new dom.window.Event("keydown", { bubbles: true, cancelable: true });
+			Object.defineProperty(ev, "key", { value: "Escape" });
+			ev.preventDefault();
+			window.dispatchEvent(ev);
+		});
+		assert.equal(closed, 0);
+	});
+});
+
 describe("decoupling", () => {
 	it("the graph knows nothing of the Work list", () => {
 		const g = src("../components/graph-view.tsx");
@@ -106,7 +211,7 @@ describe("decoupling", () => {
 		assert.ok(!entry.includes("useWorkView") && !entry.includes("left:"));
 	});
 	it("no Work provider or layer state is left", () => {
-		assert.ok(!existsSync(new URL("../components/work-view-entry.tsx", import.meta.url)) || !src("../components/work-view-entry.tsx").includes("WorkViewContext"));
+		assert.ok(!src("../components/work-nav-link.tsx").includes("WorkViewContext"));
 		assert.ok(!/WORK_EXPANDED_KEY|work-view-col-width/.test(src("../components/work-view.tsx") + src("../src/core/work-select.ts")));
 	});
 });
@@ -124,7 +229,7 @@ describe("sidebar", () => {
 		const bar = src("../components/sidebar.tsx");
 		assert.match(bar, /href="\/"[\s\S]{0,120}data-testid="nav-graph"/);
 		assert.match(bar, /<WorkNavEntry \/>/);
-		const nav = src("../components/work-view-entry.tsx");
+		const nav = src("../components/work-nav-link.tsx");
 		assert.match(nav, /href="\/work"/);
 		assert.match(nav, /data-testid="nav-work"/);
 		assert.equal(typeof WorkNavEntry, "function");
@@ -141,5 +246,17 @@ describe("deep links", () => {
 		assert.match(src("../app/(home)/kb/entry/[id]/page.tsx"), /EntryReaderOverlay/);
 		assert.match(src("../app/(home)/page.tsx"), /WorkReaderHost/);
 		assert.match(src("../app/work/page.tsx"), /WorkReaderHost/);
+	});
+});
+
+describe("NavTracker", () => {
+	it("a mount (and a strict-mode re-run) is not a navigation; only a real pathname change counts", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<React.StrictMode><FakeNav start="/kb/entry/x"><NavTracker /><Probe /></FakeNav></React.StrictMode>));
+		assert.equal(hasInAppHistory(), false, "a deep link must not look like in-app history");
+		await act(async () => api.open("a")); // same pathname, only ?item= changes
+		assert.equal(hasInAppHistory(), false);
 	});
 });

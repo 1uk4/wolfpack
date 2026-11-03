@@ -85,7 +85,7 @@ export function EntryReaderView({ id, state, overlay }: { id: string; state: Ent
 	const entry = state.kind === "ready" ? state.entry : null;
 	return (
 		<div
-			className={overlay ? "fixed inset-y-0 right-0 z-[60] flex w-[min(52rem,70vw)] flex-col border-l bg-background max-md:inset-0 max-md:h-dvh max-md:w-full max-md:border-l-0" : "flex h-dvh flex-col"}
+			className={overlay ? "fixed inset-y-0 right-0 z-[60] flex w-[min(52rem,70vw)] flex-col border-l bg-background max-md:inset-0 max-md:h-dvh max-md:w-full max-md:border-l-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:pt-[env(safe-area-inset-top)]" : "flex h-dvh flex-col"}
 			role={overlay ? "dialog" : undefined}
 			aria-label={overlay ? "Entry reader" : undefined}
 			data-testid="entry-reader"

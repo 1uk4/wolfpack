@@ -16,6 +16,8 @@ export interface DeviceRow {
 	createdAt: string;
 	lastUsedAt: string | null;
 	self: boolean;
+	addedBy?: string | null;
+	addedById?: string | null;
 }
 export interface PairingCode {
 	code: string;
@@ -33,6 +35,16 @@ export function lastUsedLabel(at: string | null, now: number): string {
 	return `${Math.floor(s / 86400)} d ago`;
 }
 
+/** Devices that `id` added, directly or through the devices it added (what a cascade revoke would also take). */
+export function addedDescendants(rows: readonly DeviceRow[], id: string): string[] {
+	const out = new Set<string>();
+	for (let grew = true; grew; ) {
+		grew = false;
+		for (const r of rows) if (r.addedById && (r.addedById === id || out.has(r.addedById)) && r.id !== id && !out.has(r.id)) (out.add(r.id), (grew = true));
+	}
+	return [...out];
+}
+
 const BTN = "min-h-11 rounded-sm border border-border px-3 font-ui text-sm transition-colors hover:bg-accent md:min-h-8";
 
 export function DevicesView(p: {
@@ -43,7 +55,10 @@ export function DevicesView(p: {
 	busy?: boolean;
 	code?: PairingCode | null;
 	onAsk: (id: string | null) => void;
-	onRevoke: (id: string) => void;
+	onRevoke: (id: string, cascade: boolean) => void;
+	/** Cascade checkbox state (reset whenever a different row is asked). */
+	cascade?: boolean;
+	onCascade?: (on: boolean) => void;
 	onAdd: () => void;
 	onDismissCode: () => void;
 }) {
@@ -71,16 +86,27 @@ export function DevicesView(p: {
 										</span>
 									)}
 								</p>
-								<p className="text-xs text-muted-foreground">last used {lastUsedLabel(d.lastUsedAt, p.now)}</p>
+								<p className="text-xs text-muted-foreground">
+									last used {lastUsedLabel(d.lastUsedAt, p.now)}
+									{d.addedBy && <span data-testid="device-added-by"> · added by {d.addedBy}</span>}
+								</p>
 							</div>
 							{p.confirming === d.id ? (
-								<div className="flex gap-2" data-testid="device-confirm">
-									<button type="button" disabled={p.busy} className={`${BTN} border-red-500/60 text-red-500`} onClick={() => p.onRevoke(d.id)}>
-										{d.self ? "Sign out & revoke" : "Confirm revoke"}
-									</button>
-									<button type="button" className={BTN} onClick={() => p.onAsk(null)}>
-										Cancel
-									</button>
+								<div className="flex flex-col gap-2 md:items-end" data-testid="device-confirm">
+									{addedDescendants(p.devices!, d.id).length > 0 && (
+										<label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground md:min-h-0">
+											<input type="checkbox" data-testid="device-cascade" checked={!!p.cascade} onChange={(e) => p.onCascade?.(e.target.checked)} />
+											also revoke devices it added ({addedDescendants(p.devices!, d.id).length})
+										</label>
+									)}
+									<div className="flex gap-2">
+										<button type="button" disabled={p.busy} className={`${BTN} border-red-500/60 text-red-500`} onClick={() => p.onRevoke(d.id, !!p.cascade)}>
+											{d.self ? "Sign out & revoke" : "Confirm revoke"}
+										</button>
+										<button type="button" className={BTN} onClick={() => p.onAsk(null)}>
+											Cancel
+										</button>
+									</div>
 								</div>
 							) : (
 								<button type="button" data-testid="device-revoke" className={BTN} onClick={() => p.onAsk(d.id)}>
@@ -123,6 +149,7 @@ export function DevicesSection() {
 	const [error, setError] = useState<string | null>(null);
 	const [confirming, setConfirming] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [cascade, setCascade] = useState(false);
 	const [code, setCode] = useState<PairingCode | null>(null);
 	const [now, setNow] = useState(() => Date.now());
 
@@ -142,10 +169,11 @@ export function DevicesSection() {
 		void load();
 	}, [load]);
 
-	const revoke = async (id: string) => {
+	const revoke = async (id: string, cascadeToo: boolean) => {
 		setBusy(true);
 		try {
-			const r = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+			// A self-revoke makes the NEXT /api call a hub 401, which the global fetch wrapper (hub-auth.tsx) turns into sign-out + /pair; the reload below is that call.
+			const r = await fetch(`/api/devices/${encodeURIComponent(id)}${cascadeToo ? "?cascade=1" : ""}`, { method: "DELETE" });
 			if (!r.ok) {
 				const b = (await r.json().catch(() => ({}))) as { error?: string };
 				setError(b.error ?? `status ${r.status}`);
@@ -168,5 +196,5 @@ export function DevicesSection() {
 			setBusy(false);
 		}
 	};
-	return <DevicesView devices={devices} error={error} now={now} confirming={confirming} busy={busy} code={code} onAsk={setConfirming} onRevoke={(id) => void revoke(id)} onAdd={() => void add()} onDismissCode={() => { setCode(null); void load(); }} />;
+	return <DevicesView devices={devices} error={error} now={now} confirming={confirming} busy={busy} code={code} onAsk={(id) => { setCascade(false); setConfirming(id); }} cascade={cascade} onCascade={setCascade} onRevoke={(id, c) => void revoke(id, c)} onAdd={() => void add()} onDismissCode={() => { setCode(null); void load(); }} />;
 }

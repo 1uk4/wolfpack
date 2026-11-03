@@ -8,14 +8,17 @@ import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
-const STATUS: Record<string, number> = { unauthorized: 401, forbidden: 403, not_found: 404, invalid_request: 400, busy: 409 };
+const STATUS: Record<string, number> = { unauthorized: 401, forbidden: 403, not_found: 404, invalid_request: 400, busy: 409, conflict: 409 };
 
 function fail(err: unknown): Response {
 	const e = err as Error & { code?: string; hubAuth?: boolean };
 	const message = e instanceof Error ? e.message : "Unexpected error";
 	if (e?.hubAuth === true) return Response.json({ error: message, code: "unauthorized" }, { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });
 	const code = typeof e?.code === "string" ? e.code : "engine_error";
-	return Response.json({ error: message, code }, { status: STATUS[code] ?? 502 });
+	const status = STATUS[code];
+	// Only the hub's own client-facing refusals carry their words; anything else (engine errors, network failures) is a generic 502: no internals leak to the browser.
+	if (status === undefined) return Response.json({ error: "the hub could not complete the request", code: "engine_error" }, { status: 502 });
+	return Response.json({ error: message, code }, { status });
 }
 
 const unsupported = () => Response.json({ error: "devices need a hub (WOLFPACK_HUB_URL)", code: "invalid_request" }, { status: 501 });
@@ -41,10 +44,10 @@ export function createDevicesApi(source: ClientSource, o: { hubUrl?: string } = 
 				return fail(err);
 			}
 		},
-		async revoke(id: string): Promise<Response> {
+		async revoke(id: string, opts: { cascade?: boolean } = {}): Promise<Response> {
 			try {
 				const f = need("revokeDevice");
-				return f ? Response.json(await f(id)) : unsupported();
+				return f ? Response.json(await f(id, opts)) : unsupported();
 			} catch (err) {
 				return fail(err);
 			}

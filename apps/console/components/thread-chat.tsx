@@ -206,6 +206,8 @@ function ThreadChatInner({
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
+	// An answer steered into the turn that is still running: shown until that turn ends (not an error).
+	const [sendPending, setSendPending] = useState(false);
 	// Feature progress: bumped when a turn ends, so the panel's live data refetches.
 	const [progressTick, setProgressTick] = useState(0);
 	// The thread record is the truth for cards: refetched whenever a turn settles (a turn that ended on a card), and
@@ -300,6 +302,7 @@ function ThreadChatInner({
 		prevStatus.current = status;
 		const wasRunning = was === "submitted" || was === "streaming";
 		if (wasRunning && status === "ready") {
+			setSendPending(false);
 			void refreshCards();
 			setProgressTick((n) => n + 1);
 			if (busyMissed.current) resumeStream();
@@ -329,8 +332,13 @@ function ThreadChatInner({
 				}
 				const ack = (await res.json()) as { disposition?: string };
 				// Queued = sibling cards still wait: the wolf holds the answer and the card stays changeable.
+				// Steered = a turn is running: the answer joins it like a chat message typed mid-turn, so the same
+				// stream keeps going (no new turn to attach to); the card is answered, the send shown as pending.
 				// Otherwise the answer starts the next turn: attach to it.
-				if (ack.disposition === "queued") {
+				if (ack.disposition === "steered") {
+					setCards((c) => (answers ? withAnswer(c, callId, answers) : withSkip(c, callId)));
+					setSendPending(true);
+				} else if (ack.disposition === "queued") {
 					setCards((c) => (answers ? withHeld(c, callId, answers) : withHeldSkip(c, callId)));
 					void refreshCards();
 				} else {
@@ -602,6 +610,11 @@ function ThreadChatInner({
 										<BrailleSpinner label="Thinking" />
 										<Shimmer duration={1}>THINKING…</Shimmer>
 									</span>
+								)}
+								{sendPending && !cardError && (
+									<div data-testid="card-send-pending" className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+										Will send when the turn finishes.
+									</div>
 								)}
 								{cardError && (
 									<div

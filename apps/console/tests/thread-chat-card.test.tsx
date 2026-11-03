@@ -88,6 +88,13 @@ class CardClient extends MockConsoleClient {
 	holdNext = false;
 	/** The next answer fails as an unknown card. */
 	notFoundNext = false;
+	/** The next answer/skip is steered into a running turn (the ack says steered; no turn starts). */
+	steerNext = false;
+	submits: string[] = [];
+	override async submit(threadId: string, text: string, opts?: Parameters<MockConsoleClient["submit"]>[2]) {
+		this.submits.push(text);
+		return super.submit(threadId, text, opts);
+	}
 	constructor(private readonly card: Card) {
 		super({ delayMs: 0, script: [{ kind: "text", text: "Shipping from the answer." }] });
 	}
@@ -118,6 +125,10 @@ class CardClient extends MockConsoleClient {
 			return { messageId: `card-${callId}`, disposition: "queued" as const };
 		}
 		this.skippedState = true;
+		if (this.steerNext) {
+			this.steerNext = false;
+			return { messageId: "7", disposition: "steered" as const };
+		}
 		return this.submit(threadId, "skipped");
 	}
 	async answerCard(threadId: string, callId: string, answers: CardAnswers) {
@@ -138,6 +149,10 @@ class CardClient extends MockConsoleClient {
 			return { messageId: `card-${callId}`, disposition: "queued" as const };
 		}
 		this.answered = answers;
+		if (this.steerNext) {
+			this.steerNext = false;
+			return { messageId: "7", disposition: "steered" as const };
+		}
 		return this.submit(threadId, "answer");
 	}
 }
@@ -284,6 +299,32 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await click(q('[data-testid="card-submit"]')!);
 		await settle();
 		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "main" } } }]);
+	});
+
+	it("an answer steered into a running turn marks the card answered, shows the pending send, no error, no new stream", async () => {
+		const client = new CardClient(SINGLE);
+		client.steerNext = true;
+		await mount(client);
+		await click(document.querySelectorAll('[data-testid="card-option"]')[1]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "develop" } } }]);
+		assert.ok(q('[data-testid="answered-card"]'));
+		assert.equal(q('[data-testid="pending-card"]'), null);
+		assert.equal(q('[data-testid="card-error"]'), null);
+		assert.match(q('[data-testid="card-send-pending"]')?.textContent ?? "", /will send when the turn finishes/i);
+		assert.equal(client.submits.length, 0, "no new turn was started");
+	});
+
+	it("a skip steered into a running turn behaves the same", async () => {
+		const client = new CardClient(FREE);
+		client.steerNext = true;
+		await mount(client);
+		await click(q('[data-testid="card-skip"]')!);
+		await settle();
+		assert.deepEqual(client.skips, [CALL]);
+		assert.equal(q('[data-testid="card-error"]'), null);
+		assert.ok(q('[data-testid="card-send-pending"]'));
 	});
 
 	it("a queued answer stays pending and shows as held", async () => {

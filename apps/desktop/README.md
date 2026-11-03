@@ -17,4 +17,4 @@ Rules: https only (plain http only for 127.0.0.1/localhost/[::1] and 100.64/10 t
 
 In remote mode no server is spawned and `data/` + `auth.json` are untouched; permissions, notifications and navigation are pinned to the remote origin; other origins open in the browser. If the host is unreachable a local error page with a Retry button is shown.
 
-Pairing: the pairing page is `https://<host>/hub/pair?code=…` on the same origin. The app has no URL bar, so pair the desktop app from the console's own pairing UI, or start the app once with `LH_CONSOLE_URL=https://<host>/hub/pair?code=…` (path is kept; the token lands in this app's localStorage/cookie), then restart with the plain host URL.
+Pairing: the pairing page is `https://<host>/hub/pair?code=…` on the same origin, so it is allowed inside the app. The configured URL keeps only origin + path (query/hash are dropped), and the app has no URL bar, so there is currently no way to open a `?code=` link inside the app; see the follow-up noted in the ticket.

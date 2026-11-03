@@ -53,6 +53,13 @@ import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "./work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 
+/** What a click on a map node does: a work node opens the reader, a collapsed feature on the route expands, anything else selects (side pane). */
+export function nodeClickAction(nodeId: string, collapsed: ReadonlySet<string>): { kind: "expand" | "open-work"; id: string } | { kind: "select" } {
+	const raw = rawWorkId(nodeId);
+	if (!raw) return { kind: "select" };
+	return collapsed.has(raw) ? { kind: "expand", id: raw } : { kind: "open-work", id: raw };
+}
+
 /** The default node look when a node carries no colour of its own. */
 const NODE_COLOR_TOKEN = "--primary";
 
@@ -285,9 +292,9 @@ export function GraphView({
 				onSelect: (nodeId) => {
 					// A collapsed feature on the selected route expands in place
 					// instead of re-targeting the route.
-					const raw = rawWorkId(nodeId);
-					if (raw && collapsedRef.current.has(raw)) setExpanded((prev) => ({ id: selectedIdRef.current, set: new Set([...(prev.id === selectedIdRef.current ? prev.set : []), raw]) }));
-					else if (raw) openWorkRef.current(raw); // a work node opens the reader straight away
+					const act = nodeClickAction(nodeId, collapsedRef.current);
+					if (act.kind === "expand") setExpanded((prev) => ({ id: selectedIdRef.current, set: new Set([...(prev.id === selectedIdRef.current ? prev.set : []), act.id]) }));
+					else if (act.kind === "open-work") openWorkRef.current(act.id); // a work node opens the reader straight away
 					else setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),

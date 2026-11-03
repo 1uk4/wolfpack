@@ -149,6 +149,12 @@ if [ -n "${TRACER_CONSOLE:-}" ]; then
   # Relay mode = WOLFPACK_HUB_URL set, WOLFPACK_API_URL NOT set, and a token. The token is the BROWSER's (a `hubd pair --kind browser` code traded at
   # /v1/pair, handed to the console's /pair page as #token=, exactly what the hub's own /pair page does); the console process itself holds no token.
   OUT=/out; mkdir -p "$OUT"; rm -f "$OUT"/console-proof-*.png
+  # P9: the hub's KB copy holds two domains (an entry each); hal2 subscribes to neither. The console graph comes from the hub (GET /v1/kb/graph), not from hal2.
+  for d in gphalpha gphbeta; do
+    mkdir -p "$HUBD_DATA/kb/base/domains/$d/entries"
+    printf -- '---\nid: kb-%s-aaaaaaa\ntitle: "Graph seed %s"\ndomain: %s\n---\n\n# Graph seed\n\nSeed entry of %s.\n' "$d" "$d" "$d" "$d" > "$HUBD_DATA/kb/base/domains/$d/entries/kb-$d-aaaaaaa.md"
+  done
+  chown -R hubd:hubd "$HUBD_DATA/kb/base/domains"; touch -d '1 hour ago' "$HUBD_DATA"/kb/base/domains/gph*/entries/*.md
   # P2: the browser pairs through the QR link flow: `hubd pair --kind browser --label ... ` prints the QR + link (HUBD_PUBLIC_URL); the proof opens that link
   rm -f /tmp/proof-want-revoke /tmp/proof-revoked
   as hubd HOME=/home/hubd HUBD_PUBLIC_URL=$HUB node $APP/packages/hubd/dist/cli.js pair --kind browser --label tracer-browser --data-dir "$HUBD_DATA" >/tmp/pair.out

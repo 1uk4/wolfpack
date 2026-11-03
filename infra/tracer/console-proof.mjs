@@ -70,6 +70,14 @@ try {
   const gj = await gr.json().catch(() => ({}));
   step(`GET /api/wolves/hal2/kb/graph -> ${gr.status()} nodes=${Array.isArray(gj.nodes) ? gj.nodes.length : "n/a"}`);
   if (gr.status() !== 200 || !Array.isArray(gj.nodes)) throw new Error(`kb/graph through the relay console failed: ${gr.status()} ${JSON.stringify(gj).slice(0, 200)}`);
+  // 3c. P9: the graph comes from the HUB's own KB copy (token-scoped), with no KB wolf: the console route answers with every domain the hub holds.
+  const hg = await ctx.request.get(`${base}/api/kb/graph`, { headers: auth });
+  const hj = await hg.json().catch(() => ({}));
+  const doms = (hj.domains ?? []).map((d) => d.name);
+  step(`GET /api/kb/graph (hub KB copy) -> ${hg.status()} domains=[${doms.join(",")}] nodes=${Array.isArray(hj.nodes) ? hj.nodes.length : "n/a"} domNodes=${(hj.nodes ?? []).filter((n) => n.kind === "domain").length}`);
+  if (hg.status() !== 200 || !Array.isArray(hj.nodes) || hj.nodes.length === 0) throw new Error(`hub kb graph failed: ${hg.status()} ${JSON.stringify(hj).slice(0, 200)}`);
+  if (doms.length < 2 || !doms.includes("gphalpha") || !doms.includes("gphbeta")) throw new Error(`hub kb graph shows ${doms.length} domain(s), want >1 incl. gphalpha+gphbeta`);
+  if (hj.nodes.filter((n) => n.kind === "domain").length < 2) throw new Error("hub kb graph has fewer than 2 domain nodes");
   await link.click();
   const ta = page.locator('[data-testid="composer"] textarea').first();
   await ta.waitFor({ timeout: 30000 });

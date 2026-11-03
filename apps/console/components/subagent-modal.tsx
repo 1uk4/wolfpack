@@ -268,7 +268,7 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop, p
 	const hint = messageHint(busy ? "running" : state);
 	const [text, setText] = useState("");
 	// One action button: Stop while the child runs and the field is empty, Steer (or Resume) once there is text.
-	const stopMode = hint.mode === "steer" && !text.trim();
+	const stopMode = (state === "running" || state === "queued") && !text.trim(); // the summary, as the old header Stop was
 	const [sendError, setSendError] = useState<string | null>(null);
 	const sending = useRef(false);
 	const post = (input: string, whenBusy: "steer" | "reject") =>

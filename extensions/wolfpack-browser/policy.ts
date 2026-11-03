@@ -192,6 +192,7 @@ export function capText(text: string, max: number): string {
 
 /** Keep the newest `limit` entries (clamped to 1..cap). */
 export function lastN<T>(items: readonly T[], limit: number | undefined, cap: number): T[] {
-  const n = Math.max(1, Math.min(Math.floor(limit ?? 50) || 50, cap));
+  const asked = Math.floor(limit ?? 50);
+  const n = Math.min(asked >= 1 ? asked : 50, cap);
   return items.slice(-n);
 }

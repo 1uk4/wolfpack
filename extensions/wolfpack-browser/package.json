@@ -8,6 +8,10 @@
   "dependencies": {
     "playwright-core": "^1.63.0"
   },
+  "wolfpack": {
+    "playwrightCore": true,
+    "externals": ["chromium-bidi", "chromium-bidi/*", "electron"]
+  },
   "pi-durable": {
     "extensions": ["./durable.ts"]
   }

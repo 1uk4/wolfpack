@@ -31,6 +31,10 @@ export function useWorkReader(): { itemId: string | null; open: (id: string) => 
 	const params = useSearchParams();
 	const search = params?.toString() ?? "";
 	const itemId = params?.get(ITEM_PARAM) || null;
+	// Whatever closed the reader (X, Esc, browser Back), the next one starts from a clean slate.
+	useEffect(() => {
+		if (itemId === null) appOpened = 0;
+	}, [itemId]);
 	const open = useCallback(
 		(id: string) => {
 			if (itemId === null) {
@@ -42,7 +46,6 @@ export function useWorkReader(): { itemId: string | null; open: (id: string) => 
 	);
 	const close = useCallback(() => {
 		if (appOpened > 0) {
-			appOpened--;
 			router.back();
 		} else router.replace(readerUrl(pathname, search, null), { scroll: false });
 	}, [router, pathname, search]);

@@ -94,12 +94,18 @@ fi
 echo "== pair workerd (worker token for host $HOST_ID)"
 WCODE=$(code --kind worker --host-id $HOST_ID)
 WENV=(HOME=$WHOME WORKERD_CONFIG_DIR=$WHOME/.wolfpack/workerd KB_OPS=$WHOME/ops)
-# P7: console mode gives hal2 KB roots (an empty mirror) so workerd reports kbReadable in its hello and wolfd serves /kb/graph; the console proof asserts both through the relay.
-if [ -n "${TRACER_CONSOLE:-}" ] && [ -z "$KB" ]; then mkdir -p "$WHOME/kb-mirror/domains" "$WHOME/ops"; chown -R wolf-hal2:wolf-hal2 "$WHOME/kb-mirror" "$WHOME/ops"; WENV+=(KB_BASE=$WHOME/kb-mirror); fi
+# P7: console mode: hal2 runs in hub-KB mode like sfo-01: WOLFPACK_HUB_KB=1 + its own worker token live ONLY in the wolf's .env (wolfd-kb.sh loads it into wolfd, as
+# systemd EnvironmentFile= does). workerd does not inherit it; it reads that .env to report kbReadable in its hello. No KB_BASE for workerd.
+CONSOLE_HUBKB=
+if [ -n "${TRACER_CONSOLE:-}" ] && [ -z "$KB" ] && [ "$MODE" != max ]; then
+  CONSOLE_HUBKB=1
+  KC=$(code --kind worker --host-id $HOST_ID); KT=$(curl -fsS -H 'Content-Type: application/json' -d "{\"code\":\"$KC\",\"label\":\"hal2-wolf\"}" $HUB/v1/pair | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
+  ( umask 077; printf "WOLF_HOME=%s\nWOLFPACK_HUB_KB=1\nWOLFPACK_HUB_URL=%s\nWOLFPACK_HUB_TOKEN=%s\nWOLFPACK_KB_POLL_MS=2000\n" "$WHOME" "$HUB" "$KT" > "$WHOME/.env" ); chown wolf-hal2:wolf-hal2 "$WHOME/.env"; unset KC KT
+fi
 as wolf-hal2 "${WENV[@]}" node $APP/packages/workerd/dist/bin/workerd.js pair $HUB "$WCODE"
 
 if [ "$MODE" = max ]; then WOLFD_CMD="$T/wolfd-max.sh"; WOLFD_PAT="bin/wolfd.js --config"; echo "== start workerd (NOT link-only) -> supervises the REAL wolfd bin on the claude bridge (user wolf-hal2)"
-elif [ -n "$KB" ]; then WOLFD_CMD="$T/wolfd-kb.sh"; WOLFD_PAT="^node /opt/tracer/stub-wolfd.mjs"; echo "== start workerd (NOT link-only) -> supervises the scripted-model wolfd with the REAL memory/tasks extensions + hub KB (user wolf-hal2)"
+elif [ -n "$KB" ] || [ -n "$CONSOLE_HUBKB" ]; then WOLFD_CMD="$T/wolfd-kb.sh"; WOLFD_PAT="^node /opt/tracer/stub-wolfd.mjs"; echo "== start workerd (NOT link-only) -> supervises the scripted-model wolfd with the REAL memory/tasks extensions + hub KB (user wolf-hal2)"
 else WOLFD_CMD="node $T/stub-wolfd.mjs"; WOLFD_PAT="^node /opt/tracer/stub-wolfd.mjs"; echo "== start workerd (NOT link-only) -> supervises wolfd via the scripted-model stub (user wolf-hal2)"; fi
 as wolf-hal2 "${WENV[@]}" WORKERD_FEED=0 node $APP/packages/workerd/dist/bin/workerd.js --wolves $WOLVES --port 7142 --host 127.0.0.1 --wolfd "$WOLFD_CMD" >"$D/log/workerd.log" 2>&1 &
 wait_for "grep -q 'serving' $D/log/workerd.log" || { tail -n 30 $D/log/workerd.log >&2; exit 1; }

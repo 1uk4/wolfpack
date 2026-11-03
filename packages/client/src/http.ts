@@ -481,6 +481,19 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("getKbGraph", { name: wolf }, ROUTES.getKbGraph.response.schema, undefined, wolf, query)) as KbGraph;
   }
 
+  /** True in relay mode: the KB graph is served by the hub from its own KB copy (see getHubKbGraph). */
+  get kbFromHub(): boolean {
+    return this.hub?.relay === true;
+  }
+
+  /** The KB graph from the HUB's read-only KB copy, limited to the domains this token may read (GET /v1/kb/graph). */
+  async getHubKbGraph(opts: { domain?: string; archivedWork?: boolean } = {}): Promise<KbGraph> {
+    const q = new URLSearchParams();
+    if (opts.domain) q.set("domain", opts.domain);
+    if (opts.archivedWork !== undefined) q.set("archivedWork", String(opts.archivedWork));
+    return (await this.json("hubKbGraph", {}, ROUTES.hubKbGraph.response.schema, undefined, undefined, q.size ? `?${q}` : "")) as KbGraph;
+  }
+
   async getKbEntry(wolf: string, id: string): Promise<KbEntryDetail> {
     return (await this.json("getKbEntry", { name: wolf, id }, ROUTES.getKbEntry.response.schema, undefined, wolf)) as KbEntryDetail;
   }

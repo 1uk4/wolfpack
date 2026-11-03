@@ -199,6 +199,10 @@ export interface ConsoleClient {
   getKbPipeline?(wolf: string): Promise<KbPipelineResponse>;
   /** The KB graph (librarian wolf only; rejects ProtocolError `kb_unavailable` elsewhere, NotFoundError for an unknown domain). Layers default off. */
   getKbGraph?(wolf: string, opts?: { domain?: string; archivedWork?: boolean; denTopics?: boolean }): Promise<KbGraph>;
+  /** True when the KB graph comes from the hub's own KB copy (relay mode): then use getHubKbGraph, no KB wolf needed. */
+  readonly kbFromHub?: boolean;
+  /** The KB graph from the hub's read-only KB copy, limited to the domains the token may read. */
+  getHubKbGraph?(opts?: { domain?: string; archivedWork?: boolean }): Promise<KbGraph>;
   /** One KB entry with its body, wikilinks and backlinks (librarian only). Rejects NotFoundError for an unknown entry. */
   getKbEntry?(wolf: string, id: string): Promise<KbEntryDetail>;
 }

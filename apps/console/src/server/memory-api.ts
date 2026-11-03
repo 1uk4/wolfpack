@@ -21,6 +21,7 @@
 
 import type { ConsoleClient } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
+import { findKbSource } from "../core/kb.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
@@ -216,6 +217,30 @@ export function createMemoryApi(source: ClientSource) {
 					if (v !== undefined) opts[k] = v;
 				}
 				return json(await client.getKbGraph(librarian, opts));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/**
+		 * The graph for the browser, source chosen HERE: relay mode (hub serves it from its KB copy, token-scoped) needs no KB wolf;
+		 * otherwise the first wolf that can read the KB (librarian, else a mirror), exactly as the browser used to pick.
+		 */
+		async kbGraphAuto(params: URLSearchParams): Promise<Response> {
+			try {
+				const client = source();
+				if (client.kbFromHub && client.getHubKbGraph) {
+					const opts: { domain?: string; archivedWork?: boolean } = {};
+					const domain = params.get("domain");
+					if (domain) opts.domain = domain;
+					const aw = flag(params.get("archivedWork"));
+					if (aw !== undefined) opts.archivedWork = aw;
+					return json(await client.getHubKbGraph(opts));
+				}
+				if (!client.getKbGraph) return unsupported("kb_unavailable", "the KB graph");
+				const kb = findKbSource(await client.listWolves());
+				if (!kb) return json({ error: "no wolf can read the knowledge base", code: "kb_unavailable" }, 409);
+				return await this.kbGraph(kb.name, params);
 			} catch (err) {
 				return failure(err);
 			}

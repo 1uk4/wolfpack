@@ -1,6 +1,7 @@
 {
-  "_comment": "Releasable components. Tag = <component>/vX.Y.Z. To add `console`: add an entry here, a case in scripts/release-build.sh, and it is already in scripts/affected.mjs COMPONENTS.",
+  "_comment": "Releasable components. Tag = <component>/vX.Y.Z. `console` is the Next standalone server (deploy/console); it must be built on linux-x64 (release.yml does), see release-build.sh.",
   "wolfd":   { "asset": "wolfd-v{version}-linux-x64.tar.gz",   "smoke": true  },
   "workerd": { "asset": "workerd-v{version}-linux-x64.tar.gz", "smoke": false },
-  "hubd":    { "asset": "hubd-v{version}-linux-x64.tar.gz",    "smoke": false }
+  "hubd":    { "asset": "hubd-v{version}-linux-x64.tar.gz",    "smoke": false },
+  "console": { "asset": "console-v{version}-linux-x64.tar.gz", "smoke": false }
 }

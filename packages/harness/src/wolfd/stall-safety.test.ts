@@ -159,7 +159,7 @@ describe("stall watchdog", () => {
     await tick(150);
     const [ev] = stalled(events);
     expect(ev).toBeDefined();
-    expect((ev as { message: string }).message).toContain("Queued messages will follow");
+    expect((ev as { message: string }).message).toContain("Queued messages and card answers will follow");
     await tick(10);
     expect(eng.submitted.at(-1)?.input).toBe("while hung");
     expect(events.some((e) => e.type === "turn-end")).toBe(true);

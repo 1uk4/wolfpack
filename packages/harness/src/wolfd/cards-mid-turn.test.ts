@@ -108,6 +108,22 @@ describe("card answers while a turn runs", () => {
     expect(String(resent.input)).toContain("blue");
   });
 
+  it("a resend that fails twice puts the card back as pending, with an error that says so", async () => {
+    const { eng, rt, events } = await rig(["a"]);
+    await rt.answerCard("a", { answer: { value: "blue" } });
+    eng.state.failSubmits = 2;
+    await rt.abort();
+    await tick(100);
+    const errs = events.filter((e) => e.type === "error").map((e) => (e as { message: string }).message);
+    expect(errs).toHaveLength(2);
+    expect(errs[1]).toContain("answer it again");
+    expect(rt.detail().pendingCards?.map((c) => c.callId)).toEqual(["a"]);
+    expect(events.filter((e) => e.type === "card-pending" && e.card.callId === "a").length).toBe(1);
+    const ack = await rt.answerCard("a", { answer: { value: "green" } });
+    expect(["started", "steered", "queued"]).toContain(ack.disposition);
+    expect(eng.submitted.at(-1)?.cardAnswers).toMatchObject({ cards: [{ callId: "a", answers: { answer: { value: "green" } } }] });
+  });
+
   it("a placed answer is not re-sent by a later abort", async () => {
     const { eng, rt } = await rig(["a"]);
     await rt.answerCard("a", { answer: { value: "blue" } });
@@ -127,6 +143,34 @@ describe("a chat message mid-turn", () => {
     expect(events.filter((e) => e.type === "card-settled" && e.closed === "superseded").map((e) => (e as { callId: string }).callId)).toEqual(["a", "b"]);
     await expect(rt.answerCard("a", { answer: { value: "x" } })).rejects.toMatchObject({ code: "not_found" });
     await expect(rt.skipCard("b")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("an answer in flight is not superseded by a chat message accepted meanwhile: it ends answered, closed once", async () => {
+    const { eng, rt, events } = await rig(["a"]);
+    // The answer's submit stalls in the engine (the claim is held) while the chat message is accepted.
+    let release!: () => void;
+    eng.state.gate = new Promise<void>((r) => (release = r));
+    const answering = rt.answerCard("a", { answer: { value: "blue" } });
+    await tick(1);
+    eng.state.gate = undefined;
+    await rt.submit("change of plan", "steer");
+    expect(events.some((e) => e.type === "card-settled" && e.closed === "superseded")).toBe(false);
+    release();
+    await answering;
+    const closes = events.filter((e) => e.type === "card-settled" && e.callId === "a");
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toMatchObject({ closed: "answered" });
+    expect(rt.detail().pendingCards).toBeUndefined();
+  });
+
+  it("superseding discards a held sibling answer loudly", async () => {
+    const { rt, events } = await rig(["a", "b"]);
+    await rt.answerCard("a", { answer: { value: "one" } }); // held: b still waits
+    await rt.submit("never mind", "steer");
+    const msg = events.filter((e) => e.type === "error").map((e) => (e as { message: string }).message).join("\n");
+    expect(msg).toContain("saved answer");
+    expect(msg).toContain("a");
+    expect(events.filter((e) => e.type === "card-settled" && e.closed === "superseded")).toHaveLength(2);
   });
 
   it("a rejected submit leaves the cards answerable", async () => {

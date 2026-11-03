@@ -175,8 +175,10 @@ export const ROUTES = {
    * sibling card of the turn is pending, starts the next turn: the ack is the next turn's SubmitAck, or disposition
    * `queued` while siblings wait (a held answer can be re-sent to change it). While a turn is running the answer is
    * steered into it like a chat message typed mid-turn: the ack is `steered` (the card is answered; the agent reads it at
-   * the turn's next boundary or when it ends); it never fails as `busy`. A plain submit supersedes pending cards (they
-   * become `dismissed`), and a server does so as soon as it accepts the message, even mid-turn. 404 `not_found` for an
+   * the turn's next boundary or when it ends); it never fails as `busy`. A sibling card raised moments after this
+   * answer, in the same round, is not waited for: its answer is delivered separately, each labelled with its card. A plain submit supersedes pending cards (they
+   * become `dismissed`), and a server does so as soon as it accepts the message, even mid-turn (a card whose answer is
+   * already being submitted stays answered). 404 `not_found` for an
    * unknown, superseded or already-answered card, 400 `invalid_request` when `answers` do not match the card's fields.
    * (Servers before this change answered 409 `busy` while a turn was running; clients treat that as a retryable error.)
    */

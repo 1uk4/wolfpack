@@ -350,8 +350,14 @@ export class ThreadRuntime {
         this.resubmitCardAnswers(cardAnswers)
           .catch((e) => {
             this.host.onError(e);
-            this.emit({ type: "error", ...(this.running ? { turnId: this.running.turnId } : {}), message: `Could not re-send your card answer after the abort${(answerItem.tries ?? 0) < 1 ? " (will retry once)" : ""}.` });
-            if ((answerItem.tries ?? 0) < 1) this.withdrawn.unshift({ ...answerItem, tries: (answerItem.tries ?? 0) + 1 });
+            const retry = (answerItem.tries ?? 0) < 1;
+            this.emit({ type: "error", ...(this.running ? { turnId: this.running.turnId } : {}), message: `Could not re-send your card answer after the abort${retry ? " (will retry once)" : ": the question is open again, please answer it again"}.` });
+            if (retry) this.withdrawn.unshift({ ...answerItem, tries: (answerItem.tries ?? 0) + 1 });
+            else {
+              this.cards.reraise(cardAnswers);
+              this.syncCards();
+              this.notify();
+            }
           })
           .finally(() => {
             this.resubmitting = false;
@@ -428,7 +434,7 @@ export class ThreadRuntime {
     const idle = Date.now() - this.lastActivity;
     if (idle < limit) return this.armWatchdog(limit - idle);
     const follow = this.ownerQueued.size > 0 || this.withdrawn.length > 0;
-    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages will follow." : ""}` });
+    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages and card answers will follow." : ""}` });
     void this.abort()
       .catch((e) => this.host.onError(e))
       .finally(() => {
@@ -716,8 +722,13 @@ export class ThreadRuntime {
 
   /** Close every pending card as superseded, now (the later pi.user entry then finds nothing to dismiss). */
   private supersedePending(): void {
-    const ids = this.cards.dismissAll();
+    // Claimed cards (an answer is mid-submit) are not touched: they end answered/skipped, exactly once.
+    const { ids, heldDiscarded } = this.cards.dismissUnclaimed();
     if (ids.length === 0) return;
+    if (heldDiscarded.length > 0) {
+      const turnId = this.running?.turnId;
+      this.emit({ type: "error", ...(turnId ? { turnId } : {}), message: `Your message replaced ${ids.length === 1 ? "the pending question" : "the pending questions"}; the saved answer${heldDiscarded.length === 1 ? "" : "s"} (call ${heldDiscarded.join(", ")}) ${heldDiscarded.length === 1 ? "was" : "were"} discarded.` });
+    }
     this.syncCards(new Map(ids.map((id): [string, CardClosed] => [id, "superseded"])));
     this.notify();
   }
@@ -753,6 +764,8 @@ export class ThreadRuntime {
       this.notify();
       return { messageId: `card-${callId}`, disposition: "queued" };
     }
+    // Sibling cards raised after this answer (same round, moments later) are not waited for: an answer given while the
+    // turn still runs is steered at once, so a late sibling's answer arrives separately, each labelled with its card.
     const ids = ready.map((r) => r.callId);
     const before = this.turnStarts;
     if (this.answering++ === 0 && !this.running) this.answerStartedAt = new Date().toISOString();
@@ -773,6 +786,7 @@ export class ThreadRuntime {
       r = await this.conv.submit({ input: answerText(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
     } catch (e) {
       this.cards.release(ids);
+      // Safety net: with whenBusy "steer" the engine never answers busy, so this should be unreachable.
       if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }

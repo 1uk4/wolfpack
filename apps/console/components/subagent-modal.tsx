@@ -52,19 +52,48 @@ export const messageHint = (state: SubagentState | undefined): { mode: "steer" |
 		? { mode: "steer", text: "The subagent is running: your message steers it." }
 		: { mode: "resume", text: "The subagent is not running: your message resumes it." };
 
-function Header({ summary, now, titleId, close, onStop }: { summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; onStop?: () => void }) {
+export type SubagentPane = "ledger" | "transcript";
+const PANES: { id: SubagentPane; label: string }[] = [
+	{ id: "ledger", label: "Ledger" },
+	{ id: "transcript", label: "Transcript" },
+];
+
+/** The Ledger | Transcript segmented switch. Below 900px one pane shows at a time; from 900px both sit side by side, so it hides. */
+export function PaneSwitch({ value, onChange }: { value: SubagentPane; onChange: (v: SubagentPane) => void }) {
+	return (
+		<div role="tablist" aria-label="Subagent view" data-testid="subagent-switch" className="flex w-full gap-0.5 rounded-lg bg-muted p-0.5 min-[900px]:hidden max-md:order-last max-md:basis-full md:w-auto">
+			{PANES.map((p) => (
+				<button
+					key={p.id}
+					type="button"
+					role="tab"
+					id={`subagent-tab-${p.id}`}
+					aria-selected={value === p.id}
+					aria-controls={`subagent-pane-${p.id}`}
+					data-testid={`subagent-tab-${p.id}`}
+					className={`min-h-9 flex-1 rounded-md px-3 text-xs font-medium md:min-h-7 ${value === p.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+					onClick={() => onChange(p.id)}
+				>
+					{p.label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function Header({ summary, now, titleId, close, onStop, pane, onPane }: { summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; onStop?: () => void; pane: SubagentPane; onPane: (v: SubagentPane) => void }) {
 	const state = summary?.state;
 	const stoppable = (state === "running" || state === "queued") && onStop !== undefined;
 	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
 	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
 	const turnMs = summary ? separateTurnMs(summary, now) : undefined;
 	return (
-		<OverlayHeader className="mb-3 flex items-center gap-x-3 gap-y-1 pr-4" data-testid="subagent-header">
-			<div id={titleId} className="min-w-0 shrink truncate font-sans text-sm font-medium" title={summary?.title} data-testid="subagent-title">
+		<OverlayHeader className="mb-3 flex items-center gap-x-3 gap-y-2 pr-4 max-md:-ml-0 max-md:flex-wrap max-md:pr-0" data-testid="subagent-header">
+			<div id={titleId} className="min-w-0 shrink truncate font-sans text-sm font-medium max-md:flex-1" title={summary?.title} data-testid="subagent-title">
 				{summary ? summary.title : "Subagent"}
 			</div>
 			{summary && (
-				<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted-foreground" data-testid="subagent-meta">
+				<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 font-mono max-md:order-last max-md:basis-full text-[11px] text-muted-foreground" data-testid="subagent-meta">
 					{summary.agent && <span data-testid="subagent-agent">{summary.agent}</span>}
 					{state && (
 						<span data-testid="subagent-state" data-state={state} className={`rounded-full border border-border px-1.5 ${STATE_CLASS[state]}`}>
@@ -90,6 +119,7 @@ function Header({ summary, now, titleId, close, onStop }: { summary: ThreadSumma
 				</button>
 			)}
 			{close}
+			<PaneSwitch value={pane} onChange={onPane} />
 		</OverlayHeader>
 	);
 }
@@ -120,10 +150,13 @@ function LedgerEntryRow({ e }: { e: LedgerEntry }) {
 }
 
 /** The ledger column: always visible, its own scroll; stacks above the transcript below 900px. */
-function Ledger({ entries }: { entries: readonly LedgerEntry[] | null }) {
+function Ledger({ entries, shown }: { entries: readonly LedgerEntry[] | null; shown: boolean }) {
 	return (
 		<aside
-			className="flex max-h-48 w-full shrink-0 flex-col border-b border-border min-[900px]:max-h-none min-[900px]:w-[340px] min-[900px]:border-b-0 min-[900px]:border-r"
+			id="subagent-pane-ledger"
+			role="tabpanel"
+			aria-labelledby="subagent-tab-ledger"
+			className={`${shown ? "flex" : "hidden"} min-h-0 w-full flex-1 flex-col min-[900px]:flex min-[900px]:max-h-none min-[900px]:w-[340px] min-[900px]:flex-none min-[900px]:border-r`}
 			data-testid="subagent-ledger"
 			aria-label="Ledger"
 		>
@@ -209,7 +242,7 @@ interface Loaded {
 	messages: LhMessage[];
 }
 
-function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void }) {
+function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, pane }: { pane: SubagentPane; wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void }) {
 	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
 	const { messages, status, error, clearError, resumeStream } = useChatSession({
 		chatId: childThreadId,
@@ -266,8 +299,15 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf:
 	};
 	return (
 		<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border min-[900px]:flex-row" data-testid="subagent-columns">
-			<Ledger entries={entries} />
-			<section className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="subagent-transcript-column" aria-label="Transcript">
+			<Ledger entries={entries} shown={pane === "ledger"} />
+			<section
+				id="subagent-pane-transcript"
+				role="tabpanel"
+				aria-labelledby="subagent-tab-transcript"
+				className={`${pane === "transcript" ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col min-[900px]:flex`}
+				data-testid="subagent-transcript-column"
+				aria-label="Transcript"
+			>
 				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="subagent-transcript-scroll">
 					<Transcript messages={messages} streaming={status === "streaming"} entries={entries} />
 					{error && (
@@ -417,11 +457,12 @@ function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; c
 			.finally(() => void refresh());
 	}, [base, refresh]);
 
+	const [pane, setPane] = useState<SubagentPane>("transcript");
 	const now = useNow(loaded?.summary.state === "running");
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-view" data-child={childThreadId}>
 			{/* One Header for every state, so the close button keeps its place (and focus) through loading. */}
-			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} onStop={loaded ? stop : undefined} />
+			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} onStop={loaded ? stop : undefined} pane={pane} onPane={setPane} />
 			{(note ?? stopNote) && (
 				<div className="mb-2 text-xs text-destructive" data-testid="subagent-note">
 					{note ?? stopNote}
@@ -434,7 +475,7 @@ function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; c
 			) : !loaded ? (
 				<div className="text-xs text-muted-foreground">Loading…</div>
 			) : (
-				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} />
+				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} pane={pane} />
 			)}
 		</div>
 	);

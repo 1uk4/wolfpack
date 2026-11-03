@@ -366,6 +366,23 @@ describe("subagent modal", () => {
 		assert.ok(q('[data-testid="subagent-ledger-scroll"]') && q('[data-testid="subagent-transcript-scroll"]'));
 	});
 
+	it("the Ledger | Transcript switch is a tablist at the top: Transcript by default, toggling swaps the visible pane", async () => {
+		await mount(fake({}));
+		const sw = q('[data-testid="subagent-switch"]')!;
+		assert.equal(sw.getAttribute("role"), "tablist");
+		assert.ok(q('[data-testid="subagent-header"]')!.contains(sw));
+		const tl = q('[data-testid="subagent-tab-ledger"]')!;
+		const tt = q('[data-testid="subagent-tab-transcript"]')!;
+		assert.equal(tt.getAttribute("aria-selected"), "true");
+		assert.equal(tl.getAttribute("aria-selected"), "false");
+		assert.match(q('[data-testid="subagent-ledger"]')!.className, /\bhidden\b/);
+		await act(async () => void (tl as HTMLElement).click());
+		assert.equal(tl.getAttribute("aria-selected"), "true");
+		assert.equal(tt.getAttribute("aria-selected"), "false");
+		assert.doesNotMatch(q('[data-testid="subagent-ledger"]')!.className, /\bhidden\b/);
+		assert.match(q('[data-testid="subagent-transcript-column"]')!.className, /\bhidden\b/);
+	});
+
 	it("an empty ledger still shows the column; a ledger entry expands on click", async () => {
 		const g = fake({});
 		g.state.ledger = [];

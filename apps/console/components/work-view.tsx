@@ -10,29 +10,26 @@
  *
  * Data: the injected `WorkClient` (default: console → wolfd → the Work API), fetched when the view opens, on window
  * focus and on a light poll while open. The domain is remembered in localStorage and starts on wolfpack.
- * `WorkViewProvider` mounts the one overlay; the graph header's Work button and the sidebar's Work entry both open it.
+ * It is its own page (/work, app/work/page.tsx), full-bleed, with no graph behind it. A row click opens the item in the
+ * reader panel (work-reader.tsx) through `?item=<id>`; the list underneath stays mounted, so closing the reader
+ * returns to it with its scroll, filters and domain intact.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, Maximize2Icon, Minimize2Icon, SearchIcon } from "lucide-react";
-import { OverlayShell } from "@/components/overlay-shell";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/top-bar";
-import { WorkViewContext, useWorkView, type WorkSelection } from "./work-view-entry";
+import { useWorkReader } from "./work-reader";
 import {
 	DEFAULT_WORK_SORT,
-	WORK_COL_WIDTH_KEY,
 	ancestorKeys,
 	LANE_COLOR,
 	WORK_ROW_H,
 	buildWorkTable,
-	clampPaneWidth,
 	groupConnectors,
 	laneKey,
 	lanePath,
 	laneState,
 	nextWorkSort,
-	parseWorkColWidth,
 	rowRouteState,
 	type Chip,
 	type WorkRouteView,
@@ -43,12 +40,11 @@ import {
 } from "@/src/core";
 import { createWorkClient, type WorkClient, type WorkDomain } from "./work-client";
 import { createGraduateClient, type GraduateClient } from "./graduate-client";
-import { GraduateControl, GraduateToasts } from "./graduate-dialog";
+import { GraduateControl } from "./graduate-dialog";
 import { useGraduated } from "./graduation-signal";
 
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
 export const DEFAULT_WORK_DOMAIN = "wolfpack";
-export const WORK_EXPANDED_KEY = "wolfpack:work-view-expanded";
 export const WORK_POLL_MS = 30_000;
 
 function readDomain(): string {
@@ -57,77 +53,6 @@ function readDomain(): string {
 	} catch {
 		return DEFAULT_WORK_DOMAIN;
 	}
-}
-
-export function WorkViewProvider({ children, client, graduate, onSelect }: { children: ReactNode; client?: WorkClient; graduate?: GraduateClient; onSelect?: (id: string) => void }) {
-	const [isOpen, setOpen] = useState(false);
-	const [selection, setSelection] = useState<WorkSelection | null>(null);
-	const [routeView, setRouteView] = useState<WorkRouteView | null>(null);
-	const [colWidth, setColWidthState] = useState(() => {
-		try {
-			return parseWorkColWidth(localStorage.getItem(WORK_COL_WIDTH_KEY), window.innerWidth);
-		} catch {
-			return parseWorkColWidth(null);
-		}
-	});
-	const [expanded, setExpandedState] = useState(() => {
-		try {
-			return localStorage.getItem(WORK_EXPANDED_KEY) === "1";
-		} catch {
-			return false;
-		}
-	});
-	const [graphPaneOpen, setPaneOpen] = useState(false);
-	const setExpanded = useCallback((next: boolean) => {
-		setExpandedState(next);
-		try {
-			localStorage.setItem(WORK_EXPANDED_KEY, next ? "1" : "0");
-		} catch {
-			// storage blocked: the layout just isn't remembered
-		}
-	}, []);
-	const open = useCallback(() => setOpen(true), []);
-	const close = useCallback(() => {
-		setOpen(false);
-		setSelection(null);
-	}, []);
-	const onSelectRef = useRef(onSelect);
-	onSelectRef.current = onSelect;
-	const select = useCallback((id: string) => {
-		// Picking a row from the full-screen table shows it on the graph: back to the column (a persisted choice).
-		setExpanded(false);
-		setSelection((cur) => ({ id, seq: (cur?.seq ?? 0) + 1 }));
-		onSelectRef.current?.(id);
-	}, [setExpanded]);
-	const clearSelection = useCallback(() => setSelection(null), []);
-	// The graph republishes on every render of its selection; keep the old object when nothing changed.
-	const publishRoute = useCallback(
-		(view: WorkRouteView | null) => setRouteView((cur) => (JSON.stringify(cur) === JSON.stringify(view) ? cur : view)),
-		[],
-	);
-	const setColWidth = useCallback((w: number, persist = false) => {
-		const next = clampPaneWidth(w, typeof window === "undefined" ? undefined : window.innerWidth);
-		setColWidthState(next);
-		if (persist) {
-			try {
-				localStorage.setItem(WORK_COL_WIDTH_KEY, String(next));
-			} catch {
-				// storage blocked: the width just isn't remembered
-			}
-		}
-	}, []);
-	const api = useMemo(
-		() => ({ open, close, isOpen, selection: isOpen ? selection : null, select, clearSelection, expanded, setExpanded, graphPaneOpen, publishPane: setPaneOpen, routeView, publishRoute, colWidth, setColWidth }),
-		[open, close, isOpen, selection, select, clearSelection, expanded, setExpanded, graphPaneOpen, routeView, publishRoute, colWidth, setColWidth],
-	);
-	// The overlay is the LAST child: the TopBar's drag region must not be punched through by later no-drag elements.
-	return (
-		<WorkViewContext.Provider value={api}>
-			{children}
-			<GraduateToasts />
-			{isOpen && <WorkOverlay client={client} graduate={graduate} onClose={close} />}
-		</WorkViewContext.Provider>
-	);
 }
 
 // ---- Data ------------------------------------------------------------------
@@ -197,10 +122,10 @@ function RowTitle({ row }: { row: TableRow }) {
 }
 
 const COLS = {
-	stage: "w-48 shrink-0",
-	progress: "w-28 shrink-0",
-	assignee: "w-24 shrink-0",
-	created: "w-24 shrink-0",
+	stage: "w-28 shrink-0 md:w-48",
+	progress: "w-28 shrink-0 max-md:hidden",
+	assignee: "w-24 shrink-0 max-md:hidden",
+	created: "w-24 shrink-0 max-md:hidden",
 };
 const INDENT_PX = [12, 40, 72] as const;
 
@@ -212,6 +137,8 @@ interface RowCtx {
 	view: WorkRouteView | null;
 	/** The split's narrow column: only Name and Stage (plus the step number). */
 	compact: boolean;
+	/** The item the reader shows (its row is marked). */
+	openId: string | null;
 	/** The group's gutter width (px), added to the indent of the rows below the group row. */
 	gutter: number;
 	/** The graduation seam: each feature row's control reads and drives its job through it. */
@@ -240,7 +167,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				data-graduated={row.graduated || undefined}
 				data-route={rr.mode === "none" ? undefined : rr.mode}
 				data-step={rr.mode !== "none" && rr.step !== null ? rr.step : undefined}
-				data-selected={rr.selected || undefined}
+				data-selected={(rr.selected || ctx.openId === row.id) || undefined}
 				data-cursor={view && rr.cursor ? true : undefined}
 				onClick={row.id ? () => onSelect(row.id) : undefined}
 				style={{ height: WORK_ROW_H, paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
@@ -347,11 +274,9 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 	{ col: "created", label: "Created", cls: `${COLS.created} justify-end` },
 ];
 
-export function WorkOverlay({ client: injected, graduate: injectedGraduate, onClose }: { client?: WorkClient; graduate?: GraduateClient; onClose: () => void }) {
-	const { select, routeView, colWidth, setColWidth, expanded: full, setExpanded: setFull, graphPaneOpen } = useWorkView();
-	// A column over the graph unless expanded. In the column the graph's selection is what's lit: the table mirrors the route the graph computed.
-	const split = !full;
-	const view = split ? routeView : null;
+export function WorkList({ client: injected, graduate: injectedGraduate }: { client?: WorkClient; graduate?: GraduateClient }) {
+	const { open: openItem, itemId } = useWorkReader();
+	const view: WorkRouteView | null = null; // no graph route to mirror: the list stands alone
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
 	const [domains, setDomains] = useState<WorkDomain[]>([]);
@@ -391,61 +316,14 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 
 	const items = load.state === "ready" ? load.items : null;
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const tableRef = useRef(table);
-	tableRef.current = table;
-	// Open the groups holding lit rows, once per route (a manual collapse stays collapsed until the route changes).
-	const routeKey = view ? JSON.stringify(Object.keys(view.steps).sort()) + view.selected : "";
-	useEffect(() => {
-		if (!view || !tableRef.current) return;
-		const ids = new Set([...Object.keys(view.steps), view.selected]);
-		const keys = ancestorKeys(tableRef.current.groups, ids);
-		setExpanded((prev) => (keys.every((k) => prev.has(k)) ? prev : new Set([...prev, ...keys])));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [routeKey, items === null]);
-	// The pane's cursor row stays in sight as ←/→ walk the route.
-	const cursorId = view ? (view.cursor ?? view.selected) : null;
-	useEffect(() => {
-		if (!cursorId) return;
-		const el = document.querySelector(`[data-testid="work-row-${cursorId}"]`) as (HTMLElement & { scrollIntoView?: (o?: object) => void }) | null;
-		el?.scrollIntoView?.({ block: "nearest" });
-	}, [cursorId]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: select, view, compact: split, gutter: 0, graduate: graduateClient };
-	const startResize = (e: React.PointerEvent) => {
-		e.preventDefault();
-		const startX = e.clientX;
-		const startW = colWidth;
-		let latest = startW;
-		const move = (ev: Event) => {
-			latest = clampPaneWidth(startW + ((ev as PointerEvent).clientX - startX), window.innerWidth);
-			setColWidth(latest);
-		};
-		const up = () => {
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", up);
-			window.removeEventListener("pointercancel", up);
-			setColWidth(latest, true);
-		};
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", up);
-		window.addEventListener("pointercancel", up);
-	};
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, view, compact: false, gutter: 0, graduate: graduateClient, openId: itemId };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 
 	return (
-		<OverlayShell label="Work" testId="work-view" closeTestId="work-close" onClose={onClose} yieldEsc={graphPaneOpen} bleed column={split ? colWidth : undefined}>
-			{(close) => (
-				<div data-split={split || undefined} className="flex h-full min-h-0 flex-1 flex-col">
-					{split && (
-						<div
-							role="separator"
-							aria-orientation="vertical"
-							aria-label="Resize Work column"
-							data-testid="work-resize"
-							onPointerDown={startResize}
-							className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none transition-colors hover:bg-ring/40"
-						/>
-					)}
+		<main data-testid="work-view" className="flex h-dvh min-h-0 flex-col bg-background">
+			{(
+				<div className="flex h-full min-h-0 flex-1 flex-col">
 					<TopBar>
 						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{table ? `${table.count} ${table.count === 1 ? "item" : "items"}` : ""}
@@ -476,32 +354,20 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 								placeholder="Search work…"
 								aria-label="Search work"
 								spellCheck={false}
-								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring ${split ? "w-32" : "w-56"}`}
+								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring w-32 md:w-56`}
 							/>
 						</div>
-						<Button
-							size="icon-xs"
-							variant="ghost"
-							className="ml-auto shrink-0"
-							data-testid="work-layout-toggle"
-							aria-label={split ? "Expand Work list to full screen" : "Collapse Work list to a column"}
-							aria-pressed={full}
-							onClick={() => setFull(split)}
-						>
-							{split ? <Maximize2Icon /> : <Minimize2Icon />}
-						</Button>
-						{close}
 					</TopBar>
 					<div className="min-h-0 flex-1 overflow-y-auto">
 						<div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background/80 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
-							{(split ? HEADERS.filter((h) => h.col === "name" || h.col === "stage") : HEADERS).map((h) => (
+							{HEADERS.map((h) => (
 								<button
 									key={h.col}
 									type="button"
 									data-testid={`work-sort-${h.col}`}
 									aria-sort={sort.col === h.col ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
 									onClick={() => setSort((cur) => nextWorkSort(cur, h.col))}
-									className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${split ? (h.col === "name" ? "flex-1 pl-[2.625rem]" : "w-32 shrink-0") : h.cls}`}
+									className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${h.cls}`}
 								>
 									{h.label} {chevron(h.col)}
 								</button>
@@ -528,6 +394,6 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 					</div>
 				</div>
 			)}
-		</OverlayShell>
+		</main>
 	);
 }

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRightIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useWorkView } from "@/components/work-view-entry";
+import { hasInAppHistory } from "@/components/nav-tracker";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
@@ -36,8 +36,6 @@ export function entryReaderState(res: KbResult<KbEntryDetail>): EntryReaderState
 
 export interface ReaderOverlayProps {
 	onClose: () => void;
-	/** Left offset (px): the Work column's width when it is split beside the reader. */
-	left: number;
 }
 
 export function EntryReader({ id, overlay }: { id: string; overlay?: ReaderOverlayProps }) {
@@ -59,14 +57,16 @@ export function EntryReader({ id, overlay }: { id: string; overlay?: ReaderOverl
 }
 
 /**
- * The reader as an OVERLAY (the /kb/entry/[id] route): drawn over the graph, which stays mounted behind it, and to the
- * right of the Work column when the Work list is split. Esc / X remove only the reader (back to "/"); the Work list's
- * own state is untouched. Esc is claimed in the capture phase so the Work overlay's document listener does not also act.
+ * The reader as an OVERLAY (the /kb/entry/[id] route): drawn over the graph, which stays mounted behind it. Esc / X
+ * remove only the reader (Back, or "/" on a deep link). Esc is claimed in the capture phase so nothing else also acts.
  */
 export function EntryReaderOverlay({ id }: { id: string }) {
 	const router = useRouter();
-	const work = useWorkView();
-	const close = useCallback(() => router.push("/"), [router]);
+	// Closing returns to the page it was opened from (Back) when it was opened in-app, else to "/".
+	const close = useCallback(() => {
+		if (hasInAppHistory()) router.back();
+		else router.push("/");
+	}, [router]);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return;
@@ -77,8 +77,7 @@ export function EntryReaderOverlay({ id }: { id: string }) {
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [close]);
-	const left = work.isOpen && !work.expanded ? work.colWidth : 0;
-	return <EntryReader id={id} overlay={{ onClose: close, left }} />;
+	return <EntryReader id={id} overlay={{ onClose: close }} />;
 }
 
 /** Presentational half (SSR-testable). */
@@ -86,8 +85,7 @@ export function EntryReaderView({ id, state, overlay }: { id: string; state: Ent
 	const entry = state.kind === "ready" ? state.entry : null;
 	return (
 		<div
-			className={overlay ? "fixed inset-y-0 right-0 z-[60] flex flex-col bg-background" : "flex h-dvh flex-col"}
-			style={overlay ? { left: overlay.left } : undefined}
+			className={overlay ? "fixed inset-y-0 right-0 z-[60] flex w-[min(52rem,70vw)] flex-col border-l bg-background max-md:inset-0 max-md:h-dvh max-md:w-full max-md:border-l-0" : "flex h-dvh flex-col"}
 			role={overlay ? "dialog" : undefined}
 			aria-label={overlay ? "Entry reader" : undefined}
 			data-testid="entry-reader"
@@ -97,7 +95,7 @@ export function EntryReaderView({ id, state, overlay }: { id: string; state: Ent
 			<TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{entry?.title ?? id}</h1>
 				{overlay && (
-					<Button size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid="entry-reader-close" onClick={overlay.onClose}>
+					<Button size="icon-xs" variant="ghost" className="ml-auto shrink-0 max-md:size-11" aria-label="Close" data-testid="entry-reader-close" onClick={overlay.onClose}>
 						<XIcon />
 					</Button>
 				)}

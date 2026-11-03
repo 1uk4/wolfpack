@@ -21,7 +21,7 @@ import { ComposerControls, useThreadSettings } from "@/components/composer-contr
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { fitImage, browserFitDeps } from "@/components/image-fit";
-import { canSendWith, chipFor, dragHasFiles, droppedFiles, fetchAttachmentLimit, friendlyUploadError, readyInfos, tooLargeMessage, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
+import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
@@ -386,28 +386,38 @@ function ThreadChatInner({
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
-	// The per-file budget for this console's mode (relay cap or local cap), fetched once.
-	const limitRef = useRef<Promise<AttachmentLimit>>(undefined);
+	// The per-file budget for this console's mode, fetched on demand: only a successful answer is kept, a failure is retried on the
+	// next batch and meanwhile the conservative relay budget applies.
+	const limitRef = useRef<AttachmentLimit | undefined>(undefined);
+	// Decoding and re-encoding a photo is memory-heavy (iOS): files of one batch (and of overlapping batches) are fitted one at a time.
+	const fitChain = useRef<Promise<unknown>>(Promise.resolve());
 	const onFiles = useCallback(
 		(files: File[]) => {
-			limitRef.current ??= fetchAttachmentLimit();
 			for (const file of files) {
 				const key = `att-${Math.random().toString(36).slice(2)}`;
+				// Infinity: the size is NOT prechecked here (type and emptiness only); an over-budget image is fitted below, and only a failed fit reports "too large".
 				const { chip, upload } = chipFor(file, key, Infinity);
 				setAttachments((prev) => [...prev, chip]);
 				if (!upload) continue;
-				// Each file is its own upload request, so the budget is per file (no combined limit).
+				const fit = fitChain.current.then(async () => {
+					limitRef.current ??= await fetchAttachmentLimit();
+					const limit = limitRef.current ?? FALLBACK_LIMIT;
+					return { limit, result: await fitImage(file, limit.maxBytes, browserFitDeps()) };
+				});
+				fitChain.current = fit.catch(() => {});
+				// Uploads of the fitted files run in parallel.
 				void (async () => {
-					const limit = await limitRef.current!;
-					const relay = limit.mode === "relay";
+					let limit = FALLBACK_LIMIT;
 					try {
-						const fitted = await fitImage(file, limit.maxBytes, browserFitDeps());
-						if (!fitted) return patchAttachment(key, { status: "error", error: tooLargeMessage(limit.maxBytes, relay, file.size) });
-						const { id, name, mimeType, size } = await uploadFile(transport.uploadUrl!, fitted);
+						const fitted = await fit;
+						limit = fitted.limit;
+						const relay = limit.mode === "relay";
+						if (!fitted.result.ok) return patchAttachment(key, { status: "error", error: fitFailureMessage(fitted.result.reason, limit.maxBytes, relay, file.size) });
+						const { id, name, mimeType, size } = await uploadFile(transport.uploadUrl!, fitted.result.file);
 						patchAttachment(key, { status: "ready", id, name, mimeType, size });
 					} catch (err) {
 						const e = err as Error;
-						patchAttachment(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, relay) });
+						patchAttachment(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, limit.mode === "relay") });
 					}
 				})();
 			}

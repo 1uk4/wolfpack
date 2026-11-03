@@ -45,9 +45,26 @@ export function tooLargeMessage(maxBytes: number, relay: boolean, size?: number)
 	return relay ? `Photo too large to send over the hub${got}, max ${mb(maxBytes)} MB.` : `Too large${got}; limit ${mb(maxBytes)} MB.`;
 }
 
-/** A server/relay refusal for size ("request body too large for the relay", 413) as the friendly text; other errors pass through. */
+/** The hub's own wording for a body over its cap. */
+const RELAY_TOO_LARGE = /too large for the relay/i;
+
+/** A size refusal (a 413, the hub's "request body too large for the relay", the wolf's "attachment too large") as the friendly text; every other error (e.g. "header too large") passes through. */
 export function friendlyUploadError(message: string, status: number | undefined, maxBytes: number, relay: boolean): string {
-	return status === 413 || /too large/i.test(message) ? tooLargeMessage(maxBytes, relay) : message;
+	return status === 413 || RELAY_TOO_LARGE.test(message) || /attachment too large/i.test(message) ? tooLargeMessage(maxBytes, relay) : message;
+}
+
+/** The chip text for each way fitting an image can fail. */
+export function fitFailureMessage(reason: "too-large" | "gif-too-large" | "undecodable" | "unsupported", maxBytes: number, relay: boolean, size?: number): string {
+	switch (reason) {
+		case "undecodable":
+			return "Couldn't read this image.";
+		case "unsupported":
+			return `Unsupported image type: ${ATTACHMENT_IMAGE_TYPES.map((t) => t.slice(6)).join(", ")} only.`;
+		case "gif-too-large":
+			return `This GIF is too large to send (${mb(maxBytes)} MB max) and can't be shrunk without losing the animation.`;
+		default:
+			return tooLargeMessage(maxBytes, relay, size);
+	}
 }
 
 /** The chip for a file about to upload, or an error chip (nothing to upload) when the precheck refuses it. */
@@ -62,15 +79,20 @@ export interface AttachmentLimit {
 	maxBytes: number;
 }
 
-/** The console's per-file budget (/api/attachment-limit); on failure the local cap (the server still refuses honestly). */
-export async function fetchAttachmentLimit(fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<AttachmentLimit> {
+/** The budget used while the real one is unknown: relay mode's (1.8 MB), so a failed fetch can never let an oversize body through. */
+export const FALLBACK_LIMIT: AttachmentLimit = { mode: "relay", maxBytes: Math.floor(2 * 1024 * 1024 * 0.9) };
+
+/** The console's per-file budget (/api/attachment-limit), or undefined when it could not be read (callers use FALLBACK_LIMIT and must not cache the failure). */
+export async function fetchAttachmentLimit(fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<AttachmentLimit | undefined> {
 	try {
-		const j = (await (await fetchFn("/api/attachment-limit")).json()) as Partial<AttachmentLimit>;
+		const res = await fetchFn("/api/attachment-limit");
+		if (!res.ok) return undefined;
+		const j = (await res.json()) as Partial<AttachmentLimit>;
 		if ((j.mode === "local" || j.mode === "relay") && typeof j.maxBytes === "number" && j.maxBytes > 0) return { mode: j.mode, maxBytes: j.maxBytes };
 	} catch {
-		/* fall through */
+		/* unknown */
 	}
-	return { mode: "local", maxBytes: ATTACHMENT_MAX_BYTES };
+	return undefined;
 }
 
 /** `accept` for the file picker input. */

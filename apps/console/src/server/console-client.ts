@@ -11,6 +11,7 @@
 
 import { HttpConsoleClient, MockConsoleClient, type ConsoleClient } from "@wolfpack/client";
 import { bearerOf } from "../core/hub-auth.ts";
+import { isRelayMode } from "./relay-mode.ts";
 
 const KEY = Symbol.for("wolfpack.console.client");
 
@@ -227,11 +228,8 @@ export function createConsoleClient(env: Record<string, string | undefined> = pr
 	// and, for resolver-less callers (scripts, tests), here.
 	const hub = hubUrl ? { baseUrl: hubUrl, token: requestToken ? undefined : env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
 	if (env.WOLFPACK_HUB_KEY?.trim()) console.warn("console: WOLFPACK_HUB_KEY is no longer supported and is ignored; set WOLFPACK_HUB_TOKEN (from `hubd pair`)");
-	const flag = env.WOLFPACK_HUB_RELAY?.trim() ?? "";
-	const off = /^(0|false|no|off)$/i.test(flag);
-	const forced = /^(1|true|yes|on)$/i.test(flag);
 	const haveToken = !!requestToken || !!hub?.token;
-	if (hub && !off && (forced || (!baseUrl && haveToken))) return relayClient(hub, requestToken);
+	if (hub && isRelayMode(env, haveToken)) return relayClient(hub, requestToken);
 	const withToken = (c: ConsoleClient): ConsoleClient => (hub && requestToken ? composeWorkReads(c, requestScopedWork(hub, requestToken)) : c);
 	if (baseUrl) return withToken(new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) }));
 	if (!hub) return new MockConsoleClient();

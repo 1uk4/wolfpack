@@ -1,11 +1,12 @@
 import { attachmentLimit } from "@/src/server/attachment-limit";
-import { nextRequestToken } from "@/src/server/console-client";
 
 export const dynamic = "force-dynamic";
 
-/** The per-file upload budget for this console's mode (relay cap or the local attachment cap), decided like the client factory (the request's token counts). Not secret. */
+/**
+ * The per-file upload budget for this console's mode (relay cap or the local attachment cap), read at runtime. Not secret.
+ * Decided like the live client (getConsoleClient passes a per-request token resolver, which counts as a token): a hub URL
+ * without WOLFPACK_HUB_RELAY=0 and without a direct WOLFPACK_API_URL means relay.
+ */
 export async function GET(): Promise<Response> {
-	const token = await nextRequestToken().catch(() => null);
-	const limit = attachmentLimit(process.env, !!token || !!process.env.WOLFPACK_HUB_TOKEN?.trim());
-	return Response.json(limit, { headers: { "Cache-Control": "no-store" } });
+	return Response.json(attachmentLimit(process.env, true), { headers: { "Cache-Control": "no-store" } });
 }

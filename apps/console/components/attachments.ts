@@ -9,6 +9,7 @@
  */
 
 import type { UiAttachment } from "@/src/core";
+import { RELAY_ATTACHMENT_BYTES } from "@/src/core/attachment-budget";
 import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_NAME_HEADER } from "@wolfpack/protocol/attachments";
 
 export interface PendingAttachment {
@@ -80,7 +81,7 @@ export interface AttachmentLimit {
 }
 
 /** The budget used while the real one is unknown: relay mode's (1.8 MB), so a failed fetch can never let an oversize body through. */
-export const FALLBACK_LIMIT: AttachmentLimit = { mode: "relay", maxBytes: Math.floor(2 * 1024 * 1024 * 0.9) };
+export const FALLBACK_LIMIT: AttachmentLimit = { mode: "relay", maxBytes: RELAY_ATTACHMENT_BYTES };
 
 /** The console's per-file budget (/api/attachment-limit), or undefined when it could not be read (callers use FALLBACK_LIMIT and must not cache the failure). */
 export async function fetchAttachmentLimit(fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<AttachmentLimit | undefined> {

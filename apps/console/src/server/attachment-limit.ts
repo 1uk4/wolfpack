@@ -4,7 +4,7 @@
  * request bodies over LINK_RELAY_MAX_BODY, so the budget is 90% of that (headroom for body-size rounding in front of the hub).
  */
 import { ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol/attachments";
-import { LINK_RELAY_MAX_BODY } from "@wolfpack/protocol";
+import { RELAY_ATTACHMENT_BYTES } from "../core/attachment-budget.ts";
 import { isRelayMode } from "./relay-mode.ts";
 
 export interface AttachmentLimit {
@@ -12,8 +12,7 @@ export interface AttachmentLimit {
 	maxBytes: number;
 }
 
-/** The conservative budget: what relay mode allows. */
-export const RELAY_ATTACHMENT_BYTES = Math.floor(LINK_RELAY_MAX_BODY * 0.9);
+export { RELAY_ATTACHMENT_BYTES };
 
 /** `haveToken`: the request carries a hub bearer token (or the env has one). */
 export function attachmentLimit(env: Record<string, string | undefined> = process.env, haveToken = !!env.WOLFPACK_HUB_TOKEN?.trim()): AttachmentLimit {

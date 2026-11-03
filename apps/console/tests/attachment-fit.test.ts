@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import { LINK_RELAY_MAX_BODY } from "@wolfpack/protocol";
 import { ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol/attachments";
+import { GET as limitRoute } from "../app/api/attachment-limit/route.ts";
 import { attachmentLimit, RELAY_ATTACHMENT_BYTES } from "../src/server/attachment-limit.ts";
 import { isRelayMode } from "../src/server/relay-mode.ts";
 import { chipFor, fetchAttachmentLimit, fitFailureMessage, FALLBACK_LIMIT, friendlyUploadError, precheckFile, tooLargeMessage } from "../components/attachments.ts";
-import { fitImage, planSteps, scaledSize, type FitDeps, type FitResult } from "../components/image-fit.ts";
+import { fitImage, fitImageWithTimeout, planSteps, scaledSize, type FitDeps, type FitResult } from "../components/image-fit.ts";
 
 const MB = 1024 * 1024;
 const big = (n: number, type = "image/jpeg", name = "IMG_1.HEIC.jpeg") => new File([new Uint8Array(n)], name, { type });
@@ -141,5 +142,46 @@ describe("messages", () => {
 		assert.match(fitFailureMessage("too-large", 1.8 * MB, true, 6 * MB), /Photo too large to send over the hub \(6 MB\), max 1\.8 MB/);
 		assert.match(fitFailureMessage("gif-too-large", 1.8 * MB, true), /GIF/);
 		assert.match(fitFailureMessage("unsupported", 1, true), /Unsupported/);
+	});
+});
+
+describe("limit route", () => {
+	it("decides like the live client: a hub URL means relay (the request-token resolver always counts), unless forced off or a direct wolf URL", async () => {
+		const saved = { ...process.env };
+		try {
+			for (const k of ["WOLFPACK_HUB_URL", "WOLFPACK_HUB_TOKEN", "WOLFPACK_HUB_RELAY", "WOLFPACK_API_URL"]) delete process.env[k];
+			process.env.WOLFPACK_HUB_URL = "http://hub:1/v1"; // no env token: the browser's token is what authenticates
+			assert.deepEqual(await (await limitRoute()).json(), { mode: "relay", maxBytes: RELAY_ATTACHMENT_BYTES });
+			process.env.WOLFPACK_HUB_RELAY = "0";
+			assert.equal((await (await limitRoute()).json()).mode, "local");
+			delete process.env.WOLFPACK_HUB_RELAY;
+			delete process.env.WOLFPACK_HUB_URL;
+			assert.equal((await (await limitRoute()).json()).mode, "local");
+		} finally {
+			for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+			Object.assign(process.env, saved);
+		}
+	});
+	it("the client-safe relay budget is 90% of the hub body cap", () => assert.equal(RELAY_ATTACHMENT_BYTES, Math.floor(LINK_RELAY_MAX_BODY * 0.9)));
+});
+
+describe("fit timeout", () => {
+	it("a stuck decode resolves undecodable after the timeout and does not block the next file", async () => {
+		mock.timers.enable({ apis: ["setTimeout"] });
+		try {
+			const stuck: FitDeps = { decode: () => new Promise(() => {}), encode: async () => null };
+			const p = fitImageWithTimeout(big(6 * MB), 1.8 * MB, stuck, 30_000);
+			mock.timers.tick(29_999);
+			let settled = false;
+			void p.then(() => (settled = true));
+			await Promise.resolve();
+			assert.equal(settled, false);
+			mock.timers.tick(1);
+			assert.deepEqual(await p, { ok: false, reason: "undecodable" });
+			const next = await fitImageWithTimeout(big(100), 1.8 * MB, stuck, 30_000);
+			assert.ok(next.ok);
+		} finally {
+			mock.timers.reset();
+		}
 	});
 });

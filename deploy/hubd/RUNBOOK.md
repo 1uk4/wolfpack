@@ -159,3 +159,43 @@ systemctl start hubd
 ```
 (GNU tar stores the `domains` symlink as a link, not its contents; the tar holds tokens, so it is created 0600.) Restore, with hubd stopped and `/var/lib/hubd` moved aside: `tar -xpf /root/hubd-state.tar -C /var/lib` as root (`-p` and root's default `--same-owner` keep owner hubd:hubd and the 0700/0600 modes), then `systemctl start hubd`.
 - No ACLs were set, so nothing in Dewey's tree needs undoing. Pre-created lane dirs are empty and harmless.
+
+## 7. Merge the legacy work store into hubd (`hubd work-import`, ticket work-wolfpack-MMeb8jJ)
+Until the old wolves are repointed to the hub, work is written in two places: hubd's store (`/var/lib/hubd/ledger/work-events.jsonl` + the work dirs behind the `kb/base/domains` symlink) and the legacy store (`/var/lib/workerd-kb/domains/<d>/work/*.md` + `/var/wolfpack/kb/work/ledger/work-events.jsonl`, written by wolfpack-agent). `work-import` merges legacy into hubd; the legacy paths are only read. Rules: ledger events are deduped by sha256 of the canonical event JSON (multiset, so re-runs add nothing) and merged by `at`; legacy-only `.md` are copied; for items in both, the file with the newer effective `updated` wins (ties: the file whose stage matches the folded ledger, else hubd's is kept and listed as a conflict); hubd-only files are never deleted. It takes the work-writer lock (even for `--dry-run`), so it **refuses while hubd runs**; run it as the `hubd` user so new files get the right owner. All commands on sfo-01 as root:
+```
+N="runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs"
+ARGS="--from-domains /var/lib/workerd-kb/domains --from-ledger /var/wolfpack/kb/work/ledger/work-events.jsonl --data-dir /var/lib/hubd --domains personal,wolfpack"
+
+# 1. stop hubd
+systemctl stop hubd
+
+# 2. back up. The tar of /var/lib/hubd holds only the kb/base/domains SYMLINK, so also copy the real work dirs and the ledger
+B=/root/hubd-pre-work-import-$(date +%Y%m%d-%H%M%S); mkdir -p "$B"
+( umask 077; tar --one-file-system -C /var/lib -cpf "$B/hubd-state.tar" hubd )
+for d in personal wolfpack; do mkdir -p "$B/work/$d"; cp -a /var/lib/hubd/kb/base/domains/$d/work/. "$B/work/$d/"; done   # cp follows the symlink
+ls "$B/work/wolfpack" | wc -l                                                          # expect ~484 (before import)
+# (the import also makes its own copy under /var/lib/hubd/backups/work-import-<stamp>/ before writing)
+
+# 3. dry run: prints events to append, files to add, files to update (old->new stage), conflicts, skipped lines, writes nothing
+$N work-import $ARGS --dry-run
+# expected on the 2026-11-03 data: events 3926, add 46, update 22, conflicts 1 (work-personal-Ciimcxv: same stage, differing text)
+
+# 4. import (prints the consistency check: every legacy file's stage vs the merged state; must say 0 mismatch(es))
+$N work-import $ARGS
+
+# 5. start hubd
+systemctl start hubd
+
+# 6. checks
+systemctl is-active hubd; journalctl -u hubd -n 20 --no-pager
+$N work-import $ARGS --dry-run | head -4          # (stop hubd first, the lock) -- or skip; the import's own re-run must show events 0 / add 0 / update 0
+wc -l /var/lib/hubd/ledger/work-events.jsonl      # 5 + 3926 = 3931
+# through the console/API: work-wolfpack-0HuY8Al is a shipped feature with its children; a PATCH to a formerly KB-only item returns 200, not 404
+ls /var/lib/hubd/kb/base/domains/wolfpack/work/*.md | wc -l   # ~530 (484 + 46)
+```
+Note that the re-run check in step 6 needs hubd stopped (lock); do it before step 5 if wanted: run the import command a second time right after step 4 and expect `events to append: 0`, `files to add: 0`, `files to update: 0`.
+
+**Rollback** (hubd stopped): put back the ledger and the work files from the backup. `cp -a "$B/work/$d/." /var/lib/hubd/kb/base/domains/$d/work/` restores the replaced files (files the import added can be removed by diffing against `$B/work/$d`), and
+`cp -p /var/lib/hubd/backups/work-import-<stamp>/ledger/work-events.jsonl /var/lib/hubd/ledger/work-events.jsonl` restores the ledger (the pre-import copy, 5 events). `chown -R` is not needed if you run as above (`cp -a` keeps owners); then `systemctl start hubd`.
+
+**Catch-up re-run** (until the old wolves are repointed; legacy keeps getting writes): repeat steps 1, 3, 4, 5 (and a fresh backup in step 2). Only events and files that are new or newer in legacy are applied; events already imported are skipped, and a hubd-newer file is kept. Writes made through hubd after an earlier import are never lost, because hubd's ledger events are only ever added to.

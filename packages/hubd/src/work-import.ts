@@ -8,7 +8,7 @@
  * event id of their own, and two genuinely identical events can exist (same note text in the same minute), so the key is used as a
  * MULTISET: if the legacy ledger holds n copies of a key and hubd's holds m, n-m are appended. Re-running therefore adds nothing.
  * Order: foldWork depends on file order (a staged/deleted event needs its work.created first, later events override earlier), so the
- * result is a stable two-way merge by the `at` timestamp ("YYYY-MM-DD HH:MM"): each source keeps its own order, ties go to hubd's
+ * result is a stable two-way merge by the `at` timestamp ("YYYY-MM-DD HH:MM"): the new events are stably sorted by `at`, hubd's own order is kept, ties go to hubd's
  * events. When nothing is appended the ledger file is not touched; otherwise it is rewritten atomically (tmp + rename), backup first.
  *
  * Files: legacy-only .md are copied; for an item in both, the version with the newer effective `updated` wins, where effective =
@@ -138,6 +138,7 @@ export function importWork(opts: ImportOptions): ImportReport {
       if (!inScope(l.id)) continue;
       if (n > (have.get(l.key) ?? 0)) fresh.push(l);
     }
+    fresh.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)); // stable (Array.sort): equal timestamps keep legacy order
     report.eventsToAppend = fresh.length;
     // Hubd's file as-is (unparseable lines kept in place at the front would lose position; keep every original line in order).
     const hubdAll = existsSync(hubdFile) ? readFileSync(hubdFile, "utf-8").split("\n").filter((l) => l.trim()) : [];
@@ -162,6 +163,7 @@ export function importWork(opts: ImportOptions): ImportReport {
     };
     const legacyDay = lastDay(legacy.lines);
     const hubdDay = lastDay(hubd.lines);
+    const ledgerFold = foldWork([...hubd.lines, ...legacy.lines].filter((l) => inScope(l.id)).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).map((l) => l.event));
     const writes: Array<{ target: string; data: Buffer; like: string }> = [];
     const legacyStages = new Map<string, { domain: string; stage: string }>();
     for (const d of domains) {
@@ -183,10 +185,16 @@ export function importWork(opts: ImportOptions): ImportReport {
         if (hf.raw.equals(lf.raw)) continue;
         const lEff = [lf.updated, legacyDay.get(lf.id) ?? ""].sort().pop()!;
         const hEff = [hf.updated, hubdDay.get(hf.id) ?? ""].sort().pop()!;
-        const decision = lEff > hEff ? "legacy" : hEff > lEff ? "hubd" : "conflict-kept-hubd";
+        let decision: "legacy" | "hubd" | "conflict-kept-hubd" = lEff > hEff ? "legacy" : hEff > lEff ? "hubd" : "conflict-kept-hubd";
+        if (decision === "conflict-kept-hubd") {
+          // Same age: the merged ledger is the source of truth, so the file that agrees with its folded stage wins; if both or neither do it stays a conflict.
+          const folded = (ledgerFold.get(lf.id as never) as { stage?: string } | undefined)?.stage;
+          if (folded && folded === lf.stage && folded !== hf.stage) decision = "legacy";
+          else if (folded && folded === hf.stage && folded !== lf.stage) decision = "hubd";
+        }
         report.decisions.push({ id: lf.id, legacyStage: lf.stage, hubdStage: hf.stage, legacyUpdated: lEff, hubdUpdated: hEff, decision });
         if (decision === "legacy") {
-          report.filesToUpdate.push({ id: lf.id, from: hf.stage, to: lf.stage, reason: `legacy ${lEff} > hubd ${hEff}` });
+          report.filesToUpdate.push({ id: lf.id, from: hf.stage, to: lf.stage, reason: lEff > hEff ? `legacy ${lEff} > hubd ${hEff}` : `same age ${lEff}; legacy stage matches the ledger` });
           writes.push({ target, data: lf.raw, like: target });
         } else if (decision === "conflict-kept-hubd") report.conflicts.push(lf.id);
       }

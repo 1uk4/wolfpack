@@ -10,10 +10,11 @@
  *  WRITE  memory's emitDelta keeps writing `<KB_OPS>/inbox/<wolf>/*.md` (KB_OPS defaults to `<home>/ops`); a feeder scans that lane and
  *         POSTs each file to hubd `/v1/contributions`; only a 2xx moves the file to `<lane>/sent/`. Failures (see `classify`):
  *         a terminal 4xx (or an unparseable file) moves the file to `<lane>/rejected/` (+ `.reason.json`) and is never retried;
- *         401/403/404/405/410 mean a config problem (token, URL, grant): the pass stops, the files stay, one ERROR line is logged and the whole
- *         feeder backs off; transient failures (network, 5xx, 408, 429) back off per file (5 s .. 5 min).
+ *         401/403/404/405/410 mean a config problem (token, URL, grant): the file stays and backs off on its own; a 401 (token-wide), or
+ *         two distinct files failing that way in one pass, stops the pass and backs the whole feeder off with one ERROR line (a single
+ *         403/404/410 can be specific to one contribution, so it must not block the files behind it); transient failures (network, 5xx, 408, 429) back off per file (5 s .. 5 min).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { KbSync } from "@wolfpack/kb/sync";
 import { parseContribution } from "@wolfpack/kb/librarian/intake";
@@ -63,7 +64,8 @@ export type Failure = "terminal" | "config" | "retry";
 const backoff = (fails: number): number => Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (fails - 1));
 
 /**
- * What to do with a failed post. 401/403/404/405/410 = config problem (bad token, wrong URL, wolf not granted): keep everything, back off.
+ * What to do with a failed post. 401/403/404/405/410 = config problem (bad token, wrong URL, wolf not granted): keep the file, back off
+ * (the caller decides whether it is file-specific or global).
  * Other 4xx except 408/429 = the hub will never accept this file. Everything else, including a plain Error from a transport failure
  * (postContribution throws a plain Error when the hub cannot be reached), is transient.
  */
@@ -103,6 +105,11 @@ export async function feedInboxToHub(
   // Drop backoff entries of files that are no longer in the inbox (sent, rejected, deleted by hand).
   const present = new Set(names);
   for (const k of [...state.files.keys()]) if (!present.has(k)) state.files.delete(k);
+
+  // A crash between writing and renaming a reason file leaves a tmp file behind; remove it.
+  try {
+    for (const n of readdirSync(join(lane, "rejected"))) if (/\.reason\.json\.tmp-/.test(n)) rmSync(join(lane, "rejected", n), { force: true });
+  } catch {}
 
   const eligible = names.filter((n) => !n.startsWith(".") && n.endsWith(".md") && !/\.tmp-/.test(n));
   if (state.auth.nextAt > now()) {
@@ -148,6 +155,7 @@ export async function feedInboxToHub(
     return wait;
   };
 
+  const configFailed = new Set<string>();
   for (let i = 0; i < eligible.length; i++) {
     const name = eligible[i]!;
     const file = join(lane, name);
@@ -179,6 +187,8 @@ export async function feedInboxToHub(
     } catch (e) {
       const msg = safeMsg(e, hub.token);
       const kind = classify(e);
+      // The hub answered and it was not a config refusal: token and URL work.
+      if (e instanceof HubHttpError && kind !== "config") state.auth = { fails: 0, nextAt: 0 };
       if (kind === "terminal") {
         const status = (e as HubHttpError).status;
         const r = (e as HubHttpError).details?.reason;
@@ -190,14 +200,21 @@ export async function feedInboxToHub(
         const wait = retryLater(name);
         log(`hub-kb: contribution ${name} not sent (will retry in ${Math.round(wait / 1000)}s): ${msg}`);
       } else if (kind === "config") {
-        // Circuit breaker: every file would fail the same way. Stop the pass, back the whole feeder off, one line per pass.
-        const fails = state.auth.fails + 1;
-        const wait = backoff(fails);
-        state.auth = { fails, nextAt: now() + wait };
-        res.failed++;
-        res.deferred += eligible.length - i - 1;
-        log(`hub-kb: ERROR hub refused ${name} (${(e as HubHttpError).status}): check WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN, or the wolf is not granted this domain; ${eligible.length - i} file(s) kept, retry in ${Math.round(wait / 1000)}s: ${msg}`);
-        return res;
+        const status = (e as HubHttpError).status;
+        const wait = retryLater(name);
+        configFailed.add(name);
+        // Only a 401 (token-wide), or two distinct files failing this way in one pass, says "everything will fail": trip the breaker.
+        // Otherwise (a 403/404/410 can be about this one contribution) carry on with the next file.
+        if (status === 401 || configFailed.size >= 2) {
+          const fails = state.auth.fails + 1;
+          const authWait = backoff(fails);
+          state.auth = { fails, nextAt: now() + authWait };
+          const left = eligible.length - i - 1;
+          res.deferred += left;
+          log(`hub-kb: ERROR hub refused ${name} (${status}): check WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN, or the wolf is not granted this domain; ${eligible.length - i} file(s) kept, retry in ${Math.round(authWait / 1000)}s: ${msg}`);
+          return res;
+        }
+        log(`hub-kb: contribution ${name} refused (${status}: token/URL/grant); kept, retry in ${Math.round(wait / 1000)}s: ${msg}`);
       } else {
         const wait = retryLater(name);
         log(`hub-kb: contribution ${name} not sent (will retry in ${Math.round(wait / 1000)}s): ${msg}`);

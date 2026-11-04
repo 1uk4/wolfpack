@@ -132,14 +132,14 @@ describe("feedInboxToHub", () => {
     expect(logs.filter((l) => l.includes("bad.md"))).toHaveLength(1);
   });
 
-  it.each([401, 403, 404, 405, 410])("%i keeps the files, logs one loud ERROR per pass and backs the feeder off", async (status) => {
+  it("401 keeps the files, logs one loud ERROR per pass and backs the feeder off", async () => {
     const ops = tmp();
     const lane = file(ops);
     more(lane, 4);
     const logs: string[] = [];
     const state = newFeedState();
     let calls = 0;
-    const f = (async () => (calls++, new Response("{}", { status }))) as unknown as typeof fetch;
+    const f = (async () => (calls++, new Response("{}", { status: 401 }))) as unknown as typeof fetch;
     const p = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 0 });
     expect(p).toEqual({ sent: 0, failed: 1, rejected: 0, deferred: 4 });
     expect(calls).toBe(1);
@@ -147,14 +147,70 @@ describe("feedInboxToHub", () => {
     expect(existsSync(join(lane, "rejected"))).toBe(false);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatch(/ERROR.*WOLFPACK_HUB_TOKEN.*not granted this domain/);
-    // backing off: the next pass at +1 s does not call the hub at all and logs nothing
-    expect(await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 1000 })).toMatchObject({ failed: 0, deferred: 5 });
+    expect(await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 1000 })).toEqual({ sent: 0, failed: 0, rejected: 0, deferred: 5 });
     expect(calls).toBe(1);
     expect(logs).toHaveLength(1);
-    // after the wait it tries again, with a doubled wait
     await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 5000 });
     expect(calls).toBe(2);
     expect(state.auth).toEqual({ fails: 2, nextAt: 5000 + 10000 });
+  });
+
+  it.each([403, 404, 405, 410])("a single %i is file-specific: that file is kept with backoff, the others are still sent", async (status) => {
+    const ops = tmp();
+    const lane = file(ops);
+    more(lane, 3);
+    const state = newFeedState();
+    const logs: string[] = [];
+    // the first file in listing order (caching-…, before extra-…) is the poisoned one: only the first call is refused
+    let calls = 0;
+    const f = (async () => new Response(JSON.stringify({ id: "c" }), { status: calls++ === 0 ? status : 201 })) as unknown as typeof fetch;
+    const p = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 0 });
+    expect(p).toEqual({ sent: 3, failed: 1, rejected: 0, deferred: 0 });
+    expect(readdirSync(lane).filter((n) => n.endsWith(".md"))).toEqual([NAME]);
+    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000 });
+    expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
+    // next pass: the poisoned file is skipped while it backs off; the feeder is not blocked
+    expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 1000 })).toEqual({ sent: 0, failed: 0, rejected: 0, deferred: 1 });
+  });
+
+  it("two distinct files refused with 404 in one pass trip the breaker", async () => {
+    const ops = tmp();
+    const lane = file(ops);
+    more(lane, 4);
+    const state = newFeedState();
+    const logs: string[] = [];
+    let calls = 0;
+    const f = (async () => (calls++, new Response("{}", { status: 404 }))) as unknown as typeof fetch;
+    const p = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 0 });
+    expect(calls).toBe(2);
+    expect(p).toEqual({ sent: 0, failed: 2, rejected: 0, deferred: 3 });
+    expect(logs.filter((l) => l.includes("ERROR"))).toHaveLength(1);
+    expect(state.auth).toEqual({ fails: 1, nextAt: 5000 });
+    expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 1000 })).toMatchObject({ deferred: 5 });
+    expect(calls).toBe(2);
+  });
+
+  it("any non-config answer from the hub resets the shared config backoff", async () => {
+    const ops = tmp();
+    const lane = file(ops);
+    const state = newFeedState();
+    state.auth = { fails: 3, nextAt: 0 };
+    await feedInboxToHub(ops, "hal2", hubOf(reply(400)), () => {}, { state, now: () => 0 });
+    expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
+    file(ops);
+    state.auth = { fails: 3, nextAt: 0 };
+    await feedInboxToHub(ops, "hal2", hubOf(reply(503)), () => {}, { state, now: () => 0 });
+    expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
+    expect(lane).toBeTruthy();
+  });
+
+  it("removes a stray reason-file tmp left in rejected/", async () => {
+    const ops = tmp();
+    const lane = file(ops);
+    mkdirSync(join(lane, "rejected"));
+    writeFileSync(join(lane, "rejected", "x.md.reason.json.tmp-123"), "{");
+    await feedInboxToHub(ops, "hal2", hubOf(reply(500)), () => {}, { now: () => 0 });
+    expect(existsSync(join(lane, "rejected", "x.md.reason.json.tmp-123"))).toBe(false);
   });
 
   it("once the config is fixed the kept files go through", async () => {

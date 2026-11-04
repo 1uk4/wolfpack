@@ -7,7 +7,7 @@ Electron shell for the Wolfpack Console.
 By default the app starts its bundled local server. To open a console served
 elsewhere (e.g. the VPS behind tailscale serve) instead, set the URL either way:
 
-- env: `LH_CONSOLE_URL=https://sfo-01.<tailnet>.ts.net` (wins over the file)
+- env: `WOLFPACK_CONSOLE_URL=https://sfo-01.<tailnet>.ts.net` (wins over the file)
 - file: `~/Library/Application Support/LearnHarness/console.json`
   `{ "consoleUrl": "https://sfo-01.<tailnet>.ts.net" }`
 

@@ -30,11 +30,11 @@ describe("resolveConsoleTarget", () => {
 	it("reads console.json, env overrides it", () => {
 		writeFileSync(join(dir, "console.json"), JSON.stringify({ consoleUrl: "https://file.ts.net" }));
 		assert.equal(resolveConsoleTarget({ env: {}, userDataDir: dir }).origin, "https://file.ts.net");
-		assert.equal(resolveConsoleTarget({ env: { LH_CONSOLE_URL: "https://env.ts.net" }, userDataDir: dir }).origin, "https://env.ts.net");
+		assert.equal(resolveConsoleTarget({ env: { WOLFPACK_CONSOLE_URL: "https://env.ts.net" }, userDataDir: dir }).origin, "https://env.ts.net");
 	});
 	it("invalid value logs and falls back to local", () => {
 		const logs: string[] = [];
-		assert.deepEqual(resolveConsoleTarget({ env: { LH_CONSOLE_URL: "http://evil.com" }, userDataDir: dir, log: (m: string) => logs.push(m) }), { mode: "local" });
+		assert.deepEqual(resolveConsoleTarget({ env: { WOLFPACK_CONSOLE_URL: "http://evil.com" }, userDataDir: dir, log: (m: string) => logs.push(m) }), { mode: "local" });
 		assert.equal(logs.length, 1);
 	});
 	it("broken json falls back to local", () => {

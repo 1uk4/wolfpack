@@ -544,7 +544,7 @@ async function main() {
 	// Dev mode: point at a running `next dev` server (LH_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies
 	// (guards, menu, single instance).
-	// Remote mode (LH_CONSOLE_URL / console.json consoleUrl, see remote.cjs):
+	// Remote mode (WOLFPACK_CONSOLE_URL / console.json consoleUrl, see remote.cjs):
 	// no server spawn, no DATA_DIR/auth.json. LH_DEV_URL takes precedence.
 	const devUrl = process.env.LH_DEV_URL;
 	const target = devUrl ? { mode: "local" } : resolveConsoleTarget({ env: process.env, userDataDir: app.getPath("userData"), log });

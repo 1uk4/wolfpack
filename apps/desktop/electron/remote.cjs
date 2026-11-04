@@ -4,7 +4,7 @@
  * bundled local server. Pure helpers, no Electron — unit-tested from
  * apps/console/tests/desktop-remote.test.ts.
  *
- * Config: env LH_CONSOLE_URL wins over `consoleUrl` in <userData>/console.json
+ * Config: env WOLFPACK_CONSOLE_URL wins over `consoleUrl` in <userData>/console.json
  * (macOS: ~/Library/Application Support/LearnHarness/console.json).
  * Accepted: https://host[:port][/path]; plain http only for loopback
  * (127.0.0.1, localhost, [::1]) and tailnet CGNAT 100.64.0.0/10 IPs.
@@ -44,9 +44,9 @@ function parseConsoleUrl(raw) {
 function resolveConsoleTarget({ env = process.env, userDataDir, log = () => {} }) {
 	let raw;
 	let source;
-	if (env.LH_CONSOLE_URL) {
-		raw = env.LH_CONSOLE_URL;
-		source = "LH_CONSOLE_URL";
+	if (env.WOLFPACK_CONSOLE_URL) {
+		raw = env.WOLFPACK_CONSOLE_URL;
+		source = "WOLFPACK_CONSOLE_URL";
 	} else if (userDataDir) {
 		const file = path.join(userDataDir, "console.json");
 		try {

@@ -87,8 +87,8 @@ function kbItems(roots: KbRoots, domain: string): { items: Item[]; sig: string; 
   return { items, sig: sigs.join("|"), cacheable };
 }
 
-/** A file item as events: created, then its links / graduation / summary / schedule / standing, all before the ledger's events. */
-function seedEvents(it: Item): WorkEvent[] {
+/** A file item as events (`by` stamps them, e.g. the import's seed marker): created, then its links / graduation / summary / schedule / standing, all before the ledger's events. */
+export function seedEvents(it: Item, by?: string): WorkEvent[] {
   const day = (d: string) => `${d} 00:00`;
   const raw: object[] = [
     { type: "work.created", id: it.id, at: day(it.created), kind: it.kind, domain: it.domain, title: it.title, assignee: it.assignee, area: it.area ?? null, partOf: it.partOf ?? null, successCriteria: it.successCriteria ?? null, stage: it.stage, container: it.container ?? false },
@@ -101,7 +101,7 @@ function seedEvents(it: Item): WorkEvent[] {
   if (it.graduated) raw.push({ type: "work.graduated", id: it.id, at: day(it.graduated) });
   const out: WorkEvent[] = [];
   for (const r of raw) {
-    const e = parseWorkEvent(r);
+    const e = parseWorkEvent(by ? { ...r, by } : r);
     if (!e) {
       if ((r as { type: string }).type === "work.created") return []; // the item itself is invalid: no seed at all
       continue; // a bad optional field drops just that field

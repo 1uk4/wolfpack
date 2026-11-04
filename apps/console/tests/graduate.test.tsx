@@ -245,32 +245,27 @@ const openList = async (graduate: GraduateClient, work = fakeWork()) => {
 // ---- Work list ------------------------------------------------------------------------
 
 describe("Work list: the Graduate button", () => {
-	it("is enabled on a ready feature and disabled, with the reason, on one with open tasks", async () => {
+	it("a ready feature has the button; a feature that is not ready has none, and its stage cell says why", async () => {
 		await openList(fakeGraduate());
 		const ready = q("work-graduate-ready") as HTMLButtonElement;
 		assert.ok(ready);
 		assert.equal(ready.disabled, false);
-		const busy = q("work-graduate-busy") as HTMLButtonElement;
-		assert.equal(busy.disabled, true);
-		assert.equal(busy.getAttribute("data-reason"), "2 tasks open");
-		assert.match(busy.getAttribute("title") ?? "", /2 tasks open/);
+		assert.equal(q("work-graduate-busy"), null, "no button (and no reserved width) on a feature with open tasks");
+		assert.match(q("work-stage-busy")!.getAttribute("title") ?? "", /not ready to graduate: 2 tasks open/);
 	});
 	it("tasks and groups carry no button", async () => {
 		await openList(fakeGraduate());
-		assert.deepEqual(qa('[data-testid^="work-graduate-"]').map((b) => b.getAttribute("data-testid")).sort(), ["work-graduate-busy", "work-graduate-off", "work-graduate-ready"]);
-	});
-	it("clicking a disabled button opens nothing", async () => {
-		const g = fakeGraduate();
-		await openList(g);
-		await click(q("work-graduate-busy")!);
-		assert.equal(q("graduate-dialog"), null);
-		assert.equal(g.starts.length, 0);
+		assert.deepEqual(qa('[data-testid^="work-graduate-"]').map((b) => b.getAttribute("data-testid")).sort(), ["work-graduate-off", "work-graduate-ready"]);
 	});
 	it("the click opens the confirmation step and does not also select the row", async () => {
 		await openList(fakeGraduate());
+		const expanded = () => q("work-row-ready")!.getAttribute("aria-expanded");
+		const before = expanded();
 		await click(q("work-graduate-ready")!);
 		assert.ok(q("graduate-dialog"));
+		assert.equal(expanded(), before, "the click did not toggle the row");
 		assert.equal(q("work-view")!.getAttribute("data-split"), null);
+		assert.equal(q("work-reader"), null);
 	});
 });
 

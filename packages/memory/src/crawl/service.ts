@@ -26,7 +26,7 @@ import { hostname } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { acquireLock, bootsDiffer, lockHeld, refreshLock, releaseLock, type HeldLock, type LockEnv } from "./lock.js";
 import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.js";
-import { checkHubContributionsDetailed, emitCrawlToHub, hubTargetFromEnv, listDomainsOnHub, readHubReceiptsDetailed, redactUrl, scrubSecrets, type HubTarget } from "./hub.js";
+import { checkHubContributionsDetailed, emitCrawlToHub, entryRef, hubTargetFromEnv, listDomainsOnHub, readHubReceiptsDetailed, redactUrl, scrubSecrets, type HubTarget } from "./hub.js";
 import { readPlan } from "./plan.js";
 import { DEFAULT_CRAWL_CONCURRENCY, runCrawl, type RunCrawlOptions, type RunCrawlResult } from "./run.js";
 import {
@@ -101,6 +101,10 @@ export interface ReleaseRecord {
   /** Credentials stripped. */
   dest: string;
   via: "hub" | "inbox";
+  /** Entries the hub refused (a possible secret) in this attempt; absent when none. */
+  refused?: number;
+  /** Value-free refs (`entryRef`) of the refused entries. */
+  refusedRefs?: string[];
 }
 
 export interface RunView {
@@ -229,6 +233,8 @@ const KEEP_FINISHED = 5;
 const SAVE_THROTTLE_MS = 1000;
 const RELEASE_LOCK_MAX_AGE_MS = 30 * 60_000;
 const MAX_RELEASES = 20;
+/** Run-dir sidecar naming the entries (refs only) the hub refused in the latest release attempt. */
+const REFUSED_FILE = "release-refused.json";
 
 const alive = (pid: number): boolean => {
   try {
@@ -853,7 +859,10 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
         }
         const via = target.kind === "hub" ? "hub" : "inbox";
         const warnings: string[] = [];
-        const entry: ReleaseRecord = { at: now(), emitted: r.emitted, skipped: r.skipped, dest: r.dest, via };
+        const refusedRefs = (r.rejected ?? []).map((x) => entryRef(x.denTopicId));
+        const entry: ReleaseRecord = { at: now(), emitted: r.emitted, skipped: r.skipped, dest: r.dest, via, ...(refusedRefs.length ? { refused: refusedRefs.length, refusedRefs } : {}) };
+        // A release that sent NOTHING because the hub refused entries is not a release: it must not make the run look "released" (emitted.json / run.json `release`).
+        const sentNothing = r.emitted === 0 && refusedRefs.length > 0;
 
         // emitted.json: keep the first real release at the top level; every attempt goes in `releases`.
         let prev: { at?: number; emitted?: number; dest?: string; via?: "hub" | "inbox"; skipped?: number; releases?: ReleaseRecord[] } | undefined;
@@ -866,13 +875,17 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
         const keepPrev = !!prevTop && (prevTop.emitted > 0 || entry.emitted === 0);
         const top = keepPrev ? prevTop! : entry;
         const releases = [...(prev?.releases ?? (prevTop ? [prevTop] : [])), entry].slice(-MAX_RELEASES);
-        const e1 = writeFileAtomic(join(dir, "emitted.json"), JSON.stringify({ ...top, releases }, null, 2));
+        const e1 = sentNothing && !prevTop ? undefined : writeFileAtomic(join(dir, "emitted.json"), JSON.stringify({ ...top, releases }, null, 2));
+        // What was refused last time, for a later preview (removed again by the next attempt that refuses nothing).
+        const refusedFile = join(dir, REFUSED_FILE);
+        if (refusedRefs.length) writeFileAtomic(refusedFile, JSON.stringify({ at: entry.at, count: refusedRefs.length, refs: refusedRefs }, null, 2));
+        else rmSync(refusedFile, { force: true });
         if (e1) warnings.push(`released, but could not write emitted.json (${e1}); the run may look unreleased`);
 
         // run.json: through the held record when this process has one (never read-modify-write over a live record).
         const h = heldFor(dir);
         if (h) {
-          h.rec.release = h.rec.release && (h.rec.release.emitted > 0 || entry.emitted === 0) ? h.rec.release : entry;
+          h.rec.release = h.rec.release && (h.rec.release.emitted > 0 || entry.emitted === 0) ? h.rec.release : sentNothing ? h.rec.release : entry;
           h.rec.releases = [...(h.rec.releases ?? []), entry].slice(-MAX_RELEASES);
           const e2 = save(h, true);
           if (e2) warnings.push(`released, but could not update run.json (${e2})`);
@@ -880,12 +893,12 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
           const cur = readRun(dir);
           if (cur.kind === "ok") {
             const rec = cur.rec;
-            const first = rec.release && (rec.release.emitted > 0 || entry.emitted === 0) ? rec.release : entry;
+            const first = rec.release && (rec.release.emitted > 0 || entry.emitted === 0) ? rec.release : sentNothing ? rec.release : entry;
             const e2 = writeRunRecord({ ...rec, release: first, releases: [...(rec.releases ?? []), entry].slice(-MAX_RELEASES) });
             if (e2) warnings.push(`released, but could not update run.json (${e2})`);
           }
         }
-        for (const x of r.rejected ?? []) warnings.push(`NOT released: the hub refused ${JSON.stringify(x.denTopicId.slice(0, 80))} (${x.message.replace(/^hub rejected the contribution \(400\): /, "").slice(0, 240)}). It stays unreleased until the entry is edited or left out; there is no override.`);
+        for (const x of r.rejected ?? []) warnings.push(`NOT released: the hub refused entry ${entryRef(x.denTopicId)} (${x.message.replace(/^hub rejected the contribution \(400\): /, "").slice(0, 240)}). It stays unreleased until the entry is edited or left out; there is no override.`);
         return { ...r, via, warnings };
       } finally {
         if (locked) releaseLock(locked);

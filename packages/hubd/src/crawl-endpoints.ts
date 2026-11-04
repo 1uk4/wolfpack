@@ -11,7 +11,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { contributionFileName } from "@wolfpack/kb/client";
-import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
+import { contentHash, isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { contributionsDir } from "./layout.js";
 
 // ── receipts / check ────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ export function loadKbDocs(roots: Pick<KbRoots, "kbBase">, domains?: Iterable<st
   }
   const docs: KbDoc[] = [];
   for (const d of list) {
-    if (!/^[A-Za-z0-9._-]+$/.test(d)) continue;
+    if (!isSafeSegment(d)) continue; // caller-supplied names: no "..", no separators
     const dir = join(base, d, "entries");
     let names: string[];
     try {

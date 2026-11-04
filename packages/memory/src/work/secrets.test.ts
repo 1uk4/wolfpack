@@ -30,4 +30,8 @@ describe("scanSecretsForCrawl", () => {
     }
     for (const t of ["sk-" + "a".repeat(24), "-----BEGIN RSA PRIVATE KEY-----\nx", "Bearer " + "a".repeat(30), "https://u:" + "passw0rd@host/x", "ghp_" + "A1".repeat(18)]) expect(scanSecretsForCrawl(t).findings.length, t.slice(0, 8)).toBeGreaterThan(0);
   });
+  it("ignores markdown/code punctuation around a value: `apiKey`, apiKey(), **x**, apiKey.value, trailing period", () => {
+    for (const v of ["`apiKey`", "apiKey()", "**plaintoken**", "apiKey.value", "someword."]) expect(scanSecretsForCrawl(`token: ${v}`).findings, v).toEqual([]);
+    expect(scanSecretsForCrawl("token: `a1b2c3d4e5f6a7b8`").findings.length).toBe(1); // a quoted real key is still caught
+  });
 });

@@ -50,12 +50,17 @@ function looksSecret(v: string): boolean {
  *   - a work-item id (`work-<domain>-<id>`) or a KB id (`kb-<domain>-<id>`)
  *   - an env-var NAME: ALL_CAPS segments joined by underscores (at least one underscore), at most 2 digits (HUBD_TOKEN, WOLFPACK_HUB_TOKEN)
  *   - plain words / a path: lowercase letters with - _ . / ~ and NO digits (per-wolf, hub-token-file, ~/.wolfpack/hub.json)
+ *   - letters only, optionally dotted (a word or identifier such as apiKey.value); markdown/code punctuation around the value (backticks, *, parentheses, trailing .,;:) is ignored
  *   - a placeholder: <masked>, <redacted>, ***, xxx, ${VAR}, $VAR, or the words masked/redacted/hidden
  * Everything else falls through to the work-item rule (a digit or any non-letter makes it a secret), so a value mixing letters and digits
  * (such as a 16+ char key) is still caught, and every non-assignment pattern (private keys, bearer, JWT, URL credentials, token prefixes) is untouched.
  * Not covered, by design: a value of only letters in mixed case (no digit, no symbol) is not flagged by either rule.
  */
-export function looksSecretForCrawl(v: string): boolean {
+export function looksSecretForCrawl(raw: string): boolean {
+  // Markdown / code punctuation hugging the value (`token`, apiKey(), **x**, trailing . ) is not part of it.
+  const v = raw.replace(/^[`*(.,:;]+|[`*().,:;]+$/g, "");
+  if (v === "") return false;
+  if (/^[A-Za-z]+(?:\.[A-Za-z]+)*$/.test(v)) return false; // a word or a dotted identifier (apiKey.value): letters only
   if (/^(?:work|kb)-[a-z0-9][a-z0-9-]*-[A-Za-z0-9]{4,}$/.test(v)) return false;
   if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(v) && (v.match(/\d/g) ?? []).length <= 2) return false;
   if (/^[a-z~./_-]+$/.test(v)) return false;

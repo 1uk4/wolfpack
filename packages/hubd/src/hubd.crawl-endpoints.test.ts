@@ -295,6 +295,12 @@ describe("kb/match access", () => {
     expect((await post("/v1/kb/match", { candidates: [{ title: "Alpha notes", body: BODY }] }, bearer("nope"))).status).toBe(401);
   });
 
+  it("a '..' or separator domain name is ignored, not read from disk (operator identity)", async () => {
+    const r = await post("/v1/kb/match", { candidates: [{ title: "Alpha notes", body: BODY, domain: ".." }, { title: "Alpha notes", body: BODY, domain: "a/b" }] }, cast.operator);
+    expect(r.status).toBe(200);
+    expect((await r.json()).results.map((x: { matches: unknown[] }) => x.matches.length)).toEqual([0, 0]);
+  });
+
   it("the schema owns the 50-candidate limit", async () => {
     const many = Array.from({ length: 51 }, () => ({ title: "t", body: "b" }));
     expect((await post("/v1/kb/match", { candidates: many }, cast.operator)).status).toBe(400);
@@ -380,6 +386,7 @@ describe("secret check on contributions", () => {
     expect(text).toContain("body");
     expect(text).toContain("token");
     expect(text).toMatch(/entry ref [0-9a-f]{8}/);
+    expect(JSON.parse(text).details.reason).toBe("secret_detected"); // the marker the client treats as a per-entry refusal
     expect(text).not.toContain("FAKEFAKE");
     expect(text).not.toContain("crawl-wolfpack-leaky");
     expect(JSON.stringify(w.mock.calls)).not.toContain("FAKEFAKE");

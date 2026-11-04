@@ -8,6 +8,7 @@
  * `/v1/contributions` with `Authorization: Bearer` (the hub takes the wolf from the token's host). The wolf's `emitted.json` dedup is only kept when every post succeeded; on a failure
  * it is restored, so a retry re-sends (the hub is idempotent on topic + content hash).
  */
+import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -65,7 +66,15 @@ export function scrubSecrets(text: string, secrets: (string | undefined)[] = [])
 }
 const scrub = (text: string, hub?: HubTarget): string => scrubSecrets(text, [hub?.token]);
 
-/** The hub refused this contribution as invalid (400), e.g. a possible secret. Permanent for this content: retrying the same entry is refused again. */
+/** `details.reason` the hub sets when it refuses a contribution because it may hold a secret. ONLY this 400 is a per-entry refusal; any other 400 is systemic and aborts the release. */
+export const SECRET_REFUSAL_REASON = "secret_detected";
+
+/** A short, value-free reference to a den topic id (first 8 hex of its sha256), the same one the hub puts in its refusal. */
+export function entryRef(denTopicId: string): string {
+  return createHash("sha256").update(denTopicId).digest("hex").slice(0, 8);
+}
+
+/** The hub refused this contribution because it may hold a secret (400 with details.reason secret_detected). Permanent for this content: retrying the same entry is refused again. */
 export class HubRejectedError extends Error {
   constructor(message: string, readonly denTopicId: string) {
     super(message);
@@ -90,11 +99,11 @@ export async function postContribution(hub: HubTarget, wolf: string, contributio
   } catch (e) {
     throw new Error(scrub(`could not reach the hub at ${where}: ${e instanceof Error ? e.message : String(e)}`, hub));
   }
-  const body = (await res.json().catch(() => ({}))) as { id?: unknown; duplicate?: unknown; message?: unknown };
+  const body = (await res.json().catch(() => ({}))) as { id?: unknown; duplicate?: unknown; message?: unknown; details?: { reason?: unknown } };
   if (!res.ok) {
     const text = scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`, hub);
-    // 400 = the content itself is refused (permanent for this entry); 401/403/5xx stay plain errors that abort the release.
-    if (res.status === 400) throw new HubRejectedError(text, String((contribution as { denTopicId?: unknown }).denTopicId ?? "?"));
+    // Only the secret refusal is per-entry (permanent for this content); every other failure, 400 included, is systemic and aborts the release.
+    if (res.status === 400 && body.details?.reason === SECRET_REFUSAL_REASON) throw new HubRejectedError(text, String((contribution as { denTopicId?: unknown }).denTopicId ?? "?"));
     throw new Error(text);
   }
   if (typeof body.id !== "string" || !body.id) throw new Error(`hub at ${where} answered ${res.status} without a stored id`);
@@ -166,17 +175,25 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
     // A refused entry (400) does not stop the others and is never marked sent; any other failure aborts with nothing marked sent (as before).
     const sent: string[] = [];
     const rejected: { denTopicId: string; message: string }[] = [];
-    for (const c of r.delta) {
+    try {
+      for (const c of r.delta) {
+        try {
+          await postContribution(hub, wolf, c);
+          sent.push(c.denTopicId);
+        } catch (e) {
+          if (!(e instanceof HubRejectedError)) throw e;
+          rejected.push({ denTopicId: c.denTopicId, message: e.message });
+          console.error(`crawl: the hub REFUSED entry ${entryRef(c.denTopicId)}: ${e.message}`);
+        }
+      }
+    } finally {
+      // Entries the hub took are recorded even when a later post aborts the release (401/403/5xx/other 400), so a retry does not re-send them.
       try {
-        await postContribution(hub, wolf, c);
-        sent.push(c.denTopicId);
+        persistDedup(stagedDen, denLocal, sent);
       } catch (e) {
-        if (!(e instanceof HubRejectedError)) throw e;
-        rejected.push({ denTopicId: c.denTopicId, message: e.message });
-        console.error(`crawl: the hub REFUSED ${JSON.stringify(c.denTopicId.slice(0, 80))}: ${e.message}`);
+        console.warn(`crawl: could not record the ${sent.length} sent entries in the dedup: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    persistDedup(stagedDen, denLocal, sent);
     const dest = `${redactUrl(hub.baseUrl)}/v1/contributions`;
     if (!opts.quiet) console.log(`\n${sent.length} contribution(s) emitted → ${dest}${rejected.length ? ` (${rejected.length} refused by the hub)` : ""}`);
     return { ...r, emitted: sent.length, dest, ...(rejected.length ? { rejected } : {}) };

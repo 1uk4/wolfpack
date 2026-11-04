@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitCrawlToHub } from "./hub.js";
 import { acquireLock } from "./lock.js";
 import { planCrawl, readPlan } from "./plan.js";
+import { readReleaseState } from "./runs.js";
 import { CANCEL_MARKER, CrawlServiceError, createCrawlService, readRunRecord, releaseTarget, type CrawlRunner, type CrawlServiceOptions } from "./service.js";
 
 const dirs: string[] = [];
@@ -415,8 +416,46 @@ describe("release target + guards", () => {
   });
 });
 
+describe("a release where the hub refuses every entry", () => {
+  it("does not count as released: no emitted.json, no run.json release, preview shows the refusal (refs only); a later good release clears it", async () => {
+    const f = fixture();
+    writeFileSync(join(f.runDir, "history.json"), "{}");
+    const refusedAll = emitStub({ emit: () => ({ emitted: 0, skipped: 0, dest: "http://hub/v1/contributions", dir: "", contributions: [], delta: [], rejected: [{ denTopicId: "crawl-wolfpack-secretish", message: "hub rejected the contribution (400): possible secret" }] }) as never });
+    const svc = svcOf(f, { runner: refusedAll, env: { WOLFPACK_HUB_URL: "http://hub" } });
+    const r = await svc.release(f.runDir, { wolf: "w", confirmed: true });
+    expect(r.emitted).toBe(0);
+    expect(r.warnings.join(" ")).toMatch(/NOT released: the hub refused entry [0-9a-f]{8}/);
+    expect(r.warnings.join(" ")).not.toContain("crawl-wolfpack-secretish");
+    expect(existsSync(join(f.runDir, "emitted.json"))).toBe(false);
+    const pv = await svc.previewRelease(f.runDir, { wolf: "w" }).catch(() => undefined);
+    const state = readReleaseState(f.runDir, undefined, "w", []);
+    expect(state.releasedAt).toBeUndefined();
+    expect(state.refused).toMatchObject({ count: 1 });
+    expect(state.refused!.refs[0]).toMatch(/^[0-9a-f]{8}$/);
+    expect(JSON.stringify(state)).not.toContain("secretish");
+    expect(pv === undefined || pv.release.releasedAt === undefined).toBe(true);
+    // a later release that sends something is a release and clears the refusal note
+    const good = svcOf(f, { runner: emitStub(), env: { KB_OPS: tmp("ops") } });
+    await good.release(f.runDir, { wolf: "w", confirmed: true });
+    expect(existsSync(join(f.runDir, "emitted.json"))).toBe(true);
+    expect(readReleaseState(f.runDir, undefined, "w", []).refused).toBeUndefined();
+  });
+
+  it("a partial release (some sent, some refused) is a release and records refused + refs on the record", async () => {
+    const f = fixture();
+    writeFileSync(join(f.runDir, "history.json"), "{}");
+    const partial = emitStub({ emit: () => ({ emitted: 1, skipped: 0, dest: "x", dir: "", contributions: [], delta: [], rejected: [{ denTopicId: "t1", message: "m" }] }) as never });
+    const svc = svcOf(f, { runner: partial, env: { WOLFPACK_HUB_URL: "http://hub" } });
+    await svc.release(f.runDir, { wolf: "w", confirmed: true });
+    const em = JSON.parse(readFileSync(join(f.runDir, "emitted.json"), "utf-8"));
+    expect(em).toMatchObject({ emitted: 1, refused: 1 });
+    expect(em.refusedRefs).toHaveLength(1);
+    expect(readReleaseState(f.runDir, undefined, "w", []).refused).toMatchObject({ count: 1 });
+  });
+});
+
 describe("hub release failures (real emitCrawlToHub)", () => {
-  it("partial failure (second post fails): the wolf's emitted.json is untouched, no run-level emitted.json, and the retry succeeds", async () => {
+  it("partial failure (second post fails): the one already posted is recorded in the wolf's dedup, no run-level emitted.json, and the retry sends only the rest", async () => {
     const f = fixture(3);
     finish(f);
     const den = join(tmp("den"), "kb");
@@ -436,12 +475,11 @@ describe("hub release failures (real emitCrawlToHub)", () => {
     const err = (await svc.release(f.runDir, { wolf: "w", confirmed: true, roots: { denLocal: den } }).catch((e: Error) => e)) as Error;
     expect(err.message).toMatch(/409/);
     expect(err.message).not.toContain("tok-secret");
-    expect(readFileSync(join(den, "emitted.json"), "utf-8")).toBe('{"older":"sha256:1"}'); // nothing marked sent
-    expect(existsSync(join(den, "emitted-bodies"))).toBe(false);
-    expect(existsSync(join(f.runDir, "emitted.json"))).toBe(false);
+    expect(Object.keys(JSON.parse(readFileSync(join(den, "emitted.json"), "utf-8"))).length).toBe(1 + 1); // older + the one the hub took before the abort
+    expect(existsSync(join(f.runDir, "emitted.json"))).toBe(false); // the run is not "released"
     const ok = await svc.release(f.runDir, { wolf: "w", confirmed: true, roots: { denLocal: den } });
-    expect(ok.emitted).toBe(3);
-    expect(Object.keys(JSON.parse(readFileSync(join(den, "emitted.json"), "utf-8"))).length).toBe(1 + ok.emitted); // older + sent
+    expect(ok.emitted).toBe(2); // only what was not yet recorded
+    expect(Object.keys(JSON.parse(readFileSync(join(den, "emitted.json"), "utf-8"))).length).toBe(1 + 3); // older + all three
     expect(existsSync(join(f.runDir, "emitted.json"))).toBe(true);
     expect(stored.size).toBe(3);
   });

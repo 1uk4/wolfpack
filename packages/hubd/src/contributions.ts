@@ -146,6 +146,8 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
   if (!parsed.success) return reject(parsed.error.issues.map((i) => `${i.path.join(".") || "(body)"}: ${i.message}`).join("; ").slice(0, REASON_MAX));
   const c = parsed.data;
   if (c.from !== wolf) return reject(`from ${shorten(c.from)} does not match the lane ${shorten(wolf)}`);
+  // NOT A SECURITY BOUNDARY: `origin` is set by the sender, so "crawl-only refusal" guards against ACCIDENTS (a crawl that swept up a credential),
+  // not against a sender that leaves `origin` out: that one only gets the warning below. Refusing non-crawl contributions too is a follow-up task.
   // Secret check (seam: work-wolfpack-VO2wX3I), after the actor is authorized and the contribution validated. EVERY string of the validated
   // contribution is scanned (it is what gets stored), not only body/summary. Crawl contributions are refused (the owner's no-override rule);
   // others only log, until the pattern is calibrated. The answer names the field and pattern and a short hash of the topic id, never a value
@@ -156,7 +158,7 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
     const list = flagged.map((f) => `${f.field} (${f.pattern})`).join(", ");
     if (c.origin === "crawl") {
       console.warn(`hubd: refused crawl contribution ${wolf}/${ref}: possible secret in ${list.slice(0, 300)}`);
-      throw new ContributionError("invalid_request", `contribution rejected: possible secret in ${list.slice(0, 300)} (entry ref ${ref}). Edit the entry or leave it out of the release.`, { ref, field: flagged[0]!.field, pattern: flagged[0]!.pattern });
+      throw new ContributionError("invalid_request", `contribution rejected: possible secret in ${list.slice(0, 300)} (entry ref ${ref}). Edit the entry or leave it out of the release.`, { reason: "secret_detected", ref, field: flagged[0]!.field, pattern: flagged[0]!.pattern });
     }
     console.warn(`hubd: possible secret in ${wolf} contribution ${isSafeSegment(c.denTopicId) ? c.denTopicId.slice(0, 80) : ref}: ${list.slice(0, 300)} (stored; only crawl contributions are refused)`);
   }

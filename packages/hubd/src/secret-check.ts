@@ -4,6 +4,8 @@
  * SEAM (work-wolfpack-VO2wX3I): today this reuses the work-item scanner with its stricter crawl credential-assignment rule (`scanSecretsForCrawl` from @wolfpack/memory; work-item redaction keeps the over-eager `scanSecrets`). The crawl hard-400 and the non-crawl warning both use the crawl rule; the shared secret-block
  * module will replace `patternsIn` and nothing else here. Results are pattern NAMES and field paths, never matched text.
  *
+ * Enforcement note: the hard refusal applies to contributions that SAY `origin: "crawl"` (sender-set), so it is an accident guard, not a security boundary.
+ *
  * The scanner's credential-assignment pattern backtracks quadratically on a long run of `a.a.a.` or `a-a-a-` (measured: 8 KB 0.16 s,
  * 32 KB 2.4 s, 128 KB 39 s), and the contribution body cap is 8 MiB. So text is scanned in small overlapping windows (cost linear in
  * the length, each window bounded), and a field past MAX_SCAN_CHARS is not scanned at all but reported as `unscanned (too long)`, which

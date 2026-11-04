@@ -362,14 +362,15 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
             : pv.hubUnchanged
               ? `Hub check: ${pv.hubUnchanged.size} already on the hub.`
               : "Hub check: receipts read.";
-      const hubWhy = pv.hubWarnings.length ? `\n⚠ ${pv.hubWarnings.join("; ")}` : "";
+      const refusedBefore = release.refused ? `\n⚠ The hub REFUSED ${release.refused.count} entr${release.refused.count === 1 ? "y" : "ies"} in the last release attempt (a possible secret; refs ${release.refused.refs.join(", ")}). They are not released: edit the entry or leave it out, there is no override.` : "";
+      const hubWhy = `${pv.hubWarnings.length ? `\n⚠ ${pv.hubWarnings.join("; ")}` : ""}${refusedBefore}`;
       if (target.kind === "none") return text(`${review}\n\nNo release target is configured here (neither WOLFPACK_HUB_URL nor KB_OPS), so this cannot be released.`, { isError: true });
       if (pv.journeyMissing) return text(`${review}\n\nThe run's journey is not written yet — finish it with crawl_run (resume) before releasing.`, { isError: true });
 
       // No card, no release: without a user who can confirm in the console (a task-owned conversation, or a host without
       // cards) this only previews. There is deliberately no model-supplied way around that.
       if (!asks) {
-        return text(`${review}\n\n${toEmit} would be released (${unchanged} unchanged). NOT released: a release is a SHARED, one-way handoff to the librarian and needs the user's confirmation in the console, which is not available here. Ask the user to run crawl_release from a console conversation.`);
+        return text(`${review}${hubWhy}\n\n${toEmit} would be released (${unchanged} unchanged). NOT released: a release is a SHARED, one-way handoff to the librarian and needs the user's confirmation in the console, which is not available here. Ask the user to run crawl_release from a console conversation.`);
       }
 
       // The gate: a structured yes on this crawl's own confirm card (not model text), bound to this dry run's numbers
@@ -397,7 +398,9 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
 
       try {
         const r = await service.release(dir, { wolf: ctx.wolfName, roots, confirmed: true });
-        return text(`${releasedLine(dir)} ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.${r.warnings.length ? `\nWarning: ${r.warnings.join("; ")}` : ""}`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest, rejected: r.rejected?.length ?? 0 }, ...(r.rejected?.length ? { isError: true } : {}) });
+        const refusedN = r.rejected?.length ?? 0;
+        const head = refusedN ? (r.emitted ? `${releasedLine(dir)} Released ${r.emitted}, ${refusedN} refused` : `NOT released: all ${refusedN} refused by the hub`) : `${releasedLine(dir)} ${r.emitted} contribution(s)`;
+        return text(`${head}${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\n${r.emitted ? "Dewey's sweep will route + curate them." : "Nothing was handed to Dewey."}${r.warnings.length ? `\nWarning: ${r.warnings.join("; ")}` : ""}`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest, rejected: r.rejected?.length ?? 0 }, ...(r.rejected?.length ? { isError: true } : {}) });
       } catch (e) {
         return fail(`Release failed: ${e instanceof Error ? e.message : String(e)}`);
       }

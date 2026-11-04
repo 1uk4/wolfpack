@@ -92,6 +92,8 @@ export interface CrawlReleaseState {
   curated: Set<string>;
   /** den topic ids still in the inbox. */
   inbox: Set<string>;
+  /** The latest release attempt had entries refused by the hub (value-free refs, see entryRef): they are NOT released. */
+  refused?: { at: number; count: number; refs: string[] };
 }
 
 export function readReleaseState(runDir: string, opsRoot: string | undefined, wolf: string | undefined, denTopicIds: string[]): CrawlReleaseState {
@@ -103,7 +105,14 @@ export function readReleaseState(runDir: string, opsRoot: string | undefined, wo
   }
   const curated = opsRoot && wolf ? idsInLane(path.join(opsRoot, "receipts", wolf), denTopicIds) : new Set<string>();
   const inbox = opsRoot && wolf ? idsInLane(path.join(opsRoot, "inbox", wolf), denTopicIds) : new Set<string>();
-  return { releasedAt, curated, inbox };
+  let refused: CrawlReleaseState["refused"];
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(runDir, "release-refused.json"), "utf-8"));
+    if (j && typeof j.count === "number" && Array.isArray(j.refs)) refused = { at: Number(j.at) || 0, count: j.count, refs: j.refs.filter((x: unknown): x is string => typeof x === "string") };
+  } catch {
+    /* nothing refused */
+  }
+  return { releasedAt, curated, inbox, ...(refused ? { refused } : {}) };
 }
 
 export function readCrawlEntity(dir: string, lane?: { opsRoot?: string; wolf?: string }): CrawlEntity | null {

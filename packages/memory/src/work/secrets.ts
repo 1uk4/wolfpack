@@ -20,6 +20,8 @@ const PATTERNS: Array<{ kind: string; re: RegExp; replace?: (m: RegExpExecArray)
   { kind: "token", re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/g },
   { kind: "token", re: /\bgithub_pat_[A-Za-z0-9_]{30,}/g },
   { kind: "token", re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g },
+  // Telegram bot token: <8-10 digit bot id>:<35 chars>
+  { kind: "telegram bot token", re: /(?<!\d)\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g },
   { kind: "token", re: /\bAKIA[0-9A-Z]{16}\b/g },
   { kind: "token", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
   { kind: "token", re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },

@@ -228,7 +228,32 @@ describe("feedInboxToHub", () => {
     state.auth = { fails: 3, nextAt: 0 };
     await feedInboxToHub(ops, "hal2", hubOf(reply(503)), () => {}, { state, now: () => 0 });
     expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
-    expect(lane).toBeTruthy();
+    expect(readdirSync(join(lane, "rejected")).filter((n) => n.endsWith(".reason.json"))).toHaveLength(1);
+    expect(readdirSync(lane)).toContain(NAME); // the 503 one is kept
+  });
+
+  it("bad -> good -> bad does not trip the breaker (configFailed is cleared by a success)", async () => {
+    const ops = tmp();
+    const lane = join(ops, "inbox", "hal2");
+    mkdirSync(lane, { recursive: true });
+    for (const n of ["a", "b", "c"]) {
+      const c = { from: "hal2", denTopicId: n, change: "create" as const, contentHash: contentHash(body), prevHash: null, domainHint: "x", session: "durable", submitted: "2026-11-02 02:24", title: n, summary: "S.", body };
+      writeFileSync(join(lane, `${n}.md`), renderContribution(c as never));
+    }
+    const state = newFeedState();
+    const f = (async (_u: string, init: RequestInit) => new Response(JSON.stringify({ id: "c" }), { status: /"den_topic_id":"b"|"denTopicId":"b"/.test(String(init.body)) ? 201 : 404 })) as unknown as typeof fetch;
+    const p = await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 0 });
+    expect(p).toEqual({ sent: 1, failed: 2, rejected: 0, deferred: 0 });
+    expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
+  });
+
+  it("a backwards clock jump does not stall the feeder", async () => {
+    const ops = tmp();
+    file(ops);
+    const state = newFeedState();
+    state.auth = { fails: 9, nextAt: 10 * BACKOFF_CAP_MS };
+    state.files.set(NAME, { fails: 9, nextAt: 10 * BACKOFF_CAP_MS, last: 0 });
+    expect(await feedInboxToHub(ops, "hal2", hubOf(reply(201, { id: "c" })), () => {}, { state, now: () => 0 })).toMatchObject({ sent: 1 });
   });
 
   it("removes a stray reason-file tmp left in rejected/", async () => {

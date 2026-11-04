@@ -115,8 +115,17 @@ export async function feedInboxToHub(
   // not attempted, so they come ahead of the poisoned ones that tripped it; a few poisoned files at the front cannot starve the rest.
   const eligible = names
     .filter((n) => !n.startsWith(".") && n.endsWith(".md") && !/\.tmp-/.test(n))
-    .sort((a, b) => (state.files.get(a)?.last ?? -Infinity) - (state.files.get(b)?.last ?? -Infinity) || (a < b ? -1 : a > b ? 1 : 0));
-  if (state.auth.nextAt > now()) {
+    .sort((a, b) => {
+      const la = state.files.get(a)?.last;
+      const lb = state.files.get(b)?.last;
+      if (la !== lb) {
+        if (la === undefined) return -1; // never attempted first
+        if (lb === undefined) return 1;
+        return la - lb;
+      }
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  if (state.auth.nextAt > now() && state.auth.nextAt - now() <= BACKOFF_CAP_MS) {
     res.deferred = eligible.length;
     return res;
   }
@@ -164,7 +173,8 @@ export async function feedInboxToHub(
     const name = eligible[i]!;
     const file = join(lane, name);
     const st = state.files.get(name);
-    if (st && st.nextAt > now()) {
+    // nextAt further away than the cap means the clock jumped back: ignore it.
+    if (st && st.nextAt > now() && st.nextAt - now() <= BACKOFF_CAP_MS) {
       res.deferred++;
       continue;
     }
@@ -188,11 +198,15 @@ export async function feedInboxToHub(
       state.files.delete(name);
       res.sent++;
       state.auth = { fails: 0, nextAt: 0 };
+      configFailed.clear();
     } catch (e) {
       const msg = safeMsg(e, hub.token);
       const kind = classify(e);
       // The hub answered and it was not a config refusal: token and URL work.
-      if (e instanceof HubHttpError && kind !== "config") state.auth = { fails: 0, nextAt: 0 };
+      if (e instanceof HubHttpError && kind !== "config") {
+        state.auth = { fails: 0, nextAt: 0 };
+        configFailed.clear(); // bad -> good -> bad is not "two failures in a row"
+      }
       if (kind === "terminal") {
         const status = (e as HubHttpError).status;
         const r = (e as HubHttpError).details?.reason;

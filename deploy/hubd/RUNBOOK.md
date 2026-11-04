@@ -161,10 +161,20 @@ systemctl start hubd
 - No ACLs were set, so nothing in Dewey's tree needs undoing. Pre-created lane dirs are empty and harmless.
 
 ## 7. Merge the legacy work store into hubd (`hubd work-import`, ticket work-wolfpack-MMeb8jJ)
-Until the old wolves are repointed to the hub, work is written in two places: hubd's store (`/var/lib/hubd/ledger/work-events.jsonl` + the work dirs behind the `kb/base/domains` symlink) and the legacy store (`/var/lib/workerd-kb/domains/<d>/work/*.md` + `/var/wolfpack/kb/work/ledger/work-events.jsonl`, written by wolfpack-agent). `work-import` merges legacy into hubd; the legacy paths are only read. Rules: ledger events are deduped by sha256 of the canonical event JSON (multiset, so re-runs add nothing) and merged by `at`; legacy-only `.md` are copied; for items in both, the file with the newer effective `updated` wins (ties: the file whose stage matches the folded ledger, else hubd's is kept and listed as a conflict); hubd-only files are never deleted. It takes the work-writer lock (even for `--dry-run`), so it **refuses while hubd runs**; run it as the `hubd` user so new files get the right owner. All commands on sfo-01 as root:
+Until the old wolves are repointed to the hub, work is written in two places: hubd's store (`/var/lib/hubd/ledger/work-events.jsonl` + the work dirs behind the `kb/base/domains` symlink) and the legacy store (`/var/lib/workerd-kb/domains/<d>/work/*.md` + `/var/wolfpack/kb/work/ledger/work-events.jsonl`, written by wolfpack-agent). `work-import` merges legacy into hubd; the legacy paths are only read. What it does:
+- **Ledger:** legacy migration duplicates are collapsed first (exact copies; the same note text on the same item, first one kept; an event equal to the previous one of the item ignoring `at`; a `staged` to the stage the item already has; a stage change is never dropped; an item whose folded state would change is kept whole). The result is diffed against hubd's ledger (sha256 of the canonical event, as a multiset) and the missing events are merged in: each source keeps its own order, the heads are compared by `at`, hubd's 5+ events are never touched or reordered. Events with a non-date `at` are skipped and counted (they would make the fold throw).
+- **Files:** legacy-only `.md` are copied; for items in both, the file with the newer effective `updated` wins (tie: the one matching the merged ledger's stage, else hubd's is kept and listed as a conflict); hubd-only files are never deleted.
+- **Seed:** a file whose id the merged ledger never mentions gets synthetic events (`by: hubd-work-import-seed`) so hubd's ledger-only write path knows it. On the 2026-11-03 data this is 0 items (the legacy ledger already covers all 459 hubd-only files), the step is a safety net. A file whose id is in the ledger (even deleted) is never seeded.
+- It takes the work-writer lock (even for `--dry-run`), so it **refuses while hubd runs**. Run it as the `hubd` user so new files get the right owner. Unreadable files abort the run; malformed ones are skipped and counted. A dry run writes exactly one file, the list of dropped duplicates (`/var/lib/hubd/backups/work-import-dryrun-<stamp>-dropped.tsv`); a real run puts it in its backup dir (`dropped-duplicates.tsv`).
+All commands on sfo-01 as root:
 ```
 N="runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs"
-ARGS="--from-domains /var/lib/workerd-kb/domains --from-ledger /var/wolfpack/kb/work/ledger/work-events.jsonl --data-dir /var/lib/hubd --domains personal,wolfpack"
+LEG_L=/var/wolfpack/kb/work/ledger/work-events.jsonl; LEG_D=/var/lib/workerd-kb/domains
+ARGS="--from-domains $LEG_D --from-ledger $LEG_L --data-dir /var/lib/hubd --domains personal,wolfpack"
+
+# 0. read-access pre-checks AS hubd (a permission problem aborts the import anyway; find it first)
+runuser -u hubd -- test -r $LEG_L && echo ledger readable
+runuser -u hubd -- ls $LEG_D/wolfpack/work $LEG_D/personal/work >/dev/null && echo work dirs readable
 
 # 1. stop hubd
 systemctl stop hubd
@@ -176,27 +186,46 @@ for d in personal wolfpack; do mkdir -p "$B/work/$d"; cp -a /var/lib/hubd/kb/bas
 ls "$B/work/wolfpack" | wc -l                                                          # expect ~484 (before import)
 # (the import also makes its own copy under /var/lib/hubd/backups/work-import-<stamp>/ before writing)
 
-# 3. dry run: prints events to append, files to add, files to update (old->new stage), conflicts, skipped lines, writes nothing
+# 3. dry run: writes nothing but the dropped-duplicates list
 $N work-import $ARGS --dry-run
-# expected on the 2026-11-03 data: events 3926, add 46, update 22, conflicts 1 (work-personal-Ciimcxv: same stage, differing text)
+# expected on the 2026-11-03 data:
+#   legacy events in scope: 3926; after collapsing migration duplicates: 3824 (dropped: exact 58, note 43, adjacent 0, noop-stage 1)
+#   dedupe check ...: 0 difference(s)
+#   events to append: 3824      0 events out of scope      files to add: 46      files to update: 22      conflicts ...: 1
+#   seed: 0 events for 0 file-only items      malformed ledger lines: 0      skipped files: 0      items bound ... : 0
+# (numbers move a little if the legacy wolves wrote since; skipped files must be 0, a non-zero value names the file)
 
-# 4. import (prints the consistency check: every legacy file's stage vs the merged state; must say 0 mismatch(es))
-$N work-import $ARGS
+# 4. import. The consistency check compares the ledger-only fold (what hubd writes see) with every work file on stage, title, assignee, partOf, graduated and log length
+$N work-import $ARGS                       # expect: consistency check: ~530 files, 0 mismatch(es)
 
-# 4b. idempotence: a second run, hubd still stopped, must print events 0 / add 0 / update 0
-$N work-import $ARGS --dry-run | head -5
+# 4b. idempotence: a second run, hubd still stopped, must show events to append: 0 / files to add: 0 / files to update: 0
+$N work-import $ARGS --dry-run | grep -E "^(events|files)"
 
 # 5. start hubd
 systemctl start hubd
 
 # 6. checks
 systemctl is-active hubd; journalctl -u hubd -n 20 --no-pager
-wc -l /var/lib/hubd/ledger/work-events.jsonl      # 5 + 3926 = 3931
-# through the console/API: work-wolfpack-0HuY8Al is a shipped feature with its children; a PATCH to a formerly KB-only item returns 200, not 404
+wc -l /var/lib/hubd/ledger/work-events.jsonl      # 5 + 3824 = 3829 (+ seed events, if any)
 ls /var/lib/hubd/kb/base/domains/wolfpack/work/*.md | wc -l   # ~530 (484 + 46)
+# through the console/API: work-wolfpack-0HuY8Al is a shipped feature with its ~17 children; a PATCH (note/stage) to a formerly file-only item returns 200, not 404; the 38 items the legacy ledger deleted are not listed
 ```
 
-**Rollback** (hubd stopped): put back the ledger and the work files from the backup. `cp -a "$B/work/$d/." /var/lib/hubd/kb/base/domains/$d/work/` restores the replaced files (files the import added can be removed by diffing against `$B/work/$d`), and
-`cp -p /var/lib/hubd/backups/work-import-<stamp>/ledger/work-events.jsonl /var/lib/hubd/ledger/work-events.jsonl` restores the ledger (the pre-import copy, 5 events). `chown -R` is not needed if you run as above (`cp -a` keeps owners); then `systemctl start hubd`.
+**Rollback** (only valid BEFORE hubd takes new writes; after that, writes made since would be lost). With hubd stopped:
+```
+systemctl stop hubd
+ls /var/lib/hubd/backups                                   # the import's own backup: work-import-<stamp>/ (ledger/ + kb/base/domains/<d>/work/)
+S=/var/lib/hubd/backups/work-import-<stamp>                # fill in the stamp
+cp -p $S/ledger/work-events.jsonl /var/lib/hubd/ledger/work-events.jsonl                 # the pre-import ledger (5 events)
+for d in personal wolfpack; do
+  W=/var/lib/hubd/kb/base/domains/$d/work
+  cp -a "$B/work/$d/." "$W/"                                # restore replaced files (and anything else that was there)
+  for f in "$W"/*.md; do [ -e "$B/work/$d/$(basename "$f")" ] || rm -v -- "$f"; done   # remove files the import ADDED (not in the pre-import copy)
+done
+systemctl start hubd
+```
+(`cp -a` keeps owners and modes. The tar in `$B` is the full-state fallback.)
 
-**Catch-up re-run** (until the old wolves are repointed; legacy keeps getting writes): repeat steps 1, 3, 4, 5 (and a fresh backup in step 2). Only events and files that are new or newer in legacy are applied; events already imported are skipped, and a hubd-newer file is kept. Writes made through hubd after an earlier import are never lost, because hubd's ledger events are only ever added to.
+**Catch-up re-run** (until the old wolves are repointed; the legacy writer stays live): repeat steps 0-5 with a fresh backup in step 2. Only events and files that are new or newer in legacy are applied; events already imported, and the duplicates the collapse dropped, are not re-added, and writes made through hubd are never lost (its ledger is only added to). A few `MISMATCH` lines right after an import while legacy is live just mean "re-run". On a catch-up run a `MISMATCH` can also be legitimate: an item hubd has advanced since (its ledger is ahead of its file, or a kept hubd file is ahead of the legacy ledger) differs from its file by design; check that the ledger side is the newer one.
+
+**Crash mid-run:** safe to re-run. Files are written first (each tmp + rename, tmp files are removed on error), the ledger last (tmp + rename), and every step is idempotent. A leftover `.<pid>.<ts>.import.tmp` in a work dir after a hard kill can be deleted.

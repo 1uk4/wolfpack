@@ -345,7 +345,12 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 			<div className="flex h-full min-h-0 flex-1 flex-col">
 					<TopBar>
 						<span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-							{table ? `${table.count} ${table.count === 1 ? "item" : "items"}` : ""}
+							{table ? (
+								<>
+									{table.count}
+									<span className="max-md:hidden"> {table.count === 1 ? "item" : "items"}</span>
+								</>
+							) : null}
 						</span>
 						<select
 							data-testid="work-domain"
@@ -373,7 +378,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 								placeholder="Search work…"
 								aria-label="Search work"
 								spellCheck={false}
-								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring w-full min-w-0 md:w-56`}
+								className={`h-8 rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring w-full min-w-0 md:w-56`}
 							/>
 						</div>
 					</TopBar>

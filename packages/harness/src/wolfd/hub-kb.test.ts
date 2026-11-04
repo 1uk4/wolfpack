@@ -80,6 +80,15 @@ describe("feedInboxToHub", () => {
     expect(logs).toHaveLength(1);
   });
 
+  it("a secret_detected 400 is terminal: moved to rejected/ with details.reason in the reason file", async () => {
+    const ops = tmp();
+    const lane = file(ops);
+    const f = (async () => new Response(JSON.stringify({ message: "possible secret", details: { reason: "secret_detected" } }), { status: 400 })) as unknown as typeof fetch;
+    expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state: newFeedState(), now: () => 0 })).toEqual({ sent: 0, failed: 0, rejected: 1, deferred: 0 });
+    expect(readdirSync(join(lane, "rejected")).sort()).toEqual([NAME, `${NAME}.reason.json`]);
+    expect(JSON.parse(readFileSync(join(lane, "rejected", `${NAME}.reason.json`), "utf-8"))).toMatchObject({ status: 400, reason: "secret_detected" });
+  });
+
   it("reason.json caps reason at 64 chars and holds neither the token nor the body", async () => {
     const ops = tmp();
     const lane = file(ops);

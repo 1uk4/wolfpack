@@ -22,7 +22,8 @@ import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
-import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
+import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
+import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useComposerDraft, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
@@ -425,17 +426,40 @@ function ThreadChatInner({
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
+	// The per-file budget for this console's mode, fetched on demand: only a successful answer is kept, a failure is retried on the
+	// next batch and meanwhile the conservative relay budget applies.
+	const limitRef = useRef<AttachmentLimit | undefined>(undefined);
+	// Decoding and re-encoding a photo is memory-heavy (iOS): files of one batch (and of overlapping batches) are fitted one at a time.
+	const fitChain = useRef<Promise<unknown>>(Promise.resolve());
 	const onFiles = useCallback(
 		(files: File[]) => {
 			for (const file of files) {
 				const key = `att-${Math.random().toString(36).slice(2)}`;
-				const { chip, upload } = chipFor(file, key);
+				// Infinity: the size is NOT prechecked here (type and emptiness only); an over-budget image is fitted below, and only a failed fit reports "too large".
+				const { chip, upload } = chipFor(file, key, Infinity);
 				setAttachments((prev) => [...prev, chip]);
 				if (!upload) continue;
-				uploadFile(transport.uploadUrl!, file).then(
-					({ id, name, mimeType, size }) => patchAttachment(key, { status: "ready", id, name, mimeType, size }),
-					(err: Error) => patchAttachment(key, { status: "error", error: err.message }),
-				);
+				const fit = fitChain.current.then(async () => {
+					limitRef.current ??= await fetchAttachmentLimit();
+					const limit = limitRef.current ?? FALLBACK_LIMIT;
+					return { limit, result: await fitImageWithTimeout(file, limit.maxBytes, browserFitDeps()) };
+				});
+				fitChain.current = fit.catch(() => {});
+				// Uploads of the fitted files run in parallel.
+				void (async () => {
+					let limit = FALLBACK_LIMIT;
+					try {
+						const fitted = await fit;
+						limit = fitted.limit;
+						const relay = limit.mode === "relay";
+						if (!fitted.result.ok) return patchAttachment(key, { status: "error", error: fitFailureMessage(fitted.result.reason, limit.maxBytes, relay, file.size) });
+						const { id, name, mimeType, size } = await uploadFile(transport.uploadUrl!, fitted.result.file);
+						patchAttachment(key, { status: "ready", id, name, mimeType, size });
+					} catch (err) {
+						const e = err as Error;
+						patchAttachment(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, limit.mode === "relay") });
+					}
+				})();
 			}
 		},
 		[transport, patchAttachment],
@@ -513,8 +537,8 @@ function ThreadChatInner({
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<TopBar>
-					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
-					<span className="text-xs uppercase tracking-wide text-muted-foreground">{wolf}</span>
+					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
+					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
 				</TopBar>

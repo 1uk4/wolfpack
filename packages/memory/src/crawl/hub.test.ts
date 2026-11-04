@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitCrawl } from "./emit.js";
-import { persistDedup, emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, scrubSecrets } from "./hub.js";
+import { HubHttpError, HubRejectedError, persistDedup, emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, scrubSecrets } from "./hub.js";
 import { planCrawl, readPlan } from "./plan.js";
 
 const dirs: string[] = [];
@@ -65,6 +65,29 @@ describe("emitCrawlToHub", () => {
     const again = await emitCrawlToHub(runDir, hub, { wolf: "w", sinkBase: tmp("emit-sink"), quiet: true, roots: { opsRoot, kbBase: "", denLocal } });
     expect(again.emitted).toBe(0);
     expect(sent).toHaveLength(1);
+  });
+
+  it.each([401, 500])("a %i aborts the release (not a per-entry refusal) and records nothing as sent", async (status) => {
+    const runDir = runDirFixture();
+    const denLocal = join(tmp("den"), "kb");
+    const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
+    const bad = (async () => new Response(JSON.stringify({ message: "x" }), { status })) as unknown as typeof fetch;
+    const e = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: bad }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots }).catch((x) => x);
+    expect(e).toBeInstanceOf(HubHttpError);
+    expect(e).not.toBeInstanceOf(HubRejectedError);
+    expect(e.status).toBe(status);
+    expect(existsSync(join(denLocal, "emitted.json"))).toBe(false);
+  });
+
+  it("only 400 + secret_detected is a HubRejectedError (a subclass of HubHttpError); other 400s are plain HubHttpError", async () => {
+    const mk = (details: object) => (async () => new Response(JSON.stringify({ message: "m", details }), { status: 400 })) as unknown as typeof fetch;
+    const secret = await postContribution({ baseUrl: "http://h", fetch: mk({ reason: "secret_detected" }) }, "w", { denTopicId: "t1" }).catch((x) => x);
+    expect(secret).toBeInstanceOf(HubRejectedError);
+    expect(secret).toBeInstanceOf(HubHttpError);
+    expect(secret).toMatchObject({ status: 400, denTopicId: "t1", details: { reason: "secret_detected" } });
+    const other = await postContribution({ baseUrl: "http://h", fetch: mk({ reason: "bad_domain" }) }, "w", {}).catch((x) => x);
+    expect(other).toBeInstanceOf(HubHttpError);
+    expect(other).not.toBeInstanceOf(HubRejectedError);
   });
 
   it("a hub refusal (400) is reported per entry, never marked sent, and a retry re-sends it; other failures (403) still abort", async () => {
@@ -296,5 +319,15 @@ describe("persistDedup", () => {
     expect(JSON.parse(readFileSync(join(real, "emitted.json"), "utf-8")).good).toBe("h1");
     expect(readFileSync(join(real, "emitted-bodies", "good.md"), "utf-8")).toBe("body");
     expect(existsSync(join(real, "..", "evil.md"))).toBe(false);
+  });
+});
+
+describe("postContribution error", () => {
+  it("carries the HTTP status and details", async () => {
+    const f = (async () => new Response(JSON.stringify({ message: "bad", details: { reason: "x" } }), { status: 400 })) as unknown as typeof fetch;
+    const { postContribution, HubHttpError } = await import("./hub.js");
+    const e = await postContribution({ baseUrl: "http://h", fetch: f }, "w", {}).catch((x) => x);
+    expect(e).toBeInstanceOf(HubHttpError);
+    expect(e).toMatchObject({ status: 400, details: { reason: "x" } });
   });
 });

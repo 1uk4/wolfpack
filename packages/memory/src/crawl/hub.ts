@@ -73,10 +73,30 @@ export function entryRef(denTopicId: string): string {
   return createHash("sha256").update(denTopicId).digest("hex").slice(0, 8);
 }
 
-/** The hub refused this contribution because it may hold a secret (400 with details.reason secret_detected). Permanent for this content: retrying the same entry is refused again. */
-export class HubRejectedError extends Error {
-  constructor(message: string, readonly denTopicId: string) {
+/**
+ * The hub answered with a non-2xx: carries the HTTP status and the response's `details` (if any), so callers can tell a refusal from an outage.
+ * Transport errors (hub unreachable, timeout) are NOT this class: they stay a plain `Error`, which callers such as hub-kb's `classify` treat as retryable.
+ */
+export class HubHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly details?: { reason?: unknown }
+  ) {
     super(message);
+    this.name = "HubHttpError";
+  }
+}
+
+/** The hub refused this contribution because it may hold a secret (400 with details.reason secret_detected). Permanent for this content: retrying the same entry is refused again. */
+export class HubRejectedError extends HubHttpError {
+  constructor(
+    message: string,
+    status: number,
+    details?: { reason?: unknown },
+    readonly denTopicId: string = "?"
+  ) {
+    super(message, status, details);
     this.name = "HubRejectedError";
   }
 }
@@ -101,9 +121,10 @@ export async function postContribution(hub: HubTarget, wolf: string, contributio
   const body = (await res.json().catch(() => ({}))) as { id?: unknown; duplicate?: unknown; message?: unknown; details?: { reason?: unknown } };
   if (!res.ok) {
     const text = scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`, hub);
+    const details = body.details && typeof body.details === "object" ? body.details : undefined;
     // Only the secret refusal is per-entry (permanent for this content); every other failure, 400 included, is systemic and aborts the release.
-    if (res.status === 400 && body.details?.reason === SECRET_REFUSAL_REASON) throw new HubRejectedError(text, String((contribution as { denTopicId?: unknown }).denTopicId ?? "?"));
-    throw new Error(text);
+    if (res.status === 400 && details?.reason === SECRET_REFUSAL_REASON) throw new HubRejectedError(text, res.status, details, String((contribution as { denTopicId?: unknown }).denTopicId ?? "?"));
+    throw new HubHttpError(text, res.status, details);
   }
   if (typeof body.id !== "string" || !body.id) throw new Error(`hub at ${where} answered ${res.status} without a stored id`);
   return { id: body.id, duplicate: body.duplicate === true };

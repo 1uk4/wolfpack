@@ -9,14 +9,15 @@
  *         the hub into `<home>/kb-mirror` (layout "base": `domains/<d>/…`), and KB_BASE points there (unless set).
  *  WRITE  memory's emitDelta keeps writing `<KB_OPS>/inbox/<wolf>/*.md` (KB_OPS defaults to `<home>/ops`); a feeder scans that lane and
  *         POSTs each file to hubd `/v1/contributions`; only a 2xx moves the file to `<lane>/sent/`. Failures (see `classify`):
- *         a terminal 4xx moves the file to `<lane>/rejected/` (+ `.reason.json`) and is never retried; 401/403 (config) and transient
- *         failures (network, 5xx, 408, 429) leave the file in place and retry it with per-file exponential backoff (5 s .. 5 min).
+ *         a terminal 4xx (or an unparseable file) moves the file to `<lane>/rejected/` (+ `.reason.json`) and is never retried;
+ *         401/403/404/405/410 mean a config problem (token, URL, grant): the pass stops, the files stay, one ERROR line is logged and the whole
+ *         feeder backs off; transient failures (network, 5xx, 408, 429) back off per file (5 s .. 5 min).
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { KbSync } from "@wolfpack/kb/sync";
 import { parseContribution } from "@wolfpack/kb/librarian/intake";
-import { HubRejectedError, postContribution } from "@wolfpack/memory";
+import { HubHttpError, postContribution } from "@wolfpack/memory";
 import type { WolfConfig } from "@wolfpack/engine";
 
 export interface HubKbEnv {
@@ -39,27 +40,46 @@ export function hubKbFromEnv(config: WolfConfig, env: NodeJS.ProcessEnv): HubKbE
 export interface FeedPass {
   sent: number;
   failed: number;
-  /** Moved to `rejected/` (terminal 4xx). */
+  /** Moved to `rejected/` (terminal 4xx or unparseable). */
   rejected: number;
-  /** Skipped this pass because the file is backing off. */
+  /** Skipped this pass because of backoff. */
   deferred: number;
 }
 
 export const BACKOFF_BASE_MS = 5_000;
 export const BACKOFF_CAP_MS = 5 * 60_000;
+const REASON_MAX = 64;
+const MSG_MAX = 200;
 
-/** Per-file retry state, kept by the caller across passes. */
-export type FeedState = Map<string, { fails: number; nextAt: number }>;
+/** Retry state kept by the caller across passes: per-file backoff, plus one shared backoff for config failures. */
+export interface FeedState {
+  files: Map<string, { fails: number; nextAt: number }>;
+  auth: { fails: number; nextAt: number };
+}
+export const newFeedState = (): FeedState => ({ files: new Map(), auth: { fails: 0, nextAt: 0 } });
 
-export type Failure = "terminal" | "auth" | "retry";
+export type Failure = "terminal" | "config" | "retry";
 
-/** What to do with a failed post: 401/403 = config problem (keep, loud); other 4xx except 408/429 = the hub will never accept it; the rest = transient. */
+const backoff = (fails: number): number => Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (fails - 1));
+
+/**
+ * What to do with a failed post. 401/403/404/405/410 = config problem (bad token, wrong URL, wolf not granted): keep everything, back off.
+ * Other 4xx except 408/429 = the hub will never accept this file. Everything else, including a plain Error from a transport failure
+ * (postContribution throws a plain Error when the hub cannot be reached), is transient.
+ */
 export function classify(e: unknown): Failure {
-  const status = e instanceof HubRejectedError ? e.status : undefined;
-  if (status === undefined) return "retry";
-  if (status === 401 || status === 403) return "auth";
-  if (status >= 400 && status < 500 && status !== 408 && status !== 429) return "terminal";
+  if (!(e instanceof HubHttpError)) return "retry";
+  const s = e.status;
+  if (s === 401 || s === 403 || s === 404 || s === 405 || s === 410) return "config";
+  if (s >= 400 && s < 500 && s !== 408 && s !== 429) return "terminal";
   return "retry";
+}
+
+/** Error text safe to log and persist: no bearer token value, no URL userinfo, capped. */
+function safeMsg(e: unknown, token: string, max = MSG_MAX): string {
+  let m = e instanceof Error ? e.message : String(e);
+  if (token) m = m.split(token).join("[token]");
+  return m.replace(/(\/\/)[^/@\s]*@/g, "$1").slice(0, max);
 }
 
 /** One pass over `<kbOps>/inbox/<wolf>`: POST each contribution file to the hub; move the accepted ones to `sent/`. Never throws. */
@@ -71,7 +91,7 @@ export async function feedInboxToHub(
   opts: { state?: FeedState; now?: () => number } = {}
 ): Promise<FeedPass> {
   const res: FeedPass = { sent: 0, failed: 0, rejected: 0, deferred: 0 };
-  const state = opts.state ?? new Map();
+  const state = opts.state ?? newFeedState();
   const now = opts.now ?? Date.now;
   const lane = join(kbOps, "inbox", wolf);
   let names: string[];
@@ -80,55 +100,108 @@ export async function feedInboxToHub(
   } catch {
     return res;
   }
-  const move = (name: string, dir: string): string => {
+  // Drop backoff entries of files that are no longer in the inbox (sent, rejected, deleted by hand).
+  const present = new Set(names);
+  for (const k of [...state.files.keys()]) if (!present.has(k)) state.files.delete(k);
+
+  const eligible = names.filter((n) => !n.startsWith(".") && n.endsWith(".md") && !/\.tmp-/.test(n));
+  if (state.auth.nextAt > now()) {
+    res.deferred = eligible.length;
+    return res;
+  }
+  /** Move `name` into `<lane>/<dir>/`, avoiding a name clash (and a clash of the matching reason file). Returns the final name. */
+  const move = (name: string, dir: string, reason?: object): string => {
     const dest = join(lane, dir);
     mkdirSync(dest, { recursive: true });
     let n = 0;
     let cand = name;
-    while (existsSync(join(dest, cand))) cand = `${name}.${++n}`;
+    while (existsSync(join(dest, cand)) || existsSync(join(dest, `${cand}.reason.json`))) cand = `${name}.${++n}`;
+    if (reason) {
+      const rp = join(dest, `${cand}.reason.json`);
+      const tmp = `${rp}.tmp-${process.pid}`;
+      try {
+        writeFileSync(tmp, JSON.stringify(reason, null, 2) + "\n");
+        renameSync(tmp, rp);
+      } catch (e) {
+        log(`hub-kb: could not write the reason file for ${name}: ${safeMsg(e, hub.token)}`);
+      }
+    }
     renameSync(join(lane, name), join(dest, cand));
     return cand;
   };
-  for (const name of names) {
-    if (name.startsWith(".") || !name.endsWith(".md") || /\.tmp-/.test(name)) continue;
+  const reject = (name: string, status: number | undefined, message: string, reason: string | undefined): boolean => {
+    try {
+      move(name, "rejected", { ...(status !== undefined ? { status } : {}), message, ...(reason ? { reason } : {}), at: new Date(now()).toISOString() });
+      state.files.delete(name);
+      res.rejected++;
+      return true;
+    } catch (e) {
+      log(`hub-kb: could not move ${name} to rejected/ (${safeMsg(e, hub.token)}); keeping it and retrying with backoff`);
+      return false;
+    }
+  };
+  const retryLater = (name: string): number => {
+    const fails = (state.files.get(name)?.fails ?? 0) + 1;
+    const wait = backoff(fails);
+    state.files.set(name, { fails, nextAt: now() + wait });
+    res.failed++;
+    return wait;
+  };
+
+  for (let i = 0; i < eligible.length; i++) {
+    const name = eligible[i]!;
     const file = join(lane, name);
-    const st = state.get(name);
+    const st = state.files.get(name);
     if (st && st.nextAt > now()) {
       res.deferred++;
       continue;
     }
+    let contribution: object;
     try {
       if (!statSync(file).isFile()) continue;
-      readFileSync(file, "utf-8");
       const { filePath: _f, ...c } = parseContribution(file, wolf);
       // The kb parser returns summary + body together as `body`; the hub takes them apart.
       if (c.body.startsWith(`${c.summary}\n\n`)) c.body = c.body.slice(c.summary.length + 2);
-      await postContribution(hub, wolf, c);
-      move(name, "sent");
-      state.delete(name);
-      res.sent++;
+      contribution = c;
     } catch (e) {
-      const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      // A file that cannot be read or parsed never will be.
+      const msg = safeMsg(e, hub.token);
+      if (reject(name, undefined, msg, "unparseable")) log(`hub-kb: contribution ${name} is unparseable; moved to rejected/, not retried: ${msg}`);
+      else retryLater(name);
+      continue;
+    }
+    try {
+      await postContribution(hub, wolf, contribution);
+      move(name, "sent");
+      state.files.delete(name);
+      res.sent++;
+      state.auth = { fails: 0, nextAt: 0 };
+    } catch (e) {
+      const msg = safeMsg(e, hub.token);
       const kind = classify(e);
       if (kind === "terminal") {
-        const status = (e as HubRejectedError).status;
-        const cand = move(name, "rejected");
-        const details = (e as HubRejectedError).details;
-        const reason = details && typeof details === "object" && typeof (details as { reason?: unknown }).reason === "string" ? (details as { reason: string }).reason : undefined;
-        try {
-          writeFileSync(join(lane, "rejected", `${cand}.reason.json`), JSON.stringify({ status, message: msg, ...(reason ? { reason } : {}), at: new Date(now()).toISOString() }, null, 2) + "\n");
-        } catch {}
-        state.delete(name);
-        res.rejected++;
-        log(`hub-kb: contribution ${name} rejected by the hub (${status}); moved to rejected/, not retried: ${msg}`);
-        continue;
+        const status = (e as HubHttpError).status;
+        const r = (e as HubHttpError).details?.reason;
+        const reason = typeof r === "string" ? safeMsg(r, hub.token, REASON_MAX) : undefined;
+        if (reject(name, status, msg, reason)) {
+          log(`hub-kb: contribution ${name} rejected by the hub (${status}); moved to rejected/, not retried: ${msg}`);
+          continue;
+        }
+        const wait = retryLater(name);
+        log(`hub-kb: contribution ${name} not sent (will retry in ${Math.round(wait / 1000)}s): ${msg}`);
+      } else if (kind === "config") {
+        // Circuit breaker: every file would fail the same way. Stop the pass, back the whole feeder off, one line per pass.
+        const fails = state.auth.fails + 1;
+        const wait = backoff(fails);
+        state.auth = { fails, nextAt: now() + wait };
+        res.failed++;
+        res.deferred += eligible.length - i - 1;
+        log(`hub-kb: ERROR hub refused ${name} (${(e as HubHttpError).status}): check WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN, or the wolf is not granted this domain; ${eligible.length - i} file(s) kept, retry in ${Math.round(wait / 1000)}s: ${msg}`);
+        return res;
+      } else {
+        const wait = retryLater(name);
+        log(`hub-kb: contribution ${name} not sent (will retry in ${Math.round(wait / 1000)}s): ${msg}`);
       }
-      const fails = (st?.fails ?? 0) + 1;
-      const wait = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (fails - 1));
-      state.set(name, { fails, nextAt: now() + wait });
-      res.failed++;
-      if (kind === "auth") log(`hub-kb: ERROR hub refused credentials for contribution ${name} (${(e as HubRejectedError).status}): check WOLFPACK_HUB_TOKEN; file kept, retry in ${Math.round(wait / 1000)}s: ${msg}`);
-      else log(`hub-kb: contribution ${name} not sent (will retry in ${Math.round(wait / 1000)}s): ${msg}`);
     }
   }
   return res;
@@ -150,7 +223,7 @@ export function startHubKb(cfg: HubKbEnv, config: WolfConfig, env: NodeJS.Proces
   sync.setGranted(config.identity.domains);
   const feedMs = Number(env.WOLFPACK_KB_FEED_MS) > 0 ? Number(env.WOLFPACK_KB_FEED_MS) : 5_000;
   let busy = false;
-  const state: FeedState = new Map();
+  const state = newFeedState();
   const feedNow = async (): Promise<FeedPass> => {
     if (busy) return { sent: 0, failed: 0, rejected: 0, deferred: 0 };
     busy = true;
@@ -160,7 +233,7 @@ export function startHubKb(cfg: HubKbEnv, config: WolfConfig, env: NodeJS.Proces
       busy = false;
     }
   };
-  const timer = setInterval(() => void feedNow(), feedMs);
+  const timer = setInterval(() => feedNow().catch((e) => log(`hub-kb: feed pass failed: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`)), feedMs);
   timer.unref();
   log(`hub-kb: mirror ${cfg.mirrorDir} (domains: ${config.identity.domains.join(", ") || "none"}), contributions ${cfg.kbOps}/inbox/${config.identity.name} -> hub`);
   return {

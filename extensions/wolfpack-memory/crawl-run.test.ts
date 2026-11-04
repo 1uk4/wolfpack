@@ -279,7 +279,7 @@ describe("crawl_release", () => {
     const t2 = setup({ opsRoot: null });
     const p2 = await t2.plan();
     const d2 = complete(t2.crawlHome, p2, "run-y");
-    expect((await t2.call("crawl_release", { runDir: d2 })).content[0].text).toContain("not configured");
+    expect((await t2.call("crawl_release", { runDir: d2 })).content[0].text).toContain("No release target is configured");
     expect(t.calls.emit.every((e) => e.dryRun)).toBe(true);
   });
 

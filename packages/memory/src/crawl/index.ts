@@ -84,4 +84,6 @@ export {
   type EmitCrawlResult,
   type EmitContribution,
 } from "./emit.js";
-export { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, type HubTarget } from "./hub.js";
+export { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, listDomainsOnHub, readHubReceipts, checkHubContributions, type HubTarget } from "./hub.js";
+export * from "./runs.js";
+export * from "./service.js";

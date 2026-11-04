@@ -98,3 +98,59 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
     rmSync(staging, { recursive: true, force: true });
   }
 }
+
+// ── hub reads (best effort) ─────────────────────────────────────────────────
+
+async function hubGet(hub: HubTarget, path: string): Promise<{ status: number; body: unknown } | undefined> {
+  try {
+    const res = await (hub.fetch ?? fetch)(`${redactUrl(hub.baseUrl)}${path}`, {
+      headers: hub.token ? { Authorization: `Bearer ${hub.token}` } : {},
+      signal: AbortSignal.timeout(15_000),
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The domains registered on the hub (GET /v1/registry/domains), or null when the hub cannot be read. */
+export async function listDomainsOnHub(hub: HubTarget): Promise<Set<string> | null> {
+  const r = await hubGet(hub, "/v1/registry/domains");
+  if (!r || r.status !== 200) return null;
+  const list = (r.body as { domains?: { name?: unknown }[] }).domains;
+  if (!Array.isArray(list)) return null;
+  return new Set(list.map((d) => d.name).filter((n): n is string => typeof n === "string"));
+}
+
+/**
+ * SEAM (hub endpoint task work-wolfpack-ZBZPAZ9): which den topic ids the hub's curator has already curated for this wolf.
+ * Provisional contract: GET /v1/contributions/receipts → `{ curated: string[] }`. Feature-detected: any non-200 (the route
+ * does not exist yet: 404/405) or transport error answers `undefined`, meaning "unknown", never "none curated".
+ */
+export async function readHubReceipts(hub: HubTarget): Promise<Set<string> | undefined> {
+  const r = await hubGet(hub, "/v1/contributions/receipts");
+  if (!r || r.status !== 200) return undefined;
+  const curated = (r.body as { curated?: unknown }).curated;
+  return Array.isArray(curated) ? new Set(curated.filter((x): x is string => typeof x === "string")) : undefined;
+}
+
+/**
+ * SEAM (work-wolfpack-ZBZPAZ9): ask the hub what a release would do, for the dry-run review.
+ * Provisional contract: POST /v1/contributions/check `{ items: [{ denTopicId, contentHash }] }` → `{ unchanged: string[] }`
+ * (denTopicIds the hub already holds with that hash). Feature-detected like readHubReceipts: undefined = unknown.
+ */
+export async function checkHubContributions(hub: HubTarget, items: { denTopicId: string; contentHash?: string }[]): Promise<Set<string> | undefined> {
+  try {
+    const res = await (hub.fetch ?? fetch)(`${redactUrl(hub.baseUrl)}/v1/contributions/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(hub.token ? { Authorization: `Bearer ${hub.token}` } : {}) },
+      body: JSON.stringify({ items }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status !== 200) return undefined;
+    const unchanged = ((await res.json().catch(() => ({}))) as { unchanged?: unknown }).unchanged;
+    return Array.isArray(unchanged) ? new Set(unchanged.filter((x): x is string => typeof x === "string")) : undefined;
+  } catch {
+    return undefined;
+  }
+}

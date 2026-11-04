@@ -22,6 +22,8 @@ import { useWorkReader } from "./work-reader";
 import {
 	DEFAULT_WORK_SORT,
 	LANE_COLOR,
+	NOTE_H,
+	NO_GRADUATE,
 	WORK_ROW_H,
 	buildWorkTable,
 	groupConnectors,
@@ -29,6 +31,8 @@ import {
 	lanePath,
 	laneState,
 	nextWorkSort,
+	rowHeight,
+	rowTops,
 	type Chip,
 	type TableRow,
 	type WorkListItem,
@@ -102,29 +106,35 @@ function ChipView({ chip, testid }: { chip: Chip; testid: string }) {
 	);
 }
 
-/** The row's title chip, with a "↖ title" note per dependency outside its parent. */
+/** The row's title chip (truncates before the stage column). */
 function RowTitle({ row }: { row: TableRow }) {
 	return (
-		<span className="flex min-w-0 items-center gap-2 text-[13px] leading-tight">
-			<span className="min-w-0 truncate">
-				<ChipView chip={row.self!} testid={`work-chip-${row.id}`} />
-			</span>
-			{row.notes.map((n) => (
-				<span key={n.id} data-testid={`work-note-${row.id}-${n.id}`} title={`Depends on ${n.title}`} className="max-w-48 shrink-0 truncate text-[11px] text-muted-foreground">
-					↖ {n.title}
-				</span>
-			))}
+		<span className="block min-w-0 truncate text-[13px] leading-tight">
+			<ChipView chip={row.self!} testid={`work-chip-${row.id}`} />
 		</span>
 	);
 }
 
+/** The row's own link line: a "↖ title" per dependency outside its parent; wraps nowhere, truncates when long. */
+function RowLinks({ row }: { row: TableRow }) {
+	return (
+		<div data-testid={`work-links-${row.key}`} style={{ height: NOTE_H }} className="flex min-w-0 items-center gap-x-2 overflow-hidden text-[11px] text-muted-foreground">
+			{row.notes.map((n) => (
+				<span key={n.id} data-testid={`work-note-${row.id}-${n.id}`} title={`Depends on ${n.title}`} className="min-w-0 max-w-48 shrink truncate">
+					↖ {n.title}
+				</span>
+			))}
+		</div>
+	);
+}
+
 const COLS = {
-	stage: "w-28 shrink-0 md:w-48",
+	stage: "w-20 shrink-0 md:w-48",
 	progress: "w-28 shrink-0 max-md:hidden",
 	assignee: "w-24 shrink-0 max-md:hidden",
 	created: "w-24 shrink-0 max-md:hidden",
 };
-const INDENT_PX = [12, 40, 72] as const;
+const INDENT_PX = [8, 20, 32] as const;
 
 interface RowCtx {
 	expanded: ReadonlySet<string>;
@@ -155,44 +165,54 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				data-graduated={row.graduated || undefined}
 				data-selected={ctx.openId === row.id || undefined}
 				onClick={row.id ? () => onSelect(row.id) : undefined}
-				style={{ height: WORK_ROW_H, paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
-				className={`flex items-center gap-1 pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
+				style={{ height: rowHeight(row), paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
+				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
-				{hasKids ? (
-					<button
-						type="button"
-						data-testid={`work-toggle-${row.key}`}
-						aria-expanded={open}
-						aria-label={`${open ? "Collapse" : "Expand"} ${row.title}`}
-						onClick={(e) => {
-							e.stopPropagation();
-							onToggle(row.key);
-						}}
-						className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
-					>
-						{open ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
-					</button>
-				) : (
-					<span className="size-3.5 shrink-0" />
-				)}
-				<span className="min-w-0 flex-1">
-					{row.kind === "initiative" ? (
-						<span className={`truncate text-sm font-medium ${row.id ? "" : "text-muted-foreground"}`}>{row.title}</span>
+				<div style={{ height: WORK_ROW_H }} className="flex shrink-0 items-center gap-1">
+					{hasKids ? (
+						<button
+							type="button"
+							data-testid={`work-toggle-${row.key}`}
+							aria-expanded={open}
+							aria-label={`${open ? "Collapse" : "Expand"} ${row.title}`}
+							onClick={(e) => {
+								e.stopPropagation();
+								onToggle(row.key);
+							}}
+							className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+						>
+							{open ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+						</button>
 					) : (
-						<RowTitle row={row} />
+						<span className="size-3.5 shrink-0" />
 					)}
-				</span>
-				<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
-				<span data-testid={`work-stage-${row.key}`} className={`${COLS.stage} truncate text-xs text-muted-foreground`}>
-					{row.stageLabel}
-				</span>
-				<>
-						<span data-testid={`work-progress-${row.key}`} className={`${COLS.progress} text-xs tabular-nums text-muted-foreground`}>
-							{row.progress?.label ?? ""}
-						</span>
-						<span className={`${COLS.assignee} truncate text-xs text-muted-foreground`}>{row.assignee}</span>
-						<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
-				</>
+					<span className="min-w-0 flex-1">
+						{row.kind === "initiative" ? (
+							<span className={`block truncate text-sm font-medium ${row.id ? "" : "text-muted-foreground"}`}>{row.title}</span>
+						) : (
+							<RowTitle row={row} />
+						)}
+					</span>
+					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
+					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					<span
+						data-testid={`work-stage-${row.key}`}
+						title={row.graduate.show && !row.graduate.ready ? `${row.stageLabel} (not ready to graduate: ${row.graduate.reason})` : row.stageLabel}
+						className={`${COLS.stage} truncate text-xs text-muted-foreground`}
+					>
+						{row.stageLabel}
+					</span>
+					<span data-testid={`work-progress-${row.key}`} className={`${COLS.progress} text-xs tabular-nums text-muted-foreground`}>
+						{row.progress?.label ?? ""}
+					</span>
+					<span className={`${COLS.assignee} truncate text-xs text-muted-foreground`}>{row.assignee}</span>
+					<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
+				</div>
+				{row.notes.length > 0 && (
+					<div className="min-w-0 pl-[1.125rem]">
+						<RowLinks row={row} />
+					</div>
+				)}
 			</div>
 			{open && row.children.map((c) => <RowView key={c.key} row={c} ctx={ctx} />)}
 		</>
@@ -202,6 +222,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 /** One group: its rows plus the gutter SVG with the group's dependency lanes (none while the group is collapsed). */
 function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 	const gc = groupConnectors(group, (r) => isOpenRow(r, ctx));
+	const tops = rowTops(gc.rows);
 	const states = gc.edges.map((e) => laneState(e, null));
 	// Muted lanes first, lit ones last, so a lit lane is never painted over by a shared trunk.
 	const order = gc.edges.map((_, i) => i).sort((a, b) => ["done", "plain", "lit"].indexOf(states[a]!) - ["done", "plain", "lit"].indexOf(states[b]!));
@@ -212,14 +233,14 @@ function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 					data-testid={`work-lanes-${group.key}`}
 					data-lanes={gc.lanes}
 					width={gc.width}
-					height={gc.rows.length * WORK_ROW_H}
+					height={tops[tops.length - 1]! + rowHeight(gc.rows[gc.rows.length - 1]!)}
 					aria-hidden="true"
 					className="pointer-events-none absolute left-0 top-0"
 				>
 					{order.map((i) => {
 						const e = gc.edges[i]!;
 						const st = states[i]!;
-						const p = lanePath(e, gc.lanes);
+						const p = lanePath(e, gc.lanes, tops);
 						const color = LANE_COLOR[st];
 						return (
 							<g key={laneKey(e)} data-testid={`work-lane-${e.from}-${e.to}`} data-lane={e.lane} data-lane-state={st} stroke={color} fill="none" strokeWidth={st === "done" ? 1 : 1.5}>
@@ -293,7 +314,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 		<div data-testid="work-view" className="flex h-dvh min-h-0 flex-col bg-background">
 			<div className="flex h-full min-h-0 flex-1 flex-col">
 					<TopBar>
-						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+						<span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
 							{table ? `${table.count} ${table.count === 1 ? "item" : "items"}` : ""}
 						</span>
 						<select
@@ -313,7 +334,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 							<input type="checkbox" data-testid="work-show-graduated" checked={showGraduated} onChange={(e) => setShowGraduated(e.target.checked)} className="size-3.5 accent-primary" />
 							Graduated
 						</label>
-						<div className="relative shrink-0">
+						<div className="relative min-w-0 flex-1 md:flex-none">
 							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 							<input
 								data-testid="work-search"
@@ -322,7 +343,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 								placeholder="Search work…"
 								aria-label="Search work"
 								spellCheck={false}
-								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring w-32 md:w-56`}
+								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring w-full min-w-0 md:w-56`}
 							/>
 						</div>
 					</TopBar>

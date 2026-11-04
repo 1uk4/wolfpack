@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/top-bar";
 import { useWorkReader } from "./work-reader";
 import {
@@ -157,6 +157,11 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const { onToggle, onSelect } = ctx;
 	const hasKids = row.children.length > 0;
 	const open = isOpenRow(row, ctx);
+	// A tap on a row with children expands/collapses it (the chevron's job); a row without children opens the reader.
+	const activate = (): void => {
+		if (hasKids) onToggle(row.key);
+		else if (row.id) onSelect(row.id);
+	};
 	return (
 		<>
 			<div
@@ -164,7 +169,14 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				data-kind={row.kind}
 				data-graduated={row.graduated || undefined}
 				data-selected={ctx.openId === row.id || undefined}
-				onClick={row.id ? () => onSelect(row.id) : undefined}
+				onClick={hasKids || row.id ? activate : undefined}
+				onKeyDown={(e) => {
+					if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+					e.preventDefault();
+					activate();
+				}}
+				tabIndex={hasKids || row.id ? 0 : undefined}
+				aria-expanded={hasKids ? open : undefined}
 				style={{ height: rowHeight(row), paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
 				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
@@ -194,7 +206,25 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 						)}
 					</span>
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
+					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
 					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					</span>
+					{row.id && (
+						<button
+							type="button"
+							data-testid={`work-open-${row.key}`}
+							aria-label={`Open ${row.title}`}
+							title="Open"
+							onClick={(e) => {
+								e.stopPropagation();
+								onSelect(row.id);
+							}}
+							className="flex size-6 shrink-0 items-center justify-center gap-1 rounded-md border border-border/70 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:w-auto md:px-1.5"
+						>
+							<PanelRightOpenIcon className="size-3.5" />
+							<span className="max-md:hidden">Open</span>
+						</button>
+					)}
 					<span
 						data-testid={`work-stage-${row.key}`}
 						title={row.graduate.show && !row.graduate.ready ? `${row.stageLabel} (not ready to graduate: ${row.graduate.reason})` : row.stageLabel}

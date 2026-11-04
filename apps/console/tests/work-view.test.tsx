@@ -37,6 +37,7 @@ const { WorkReaderHost } = await import("../components/work-reader.tsx");
 const { FakeNav, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
 import type { WorkClient } from "../components/work-client.ts";
 import type { WorkListItem } from "../src/core/kb.ts";
+import { NOTE_H, WORK_ROW_H } from "../src/core/work-connectors.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "wolfpack", dependsOn: [], ...over });
 const ITEMS: WorkListItem[] = [
@@ -136,10 +137,35 @@ describe("opening an item", () => {
 		await open();
 		await click(q("work-toggle-i1")!);
 		assert.equal(q("work-reader"), null);
-		await click(q("work-row-f1")!);
+		await click(q("work-open-f1")!);
 		assert.equal(currentUrl(), "/work?item=f1");
 		assert.equal(q("work-reader")!.getAttribute("data-work"), "f1");
 		assert.ok(q("work-row-f1"), "the list is still there under the reader");
+	});
+	it("tapping a row with children toggles it (like the chevron); Open opens the reader and does not toggle", async () => {
+		await open();
+		const row = q("work-row-i1")!;
+		assert.equal(row.getAttribute("aria-expanded"), "false");
+		await click(row);
+		assert.equal(row.getAttribute("aria-expanded"), "true");
+		assert.ok(q("work-row-f1"));
+		assert.equal(q("work-reader"), null, "a tap on a row with children does not open the reader");
+		await click(row);
+		assert.equal(row.getAttribute("aria-expanded"), "false");
+		await click(row);
+		await click(q("work-open-i1")!);
+		assert.equal(q("work-reader")!.getAttribute("data-work"), "i1");
+		assert.equal(q("work-row-i1")!.getAttribute("aria-expanded"), "true", "Open left the row as it was");
+		assert.equal(q("work-open-i1")!.getAttribute("aria-label"), "Open Phase 1");
+	});
+	it("Enter and Space on a focused row toggle it", async () => {
+		await open();
+		const row = q("work-row-i1")!;
+		const key = (k: string) => act(async () => { row.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: k })); });
+		await key("Enter");
+		assert.equal(row.getAttribute("aria-expanded"), "true");
+		await key(" ");
+		assert.equal(row.getAttribute("aria-expanded"), "false");
 	});
 	it("the expander does not open the reader", async () => {
 		await open();
@@ -175,7 +201,7 @@ describe("opening an item", () => {
 	it("Forward re-opens the reader; /work?item=<id> opened directly shows it, and closing a deep link replaces the URL", async () => {
 		await open();
 		await click(q("work-toggle-i1")!);
-		await click(q("work-row-f1")!);
+		await click(q("work-open-f1")!);
 		await act(async () => historyBack());
 		assert.equal(q("work-reader"), null);
 		await act(async () => historyForward());
@@ -296,6 +322,19 @@ describe("gutter lanes", () => {
 		await click(q("work-toggle-no-initiative")!);
 		assert.equal(q("work-note-f4-f2")!.textContent, "↖ Graduate");
 		assert.deepEqual(laneIds(), []);
+	});
+	it("link notes sit on the row's own line, inside the row, and the row is taller by exactly that line", async () => {
+		const c = fake();
+		c.items = [...ITEMS, item("f4", "feature", { dependsOn: ["f2", "f1"], title: "Later" })];
+		await open(c);
+		await click(q("work-toggle-no-initiative")!);
+		const row = q("work-row-f4")!;
+		const links = q("work-links-f4")!;
+		assert.ok(row.contains(links));
+		assert.equal(links.querySelectorAll('[data-testid^="work-note-f4-"]').length, 2);
+		assert.equal(row.style.height, `${WORK_ROW_H + NOTE_H}px`);
+		assert.equal(q("work-links-f3"), null, "a row without notes has no link line");
+		assert.equal(q("work-row-f3")!.style.height, `${WORK_ROW_H}px`);
 	});
 });
 

@@ -133,6 +133,27 @@ describe("emitCrawlToHub: refusals vs aborts", () => {
     expect(recorded(denLocal)).toHaveLength(2);
   });
 
+  it("a dedup write failure on the SUCCESS path is a warning on the result; while unwinding from a 5xx it does not mask the post error", async () => {
+    const mk = (fail: boolean) => {
+      const runDir = runDirFixture(2);
+      const denLocal = join(tmp("den"), "kb");
+      mkdirSync(denLocal, { recursive: true });
+      mkdirSync(join(denLocal, "emitted.json")); // a directory in the way: the dedup merge cannot write
+      let call = 0;
+      const f = (async () => {
+        const n = ++call;
+        return fail && n === 2 ? new Response("{}", { status: 503 }) : ok(n);
+      }) as unknown as typeof fetch;
+      return emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } });
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = await mk(false);
+    expect(r.emitted).toBe(2);
+    expect(r.warnings?.join(" ")).toMatch(/could not record the 2 sent entries/);
+    await expect(mk(true)).rejects.toThrow(/503/);
+    warn.mockRestore();
+  });
+
   it("a 400 WITHOUT the secret marker is systemic: it aborts like a 5xx (earlier sends still recorded)", async () => {
     const runDir = runDirFixture(3);
     const denLocal = join(tmp("den"), "kb");

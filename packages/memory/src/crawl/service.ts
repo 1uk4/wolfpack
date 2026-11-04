@@ -812,6 +812,13 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       const items = preview.contributions;
       const toEmit = items.filter((c) => c.status === "emit").length;
       const release = readReleaseState(dir, opsRoot, ro.wolf, denTopicIdsForPlan(plan));
+      // A refusal note only counts for refs that still match an entry about to be emitted; one that was left out (or no longer exists) is stale.
+      if (release.refused) {
+        const live = new Set(items.filter((c) => c.status === "emit").map((c) => entryRef(c.denTopicId)));
+        const refs = release.refused.refs.filter((x) => live.has(x));
+        if (refs.length) release.refused = { ...release.refused, count: refs.length, refs };
+        else delete release.refused;
+      }
       const curated = new Set(release.curated);
       const target = releaseTarget(env);
       let hubUnchanged: Set<string> | undefined;
@@ -898,6 +905,7 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
             if (e2) warnings.push(`released, but could not update run.json (${e2})`);
           }
         }
+        for (const w of (r as { warnings?: string[] }).warnings ?? []) warnings.push(w);
         for (const x of r.rejected ?? []) warnings.push(`NOT released: the hub refused entry ${entryRef(x.denTopicId)} (${x.message.replace(/^hub rejected the contribution \(400\): /, "").slice(0, 240)}). It stays unreleased until the entry is edited or left out; there is no override.`);
         return { ...r, via, warnings };
       } finally {

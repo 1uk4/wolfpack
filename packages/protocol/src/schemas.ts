@@ -50,6 +50,13 @@ export const ErrorEnvelopeSchema = z.object({
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
+/**
+ * `details.reason` on a 400 `invalid_request` from POST /v1/contributions when the hub refused the contribution because it may hold a secret.
+ * The crawl client treats ONLY this 400 as a per-entry refusal (the other entries still go); any other 400 aborts the release. Pinned here so
+ * the hub (writer) and the client (reader) cannot drift apart.
+ */
+export const SECRET_REFUSAL_REASON = "secret_detected";
+
 /** Stable HTTP status per error code. Clients map errors from `code`, never from status. */
 export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   busy: 409,

@@ -13,6 +13,7 @@
   "dependencies": {
     "@wolfpack/engine": "*",
     "@wolfpack/kb": "*",
+    "@wolfpack/protocol": "*",
     "zod": "^3.24.0"
   },
   "devDependencies": {

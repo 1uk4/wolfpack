@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import type { Actor } from "@wolfpack/protocol";
+import { SECRET_REFUSAL_REASON, type Actor } from "@wolfpack/protocol";
 import { ContributionSchema, contentHash, isSafeSegment, type Contribution } from "@wolfpack/kb/shared";
 import { contributionFileName, renderContribution } from "@wolfpack/kb/client";
 import { parseContribution } from "@wolfpack/kb/librarian";
@@ -158,7 +158,7 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
     const list = flagged.map((f) => `${f.field} (${f.pattern})`).join(", ");
     if (c.origin === "crawl") {
       console.warn(`hubd: refused crawl contribution ${wolf}/${ref}: possible secret in ${list.slice(0, 300)}`);
-      throw new ContributionError("invalid_request", `contribution rejected: possible secret in ${list.slice(0, 300)} (entry ref ${ref}). Edit the entry or leave it out of the release.`, { reason: "secret_detected", ref, field: flagged[0]!.field, pattern: flagged[0]!.pattern });
+      throw new ContributionError("invalid_request", `contribution rejected: possible secret in ${list.slice(0, 300)} (entry ref ${ref}). Edit the entry or leave it out of the release.`, { reason: SECRET_REFUSAL_REASON, ref, field: flagged[0]!.field, pattern: flagged[0]!.pattern });
     }
     console.warn(`hubd: possible secret in ${wolf} contribution ${isSafeSegment(c.denTopicId) ? c.denTopicId.slice(0, 80) : ref}: ${list.slice(0, 300)} (stored; only crawl contributions are refused)`);
   }

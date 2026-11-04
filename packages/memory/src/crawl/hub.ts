@@ -5,14 +5,16 @@
  * file-write path (`emitCrawl`) is used unchanged.
  *
  * The contributions are built by the same `emitCrawl` (same dedup, same bodies) into a throwaway staging ops dir and then POSTed to
- * `/v1/contributions` with `Authorization: Bearer` (the hub takes the wolf from the token's host). The wolf's `emitted.json` dedup is only kept when every post succeeded; on a failure
- * it is restored, so a retry re-sends (the hub is idempotent on topic + content hash).
+ * `/v1/contributions` with `Authorization: Bearer` (the hub takes the wolf from the token's host). The wolf's `emitted.json` dedup records exactly the entries the hub
+ * accepted, even when a later post aborts the release, so a retry sends only the rest (the hub is idempotent on topic + content hash anyway).
+ * A 400 carrying `details.reason: secret_detected` refuses ONE entry (the others still go); any other failure aborts the release.
  */
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { safeSegment } from "@wolfpack/kb/shared";
+import { SECRET_REFUSAL_REASON } from "@wolfpack/protocol";
 import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.js";
 
 export interface HubTarget {
@@ -65,9 +67,6 @@ export function scrubSecrets(text: string, secrets: (string | undefined)[] = [])
   return out;
 }
 const scrub = (text: string, hub?: HubTarget): string => scrubSecrets(text, [hub?.token]);
-
-/** `details.reason` the hub sets when it refuses a contribution because it may hold a secret. ONLY this 400 is a per-entry refusal; any other 400 is systemic and aborts the release. */
-export const SECRET_REFUSAL_REASON = "secret_detected";
 
 /** A short, value-free reference to a den topic id (first 8 hex of its sha256), the same one the hub puts in its refusal. */
 export function entryRef(denTopicId: string): string {
@@ -158,12 +157,12 @@ export function persistDedup(stagedDen: string, realDen: string, ids: string[]):
 
 /**
  * Like `emitCrawl` (real emit), but delivers to the hub. `dest` of the result is the hub URL (credentials stripped).
- * The contributions are built against a STAGING copy of the wolf's dedup (`emitted.json`), posted, and only when every post
- * succeeded is the dedup merged into the real den. A failure or a crash anywhere before that leaves the real dedup untouched, so
- * unsent items are never marked sent and a retry re-sends everything (the hub is idempotent: an already-stored contribution
- * answers 200 `duplicate`).
+ * The contributions are built against a STAGING copy of the wolf's dedup (`emitted.json`) and posted one by one. The entries the hub accepted are
+ * merged into the real den afterwards, also when a later post aborts the release (401/403/5xx/other 400); refused and unsent entries are never marked
+ * sent. A crash before the first post leaves the real dedup untouched. A retry therefore sends only what is not recorded (the hub is idempotent: an
+ * already-stored contribution answers 200 `duplicate`).
  */
-export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<EmitCrawlOptions, "dryRun"> = {}): Promise<EmitCrawlResult> {
+export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<EmitCrawlOptions, "dryRun"> = {}): Promise<EmitCrawlResult & { warnings?: string[] }> {
   const wolf = opts.wolf ?? process.env.WOLF_NAME ?? "scribe";
   const denLocal = opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb");
   const staging = mkdtempSync(join(tmpdir(), "crawl-hub-"));
@@ -172,9 +171,11 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
     mkdirSync(stagedDen, { recursive: true });
     for (const f of ["emitted.json", "emitted-bodies"]) if (existsSync(join(denLocal, f))) cpSync(join(denLocal, f), join(stagedDen, f), { recursive: true });
     const r = emitCrawl(runDir, { ...opts, wolf, dryRun: false, quiet: true, roots: { ...opts.roots, opsRoot: join(staging, "ops"), denLocal: stagedDen } });
-    // A refused entry (400) does not stop the others and is never marked sent; any other failure aborts with nothing marked sent (as before).
+    // A secret-refused entry (400 + secret_detected) does not stop the others and is never marked sent; any other failure aborts the release, with the entries already accepted still recorded (finally below).
     const sent: string[] = [];
     const rejected: { denTopicId: string; message: string }[] = [];
+    const warnings: string[] = [];
+    let unwinding = true; // true until the post loop finished without throwing
     try {
       for (const c of r.delta) {
         try {
@@ -186,17 +187,21 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
           console.error(`crawl: the hub REFUSED entry ${entryRef(c.denTopicId)}: ${e.message}`);
         }
       }
+      unwinding = false;
     } finally {
-      // Entries the hub took are recorded even when a later post aborts the release (401/403/5xx/other 400), so a retry does not re-send them.
+      // Entries the hub took are recorded even when a later post aborts the release, so a retry does not re-send them.
       try {
         persistDedup(stagedDen, denLocal, sent);
       } catch (e) {
-        console.warn(`crawl: could not record the ${sent.length} sent entries in the dedup: ${e instanceof Error ? e.message : String(e)}`);
+        const msg = `could not record the ${sent.length} sent entries in the wolf's dedup (${e instanceof Error ? e.message : String(e)}); a re-release may send them again (the hub ignores exact duplicates)`;
+        // While already unwinding from a post error, that error is the one to report: do not mask it. On the success path surface it as a warning.
+        if (unwinding) console.warn(`crawl: ${msg}`);
+        else warnings.push(msg);
       }
     }
     const dest = `${redactUrl(hub.baseUrl)}/v1/contributions`;
     if (!opts.quiet) console.log(`\n${sent.length} contribution(s) emitted → ${dest}${rejected.length ? ` (${rejected.length} refused by the hub)` : ""}`);
-    return { ...r, emitted: sent.length, dest, ...(rejected.length ? { rejected } : {}) };
+    return { ...r, emitted: sent.length, dest, ...(rejected.length ? { rejected } : {}), ...(warnings.length ? { warnings } : {}) };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

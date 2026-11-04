@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scanSecrets, scanSecretsForCrawl } from "./secrets.js";
+import { looksSecretForCrawl, scanSecrets, scanSecretsForCrawl } from "./secrets.js";
 
 describe("scanSecrets: telegram bot tokens", () => {
   const tok = `${"1".repeat(9)}:${"A".repeat(10)}-${"b".repeat(10)}_${"c".repeat(13)}`;
@@ -33,5 +33,15 @@ describe("scanSecretsForCrawl", () => {
   it("ignores markdown/code punctuation around a value: `apiKey`, apiKey(), **x**, apiKey.value, trailing period", () => {
     for (const v of ["`apiKey`", "apiKey()", "**plaintoken**", "apiKey.value", "someword."]) expect(scanSecretsForCrawl(`token: ${v}`).findings, v).toEqual([]);
     expect(scanSecretsForCrawl("token: `a1b2c3d4e5f6a7b8`").findings.length).toBe(1); // a quoted real key is still caught
+  });
+  it("the exemptions are bounded: passphrases and long words are caught", () => {
+    for (const v of ["correct-horse-battery-staple", "my_secret_phrase", "Sunshinebabyloveforever", "abcdefghijklmnopqrstu", "Zx.Qw.Lk.Pr", "aBcDeFgHiJkLmNoP", "HUBD_WOLF_TOKEN_VALUE_EXTRA_LONG_NAMES_XY_Z", "VERYLONGSEGMENTNAME_TOKEN"]) {
+      expect(looksSecretForCrawl(v), v).toBe(true);
+    }
+  });
+  it("short names, identifiers, env vars and real paths still pass", () => {
+    for (const v of ["per-wolf", "hub-token-file", "apiKey", "apiKey.value", "getAuthToken", "Sunshine", "HUBD_TOKEN", "~/.wolfpack/hub.json", "/etc/hub/token", "hub.json"]) {
+      expect(looksSecretForCrawl(v), v).toBe(false);
+    }
   });
 });

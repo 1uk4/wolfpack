@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { contentHash } from "@wolfpack/kb/shared";
 import { contributionFileName } from "@wolfpack/kb/client";
-import { checkHubContributions, checkHubContributionsDetailed, readHubReceipts, readHubReceiptsDetailed } from "@wolfpack/memory";
+import { SECRET_REFUSAL_REASON } from "@wolfpack/protocol";
+import { postContribution, HubRejectedError, checkHubContributions, checkHubContributionsDetailed, readHubReceipts, readHubReceiptsDetailed } from "@wolfpack/memory";
 import { createHubServer, type HubServer } from "./server.js";
 import { wolfCast, bearer, mintOperatorToken, registerWolfOnHost } from "./testing/tokens.js";
 import { contributionsDir, hubRoots } from "./layout.js";
@@ -477,5 +478,24 @@ describe("secret check on contributions", () => {
       expect(res.status, line.slice(0, 12)).toBe(400);
     }
     w.mockRestore();
+  });
+});
+
+// Last on purpose: the malformed post below is quarantined into _bad, which the earlier secret-check tests assert is empty.
+describe("secret_detected contract (real hub 400 envelope, real client)", () => {
+  const target = () => ({ baseUrl: hub.url, token: cast.wolves.w2.Authorization.replace(/^Bearer /, "") });
+  it("the constant is the protocol's, and the real client turns the hub's secret 400 into a per-entry HubRejectedError", async () => {
+    expect(SECRET_REFUSAL_REASON).toBe("secret_detected");
+    const FAKE = "sk-" + "FAKEFAKEFAKEFAKEFAKEFAKE1234";
+    const bad = contribution("w2", "crawl-wolfpack-contract", `note ${FAKE}`);
+    const err = await postContribution(target(), "w2", bad).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HubRejectedError);
+    expect((err as HubRejectedError).denTopicId).toBe("crawl-wolfpack-contract");
+  });
+  it("any other 400 from the real hub is a plain Error (systemic), not a refusal", async () => {
+    const err = await postContribution(target(), "w2", { not: "a contribution" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(HubRejectedError);
+    expect(String((err as Error).message)).toMatch(/400/);
   });
 });

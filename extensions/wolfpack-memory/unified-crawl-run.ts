@@ -399,7 +399,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       try {
         const r = await service.release(dir, { wolf: ctx.wolfName, roots, confirmed: true });
         const refusedN = r.rejected?.length ?? 0;
-        const head = refusedN ? (r.emitted ? `${releasedLine(dir)} Released ${r.emitted}, ${refusedN} refused` : `NOT released: all ${refusedN} refused by the hub`) : `${releasedLine(dir)} ${r.emitted} contribution(s)`;
+        const head = refusedN ? (r.emitted ? `${releasedLine(dir)} ${r.emitted} released, ${refusedN} refused` : `NOT released: all ${refusedN} refused by the hub`) : `${releasedLine(dir)} ${r.emitted} contribution(s)`;
         return text(`${head}${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\n${r.emitted ? "Dewey's sweep will route + curate them." : "Nothing was handed to Dewey."}${r.warnings.length ? `\nWarning: ${r.warnings.join("; ")}` : ""}`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest, rejected: r.rejected?.length ?? 0 }, ...(r.rejected?.length ? { isError: true } : {}) });
       } catch (e) {
         return fail(`Release failed: ${e instanceof Error ? e.message : String(e)}`);

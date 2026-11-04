@@ -44,27 +44,49 @@ function looksSecret(v: string): boolean {
   return /\d/.test(v) || /[^A-Za-z]/.test(v);
 }
 
+/** A letters-only value (optionally dotted) that has the shape of an identifier or a word, not of a passphrase / random string. */
+function isIdentifierShaped(v: string): boolean {
+  const segs = v.split(".");
+  if (segs.length > 3 || v.length > 32) return false;
+  if (segs.length > 1 && segs.some((x) => x.length < 3)) return false; // Zx.Qw.Lk.Pr
+  return segs.every((x) => {
+    if (x.length > 24) return false;
+    if (/^[a-z]+$/.test(x) || /^[A-Z]+$/.test(x)) return x.length <= 20; // one word, one case
+    const rest = x.slice(1);
+    if (/^[a-z]+$/.test(rest)) return x.length <= 20; // Capitalised word
+    const transitions = (x.match(/[a-z][A-Z]/g) ?? []).length; // camelCase / PascalCase humps
+    return transitions <= x.length / 6;
+  });
+}
+
 /**
  * Crawl variant of the credential-assignment value test (the hub's hard-400 path for crawl contributions). A key name like `token:` / `secret=`
- * followed by one of these is NOT a credential, because crawled prose is full of them:
+ * followed by one of these is NOT a credential, because crawled prose is full of them. Every exemption is BOUNDED, so a passphrase does not hide in one:
  *   - a work-item id (`work-<domain>-<id>`) or a KB id (`kb-<domain>-<id>`)
- *   - an env-var NAME: ALL_CAPS segments joined by underscores (at least one underscore), at most 2 digits (HUBD_TOKEN, WOLFPACK_HUB_TOKEN)
- *   - plain words / a path: lowercase letters with - _ . / ~ and NO digits (per-wolf, hub-token-file, ~/.wolfpack/hub.json)
- *   - letters only, optionally dotted (a word or identifier such as apiKey.value); markdown/code punctuation around the value (backticks, *, parentheses, trailing .,;:) is ignored
+ *   - an env-var NAME: ALL_CAPS segments joined by underscores (at least one), at most 2 digits, each segment <= 12 chars, whole name <= 40 (HUBD_TOKEN)
+ *   - a real path: lowercase letters with - _ . / ~ and NO digits, containing `/` or starting with `~` (~/.wolfpack/hub.json)
+ *   - letters only, optionally dotted (apiKey.value): at most 3 dotted segments of >= 3 chars, each <= 24, whole <= 32; a single-case or Capitalised word
+ *     is <= 20 chars; camelCase/PascalCase has at most len/6 lower->upper humps
+ *   - a short kebab/snake word: lowercase letters only (no digits), <= 3 segments split on - _ . each <= 12 chars, whole value <= 14 (per-wolf, hub-token-file)
  *   - a placeholder: <masked>, <redacted>, ***, xxx, ${VAR}, $VAR, or the words masked/redacted/hidden
- * Everything else falls through to the work-item rule (a digit or any non-letter makes it a secret), so a value mixing letters and digits
- * (such as a 16+ char key) is still caught, and every non-assignment pattern (private keys, bearer, JWT, URL credentials, token prefixes) is untouched.
- * Not covered, by design: a value of only letters in mixed case (no digit, no symbol) is not flagged by either rule.
+ * Markdown/code punctuation around the value (backticks, *, parentheses, trailing .,;:) is ignored.
+ * Anything that is letters-only (or lowercase words) but outside those bounds IS flagged (correct-horse-battery-staple, my_secret_phrase, a 21+ char
+ * single-case word, Zx.Qw.Lk.Pr). Everything else falls through to the work-item rule (a digit or any non-letter makes it a secret), and every
+ * non-assignment pattern (private keys, bearer, JWT, URL credentials, token prefixes) is untouched.
+ * Known gap: a short mixed-case word within bounds (e.g. "Hunterxy") is indistinguishable from an identifier and passes.
  */
 export function looksSecretForCrawl(raw: string): boolean {
-  // Markdown / code punctuation hugging the value (`token`, apiKey(), **x**, trailing . ) is not part of it.
   const v = raw.replace(/^[`*(.,:;]+|[`*().,:;]+$/g, "");
   if (v === "") return false;
-  if (/^[A-Za-z]+(?:\.[A-Za-z]+)*$/.test(v)) return false; // a word or a dotted identifier (apiKey.value): letters only
-  if (/^(?:work|kb)-[a-z0-9][a-z0-9-]*-[A-Za-z0-9]{4,}$/.test(v)) return false;
-  if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(v) && (v.match(/\d/g) ?? []).length <= 2) return false;
-  if (/^[a-z~./_-]+$/.test(v)) return false;
   if (/^(?:<[^<>\s]*>|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\*{3,}|x{3,}|masked|redacted|hidden)$/i.test(v)) return false;
+  if (/^(?:work|kb)-[a-z0-9][a-z0-9-]*-[A-Za-z0-9]{4,}$/.test(v)) return false;
+  if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(v)) return v.length > 40 || (v.match(/\d/g) ?? []).length > 2 || v.split("_").some((x) => x.length > 12);
+  if (/^[a-z~./_-]+$/.test(v) && (v.includes("/") || v.startsWith("~"))) return false;
+  if (/^[A-Za-z]+(?:\.[A-Za-z]+)*$/.test(v)) return !isIdentifierShaped(v);
+  if (/^[a-z_.-]+$/.test(v)) {
+    const segs = v.split(/[-_.]/);
+    return !(segs.length <= 3 && segs.every((x) => x.length <= 12) && v.length <= 14);
+  }
   return looksSecret(v);
 }
 

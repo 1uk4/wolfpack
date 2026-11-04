@@ -441,6 +441,26 @@ describe("a release where the hub refuses every entry", () => {
     expect(readReleaseState(f.runDir, undefined, "w", []).refused).toBeUndefined();
   });
 
+  it("the preview shows a refusal only for refs that still match a current emit item; a later clean release clears release-refused.json", async () => {
+    const f = fixture();
+    finish(f);
+    const topic = f.plan.batches[0]!.topic;
+    const mkItem = (id: string) => ({ denTopicId: id, status: "emit", kind: "topic", topic, title: "t", bodyChars: 1, contentHash: "h" });
+    const items = [mkItem("crawl-wolfpack-live")];
+    const refused = emitStub({
+      emit: ((_d: string, o: { dryRun?: boolean }) => (o.dryRun ? { emitted: 1, skipped: 0, dest: "x", dir: "", contributions: items, delta: [] } : { emitted: 0, skipped: 0, dest: "x", dir: "", contributions: items, delta: [], rejected: [{ denTopicId: "crawl-wolfpack-live", message: "m" }] })) as never,
+    });
+    const svc = svcOf(f, { runner: refused, env: { WOLFPACK_HUB_URL: "http://hub" } });
+    await svc.release(f.runDir, { wolf: "w", confirmed: true });
+    expect(existsSync(join(f.runDir, "release-refused.json"))).toBe(true);
+    expect((await svc.previewRelease(f.runDir, { wolf: "w" })).release.refused?.count).toBe(1);
+    items[0] = mkItem("crawl-wolfpack-other"); // the refused entry was left out / replaced
+    expect((await svc.previewRelease(f.runDir, { wolf: "w" })).release.refused).toBeUndefined();
+    const clean = svcOf(f, { runner: emitStub(), env: { KB_OPS: tmp("ops") } });
+    await clean.release(f.runDir, { wolf: "w", confirmed: true });
+    expect(existsSync(join(f.runDir, "release-refused.json"))).toBe(false);
+  });
+
   it("a partial release (some sent, some refused) is a release and records refused + refs on the record", async () => {
     const f = fixture();
     writeFileSync(join(f.runDir, "history.json"), "{}");

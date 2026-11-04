@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
 import { cleanOrphans, overLimit } from "./work-orphans.js";
+import { formatReport, importWork } from "./work-import.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
@@ -11,7 +12,11 @@ import { assertSocketPath, parseSocketMode } from "./socket.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
-  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans";
+  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans" | "work-import";
+  fromDomains?: string;
+  fromLedger?: string;
+  dryRun?: boolean;
+  domainList?: string[];
   /** work-orphans: actually append the deletes (default is a dry run). */
   apply?: boolean;
   /** work-orphans: allow --apply over the safety limit. */
@@ -66,6 +71,8 @@ const USAGE = `usage:
                                                               browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL, e.g. https://sfo-01.<tailnet>.ts.net/hub; no QR when neither is set). --label names the device in "tokens list"
   hubd work-orphans --data-dir <dir> [--apply] [--force]      list (dry run, the default) or delete, via appended work.deleted events, work items that are in the ledger as a lone work.created but have no .md.
                                                               hubd must be STOPPED even for the dry run (it takes the work-writer lock). --apply aborts unless --force when all items qualify, when a hub of <=10 items has >3, or above 10 items when more than max(3, 10%) qualify. A single genuine orphan on a 1-item hub needs --force (orphans >= total).
+  hubd work-import --from-domains <dir> --from-ledger <file> --data-dir <dir> [--dry-run] [--domains personal,wolfpack]
+                                                              merge the legacy work store (its domains dir and ledger, read-only) into this hub: missing ledger events are added (deduped, merged by time), legacy-only .md copied, newer-wins for items in both. Backs up under <dir>/backups first. hubd must be STOPPED (work-writer lock); safe to re-run.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
@@ -74,7 +81,7 @@ env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; no
 
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest0] = argv;
-  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans") throw new Error(USAGE);
+  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans" && command !== "work-import") throw new Error(USAGE);
   let rest = rest0;
   let sub: CliArgs["sub"];
   let tokenId: string | undefined;
@@ -96,6 +103,12 @@ export function parseArgs(argv: string[]): CliArgs {
       if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);
       return v;
     };
+    if (command === "work-import") {
+      if (flag === "--dry-run") { out.dryRun = true; continue; }
+      if (flag === "--from-domains") { out.fromDomains = val0(); continue; }
+      if (flag === "--from-ledger") { out.fromLedger = val0(); continue; }
+      if (flag === "--domains") { out.domainList = val0().split(",").map((x) => x.trim()).filter(Boolean); continue; }
+    }
     if (command === "work-orphans" && flag === "--apply") { out.apply = true; continue; }
     if (command === "work-orphans" && flag === "--force") { out.force = true; continue; }
     if (command === "pair" && flag === "--label") {
@@ -150,7 +163,8 @@ export function parseArgs(argv: string[]): CliArgs {
     if (out.kind === "worker" && !out.hostId) throw new Error("pair --kind worker requires --host-id <id>");
     if (out.kind !== "worker" && out.hostId) throw new Error("--host-id is only for --kind worker");
   }
-  if ((command === "pair" || command === "tokens" || command === "work-orphans") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
+  if ((command === "pair" || command === "tokens" || command === "work-orphans" || command === "work-import") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
+  if (command === "work-import" && (!out.fromDomains || !out.fromLedger)) throw new Error("work-import requires --from-domains and --from-ledger");
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
   if (out.socket !== undefined) {
     if (out.tcpExplicit) throw new Error("--socket cannot be combined with --port/--host: pick TCP or a unix socket");
@@ -188,6 +202,10 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
         log(`${art}\n${link}`);
       }
     }
+    return;
+  }
+  if (args.command === "work-import") {
+    for (const l of formatReport(importWork({ fromDomains: args.fromDomains!, fromLedger: args.fromLedger!, dataDir: args.dataDir!, dryRun: !!args.dryRun, ...(args.domainList ? { domains: args.domainList } : {}) }))) log(l);
     return;
   }
   if (args.command === "work-orphans") {

@@ -54,7 +54,7 @@ const MSG_MAX = 200;
 
 /** Retry state kept by the caller across passes: per-file backoff, plus one shared backoff for config failures. */
 export interface FeedState {
-  files: Map<string, { fails: number; nextAt: number }>;
+  files: Map<string, { fails: number; nextAt: number; /** When the file was last attempted (ordering: least recently attempted first). */ last: number }>;
   auth: { fails: number; nextAt: number };
 }
 export const newFeedState = (): FeedState => ({ files: new Map(), auth: { fails: 0, nextAt: 0 } });
@@ -111,7 +111,11 @@ export async function feedInboxToHub(
     for (const n of readdirSync(join(lane, "rejected"))) if (/\.reason\.json\.tmp-/.test(n)) rmSync(join(lane, "rejected", n), { force: true });
   } catch {}
 
-  const eligible = names.filter((n) => !n.startsWith(".") && n.endsWith(".md") && !/\.tmp-/.test(n));
+  // Least recently attempted first: never-attempted files, then by last attempt, ties by name. Files a tripped breaker left behind were
+  // not attempted, so they come ahead of the poisoned ones that tripped it; a few poisoned files at the front cannot starve the rest.
+  const eligible = names
+    .filter((n) => !n.startsWith(".") && n.endsWith(".md") && !/\.tmp-/.test(n))
+    .sort((a, b) => (state.files.get(a)?.last ?? -Infinity) - (state.files.get(b)?.last ?? -Infinity) || (a < b ? -1 : a > b ? 1 : 0));
   if (state.auth.nextAt > now()) {
     res.deferred = eligible.length;
     return res;
@@ -150,7 +154,7 @@ export async function feedInboxToHub(
   const retryLater = (name: string): number => {
     const fails = (state.files.get(name)?.fails ?? 0) + 1;
     const wait = backoff(fails);
-    state.files.set(name, { fails, nextAt: now() + wait });
+    state.files.set(name, { fails, nextAt: now() + wait, last: now() });
     res.failed++;
     return wait;
   };

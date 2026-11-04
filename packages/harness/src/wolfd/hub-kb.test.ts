@@ -114,7 +114,7 @@ describe("feedInboxToHub", () => {
     const p = await feedInboxToHub(ops, "hal2", hubOf(reply(400)), (l) => logs.push(l), { state, now: () => 0 });
     expect(p).toMatchObject({ rejected: 0, failed: 1 });
     expect(readdirSync(lane)).toContain(NAME);
-    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000 });
+    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000, last: 0 });
     expect(logs.join("\n")).toMatch(/could not move .* to rejected/);
   });
 
@@ -167,7 +167,7 @@ describe("feedInboxToHub", () => {
     const p = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 0 });
     expect(p).toEqual({ sent: 3, failed: 1, rejected: 0, deferred: 0 });
     expect(readdirSync(lane).filter((n) => n.endsWith(".md"))).toEqual([NAME]);
-    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000 });
+    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000, last: 0 });
     expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
     // next pass: the poisoned file is skipped while it backs off; the feeder is not blocked
     expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 1000 })).toEqual({ sent: 0, failed: 0, rejected: 0, deferred: 1 });
@@ -188,6 +188,28 @@ describe("feedInboxToHub", () => {
     expect(state.auth).toEqual({ fails: 1, nextAt: 5000 });
     expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 1000 })).toMatchObject({ deferred: 5 });
     expect(calls).toBe(2);
+  });
+
+  it("poisoned files at the front do not starve the good ones behind them", async () => {
+    const ops = tmp();
+    const lane = join(ops, "inbox", "hal2");
+    mkdirSync(lane, { recursive: true });
+    const names = ["a-bad1", "a-bad2", "b-good1", "b-good2", "b-good3"];
+    for (const n of names) {
+      const c = { from: "hal2", denTopicId: n, change: "create" as const, contentHash: contentHash(body), prevHash: null, domainHint: "x", session: "durable", submitted: "2026-11-02 02:24", title: n, summary: "S.", body };
+      writeFileSync(join(lane, `${n}.md`), renderContribution(c as never));
+    }
+    const state = newFeedState();
+    const logs: string[] = [];
+    const f = (async (_u: string, init: RequestInit) => new Response(JSON.stringify({ id: "c" }), { status: String(init.body).includes("a-bad") ? 404 : 201 })) as unknown as typeof fetch;
+    const p1 = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 0 });
+    expect(p1).toEqual({ sent: 0, failed: 2, rejected: 0, deferred: 3 });
+    expect(state.auth.nextAt).toBe(5000);
+    expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 4999 })).toMatchObject({ sent: 0, deferred: 5 });
+    const p2 = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 5000 });
+    expect(p2.sent).toBe(3);
+    expect(readdirSync(join(lane, "sent")).sort()).toEqual(["b-good1.md", "b-good2.md", "b-good3.md"]);
+    expect(readdirSync(lane).filter((n) => n.endsWith(".md")).sort()).toEqual(["a-bad1.md", "a-bad2.md"]);
   });
 
   it("any non-config answer from the hub resets the shared config backoff", async () => {
@@ -252,7 +274,7 @@ describe("feedInboxToHub", () => {
     }) as unknown as typeof fetch;
     const state = newFeedState();
     expect(await feedInboxToHub(ops, "hal2", hubOf(down), () => {}, { state, now: () => 0 })).toMatchObject({ failed: 1, rejected: 0 });
-    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000 });
+    expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000, last: 0 });
     expect(readdirSync(lane)).toContain(NAME);
   });
 

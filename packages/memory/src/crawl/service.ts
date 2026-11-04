@@ -26,7 +26,7 @@ import { hostname } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { acquireLock, bootsDiffer, lockHeld, refreshLock, releaseLock, type HeldLock, type LockEnv } from "./lock.js";
 import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.js";
-import { checkHubContributions, emitCrawlToHub, hubTargetFromEnv, listDomainsOnHub, readHubReceipts, redactUrl, scrubSecrets, type HubTarget } from "./hub.js";
+import { checkHubContributionsDetailed, emitCrawlToHub, hubTargetFromEnv, listDomainsOnHub, readHubReceiptsDetailed, redactUrl, scrubSecrets, type HubTarget } from "./hub.js";
 import { readPlan } from "./plan.js";
 import { DEFAULT_CRAWL_CONCURRENCY, runCrawl, type RunCrawlOptions, type RunCrawlResult } from "./run.js";
 import {
@@ -204,6 +204,8 @@ export interface ReleasePreview {
   hubUnchanged?: Set<string>;
   /** "unknown": a hub is the target but neither its receipts nor check answered, so "already curated / unchanged" cannot be told. */
   hubState: "ok" | "unknown";
+  /** Why a hub read was unknown or partial (no URL, no token), e.g. a configuration 400; show these in the preview so they are not silent. */
+  hubWarnings: string[];
   target: ReleaseTarget;
   journeyMissing: boolean;
   plan: ReturnType<typeof readPlan>;
@@ -808,14 +810,17 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       const target = releaseTarget(env);
       let hubUnchanged: Set<string> | undefined;
       let hubState: "ok" | "unknown" = "ok";
+      const hubWarnings: string[] = [];
       if (target.kind === "hub") {
         // Hub receipts / check endpoints (work-wolfpack-ZBZPAZ9); undefined (unknown) on an older hub or while the hub is unreachable.
-        const receipts = await readHubReceipts(target.hub);
-        for (const id of receipts ?? []) curated.add(id);
-        hubUnchanged = await checkHubContributions(target.hub, items.filter((c) => c.status === "emit").map((c) => ({ denTopicId: c.denTopicId, contentHash: c.contentHash })));
-        if (receipts === undefined && hubUnchanged === undefined) hubState = "unknown";
+        const rc = await readHubReceiptsDetailed(target.hub, ro.wolf);
+        for (const id of rc.value ?? []) curated.add(id);
+        const ck = await checkHubContributionsDetailed(target.hub, items.filter((c) => c.status === "emit").map((c) => ({ denTopicId: c.denTopicId, contentHash: c.contentHash })), ro.wolf);
+        hubUnchanged = ck.value;
+        for (const reason of [rc.reason, ck.reason]) if (reason) hubWarnings.push(reason);
+        if (rc.value === undefined && hubUnchanged === undefined) hubState = "unknown";
       }
-      return { preview, items, toEmit, unchanged: items.length - toEmit, release, curated, hubUnchanged, hubState, target, journeyMissing: !hasFile(dir, "history.json"), plan };
+      return { preview, items, toEmit, unchanged: items.length - toEmit, release, curated, hubUnchanged, hubState, hubWarnings, target, journeyMissing: !hasFile(dir, "history.json"), plan };
     },
 
     async release(runDir, ro) {
@@ -880,6 +885,7 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
             if (e2) warnings.push(`released, but could not update run.json (${e2})`);
           }
         }
+        for (const x of r.rejected ?? []) warnings.push(`NOT released: the hub refused ${JSON.stringify(x.denTopicId.slice(0, 80))} (${x.message.replace(/^hub rejected the contribution \(400\): /, "").slice(0, 240)}). It stays unreleased until the entry is edited or left out; there is no override.`);
         return { ...r, via, warnings };
       } finally {
         if (locked) releaseLock(locked);

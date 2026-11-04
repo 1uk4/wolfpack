@@ -65,6 +65,14 @@ export function scrubSecrets(text: string, secrets: (string | undefined)[] = [])
 }
 const scrub = (text: string, hub?: HubTarget): string => scrubSecrets(text, [hub?.token]);
 
+/** The hub refused this contribution as invalid (400), e.g. a possible secret. Permanent for this content: retrying the same entry is refused again. */
+export class HubRejectedError extends Error {
+  constructor(message: string, readonly denTopicId: string) {
+    super(message);
+    this.name = "HubRejectedError";
+  }
+}
+
 /** POST one contribution as the wolf (30 s timeout). Throws, with credentials scrubbed from the text, on a transport error, a non-2xx, or a 2xx without an id. */
 export async function postContribution(hub: HubTarget, wolf: string, contribution: object): Promise<{ id: string; duplicate: boolean }> {
   const where = redactUrl(hub.baseUrl);
@@ -83,7 +91,12 @@ export async function postContribution(hub: HubTarget, wolf: string, contributio
     throw new Error(scrub(`could not reach the hub at ${where}: ${e instanceof Error ? e.message : String(e)}`, hub));
   }
   const body = (await res.json().catch(() => ({}))) as { id?: unknown; duplicate?: unknown; message?: unknown };
-  if (!res.ok) throw new Error(scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`, hub));
+  if (!res.ok) {
+    const text = scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`, hub);
+    // 400 = the content itself is refused (permanent for this entry); 401/403/5xx stay plain errors that abort the release.
+    if (res.status === 400) throw new HubRejectedError(text, String((contribution as { denTopicId?: unknown }).denTopicId ?? "?"));
+    throw new Error(text);
+  }
   if (typeof body.id !== "string" || !body.id) throw new Error(`hub at ${where} answered ${res.status} without a stored id`);
   return { id: body.id, duplicate: body.duplicate === true };
 }
@@ -150,11 +163,23 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
     mkdirSync(stagedDen, { recursive: true });
     for (const f of ["emitted.json", "emitted-bodies"]) if (existsSync(join(denLocal, f))) cpSync(join(denLocal, f), join(stagedDen, f), { recursive: true });
     const r = emitCrawl(runDir, { ...opts, wolf, dryRun: false, quiet: true, roots: { ...opts.roots, opsRoot: join(staging, "ops"), denLocal: stagedDen } });
-    for (const c of r.delta) await postContribution(hub, wolf, c);
-    persistDedup(stagedDen, denLocal, r.delta.map((c) => c.denTopicId));
+    // A refused entry (400) does not stop the others and is never marked sent; any other failure aborts with nothing marked sent (as before).
+    const sent: string[] = [];
+    const rejected: { denTopicId: string; message: string }[] = [];
+    for (const c of r.delta) {
+      try {
+        await postContribution(hub, wolf, c);
+        sent.push(c.denTopicId);
+      } catch (e) {
+        if (!(e instanceof HubRejectedError)) throw e;
+        rejected.push({ denTopicId: c.denTopicId, message: e.message });
+        console.error(`crawl: the hub REFUSED ${JSON.stringify(c.denTopicId.slice(0, 80))}: ${e.message}`);
+      }
+    }
+    persistDedup(stagedDen, denLocal, sent);
     const dest = `${redactUrl(hub.baseUrl)}/v1/contributions`;
-    if (!opts.quiet) console.log(`\n${r.emitted} contribution(s) emitted → ${dest}`);
-    return { ...r, dest };
+    if (!opts.quiet) console.log(`\n${sent.length} contribution(s) emitted → ${dest}${rejected.length ? ` (${rejected.length} refused by the hub)` : ""}`);
+    return { ...r, emitted: sent.length, dest, ...(rejected.length ? { rejected } : {}) };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -162,57 +187,86 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
 
 // ── hub reads (best effort) ─────────────────────────────────────────────────
 
-async function hubGet(hub: HubTarget, path: string): Promise<{ status: number; body: unknown } | undefined> {
+type HubReply = { status: number; body: unknown } | { error: string };
+
+/** Why a hub read is "unknown", without a URL or token (safe to show). */
+function reasonOf(what: string, r: HubReply): string {
+  if ("error" in r) return `${what}: hub unreachable`;
+  const msg = (r.body as { message?: unknown })?.message;
+  const detail = typeof msg === "string" ? `: ${scrubSecrets(msg).slice(0, 160)}` : "";
+  if (r.status === 404 || r.status === 405) return `${what}: this hub does not have the route (older hub)${detail}`;
+  if (r.status === 401) return `${what}: the hub token was refused (401)`;
+  return `${what}: hub answered ${r.status}${detail}`;
+}
+
+async function hubCall(hub: HubTarget, path: string, init?: { body: unknown }): Promise<HubReply> {
   try {
     const res = await (hub.fetch ?? fetch)(`${redactUrl(hub.baseUrl)}${path}`, {
-      headers: hub.token ? { Authorization: `Bearer ${hub.token}` } : {},
+      method: init ? "POST" : "GET",
+      headers: { ...(init ? { "Content-Type": "application/json" } : {}), ...(hub.token ? { Authorization: `Bearer ${hub.token}` } : {}) },
+      ...(init ? { body: JSON.stringify(init.body) } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   } catch {
-    return undefined;
+    return { error: "unreachable" };
   }
 }
 
+const wolfQuery = (wolf?: string): string => (wolf ? `?wolf=${encodeURIComponent(wolf)}` : "");
+
 /** The domains registered on the hub (GET /v1/registry/domains), or null when the hub cannot be read. */
 export async function listDomainsOnHub(hub: HubTarget): Promise<Set<string> | null> {
-  const r = await hubGet(hub, "/v1/registry/domains");
-  if (!r || r.status !== 200) return null;
+  const r = await hubCall(hub, "/v1/registry/domains");
+  if ("error" in r || r.status !== 200) return null;
   const list = (r.body as { domains?: { name?: unknown }[] }).domains;
   if (!Array.isArray(list)) return null;
   return new Set(list.map((d) => d.name).filter((n): n is string => typeof n === "string"));
 }
 
-/**
- * Which den topic ids the hub's curator has already curated for this wolf (work-wolfpack-ZBZPAZ9).
- * GET /v1/contributions/receipts[?wolf=<name>] → `{ curated: string[] }`. Any non-200 (an older hub: 404/405) or transport error
- * answers `undefined`, meaning "unknown", never "none curated".
- */
-export async function readHubReceipts(hub: HubTarget): Promise<Set<string> | undefined> {
-  const r = await hubGet(hub, "/v1/contributions/receipts");
-  if (!r || r.status !== 200) return undefined;
-  const curated = (r.body as { curated?: unknown }).curated;
-  return Array.isArray(curated) ? new Set(curated.filter((x): x is string => typeof x === "string")) : undefined;
+/** A hub read that can fail: the value, or undefined ("unknown") with a `reason` to show the user. */
+export interface HubRead<T> {
+  value?: T;
+  reason?: string;
 }
 
 /**
- * Ask the hub what a release would do, for the dry-run review (work-wolfpack-ZBZPAZ9).
- * POST /v1/contributions/check `{ items: [{ denTopicId, contentHash }] }` → `{ unchanged: string[] }`
- * (denTopicIds the hub already holds with that exact hash; an item without a contentHash is never "unchanged").
- * Like readHubReceipts: undefined = unknown.
+ * Which den topic ids the hub's curator has already curated for `wolf` (work-wolfpack-ZBZPAZ9).
+ * GET /v1/contributions/receipts?wolf=<wolf> → `{ curated: string[] }`. `value` undefined = unknown (older hub, 400 for a host with several
+ * wolves, unreachable ...), never "none curated"; `reason` says why.
  */
-export async function checkHubContributions(hub: HubTarget, items: { denTopicId: string; contentHash?: string }[]): Promise<Set<string> | undefined> {
-  try {
-    const res = await (hub.fetch ?? fetch)(`${redactUrl(hub.baseUrl)}/v1/contributions/check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(hub.token ? { Authorization: `Bearer ${hub.token}` } : {}) },
-      body: JSON.stringify({ items }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (res.status !== 200) return undefined;
-    const unchanged = ((await res.json().catch(() => ({}))) as { unchanged?: unknown }).unchanged;
-    return Array.isArray(unchanged) ? new Set(unchanged.filter((x): x is string => typeof x === "string")) : undefined;
-  } catch {
-    return undefined;
+export async function readHubReceiptsDetailed(hub: HubTarget, wolf?: string): Promise<HubRead<Set<string>>> {
+  const what = "hub receipts";
+  const r = await hubCall(hub, `/v1/contributions/receipts${wolfQuery(wolf)}`);
+  if ("error" in r || r.status !== 200) return { reason: reasonOf(what, r) };
+  const curated = (r.body as { curated?: unknown }).curated;
+  return Array.isArray(curated) ? { value: new Set(curated.filter((x): x is string => typeof x === "string")) } : { reason: `${what}: unexpected answer` };
+}
+export async function readHubReceipts(hub: HubTarget, wolf?: string): Promise<Set<string> | undefined> {
+  return (await readHubReceiptsDetailed(hub, wolf)).value;
+}
+
+/** Most items per check request (the hub's cap). */
+export const CHECK_CHUNK = 2000;
+
+/**
+ * Ask the hub what a release would do, for the dry-run review (work-wolfpack-ZBZPAZ9).
+ * POST /v1/contributions/check?wolf=<wolf> `{ items: [{ denTopicId, contentHash }] }` → `{ unchanged: string[] }`, sent in chunks of
+ * at most CHECK_CHUNK items. An item without a contentHash is never "unchanged". If any chunk fails the whole answer is unknown.
+ */
+export async function checkHubContributionsDetailed(hub: HubTarget, items: { denTopicId: string; contentHash?: string }[], wolf?: string): Promise<HubRead<Set<string>>> {
+  const what = "hub contribution check";
+  const out = new Set<string>();
+  if (items.length === 0) return { value: out }; // nothing to ask
+  for (let i = 0; i < items.length; i += CHECK_CHUNK) {
+    const r = await hubCall(hub, `/v1/contributions/check${wolfQuery(wolf)}`, { body: { items: items.slice(i, i + CHECK_CHUNK) } });
+    if ("error" in r || r.status !== 200) return { reason: reasonOf(what, r) };
+    const unchanged = (r.body as { unchanged?: unknown }).unchanged;
+    if (!Array.isArray(unchanged)) return { reason: `${what}: unexpected answer` };
+    for (const x of unchanged) if (typeof x === "string") out.add(x);
   }
+  return { value: out };
+}
+export async function checkHubContributions(hub: HubTarget, items: { denTopicId: string; contentHash?: string }[], wolf?: string): Promise<Set<string> | undefined> {
+  return (await checkHubContributionsDetailed(hub, items, wolf)).value;
 }

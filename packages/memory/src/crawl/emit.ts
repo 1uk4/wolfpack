@@ -81,6 +81,8 @@ export interface EmitCrawlResult {
   contributions: EmitContribution[];
   /** The contributions actually written (status "emit"), in order: what a hub release posts. */
   delta: Contribution[];
+  /** Hub releases only: contributions the hub refused (400, e.g. a possible secret). NOT counted in `emitted`, NOT marked sent; they stay refused until the entry is edited or left out of the release. */
+  rejected?: { denTopicId: string; message: string }[];
 }
 
 export function emitCrawl(

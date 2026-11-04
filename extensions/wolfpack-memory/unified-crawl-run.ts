@@ -362,6 +362,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
             : pv.hubUnchanged
               ? `Hub check: ${pv.hubUnchanged.size} already on the hub.`
               : "Hub check: receipts read.";
+      const hubWhy = pv.hubWarnings.length ? `\n⚠ ${pv.hubWarnings.join("; ")}` : "";
       if (target.kind === "none") return text(`${review}\n\nNo release target is configured here (neither WOLFPACK_HUB_URL nor KB_OPS), so this cannot be released.`, { isError: true });
       if (pv.journeyMissing) return text(`${review}\n\nThe run's journey is not written yet — finish it with crawl_run (resume) before releasing.`, { isError: true });
 
@@ -385,7 +386,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
           title: "Release to the librarian?",
           question: label,
           description:
-            `${already ? `${already}\n\n` : ""}${hubNote ? `${hubNote}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → ${describeTarget(target, ctx.wolfName)} → Dewey` +
+            `${already ? `${already}\n\n` : ""}${hubNote ? `${hubNote}${hubWhy}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → ${describeTarget(target, ctx.wolfName)} → Dewey` +
             `${unchanged ? ` (${unchanged} unchanged will be skipped)` : ""}.\n\n${list}\n\n` +
             `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
           confirmLabel: "Release",
@@ -396,7 +397,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
 
       try {
         const r = await service.release(dir, { wolf: ctx.wolfName, roots, confirmed: true });
-        return text(`${releasedLine(dir)} ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.${r.warnings.length ? `\nWarning: ${r.warnings.join("; ")}` : ""}`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest } });
+        return text(`${releasedLine(dir)} ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.${r.warnings.length ? `\nWarning: ${r.warnings.join("; ")}` : ""}`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest, rejected: r.rejected?.length ?? 0 }, ...(r.rejected?.length ? { isError: true } : {}) });
       } catch (e) {
         return fail(`Release failed: ${e instanceof Error ? e.message : String(e)}`);
       }

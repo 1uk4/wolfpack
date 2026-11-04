@@ -67,17 +67,38 @@ describe("emitCrawlToHub", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("a rejected post throws and leaves the dedup state as it was, so a retry re-sends", async () => {
+  it("a hub refusal (400) is reported per entry, never marked sent, and a retry re-sends it; other failures (403) still abort", async () => {
     const runDir = runDirFixture();
     const denLocal = join(tmp("den"), "kb");
     const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
-    const failing = (async () => new Response(JSON.stringify({ code: "invalid_request", message: "nope" }), { status: 400 })) as unknown as typeof fetch;
-    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: failing }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots })).rejects.toThrow(/400.*nope/);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refusing = (async () => new Response(JSON.stringify({ code: "invalid_request", message: "nope" }), { status: 400 })) as unknown as typeof fetch;
+    const first = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: refusing }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
+    expect(first.emitted).toBe(0);
+    expect(first.rejected).toHaveLength(1);
+    expect(first.rejected![0]!.message).toMatch(/400.*nope/);
+    expect(err).toHaveBeenCalled(); // loud
     expect(existsSync(join(denLocal, "emitted.json"))).toBe(false);
+    const forbidden = (async () => new Response(JSON.stringify({ code: "forbidden", message: "no" }), { status: 403 })) as unknown as typeof fetch;
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: forbidden }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots })).rejects.toThrow(/403/);
     let n = 0;
     const ok = (async () => (n++, new Response(JSON.stringify({ id: "x", duplicate: false }), { status: 201 }))) as unknown as typeof fetch;
     const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: ok }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
-    expect([r.emitted, n]).toEqual([1, 1]);
+    expect([r.emitted, n, r.rejected]).toEqual([1, 1, undefined]);
+    err.mockRestore();
+  });
+
+  it("with three entries and the hub refusing the middle one, the others are posted and marked sent; the refused one is not", async () => {
+    const runDir = runDirFixture(3);
+    const denLocal = join(tmp("den"), "kb");
+    const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let call = 0;
+    const f = (async () => (++call === 2 ? new Response(JSON.stringify({ message: "possible secret" }), { status: 400 }) : Response.json({ id: `x${call}.md`, wolf: "w", duplicate: false }, { status: 201 }))) as unknown as typeof fetch;
+    const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
+    expect([r.emitted, r.rejected!.length, Object.keys(JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8"))).length]).toEqual([2, 1, 2]);
+    expect(Object.keys(JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8")))).not.toContain(r.rejected![0]!.denTopicId);
+    err.mockRestore();
   });
 });
 

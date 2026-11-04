@@ -90,7 +90,7 @@ export const SubmitContributionResponseSchema = z.object({
 
 export const ContributionReceiptsResponseSchema = z.object({ curated: z.array(z.string()) });
 export const ContributionCheckBodySchema = z.object({
-  items: z.array(z.object({ denTopicId: z.string().min(1), contentHash: z.string().optional() })).max(2000),
+  items: z.array(z.object({ denTopicId: z.string().min(1).max(200), contentHash: z.string().max(200).optional() })).max(2000),
 });
 export const ContributionCheckResponseSchema = z.object({ unchanged: z.array(z.string()) });
 export const KbMatchBodySchema = z.object({
@@ -355,7 +355,7 @@ export const ROUTES = {
   /**
    * Match candidate entries against the hub KB for the release review. Body `{candidates: [{title, body, domain?}]}` (1..50). Per candidate: `label`
    * new | update | duplicate and up to 5 `matches` (domain, id, title, score 0-1, bodySimilarity 0-1). `method` says "embeddings" (Ollama) or "text"
-   * (fallback, with `fallback` giving the reason). Worker tokens only see/match domains their host's wolves subscribe to. 400 `invalid_request`; 403 for an unsubscribed `domain`.
+   * (fallback, with `fallback` giving the reason; also "text" when the KB scope is empty). Operator/console/browser identities see every domain; worker tokens only see/match domains their host's wolves subscribe to. The candidate limit (1..50) is this schema's. 400 `invalid_request`; 403 for an unsubscribed `domain`.
    */
   hubKbMatch: { scope: "hub", method: "POST", path: "/v1/kb/match", body: KbMatchBodySchema, response: { kind: "json", schema: KbMatchResponseSchema }, status: [200], error: err },
   /**

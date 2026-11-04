@@ -3,7 +3,8 @@
 //
 //   node scripts/den-migrate.mjs --source <old den> --target <new den> [--home <new wolf home>]
 //        [--apply] [--strict] [--chown user:group] [--allow <rel/path>@<sha256 prefix>]...
-//        [--no-scan --yes-skip-scan] [--allow-live-wal] [--json]
+//        [--no-scan --yes-skip-scan] [--max-bytes N] [--json]
+//   --apply additionally REQUIRES --source-stopped (you confirm the old Hal service is stopped; hal2 should be stopped too).
 //
 // Dry run is the default: it prints the plan and writes nothing. --apply performs it.
 // Cutover: run `--apply --strict` (non-zero exit 2 when anything was withheld, collided or unsafe).
@@ -259,7 +260,7 @@ const PROBLEM = new Set(["withheld", "collision-skipped", "unsafe-skipped"]);
 
 /**
  * @param {object} o source, target, home?, apply?, allow?: string[], scan?: fn|null, owner?: {uid,gid}, chownSpec?: string,
- *   chown?: (path,uid,gid)=>void, isRoot?: boolean, noScanConfirmed?: boolean, allowLive?: boolean, now?: number, strict?: boolean
+ *   chown?: (path,uid,gid)=>void, isRoot?: boolean, noScanConfirmed?: boolean, sourceStopped?: boolean, maxBytes?: number, fchown?: (fd,uid,gid)=>void, now?: number, strict?: boolean
  */
 export function migrate(o) {
 	const { source, target, home } = guardPaths(path.resolve(o.source), path.resolve(o.target), path.resolve(o.home ?? path.dirname(path.resolve(o.target))));
@@ -272,6 +273,10 @@ export function migrate(o) {
 	const isRoot = o.isRoot ?? (typeof process.getuid === "function" && process.getuid() === 0);
 	const chown = o.chown ?? ((p, u, g) => fs.lchownSync(p, u, g));
 	const now = o.now ?? Date.now();
+	const maxBytes = o.maxBytes ?? MAX_COPY_BYTES;
+	const fchown = o.fchown ?? ((fd, u, g) => fs.fchownSync(fd, u, g));
+
+	if (o.apply && !o.sourceStopped) throw new Error("--apply requires --source-stopped: stop the old Hal service (and hal2) first, then confirm with the flag");
 
 	if (o.apply && !o.scan && !o.noScanConfirmed) throw new Error("--no-scan with --apply requires --yes-skip-scan (nothing would check the copied files for secrets)");
 	if (!o.scan && o.apply) warnings.push("secret scan SKIPPED (--no-scan --yes-skip-scan): only filename/binary/size checks ran");
@@ -284,8 +289,8 @@ export function migrate(o) {
 		if (st) (owner = { uid: st.uid, gid: st.gid }), (ownerFrom = lst(target) ? "target den" : "home");
 	}
 	if (o.apply && isRoot && !owner) throw new Error("running as root but no owner could be resolved from the target den or --chown; refusing --apply");
-	if (owner && owner.uid === 0 && isRoot) warnings.push("owner resolves to root:root; hal2 will not be able to write these files (use --chown)");
-	const doChown = (p) => owner && chown(p, owner.uid, owner.gid);
+	if (o.apply && isRoot && owner && owner.uid === 0 && !o.chownSpec) throw new Error("running as root and the resolved owner is uid 0 (root:root); hal2 could not write these files. Pass --chown <user:group> explicitly");
+	const doChown = (p) => owner && chown(p, owner.uid, owner.gid); // directories only; files use fchown on the temp fd
 
 	// state
 	let state = { version: 1, files: {} };
@@ -317,20 +322,20 @@ export function migrate(o) {
 	const entries = [];
 	const secrets = [];
 	/** reasons a file must not be carried; returns {withheld, note} after applying --allow */
-	function gate(rel, buf, { archive, deny }) {
+	function gate(rel, buf, { archive, deny, allowRel = rel, allowBuf = buf }) {
 		const reasons = [];
 		let findings = [];
 		if (deny && denied(rel)) reasons.push("secret-looking filename");
 		if (!archive && isBinary(buf)) reasons.push("binary file");
-		if (!archive && buf.length > MAX_COPY_BYTES) reasons.push(`oversized (${buf.length} bytes)`);
+		if (!archive && buf.length > maxBytes) reasons.push(`oversized (${buf.length} bytes)`);
 		if (o.scan) {
 			findings = o.scan(buf.toString(isBinary(buf) ? "latin1" : "utf8")).findings;
 			if (findings.length) reasons.push(`secret-looking content: ${findings.map((f) => `${f.kind}x${f.count}`).join(", ")}`);
 		}
 		if (!reasons.length) return { withheld: false };
-		const prefix = allow.get(rel);
-		const digest = sha(buf);
-		if (prefix) usedAllow.add(rel);
+		const prefix = allow.get(allowRel);
+		const digest = sha(allowBuf);
+		if (prefix) usedAllow.add(allowRel);
 		if (findings.length) secrets.push({ src: rel, findings, allowed: !!prefix && digest.startsWith(prefix) });
 		if (prefix && digest.startsWith(prefix)) {
 			warnings.push(`LOUD: --allow overrides withheld file ${rel} (${reasons.join("; ")}) @${prefix}`);
@@ -365,7 +370,8 @@ export function migrate(o) {
 			continue;
 		}
 		const buf = readNoFollow(srcAbs);
-		const g = gate(rel, buf, { archive: c.kind === "archive", deny: c.kind !== "persona" });
+		const setMember = /^session\.sqlite-(wal|shm)$/.test(rel);
+		const g = gate(rel, buf, { archive: c.kind === "archive", deny: c.kind !== "persona", ...(setMember ? { allowRel: "session.sqlite", allowBuf: lst(path.join(source, "session.sqlite"))?.isFile() ? readNoFollow(path.join(source, "session.sqlite")) : buf } : {}) });
 		if (g.withheld) {
 			entries.push({ ...base, status: "withheld", note: g.note });
 			continue;
@@ -414,8 +420,20 @@ export function migrate(o) {
 			status,
 			note: j.note ?? c.note,
 			_adopt: j.adopt,
-			_op: ok ? { data, abs, key: keyOf(destRel), mode: archive ? 0o400 : st.mode & 0o777, mtime: st.mtime, src: rel, archive } : null,
+			_op: ok ? { data, abs, key: keyOf(destRel), mode: archive ? 0o400 : (st.mode & 0o777) | 0o600, mtime: st.mtime, src: rel, archive } : null,
 		});
+	}
+	// session.sqlite + -wal + -shm are one unit: all archived or all withheld
+	const SQL_SET = ["session.sqlite", "session.sqlite-wal", "session.sqlite-shm"];
+	const sqlEntries = entries.filter((e) => SQL_SET.includes(e.src));
+	if (sqlEntries.some((e) => e.status === "withheld")) {
+		for (const e of sqlEntries) {
+			if (e.status === "withheld") continue;
+			e.status = "withheld";
+			e.note = "withheld with the rest of the session.sqlite set (db, -wal, -shm are all-or-none)";
+			e._op = null;
+			e._adopt = null;
+		}
 	}
 	for (const [p] of allow) if (!usedAllow.has(p)) warnings.push(`--allow ${p} matched no withheld file (unused or the file is not withheld)`);
 
@@ -434,7 +452,7 @@ export function migrate(o) {
 	const result = { source, target, home, applied: !!o.apply, owner, ownerFrom, entries, counts, secrets, warnings, problems, looksLive };
 
 	if (o.apply) {
-		if (looksLive && !o.allowLive) throw new Error("session.sqlite-wal is non-empty and the source looks live; stop the old service first (or pass --allow-live-wal)");
+		if (looksLive) warnings.push("source still looks LIVE (wal/shm touched in the last 5 min) despite --source-stopped: verify the old service is really stopped");
 		applyPlan();
 	}
 	return result;
@@ -460,17 +478,20 @@ export function migrate(o) {
 		if (!chk.ok) throw new Unsafe(chk.reason);
 		if (chk.st && !chk.st.isFile()) throw new Unsafe(`destination is a ${typeOf(chk.st)}`);
 		mkdirp(path.dirname(abs));
+		// Residual race: the parent dir is checked above and then used by path; a process that can swap a directory for a
+		// symlink in between could redirect the temp file. Mitigated operationally by stopping hal2 (and the old Hal)
+		// for the duration of --apply. The file itself is opened O_EXCL|O_NOFOLLOW and chowned by fd, not by path.
 		const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.dm-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
 		const fd = fs.openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
 		try {
 			try {
 				fs.writeSync(fd, data);
+				if (owner) fchown(fd, owner.uid, owner.gid);
 				fs.fchmodSync(fd, mode);
 				if (mtime) fs.futimesSync(fd, mtime, mtime);
 			} finally {
 				fs.closeSync(fd);
 			}
-			doChown(tmp);
 			if (chk.st) fs.renameSync(tmp, abs);
 			else {
 				fs.linkSync(tmp, abs); // fails with EEXIST rather than clobbering a racing file
@@ -483,6 +504,29 @@ export function migrate(o) {
 			if (e.code === "EEXIST") throw new Unsafe("destination appeared during apply");
 			throw e;
 		}
+	}
+
+	/** Remove `.<name>.dm-<pid>-<hex>` temp files a killed earlier run left behind (regular files only, no symlink following). */
+	function cleanStaleTemps() {
+		const re = /^\..+\.dm-\d+-[0-9a-f]{8}$/;
+		const rec = (d) => {
+			let list;
+			try {
+				list = fs.readdirSync(d, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const e of list) {
+				const p = path.join(d, e.name);
+				if (e.isDirectory()) rec(p);
+				else if (e.isFile() && re.test(e.name)) {
+					fs.unlinkSync(p);
+					warnings.push(`removed stale temp file ${path.relative(home, p)}`);
+				}
+			}
+		};
+		rec(target);
+		rec(mig);
 	}
 
 	function archiveDirs() {
@@ -518,6 +562,7 @@ export function migrate(o) {
 			mkdirp(path.join(target, "memory", "items"));
 			mkdirp(mig);
 			for (const d of archiveDirs()) chmodDir(d, 0o700);
+			cleanStaleTemps();
 			for (const e of entries) {
 				const op = e._op;
 				try {
@@ -603,7 +648,11 @@ export function parseArgs(argv) {
 		else if (k === "--strict") a.strict = true;
 		else if (k === "--no-scan") a.noScan = true;
 		else if (k === "--yes-skip-scan") a.noScanConfirmed = true;
-		else if (k === "--allow-live-wal") a.allowLive = true;
+		else if (k === "--source-stopped") a.sourceStopped = true;
+		else if (k === "--max-bytes") {
+			a.maxBytes = Number(val());
+			if (!Number.isInteger(a.maxBytes) || a.maxBytes <= 0) throw new Error("--max-bytes must be a positive integer");
+		}
 		else if (k === "--json") a.json = true;
 		else if (k === "--source") a.source = val();
 		else if (k === "--target") a.target = val();
@@ -612,7 +661,7 @@ export function parseArgs(argv) {
 		else if (k === "--allow") a.allow.push(val());
 		else throw new Error(`unknown argument ${k}`);
 	}
-	if (!a.source || !a.target) throw new Error("usage: den-migrate.mjs --source <old den> --target <new den> [--home <dir>] [--apply] [--strict] [--chown user:group] [--allow path@sha256prefix] [--no-scan --yes-skip-scan] [--allow-live-wal] [--json]");
+	if (!a.source || !a.target) throw new Error("usage: den-migrate.mjs --source <old den> --target <new den> [--home <dir>] [--apply] [--strict] [--chown user:group] [--allow path@sha256prefix] [--no-scan --yes-skip-scan] [--max-bytes N] [--source-stopped] [--json]");
 	return a;
 }
 

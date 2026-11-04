@@ -22,7 +22,7 @@ const put = (root: string, rel: string, body: string | Buffer, mtime?: number, m
 	if (mtime) fs.utimesSync(p, mtime, mtime);
 	if (mode) fs.chmodSync(p, mode);
 };
-const run = (o: object = {}) => migrate({ source: src, target: den, home, scan: scanSecrets, ...o });
+const run = (o: object = {}) => migrate({ source: src, target: den, home, scan: scanSecrets, sourceStopped: true, ...o });
 const find = (r: any, rel: string) => r.entries.find((e: any) => e.src === rel);
 const sha = (b: Buffer | string) => crypto.createHash("sha256").update(b).digest("hex");
 const unlock = (d: string) => {
@@ -373,7 +373,12 @@ describe("ownership", () => {
 			calls.push(p);
 			chowned.set(fs.lstatSync(p).ino, [uid, gid]);
 		};
-		run({ apply: true, owner: { uid: 4242, gid: 2424 }, chown });
+		const fchown = (fd: number, uid: number, gid: number) => {
+			calls.push(`fd:${fd}`);
+			chowned.set(fs.fstatSync(fd).ino, [uid, gid]);
+		};
+		run({ apply: true, owner: { uid: 4242, gid: 2424 }, chown, fchown });
+		expect(calls.some((c) => c.startsWith("fd:"))).toBe(true);
 		expect(calls.length).toBeGreaterThan(10);
 		const created: string[] = [];
 		const walk = (d: string) => {
@@ -403,7 +408,7 @@ describe("ownership", () => {
 
 	it("refuses --apply as root when no owner resolves", () => {
 		const calls: string[] = [];
-		const o = { source: src, target: path.join(tmp, "nohome/den"), home: path.join(tmp, "nohome"), scan: scanSecrets, apply: true, isRoot: true, chown: (p: string) => calls.push(p) };
+		const o = { source: src, target: path.join(tmp, "nohome/den"), home: path.join(tmp, "nohome"), scan: scanSecrets, sourceStopped: true, apply: true, isRoot: true, chown: (p: string) => calls.push(p) };
 		expect(() => migrate(o)).toThrow(/no owner could be resolved/);
 		expect(calls).toEqual([]);
 		expect(fs.existsSync(path.join(tmp, "nohome"))).toBe(false);
@@ -416,7 +421,7 @@ describe("crash safety", () => {
 		const boom = () => {
 			if (++n === 14) throw new Error("disk on fire");
 		};
-		expect(() => run({ apply: true, owner: { uid: 1, gid: 1 }, chown: boom })).toThrow(/disk on fire/);
+		expect(() => run({ apply: true, owner: { uid: 1, gid: 1 }, chown: () => {}, fchown: boom })).toThrow(/disk on fire/);
 		const stPath = path.join(home, "migration/state.json");
 		const state = JSON.parse(fs.readFileSync(stPath, "utf8"));
 		expect(Object.keys(state.files).length).toBeGreaterThan(0);
@@ -450,15 +455,14 @@ describe("crash safety", () => {
 });
 
 describe("sqlite", () => {
-	it("warns on a non-empty WAL, refuses apply when the source looks live", () => {
+	it("warns on a non-empty WAL; a live-looking source only adds a warning once --source-stopped is given", () => {
 		const now = Date.now();
 		put(src, "session.sqlite-wal", "walbytes", Math.floor(now / 1000));
 		const dry = run({ now });
 		expect(dry.looksLive).toBe(true);
 		expect(dry.warnings.join()).toMatch(/looks LIVE/);
-		expect(() => run({ apply: true, now })).toThrow(/looks live/);
-		expect(fs.existsSync(path.join(home, "migration"))).toBe(false);
-		run({ apply: true, now, allowLive: true });
+		const applied = run({ apply: true, now });
+		expect(applied.warnings.join()).toMatch(/despite --source-stopped/);
 		expect(fs.readFileSync(path.join(home, "migration/archive/session.sqlite-wal"), "utf8")).toBe("walbytes");
 		// an old non-empty WAL only warns
 		put(src, "session.sqlite-wal", "walbytes", MT);
@@ -501,15 +505,95 @@ describe("CLI", () => {
 	it("errors exit 1: bad args, --no-scan --apply without confirmation, nested paths", () => {
 		expect(cli("--bogus").status).toBe(1);
 		expect(cli("--source", src).status).toBe(1);
-		const na = cli("--source", src, "--target", den, "--home", home, "--no-scan", "--apply");
+		const na = cli("--source", src, "--target", den, "--home", home, "--no-scan", "--apply", "--source-stopped");
 		expect(na.status).toBe(1);
 		expect(na.stderr).toMatch(/--yes-skip-scan/);
 		expect(fs.existsSync(path.join(home, "migration"))).toBe(false);
 		expect(cli("--source", src, "--target", path.join(src, "x"), "--home", tmp, "--no-scan").status).toBe(1);
 	});
 	it("--apply --strict on a clean fixture exits 0 and applies", () => {
-		const r = cli("--source", src, "--target", den, "--home", home, "--no-scan", "--yes-skip-scan", "--apply", "--strict");
+		const r = cli("--source", src, "--target", den, "--home", home, "--no-scan", "--yes-skip-scan", "--apply", "--strict", "--source-stopped");
 		expect(r.status).toBe(0);
 		expect(fs.existsSync(path.join(den, "skills/fuel-log/SKILL.md"))).toBe(true);
+	});
+});
+
+describe("cutover guards", () => {
+	it("--apply refuses without --source-stopped and writes nothing; dry run does not need it", () => {
+		expect(() => run({ apply: true, sourceStopped: false })).toThrow(/--source-stopped/);
+		expect(fs.existsSync(path.join(home, "migration"))).toBe(false);
+		expect(run({ sourceStopped: false }).applied).toBe(false);
+		const r = spawnSync("node", [SCRIPT, "--source", src, "--target", den, "--home", home, "--no-scan", "--yes-skip-scan", "--apply"], { encoding: "utf8" });
+		expect(r.status).toBe(1);
+		expect(r.stderr).toMatch(/--source-stopped/);
+	});
+
+	it("as root, a resolved owner of uid 0 is refused unless --chown is explicit", () => {
+		const base = { apply: true, isRoot: true, owner: { uid: 0, gid: 0 }, chown: () => {}, fchown: () => {} };
+		expect(() => run(base)).toThrow(/uid 0/);
+		expect(fs.existsSync(path.join(home, "migration"))).toBe(false);
+		expect(() => run({ ...base, chownSpec: "0:0" })).not.toThrow();
+		expect(() => run({ ...base, owner: { uid: 5, gid: 5 } })).not.toThrow();
+	});
+
+	it("chowns files by fd (fchown), never by path", () => {
+		const pathCalls: string[] = [];
+		const fdCalls: number[] = [];
+		run({ apply: true, owner: { uid: 7, gid: 7 }, chown: (p: string) => pathCalls.push(p), fchown: (fd: number) => fdCalls.push(fd) });
+		expect(fdCalls.length).toBeGreaterThan(30);
+		for (const p of pathCalls) expect(fs.lstatSync(p).isDirectory()).toBe(true);
+	});
+
+	it("session.sqlite, -wal and -shm are all-or-none, and --allow on session.sqlite covers the set", () => {
+		put(src, "session.sqlite-wal", `wal ${SK}`, MT);
+		let r = run({ apply: true });
+		for (const f of ["session.sqlite", "session.sqlite-wal", "session.sqlite-shm"]) expect(find(r, f).status).toBe("withheld");
+		expect(find(r, "session.sqlite").note).toMatch(/all-or-none/);
+		expect(fs.existsSync(path.join(home, "migration/archive/session.sqlite-shm"))).toBe(false);
+		r = run({ apply: true, allow: [`session.sqlite@${sha("SQLITE").slice(0, 12)}`] });
+		for (const f of ["session.sqlite", "session.sqlite-wal", "session.sqlite-shm"]) expect(find(r, f).status).toBe("new");
+		expect(fs.existsSync(path.join(home, "migration/archive/session.sqlite-wal"))).toBe(true);
+	});
+
+	it("a flagged main db withholds its clean wal/shm", () => {
+		put(src, "session.sqlite", `db ${SK}`, MT);
+		const r = run({ apply: true });
+		expect(find(r, "session.sqlite-shm").status).toBe("withheld");
+		expect(find(r, "session.sqlite-wal").status).toBe("withheld");
+		expect(r.problems.length).toBe(3);
+	});
+
+	it("keeps owner-write on copied files (mode | 0600) but 0400 in the archive", () => {
+		put(src, "vehicles/ro.md", "x", MT, 0o444);
+		run({ apply: true });
+		expect(fs.statSync(path.join(den, "vehicles/ro.md")).mode & 0o777).toBe(0o644);
+		expect(fs.statSync(path.join(home, "migration/archive/usage/u.jsonl")).mode & 0o777).toBe(0o400);
+	});
+
+	it("removes stale .dm-* temp files from earlier killed runs", () => {
+		run({ apply: true });
+		const a = path.join(den, "fitness/.lift-log.csv.dm-123-deadbeef");
+		const b = path.join(home, "migration/archive/usage/.u.jsonl.dm-9-0123abcd");
+		fs.writeFileSync(a, "x");
+		fs.chmodSync(path.join(home, "migration/archive"), 0o700);
+		fs.chmodSync(path.join(home, "migration/archive/usage"), 0o700);
+		fs.writeFileSync(b, "x");
+		fs.writeFileSync(path.join(den, "fitness/.keep-me"), "x");
+		const r = run({ apply: true });
+		expect(fs.existsSync(a)).toBe(false);
+		expect(fs.existsSync(b)).toBe(false);
+		expect(fs.existsSync(path.join(den, "fitness/.keep-me"))).toBe(true);
+		expect(r.warnings.join("\n")).toMatch(/removed stale temp file/);
+		expect(fs.statSync(path.join(home, "migration/archive/usage")).mode & 0o777).toBe(0o500);
+	});
+
+	it("--max-bytes sets the oversize limit", () => {
+		put(src, "vehicles/mid.txt", "x".repeat(5000));
+		expect(find(run({ maxBytes: 1000 }), "vehicles/mid.txt").note).toMatch(/oversized/);
+		expect(find(run(), "vehicles/mid.txt").status).toBe("new");
+		const cli = (...a: string[]) => spawnSync("node", [SCRIPT, "--source", src, "--target", den, "--home", home, "--no-scan", "--json", ...a], { encoding: "utf8" });
+		expect(cli("--max-bytes", "abc").status).toBe(1);
+		expect(JSON.parse(cli("--max-bytes", "1000").stdout).entries.find((e: any) => e.src === "vehicles/mid.txt").status).toBe("withheld");
+		expect(JSON.parse(cli("--max-bytes", "10000").stdout).entries.find((e: any) => e.src === "vehicles/mid.txt").status).toBe("new");
 	});
 });

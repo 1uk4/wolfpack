@@ -239,9 +239,14 @@ async function startConfigured(
     const withTier = (base: ConfigureOptions, tier: ThreadTier): ConfigureOptions => (tier === "main" ? base : { ...base, ...modelFor(tier) });
     const homeTier = loadHomeSettings(config.den).tier;
     const conversation = await engine.conversations.root(desired);
+    // Best-effort cleanup: it must never fail startup or a thread open.
     const dropProviderSession = (conv: EngineConversation) => async () => {
-      const sessionId = await engine.conversations.providerSessionId(conv.id);
-      if (sessionId) (opts.modelRelease ?? wolfModels.forget)(sessionId);
+      try {
+        const sessionId = await engine.conversations.providerSessionId(conv.id);
+        if (sessionId) (opts.modelRelease ?? wolfModels.forget)(sessionId);
+      } catch (e) {
+        log(`server error: could not drop the provider session of ${conv.id} after an instructions change: ${e instanceof Error ? e.message : String(e)}`);
+      }
     };
     await reconcile(conversation, withTier(desired, homeTier), dropProviderSession(conversation));
 

@@ -64,17 +64,20 @@ export const lazySdkQuery = (load: () => Promise<(args: any) => any> = loadQuery
   let real: any;
   let closed = false;
   const started = load().then((q) => { real = q(args); if (closed) real.close?.(); return real; });
+  // A load failure with close() before anyone iterates would be an unhandled rejection (can crash wolfd). The failure
+  // still reaches the iterator: `await started` below rethrows it.
+  started.catch(() => {});
+  // Only what pi-claude-bridge-stateless v0.9.3 uses (asyncIterator, close): a bridge upgrade needs a check here.
   return {
     async *[Symbol.asyncIterator]() {
       const q = await started;
       yield* q;
     },
-    close: () => { closed = true; real?.close?.(); },
-    interrupt: async () => { await (await started).interrupt?.(); },
+    close: () => { closed = true; try { real?.close?.(); } catch { /* already gone */ } },
   };
 };
 
-/** Seams for a stateless provider that must run on the host's Agent SDK `query` (its own import is stubbed in the bundle). */
+/** Seams carrying the host's Agent SDK `query` (the bridge's own import is stubbed in the bundle). The factory wraps it with withFreshSystemPrompt; this only injects it. */
 export const claudeStatelessSdkSeams = (queryFn: unknown): ClaudeStatelessSeams => ({
   queryFn: queryFn as ClaudeStatelessSeams["queryFn"],
 });

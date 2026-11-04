@@ -34,13 +34,14 @@ export function discoverAgents(opts: DiscoverOptions): ListedAgentDefinition[] {
   const agents = new Map<string, ListedAgentDefinition>();
   for (const { path: dir, source } of sources(opts)) {
     if (!existsSync(dir)) continue;
-    for (const file of readdirSync(dir).filter((entry) => entry.endsWith(".md"))) {
+    for (const file of readdirSync(dir).sort().filter((entry) => entry.endsWith(".md"))) {
       const parsed = parseAgentDefinition(readFileSync(join(dir, file), "utf8"), file.replace(/\.md$/, ""));
       if (!parsed) continue;
       agents.set(parsed.name, { ...parsed, source });
     }
   }
-  return [...agents.values()];
+  // Sorted by name: readdir order is filesystem-dependent and the roster is part of the system prompt (a changed order would look like a persona change).
+  return [...agents.values()].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
 }
 
 /** One profile by file name (`<name>.md`): project, then the wolf's agent dir, then the package dirs in the order given. */

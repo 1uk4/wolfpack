@@ -3,6 +3,9 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+const engineMock = vi.hoisted(() => ({ loadQuery: vi.fn() }));
+vi.mock("@wolfpack/engine", async (orig) => ({ ...(await orig<object>()), loadQuery: engineMock.loadQuery }));
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
 import { NEEDS_SUBSCRIPTION_TOKEN, PROVIDER_FACTORIES } from "./index.js";
@@ -135,16 +138,44 @@ describe("claudeStatelessFactory query wrapping", () => {
       expect(seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "persona", snapshot: false });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
-  it("with no queryFn seam (wolfd, subagents) still hands the bridge a wrapped host query", async () => {
+  const stream = (items: unknown[], close = vi.fn()) => Object.assign((async function* () { yield* items; })(), { close });
+  it("with no queryFn seam (wolfd, subagents) the factory's own queryFn loads the host query and rewrites the prompt", async () => {
+    const seen: any[] = [];
+    engineMock.loadQuery.mockResolvedValueOnce((a: any) => { seen.push(a); return stream([1, 2]); });
     const { root, queryFn } = build({});
     try {
-      expect(typeof queryFn).toBe("function");
-      const seen: any[] = [];
-      const wrapped = withFreshSystemPrompt(lazySdkQuery(async () => (a: any) => { seen.push(a); return (async function* () { yield 1; })(); }));
       const got: unknown[] = [];
-      for await (const m of wrapped({ prompt: "p", options: { systemPrompt: "persona" } })) got.push(m);
-      expect(got).toEqual([1]);
-      expect(seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "persona", snapshot: false });
+      for await (const m of queryFn({ prompt: "p", options: { systemPrompt: "persona", resume: "s" } })) got.push(m);
+      expect(got).toEqual([1, 2]);
+      expect(seen[0]).toEqual({ prompt: "p", options: { systemPrompt: { type: "custom", prompt: "persona", snapshot: false }, resume: "s" } });
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("a rejected load reaches the iterator and is not an unhandled rejection when close() comes first", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const failing = lazySdkQuery(async () => { throw new Error("no sdk"); });
+      const closedFirst = failing({ prompt: "p", options: {} }) as any;
+      closedFirst.close();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+      await expect((async () => { for await (const _ of closedFirst) { /* none */ } })()).rejects.toThrow("no sdk");
+      const iterated = failing({ prompt: "p", options: {} });
+      await expect((async () => { for await (const _ of iterated) { /* none */ } })()).rejects.toThrow("no sdk");
+    } finally { process.off("unhandledRejection", unhandled); }
+  });
+  it("close() before the load resolves closes the real query once it exists; close() after closes it directly", async () => {
+    let resolveLoad!: (q: (a: any) => any) => void;
+    const close1 = vi.fn();
+    const early = lazySdkQuery(() => new Promise((r) => { resolveLoad = r; }))({ prompt: "p", options: {} }) as any;
+    early.close();
+    resolveLoad(() => stream([], close1));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(close1).toHaveBeenCalledOnce();
+    const close2 = vi.fn();
+    const late = lazySdkQuery(async () => () => stream([7], close2))({ prompt: "p", options: {} }) as any;
+    for await (const _ of late) { /* drain */ }
+    late.close();
+    expect(close2).toHaveBeenCalledOnce();
   });
 });

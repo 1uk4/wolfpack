@@ -81,6 +81,16 @@ describe("discovery", () => {
   });
 });
 
+describe("roster order", () => {
+  it("is sorted by name whatever order the files were written or read in", () => {
+    const pkg = tmp();
+    for (const n of ["m", "z", "a", "q"]) put(pkg, `${n}.md`, `---\nname: ${n}\ndescription: d\n---\nx`);
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "b.md", "---\nname: b\ndescription: d\n---\nx");
+    expect(discoverAgents({ cwd: tmp(), agentDir, packageDirs: [pkg] }).map((a) => a.name)).toEqual(["a", "b", "m", "q", "z"]);
+  });
+});
+
 describe("orchestrator work-id rule", () => {
   it("tells agents to write full work ids", async () => {
     const { orchestratorRules } = await import("./orchestrator.js");

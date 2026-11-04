@@ -18,6 +18,7 @@
     "runtime:update": "node scripts/runtime-update.mjs",
     "dev:stack": "bash scripts/dev-stack.sh",
     "dev:stack:desktop": "STACK_APP=desktop bash scripts/dev-stack.sh",
+    "dev:desktop:attach": "STACK_APP=desktop STACK_WOLVES=attach bash scripts/dev-stack.sh",
     "sandbox:stack": "WOLVES_DIR=$HOME/wolves/dev bash scripts/dev-stack.sh",
     "sandbox:stack:desktop": "WOLVES_DIR=$HOME/wolves/dev STACK_APP=desktop bash scripts/dev-stack.sh"
   },

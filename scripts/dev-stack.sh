@@ -3,6 +3,11 @@
 #   npm run dev:stack                # LIVE wolves (~/wolves/local), browser console on :3000
 #   npm run dev:stack:desktop        # LIVE wolves, Electron app (console on :3210 inside)
 #   npm run sandbox:stack[:desktop]  # SANDBOX wolves (~/wolves/dev)
+#   npm run dev:desktop:attach       # ATTACH: Electron app (+ its dev console) against an ALREADY running workerd
+# Attach mode (STACK_WOLVES=attach): starts no workerd and no wolves, builds nothing, reinstalls nothing and skips the
+# models.json / API-key checks. It only checks that a workerd answers /healthz on 127.0.0.1:$WORKERD_PORT (exit 1 if
+# not: start it first, e.g. `node packages/workerd/dist/bin/workerd.js --wolves ~/wolves/local --port 7141`), then runs
+# the app with the same WOLFPACK_API_URL. Works with STACK_APP=console too.
 # Env (all optional):
 #   WOLVES_DIR            dir of wolf dirs with wolf.yaml   (default ~/wolves/local, the live wolves)
 #   WOLFPACK_MODELS_FILE  models.json (transport "api")     (default: first */models.json in WOLVES_DIR)
@@ -17,6 +22,16 @@
 # copy on its own timer and needs Ollama at 127.0.0.1:11434 (nomic-embed-text). See docs/dev-sandbox.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ "${STACK_WOLVES:-}" = "attach" ]; then
+  WORKERD_PORT="${WORKERD_PORT:-7141}"
+  if ! curl -fsS -m 2 "http://127.0.0.1:$WORKERD_PORT/healthz" >/dev/null 2>&1; then
+    echo "dev-stack: attach mode: no workerd answers on 127.0.0.1:$WORKERD_PORT. Start workerd first (e.g. node packages/workerd/dist/bin/workerd.js --wolves ~/wolves/local --port $WORKERD_PORT), then retry." >&2
+    exit 1
+  fi
+  echo "ATTACH: workerd :$WORKERD_PORT (wolves not started by dev-stack)"
+  WOLFPACK_API_URL="http://127.0.0.1:$WORKERD_PORT" npm run dev -w "@wolfpack/${STACK_APP:-console}"
+  exit $?
+fi
 WOLVES_DIR="${WOLVES_DIR:-$HOME/wolves/local}"
 if [ ! -d "$WOLVES_DIR" ] || ! ls "$WOLVES_DIR"/*/wolf.yaml >/dev/null 2>&1; then
   echo "dev-stack: no wolves in $WOLVES_DIR (no */wolf.yaml). For the sandbox, take a fresh \`wolfpack sandbox snapshot\` first (docs/dev-sandbox.md)." >&2

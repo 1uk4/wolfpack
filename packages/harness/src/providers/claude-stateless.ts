@@ -20,6 +20,7 @@
  * (stubBridgeSdkPlugin), so a call would throw. If the bridge starts using it, drop the stub or bundle properly.
  * `forget(id)` deletes the session files of one conversation; `dispose()` kills in-flight queries.
  */
+import { loadQuery } from "@wolfpack/engine";
 import { createStatelessProvider } from "pi-claude-bridge-stateless/stateless";
 import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -37,21 +38,45 @@ export interface ClaudeStatelessSeams {
 }
 
 /**
- * The bridge resumes a deterministic Claude session every round and sends `systemPrompt` as a bare string. The SDK's default
- * for a bare string is `snapshot: true`: the first request's prompt is recorded and replayed verbatim on every resume, so a
- * changed persona (AGENTS.md) is ignored until compaction (sdk.d.ts, `systemPrompt`: "use { type: 'custom', prompt,
- * snapshot: false } to opt it out"). Wrap the query so a bare string is sent fresh every round. Anything else is untouched.
- * Cost: the system prompt is re-rendered each request (the API prompt-cache prefix is only as stable as the text itself).
+ * The bridge resumes a deterministic Claude session every round and sends `systemPrompt` (a plain string: plan.system).
+ * The SDK's default for a bare string is `snapshot: true`: the first request's prompt is recorded and replayed verbatim on
+ * every resume, so a changed persona (AGENTS.md) is ignored until compaction (sdk.d.ts, `systemPrompt`: "use
+ * { type: 'custom', prompt, snapshot: false } to opt it out"). Wrap the query so the prompt is sent fresh every round:
+ * string / string[] become a custom prompt, an object without `snapshot` gets `snapshot: false`; an explicit `snapshot`
+ * and a missing prompt are left alone. Cost: the prompt is re-rendered per request (the cache prefix stays stable while
+ * the text does; a persona edit costs one cache miss).
  */
 export const withFreshSystemPrompt = (queryFn: (args: any) => any) => (args: any) => {
   const sp = args?.options?.systemPrompt;
-  if (typeof sp !== "string") return queryFn(args);
-  return queryFn({ ...args, options: { ...args.options, systemPrompt: { type: "custom", prompt: sp, snapshot: false } } });
+  let next: unknown;
+  if (typeof sp === "string" || Array.isArray(sp)) next = { type: "custom", prompt: sp, snapshot: false };
+  else if (sp && typeof sp === "object" && sp.snapshot === undefined) next = { ...sp, snapshot: false };
+  else return queryFn(args);
+  return queryFn({ ...args, options: { ...args.options, systemPrompt: next } });
+};
+
+/**
+ * The host's Agent SDK `query`, loaded lazily (the bridge's own SDK import is stubbed in the bundle, so the harness gets it
+ * from the engine's loader, which is async). The bridge only iterates the result and calls close(), so a deferred
+ * proxy is enough.
+ */
+export const lazySdkQuery = (load: () => Promise<(args: any) => any> = loadQuery as never) => (args: any) => {
+  let real: any;
+  let closed = false;
+  const started = load().then((q) => { real = q(args); if (closed) real.close?.(); return real; });
+  return {
+    async *[Symbol.asyncIterator]() {
+      const q = await started;
+      yield* q;
+    },
+    close: () => { closed = true; real?.close?.(); },
+    interrupt: async () => { await (await started).interrupt?.(); },
+  };
 };
 
 /** Seams for a stateless provider that must run on the host's Agent SDK `query` (its own import is stubbed in the bundle). */
 export const claudeStatelessSdkSeams = (queryFn: unknown): ClaudeStatelessSeams => ({
-  queryFn: withFreshSystemPrompt(queryFn as (args: any) => any) as ClaudeStatelessSeams["queryFn"],
+  queryFn: queryFn as ClaudeStatelessSeams["queryFn"],
 });
 
 /** claude-bridge's model table re-tagged for this provider (same ids, limits and zero costs). */
@@ -78,7 +103,8 @@ export const claudeStatelessFactory: ProviderFactory = (ctx) => {
     env: { ...ctx.env, ...NO_TOOL_SEARCH },
     debug: true,
     debugLogPath,
-    ...(seams.queryFn ? { queryFn: seams.queryFn } : {}),
+    // Always wrapped, whoever builds the registry (wolfd passes no seams; the pi entry injects the host query).
+    queryFn: withFreshSystemPrompt((seams.queryFn ?? lazySdkQuery()) as (args: any) => any) as never,
   });
   guardProviderStreams(handle.provider as never, { provider: CLAUDE_STATELESS_ID });
   return { provider: handle.provider as never, forget: (id) => void handle.forget(id), dispose: () => void handle.dispose() };

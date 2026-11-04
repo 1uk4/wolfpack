@@ -239,7 +239,11 @@ async function startConfigured(
     const withTier = (base: ConfigureOptions, tier: ThreadTier): ConfigureOptions => (tier === "main" ? base : { ...base, ...modelFor(tier) });
     const homeTier = loadHomeSettings(config.den).tier;
     const conversation = await engine.conversations.root(desired);
-    await reconcile(conversation, withTier(desired, homeTier));
+    const dropProviderSession = (conv: EngineConversation) => async () => {
+      const sessionId = await engine.conversations.providerSessionId(conv.id);
+      if (sessionId) (opts.modelRelease ?? wolfModels.forget)(sessionId);
+    };
+    await reconcile(conversation, withTier(desired, homeTier), dropProviderSession(conversation));
 
     const stallEnv = Number(env.WOLFPACK_STALL_TIMEOUT_MS);
     const server = new WolfServer({
@@ -262,7 +266,7 @@ async function startConfigured(
             workspace = undefined;
           }
           const want = workspace ? { ...desired, cwd: workspace.path, instructions: contextFor(workspace.path).instructions } : desired;
-          if (conv) await reconcile(conv, withTier(want, saved ? settingsOfSaved(saved).tier : "main"));
+          if (conv) await reconcile(conv, withTier(want, saved ? settingsOfSaved(saved).tier : "main"), dropProviderSession(conv));
           return conv;
         },
         setTier: (conv, tier) => conv.configure(modelFor(tier)),
@@ -397,7 +401,7 @@ export function withExtensionTools(configured: readonly string[], registered: re
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */
-async function reconcile(conv: EngineConversation, want: ConfigureOptions): Promise<void> {
+async function reconcile(conv: EngineConversation, want: ConfigureOptions, onInstructionsChanged?: () => Promise<void>): Promise<void> {
   const w = await conv.watch();
   const have = w.snapshot.agent;
   await w.stop();
@@ -411,6 +415,8 @@ async function reconcile(conv: EngineConversation, want: ConfigureOptions): Prom
     (have.thinkingLevel ?? undefined) === (want.thinkingLevel ?? undefined) &&
     sameTools;
   if (!same) await conv.configure(want);
+  // A recorded (snapshotted) Claude system prompt would outlive the edit: drop the provider session so the next round rebuilds it.
+  if (have.instructions !== want.instructions) await onInstructionsChanged?.();
 }
 
 /** The `workspaces:` block of wolf.yaml (its root); the engine's config loader does not model it. */

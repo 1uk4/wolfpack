@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
 import { NEEDS_SUBSCRIPTION_TOKEN, PROVIDER_FACTORIES } from "./index.js";
-import { claudeStatelessFactory, claudeStatelessPaths } from "./claude-stateless.js";
+import { claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, withFreshSystemPrompt } from "./claude-stateless.js";
 
 const fakeStateless = () => {
   const provider = createProvider({ id: "claude-stateless", auth: { check: async () => "t" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
@@ -92,22 +92,59 @@ describe("claude-stateless factory", () => {
 });
 
 describe("withFreshSystemPrompt", () => {
-  it("turns a bare string into a custom prompt with snapshot:false and keeps other options", async () => {
-    const { withFreshSystemPrompt } = await import("./claude-stateless.js");
+  const run = (options: object) => {
     const seen: any[] = [];
-    const q = withFreshSystemPrompt((a) => { seen.push(a); return "it"; });
-    expect(q({ prompt: "hi", options: { systemPrompt: "persona", resume: "s1", cwd: "/x" } })).toBe("it");
+    const out = withFreshSystemPrompt((a) => { seen.push(a); return "it"; })({ prompt: "hi", options });
+    return { seen, out };
+  };
+  it("turns a bare string (even empty) into a custom prompt with snapshot:false and keeps other options", () => {
+    const { seen, out } = run({ systemPrompt: "persona", resume: "s1", cwd: "/x" });
+    expect(out).toBe("it");
     expect(seen[0]).toEqual({ prompt: "hi", options: { systemPrompt: { type: "custom", prompt: "persona", snapshot: false }, resume: "s1", cwd: "/x" } });
+    expect(run({ systemPrompt: "" }).seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "", snapshot: false });
   });
-  it("leaves non-string shapes and missing prompts untouched", async () => {
-    const { withFreshSystemPrompt } = await import("./claude-stateless.js");
+  it("converts string[] and adds snapshot:false to objects lacking it; keeps an explicit snapshot", () => {
+    expect(run({ systemPrompt: ["a", "b"] }).seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: ["a", "b"], snapshot: false });
+    expect(run({ systemPrompt: { type: "preset", preset: "claude_code", append: "x" } }).seen[0].options.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: "x", snapshot: false });
+    const kept = { type: "custom", prompt: "p", snapshot: true };
+    const a = { prompt: "p", options: { systemPrompt: kept } };
     const seen: any[] = [];
-    const q = withFreshSystemPrompt((a) => { seen.push(a); });
-    const preset = { type: "preset", preset: "claude_code" };
-    const a1 = { prompt: "p", options: { systemPrompt: preset } };
-    const a2 = { prompt: "p", options: {} };
-    const a3 = { prompt: "p", options: { systemPrompt: ["a", "b"] } };
-    q(a1); q(a2); q(a3);
-    expect(seen[0]).toBe(a1); expect(seen[1]).toBe(a2); expect(seen[2]).toBe(a3);
+    withFreshSystemPrompt((x) => { seen.push(x); })(a);
+    expect(seen[0]).toBe(a);
+  });
+  it("passes a missing systemPrompt through untouched", () => {
+    const a = { prompt: "p", options: {} };
+    const seen: any[] = [];
+    withFreshSystemPrompt((x) => { seen.push(x); })(a);
+    expect(seen[0]).toBe(a);
+  });
+});
+
+describe("claudeStatelessFactory query wrapping", () => {
+  const build = (seams: object) => {
+    const root = mkdtempSync(join(tmpdir(), "stateless-home-"));
+    const create = vi.fn(() => fakeStateless() as never);
+    claudeStatelessFactory({ cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "claude-stateless": { createProvider: create, models: [], ...seams } } });
+    return { root, queryFn: (create.mock.calls as any[])[0][0].queryFn as (a: any) => any };
+  };
+  it("wraps an injected queryFn", () => {
+    const seen: any[] = [];
+    const { root, queryFn } = build({ queryFn: (a: any) => { seen.push(a); return {}; } });
+    try {
+      queryFn({ prompt: "p", options: { systemPrompt: "persona" } });
+      expect(seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "persona", snapshot: false });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("with no queryFn seam (wolfd, subagents) still hands the bridge a wrapped host query", async () => {
+    const { root, queryFn } = build({});
+    try {
+      expect(typeof queryFn).toBe("function");
+      const seen: any[] = [];
+      const wrapped = withFreshSystemPrompt(lazySdkQuery(async () => (a: any) => { seen.push(a); return (async function* () { yield 1; })(); }));
+      const got: unknown[] = [];
+      for await (const m of wrapped({ prompt: "p", options: { systemPrompt: "persona" } })) got.push(m);
+      expect(got).toEqual([1]);
+      expect(seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "persona", snapshot: false });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

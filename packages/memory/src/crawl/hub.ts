@@ -89,7 +89,7 @@ export async function postContribution(hub: HubTarget, wolf: string, contributio
 }
 
 /** Merge `staged` (a staging den's emitted map + bodies) into the real den for the given topic ids; read-merge-write so a concurrent release's entries survive. */
-function persistDedup(stagedDen: string, realDen: string, ids: string[]): void {
+export function persistDedup(stagedDen: string, realDen: string, ids: string[]): void {
   if (ids.length === 0) return;
   const read = (p: string): Record<string, string> => {
     try {
@@ -111,13 +111,25 @@ function persistDedup(stagedDen: string, realDen: string, ids: string[]): void {
   if (existsSync(bodies)) {
     mkdirSync(join(realDen, "emitted-bodies"), { recursive: true });
     for (const id of ids) {
-      const name = `${safeSegment(id, "den topic id")}.md`;
+      let name: string;
+      try {
+        name = `${safeSegment(id, "den topic id")}.md`;
+      } catch (e) {
+        // the posts already succeeded: one odd id must not abort the dedup write
+        console.warn(`crawl: skipped the dedup body for "${String(id).slice(0, 60)}": ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
       const from = join(bodies, name);
       if (!existsSync(from)) continue;
       const to = join(realDen, "emitted-bodies", name);
       const t = `${to}.${process.pid}.${Date.now()}.tmp`;
-      copyFileSync(from, t);
-      renameSync(t, to);
+      try {
+        copyFileSync(from, t);
+        renameSync(t, to);
+      } catch (e) {
+        rmSync(t, { force: true });
+        console.warn(`crawl: could not keep the dedup body ${name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
   }
 }

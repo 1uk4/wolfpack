@@ -202,7 +202,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         started = await service.startRun({ planPath, concurrency, resume: resumeRun, wolf: ctx.wolfName, onAccepted: () => i.onRunStart?.(ctx) });
       } catch (e) {
         if (e instanceof CrawlServiceError && e.code === "clash") return text(`${e.message} Use crawl_status to follow it.`);
-        if (e instanceof CrawlServiceError && e.code === "corrupt") return fail(e.message);
+        if (e instanceof CrawlServiceError && (e.code === "corrupt" || e.code === "unsupported")) return fail(e.message);
         return fail(e instanceof Error ? e.message : String(e));
       }
       return text(

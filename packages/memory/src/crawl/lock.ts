@@ -6,10 +6,15 @@
  *  - Staleness: on the same host a dead pid or a different (known) boot id is stale at once; otherwise (and always on another host,
  *    where a pid cannot be checked) only age beyond `maxAgeMs` makes a lock stale. Unreadable content is stale only once its mtime
  *    is older than UNREADABLE_GRACE_MS (it may be mid-write on a filesystem without atomic link).
- *  - Takeover is serialised by a second lock (`<lock>.takeover`): the stale file is re-read under it and removed only if it is still
- *    exactly what was judged stale.
+ *  - Takeover is serialised by a second lock (`<lock>.takeover`).
  *  - Release deletes the file only if its body still carries our token (a lock taken over from us is not ours to delete).
  *  - A holder keeps its lock fresh with refreshLock() (heartbeat).
+ *  - Takeover renames the stale file ASIDE and compares the renamed copy with what was judged stale; if it changed (the owner
+ *    refreshed it) it is put back and the taker backs off. refreshLock checks the token first, so a lock taken over is not revived.
+ *    (Residual window: a refresh landing between the taker's rename and its publish; only reachable for a lock already older than
+ *    its max age, i.e. an owner that missed its whole refresh budget.) The crashed-takeover guard is removed the same way.
+ *  - Hosts whose boot id is "unknown" (no /proc boot_id, no sysctl) cannot detect a reboot: after a reboot with pid reuse a
+ *    lock can block for up to its max age (reservation: staleMs; release.lock: RELEASE_LOCK_MAX_AGE_MS).
  */
 import { randomBytes } from "node:crypto";
 import { linkSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -25,6 +30,8 @@ export interface LockEnv {
   now: () => number;
   /** Test hook: runs after a lock was judged stale, before the takeover. */
   afterJudge?: (file: string) => void;
+  /** Test hook: runs under the takeover guard, just before the stale file is renamed aside. */
+  beforeTake?: (file: string) => void;
 }
 export interface LockBody {
   pid: number;
@@ -98,6 +105,32 @@ export function lockHeld(file: string, maxAgeMs: number, env: LockEnv): boolean 
   return raw !== undefined && !judgeStale(file, raw, maxAgeMs, env);
 }
 
+/**
+ * Remove `file` only if it still holds exactly `expected` (what the caller judged stale). The file is renamed ASIDE first, so a
+ * concurrent writer that replaced it (an owner's refresh, another taker) is detected from the renamed copy and put back, never
+ * deleted. true = gone (removed, or already absent); false = it had changed and was restored.
+ */
+function takeAside(file: string, expected: string | undefined, token: string): boolean {
+  const aside = `${file}.stale.${token}.${++seq}`;
+  try {
+    renameSync(file, aside);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw e;
+  }
+  if (read(aside) === expected) {
+    rmSync(aside, { force: true });
+    return true;
+  }
+  try {
+    linkSync(aside, file); // put it back (EEXIST: someone published a new one meanwhile; theirs stands)
+  } catch {
+    /* nothing more to do */
+  }
+  rmSync(aside, { force: true });
+  return false;
+}
+
 export function acquireLock(file: string, maxAgeMs: number, env: LockEnv): HeldLock | undefined {
   const token = randomBytes(8).toString("hex");
   const body = JSON.stringify({ pid: env.pid, host: env.host, boot: env.boot, at: env.now(), token } satisfies LockBody);
@@ -105,11 +138,13 @@ export function acquireLock(file: string, maxAgeMs: number, env: LockEnv): HeldL
   const seen = read(file);
   if (!judgeStale(file, seen, maxAgeMs, env)) return undefined;
   env.afterJudge?.(file);
-  // Serialised takeover.
+  // Serialised takeover: a second lock guards it.
   const guard = `${file}.takeover`;
   const guardBody = JSON.stringify({ pid: env.pid, host: env.host, boot: env.boot, at: env.now(), token });
   if (!publish(guard, guardBody)) {
-    // someone is taking over; a takeover file older than a few seconds is a crashed takeover
+    // A takeover is in progress, or crashed. A guard older than a few seconds is a crashed one: remove it with the same
+    // rename-aside + compare (only if unchanged) and try once; otherwise this is a clash and a later attempt retries.
+    const seenGuard = read(guard);
     let old = false;
     try {
       old = env.now() - statSync(guard).mtimeMs > TAKEOVER_MAX_AGE_MS;
@@ -117,20 +152,18 @@ export function acquireLock(file: string, maxAgeMs: number, env: LockEnv): HeldL
       /* gone */
     }
     if (!old) return undefined;
-    rmSync(guard, { force: true });
+    env.afterJudge?.(guard);
+    if (!takeAside(guard, seenGuard, token)) return undefined;
     if (!publish(guard, guardBody)) return undefined;
   }
   try {
-    const again = read(file);
-    if (again !== seen) {
-      // changed since we judged it (another process took over, or the owner refreshed): re-judge what is there now
-      if (again !== undefined && !judgeStale(file, again, maxAgeMs, env)) return undefined;
-      if (again !== undefined && again !== seen) return undefined; // do not remove something we did not judge
-    }
-    rmSync(file, { force: true });
+    env.beforeTake?.(file);
+    // Rename aside and compare with what was judged stale: an owner that refreshed meanwhile keeps its lock.
+    if (!takeAside(file, seen, token)) return undefined;
     return publish(file, body) ? { file, token } : undefined;
   } finally {
-    if (parse(read(guard))?.token === token) rmSync(guard, { force: true });
+    // our own guard only (token check), removed aside-style so a successor's guard is never deleted
+    if (parse(read(guard))?.token === token) takeAside(guard, guardBody, token);
   }
 }
 

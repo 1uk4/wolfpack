@@ -2,9 +2,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitCrawl } from "./emit.js";
-import { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, scrubSecrets } from "./hub.js";
+import { persistDedup, emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, scrubSecrets } from "./hub.js";
 import { planCrawl, readPlan } from "./plan.js";
 
 const dirs: string[] = [];
@@ -197,5 +197,21 @@ describe("scrubSecrets", () => {
     const t = scrubSecrets("GET https://u:p@h/x?token=abc&k=1 Bearer abc.def-1 sk-ant-abcdef12 and mytoken123", ["mytoken123"]);
     expect(t).not.toMatch(/u:p|abc|sk-ant|mytoken123/);
     expect(t).toContain("k=1");
+  });
+});
+
+describe("persistDedup", () => {
+  it("a den topic id safeSegment rejects is skipped with a warning; the dedup write and the other bodies still land", () => {
+    const staged = tmp("staged");
+    const real = tmp("real");
+    mkdirSync(join(staged, "emitted-bodies"), { recursive: true });
+    writeFileSync(join(staged, "emitted.json"), JSON.stringify({ good: "h1", "../evil": "h2" }));
+    writeFileSync(join(staged, "emitted-bodies", "good.md"), "body");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => persistDedup(staged, real, ["../evil", "good"])).not.toThrow();
+    warn.mockRestore();
+    expect(JSON.parse(readFileSync(join(real, "emitted.json"), "utf-8")).good).toBe("h1");
+    expect(readFileSync(join(real, "emitted-bodies", "good.md"), "utf-8")).toBe("body");
+    expect(existsSync(join(real, "..", "evil.md"))).toBe(false);
   });
 });

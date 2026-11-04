@@ -163,6 +163,10 @@ export interface CrawlServiceOptions {
   domainsRetryMs?: number;
   /** The last good registry is kept while the hub is down, but no longer than this. Default 24 h. */
   domainsMaxAgeMs?: number;
+  /** How often release.lock is refreshed during a slow emit. Default 60 s (capped at a third of the lock max age). */
+  releaseRefreshMs?: number;
+  /** Release lock max age (default 30 min); tests shorten it. */
+  releaseLockMaxAgeMs?: number;
   /** Test hook for the lock race tests. */
   lockHook?: (file: string) => void;
 }
@@ -400,6 +404,8 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
   const id = o.identity ?? { host: hostname(), boot: bootId() };
   const heartbeatMs = o.heartbeatMs ?? 12_000;
   const staleMs = o.staleMs ?? 45_000;
+  const releaseLockMaxAge = o.releaseLockMaxAgeMs ?? RELEASE_LOCK_MAX_AGE_MS;
+  const releaseRefreshMs = o.releaseRefreshMs ?? 60_000;
   const domainsTtlMs = o.domainsTtlMs ?? 60_000;
   const domainsRetryMs = o.domainsRetryMs ?? 10_000;
   const domainsMaxAgeMs = o.domainsMaxAgeMs ?? 24 * 3_600_000;
@@ -615,8 +621,9 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       const resume = input.resume;
       if (resume) {
         const st = heldFor(resume.runDir) ? viewOfHeld(heldFor(resume.runDir)!).state : viewOfDisk(resume.runDir).state;
-        if (st === "corrupt" || st === "unsupported") throw new CrawlServiceError("corrupt", `${resume.runDir} has an ${st === "corrupt" ? "unreadable" : "unsupported (newer) "} run.json; it cannot be resumed.`);
-        if (releasing.has(norm(resume.runDir)) || lockHeld(join(resume.runDir, "release.lock"), RELEASE_LOCK_MAX_AGE_MS, lockEnv)) throw new CrawlServiceError("releasing", `${resume.runDir} is being released; it cannot be resumed now.`);
+        if (st === "unsupported") throw new CrawlServiceError("unsupported", `${resume.runDir} has a run.json written by a newer crawl service; it cannot be resumed by this version.`);
+        if (st === "corrupt") throw new CrawlServiceError("corrupt", `${resume.runDir} has an unreadable run.json; it cannot be resumed.`);
+        if (releasing.has(norm(resume.runDir)) || lockHeld(join(resume.runDir, "release.lock"), releaseLockMaxAge, lockEnv)) throw new CrawlServiceError("releasing", `${resume.runDir} is being released; it cannot be resumed now.`);
       }
       mkdirSync(crawlHome, { recursive: true });
       const reservation = join(crawlHome, reserveName(plan.source, plan.domain));
@@ -820,7 +827,7 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       const lock = join(dir, "release.lock");
       let locked: HeldLock | undefined;
       try {
-        locked = acquireLock(lock, RELEASE_LOCK_MAX_AGE_MS, lockEnv);
+        locked = acquireLock(lock, releaseLockMaxAge, lockEnv);
         if (!locked) throw new CrawlServiceError("releasing", `${dir} is being released by another process.`);
         // Everything is rechecked now that nothing else can release this dir.
         const target = releaseTarget(env);
@@ -830,7 +837,15 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
         if (!hasFile(dir, "history.json")) throw new CrawlServiceError("journey-missing", "The run's journey is not written yet — finish it (resume the run) before releasing.");
         const opsRoot = env.KB_OPS || undefined;
         const roots = { ...(opsRoot ? { opsRoot } : {}), ...(env.KB_BASE ? { kbBase: env.KB_BASE } : {}), ...(ro.roots?.denLocal ? { denLocal: ro.roots.denLocal } : {}) };
-        const r = await runner.emit(dir, { dryRun: false, wolf: ro.wolf, sinkBase: crawlHome, quiet: true, roots });
+        // A release can outlast the lock max age (a big hub batch): keep the lock fresh for as long as the emit runs.
+        const keepAlive = setInterval(() => refreshLock(locked!, lockEnv), Math.max(10, Math.min(releaseRefreshMs, releaseLockMaxAge / 3)));
+        keepAlive.unref?.();
+        let r: Awaited<ReturnType<CrawlRunner["emit"]>>;
+        try {
+          r = await runner.emit(dir, { dryRun: false, wolf: ro.wolf, sinkBase: crawlHome, quiet: true, roots });
+        } finally {
+          clearInterval(keepAlive);
+        }
         const via = target.kind === "hub" ? "hub" : "inbox";
         const warnings: string[] = [];
         const entry: ReleaseRecord = { at: now(), emitted: r.emitted, skipped: r.skipped, dest: r.dest, via };

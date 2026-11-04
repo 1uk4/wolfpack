@@ -626,3 +626,47 @@ describe("review round 2: reservation, cancel marker, resume vs release, domains
     expect(svc.releasable(f.runDir)).toMatchObject({ ok: false, code: "unsupported" });
   });
 });
+
+describe("review round 3", () => {
+  it("release.lock is refreshed during a slow emit and cannot be taken over by a second releaser", async () => {
+    const f = fixture();
+    finish(f);
+    let t = 5_000_000;
+    let release!: () => void;
+    let started!: () => void;
+    const inEmit = new Promise<void>((r) => (started = r));
+    const slow: CrawlRunner = {
+      run: holdRunner().runner.run,
+      emit: () =>
+        new Promise((resolve) => {
+          started();
+          release = () => resolve({ emitted: 1, skipped: 0, dest: "inbox", dir: "", contributions: [], delta: [] } as never);
+        }),
+    };
+    const ops = tmp("ops");
+    const mk = (pid: number) => svcOf(f, { runner: slow, env: { KB_OPS: ops }, pid, isAlive: () => true, now: () => t, localDomains: () => new Set(["wolfpack"]), releaseLockMaxAgeMs: 1000, releaseRefreshMs: 10 });
+    const a = mk(111);
+    const p = a.release(f.runDir, { wolf: "w", confirmed: true });
+    await inEmit;
+    const lock = join(f.runDir, "release.lock");
+    const at0 = JSON.parse(readFileSync(lock, "utf-8")).at;
+    t += 900;
+    await new Promise((r) => setTimeout(r, 40)); // the interval fires on real time and stamps the fake clock
+    expect(JSON.parse(readFileSync(lock, "utf-8")).at).toBeGreaterThan(at0);
+    t += 900; // 1800 ms since acquisition, but only 900 since the last refresh (< 1000)
+    await expect(mk(222).release(f.runDir, { wolf: "w", confirmed: true })).rejects.toMatchObject({ code: "releasing" });
+    release();
+    await p;
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("resume of a newer-version run.json throws the `unsupported` code", async () => {
+    const f = fixture();
+    const owner = svcOf(f, { pid: 111 });
+    const dir = (await owner.startRun({ planPath: f.planPath })).runDir;
+    writeFileSync(join(dir, "observations.jsonl"), "");
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ version: 2, state: "cancelled" }));
+    const svc = svcOf(f, { pid: 222 });
+    await expect(svc.startRun({ planPath: f.planPath, resume: { runDir: dir } as never })).rejects.toMatchObject({ code: "unsupported" });
+  });
+});

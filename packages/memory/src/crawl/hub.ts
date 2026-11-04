@@ -8,9 +8,10 @@
  * `/v1/contributions` with `Authorization: Bearer` (the hub takes the wolf from the token's host). The wolf's `emitted.json` dedup is only kept when every post succeeded; on a failure
  * it is restored, so a retry re-sends (the hub is idempotent on topic + content hash).
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import { safeSegment } from "@wolfpack/kb/shared";
 import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.js";
 
 export interface HubTarget {
@@ -42,7 +43,7 @@ export function redactUrl(url: string): string {
     u.hash = "";
     return u.toString().replace(/\/+$/, "");
   } catch {
-    return url.replace(/\/\/[^/@\s]*@/g, "//").replace(/\/+$/, "");
+    return url.replace(/\/\/[^/@\s]*@/g, "//").replace(/[?#].*$/, "").replace(/\/+$/, "");
   }
 }
 
@@ -105,8 +106,20 @@ function persistDedup(stagedDen: string, realDen: string, ids: string[]): void {
   const tmp = join(realDen, `emitted.json.${process.pid}.${Date.now()}.tmp`);
   writeFileSync(tmp, JSON.stringify(real, null, 2) + "\n");
   renameSync(tmp, join(realDen, "emitted.json"));
+  // Bodies are merged per sent id (atomic file copy), never wholesale: a concurrent release's bodies are not overwritten.
   const bodies = join(stagedDen, "emitted-bodies");
-  if (existsSync(bodies)) cpSync(bodies, join(realDen, "emitted-bodies"), { recursive: true });
+  if (existsSync(bodies)) {
+    mkdirSync(join(realDen, "emitted-bodies"), { recursive: true });
+    for (const id of ids) {
+      const name = `${safeSegment(id, "den topic id")}.md`;
+      const from = join(bodies, name);
+      if (!existsSync(from)) continue;
+      const to = join(realDen, "emitted-bodies", name);
+      const t = `${to}.${process.pid}.${Date.now()}.tmp`;
+      copyFileSync(from, t);
+      renameSync(t, to);
+    }
+  }
 }
 
 /**

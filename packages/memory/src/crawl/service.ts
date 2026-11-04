@@ -24,6 +24,7 @@ import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, re
 import { execFileSync } from "node:child_process";
 import { hostname } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { acquireLock, bootsDiffer, lockHeld, refreshLock, releaseLock, type HeldLock, type LockEnv } from "./lock.js";
 import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.js";
 import { checkHubContributions, emitCrawlToHub, hubTargetFromEnv, listDomainsOnHub, readHubReceipts, redactUrl, scrubSecrets, type HubTarget } from "./hub.js";
 import { readPlan } from "./plan.js";
@@ -56,7 +57,7 @@ export interface CrawlRunner {
 
 export type RunState = "running" | "done" | "failed" | "gate-failed" | "cancelled";
 /** What status reports: a recorded state, or one derived from disk. */
-export type RunViewState = RunState | "interrupted" | "running-elsewhere" | "unrecorded" | "corrupt";
+export type RunViewState = RunState | "interrupted" | "running-elsewhere" | "unrecorded" | "corrupt" | "unsupported";
 
 /** <runDir>/run.json (version 1). */
 export interface RunRecord {
@@ -128,6 +129,7 @@ export type CrawlServiceErrorCode =
   | "run-active"
   | "run-not-done"
   | "corrupt"
+  | "unsupported"
   | "releasing"
   | "not-confirmed"
   | "domains-unknown";
@@ -157,6 +159,12 @@ export interface CrawlServiceOptions {
   staleMs?: number;
   /** How long the hub domain list is trusted. Default 60 s. */
   domainsTtlMs?: number;
+  /** After a failed registry read, do not retry for this long (a down hub must not add its timeout to every tool). Default 10 s. */
+  domainsRetryMs?: number;
+  /** The last good registry is kept while the hub is down, but no longer than this. Default 24 h. */
+  domainsMaxAgeMs?: number;
+  /** Test hook for the lock race tests. */
+  lockHook?: (file: string) => void;
 }
 
 export interface StartRunInput {
@@ -209,6 +217,8 @@ export interface ReleaseOptions {
   confirmed?: boolean;
 }
 
+/** A file in the run dir asking the owning process to stop (written by stopRun force on a running-elsewhere record, read in heartbeat()). */
+export const CANCEL_MARKER = "cancel.request";
 const KEEP_FINISHED = 5;
 const SAVE_THROTTLE_MS = 1000;
 const RELEASE_LOCK_MAX_AGE_MS = 30 * 60_000;
@@ -270,7 +280,7 @@ export function envConcurrency(env: Record<string, string | undefined>): number 
 const fromSnapshot = (s: ProgressSnapshot): RunProgress => ({ total: s.total, rows: new Map(s.rows.map((r) => [r.topic, r])), journey: s.journey, gateFailures: s.gateFailures, usage: s.usage, startedAt: s.startedAt });
 
 const STATES = new Set<string>(["running", "done", "failed", "gate-failed", "cancelled"]);
-type ReadRun = { kind: "none" } | { kind: "corrupt"; reason: string } | { kind: "ok"; rec: RunRecord };
+type ReadRun = { kind: "none" } | { kind: "unsupported"; version: unknown } | { kind: "corrupt"; reason: string } | { kind: "ok"; rec: RunRecord };
 
 function readRun(runDir: string): ReadRun {
   const file = join(runDir, "run.json");
@@ -282,6 +292,7 @@ function readRun(runDir: string): ReadRun {
   }
   try {
     const r = JSON.parse(raw) as Partial<RunRecord>;
+    if (r && typeof r === "object" && typeof r.version === "number" && r.version > 1) return { kind: "unsupported", version: r.version }; // written by a newer service: leave it alone
     if (!r || r.version !== 1) return { kind: "corrupt", reason: "unknown version" };
     if (typeof r.state !== "string" || !STATES.has(r.state)) return { kind: "corrupt", reason: "bad state" };
     if (typeof r.pid !== "number") return { kind: "corrupt", reason: "no pid" };
@@ -359,10 +370,11 @@ export interface CrawlService {
   /** Check domains, reserve the plan on disk, then start a run detached; throws CrawlServiceError. */
   startRun(input: StartRunInput): Promise<StartedRun>;
   /**
-   * Abort a run held by this process. With a runDir that is a stale foreign record (interrupted, or running-elsewhere with
-   * `force`) it is marked cancelled instead (takeover).
+   * Abort a run held by this process. A stale foreign record (interrupted) is marked cancelled (takeover). A live foreign run
+   * (running-elsewhere) is only stopped with `force`: a cancel marker is written which its owner honours at its next heartbeat
+   * (`requested: true`); the record is never rewritten under a live owner.
    */
-  stopRun(runDir?: string, opts?: { force?: boolean }): { stopped: string; takenOver?: boolean } | { error: "none" | "ambiguous" | "foreign"; running: string[]; pid?: number };
+  stopRun(runDir?: string, opts?: { force?: boolean }): { stopped: string; takenOver?: boolean; requested?: boolean } | { error: "none" | "ambiguous" | "foreign"; running: string[]; pid?: number };
   status(opts?: { runDir?: string; wolf?: string }): StatusResult;
   listRuns(): RunView[];
   releaseTarget(): ReleaseTarget;
@@ -389,6 +401,8 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
   const heartbeatMs = o.heartbeatMs ?? 12_000;
   const staleMs = o.staleMs ?? 45_000;
   const domainsTtlMs = o.domainsTtlMs ?? 60_000;
+  const domainsRetryMs = o.domainsRetryMs ?? 10_000;
+  const domainsMaxAgeMs = o.domainsMaxAgeMs ?? 24 * 3_600_000;
   const bases = [crawlHome];
   /** The abort-controller cache for runs held by THIS process (state of record is run.json). */
   const held = new Map<string, Held>();
@@ -398,6 +412,9 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
   let slots = 0;
   let hubDomains: Set<string> | null = null;
   let hubFetchedAt = 0;
+  let hubFailedAt: number | undefined;
+  /** The last good registry, accepted while the hub is down for at most domainsMaxAgeMs (then it reads as unknown again). */
+  const goodHubDomains = (): Set<string> | null => (hubDomains && now() - hubFetchedAt <= domainsMaxAgeMs ? hubDomains : null);
   let timer: ReturnType<typeof setInterval> | undefined;
 
   const secrets = () => [env.WOLFPACK_HUB_TOKEN, env.ANTHROPIC_API_KEY];
@@ -438,16 +455,21 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
     runDir: h.rec.runDir,
     state: h.rec.state,
     resumable: (h.rec.state === "cancelled" || h.rec.state === "failed") && isResumable(h.rec.runDir),
-    progress: h.progress,
+    progress: fromSnapshot(snapshot(h.progress)), // scrubbed like the persisted copy
     record: h.rec,
     live: h.rec.state === "running",
   });
 
-  /** A `running` record this process does not hold: still running elsewhere, or dead. */
+  /**
+   * A `running` record this process does not hold: still running elsewhere, or dead.
+   * Same host: a (known) different boot id, our own pid, a dead pid or a stale heartbeat = interrupted. Another host: the pid
+   * cannot be checked, so only the heartbeat decides.
+   */
   const foreignState = (rec: RunRecord): "running-elsewhere" | "interrupted" => {
-    if (rec.host !== undefined && (rec.host !== id.host || rec.boot !== id.boot)) return "interrupted";
-    if (rec.pid === pid) return "interrupted"; // our own pid, but not held: a previous service instance
     const fresh = now() - (rec.updatedAt ?? 0) <= staleMs;
+    if (rec.host !== undefined && rec.host !== id.host) return fresh ? "running-elsewhere" : "interrupted";
+    if (bootsDiffer(rec.boot, id.boot)) return "interrupted";
+    if (rec.pid === pid) return "interrupted"; // our own pid, but not held: a previous service instance
     return fresh && isAlive(rec.pid) ? "running-elsewhere" : "interrupted";
   };
 
@@ -455,6 +477,7 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
     try {
       const r = readRun(dir);
       if (r.kind === "none") return { runDir: dir, state: "unrecorded", resumable: isResumable(dir), live: false };
+      if (r.kind === "unsupported") return { runDir: dir, state: "unsupported", resumable: false, live: false };
       if (r.kind === "corrupt") {
         try {
           if (!existsSync(join(dir, "run.json.corrupt"))) copyFileSync(join(dir, "run.json"), join(dir, "run.json.corrupt"));
@@ -485,40 +508,11 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
     return undefined;
   };
 
-  // ── file locks (reservation, release.lock) ───────────────────────────────
+  // ── file locks (reservation, release.lock): see lock.ts ──────────────────
 
-  interface LockBody {
-    pid: number;
-    host: string;
-    boot: string;
-    at: number;
-  }
-  const lockStale = (file: string, maxAgeMs: number): boolean => {
-    try {
-      const l = JSON.parse(readFileSync(file, "utf-8")) as Partial<LockBody>;
-      if (l.host !== id.host || l.boot !== id.boot) return true;
-      if (typeof l.pid !== "number" || !isAlive(l.pid)) return true;
-      return now() - (l.at ?? 0) > maxAgeMs;
-    } catch {
-      return true; // unreadable / half-written lock: treat as stale
-    }
-  };
-  /** Create `file` with wx; take over a stale one once. */
-  function acquireLock(file: string, maxAgeMs: number): boolean {
-    const body = JSON.stringify({ pid, host: id.host, boot: id.boot, at: now() } satisfies LockBody);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        writeFileSync(file, body, { flag: "wx" });
-        return true;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-        if (!lockStale(file, maxAgeMs)) return false;
-        rmSync(file, { force: true });
-      }
-    }
-    return false;
-  }
-  const unlock = (file: string) => rmSync(file, { force: true });
+  const lockEnv: LockEnv = { pid, host: id.host, boot: id.boot, isAlive, now, ...(o.lockHook ? { afterJudge: o.lockHook } : {}) };
+  /** Start reservations this process holds (refreshed by the heartbeat while runner.run is slow to make its sink). */
+  const reservations = new Set<HeldLock>();
 
   // ── heartbeat ────────────────────────────────────────────────────────────
 
@@ -546,6 +540,8 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       case "cancelled":
       case "gate-failed":
         return { ok: false, code: "run-not-done", message: `${dir} ${view.state === "gate-failed" ? "was refused by the gate" : view.state}; it is not a finished crawl and cannot be released.` };
+      case "unsupported":
+        return { ok: false, code: "unsupported", message: `${dir} was written by a newer crawl service (unsupported run.json version); use that version to release it.` };
       case "corrupt":
         return { ok: false, code: "corrupt", message: `${dir} has an unreadable run.json (kept as run.json.corrupt); inspect it before releasing.` };
       default:
@@ -571,19 +567,24 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       const hub = hubTargetFromEnv(env);
       if (!hub) return null;
       if (hubDomains && now() - hubFetchedAt < domainsTtlMs) return hubDomains;
+      if (hubFailedAt !== undefined && now() - hubFailedAt < domainsRetryMs) return goodHubDomains(); // negative cache: do not re-pay the timeout
       const fresh = await listDomainsOnHub(hub);
       if (fresh) {
         hubDomains = fresh;
         hubFetchedAt = now();
-      } // else keep the last good list (never overwrite with null)
-      return hubDomains;
+        hubFailedAt = undefined;
+      } else hubFailedAt = now(); // keep the last good list (never overwrite with null)
+      return goodHubDomains();
     },
     declaredDomains() {
-      return o.localDomains?.() ?? hubDomains;
+      return o.localDomains?.() ?? goodHubDomains();
     },
     requireDomains() {
-      if ((o.localDomains?.() ?? null) || hubDomains) return;
-      if (hubTargetFromEnv(env)) throw new CrawlServiceError("domains-unknown", `The hub's domain registry (${redactUrl(hubTargetFromEnv(env)!.baseUrl)}) could not be read and there is no local KB mirror, so the plan's domain cannot be checked. Try again when the hub is reachable.`);
+      if ((o.localDomains?.() ?? null) || goodHubDomains()) return;
+      const target = releaseTarget(env);
+      if (target.kind === "none") return; // nothing is ever released from here: no domain source to check against
+      if (target.kind === "hub") throw new CrawlServiceError("domains-unknown", `The hub's domain registry (${redactUrl(target.hub.baseUrl)}) could not be read and there is no local KB mirror, so the plan's domain cannot be checked. Try again when the hub is reachable.`);
+      throw new CrawlServiceError("domains-unknown", "The KB's declared domains could not be read here (no readable KB_BASE + KB_OPS) and no hub is configured, so the plan's domain cannot be checked.");
     },
 
     outstanding(plan) {
@@ -592,7 +593,7 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
         if (h?.rec.state === "running") return false;
         if (h) return true;
         const st = viewOfDisk(r.runDir).state;
-        return st !== "running-elsewhere" && st !== "corrupt";
+        return st !== "running-elsewhere" && st !== "corrupt" && st !== "unsupported";
       });
     },
 
@@ -614,18 +615,23 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       const resume = input.resume;
       if (resume) {
         const st = heldFor(resume.runDir) ? viewOfHeld(heldFor(resume.runDir)!).state : viewOfDisk(resume.runDir).state;
-        if (st === "corrupt") throw new CrawlServiceError("corrupt", `${resume.runDir} has an unreadable run.json; it cannot be resumed.`);
+        if (st === "corrupt" || st === "unsupported") throw new CrawlServiceError("corrupt", `${resume.runDir} has an ${st === "corrupt" ? "unreadable" : "unsupported (newer) "} run.json; it cannot be resumed.`);
+        if (releasing.has(norm(resume.runDir)) || lockHeld(join(resume.runDir, "release.lock"), RELEASE_LOCK_MAX_AGE_MS, lockEnv)) throw new CrawlServiceError("releasing", `${resume.runDir} is being released; it cannot be resumed now.`);
       }
       mkdirSync(crawlHome, { recursive: true });
       const reservation = join(crawlHome, reserveName(plan.source, plan.domain));
-      if (!acquireLock(reservation, staleMs)) throw new CrawlServiceError("clash", "Another process is starting a run of this plan right now.");
+      const reservationLock = acquireLock(reservation, staleMs, lockEnv);
+      if (!reservationLock) throw new CrawlServiceError("clash", "Another process is starting a run of this plan right now.");
+      reservations.add(reservationLock);
       let reserved = true;
       const unreserve = () => {
         if (reserved) {
           reserved = false;
-          unlock(reservation);
+          reservations.delete(reservationLock);
+          releaseLock(reservationLock);
         }
       };
+      if (resume) rmSync(join(resume.runDir, CANCEL_MARKER), { force: true });
 
       const progress = newRunProgress();
       const controller = new AbortController();
@@ -717,6 +723,7 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       ).then(() => {
         save(h, true);
         unreserve();
+        if (!rec.runDir.startsWith("pending-")) rmSync(join(rec.runDir, CANCEL_MARKER), { force: true });
         prune();
         if (!anyRunning()) stopTimer();
       });
@@ -733,13 +740,20 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       }
       if (running.length > 1) return { error: "ambiguous", running: running.map((h) => h.rec.runDir) };
       if (runDir) {
-        // Takeover of a stale foreign record.
         const v = viewOfDisk(runDir);
-        if (v.record && (v.state === "interrupted" || (v.state === "running-elsewhere" && opts.force))) {
-          const rec: RunRecord = { ...v.record, state: "cancelled", finishedAt: now(), updatedAt: now(), error: v.state === "interrupted" ? "taken over: the owning process is gone" : "taken over by force" };
-          const err = writeRunRecord(rec);
-          if (!err) return { stopped: runDir, takenOver: true };
-        } else if (v.state === "running-elsewhere") return { error: "foreign", running: [runDir], pid: v.record?.pid };
+        if (v.record && v.state === "interrupted") {
+          // Takeover of a stale record: its owner is gone (or its heartbeat stopped), so it cannot be overwritten under anyone.
+          const rec: RunRecord = { ...v.record, state: "cancelled", finishedAt: now(), updatedAt: now(), error: "taken over: the owning process is gone" };
+          if (!writeRunRecord(rec)) return { stopped: runDir, takenOver: true };
+        } else if (v.state === "running-elsewhere") {
+          if (!opts.force) return { error: "foreign", running: [runDir], pid: v.record?.pid };
+          try {
+            writeFileSync(join(runDir, CANCEL_MARKER), JSON.stringify({ at: now(), by: pid }));
+            return { stopped: runDir, requested: true };
+          } catch {
+            return { error: "foreign", running: [runDir], pid: v.record?.pid };
+          }
+        }
       }
       return { error: "none", running: [] };
     },
@@ -804,9 +818,9 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       if (releasing.has(key)) throw new CrawlServiceError("releasing", `${dir} is already being released.`);
       releasing.add(key);
       const lock = join(dir, "release.lock");
-      let locked = false;
+      let locked: HeldLock | undefined;
       try {
-        locked = acquireLock(lock, RELEASE_LOCK_MAX_AGE_MS);
+        locked = acquireLock(lock, RELEASE_LOCK_MAX_AGE_MS, lockEnv);
         if (!locked) throw new CrawlServiceError("releasing", `${dir} is being released by another process.`);
         // Everything is rechecked now that nothing else can release this dir.
         const target = releaseTarget(env);
@@ -853,13 +867,23 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
         }
         return { ...r, via, warnings };
       } finally {
-        if (locked) unlock(lock);
+        if (locked) releaseLock(locked);
         releasing.delete(key);
       }
     },
 
     heartbeat() {
       for (const h of held.values()) if (h.rec.state === "running") save(h, true);
+      for (const l of reservations) refreshLock(l, lockEnv);
+      // A force-stop request from another process (stopRun on a running-elsewhere record) arrives as a marker file.
+      for (const h of held.values()) {
+        if (h.rec.state !== "running" || h.rec.runDir.startsWith("pending-")) continue;
+        const marker = join(h.rec.runDir, CANCEL_MARKER);
+        if (existsSync(marker)) {
+          rmSync(marker, { force: true });
+          h.controller.abort();
+        }
+      }
       if (!anyRunning()) stopTimer();
     },
 

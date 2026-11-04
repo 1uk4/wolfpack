@@ -197,7 +197,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
           ? `\nNote: ${outstanding.length} unfinished run(s) of this plan exist (e.g. ${outstanding[0].runDir}), but this host cannot ask the user, so this started a FRESH run. To resume one instead, stop it with crawl_stop and call crawl_run with resume set to that run directory.`
           : "";
 
-      let started: ReturnType<CrawlService["startRun"]>;
+      let started: Awaited<ReturnType<CrawlService["startRun"]>>;
       try {
         started = await service.startRun({ planPath, concurrency, resume: resumeRun, wolf: ctx.wolfName, onAccepted: () => i.onRunStart?.(ctx) });
       } catch (e) {
@@ -227,6 +227,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         return `RUNNING ${where} in another process (pid ${rec?.pid})`;
       case "interrupted":
         return `INTERRUPTED ${where} — the process that ran it is gone; finished batches were kept, resumable with crawl_run`;
+      case "unsupported":
+        return `UNSUPPORTED ${where} — run.json was written by a newer version; left untouched`;
       case "corrupt":
         return `UNREADABLE ${where} — run.json is corrupt (kept as run.json.corrupt); not resumable or releasable until inspected`;
       case "unrecorded":
@@ -263,15 +265,16 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
     name: "crawl_stop",
     description:
       "Stop a crawl run held by THIS process: in-flight batches finish, nothing new starts; finished batches are kept and crawl_run can resume it. " +
-      "For a run left over from a dead process (reads INTERRUPTED in crawl_status) pass its runDir to mark it cancelled; `force` also takes over a record that claims to run in another live process.",
+      "For a run left over from a dead process (reads INTERRUPTED in crawl_status) pass its runDir to mark it cancelled; `force` asks the owner of a run in another live process to stop (it reacts at its next heartbeat).",
     parameters: Type.Object({
       runDir: Type.Optional(Type.String({ description: "The run to stop (defaults to the only one running)" })),
       force: Type.Optional(Type.Boolean({ description: "Take over a stale record that claims to be running in another process" })),
     }),
     async execute(args: { runDir?: string; force?: boolean }) {
       const r = service.stopRun(args.runDir, { force: args.force === true });
+      if ("stopped" in r && r.requested) return text(`Asked the process running ${r.stopped} to stop; it honours the request within a few seconds (check crawl_status).`);
       if ("stopped" in r) return text(r.takenOver ? `Marked ${r.stopped} cancelled (its process was gone). Resume it with crawl_run.` : `Stopping ${r.stopped}: in-flight batches finish first. Check crawl_status; resume later with crawl_run.`);
-      if (r.error === "foreign") return fail(`${r.running[0]} is running in another process (pid ${r.pid}). Stop it there, or pass force: true to take over a stale record.`);
+      if (r.error === "foreign") return fail(`${r.running[0]} is running in another process (pid ${r.pid}). Stop it there, or pass force: true to ask its owner to stop.`);
       if (r.error === "none") return fail("No crawl run is in progress here.");
       return fail(`Several runs are in progress; pass runDir:\n${r.running.map((d) => `  ${d}`).join("\n")}`);
     },

@@ -7,8 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitCrawlToHub } from "./hub.js";
+import { acquireLock } from "./lock.js";
 import { planCrawl, readPlan } from "./plan.js";
-import { CrawlServiceError, createCrawlService, readRunRecord, releaseTarget, type CrawlRunner, type CrawlServiceOptions } from "./service.js";
+import { CANCEL_MARKER, CrawlServiceError, createCrawlService, readRunRecord, releaseTarget, type CrawlRunner, type CrawlServiceOptions } from "./service.js";
 
 const dirs: string[] = [];
 const tmp = (p: string) => {
@@ -207,8 +208,14 @@ describe("process identity, heartbeat, takeover", () => {
     const dirBoot = await foreign(f, { boot: "old-boot" });
     const svc = svcOf(f, { pid: 333, isAlive: () => true });
     expect(svc.listRuns().find((r) => r.runDir === dirBoot)!.state).toBe("interrupted");
-    writeFileSync(join(dirBoot, "run.json"), JSON.stringify({ ...readRunRecord(dirBoot)!, boot: "b1", host: "other-host" }));
+    // another host: the pid cannot be checked, so a FRESH heartbeat means running-elsewhere, a stale one interrupted
+    writeFileSync(join(dirBoot, "run.json"), JSON.stringify({ ...readRunRecord(dirBoot)!, boot: "b1", host: "other-host", updatedAt: Date.now() }));
+    expect(svc.listRuns().find((r) => r.runDir === dirBoot)!.state).toBe("running-elsewhere");
+    writeFileSync(join(dirBoot, "run.json"), JSON.stringify({ ...readRunRecord(dirBoot)!, updatedAt: Date.now() - 10 * 60_000 }));
     expect(svc.listRuns().find((r) => r.runDir === dirBoot)!.state).toBe("interrupted");
+    // an "unknown" boot id never proves a difference
+    writeFileSync(join(dirBoot, "run.json"), JSON.stringify({ ...readRunRecord(dirBoot)!, host: ID.host, boot: "unknown", updatedAt: Date.now() }));
+    expect(svc.listRuns().find((r) => r.runDir === dirBoot)!.state).toBe("running-elsewhere");
   });
 
   it("a stale heartbeat reads interrupted even when the pid is alive; the heartbeat keeps a live run fresh", async () => {
@@ -234,8 +241,10 @@ describe("process identity, heartbeat, takeover", () => {
     const dir = await foreign(f, {});
     const live = svcOf(f, { pid: 333, isAlive: () => true });
     expect(live.stopRun(dir)).toMatchObject({ error: "foreign", pid: 111 });
-    expect(live.stopRun(dir, { force: true })).toEqual({ stopped: dir, takenOver: true });
-    expect(readRunRecord(dir)).toMatchObject({ state: "cancelled" });
+    // force on a live owner never rewrites its record: it leaves a cancel marker the owner honours at its heartbeat
+    expect(live.stopRun(dir, { force: true })).toEqual({ stopped: dir, requested: true });
+    expect(readRunRecord(dir)).toMatchObject({ state: "running" });
+    expect(existsSync(join(dir, CANCEL_MARKER))).toBe(true);
 
     const f2 = fixture();
     const dir2 = await foreign(f2, {});
@@ -307,7 +316,7 @@ describe("release target + guards", () => {
     const f = fixture();
     const ops = tmp("ops");
     const ok = holdRunner();
-    const owner = svcOf(f, { runner: { ...emitStub(), run: ok.runner.run }, env: { KB_OPS: ops }, pid: 111, isAlive: () => true });
+    const owner = svcOf(f, { runner: { ...emitStub(), run: ok.runner.run }, env: { KB_OPS: ops }, pid: 111, isAlive: () => true, localDomains: () => new Set(["wolfpack"]) });
     const dir = (await owner.startRun({ planPath: f.planPath, wolf: "w" })).runDir;
     writeFileSync(join(dir, "history.json"), "{}");
     const peer = svcOf(f, { runner: emitStub(), env: { KB_OPS: ops }, pid: 222, isAlive: () => true });
@@ -509,5 +518,111 @@ describe("hub seams, domains", () => {
     expect(pv.curated.has("crawl-wolfpack-docs0")).toBe(true);
     // no hub target: the field is ok (nothing to be unknown about)
     expect((await svcOf(f, { runner, env: { KB_OPS: tmp("ops") } }).previewRelease(f.runDir, { wolf: "w" })).hubState).toBe("ok");
+  });
+});
+
+describe("review round 2: reservation, cancel marker, resume vs release, domains, live redaction", () => {
+  it("a reservation survives a slow runner.run (no sink yet) because the heartbeat refreshes it", async () => {
+    const f = fixture();
+    let t = 1_000_000;
+    const owner = svcOf(f, { runner: holdRunner({ sink: false }).runner, pid: 111, now: () => t, staleMs: 45_000, isAlive: () => true });
+    await owner.startRun({ planPath: f.planPath });
+    const peer = svcOf(f, { pid: 222, now: () => t, staleMs: 45_000, isAlive: () => true });
+    t += 30_000;
+    owner.heartbeat();
+    t += 30_000; // 60 s since the reservation was made, 30 s since its last refresh
+    await expect(peer.startRun({ planPath: f.planPath })).rejects.toMatchObject({ code: "clash" });
+    owner.shutdown();
+  });
+
+  it("stop --force on a live foreign run leaves a cancel marker; the owner aborts at its next heartbeat", async () => {
+    const f = fixture();
+    const owner = svcOf(f, { pid: 111, isAlive: () => true });
+    const dir = (await owner.startRun({ planPath: f.planPath })).runDir;
+    const peer = svcOf(f, { pid: 222, isAlive: () => true });
+    expect(peer.stopRun(dir)).toMatchObject({ error: "foreign" });
+    expect(peer.stopRun(dir, { force: true })).toEqual({ stopped: dir, requested: true });
+    owner.heartbeat();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(owner.listRuns().find((r) => r.runDir === dir)!.state).toBe("cancelled");
+    expect(existsSync(join(dir, CANCEL_MARKER))).toBe(false);
+    owner.shutdown();
+  });
+
+  it("a resume is refused while the dir is being released (in-process or a fresh release.lock from another process)", async () => {
+    const f = fixture();
+    const owner = svcOf(f, { pid: 111 });
+    const dir = (await owner.startRun({ planPath: f.planPath })).runDir;
+    writeFileSync(join(dir, "observations.jsonl"), "");
+    const second = svcOf(f, { pid: 222, isAlive: () => false });
+    const out = second.outstanding(f.plan);
+    expect(out.map((o) => o.runDir)).toEqual([dir]);
+    const lock = acquireLock(join(dir, "release.lock"), 60_000, { pid: 7, host: "h1", boot: "b1", isAlive: () => true, now: () => Date.now() });
+    expect(lock).toBeTruthy();
+    const third = svcOf(f, { pid: 333, isAlive: (p) => p === 7 });
+    await expect(third.startRun({ planPath: f.planPath, resume: out[0] })).rejects.toMatchObject({ code: "releasing" });
+  });
+
+  it("a KB_OPS-only host (release target, no readable domains, no hub) fails closed; no release target at all skips the check", async () => {
+    const f = fixture();
+    const ops = svcOf(f, { env: { KB_OPS: tmp("ops") } });
+    await expect(ops.startRun({ planPath: f.planPath })).rejects.toMatchObject({ code: "domains-unknown" });
+    expect(() => ops.requireDomains()).toThrowError(/declared domains could not be read/);
+    const none = svcOf(f, { env: {} });
+    expect(() => none.requireDomains()).not.toThrow();
+  });
+
+  it("a down registry is not re-tried on every call (negative cache) and a last-good list expires after domainsMaxAgeMs", async () => {
+    const f = fixture();
+    let t = 1_000;
+    let calls = 0;
+    let up = true;
+    vi.stubGlobal("fetch", async () => {
+      calls++;
+      return up ? Response.json({ domains: [{ name: "wolfpack" }] }) : new Response("no", { status: 503 });
+    });
+    const svc = svcOf(f, { env: { WOLFPACK_HUB_URL: "https://hub.example", WOLFPACK_HUB_TOKEN: "x" }, now: () => t, domainsTtlMs: 100, domainsRetryMs: 5_000, domainsMaxAgeMs: 60_000 });
+    expect([...(await svc.refreshDomains())!]).toEqual(["wolfpack"]);
+    up = false;
+    t += 200;
+    expect(await svc.refreshDomains()).toBeTruthy(); // failed read, last good kept
+    const n = calls;
+    t += 200;
+    await svc.refreshDomains();
+    expect(calls).toBe(n); // inside the retry window: no new request
+    t += 120_000;
+    await svc.refreshDomains();
+    expect(svc.declaredDomains()).toBeNull(); // too old to trust
+  });
+
+  it("the live status scrubs a token in a row error, not only the persisted record", async () => {
+    const f = fixture();
+    const runner: CrawlRunner = {
+      run(planFile, o) {
+        const dir = join(o.sinkBase!, "run-live");
+        mkdirSync(dir, { recursive: true });
+        copyFileSync(planFile, join(dir, "plan.yaml"));
+        o.onSink?.(dir);
+        o.onProgress?.({ phase: "batch", batch: { topic: "docs0", index: 0, total: 1, files: 1, stage: "error", error: "401 Bearer live-secret-9 tok-live-abc" } });
+        return new Promise(() => {});
+      },
+      emit: () => {
+        throw new Error("x");
+      },
+    };
+    const svc = svcOf(f, { runner, env: { WOLFPACK_HUB_TOKEN: "tok-live-abc" } });
+    const dir = (await svc.startRun({ planPath: f.planPath })).runDir;
+    const view = svc.listRuns().find((r) => r.runDir === dir)!;
+    expect(JSON.stringify(view.progress)).not.toMatch(/live-secret|tok-live-abc/);
+    svc.shutdown();
+  });
+
+  it("a run.json from a newer version is `unsupported` (left alone, not corrupt, not releasable)", async () => {
+    const f = fixture();
+    writeFileSync(join(f.runDir, "run.json"), JSON.stringify({ version: 2, state: "done" }));
+    const svc = svcOf(f);
+    expect(svc.listRuns().find((r) => r.runDir === f.runDir)!.state).toBe("unsupported");
+    expect(existsSync(join(f.runDir, "run.json.corrupt"))).toBe(false);
+    expect(svc.releasable(f.runDir)).toMatchObject({ ok: false, code: "unsupported" });
   });
 });

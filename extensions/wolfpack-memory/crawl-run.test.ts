@@ -79,7 +79,10 @@ function setup(opts: { cards?: boolean; opsRoot?: string | null; env?: Record<st
       };
     },
   };
-  const env: NodeJS.ProcessEnv = { WOLFPACK_CRAWL_HOME: crawlHome, KB_BASE: "", KB_OPS: ops ?? "", ...opts.env };
+  // a declared-domain source: with a release target and no readable domains the service fails closed
+  const kbBase = tmp("kbbase");
+  writeFileSync(join(kbBase, "domains.yaml"), "domains:\n  wolfpack: {}\n");
+  const env: NodeJS.ProcessEnv = { WOLFPACK_CRAWL_HOME: crawlHome, KB_BASE: kbBase, KB_OPS: ops ?? "", ...opts.env };
   const ext = createCrawlExtension({ runner }, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env, ...(opts.cards === false ? {} : { capabilities: { askCards: true } }) } as never);
   const cardLog: FakeCard[] = [];
   const conv = fakeConversation(cardLog);
@@ -464,6 +467,6 @@ describe("teardown and start races", () => {
     const t = setup();
     const planPath = await t.plan();
     await t.call("crawl_run", { planPath, concurrency: 5 });
-    expect(t.calls.run[0].opts.kbBase).toBe("");
+    expect(t.calls.run[0].opts.kbBase).not.toBe("/daemon/kb"); // the wolf's own env, never the daemon's
   });
 });

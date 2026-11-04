@@ -108,6 +108,10 @@ npm run sandbox:stack:desktop  # or sandbox:stack for the browser console
 To keep model usage low while testing, add `tiers: {main: {model: claude-haiku-5-5}, smart: {model: claude-haiku-5-5}}` to
 the wolves' `wolf.yaml`.
 
+**Attach mode.** `npm run dev:desktop:attach` (`STACK_APP=desktop STACK_WOLVES=attach`) opens only the Electron app and its dev
+console against a workerd you already started by hand (`/healthz` on `127.0.0.1:$WORKERD_PORT`, default 7141). It starts no
+workerd or wolves, builds nothing and skips the models/API-key checks; it exits 1 if no workerd answers.
+
 **Extension bundles.** wolfd loads each wolf's extensions from the installed bundle in its den
 (`<sandbox>/dens/<wolf>/extensions/<ext>/index.js`), which nothing else rebuilds. On every start `dev-stack.sh` builds the
 CLI from this checkout and runs `sandbox install-extensions` for each sandboxed wolf whose bundle is missing or older than

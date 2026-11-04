@@ -90,3 +90,24 @@ describe("claude-stateless factory", () => {
     rmSync(home, { recursive: true, force: true });
   });
 });
+
+describe("withFreshSystemPrompt", () => {
+  it("turns a bare string into a custom prompt with snapshot:false and keeps other options", async () => {
+    const { withFreshSystemPrompt } = await import("./claude-stateless.js");
+    const seen: any[] = [];
+    const q = withFreshSystemPrompt((a) => { seen.push(a); return "it"; });
+    expect(q({ prompt: "hi", options: { systemPrompt: "persona", resume: "s1", cwd: "/x" } })).toBe("it");
+    expect(seen[0]).toEqual({ prompt: "hi", options: { systemPrompt: { type: "custom", prompt: "persona", snapshot: false }, resume: "s1", cwd: "/x" } });
+  });
+  it("leaves non-string shapes and missing prompts untouched", async () => {
+    const { withFreshSystemPrompt } = await import("./claude-stateless.js");
+    const seen: any[] = [];
+    const q = withFreshSystemPrompt((a) => { seen.push(a); });
+    const preset = { type: "preset", preset: "claude_code" };
+    const a1 = { prompt: "p", options: { systemPrompt: preset } };
+    const a2 = { prompt: "p", options: {} };
+    const a3 = { prompt: "p", options: { systemPrompt: ["a", "b"] } };
+    q(a1); q(a2); q(a3);
+    expect(seen[0]).toBe(a1); expect(seen[1]).toBe(a2); expect(seen[2]).toBe(a3);
+  });
+});

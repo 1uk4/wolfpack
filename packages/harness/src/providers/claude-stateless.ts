@@ -36,9 +36,22 @@ export interface ClaudeStatelessSeams {
   models?: Parameters<typeof createStatelessProvider>[0]["models"];
 }
 
+/**
+ * The bridge resumes a deterministic Claude session every round and sends `systemPrompt` as a bare string. The SDK's default
+ * for a bare string is `snapshot: true`: the first request's prompt is recorded and replayed verbatim on every resume, so a
+ * changed persona (AGENTS.md) is ignored until compaction (sdk.d.ts, `systemPrompt`: "use { type: 'custom', prompt,
+ * snapshot: false } to opt it out"). Wrap the query so a bare string is sent fresh every round. Anything else is untouched.
+ * Cost: the system prompt is re-rendered each request (the API prompt-cache prefix is only as stable as the text itself).
+ */
+export const withFreshSystemPrompt = (queryFn: (args: any) => any) => (args: any) => {
+  const sp = args?.options?.systemPrompt;
+  if (typeof sp !== "string") return queryFn(args);
+  return queryFn({ ...args, options: { ...args.options, systemPrompt: { type: "custom", prompt: sp, snapshot: false } } });
+};
+
 /** Seams for a stateless provider that must run on the host's Agent SDK `query` (its own import is stubbed in the bundle). */
 export const claudeStatelessSdkSeams = (queryFn: unknown): ClaudeStatelessSeams => ({
-  queryFn: queryFn as ClaudeStatelessSeams["queryFn"],
+  queryFn: withFreshSystemPrompt(queryFn as (args: any) => any) as ClaudeStatelessSeams["queryFn"],
 });
 
 /** claude-bridge's model table re-tagged for this provider (same ids, limits and zero costs). */

@@ -46,7 +46,7 @@ describe("crawl service release against a real hubd", () => {
     // the hub in this checkout has no receipts/check routes yet: the seams answer "unknown", the preview still works
     expect(pv.hubUnchanged).toBeUndefined();
 
-    const r = await svc.release(runDir, { wolf: "crawler", roots });
+    const r = await svc.release(runDir, { wolf: "crawler", roots, confirmed: true });
     expect(r.via).toBe("hub");
     expect(r.dest).toBe(`${hub.url}/v1/contributions`);
     const landed = readdirSync(contributionsDir(dataDir, "crawler")).filter((f) => f.endsWith(".md"));
@@ -55,7 +55,7 @@ describe("crawl service release against a real hubd", () => {
     expect(readRunRecord(runDir)).toBeUndefined(); // released without a run in this process: no record to amend
     expect(JSON.parse(readFileSync(join(runDir, "emitted.json"), "utf-8"))).toMatchObject({ via: "hub", emitted: r.emitted });
 
-    const again = await svc.release(runDir, { wolf: "crawler", roots });
+    const again = await svc.release(runDir, { wolf: "crawler", roots, confirmed: true });
     expect(again.emitted).toBe(0);
     expect(readdirSync(contributionsDir(dataDir, "crawler")).filter((f) => f.endsWith(".md"))).toHaveLength(landed.length);
   });
@@ -70,7 +70,7 @@ describe("crawl service release against a real hubd", () => {
     writeFileSync(join(sink.dir, "history.json"), JSON.stringify({ title: "H", summary: "s", body: "h", events: [] }));
     const env = { WOLFPACK_HUB_URL: hub.url, WOLFPACK_HUB_TOKEN: "not-a-token" };
     const svc = createCrawlService({ crawlHome, env, runner: { run: runCrawl as never, emit: defaultEmit(env) } });
-    const err = await svc.release(sink.dir, { wolf: "crawler", roots: { denLocal: join(tmp("den2"), "kb") } }).catch((e: Error) => e);
+    const err = await svc.release(sink.dir, { wolf: "crawler", confirmed: true, roots: { denLocal: join(tmp("den2"), "kb") } }).catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toContain("not-a-token");
     expect(() => readFileSync(join(sink.dir, "emitted.json"))).toThrow();

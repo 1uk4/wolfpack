@@ -9,6 +9,7 @@ export {
   listCrawls,
   findLatestPlan,
   findIncompleteRuns,
+  readIncompleteRun,
   agoLabel,
   incompleteRunLabel,
   crawlEntityLabel,

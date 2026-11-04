@@ -167,11 +167,40 @@ export interface IncompleteRun {
   mtime: number;
 }
 
+/** The unfinished-run view of ONE dir (any plan), or undefined when it never ran or is fully done. The single rule for "resumable". */
+export function readIncompleteRun(dir: string): IncompleteRun | undefined {
+  if (!hasFile(dir, "observations.jsonl")) return undefined; // never ran (plan dir)
+  let plan: ReturnType<typeof readPlan>;
+  try {
+    plan = readPlan(path.join(dir, "plan.yaml"));
+  } catch {
+    return undefined;
+  }
+  let doneTopics = new Set<string>();
+  try {
+    doneTopics = new Set((JSON.parse(fs.readFileSync(path.join(dir, "topics.json"), "utf-8")) as [string, unknown][]).map(([k]) => k));
+  } catch {
+    /* nothing completed yet */
+  }
+  const topics = plan.batches.map((b) => b.topic);
+  const missing = topics.filter((t) => !doneTopics.has(t));
+  const journeyWritten = hasFile(dir, "history.json");
+  if (journeyWritten && missing.length === 0) return undefined;
+  let mtime = 0;
+  try {
+    mtime = fs.statSync(path.join(dir, "plan.yaml")).mtimeMs;
+  } catch {
+    /* 0 */
+  }
+  return { runDir: dir, missing, done: doneTopics.size, total: topics.length, domain: plan.domain, journeyWritten, mtime };
+}
+
 /** Resumable runs of this plan (same source + domain), newest first: extraction began and it is not fully done. */
 export function findIncompleteRuns(resolved: { source: string; domain: string }, bases: string[]): IncompleteRun[] {
   const found: IncompleteRun[] = [];
   for (const dir of scanCrawlDirs(bases)) {
-    if (!hasFile(dir, "observations.jsonl")) continue; // never ran (plan dir)
+    const inc = readIncompleteRun(dir);
+    if (!inc) continue;
     let plan: ReturnType<typeof readPlan>;
     try {
       plan = readPlan(path.join(dir, "plan.yaml"));
@@ -179,23 +208,7 @@ export function findIncompleteRuns(resolved: { source: string; domain: string },
       continue;
     }
     if (plan.source !== resolved.source || plan.domain !== resolved.domain) continue;
-    let doneTopics = new Set<string>();
-    try {
-      doneTopics = new Set((JSON.parse(fs.readFileSync(path.join(dir, "topics.json"), "utf-8")) as [string, unknown][]).map(([k]) => k));
-    } catch {
-      /* nothing completed yet */
-    }
-    const topics = plan.batches.map((b) => b.topic);
-    const missing = topics.filter((t) => !doneTopics.has(t));
-    const journeyWritten = hasFile(dir, "history.json");
-    if (journeyWritten && missing.length === 0) continue;
-    let mtime = 0;
-    try {
-      mtime = fs.statSync(path.join(dir, "plan.yaml")).mtimeMs;
-    } catch {
-      /* 0 */
-    }
-    found.push({ runDir: dir, missing, done: doneTopics.size, total: topics.length, domain: plan.domain, journeyWritten, mtime });
+    found.push(inc);
   }
   return found.sort((a, b) => b.mtime - a.mtime);
 }

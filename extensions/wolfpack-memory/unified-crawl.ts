@@ -56,6 +56,16 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
     mkdirSync(crawlHome, { recursive: true });
     return core.draft(o);
   };
+  /** Fail closed: with no KB mirror and an unreadable hub registry the domain cannot be checked, so planning stops rather than skipping the check. */
+  const domainsRefusal = (): ToolResult | undefined => {
+    try {
+      service.requireDomains();
+      return undefined;
+    } catch (e) {
+      return fail(e);
+    }
+  };
+
   const run = createCrawlRunTools({
     core,
     service,
@@ -115,6 +125,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         ...docs.plan,
         async execute(args: DraftOptions, ctx: ToolContext) {
           await service.refreshDomains();
+          { const refused = domainsRefusal(); if (refused) return refused; }
           if (!core.isDir(args.path)) return fail(`source is not a directory: ${args.path}`);
           begin(ctx);
           try {
@@ -145,6 +156,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         ...docs.validate,
         async execute(args: { planPath?: string }) {
           await service.refreshDomains();
+          { const refused = domainsRefusal(); if (refused) return refused; }
           try {
             const r = core.validate(args.planPath);
             return text(r.ok ? "GATE PASSES — plan is ready to run." : `GATE FAILS:\n  ${r.failures.join("\n  ")}`, { details: r });
@@ -159,6 +171,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         ...docs.finalize,
         async execute(args: { planPath?: string }, ctx: ToolContext) {
           await service.refreshDomains();
+          { const refused = domainsRefusal(); if (refused) return refused; }
           try {
             const r = core.finalize(args.planPath);
             if (!r.ok) return text(`CANNOT FINALIZE — fix these first:\n  ${r.failures.join("\n  ")}`, { details: r });

@@ -8,7 +8,7 @@
  * `/v1/contributions` with `Authorization: Bearer` (the hub takes the wolf from the token's host). The wolf's `emitted.json` dedup is only kept when every post succeeded; on a failure
  * it is restored, so a retry re-sends (the hub is idempotent on topic + content hash).
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.js";
@@ -27,10 +27,15 @@ export function hubTargetFromEnv(env: Record<string, string | undefined> = proce
   return baseUrl ? { baseUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
 }
 
-/** The hub URL without credentials, query or fragment (safe to show and log). */
+let warnedCreds = false;
+/** The hub URL without credentials, query or fragment (safe to show and log). Warns once when credentials were stripped (use WOLFPACK_HUB_TOKEN). */
 export function redactUrl(url: string): string {
   try {
     const u = new URL(url);
+    if ((u.username || u.password) && !warnedCreds) {
+      warnedCreds = true;
+      console.warn("[crawl] the hub URL contains credentials; they are ignored. Put the token in WOLFPACK_HUB_TOKEN.");
+    }
     u.username = "";
     u.password = "";
     u.search = "";
@@ -44,8 +49,20 @@ export function redactUrl(url: string): string {
 /** Hub POST timeout. */
 export const POST_TIMEOUT_MS = 30_000;
 
-/** Strip `user:pass@` from any URL inside an error text. */
-const scrub = (text: string): string => text.replace(/(\/\/)[^/@\s]*@/g, "$1");
+/**
+ * Strip secrets from text that may be persisted or shown: URL userinfo, `Bearer …`, `sk-…` keys, `?token=` style query values,
+ * and any exact `secrets` given (e.g. the hub token, which a server may echo back).
+ */
+export function scrubSecrets(text: string, secrets: (string | undefined)[] = []): string {
+  let out = text
+    .replace(/(\/\/)[^/@\s]*@/g, "$1")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
+    .replace(/\bsk-[A-Za-z0-9_-]{6,}/g, "sk-***")
+    .replace(/([?&](?:token|access_token|api_key|apikey|key|secret)=)[^&\s"']+/gi, "$1***");
+  for (const t of secrets) if (t && t.length >= 4) out = out.split(t).join("***");
+  return out;
+}
+const scrub = (text: string, hub?: HubTarget): string => scrubSecrets(text, [hub?.token]);
 
 /** POST one contribution as the wolf (30 s timeout). Throws, with credentials scrubbed from the text, on a transport error, a non-2xx, or a 2xx without an id. */
 export async function postContribution(hub: HubTarget, wolf: string, contribution: object): Promise<{ id: string; duplicate: boolean }> {
@@ -62,35 +79,54 @@ export async function postContribution(hub: HubTarget, wolf: string, contributio
       signal: AbortSignal.timeout(POST_TIMEOUT_MS),
     });
   } catch (e) {
-    throw new Error(scrub(`could not reach the hub at ${where}: ${e instanceof Error ? e.message : String(e)}`));
+    throw new Error(scrub(`could not reach the hub at ${where}: ${e instanceof Error ? e.message : String(e)}`, hub));
   }
   const body = (await res.json().catch(() => ({}))) as { id?: unknown; duplicate?: unknown; message?: unknown };
-  if (!res.ok) throw new Error(scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`));
+  if (!res.ok) throw new Error(scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`, hub));
   if (typeof body.id !== "string" || !body.id) throw new Error(`hub at ${where} answered ${res.status} without a stored id`);
   return { id: body.id, duplicate: body.duplicate === true };
 }
 
+/** Merge `staged` (a staging den's emitted map + bodies) into the real den for the given topic ids; read-merge-write so a concurrent release's entries survive. */
+function persistDedup(stagedDen: string, realDen: string, ids: string[]): void {
+  if (ids.length === 0) return;
+  const read = (p: string): Record<string, string> => {
+    try {
+      const j = JSON.parse(readFileSync(p, "utf-8"));
+      return j && typeof j === "object" ? j : {};
+    } catch {
+      return {};
+    }
+  };
+  const staged = read(join(stagedDen, "emitted.json"));
+  mkdirSync(realDen, { recursive: true });
+  const real = read(join(realDen, "emitted.json"));
+  for (const id of ids) if (staged[id] !== undefined) real[id] = staged[id];
+  const tmp = join(realDen, `emitted.json.${process.pid}.${Date.now()}.tmp`);
+  writeFileSync(tmp, JSON.stringify(real, null, 2) + "\n");
+  renameSync(tmp, join(realDen, "emitted.json"));
+  const bodies = join(stagedDen, "emitted-bodies");
+  if (existsSync(bodies)) cpSync(bodies, join(realDen, "emitted-bodies"), { recursive: true });
+}
+
 /**
- * Like `emitCrawl` (real emit), but delivers to the hub. `dest` of the result is the hub URL (credentials stripped). If emitCrawl or
- * any post fails, the wolf's `emitted.json` dedup is restored, so a retry re-sends everything; the hub is idempotent
- * (an already-stored contribution answers 200 `duplicate`), so only the missing ones land.
+ * Like `emitCrawl` (real emit), but delivers to the hub. `dest` of the result is the hub URL (credentials stripped).
+ * The contributions are built against a STAGING copy of the wolf's dedup (`emitted.json`), posted, and only when every post
+ * succeeded is the dedup merged into the real den. A failure or a crash anywhere before that leaves the real dedup untouched, so
+ * unsent items are never marked sent and a retry re-sends everything (the hub is idempotent: an already-stored contribution
+ * answers 200 `duplicate`).
  */
 export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<EmitCrawlOptions, "dryRun"> = {}): Promise<EmitCrawlResult> {
   const wolf = opts.wolf ?? process.env.WOLF_NAME ?? "scribe";
   const denLocal = opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb");
-  const emittedPath = join(denLocal, "emitted.json");
-  const before = existsSync(emittedPath) ? readFileSync(emittedPath, "utf-8") : undefined;
   const staging = mkdtempSync(join(tmpdir(), "crawl-hub-"));
+  const stagedDen = join(staging, "den-kb");
   try {
-    let r: EmitCrawlResult;
-    try {
-      r = emitCrawl(runDir, { ...opts, wolf, dryRun: false, quiet: true, roots: { ...opts.roots, opsRoot: staging, denLocal } });
-      for (const c of r.delta) await postContribution(hub, wolf, c);
-    } catch (e) {
-      if (before !== undefined) writeFileSync(emittedPath, before);
-      else rmSync(emittedPath, { force: true });
-      throw e;
-    }
+    mkdirSync(stagedDen, { recursive: true });
+    for (const f of ["emitted.json", "emitted-bodies"]) if (existsSync(join(denLocal, f))) cpSync(join(denLocal, f), join(stagedDen, f), { recursive: true });
+    const r = emitCrawl(runDir, { ...opts, wolf, dryRun: false, quiet: true, roots: { ...opts.roots, opsRoot: join(staging, "ops"), denLocal: stagedDen } });
+    for (const c of r.delta) await postContribution(hub, wolf, c);
+    persistDedup(stagedDen, denLocal, r.delta.map((c) => c.denTopicId));
     const dest = `${redactUrl(hub.baseUrl)}/v1/contributions`;
     if (!opts.quiet) console.log(`\n${r.emitted} contribution(s) emitted → ${dest}`);
     return { ...r, dest };

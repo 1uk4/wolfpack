@@ -24,7 +24,7 @@ import { defineTool, Type, type ExtensionContext, type ToolContext, type ToolRes
 import type { Card } from "@wolfpack/protocol";
 import { engineSteps, createEngine, loadModelTable } from "@wolfpack/engine";
 import { confirmCard } from "@wolfpack/harness/engine";
-import { CRAWL_CONCURRENCY_MAX, CrawlServiceError, DEFAULT_CRAWL_CONCURRENCY, defaultEmit, describeTarget, parseConcurrency, readPlan, runCrawl, type CrawlRunner, type CrawlService, type RunView } from "@wolfpack/memory";
+import { CONCURRENCY_CHOICES, CRAWL_CONCURRENCY_MAX, CrawlServiceError, defaultEmit, envConcurrency as envConcurrencyOf, describeTarget, parseConcurrency, readPlan, runCrawl, type CrawlRunner, type CrawlService, type RunView } from "@wolfpack/memory";
 import type { CrawlCore } from "./crawl-core.js";
 import {
   crawlEntityLabel,
@@ -39,7 +39,6 @@ import {
 
 export { CRAWL_CONCURRENCY_MAX };
 export type { CrawlRunner };
-const CONCURRENCY_CHOICES = [5, 8, 12, 16, 24, 32];
 
 const text = (t: string, extra: Partial<ToolResult> = {}): ToolResult => ({ content: [{ type: "text", text: t }], ...extra });
 const fail = (t: string): ToolResult => text(t, { isError: true });
@@ -77,10 +76,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
   const stop = () => service.shutdown();
   const bases = [crawlHome];
   const opsRoot = env.KB_OPS || undefined;
-  const envConcurrency = (): number => {
-    const raw = Number(env.WOLFPACK_CRAWL_CONCURRENCY);
-    return Number.isFinite(raw) && raw >= 1 ? Math.min(Math.floor(raw), CRAWL_CONCURRENCY_MAX) : DEFAULT_CRAWL_CONCURRENCY;
-  };
+  const envConcurrency = (): number => envConcurrencyOf(env);
 
   /** Cards are only for a conversation someone reads: not a task-owned one (a subagent). */
   async function canAsk(ctx: ToolContext): Promise<boolean> {
@@ -169,6 +165,11 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         return fail(`Cannot read the plan ${planPath}: ${e instanceof Error ? e.message : String(e)}`);
       }
       await service.refreshDomains();
+      try {
+        service.requireDomains();
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
       const gate = core.validate(planPath);
       if (!gate.ok) return fail(`The plan is not ready to run (gate fails):\n  ${gate.failures.join("\n  ")}\nFinalize it with crawl_finalize first.`);
 
@@ -198,9 +199,10 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
 
       let started: ReturnType<CrawlService["startRun"]>;
       try {
-        started = service.startRun({ planPath, concurrency, resume: resumeRun, wolf: ctx.wolfName, onAccepted: () => i.onRunStart?.(ctx) });
+        started = await service.startRun({ planPath, concurrency, resume: resumeRun, wolf: ctx.wolfName, onAccepted: () => i.onRunStart?.(ctx) });
       } catch (e) {
         if (e instanceof CrawlServiceError && e.code === "clash") return text(`${e.message} Use crawl_status to follow it.`);
+        if (e instanceof CrawlServiceError && e.code === "corrupt") return fail(e.message);
         return fail(e instanceof Error ? e.message : String(e));
       }
       return text(
@@ -225,6 +227,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         return `RUNNING ${where} in another process (pid ${rec?.pid})`;
       case "interrupted":
         return `INTERRUPTED ${where} — the process that ran it is gone; finished batches were kept, resumable with crawl_run`;
+      case "corrupt":
+        return `UNREADABLE ${where} — run.json is corrupt (kept as run.json.corrupt); not resumable or releasable until inspected`;
       case "unrecorded":
         return `${r.resumable ? "UNFINISHED" : "ON DISK"} ${where} — started before run records existed${r.resumable ? "; resumable with crawl_run" : ""}`;
       case "done":
@@ -245,7 +249,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
     async execute(args: { runDir?: string }, ctx: ToolContext) {
       const { runs, disk } = service.status({ runDir: args.runDir, wolf: ctx.wolfName });
       const out: string[] = [];
-      for (const r of runs.filter((x) => x.record || x.live)) out.push(r.progress ? `${stateLine(r)}\n${renderProgress(r.progress)}` : stateLine(r));
+      for (const r of runs) out.push(r.progress ? `${stateLine(r)}\n${renderProgress(r.progress)}` : stateLine(r));
       if (args.runDir && runs.length === 0 && disk.length === 0) return fail(`No crawl at ${args.runDir}.`);
       if (disk.length > 0) {
         out.push(`On disk (${Math.min(disk.length, 10)} of ${disk.length}, newest first):`);
@@ -257,11 +261,17 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
 
   const stopTool = defineTool({
     name: "crawl_stop",
-    description: "Stop a crawl run held by THIS process (a run from before a restart is already stopped: it reads interrupted in crawl_status): in-flight batches finish, nothing new starts; finished batches are kept and crawl_run can resume it.",
-    parameters: Type.Object({ runDir: Type.Optional(Type.String({ description: "The run to stop (defaults to the only one running)" })) }),
-    async execute(args: { runDir?: string }) {
-      const r = service.stopRun(args.runDir);
-      if ("stopped" in r) return text(`Stopping ${r.stopped}: in-flight batches finish first. Check crawl_status; resume later with crawl_run.`);
+    description:
+      "Stop a crawl run held by THIS process: in-flight batches finish, nothing new starts; finished batches are kept and crawl_run can resume it. " +
+      "For a run left over from a dead process (reads INTERRUPTED in crawl_status) pass its runDir to mark it cancelled; `force` also takes over a record that claims to run in another live process.",
+    parameters: Type.Object({
+      runDir: Type.Optional(Type.String({ description: "The run to stop (defaults to the only one running)" })),
+      force: Type.Optional(Type.Boolean({ description: "Take over a stale record that claims to be running in another process" })),
+    }),
+    async execute(args: { runDir?: string; force?: boolean }) {
+      const r = service.stopRun(args.runDir, { force: args.force === true });
+      if ("stopped" in r) return text(r.takenOver ? `Marked ${r.stopped} cancelled (its process was gone). Resume it with crawl_run.` : `Stopping ${r.stopped}: in-flight batches finish first. Check crawl_status; resume later with crawl_run.`);
+      if (r.error === "foreign") return fail(`${r.running[0]} is running in another process (pid ${r.pid}). Stop it there, or pass force: true to take over a stale record.`);
       if (r.error === "none") return fail("No crawl run is in progress here.");
       return fail(`Several runs are in progress; pass runDir:\n${r.running.map((d) => `  ${d}`).join("\n")}`);
     },
@@ -293,7 +303,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const asks = await canAsk(ctx);
       let runDir = args.runDir;
       if (!runDir) {
-        const all = listCrawls(bases, { opsRoot, wolf: ctx.wolfName }).filter((e) => e.status === "complete" || e.status === "released" || e.status === "curated");
+        const all = listCrawls(bases, { opsRoot, wolf: ctx.wolfName }).filter((e) => (e.status === "complete" || e.status === "released" || e.status === "curated") && service.releasable(e.dir).ok);
         if (all.length === 0) return fail("No completed crawl to release; run one with crawl_run first.");
         if (all.length === 1) runDir = all[0].dir;
         else {
@@ -327,6 +337,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       try {
         pv = await service.previewRelease(dir, { wolf: ctx.wolfName, roots });
       } catch (e) {
+        if (e instanceof CrawlServiceError) return fail(e.message);
         return fail(`Could not build the release preview: ${e instanceof Error ? e.message : String(e)}`);
       }
       const { items, toEmit, plan, release, target } = pv;
@@ -340,6 +351,14 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const list = items.map((c) => `- ${c.kind === "history" ? "history" : c.topic} — ${c.title} (${c.bodyChars} chars, ${c.status === "emit" ? "new/changed" : "unchanged"})`).join("\n");
       const review = `${items.length} contribution(s) from ${dir} (domain ${plan.domain}):\n${list}`;
 
+      const hubNote =
+        target.kind !== "hub"
+          ? ""
+          : pv.hubState === "unknown"
+            ? "⚠ Hub check unavailable: the hub could not tell what it already holds or has curated, so \"new/changed\" is judged from this wolf's own record only (the hub skips duplicates)."
+            : pv.hubUnchanged
+              ? `Hub check: ${pv.hubUnchanged.size} already on the hub.`
+              : "Hub check: receipts read.";
       if (target.kind === "none") return text(`${review}\n\nNo release target is configured here (neither WOLFPACK_HUB_URL nor KB_OPS), so this cannot be released.`, { isError: true });
       if (pv.journeyMissing) return text(`${review}\n\nThe run's journey is not written yet — finish it with crawl_run (resume) before releasing.`, { isError: true });
 
@@ -363,7 +382,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
           title: "Release to the librarian?",
           question: label,
           description:
-            `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → ${describeTarget(target, ctx.wolfName)} → Dewey` +
+            `${already ? `${already}\n\n` : ""}${hubNote ? `${hubNote}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → ${describeTarget(target, ctx.wolfName)} → Dewey` +
             `${unchanged ? ` (${unchanged} unchanged will be skipped)` : ""}.\n\n${list}\n\n` +
             `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
           confirmLabel: "Release",
@@ -373,8 +392,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       }
 
       try {
-        const r = await service.release(dir, { wolf: ctx.wolfName, roots });
-        return text(`${releasedLine(dir)} ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest } });
+        const r = await service.release(dir, { wolf: ctx.wolfName, roots, confirmed: true });
+        return text(`${releasedLine(dir)} ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.${r.warnings.length ? `\nWarning: ${r.warnings.join("; ")}` : ""}`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest } });
       } catch (e) {
         return fail(`Release failed: ${e instanceof Error ? e.message : String(e)}`);
       }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { emitCrawl } from "./emit.js";
-import { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl } from "./hub.js";
+import { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, scrubSecrets } from "./hub.js";
 import { planCrawl, readPlan } from "./plan.js";
 
 const dirs: string[] = [];
@@ -107,6 +107,43 @@ describe("emitCrawlToHub failure handling", () => {
     expect(call).toBe(5); // 2 + 3 (the first one answered duplicate)
   });
 
+  it("a crash between building the delta and the posts (the very first post blows up) leaves the wolf's dedup exactly as it was, with no staging leftovers", async () => {
+    const runDir = runDirFixture(2);
+    const denLocal = join(tmp("den"), "kb");
+    mkdirSync(denLocal, { recursive: true });
+    writeFileSync(join(denLocal, "emitted.json"), '{"keep":"me"}');
+    const crash = (async () => {
+      throw "process died";
+    }) as unknown as typeof fetch;
+    const before = readdirSync(tmpdir()).filter((n) => n.startsWith("crawl-hub-") && !n.startsWith("crawl-hub-src") && !n.startsWith("crawl-hub-run") && !n.startsWith("crawl-hub-sink") && !n.startsWith("crawl-hub-den") && !n.startsWith("crawl-hub-ops") && !n.startsWith("crawl-hub-s-"));
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: crash }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } })).rejects.toBeTruthy();
+    expect(readFileSync(join(denLocal, "emitted.json"), "utf-8")).toBe('{"keep":"me"}');
+    expect(existsSync(join(denLocal, "emitted-bodies"))).toBe(false);
+    const after = readdirSync(tmpdir()).filter((n) => n.startsWith("crawl-hub-") && !n.startsWith("crawl-hub-src") && !n.startsWith("crawl-hub-run") && !n.startsWith("crawl-hub-sink") && !n.startsWith("crawl-hub-den") && !n.startsWith("crawl-hub-ops") && !n.startsWith("crawl-hub-s-"));
+    expect(after).toEqual(before);
+  });
+
+  it("a success merges into the dedup as it is NOW: a concurrent release's entries written during the posts survive, and only the sent ids are added", async () => {
+    const runDir = runDirFixture(2);
+    const denLocal = join(tmp("den"), "kb");
+    mkdirSync(denLocal, { recursive: true });
+    writeFileSync(join(denLocal, "emitted.json"), '{"a":"1"}');
+    let first = true;
+    const racing = (async (_u: string, init: RequestInit) => {
+      if (first) {
+        first = false;
+        writeFileSync(join(denLocal, "emitted.json"), '{"a":"1","other-release":"2"}'); // someone else released meanwhile
+      }
+      const b = JSON.parse(String(init.body)) as { denTopicId: string };
+      return Response.json({ id: `${b.denTopicId}.md`, wolf: "w", duplicate: false }, { status: 201 });
+    }) as unknown as typeof fetch;
+    const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: racing }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } });
+    const map = JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8")) as Record<string, string>;
+    expect(map.a).toBe("1");
+    expect(map["other-release"]).toBe("2");
+    expect(Object.keys(map).length).toBe(2 + r.emitted);
+  });
+
   it("emitCrawl throwing leaves a previous emitted.json as it was and surfaces the error", async () => {
     const denLocal = join(tmp("den"), "kb");
     mkdirSync(denLocal, { recursive: true });
@@ -152,5 +189,13 @@ describe("emitCrawl (no hub): the inbox path is unchanged", () => {
     expect(r.dest).toBe(`${opsRoot}/inbox/w`);
     expect(readdirSync(join(opsRoot, "inbox", "w"))).toHaveLength(1);
     expect(r.delta).toHaveLength(1);
+  });
+});
+
+describe("scrubSecrets", () => {
+  it("removes userinfo, Bearer tokens, sk- keys, token query values and exact secrets", () => {
+    const t = scrubSecrets("GET https://u:p@h/x?token=abc&k=1 Bearer abc.def-1 sk-ant-abcdef12 and mytoken123", ["mytoken123"]);
+    expect(t).not.toMatch(/u:p|abc|sk-ant|mytoken123/);
+    expect(t).toContain("k=1");
   });
 });

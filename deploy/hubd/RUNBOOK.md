@@ -183,17 +183,18 @@ $N work-import $ARGS --dry-run
 # 4. import (prints the consistency check: every legacy file's stage vs the merged state; must say 0 mismatch(es))
 $N work-import $ARGS
 
+# 4b. idempotence: a second run, hubd still stopped, must print events 0 / add 0 / update 0
+$N work-import $ARGS --dry-run | head -5
+
 # 5. start hubd
 systemctl start hubd
 
 # 6. checks
 systemctl is-active hubd; journalctl -u hubd -n 20 --no-pager
-$N work-import $ARGS --dry-run | head -4          # (stop hubd first, the lock) -- or skip; the import's own re-run must show events 0 / add 0 / update 0
 wc -l /var/lib/hubd/ledger/work-events.jsonl      # 5 + 3926 = 3931
 # through the console/API: work-wolfpack-0HuY8Al is a shipped feature with its children; a PATCH to a formerly KB-only item returns 200, not 404
 ls /var/lib/hubd/kb/base/domains/wolfpack/work/*.md | wc -l   # ~530 (484 + 46)
 ```
-Note that the re-run check in step 6 needs hubd stopped (lock); do it before step 5 if wanted: run the import command a second time right after step 4 and expect `events to append: 0`, `files to add: 0`, `files to update: 0`.
 
 **Rollback** (hubd stopped): put back the ledger and the work files from the backup. `cp -a "$B/work/$d/." /var/lib/hubd/kb/base/domains/$d/work/` restores the replaced files (files the import added can be removed by diffing against `$B/work/$d`), and
 `cp -p /var/lib/hubd/backups/work-import-<stamp>/ledger/work-events.jsonl /var/lib/hubd/ledger/work-events.jsonl` restores the ledger (the pre-import copy, 5 events). `chown -R` is not needed if you run as above (`cp -a` keeps owners); then `systemctl start hubd`.

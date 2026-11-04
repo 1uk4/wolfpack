@@ -14,7 +14,8 @@ export interface SecretScan {
 
 const KEY_NAME = String.raw`[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|password|passwd|passphrase|private[_-]?key|credential)s?`;
 
-const PATTERNS: Array<{ kind: string; re: RegExp; replace?: (m: RegExpExecArray) => string }> = [
+type Looks = (v: string) => boolean;
+const PATTERNS: Array<{ kind: string; re: RegExp; replace?: (m: RegExpExecArray, looks: Looks) => string }> = [
   { kind: "private key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
   { kind: "token", re: /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{20,}/g },
   { kind: "token", re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/g },
@@ -32,7 +33,7 @@ const PATTERNS: Array<{ kind: string; re: RegExp; replace?: (m: RegExpExecArray)
   {
     kind: "credential assignment",
     re: new RegExp(String.raw`(\b${KEY_NAME}["']?\s*[:=]\s*["']?)([^\s"'<>{}$,;]{8,})`, "gi"),
-    replace: (m) => (looksSecret(m[2]) ? `${m[1]}[REDACTED:credential assignment]` : m[0]),
+    replace: (m, looks) => (looks(m[2]) ? `${m[1]}[REDACTED:credential assignment]` : m[0]),
   },
 ];
 
@@ -43,13 +44,41 @@ function looksSecret(v: string): boolean {
   return /\d/.test(v) || /[^A-Za-z]/.test(v);
 }
 
+/**
+ * Crawl variant of the credential-assignment value test (the hub's hard-400 path for crawl contributions). A key name like `token:` / `secret=`
+ * followed by one of these is NOT a credential, because crawled prose is full of them:
+ *   - a work-item id (`work-<domain>-<id>`) or a KB id (`kb-<domain>-<id>`)
+ *   - an env-var NAME: ALL_CAPS segments joined by underscores (at least one underscore), at most 2 digits (HUBD_TOKEN, WOLFPACK_HUB_TOKEN)
+ *   - plain words / a path: lowercase letters with - _ . / ~ and NO digits (per-wolf, hub-token-file, ~/.wolfpack/hub.json)
+ *   - a placeholder: <masked>, <redacted>, ***, xxx, ${VAR}, $VAR, or the words masked/redacted/hidden
+ * Everything else falls through to the work-item rule (a digit or any non-letter makes it a secret), so a value mixing letters and digits
+ * (such as a 16+ char key) is still caught, and every non-assignment pattern (private keys, bearer, JWT, URL credentials, token prefixes) is untouched.
+ * Not covered, by design: a value of only letters in mixed case (no digit, no symbol) is not flagged by either rule.
+ */
+export function looksSecretForCrawl(v: string): boolean {
+  if (/^(?:work|kb)-[a-z0-9][a-z0-9-]*-[A-Za-z0-9]{4,}$/.test(v)) return false;
+  if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(v) && (v.match(/\d/g) ?? []).length <= 2) return false;
+  if (/^[a-z~./_-]+$/.test(v)) return false;
+  if (/^(?:<[^<>\s]*>|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\*{3,}|x{3,}|masked|redacted|hidden)$/i.test(v)) return false;
+  return looksSecret(v);
+}
+
 export function scanSecrets(input: string): SecretScan {
+  return scan(input, looksSecret);
+}
+
+/** Like `scanSecrets`, but with the stricter crawl credential-assignment rule (`looksSecretForCrawl`). Only the hub's crawl check uses it. */
+export function scanSecretsForCrawl(input: string): SecretScan {
+  return scan(input, looksSecretForCrawl);
+}
+
+function scan(input: string, looks: Looks): SecretScan {
   let text = input;
   const counts = new Map<string, number>();
   for (const p of PATTERNS) {
     text = text.replace(p.re, (...args) => {
       const m = args.slice(0, -2) as unknown as RegExpExecArray;
-      const out = p.replace ? p.replace(m) : `[REDACTED:${p.kind}]`;
+      const out = p.replace ? p.replace(m, looks) : `[REDACTED:${p.kind}]`;
       if (out !== m[0]) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
       return out;
     });

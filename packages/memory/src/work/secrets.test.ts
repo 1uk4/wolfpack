@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scanSecrets } from "./secrets.js";
+import { scanSecrets, scanSecretsForCrawl } from "./secrets.js";
 
 describe("scanSecrets: telegram bot tokens", () => {
   const tok = `${"1".repeat(9)}:${"A".repeat(10)}-${"b".repeat(10)}_${"c".repeat(13)}`;
@@ -11,5 +11,23 @@ describe("scanSecrets: telegram bot tokens", () => {
   });
   it("leaves times, ratios and short ids alone", () => {
     expect(scanSecrets("12:30:45 ratio 3:1 id 12345678:short").findings).toEqual([]);
+  });
+});
+
+describe("scanSecretsForCrawl", () => {
+  it("leaves the work-item rule alone: scanSecrets still redacts a work id after 'token:'", () => {
+    expect(scanSecrets("token: work-wolfpack-ZBZPAZ9").findings).toEqual([{ kind: "credential assignment", count: 1 }]);
+    expect(scanSecretsForCrawl("token: work-wolfpack-ZBZPAZ9").findings).toEqual([]);
+  });
+  it("exempts ids, env-var names, plain words, paths and placeholders", () => {
+    for (const v of ["work-wolfpack-ZBZPAZ9", "kb-wolfpack-4acoMDv", "HUBD_TOKEN", "WOLFPACK_HUB_TOKEN", "per-wolf", "hub-token-file", "~/.wolfpack/hub.json", "/etc/hub/token", "<masked>", "<redacted>", "***", "xxxxxxxx", "${HUB_TOKEN}", "$HUB_TOKEN"]) {
+      expect(scanSecretsForCrawl(`token: ${v}`).findings, v).toEqual([]);
+    }
+  });
+  it("still catches near-miss real secrets", () => {
+    for (const v of ["a1b2c3d4e5f6a7b8c9d0e1f2", "hunter2hunter2", "Zx9_Qw3-Lk7pR2vT8nB4", "work-wolfpack-ZBZPAZ9-9f8e7d6c5b4a3210", "AB12CD34EF56GH78IJ", "per-wolf-2026-0abc1234def", "kb-wolfpack-4acoMDv.suffix1"]) {
+      expect(scanSecretsForCrawl(`secret=${v}`).findings.map((f) => f.kind), v).toContain("credential assignment");
+    }
+    for (const t of ["sk-" + "a".repeat(24), "-----BEGIN RSA PRIVATE KEY-----\nx", "Bearer " + "a".repeat(30), "https://u:" + "passw0rd@host/x", "ghp_" + "A1".repeat(18)]) expect(scanSecretsForCrawl(t).findings.length, t.slice(0, 8)).toBeGreaterThan(0);
   });
 });

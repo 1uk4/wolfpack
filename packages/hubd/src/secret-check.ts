@@ -1,7 +1,7 @@
 /**
  * The hub-side secret check on incoming contributions.
  *
- * SEAM (work-wolfpack-VO2wX3I): today this reuses the work-item scanner (`scanSecrets` from @wolfpack/memory); the shared secret-block
+ * SEAM (work-wolfpack-VO2wX3I): today this reuses the work-item scanner with its stricter crawl credential-assignment rule (`scanSecretsForCrawl` from @wolfpack/memory; work-item redaction keeps the over-eager `scanSecrets`). The crawl hard-400 and the non-crawl warning both use the crawl rule; the shared secret-block
  * module will replace `patternsIn` and nothing else here. Results are pattern NAMES and field paths, never matched text.
  *
  * The scanner's credential-assignment pattern backtracks quadratically on a long run of `a.a.a.` or `a-a-a-` (measured: 8 KB 0.16 s,
@@ -9,7 +9,7 @@
  * the length, each window bounded), and a field past MAX_SCAN_CHARS is not scanned at all but reported as `unscanned (too long)`, which
  * a strict caller treats as a finding (fail closed).
  */
-import { scanSecrets } from "@wolfpack/memory";
+import { scanSecretsForCrawl } from "@wolfpack/memory";
 
 /** Window and overlap, chars. The overlap exceeds the longest minimal span any pattern needs, so a secret cut by a window edge is whole in the next. */
 export const SCAN_WINDOW = 2048;
@@ -23,7 +23,7 @@ export function patternsIn(text: string): string[] {
   if (text.length > MAX_SCAN_CHARS) return [UNSCANNED];
   const kinds = new Set<string>();
   for (let i = 0; i < text.length; i += SCAN_WINDOW - SCAN_OVERLAP) {
-    for (const f of scanSecrets(text.slice(i, i + SCAN_WINDOW)).findings) kinds.add(f.kind);
+    for (const f of scanSecretsForCrawl(text.slice(i, i + SCAN_WINDOW)).findings) kinds.add(f.kind);
     if (i + SCAN_WINDOW >= text.length) break;
   }
   return [...kinds];

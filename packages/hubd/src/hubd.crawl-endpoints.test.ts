@@ -450,11 +450,25 @@ describe("secret check on contributions", () => {
     expect((await post("/v1/contributions", crawl("w2", "crawl-wolfpack-clean", "nothing secret here, a token is mentioned only in passing"), cast.wolves.w2)).status).toBe(201);
   });
 
-  it("KNOWN over-rejection (uncalibrated pattern): crawl prose like 'token: work-wolfpack-ZBZPAZ9' IS refused; the owner has no-override for crawl, so the entry is edited", async () => {
+  it("crawl prose that names a token/secret with a work id, kb id, env-var name, plain words, a path or a placeholder is NOT refused", async () => {
+    const prose = [
+      "see token: work-wolfpack-ZBZPAZ9 for details", "secret=kb-wolfpack-4acoMDv", "set the HUBD_TOKEN env: token: HUBD_TOKEN", "password: per-wolf",
+      "token_file: hub-token-file", "credential: ~/.wolfpack/hub.json", "api_key = <masked>", "token: ${HUB_TOKEN}", "secret: $HUB_SECRET", "password: ***", "token: xxx",
+    ].join("\n");
+    expect((await post("/v1/contributions", crawl("w2", "crawl-wolfpack-prose", prose), cast.wolves.w2)).status).toBe(201);
+  });
+
+  it("near-miss real secrets are still refused for crawl", async () => {
     const w = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await post("/v1/contributions", crawl("w2", "crawl-wolfpack-prose", "see token: work-wolfpack-ZBZPAZ9 for details"), cast.wolves.w2);
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("credential assignment");
+    const real = [
+      "token: ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "api_key = " + "a1b2c3d4e5f6a7b8c9d0e1f2", "password: " + "hunter2hunter2", "secret=" + "Zx9_Qw3-Lk7pR2vT8nB4",
+      "token: " + "work-wolfpack-ZBZPAZ9-" + "9f8e7d6c5b4a3210", "API_TOKEN: " + "AB12CD34EF56GH78IJ", "credential: " + "per-wolf-2026-0abc1234def",
+      "-----BEGIN PRIVATE KEY-----\nabc", "Authorization: Bearer " + "abcdefghijklmnopqrstuvwxyz0123456789", "postgres://user:" + "s3cretpass@db/x", "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.abcdefghijk1234",
+    ];
+    for (const line of real) {
+      const res = await post("/v1/contributions", crawl("w2", "crawl-wolfpack-real", `note\n${line}`), cast.wolves.w2);
+      expect(res.status, line.slice(0, 12)).toBe(400);
+    }
     w.mockRestore();
   });
 });

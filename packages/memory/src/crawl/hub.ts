@@ -184,9 +184,9 @@ export async function listDomainsOnHub(hub: HubTarget): Promise<Set<string> | nu
 }
 
 /**
- * SEAM (hub endpoint task work-wolfpack-ZBZPAZ9): which den topic ids the hub's curator has already curated for this wolf.
- * Provisional contract: GET /v1/contributions/receipts → `{ curated: string[] }`. Feature-detected: any non-200 (the route
- * does not exist yet: 404/405) or transport error answers `undefined`, meaning "unknown", never "none curated".
+ * Which den topic ids the hub's curator has already curated for this wolf (work-wolfpack-ZBZPAZ9).
+ * GET /v1/contributions/receipts[?wolf=<name>] → `{ curated: string[] }`. Any non-200 (an older hub: 404/405) or transport error
+ * answers `undefined`, meaning "unknown", never "none curated".
  */
 export async function readHubReceipts(hub: HubTarget): Promise<Set<string> | undefined> {
   const r = await hubGet(hub, "/v1/contributions/receipts");
@@ -196,9 +196,10 @@ export async function readHubReceipts(hub: HubTarget): Promise<Set<string> | und
 }
 
 /**
- * SEAM (work-wolfpack-ZBZPAZ9): ask the hub what a release would do, for the dry-run review.
- * Provisional contract: POST /v1/contributions/check `{ items: [{ denTopicId, contentHash }] }` → `{ unchanged: string[] }`
- * (denTopicIds the hub already holds with that hash). Feature-detected like readHubReceipts: undefined = unknown.
+ * Ask the hub what a release would do, for the dry-run review (work-wolfpack-ZBZPAZ9).
+ * POST /v1/contributions/check `{ items: [{ denTopicId, contentHash }] }` → `{ unchanged: string[] }`
+ * (denTopicIds the hub already holds with that exact hash; an item without a contentHash is never "unchanged").
+ * Like readHubReceipts: undefined = unknown.
  */
 export async function checkHubContributions(hub: HubTarget, items: { denTopicId: string; contentHash?: string }[]): Promise<Set<string> | undefined> {
   try {

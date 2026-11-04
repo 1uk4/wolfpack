@@ -68,6 +68,8 @@ export interface EmitContribution {
   currency: string;
   /** "emit" = new/changed (would be written); "skip" = unchanged (dedup). */
   status: "emit" | "skip";
+  /** Content hash of the contribution (present when status is "emit"); the hub contribution check compares it. */
+  contentHash?: string;
 }
 
 export interface EmitCrawlResult {
@@ -167,6 +169,7 @@ export function emitCrawl(
       sourceUpdated: temporal.sourceUpdated,
       currency,
       status: result ? "emit" : "skip",
+      contentHash: result?.contentHash,
     });
     if (body.length > CRAWL.bodyTargetChars) {
       sink.log(
@@ -217,6 +220,7 @@ export function emitCrawl(
         sourceUpdated: jr.to,
         currency: "archived",
         status: result ? "emit" : "skip",
+        contentHash: result?.contentHash,
       });
       if (result) {
         delta.push(result);

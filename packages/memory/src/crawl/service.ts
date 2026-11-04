@@ -809,10 +809,10 @@ export function createCrawlService(o: CrawlServiceOptions): CrawlService {
       let hubUnchanged: Set<string> | undefined;
       let hubState: "ok" | "unknown" = "ok";
       if (target.kind === "hub") {
-        // Seams for the hub receipts / check endpoints (work-wolfpack-ZBZPAZ9); undefined until they exist or while the hub is unreachable.
+        // Hub receipts / check endpoints (work-wolfpack-ZBZPAZ9); undefined (unknown) on an older hub or while the hub is unreachable.
         const receipts = await readHubReceipts(target.hub);
         for (const id of receipts ?? []) curated.add(id);
-        hubUnchanged = await checkHubContributions(target.hub, items.map((c) => ({ denTopicId: c.denTopicId })));
+        hubUnchanged = await checkHubContributions(target.hub, items.filter((c) => c.status === "emit").map((c) => ({ denTopicId: c.denTopicId, contentHash: c.contentHash })));
         if (receipts === undefined && hubUnchanged === undefined) hubState = "unknown";
       }
       return { preview, items, toEmit, unchanged: items.length - toEmit, release, curated, hubUnchanged, hubState, target, journeyMissing: !hasFile(dir, "history.json"), plan };

@@ -88,6 +88,21 @@ export const SubmitContributionResponseSchema = z.object({
   duplicate: z.boolean(),
 });
 
+export const ContributionReceiptsResponseSchema = z.object({ curated: z.array(z.string()) });
+export const ContributionCheckBodySchema = z.object({
+  items: z.array(z.object({ denTopicId: z.string().min(1), contentHash: z.string().optional() })).max(2000),
+});
+export const ContributionCheckResponseSchema = z.object({ unchanged: z.array(z.string()) });
+export const KbMatchBodySchema = z.object({
+  candidates: z.array(z.object({ title: z.string(), body: z.string(), domain: z.string().optional() })).min(1).max(50),
+});
+const KbMatchSchema = z.object({ domain: z.string(), id: z.string(), title: z.string(), score: z.number(), bodySimilarity: z.number() });
+export const KbMatchResponseSchema = z.object({
+  method: z.enum(["embeddings", "text"]),
+  fallback: z.string().optional(),
+  results: z.array(z.object({ title: z.string(), label: z.enum(["new", "update", "duplicate"]), matches: z.array(KbMatchSchema) })),
+});
+
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
 export const ListThreadsResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
 export const ListChildrenResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
@@ -327,6 +342,22 @@ export const ROUTES = {
    * not registered, not active or not on the token's host; for an operator token there is no such check.
    */
   submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
+  /**
+   * Which den topic ids the curator has curated (files in `contributions/<wolf>/_processed/`) for the calling wolf. Query `wolf` names the wolf:
+   * a worker token defaults to its host's only active wolf (several = 400) and may name only an active wolf of its host (403 otherwise); an operator token must name it (400).
+   */
+  hubContributionReceipts: { scope: "hub", method: "GET", path: "/v1/contributions/receipts", response: { kind: "json", schema: ContributionReceiptsResponseSchema }, status: [200], error: err },
+  /**
+   * Which `{denTopicId, contentHash}` items the hub already holds for the wolf (pending or curated) with exactly that hash: `{unchanged: denTopicId[]}`.
+   * An item without contentHash is never unchanged. Max 2000 items. Same wolf resolution as receipts (query `wolf`). 400 `invalid_request` for a bad body.
+   */
+  hubContributionCheck: { scope: "hub", method: "POST", path: "/v1/contributions/check", body: ContributionCheckBodySchema, response: { kind: "json", schema: ContributionCheckResponseSchema }, status: [200], error: err },
+  /**
+   * Match candidate entries against the hub KB for the release review. Body `{candidates: [{title, body, domain?}]}` (1..50). Per candidate: `label`
+   * new | update | duplicate and up to 5 `matches` (domain, id, title, score 0-1, bodySimilarity 0-1). `method` says "embeddings" (Ollama) or "text"
+   * (fallback, with `fallback` giving the reason). Worker tokens only see/match domains their host's wolves subscribe to. 400 `invalid_request`; 403 for an unsubscribed `domain`.
+   */
+  hubKbMatch: { scope: "hub", method: "POST", path: "/v1/kb/match", body: KbMatchBodySchema, response: { kind: "json", schema: KbMatchResponseSchema }, status: [200], error: err },
   /**
    * Hub work WRITES (hubd is the only ledger writer). Every one requires a bearer token; the actor is the token's identity.
    * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),

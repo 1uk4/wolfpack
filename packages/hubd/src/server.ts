@@ -18,6 +18,8 @@ import {
   PatchWorkOpSchema,
   KbCommitRequestSchema,
   KbManifestDiffRequestSchema,
+  ContributionCheckBodySchema,
+  KbMatchBodySchema,
   KB_COMMIT_BODY_LIMIT,
   type KbCommitRequest,
   type KbCommitResponse,
@@ -29,11 +31,12 @@ import {
   type ErrorCode,
   type ErrorEnvelope,
 } from "@wolfpack/protocol";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
+import { MAX_CANDIDATES, curatedTopics, matchKb, ollamaFromEnv, secretFindings, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
   applyOps,
@@ -124,6 +127,8 @@ export interface HubOptions {
   inboxRoot?: string;
   /** Librarian receipts root the hub watches (`<root>/<wolf>/*.md`). Default `<dataDir>/kb/ops/receipts`. Set by the `hubd` CLI from env HUBD_RECEIPTS_ROOT (no flag). */
   receiptsRoot?: string;
+  /** Embedding service for POST /v1/kb/match (default from env HUBD_OLLAMA_URL / HUBD_OLLAMA_MODEL; no URL = text matching only). */
+  ollama?: OllamaConfig;
   /** Receipts lane poll, ms (default 3000; 0 = off). */
   receiptPollMs?: number;
   /** Resend an unacknowledged receipt after this long, ms (default 10000). */
@@ -252,6 +257,8 @@ function parseBody<T>(schema: { safeParse(v: unknown): { success: true; data: T 
   if (r.success) return r.data;
   throw new HubError("invalid_request", r.error.issues.map((i) => `${i.path.map(String).join(".") || "body"}: ${i.message}`).join("; "));
 }
+
+const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
@@ -517,6 +524,20 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return w;
     }
 
+    /** The wolf a receipts/check request is about: query `wolf`, else (worker token) the host's only active wolf; an operator must name it. */
+    function receiptWolf(req: IncomingMessage, url: URL): string {
+      const named = url.searchParams.get("wolf") ?? undefined;
+      const actor = writeActor(req);
+      if (TOKEN_INFO.get(actor)?.hostId) return wolfActorFor(actor, named).id; // worker: only an active wolf of its host
+      if (actor.kind === "wolf") {
+        if (named !== undefined && named !== actor.id) throw new HubError("forbidden", "a wolf may only read its own contributions");
+        return actor.id;
+      }
+      if (named === undefined) throw new HubError("invalid_request", "name the wolf (query wolf=<name>)");
+      if (!isSafeSegment(named) || !/^[a-z0-9][a-z0-9._-]*$/.test(named)) throw new HubError("invalid_request", "bad wolf name");
+      return named;
+    }
+
     /** KB sync reads: a worker token sees only the domains its host's wolves subscribe to; console/browser tokens see all. */
     function requireKbDomain(id: AuthIdentity | undefined, domain: string): void {
       if (!id || id.kind !== "worker") return;
@@ -600,12 +621,32 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           try {
             const submitted = await readJsonObject(req, res);
             const named = typeof submitted.json.from === "string" ? submitted.json.from : undefined;
+            // Hub-side secret check (seam: work-wolfpack-VO2wX3I). Rejected, NOT quarantined (that would store the secret); the answer names entry, field and pattern, never the value.
+            const topic = typeof submitted.json.denTopicId === "string" ? submitted.json.denTopicId.slice(0, 80) : "(no denTopicId)";
+            const flagged = secretFindings(topic, { body: str(submitted.json.body), summary: str(submitted.json.summary), title: str(submitted.json.title) });
+            if (flagged.length) throw new HubError("invalid_request", `contribution rejected: possible secret in ${flagged.map((f) => `entry ${f.entry} field ${f.field} (${f.pattern})`).join(", ").slice(0, 400)}`, { entry: flagged[0]!.entry, field: flagged[0]!.field, pattern: flagged[0]!.pattern });
             const stored = storeContribution(opts.dataDir, wolfActorFor(tokenActor, named), submitted, inboxRoot);
             return send(res, stored.duplicate ? 200 : 201, stored);
           } catch (e) {
             if (e instanceof ContributionError) throw new HubError(e.code, e.message);
             throw e;
           }
+        }
+        case "hubContributionReceipts": {
+          const wolf = receiptWolf(req, url);
+          return send(res, 200, { curated: curatedTopics(opts.dataDir, wolf, inboxRoot) });
+        }
+        case "hubContributionCheck": {
+          const wolf = receiptWolf(req, url);
+          const body = parseBody(ContributionCheckBodySchema, await readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 200, { unchanged: unchangedItems(opts.dataDir, wolf, body.items, inboxRoot) });
+        }
+        case "hubKbMatch": {
+          const body = parseBody(KbMatchBodySchema, await readJson(req, { maxBytes: KB_COMMIT_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          if (body.candidates.length > MAX_CANDIDATES) throw new HubError("invalid_request", `at most ${MAX_CANDIDATES} candidates`);
+          for (const c of body.candidates) if (c.domain) requireKbDomain(identity, c.domain);
+          const allow = identity?.kind === "worker" ? (d: string) => { try { requireKbDomain(identity, d); return true; } catch { return false; } } : undefined;
+          return send(res, 200, await matchKb(roots, body.candidates, opts.ollama ?? ollamaFromEnv(), allow));
         }
         case "hubCreateWork": {
           const actor = writeActor(req);

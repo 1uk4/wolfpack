@@ -43,8 +43,9 @@ describe("crawl service release against a real hubd", () => {
     expect(pv.target.kind).toBe("hub");
     expect(pv.toEmit).toBeGreaterThan(0);
     expect(existsSync(contributionsDir(dataDir, "crawler"))).toBe(false); // a preview posts nothing
-    // the hub in this checkout has no receipts/check routes yet: the seams answer "unknown", the preview still works
-    expect(pv.hubUnchanged).toBeUndefined();
+    // the hub answers the check route: nothing is held yet, so nothing is unchanged (an answer, not "unknown")
+    expect(pv.hubUnchanged).toEqual(new Set());
+    expect(pv.hubState).toBe("ok");
 
     const r = await svc.release(runDir, { wolf: "crawler", roots, confirmed: true });
     expect(r.via).toBe("hub");

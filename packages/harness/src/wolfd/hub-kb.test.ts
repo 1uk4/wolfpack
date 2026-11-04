@@ -169,6 +169,8 @@ describe("feedInboxToHub", () => {
     expect(readdirSync(lane).filter((n) => n.endsWith(".md"))).toEqual([NAME]);
     expect(state.files.get(NAME)).toEqual({ fails: 1, nextAt: 5000, last: 0 });
     expect(state.auth).toEqual({ fails: 0, nextAt: 0 });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/hub-kb: ERROR.*WOLFPACK_HUB_URL.*WOLFPACK_HUB_TOKEN.*not granted this domain/);
     // next pass: the poisoned file is skipped while it backs off; the feeder is not blocked
     expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 1000 })).toEqual({ sent: 0, failed: 0, rejected: 0, deferred: 1 });
   });
@@ -184,7 +186,10 @@ describe("feedInboxToHub", () => {
     const p = await feedInboxToHub(ops, "hal2", hubOf(f), (l) => logs.push(l), { state, now: () => 0 });
     expect(calls).toBe(2);
     expect(p).toEqual({ sent: 0, failed: 2, rejected: 0, deferred: 3 });
-    expect(logs.filter((l) => l.includes("ERROR"))).toHaveLength(1);
+    // the first refusal logs its own ERROR line; the second trips the breaker, whose line is the only one that says so
+    const errs = logs.filter((l) => l.includes("ERROR"));
+    expect(errs).toHaveLength(2);
+    expect(errs.filter((l) => l.includes("file(s) kept"))).toHaveLength(1);
     expect(state.auth).toEqual({ fails: 1, nextAt: 5000 });
     expect(await feedInboxToHub(ops, "hal2", hubOf(f), () => {}, { state, now: () => 1000 })).toMatchObject({ deferred: 5 });
     expect(calls).toBe(2);

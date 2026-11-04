@@ -218,7 +218,7 @@ export async function feedInboxToHub(
           log(`hub-kb: ERROR hub refused ${name} (${status}): check WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN, or the wolf is not granted this domain; ${eligible.length - i} file(s) kept, retry in ${Math.round(authWait / 1000)}s: ${msg}`);
           return res;
         }
-        log(`hub-kb: contribution ${name} refused (${status}: token/URL/grant); kept, retry in ${Math.round(wait / 1000)}s: ${msg}`);
+        log(`hub-kb: ERROR hub refused ${name} (${status}): check WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN, or the wolf is not granted this domain; file kept, retry in ${Math.round(wait / 1000)}s: ${msg}`);
       } else {
         const wait = retryLater(name);
         log(`hub-kb: contribution ${name} not sent (will retry in ${Math.round(wait / 1000)}s): ${msg}`);

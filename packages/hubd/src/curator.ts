@@ -98,6 +98,14 @@ export interface Curator {
   runOnce(): Promise<CuratorRun | undefined>;
   /** Stop the timer, wait (bounded) for a tick in flight, release the lease. */
   close(): Promise<void>;
+  /** Read-only state for the KB activity route: whether the curator is on, a sweep is running, and the last finished one (this process only). */
+  status(): CuratorStatus;
+}
+
+export interface CuratorStatus {
+  enabled: boolean;
+  running: boolean;
+  last?: { finishedAt: string; processed: number; error?: string };
 }
 
 export interface CuratorDeps {
@@ -246,6 +254,8 @@ export function createCurator(deps: CuratorDeps): Curator {
   let inflight: Promise<CuratorRun | undefined> | undefined;
   let closing = false;
   let warnedWolf = false;
+  let running = false;
+  let last: CuratorStatus["last"];
 
   if (enabled && o.embedModel && !isNomicModel(o.embedModel) && process.env.WOLFPACK_EMBED_MODEL !== o.embedModel) {
     // The task prefix (nomic only) is keyed on the process-wide model name, which sweep.ts reads itself; an option cannot reach it.
@@ -273,6 +283,11 @@ export function createCurator(deps: CuratorDeps): Curator {
     let finished = false;
     let pending = 0;
     const emit = (d: HubEventDraft) => {
+      if (d.type === "sweep_started") running = true;
+      else if (d.type === "sweep_finished") {
+        running = false;
+        last = { finishedAt: new Date().toISOString(), processed: d.processed, ...(d.error ? { error: d.error } : {}) };
+      }
       try {
         deps.emit(d);
       } catch {
@@ -347,6 +362,7 @@ export function createCurator(deps: CuratorDeps): Curator {
   };
 
   return {
+    status: () => ({ enabled, running, ...(last ? { last } : {}) }),
     start() {
       if (!enabled || pollMs <= 0 || timer) return;
       timer = setInterval(() => void runOnce().catch((e) => console.error("[curator] tick failed:", err1(e))), pollMs);

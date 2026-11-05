@@ -35,6 +35,7 @@ import {
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
+import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { createCurator, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
@@ -302,6 +303,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
+  let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({
     roots,
@@ -847,6 +849,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             throw e;
           }
         }
+        case "hubKbActivity": {
+          // Named case: this route is answered from the hub's own ledger and never relays. Not for workers.
+          if (identity && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot read KB activity");
+          const q = url.searchParams;
+          return send(res, 200, kbActivity!.read({ since: q.get("since"), before: q.get("before"), limit: q.get("limit"), domain: q.get("domain") }));
+        }
         case "hubKbEntry": {
           if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(params.id)) throw new HubError("invalid_request", "malformed entry id");
           // Only the readable domains are even read, so a forbidden entry is indistinguishable from a missing one (and backlinks never cross the grant).
@@ -924,6 +932,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
     curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: opts.curator });
     curator.start();
+    kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator });
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.

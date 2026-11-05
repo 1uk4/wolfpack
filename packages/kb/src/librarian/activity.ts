@@ -50,10 +50,12 @@ export interface EntryInfo {
 }
 export interface ActivityIndex {
   hasDecisions: boolean;
-  /** Latest decision per key, newest first. Each carries its domain (undefined: unresolved) for the filter. */
-  decisions: Array<{ d: ActivityDecision; domain?: string }>;
-  /** Per domain, newest first, uncapped (the page applies the cap). */
-  changes: Map<string, ActivityChange[]>;
+  /** Latest decision per key, newest first. */
+  decisions: ActivityDecision[];
+  /** Every entry_written / entry_retired, newest first (the page caps them per domain). */
+  changes: Array<ActivityChange & { id: string }>;
+  sectionDomain: Map<string, string>;
+  placedSection: Map<string, string>;
 }
 export interface ActivityPage {
   hasDecisions: boolean;
@@ -69,56 +71,123 @@ export interface ActivityQuery {
   domain?: string;
 }
 
-/** Newest first: by `at`, then id. */
-const newer = (a: { at: string; id?: string }, b: { at: string; id?: string }) => (a.at === b.at ? (b.id ?? "").localeCompare(a.id ?? "") : b.at.localeCompare(a.at));
+/**
+ * Newest first, as a sort comparator (negative: `a` sorts before `b`). Compares the PARSED times, with the id as the tiebreak
+ * (ids are time-ordered); unparseable timestamps fall back to string order. The window, the cursor and the sort all use it.
+ */
+const newer = (a: { at: string; id?: string }, b: { at: string; id?: string }): number => {
+  const ta = Date.parse(a.at);
+  const tb = Date.parse(b.at);
+  if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return tb - ta;
+  if (!(Number.isFinite(ta) && Number.isFinite(tb)) && a.at !== b.at) return b.at.localeCompare(a.at);
+  return (b.id ?? "").localeCompare(a.id ?? "");
+};
 
-/** entryId -> {domain,title} from `<kbBase>/domains/<domain>/entries/<id>.md` (frontmatter title). One directory walk. */
-export function scanEntryInfo(kbBase: string): Map<string, EntryInfo> {
-  const out = new Map<string, EntryInfo>();
-  let domains: string[] = [];
+/** Resolves an entry id to its domain and title. The hub backs it with the entry files (domain: cached listing; title: read on demand). */
+export interface EntryResolver {
+  domain(id: string): string | undefined;
+  title(id: string): string | undefined;
+}
+const NO_ENTRIES: EntryResolver = { domain: () => undefined, title: () => undefined };
+
+const listDomains = (kbBase: string): string[] => {
   try {
-    domains = readdirSync(join(kbBase, "domains"), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name);
+    return readdirSync(join(kbBase, "domains"), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name);
   } catch {
-    return out;
+    return [];
   }
-  for (const domain of domains) {
-    let files: string[] = [];
+};
+
+/** entryId -> domain from `<kbBase>/domains/<domain>/entries/<id>.md`. Directory listings only: no entry file is opened. */
+export function scanEntryDomains(kbBase: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const domain of listDomains(kbBase)) {
     try {
-      files = readdirSync(join(kbBase, "domains", domain, "entries")).filter((f) => f.endsWith(".md"));
+      for (const f of readdirSync(join(kbBase, "domains", domain, "entries"))) if (f.endsWith(".md")) out.set(f.slice(0, -3), domain);
     } catch {
-      continue;
-    }
-    for (const f of files) {
-      const id = f.slice(0, -3);
-      let title: string | undefined;
-      try {
-        const t = parseFrontmatter(readFileSync(join(kbBase, "domains", domain, "entries", f), "utf-8")).fields.title;
-        if (typeof t === "string" && t.trim()) title = oneLine(t, 200);
-      } catch {
-        /* unreadable entry: no title */
-      }
-      out.set(id, { domain, ...(title ? { title } : {}) });
+      /* no entries dir */
     }
   }
   return out;
 }
 
-export function buildActivityIndex(events: KbEvent[], entryInfo: Map<string, EntryInfo> | ((id: string) => EntryInfo | undefined) = new Map()): ActivityIndex {
-  const info = typeof entryInfo === "function" ? entryInfo : (id: string) => entryInfo.get(id);
+/** The frontmatter title of one entry file (redacted, one line), or undefined. */
+export function readEntryTitle(kbBase: string, domain: string, id: string): string | undefined {
+  try {
+    const t = parseFrontmatter(readFileSync(join(kbBase, "domains", domain, "entries", `${id}.md`), "utf-8")).fields.title;
+    return typeof t === "string" && t.trim() ? oneLine(t, 200) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A resolver over the entry files, using a domain map the caller scanned (and may cache). Titles are read fresh. */
+export function fsEntryResolver(kbBase: string, domains: Map<string, string>): EntryResolver {
+  return { domain: (id) => domains.get(id), title: (id) => (domains.has(id) ? readEntryTitle(kbBase, domains.get(id)!, id) : undefined) };
+}
+
+/** entryId -> {domain,title} for every entry file (test / one-shot convenience). */
+export function scanEntryInfo(kbBase: string): Map<string, EntryInfo> {
+  const out = new Map<string, EntryInfo>();
+  for (const [id, domain] of scanEntryDomains(kbBase)) {
+    const title = readEntryTitle(kbBase, domain, id);
+    out.set(id, { domain, ...(title ? { title } : {}) });
+  }
+  return out;
+}
+
+const asResolver = (x: Map<string, EntryInfo> | ((id: string) => EntryInfo | undefined) | EntryResolver | undefined): EntryResolver => {
+  if (!x) return NO_ENTRIES;
+  if (x instanceof Map) return { domain: (id) => x.get(id)?.domain, title: (id) => x.get(id)?.title };
+  if (typeof x === "function") return { domain: (id) => x(id)?.domain, title: (id) => x(id)?.title };
+  return x;
+};
+
+/** Free text from the engine (reasons, warnings): redacted, first line, capped. */
+const clean = (s: string): string => oneLine(s, REASON_MAX);
+function cleanRouting(r: Decision["routing"]): Decision["routing"] {
+  if (!r) return r;
+  return {
+    ...r,
+    ...(r.warning !== undefined ? { warning: clean(r.warning) } : {}),
+    ...(r.subject ? { subject: { ...r.subject, ...(r.subject.reason !== undefined ? { reason: clean(r.subject.reason) } : {}) } } : {}),
+    ...(r.confirm ? { confirm: { ...r.confirm, ...(r.confirm.reason !== undefined ? { reason: clean(r.confirm.reason) } : {}) } } : {}),
+  } as Decision["routing"];
+}
+
+/** Which decision outcomes can have produced an entry_written of this action. */
+const ACCEPTS: Record<"create" | "merge" | "supersede", ActivityOutcome[]> = { create: ["create"], merge: ["merge", "unchanged"], supersede: ["merge", "create"] };
+
+/**
+ * The ledger side of the model: everything that does not depend on the entry files. Rebuild it only when the ledger changes;
+ * `pageActivity` resolves domains and titles per request.
+ */
+export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
   const latest = new Map<string, { e: Decision; n: number }>();
-  const decisionOfEntry = new Map<string, Decision>();
+  const decsOfEntry = new Map<string, Array<{ idx: number; e: Decision }>>();
+  const marks = new Map<string, number[]>(); // entry_written / entry_retired positions per entry
   const sectionDomain = new Map<string, string>();
   const placedSection = new Map<string, string>();
   let hasDecisions = false;
-  for (const e of events) {
+  events.forEach((e, idx) => {
     switch (e.t) {
       case "decision": {
         hasDecisions = true;
         const k = JSON.stringify([e.from, e.denTopicId, e.hash]);
-        const prev = latest.get(k);
         // "Latest" = last in ledger order; the ledger is append-only, so file order is time order.
-        latest.set(k, { e, n: (prev?.n ?? 0) + 1 });
-        if (e.entryId) decisionOfEntry.set(e.entryId, e);
+        latest.set(k, { e, n: (latest.get(k)?.n ?? 0) + 1 });
+        if (e.entryId) {
+          const l = decsOfEntry.get(e.entryId) ?? [];
+          l.push({ idx, e });
+          decsOfEntry.set(e.entryId, l);
+        }
+        break;
+      }
+      case "entry_written":
+      case "entry_retired": {
+        const l = marks.get(e.entryId) ?? [];
+        l.push(idx);
+        marks.set(e.entryId, l);
         break;
       }
       case "section_created":
@@ -132,11 +201,11 @@ export function buildActivityIndex(events: KbEvent[], entryInfo: Map<string, Ent
         break;
       default:
     }
-  }
-  const domainOf = (entryId: string): string | undefined => info(entryId)?.domain ?? sectionDomain.get(placedSection.get(entryId) ?? "");
+  });
 
   const decisions = [...latest.values()].map(({ e, n }) => {
-    const d: ActivityDecision = {
+    const routing = cleanRouting(e.routing);
+    return {
       id: e.id,
       at: e.at,
       from: e.from,
@@ -145,62 +214,73 @@ export function buildActivityIndex(events: KbEvent[], entryInfo: Map<string, Ent
       outcome: e.outcome,
       ...(e.entryId ? { entryId: e.entryId } : {}),
       ...(e.reason ? { reason: oneLine(e.reason, REASON_MAX) } : {}),
-      ...(e.routing ? { routing: e.routing } : {}),
+      ...(routing ? { routing } : {}),
       ...(n > 1 ? { superseded: n - 1 } : {}),
-    };
-    return { d, ...(e.entryId && domainOf(e.entryId) ? { domain: domainOf(e.entryId) } : {}) };
+    } as ActivityDecision;
   });
-  decisions.sort((a, b) => newer(a.d, b.d));
+  decisions.sort(newer);
 
-  const changes = new Map<string, ActivityChange[]>();
-  for (const e of events) {
-    if (e.t !== "entry_written" && e.t !== "entry_retired") continue;
-    const dec = decisionOfEntry.get(e.entryId);
-    const title = info(e.entryId)?.title;
-    const c: ActivityChange = {
-      at: e.at,
-      entryId: e.entryId,
-      ...(title ? { title } : {}),
-      action: e.t === "entry_retired" ? "retire" : e.action,
-      ...(dec ? { from: dec.from, denTopicId: dec.denTopicId } : {}),
-    };
-    const dom = domainOf(e.entryId) ?? UNPLACED;
-    const list = changes.get(dom) ?? [];
-    list.push(c);
-    changes.set(dom, list);
-  }
-  for (const [dom, list] of changes) {
-    list.reverse(); // ledger order is time order: newest first
-    list.sort((a, b) => (a.at === b.at ? 0 : b.at.localeCompare(a.at))); // stable: ties keep the reversed ledger order
-    changes.set(dom, list);
-  }
-  return { hasDecisions, decisions, changes };
+  /**
+   * The decision behind an entry_written: the one of the SAME BATCH. sweep.ts logs the entry (commitKb) before it appends the batch
+   * with the decision, so the batch's decision usually follows the write: take the first outcome-matching decision from this write up
+   * to the entry's next write/retire; else the latest matching one before it; else the latest earlier decision of any outcome.
+   * An entry_retired is not a contribution and carries no attribution.
+   */
+  const attribute = (entryId: string, idx: number, action: "create" | "merge" | "supersede"): Decision | undefined => {
+    const decs = decsOfEntry.get(entryId) ?? [];
+    const next = (marks.get(entryId) ?? []).find((m) => m > idx) ?? Infinity;
+    const ok = (o: ActivityOutcome) => ACCEPTS[action].includes(o);
+    const after = decs.find((x) => x.idx >= idx && x.idx < next && ok(x.e.outcome));
+    if (after) return after.e;
+    const before = decs.filter((x) => x.idx < idx);
+    return [...before].reverse().find((x) => ok(x.e.outcome))?.e ?? before[before.length - 1]?.e;
+  };
+  const changes: Array<ActivityChange & { id: string }> = [];
+  events.forEach((e, idx) => {
+    if (e.t !== "entry_written" && e.t !== "entry_retired") return;
+    const dec = e.t === "entry_written" ? attribute(e.entryId, idx, e.action) : undefined;
+    changes.push({ id: e.id, at: e.at, entryId: e.entryId, action: e.t === "entry_retired" ? "retire" : e.action, ...(dec ? { from: dec.from, denTopicId: dec.denTopicId } : {}) });
+  });
+  changes.sort(newer);
+  return { hasDecisions, decisions, changes, sectionDomain, placedSection };
 }
 
-export function pageActivity(index: ActivityIndex, q: ActivityQuery = {}): ActivityPage {
+export function pageActivity(index: ActivityIndex, q: ActivityQuery = {}, entries: EntryResolver = NO_ENTRIES): ActivityPage {
   const limit = q.limit ?? 50;
+  const domainOf = (id: string): string => entries.domain(id) ?? index.sectionDomain.get(index.placedSection.get(id) ?? "") ?? UNPLACED;
   const counts = Object.fromEntries(ACTIVITY_OUTCOMES.map((o) => [o, 0])) as Record<ActivityOutcome, number>;
-  const inWindow = index.decisions.filter(({ d, domain }) => {
-    if (q.domain !== undefined && domain !== q.domain) return false;
+  const inWindow = index.decisions.filter((d) => {
+    // A decision belongs to its entry's domain; one with no entry (reject, parked, unclassified) belongs to none and is dropped by a domain filter.
+    if (q.domain !== undefined && (d.entryId === undefined || domainOf(d.entryId) !== q.domain)) return false;
     if (q.sinceMs !== undefined) {
       const t = Date.parse(d.at);
       if (!Number.isFinite(t) || t < q.sinceMs) return false;
     }
     return true;
   });
-  for (const { d } of inWindow) counts[d.outcome]++;
+  for (const d of inWindow) counts[d.outcome]++;
   let rest = inWindow;
   if (q.before !== undefined) {
     const i = q.before.indexOf("|");
     const cur = { at: q.before.slice(0, i), id: q.before.slice(i + 1) };
-    rest = inWindow.filter(({ d }) => newer(cur, d) < 0); // strictly older than the cursor
+    rest = inWindow.filter((d) => newer(cur, d) < 0); // strictly older than the cursor
   }
-  const page = rest.slice(0, limit).map((x) => x.d);
+  const page = rest.slice(0, limit);
   const last = page[page.length - 1];
-  const domains = [...index.changes.keys()]
-    .filter((d) => q.domain === undefined || d === q.domain)
+
+  const byDomain = new Map<string, ActivityChange[]>();
+  for (const { id: _id, ...c } of index.changes) {
+    const dom = domainOf(c.entryId);
+    if (q.domain !== undefined && dom !== q.domain) continue;
+    const list = byDomain.get(dom) ?? [];
+    if (list.length >= CHANGES_PER_DOMAIN) continue;
+    const title = entries.title(c.entryId);
+    list.push({ ...c, ...(title ? { title } : {}) });
+    byDomain.set(dom, list);
+  }
+  const domains = [...byDomain.keys()]
     .sort((a, b) => (a === UNPLACED ? 1 : b === UNPLACED ? -1 : a.localeCompare(b)))
-    .map((domain) => ({ domain, items: index.changes.get(domain)!.slice(0, CHANGES_PER_DOMAIN) }));
+    .map((domain) => ({ domain, items: byDomain.get(domain)! }));
   return {
     hasDecisions: index.hasDecisions,
     decisions: { items: page, ...(rest.length > limit && last ? { nextCursor: `${last.at}|${last.id}` } : {}), total: inWindow.length, counts },
@@ -208,8 +288,8 @@ export function pageActivity(index: ActivityIndex, q: ActivityQuery = {}): Activ
   };
 }
 
-export function foldKbActivity(events: KbEvent[], opts: ActivityQuery & { entryInfo?: Map<string, EntryInfo> | ((id: string) => EntryInfo | undefined) } = {}): ActivityPage {
-  return pageActivity(buildActivityIndex(events, opts.entryInfo), opts);
+export function foldKbActivity(events: KbEvent[], opts: ActivityQuery & { entryInfo?: Map<string, EntryInfo> | ((id: string) => EntryInfo | undefined) | EntryResolver } = {}): ActivityPage {
+  return pageActivity(buildActivityIndex(events), opts, asResolver(opts.entryInfo));
 }
 
 export interface IncomingWolf {
@@ -228,11 +308,17 @@ const safeDir = <T>(fn: () => T, fallback: T): T => {
     return fallback;
   }
 };
+/** File names carry no time, so ages need a stat. At most this many files per wolf are stat'ed (the rest are only counted). */
+export const INCOMING_STAT_CAP = 200;
 
 /**
  * The pending lane `<inboxRoot>/<wolf>/<denTopicId>-<hash10>.md`. Top-level `.md` files only: `_processed/`, `_bad/` and dotfiles
- * (`.sweep-lease*`, `.*.tmp`) are never pending. `hash` is the 10-hex tag of the file name (a prefix of the ledger hash).
- * Items are oldest first, at most 20 per wolf.
+ * (`.sweep-lease*`, `.*.tmp`) are never pending. `pending` is counted from the directory listing alone. `hash` is the 10-hex tag
+ * of the file name (a prefix of the ledger hash).
+ *
+ * APPROXIMATION: ages come from mtimes, and only the first INCOMING_STAT_CAP files (by name) of a wolf are stat'ed. `items` (at most 20,
+ * oldest first) and `oldestAgeMs` are taken from that sample, so with more than 200 pending files they describe the sample, not
+ * necessarily the true 20 oldest. Up to 200 pending files per wolf the answer is exact.
  */
 export function readIncoming(inboxRoot: string, now: number = Date.now()): { total: number; wolves: IncomingWolf[] } {
   const wolves: IncomingWolf[] = [];
@@ -240,26 +326,23 @@ export function readIncoming(inboxRoot: string, now: number = Date.now()): { tot
   const names = safeDir(() => readdirSync(inboxRoot, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name).sort(), [] as string[]);
   for (const wolf of names) {
     const dir = join(inboxRoot, wolf);
-    const files: Array<{ f: string; mtime: number }> = [];
-    for (const f of safeDir(() => readdirSync(dir), [] as string[])) {
-      if (f.startsWith(".") || !f.endsWith(".md")) continue;
-      const mtime = safeDir(() => {
-        const s = statSync(join(dir, f));
-        return s.isFile() ? s.mtimeMs : undefined;
-      }, undefined);
-      if (mtime !== undefined) files.push({ f, mtime });
+    const listed = safeDir(() => readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && !e.name.startsWith(".") && e.name.endsWith(".md")).map((e) => e.name).sort(), [] as string[]);
+    const sampled: Array<{ f: string; mtime: number }> = [];
+    for (const f of listed.slice(0, INCOMING_STAT_CAP)) {
+      const mtime = safeDir(() => statSync(join(dir, f)).mtimeMs, undefined);
+      if (mtime !== undefined) sampled.push({ f, mtime });
     }
-    files.sort((a, b) => a.mtime - b.mtime || a.f.localeCompare(b.f));
+    sampled.sort((a, b) => a.mtime - b.mtime || a.f.localeCompare(b.f));
     const badDir = join(dir, "_bad");
     const bad = existsSync(badDir) ? safeDir(() => readdirSync(badDir).filter((f) => !f.startsWith(".") && !f.endsWith(".reason.txt")).length, 0) : undefined;
-    if (files.length === 0 && !bad) continue;
-    total += files.length;
+    if (listed.length === 0 && !bad) continue;
+    total += listed.length;
     wolves.push({
       wolf,
-      pending: files.length,
-      ...(files.length ? { oldestAgeMs: Math.max(0, Math.round(now - files[0].mtime)) } : {}),
+      pending: listed.length,
+      ...(sampled.length ? { oldestAgeMs: Math.max(0, Math.round(now - sampled[0].mtime)) } : {}),
       ...(bad !== undefined ? { bad } : {}),
-      items: files.slice(0, INCOMING_ITEMS_PER_WOLF).map(({ f, mtime }) => {
+      items: sampled.slice(0, INCOMING_ITEMS_PER_WOLF).map(({ f, mtime }) => {
         const m = FILE_RE.exec(f);
         return { denTopicId: m ? m[1] : f.slice(0, -3), ...(m ? { hash: m[2] } : {}), ageMs: Math.max(0, Math.round(now - mtime)) };
       }),

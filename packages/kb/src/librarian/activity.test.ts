@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { KbEvent } from "../shared/index.js";
-import { ACTIVITY_OUTCOMES, buildActivityIndex, foldKbActivity, pageActivity, readIncoming, scanEntryInfo } from "./activity.js";
+import { ACTIVITY_OUTCOMES, INCOMING_STAT_CAP, buildActivityIndex, foldKbActivity, pageActivity, readIncoming, scanEntryInfo } from "./activity.js";
 
 let n = 0;
 const id = () => `e${String(++n).padStart(6, "0")}`;
@@ -153,5 +153,85 @@ describe("readIncoming", () => {
     expect(r.wolves[0].pending).toBe(25);
     expect(r.wolves[0].items).toHaveLength(20);
     expect(readIncoming(join(root, "nope"))).toEqual({ total: 0, wolves: [] });
+  });
+});
+
+describe("attribution, redaction, ordering", () => {
+  it("attributes each change to its own batch's decision, not the entry's latest contributor", () => {
+    // sweep order: entry_written first (commitKb), then the batch's decision.
+    const evs: KbEvent[] = [
+      written(1, "kb-1", "create"),
+      dec(1, { from: "w1", denTopicId: "tA", hash: "a", outcome: "create", entryId: "kb-1" }),
+      written(5, "kb-1", "merge"),
+      dec(5, { from: "w2", denTopicId: "tB", hash: "b", outcome: "merge", entryId: "kb-1" }),
+      dec(7, { from: "w3", denTopicId: "tC", hash: "c", outcome: "unchanged", entryId: "kb-1" }),
+    ];
+    const items = foldKbActivity(evs, { entryInfo: new Map([["kb-1", { domain: "alpha" }]]) }).changes.domains[0].items;
+    expect(items.map((c) => [c.action, c.from])).toEqual([["merge", "w2"], ["create", "w1"]]); // the later unchanged never overwrites
+  });
+
+  it("also attributes when the decision precedes the write; falls back to the latest earlier decision; retire has none", () => {
+    const evs: KbEvent[] = [dec(1, { from: "w1", entryId: "kb-1" }), written(2, "kb-1", "create"), written(3, "kb-1", "supersede"), retired(4, "kb-1")];
+    const items = foldKbActivity(evs, { entryInfo: new Map([["kb-1", { domain: "alpha" }]]) }).changes.domains[0].items;
+    expect(items.map((c) => [c.action, c.from])).toEqual([["retire", undefined], ["supersede", "w1"], ["create", "w1"]]);
+  });
+
+  it("redacts and caps routing.subject.reason, routing.confirm.reason and routing.warning", () => {
+    const secret = `Bearer ${"x".repeat(30)} ${"y".repeat(500)}`;
+    const f = foldKbActivity([
+      dec(1, { routing: { route: "similarity", candidates: [], subject: { match: "m", valid: false, reason: secret }, confirm: { candidate: "c", score: 1, merge: false, valid: false, reason: secret }, warning: secret } }),
+    ]);
+    const r = f.decisions.items[0].routing!;
+    for (const t of [r.subject!.reason!, r.confirm!.reason!, r.warning!]) {
+      expect(t).toContain("[REDACTED]");
+      expect(t.length).toBeLessThanOrEqual(240);
+    }
+  });
+
+  it("counts an unchanged outcome and keeps it in the feed", () => {
+    const f = foldKbActivity([dec(1, { outcome: "unchanged", entryId: "kb-1" })]);
+    expect(f.decisions.counts.unchanged).toBe(1);
+    expect(f.decisions.items[0].outcome).toBe("unchanged");
+  });
+
+  it("pages events with an equal `at` without overlap (id tiebreak)", () => {
+    const evs = [1, 2, 3, 4, 5].map((i) => dec(1, { denTopicId: `t${i}`, hash: `h${i}` }));
+    const idx = buildActivityIndex(evs);
+    const seen: string[] = [];
+    let before: string | undefined;
+    for (let i = 0; i < 6; i++) {
+      const p = pageActivity(idx, { limit: 2, before });
+      seen.push(...p.decisions.items.map((d) => d.denTopicId));
+      if (!p.decisions.nextCursor) break;
+      before = p.decisions.nextCursor;
+    }
+    expect(seen).toEqual(["t5", "t4", "t3", "t2", "t1"]);
+  });
+
+  it("compares parsed times: equal instants in different notations tie and fall to the id", () => {
+    const a = { ...dec(1, { denTopicId: "a", hash: "a" }), at: "2026-11-01T00:01:00.000Z" } as KbEvent;
+    const b = { ...dec(1, { denTopicId: "b", hash: "b" }), at: "2026-11-01T00:01:00Z" } as KbEvent;
+    expect(foldKbActivity([a, b]).decisions.items.map((d) => d.denTopicId)).toEqual(["b", "a"]);
+  });
+
+  it("selects the (unplaced) domain: entries with no resolvable domain; decisions without an entry are excluded", () => {
+    const f = foldKbActivity([dec(1, { entryId: "kb-ghost" }), dec(2, { outcome: "reject" }), written(3, "kb-ghost")], { domain: "(unplaced)" });
+    expect(f.decisions.items.map((d) => d.entryId)).toEqual(["kb-ghost"]);
+    expect(f.changes.domains.map((d) => d.domain)).toEqual(["(unplaced)"]);
+  });
+
+  it("bounds the stat work in readIncoming: counts every file, describes at most the first 200 by name", () => {
+    const root = mkdtempSync(join(tmpdir(), "kb-incoming-cap-"));
+    try {
+      mkdirSync(join(root, "w1"));
+      const n = INCOMING_STAT_CAP + 30;
+      for (let i = 0; i < n; i++) writeFileSync(join(root, "w1", `t${String(i).padStart(4, "0")}-0123456789.md`), "x");
+      const r = readIncoming(root);
+      expect(r.total).toBe(n);
+      expect(r.wolves[0].pending).toBe(n);
+      expect(r.wolves[0].items).toHaveLength(20);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

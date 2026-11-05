@@ -67,6 +67,8 @@ export interface CuratorOptions {
   embedModel?: string;
   /** Test seam: the embedder (default: the KB's cached embedder; its URL/model come from embedUrl / embedModel). */
   getEmbedder?: () => CachedEmbedder;
+  /** Test seam: clock (ms) for the status `finishedAt` (default Date.now). */
+  now?: () => number;
   /** Test seam: run budget for the one item (see SweepTickOptions.budgetMs). */
   budgetMs?: number;
   /** How long close() waits for a tick in flight, ms (default 15000, under the unit's TimeoutStopSec=20). A tick still running after that stops writing (every writer call checks the closing flag) and the lease is released when it ends. */
@@ -286,7 +288,7 @@ export function createCurator(deps: CuratorDeps): Curator {
       if (d.type === "sweep_started") running = true;
       else if (d.type === "sweep_finished") {
         running = false;
-        last = { finishedAt: new Date().toISOString(), processed: d.processed, ...(d.error ? { error: d.error } : {}) };
+        last = { finishedAt: new Date((o.now ?? Date.now)()).toISOString(), processed: d.processed, ...(d.error ? { error: d.error } : {}) };
       }
       try {
         deps.emit(d);

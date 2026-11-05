@@ -1,17 +1,28 @@
 /**
  * GET /v1/kb/activity: the hub's own ledger, contributions lane and curator state. No relay to a wolf.
  *
- * Cache: the parsed ledger (events -> ActivityIndex, plus the entry-file scan that resolves domains and titles) is kept per
- * ledger file signature (mtimeMs, size). An append changes the size, so the next read re-parses; reads in between cost two stat
- * calls and the paging pass. The lane is read fresh every time (directory listings). A missing ledger is the empty index.
+ * Query: `since` (7d|30d|all|ISO, default 30d), `before` (cursor), `limit` (1..200, default 50; larger values are clamped to 200),
+ * `domain`. `domain` restricts `changes` and the decision feed to one domain (`(unplaced)` selects entries whose domain cannot be
+ * resolved). A decision belongs to its entry's domain, so with `domain` set, decisions WITHOUT an entryId (reject, parked,
+ * unclassified) are excluded from the feed and its counts.
+ *
+ * Caches (two, independent):
+ *  - ledger index (events -> ActivityIndex) keyed on the ledger file's (mtimeMs, size); rebuilt only when the ledger changes.
+ *  - entry-id -> domain map (a directory listing, no file is opened) with a short TTL (ENTRY_SCAN_TTL_MS), so a sweep that appends
+ *    to the ledger never triggers a full entry scan, and entries moved without a ledger append show up within the TTL.
+ *    Titles are read per request, only for the (at most 10 per domain) change items returned, so a title edit shows immediately.
+ * The lane is read fresh every time (bounded directory listings, see readIncoming). A missing ledger is the empty index.
  */
 import { statSync } from "node:fs";
-import { buildActivityIndex, pageActivity, readIncoming, readLedger, scanEntryInfo, type ActivityIndex } from "@wolfpack/kb/librarian";
+import { resolve } from "node:path";
+import { buildActivityIndex, fsEntryResolver, pageActivity, readIncoming, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
 import { ledgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import type { KbActivityResponse } from "@wolfpack/protocol";
 import type { Curator } from "./curator.js";
 import { HubError } from "./errors.js";
-import { contributionsRoot } from "./layout.js";
+import { CONTRIBUTIONS_LANE } from "./layout.js";
+
+export const ENTRY_SCAN_TTL_MS = 5_000;
 
 export interface KbActivityQuery {
   since?: string | null;
@@ -30,7 +41,8 @@ const ISO_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
 export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receiptsRoot: string; curator?: Curator; now?: () => number }): KbActivity {
   const now = d.now ?? Date.now;
   let cached: { sig: string; index: ActivityIndex } | undefined;
-  const lane: "hub" | "custom" = d.inboxRoot === contributionsRoot(d.roots.denLocal) || d.inboxRoot === `${d.roots.opsRoot}/contributions` ? "hub" : "custom";
+  let domains: { at: number; map: Map<string, string> } | undefined;
+  const lane: "hub" | "custom" = resolve(d.inboxRoot) === resolve(d.roots.opsRoot, CONTRIBUTIONS_LANE) ? "hub" : "custom";
 
   const index = (): ActivityIndex => {
     let sig = "none";
@@ -41,9 +53,14 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
       /* no ledger yet */
     }
     if (cached?.sig === sig) return cached.index;
-    const built = buildActivityIndex(sig === "none" ? [] : readLedger(d.roots), scanEntryInfo(d.roots.kbBase));
+    const built = buildActivityIndex(sig === "none" ? [] : readLedger(d.roots));
     cached = { sig, index: built };
     return built;
+  };
+
+  const entryDomains = (t: number): Map<string, string> => {
+    if (!domains || t - domains.at >= ENTRY_SCAN_TTL_MS || t < domains.at) domains = { at: t, map: scanEntryDomains(d.roots.kbBase) };
+    return domains.map;
   };
 
   return {
@@ -60,15 +77,15 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
       }
       let limit = 50;
       if (q.limit != null) {
-        if (!/^\d{1,6}$/.test(q.limit) || Number(q.limit) < 1) throw new HubError("invalid_request", "limit must be an integer from 1 to 200");
+        if (!/^\d{1,6}$/.test(q.limit) || Number(q.limit) < 1) throw new HubError("invalid_request", "limit must be an integer >= 1 (values above 200 are clamped to 200)");
         limit = Math.min(200, Number(q.limit));
       }
       if (q.before != null && !/^[^|]{1,64}\|[^|]{1,128}$/.test(q.before)) throw new HubError("invalid_request", "before is not a cursor from nextCursor");
       const domain = q.domain ? q.domain : undefined;
-      if (domain !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(domain)) throw new HubError("invalid_request", "malformed domain");
+      if (domain !== undefined && domain !== UNPLACED && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(domain)) throw new HubError("invalid_request", "malformed domain");
 
       const idx = index();
-      const page = pageActivity(idx, { sinceMs, ...(q.before != null ? { before: q.before } : {}), limit, ...(domain ? { domain } : {}) });
+      const page = pageActivity(idx, { sinceMs, ...(q.before != null ? { before: q.before } : {}), limit, ...(domain ? { domain } : {}) }, fsEntryResolver(d.roots.kbBase, entryDomains(t)));
       const incoming = readIncoming(d.inboxRoot, t);
       const st = d.curator?.status();
       const on = st?.enabled === true;

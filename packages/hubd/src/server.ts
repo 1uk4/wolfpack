@@ -850,7 +850,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           }
         }
         case "hubKbActivity": {
-          // Named case: this route is answered from the hub's own ledger and never relays. Not for workers.
+          // Named case: answered from the hub's own ledger and never relays. Not for workers. `domain` drops decisions with no entryId (see kb-activity.ts).
           if (identity && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot read KB activity");
           const q = url.searchParams;
           return send(res, 200, kbActivity!.read({ since: q.get("since"), before: q.get("before"), limit: q.get("limit"), domain: q.get("domain") }));
@@ -930,7 +930,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     if (opts.socketPath === undefined) port = (server.address() as AddressInfo).port;
     revisions.start();
     // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
-    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: opts.curator });
+    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator } });
     curator.start();
     kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator });
   } catch (e) {

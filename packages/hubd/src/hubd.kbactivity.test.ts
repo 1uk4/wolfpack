@@ -8,6 +8,7 @@ import { appendLedger } from "@wolfpack/kb/librarian";
 import { ev, ledgerFile } from "@wolfpack/kb/shared";
 import { createHubServer, type HubServer, type HubOptions } from "./server.js";
 import { hubRoots } from "./layout.js";
+import { createKbActivity } from "./kb-activity.js";
 import { bearer, mintOperatorToken, mintWorkerToken, OP, seedTokens } from "./testing/tokens.js";
 
 const tmp: string[] = [];
@@ -92,12 +93,43 @@ describe("GET /v1/kb/activity", () => {
   });
 
   it("source reflects a custom inbox root and the curator state", async () => {
-    const custom = await setup({ inboxRoot: join(tmpdir(), "elsewhere-lane") });
-    expect((await parse(await custom.get("/v1/kb/activity"))).source.lane).toBe("custom");
+    const lane = mkdtempSync(join(tmpdir(), "dewey-inbox-"));
+    tmp.push(lane);
+    mkdirSync(join(lane, "w9", "_processed"), { recursive: true });
+    writeFileSync(join(lane, "w9", "topic-x-0123456789.md"), "x");
+    const custom = await setup({ inboxRoot: lane });
+    const cb = await parse(await custom.get("/v1/kb/activity"));
+    expect(cb.source.lane).toBe("custom");
+    expect(cb.incoming).toMatchObject({ total: 1, wolves: [{ wolf: "w9", pending: 1, items: [{ denTopicId: "topic-x", hash: "0123456789" }] }] });
 
     const on = await setup({ curator: { enabled: true, pollMs: 0 } });
     const body = await parse(await on.get("/v1/kb/activity"));
     expect(body.source.curator).toBe("on");
     expect(body.sweep).toEqual({ running: false });
+  });
+
+  it("a title edit with no ledger append shows at once; a moved entry's domain after the TTL", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kbactivity-ttl-"));
+    tmp.push(dir);
+    const roots = hubRoots(dir);
+    const entry = (domain: string, title: string) => {
+      mkdirSync(join(roots.kbBase, "domains", domain, "entries"), { recursive: true });
+      writeFileSync(join(roots.kbBase, "domains", domain, "entries", "kb-1.md"), `---\nid: kb-1\ntitle: "${title}"\n---\nx\n`);
+    };
+    entry("alpha", "Before");
+    appendLedger(roots, [ev.entryWritten("kb-1", "kb-1", "create")]);
+    let t = Date.parse("2026-11-05T00:00:00Z");
+    const act = createKbActivity({ roots, inboxRoot: join(roots.opsRoot, "contributions"), receiptsRoot: join(roots.opsRoot, "receipts"), now: () => t });
+    const first = act.read({}).changes.domains;
+    expect(first).toMatchObject([{ domain: "alpha", items: [{ title: "Before" }] }]);
+    entry("alpha", "After");
+    t += 1_000;
+    expect(act.read({}).changes.domains[0].items[0].title).toBe("After"); // no ledger append, inside the TTL
+    rmSync(join(roots.kbBase, "domains", "alpha"), { recursive: true });
+    entry("beta", "After");
+    t += 1_000;
+    expect(act.read({}).changes.domains[0].domain).toBe("alpha"); // listing cached inside the TTL
+    t += 5_000;
+    expect(act.read({}).changes.domains[0].domain).toBe("beta"); // rescanned after the TTL
   });
 });

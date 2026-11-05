@@ -1,8 +1,8 @@
 # Wolfpack Roadmap — Dockerization, KB-as-a-Service, Pi Durable
 
 > Strategic phasing for moving Wolfpack to ephemeral containers + a server-authoritative
-> knowledge base, without blocking day-to-day use. Companion spec for Phase 1:
-> `docs/factory-design.md`.
+> knowledge base, without blocking day-to-day use.
+
 
 ## Status legend
 - ✅ built · 🟡 designed/partial · ⬜ to build
@@ -47,7 +47,6 @@ These hold across every phase — they are the fixed points the roadmap builds a
 ## Phase 1 — Factory (task system), on the current pi CLI ✅
 
 A usable task system, file-first, before any container or service work.
-Spec (as built): `docs/factory-design.md`.
 
 - **WorkItem** node in `kb/schema/work.ts`, event-sourced on its own work ledger
   (`<den>/kb/ledger/work-events.jsonl`); items render to
@@ -63,7 +62,7 @@ Spec (as built): `docs/factory-design.md`.
   inbox → sweep path (alias or subject check) as subject updates plus one initiative entry.
 
 Open gaps (area inheritance, area → `subsystem` facet, work files written into the
-receive-only mirror) are listed in `docs/factory-design.md`.
+receive-only mirror) remain open.
 
 ---
 
@@ -84,7 +83,7 @@ is service-backed with no data-model change (same WorkItem files, now behind the
 
 ---
 
-## Phase 3 — Containerize wolves + `DockerBackend` ⬜
+## Phase 3 — Containerize wolves ⬜
 
 Wolves become ephemeral containers managed by the Wolfpack CLI.
 
@@ -93,8 +92,6 @@ Wolves become ephemeral containers managed by the Wolfpack CLI.
 - **Dev wolf:** `docker run -it`, repo bind-mounted, `KB_ENDPOINT`/`KB_TOKEN` injected.
 - **Daemon wolf:** `docker run -dit` + restart policy (replaces systemd + tmux); Telegram
   outbound.
-- **`DockerBackend`** implementing the existing `WolfBackend` contract
-  (`list/status/logs/restart/remove` → docker API); `wolfpack launch` drives Docker.
 
 *Milestone:* `wolfpack launch dev-wolf` gives you a containerized dev environment wired to
 the VPS KB; VPS daemon wolves run as containers.

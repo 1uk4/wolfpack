@@ -35,7 +35,7 @@ export interface RunningSandbox {
 }
 
 const defaultStartWorkServer: StartWorkServer = async (o) => {
-  const { startLocalWorkServer } = await import("@wolfpack/agent");
+  const { startLocalWorkServer } = await import("@wolfpack/work-server");
   return startLocalWorkServer(o);
 };
 

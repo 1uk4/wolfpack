@@ -19,6 +19,7 @@
   "dependencies": {
     "@wolfpack/engine": "*",
     "@wolfpack/kb": "*",
+    "@wolfpack/work-server": "*",
     "express": "^4.21.0",
     "yaml": "^2.6.0",
     "nanoid": "^5.1.0"

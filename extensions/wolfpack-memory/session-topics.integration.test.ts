@@ -13,7 +13,7 @@ import { openNodeSqliteStorage } from "../../packages/harness/node_modules/@eare
 import { afterEach, describe, expect, it } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
-import { startLocalWorkServer } from "@wolfpack/agent";
+import { startLocalWorkServer } from "@wolfpack/work-server";
 import { contentHash } from "@wolfpack/kb/shared";
 import { writeDenTopic } from "@wolfpack/memory";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";

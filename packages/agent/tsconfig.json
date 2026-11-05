@@ -7,6 +7,7 @@
   "include": ["src"],
   "references": [
     { "path": "../engine" },
-    { "path": "../kb" }
+    { "path": "../kb" },
+    { "path": "../work-server" }
   ]
 }

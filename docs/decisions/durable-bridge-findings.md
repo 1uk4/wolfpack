@@ -1,5 +1,7 @@
 # Durable bridge spike — FINDINGS
 
+> **Archived.** The spike code and raw evidence (`spikes/durable-bridge/`) were removed from the repo during open-source cleanup; they remain in git history. The 1.4.0 captures the engine event-mapper tests need live in `packages/harness/src/engine/__fixtures__/`. Paths such as `src/…` and `evidence/…` below refer to the removed spike.
+
 Spike `work-wolfpack-nPeM4M7`. Risk-retirement for an SSE/HTTP bridge over **raw `@earendil-works/pi-durable`**, headless, no daemon, no wolfpack extensions, no WORK_*/den/KB. Bare engine, model `claude-haiku-5-5` via pi-ai's `anthropic` provider.
 
 **Result: behaviours 1–6 all PASS, on both 1.3.0 and 1.4.0 (observable behaviour identical).** All numbers below are from real runs; raw captures are in `evidence/` (1.4.0) and `evidence-1.3.0/` (baseline).

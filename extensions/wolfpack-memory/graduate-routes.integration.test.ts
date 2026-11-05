@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
-import { startLocalWorkServer } from "@wolfpack/agent";
+import { startLocalWorkServer } from "@wolfpack/work-server";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { parkExtension, startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import createMemoryExtension from "./unified.js";

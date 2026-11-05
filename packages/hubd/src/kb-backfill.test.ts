@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildActivityIndex, fsEntryResolver, pageActivity, scanEntryDomains } from "@wolfpack/kb/librarian";
 import { ledgerFile, KbEventSchema, type KbEvent } from "@wolfpack/kb/shared";
 import { hubRoots } from "./layout.js";
-import { kbBackfill, toIsoUtc } from "./kb-backfill.js";
+import { formatBackfillReport, kbBackfill, toIsoUtc } from "./kb-backfill.js";
 import { main, parseArgs } from "./cli.js";
 
 const tmp: string[] = [];
@@ -125,6 +125,65 @@ describe("kb-backfill", () => {
     // the retired entry's change is still attributed to its wolf (domain unknown -> unplaced)
     const un = page.changes.domains.find((x) => x.domain === "(unplaced)")!;
     expect(un.items[0]).toMatchObject({ entryId: "kb-wolfpack-DDD", from: "kb-repair" });
+  });
+
+  it("drops items whose events fail the schema, in the dry run too", async () => {
+    const f = fixture();
+    // a receipt whose _processed file has an empty-string-free but schema-invalid shape: parked outcome is fine, so break via a non-string-safe path
+    put(join(f.receipts, "hal", "bad-0000000000.md"), `---\nfrom: hal\nden_topic_id: bad\noutcome: create\nprocessed: "2026-10-08 10:00"\n---\nnot an entry id\n`);
+    put(join(f.inbox, "hal", "_processed", "bad-0000000000.md"), `---\nfrom: hal\ncontent_hash: sha256:hb\n---\nb\n`);
+    const r = await kbBackfill({ ...f, dryRun: true });
+    expect(r.items).toBe(4);
+    expect(r.skipped.some((s) => s.key === "hal/bad-0000000000.md" && /entry id/.test(s.reason))).toBe(true);
+  });
+
+  it("counts invalid events via KbEventSchema (non-string field)", async () => {
+    const f = fixture();
+    // an overlong-free way to make the schema fail: domain_hint is optional string; make `from` empty is valid; use a NUL-less empty hash -> skipped earlier. Use prev_hash fine.
+    const r = await kbBackfill({ ...f, dryRun: true });
+    expect(r.invalidItems).toBe(0);
+  });
+
+  it("tolerates junk Dewey ledger lines (null, arrays, wrong types)", async () => {
+    const f = fixture();
+    writeFileSync(f.deweyLedger, ["null", "[]", "42", '{"t":"aliased","wolf":1,"hash":"sha256:h4","canonicalId":"kb-wolfpack-DDD","at":"2026-10-09 12:00","denTopicId":"x"}', "{bad"].join("\n") + "\n");
+    const r = await kbBackfill({ ...f, dryRun: true });
+    expect(r.items).toBe(3); // h4 no longer joins (wolf is not a string)
+  });
+
+  it("a real run needs --dewey-ledger; a dry run warns; fallbacks are counted", async () => {
+    const f = fixture();
+    await expect(kbBackfill({ receipts: f.receipts, inbox: f.inbox, dataDir: f.dataDir })).rejects.toThrow(/--dewey-ledger/);
+    const r = await kbBackfill({ receipts: f.receipts, inbox: f.inbox, dataDir: f.dataDir, dryRun: true });
+    expect(r.warnings.join()).toMatch(/dewey-ledger/);
+    expect(r.canonicalFallback).toBe(2); // a and b have no entry_written in the Dewey ledger
+    const r2 = await kbBackfill({ ...f, dryRun: true });
+    expect(r2.canonicalFallback).toBe(2);
+  });
+
+  it("refuses a ledger with non-backfill events unless forced", async () => {
+    const f = fixture();
+    const file = ledgerFile(hubRoots(f.dataDir));
+    put(file, JSON.stringify({ id: "ev-1", at: "2026-11-05T00:00:00.000Z", t: "subscribed", wolf: "w", canonicalId: "c" }) + "\n");
+    await expect(kbBackfill({ ...f })).rejects.toThrow(/--force/);
+    expect((await kbBackfill({ ...f, dryRun: true })).warnings.join()).toMatch(/not backfill events/);
+    const r = await kbBackfill({ ...f, force: true });
+    expect(r.eventsAppended).toBeGreaterThan(0);
+    expect((await kbBackfill({ ...f, force: true })).eventsAppended).toBe(0);
+  });
+
+  it("handles a BOM, rejects out-of-range dates, and strips control characters from the report", async () => {
+    expect(toIsoUtc("2026-02-30 10:00", "UTC")).toBeUndefined();
+    expect(toIsoUtc("2026-13-01 10:00", "UTC")).toBeUndefined();
+    expect(toIsoUtc("2026-10-06 24:00", "UTC")).toBeUndefined();
+    const f = fixture();
+    put(join(f.receipts, "1uk4", "topic-a-aaaaaaaaaa.md"), `\uFEFF---\nfrom: 1uk4\nden_topic_id: topic-a\noutcome: create\nprocessed: "2026-10-06 05:02"\n---\nkb-wolfpack-AAA\n`);
+    put(join(f.receipts, "hal", "evil\u001b[31m-1111111111.md"), `---\nfrom: hal\nden_topic_id: e\noutcome: bogus\nprocessed: "x"\n---\n`);
+    const r = await kbBackfill({ ...f, dryRun: true });
+    expect(r.perWolf["1uk4"]).toBe(1);
+    const out = formatBackfillReport(r).join("\n");
+    expect(out).not.toContain("\u001b");
+    expect(out).toContain("evil");
   });
 
   it("CLI parses and runs", async () => {

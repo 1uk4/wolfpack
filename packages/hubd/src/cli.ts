@@ -80,7 +80,7 @@ const USAGE = `usage:
                                                               hubd must be STOPPED even for the dry run (it takes the work-writer lock). --apply aborts unless --force when all items qualify, when a hub of <=10 items has >3, or above 10 items when more than max(3, 10%) qualify. A single genuine orphan on a 1-item hub needs --force (orphans >= total).
   hubd work-import --from-domains <dir> --from-ledger <file> --data-dir <dir> [--dry-run] [--domains personal,wolfpack]
                                                               merge the legacy work store (its domains dir and ledger, read-only) into this hub: migration duplicates collapsed, missing ledger events added (each source keeps its order, merged by time), legacy-only .md copied, newer-wins for items in both, file-only items seeded into the ledger. Backs up under <dir>/backups first. hubd must be STOPPED (work-writer lock); safe to re-run.
-  hubd kb-backfill --receipts <dir> --inbox <dir> [--dewey-ledger <file>] --data-dir <dir> [--tz <IANA, default UTC>] [--dry-run]
+  hubd kb-backfill --receipts <dir> --inbox <dir> --dewey-ledger <file> --data-dir <dir> [--tz <IANA, default UTC>] [--dry-run] [--force]
                                                               one-off, idempotent: append Dewey's past curation decisions (receipts + _processed, kb-repair via the Dewey ledger's aliased events) to the hub KB ledger so /kb-activity shows history. Run as the hubd user (file ownership); stop hubd or rely on the KB writer lock. Events carry ids starting "bf-".
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
@@ -125,6 +125,7 @@ export function parseArgs(argv: string[]): CliArgs {
       if (flag === "--inbox") { out.inbox = val0(); continue; }
       if (flag === "--dewey-ledger") { out.deweyLedger = val0(); continue; }
       if (flag === "--tz") { out.tz = val0(); continue; }
+      if (flag === "--force") { out.force = true; continue; }
     }
     if (command === "work-orphans" && flag === "--apply") { out.apply = true; continue; }
     if (command === "work-orphans" && flag === "--force") { out.force = true; continue; }
@@ -227,7 +228,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     return;
   }
   if (args.command === "kb-backfill") {
-    const r = await kbBackfill({ receipts: args.receipts!, inbox: args.inbox!, dataDir: args.dataDir!, dryRun: !!args.dryRun, ...(args.deweyLedger ? { deweyLedger: args.deweyLedger } : {}), ...(args.tz ? { tz: args.tz } : {}) });
+    const r = await kbBackfill({ receipts: args.receipts!, inbox: args.inbox!, dataDir: args.dataDir!, dryRun: !!args.dryRun, force: !!args.force, ...(args.deweyLedger ? { deweyLedger: args.deweyLedger } : {}), ...(args.tz ? { tz: args.tz } : {}) });
     for (const l of formatBackfillReport(r)) log(l);
     return;
   }

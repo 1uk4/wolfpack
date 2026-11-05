@@ -2,10 +2,7 @@
 	"name": "@wolfpack/console",
 	"version": "0.3.4",
 	"license": "AGPL-3.0-only",
-	"author": {
-		"name": "Amos Blomqvist",
-		"email": "255718537+amosblomqvist@users.noreply.github.com"
-	},
+	"author": "Luka Flores",
 	"homepage": "https://github.com/amosblomqvist/learnharness",
 	"description": "Wolfpack Console: the control plane for wolfpack agents.",
 	"type": "module",

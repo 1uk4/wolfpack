@@ -1,0 +1,14 @@
+Wolfpack
+Copyright (c) 2026 Luka Flores
+
+Wolfpack is licensed under the GNU Affero General Public License v3.0 only
+(AGPL-3.0-only). See the LICENSE file.
+
+Portions of apps/console and apps/desktop are derived from learnharness,
+Copyright (c) Amos Blomqvist, licensed under AGPL-3.0-only,
+https://github.com/amosblomqvist/learnharness, based on commit
+6cba9c8c5afe8a63f47ea4ebae6e91d8a205cebb; modified by Wolfpack contributors.
+See docs/provenance/learnharness.md.
+
+extensions/wolfpack-telegram is based on badlogic/pi-telegram (MIT) and keeps
+its MIT license.

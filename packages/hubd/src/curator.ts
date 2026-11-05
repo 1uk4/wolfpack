@@ -10,6 +10,12 @@
  *   events    sweep_started / sweep_item / sweep_finished on the hub event bus; started and finished are always paired.
  *   lease     `<inboxRoot>/.sweep-lease` (kb/librarian/curator-lease.ts): the hub holds it while the curator is on; a fresh wolf
  *             lease refuses start and skips a tick; wolf-side sweeps skip while the hub lease is fresh.
+ *   KNOWN WINDOW (not closed here, same as the wolf-side sweep): sweep.ts commits the entry (commitKb logs its entry_written) and
+ *             only THEN appends the ledger batch that marks the contribution hash as seen. A crash or a failing append between
+ *             the two leaves a live entry with the contribution still unseen, so the next tick routes it again and can create a
+ *             second entry. Wiring cannot close it (entries carry no contribution hash to check); see the ticket follow-up.
+ *   not covered  reorg / rebuild / retire / split-fat and tryRecoverAndRender are not under the sweep lease and write the KB
+ *             directly, bypassing commitKb: do not run them against a live hub KB.
  *   flag      off unless `enabled`. No decision logic lives here: sweep.ts decides, this file only writes and reports.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -18,8 +24,10 @@ import { loadModelTable, type Engine } from "@wolfpack/engine";
 import {
   acquireLease,
   appendLedger,
+  createEmbedder,
   createLibrarianEngine,
   defaultSweepWriter,
+  resolveEmbedConfig,
   freshLeaseIn,
   renderDomainDigest,
   renderDomainIndex,
@@ -42,7 +50,7 @@ import { CONTRIBUTIONS_LANE } from "./layout.js";
 
 export const SYSTEM_ACTOR: Actor = { id: "system", kind: "system" };
 export const DEFAULT_CURATOR_POLL_MS = 60_000;
-const DEFAULT_CLOSE_WAIT_MS = 5_000;
+const DEFAULT_CLOSE_WAIT_MS = 15_000;
 
 export interface CuratorOptions {
   /** Switch (default false = off: no lease, no timer, `runCuratorOnce` does nothing). Env HUBD_CURATOR in the hubd CLI. */
@@ -53,14 +61,21 @@ export interface CuratorOptions {
   modelsFile?: string;
   /** Test seam: the engine (default: createLibrarianEngine on the model table). */
   createEngine?: () => Engine;
-  /** Test seam: the embedder (default: the KB's cached embedder; its URL/model come from WOLFPACK_EMBED_URL / _MODEL, set by the CLI). */
+  /** Embedding service URL / model for placement (env HUBD_EMBED_URL / HUBD_EMBED_MODEL in the CLI). Default: WOLFPACK_EMBED_URL / _MODEL or nomic-embed-text on 127.0.0.1:11434. NOTE: the sweep adds nomic's task prefixes keyed on the process-wide model name, so a non-nomic model needs WOLFPACK_EMBED_MODEL set as well. */
+  embedUrl?: string;
+  embedModel?: string;
+  /** Test seam: the embedder (default: the KB's cached embedder; its URL/model come from embedUrl / embedModel). */
   getEmbedder?: () => CachedEmbedder;
   /** Test seam: run budget for the one item (see SweepTickOptions.budgetMs). */
   budgetMs?: number;
-  /** How long close() waits for a tick in flight, ms (default 5000). */
+  /** How long close() waits for a tick in flight, ms (default 15000, under the unit's TimeoutStopSec=20). A tick still running after that stops writing (every writer call checks the closing flag) and the lease is released when it ends. */
   closeWaitMs?: number;
   /** @internal TEST-ONLY: runs inside an entry write, after the file was read for the compare-and-set and before the commit (a racing writer). */
   afterEntryRead?: (entryId: string) => void;
+  /** @internal TEST-ONLY: wraps the tick's writer (failure injection). */
+  wrapWriter?: (w: SweepWriter) => SweepWriter;
+  /** @internal TEST-ONLY: called at the end of start() (simulates a later startup step failing). */
+  afterStart?: () => void;
 }
 
 export interface CuratorRun {
@@ -99,9 +114,14 @@ export interface CuratorDeps {
 
 const err1 = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
 
-/** The hubd SweepWriter. `committed` collects the entry ids commitKb already logged (entry_written) in this tick. */
-export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive">, hooks: { afterEntryRead?: (id: string) => void } = {}): SweepWriter & { committed: Set<string> } {
-  const committed = new Set<string>();
+/**
+ * The hubd SweepWriter. Every method refuses once `closing()` is true (the tick then fails its item, which stays queued).
+ * `pending` counts, per entry id, the commitKb commits that already logged an entry_written: appendLedger drops one sweep-made
+ * entry_written per pending commit (and only those), so each commit is logged exactly once. A commit that changed nothing, and a
+ * patchEntry (the sweep adds no entry_written for it), never add to it.
+ */
+export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"> & { closing?: () => boolean }, hooks: { afterEntryRead?: (id: string) => void } = {}): SweepWriter & { pending: Map<string, number> } {
+  const pending = new Map<string, number>();
   /** Run `fn` in the writer queue; the hub answers undefined only when it is shutting down (then the item fails and stays queued). */
   const excl = async <T>(fn: () => T): Promise<T> => {
     const r = await d.exclusive(() => ({ v: fn() }));
@@ -117,21 +137,23 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
       ? { op: "create", domain, path, content, contentHash: contentHash(content), prevHash: null }
       : { op: "update", domain, path, content, contentHash: contentHash(content), prevHash: contentHash(prev) };
   };
-  const commitFiles = async (roots: KbRoots, files: Array<{ domain: string; path: string; content: string }>, afterRead?: () => void) => {
+  /** True when something was committed. */
+  const commitFiles = async (roots: KbRoots, files: Array<{ domain: string; path: string; content: string }>, afterRead?: () => void): Promise<boolean> => {
     const changes = files.map((f) => change(roots, f.domain, f.path, f.content)).filter((c): c is KbChange => c !== null);
     afterRead?.();
-    if (changes.length > 0) await d.commit(SYSTEM_ACTOR, { changes });
+    if (changes.length === 0) return false;
+    await d.commit(SYSTEM_ACTOR, { changes });
+    return true;
   };
   /** Render with a sink, then commit what was rendered. */
-  const collect = (roots: KbRoots, render: (sink: (file: string, content: string) => void) => void) => {
+  const collect = (render: (sink: (file: string, content: string) => void) => void) => {
     const out: Array<{ domain: string; path: string; content: string }> = [];
     render((file, content) => out.push({ domain: basename(dirname(file)), path: basename(file), content }));
     return out;
   };
   const stripStamp = (s: string) => s.replace(/^_Updated: .*_$/m, "");
 
-  return {
-    committed,
+  const w: SweepWriter = {
     async commitEntry(roots, entry) {
       const path = `entries/${entry.id}.md`;
       const next = renderEntry(entry);
@@ -140,17 +162,22 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
         const prev = readFileSync(file, "utf-8");
         if (prev !== next) await excl(() => snapshotIfChanged(roots, entry.domain, entry.id, prev, next)); // keep what is overwritten (versions/)
       }
-      await commitFiles(roots, [{ domain: entry.domain, path, content: next }], () => hooks.afterEntryRead?.(entry.id));
-      committed.add(entry.id);
+      if (await commitFiles(roots, [{ domain: entry.domain, path, content: next }], () => hooks.afterEntryRead?.(entry.id))) pending.set(entry.id, (pending.get(entry.id) ?? 0) + 1);
     },
     async patchEntry(roots, domain, id, content) {
       await commitFiles(roots, [{ domain, path: `entries/${id}.md`, content }]);
     },
     async appendLedger(roots, events) {
       // commitKb already wrote the entry_written of every entry committed above; a second one would double-count it.
-      const rest = events.filter((e: KbEvent) => !((e as { t?: string }).t === "entry_written" && committed.has((e as { entryId?: string }).entryId ?? "")));
-      if (rest.length === 0) return;
-      await excl(() => appendLedger(roots, rest));
+      const left = new Map(pending);
+      const rest = events.filter((e: KbEvent) => {
+        const id = (e as { entryId?: string }).entryId ?? "";
+        if ((e as { t?: string }).t !== "entry_written" || !(left.get(id) ?? 0)) return true;
+        left.set(id, left.get(id)! - 1);
+        return false;
+      });
+      if (rest.length > 0) await excl(() => appendLedger(roots, rest));
+      for (const [id, n] of left) n > 0 ? pending.set(id, n) : pending.delete(id); // consumed only once the append went through
     },
     async syncDelivered(roots, domain, key) {
       // Rewrites entries in place (holder + members) and may snapshot versions: inside the writer queue. The revision scan records them.
@@ -160,14 +187,14 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
       await excl(() => writeSections(roots, sections));
     },
     async renderDomain(roots, domain) {
-      await commitFiles(roots, collect(roots, (sink) => {
+      await commitFiles(roots, collect((sink) => {
         renderDomainIndex(roots, domain, sink);
         renderDomainDigest(roots, domain, sink);
       }));
     },
     async renderRegistry(roots, reg) {
       try {
-        const files = collect(roots, (sink) => void renderRegistry(roots, reg, [], sink)).filter((f) => {
+        const files = collect((sink) => void renderRegistry(roots, reg, [], sink)).filter((f) => {
           const file = fileOf(roots, f.domain, f.path);
           return !existsSync(file) || stripStamp(readFileSync(file, "utf-8")) !== stripStamp(f.content); // only the timestamp moved: no commit
         });
@@ -183,6 +210,14 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
     // The hub's KB is not a git repo of its own (and `git -C` would climb into whatever repo holds the data dir): never commit.
     gitCommit: () => undefined,
   };
+  // Closing gate: nothing is written once the curator is closing, not even by the default (plain disk) methods.
+  const gated = Object.fromEntries(
+    Object.entries(w).map(([k, fn]) => [k, (...args: unknown[]) => {
+      if (d.closing?.()) throw new Error("the hub is shutting down");
+      return (fn as (...a: unknown[]) => unknown)(...args);
+    }])
+  ) as unknown as SweepWriter;
+  return Object.assign(gated, { pending });
 }
 
 export function createCurator(deps: CuratorDeps): Curator {
@@ -244,14 +279,16 @@ export function createCurator(deps: CuratorDeps): Curator {
         emit({ type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome, ...(e.entryId ? { entryId: e.entryId } : {}) });
       }
     };
-    const writer = createHubSweepWriter(deps, { afterEntryRead: o.afterEntryRead });
+    const base = createHubSweepWriter({ ...deps, closing: () => closing }, { afterEntryRead: o.afterEntryRead });
+    const writer = o.wrapWriter ? o.wrapWriter(base) : base;
     try {
       const tick = await runSweepTick({
         roots: deps.roots,
         lane: CONTRIBUTIONS_LANE,
         writer,
         createEngine: o.createEngine ?? (() => createLibrarianEngine(loadModelTable(o.modelsFile ? { file: o.modelsFile } : {}).table)),
-        ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : {}),
+        leaseOwner: "none", // the hub lease is held by this curator for its whole life
+        ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : o.embedUrl || o.embedModel ? { getEmbedder: () => createEmbedder(deps.roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }) } : {}),
         budgetMs: o.budgetMs,
         notePoster: null, // work link-back notes stay queued; the hub owns the work ledger and has no Work API to post to
         notify: (m) => console.log(`[curator] ${m}`),
@@ -260,10 +297,9 @@ export function createCurator(deps: CuratorDeps): Curator {
       });
       const r = tick.sweep;
       const error = r.errors > 0 ? (r.failures[0]?.reason ?? r.paused ?? "an item failed") : undefined;
-      tally.remaining = r.remaining;
-      tally.parked = r.parked.length;
+      tally.remaining = r.remaining; // parked / processed are the per-item counts the events already carried
       finish(error);
-      return { outcome: tick.outcome, processed: r.processed, created: r.created, merged: r.merged, rejected: r.rejected, parked: r.parked.length, remaining: r.remaining, ...(error ?? r.paused ? { error: error ?? r.paused } : {}) };
+      return { outcome: tick.outcome, processed: r.processed, created: r.created, merged: r.merged, rejected: r.rejected, parked: r.parked.length, remaining: r.remaining, ...((error ?? r.paused) ? { error: error ?? r.paused } : {}) };
     } catch (e) {
       const msg = err1(e);
       console.error("[curator] sweep failed:", msg);
@@ -293,10 +329,11 @@ export function createCurator(deps: CuratorDeps): Curator {
       if (!enabled || pollMs <= 0 || timer) return;
       timer = setInterval(() => void runOnce().catch((e) => console.error("[curator] tick failed:", err1(e))), pollMs);
       timer.unref();
+      o.afterStart?.();
     },
     runOnce,
     async close() {
-      closing = true;
+      closing = true; // from here every writer call of a tick in flight is refused
       if (timer) clearInterval(timer);
       timer = undefined;
       const p = inflight;
@@ -305,8 +342,12 @@ export function createCurator(deps: CuratorDeps): Curator {
         await Promise.race([p.catch(() => undefined), new Promise<void>((r) => (to = setTimeout(r, o.closeWaitMs ?? DEFAULT_CLOSE_WAIT_MS)))]);
         if (to) clearTimeout(to);
       }
-      lease?.release();
+      const l = lease;
       lease = undefined;
+      if (!l) return;
+      // The lease stays while a tick is still running (it keeps heartbeating); it goes when that tick ends.
+      if (inflight) void inflight.then(() => l.release(), () => l.release());
+      else l.release();
     },
   };
 }

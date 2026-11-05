@@ -8,6 +8,9 @@ import type { Engine } from "@wolfpack/engine";
 import { LINK_PROTOCOL_VERSION, parseLinkFrame, type LinkFrame } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
 import { readLedger, leaseFile } from "@wolfpack/kb/librarian";
+import { hostname } from "node:os";
+import { utimesSync } from "node:fs";
+import { createHubSweepWriter, SYSTEM_ACTOR } from "./curator.js";
 import { createTokenStore } from "./auth.js";
 import { curatorFromEnv } from "./cli.js";
 import { createHubServer, type HubServer, type HubOptions } from "./server.js";
@@ -226,5 +229,200 @@ describe("hub curator", () => {
     expect(events.types().filter((t) => t === "sweep_started")).toHaveLength(1);
     expect(events.text()).toMatch(/"type":"sweep_finished"[^\n]*"error":"[^"]*(stale write|conflict)/);
     expect(readLedger(hub.roots).filter((e) => (e as { t: string }).t === "entry_written")).toHaveLength(0);
+  }, 30_000);
+});
+
+const drop = (dir: string, n: number) => {
+  mkdirSync(lane(dir), { recursive: true });
+  const c = contribution(n);
+  writeFileSync(join(lane(dir), `topic-${n}-aaaaaaaaa${n}.md`), `---\nfrom: alpha\nden_topic_id: ${c.denTopicId}\ncontent_hash: ${c.contentHash}\nprev_hash: null\ndomain_hint: wp\n---\n\n${c.body}\n`);
+};
+const ledgerCount = (hub: HubServer, t: string) => readLedger(hub.roots).filter((e) => (e as { t: string }).t === t).length;
+const wolfLease = (dir: string, o: object = {}) => {
+  mkdirSync(join(dir, "kb", "ops", "inbox"), { recursive: true });
+  writeFileSync(join(dir, "kb", "ops", "inbox", ".sweep-lease"), JSON.stringify({ owner: "wolf", pid: process.pid, host: hostname(), at: new Date().toISOString(), ...o }));
+};
+const freshDir = () => { const d = mkdtempSync(join(tmpdir(), "hubd-curator-")); tmp.push(d); seedTokens(d); return d; };
+
+describe("hub curator: wolf lease refusals", () => {
+  it("refuses a live-pid wolf lease (own pid and another live pid), accepts a stale one and a dead-pid one", async () => {
+    const dir = freshDir();
+    wolfLease(dir, { pid: process.ppid }); // another live process on this host
+    await expect(createHubServer({ dataDir: dir, port: 0, curator: curatorOpts() })).rejects.toThrow(/wolf-side sweep holds the sweep lease/);
+    wolfLease(dir, { pid: process.pid });
+    await expect(createHubServer({ dataDir: dir, port: 0, curator: curatorOpts() })).rejects.toThrow(/wolf-side sweep holds the sweep lease/);
+    // a lease from another host cannot be pid-checked: held until it is stale by age
+    wolfLease(dir, { pid: 1, host: "elsewhere" });
+    await expect(createHubServer({ dataDir: dir, port: 0, curator: curatorOpts() })).rejects.toThrow(/wolf-side sweep holds the sweep lease/);
+    const f = join(dir, "kb", "ops", "inbox", ".sweep-lease");
+    const old = new Date(Date.now() - 3 * 3600_000);
+    utimesSync(f, old, old); // stale by age
+    const a = await createHubServer({ dataDir: dir, port: 0, curator: curatorOpts() });
+    servers.push(a);
+    await a.close();
+    servers.pop();
+    wolfLease(dir, { pid: 2147483000 }); // dead pid on this host: stale at once
+    const b = await createHubServer({ dataDir: dir, port: 0, curator: curatorOpts() });
+    servers.push(b);
+  }, 30_000);
+
+  it("a wolf lease that appears while the hub runs skips the tick", async () => {
+    const { hub, dir } = await start({ curator: curatorOpts() });
+    drop(dir, 1);
+    wolfLease(dir);
+    expect(await hub.runCuratorOnce()).toMatchObject({ outcome: "skipped" });
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+  });
+});
+
+describe("hub curator: failures", () => {
+  const pairs = (events: ReturnType<typeof followEvents>) => ({ s: events.types().filter((t) => t === "sweep_started").length, f: events.types().filter((t) => t === "sweep_finished").length });
+
+  it("a writeReceipt failure after the commit: the entry stays, the item stays queued, started/finished are paired", async () => {
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, writeReceipt: () => { throw new Error("disk full"); } }) }) });
+    const events = followEvents(hub);
+    await new Promise((r) => setTimeout(r, 100));
+    drop(dir, 1);
+    const run = await hub.runCuratorOnce();
+    expect(run!.error).toMatch(/disk full/);
+    expect(entryFiles(dir)).toHaveLength(1);
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+    await until(() => events.types().includes("sweep_finished"), "sweep_finished");
+    expect(pairs(events)).toEqual({ s: 1, f: 1 });
+  }, 30_000);
+
+  it("a markProcessed failure after the commit and the receipt: same", async () => {
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, markProcessed: () => { throw new Error("EROFS"); } }) }) });
+    const events = followEvents(hub);
+    await new Promise((r) => setTimeout(r, 100));
+    drop(dir, 1);
+    const run = await hub.runCuratorOnce();
+    expect(run!.error).toMatch(/EROFS/);
+    expect(entryFiles(dir)).toHaveLength(1);
+    expect(readdirSync(join(dir, "kb", "ops", "receipts", "alpha"))).toHaveLength(1);
+    await until(() => events.types().includes("sweep_finished"), "sweep_finished");
+    expect(pairs(events)).toEqual({ s: 1, f: 1 });
+  }, 30_000);
+
+  it("a throw mid-tick (outside any item) still pairs sweep_started with sweep_finished", async () => {
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, renderDomain: () => { throw new Error("render blew up"); }, gitCommit: () => { throw new Error("late blow up"); } }) }) });
+    const events = followEvents(hub);
+    await new Promise((r) => setTimeout(r, 100));
+    drop(dir, 1);
+    await hub.runCuratorOnce();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(pairs(events)).toEqual({ s: 1, f: 1 });
+    // the curator keeps working afterwards
+    await expect(hub.runCuratorOnce()).resolves.toBeDefined();
+  }, 30_000);
+
+  it("engine.call and embed run WITHOUT the KB writer queue held (a commit from inside them completes)", async () => {
+    let inCall = 0;
+    let inEmbed = 0;
+    let hubRef: HubServer | undefined;
+    const probe = async (n: number) => {
+      const content = `---\nid: kb-wp-probe0${n}\n---\nprobe`;
+      const r = await Promise.race([
+        hubRef!.commitKb({ id: "operator", kind: "operator" } as any, { changes: [{ op: "create", domain: "wp", path: `entries/kb-wp-probe0${n}.md`, content, contentHash: contentHash(content), prevHash: null }] } as any).then(() => "done", () => "done"),
+        new Promise((res) => setTimeout(() => res("held"), 1500)),
+      ]);
+      return r;
+    };
+    const results: unknown[] = [];
+    const slowEngine = { ...engine, call: async (...a: [string, any]) => { if (inCall++ === 0) results.push(await probe(1)); return (engine as any).call(...a); } };
+    const slowEmbedder = { ...embedder, embed: async () => { if (inEmbed++ === 0) results.push(await probe(2)); return [1, 0, 0]; } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => slowEngine, getEmbedder: () => slowEmbedder }) });
+    hubRef = hub;
+    drop(dir, 1);
+    await hub.runCuratorOnce();
+    expect(inCall).toBeGreaterThan(0);
+    expect(results).toEqual(["done", "done"]);
+  }, 30_000);
+
+  it("close() while a tick is in flight: nothing is written after the close, the lease stays until the tick ends, then goes", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inCall = new Promise<void>((r) => (entered = r));
+    const gated = { ...engine, call: async (...a: [string, any]) => { entered(); await gate; return (engine as any).call(...a); } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => gated, closeWaitMs: 50 }) });
+    drop(dir, 1);
+    const tick = hub.runCuratorOnce();
+    await inCall;
+    await hub.close();
+    servers.pop();
+    // closed, tick still running: the lease is still held
+    expect(existsSync(leaseFile(contributionsRoot(dir)))).toBe(true);
+    release();
+    await tick;
+    await until(() => !existsSync(leaseFile(contributionsRoot(dir))), "lease released after the tick ended");
+    // nothing was written once the hub was closing
+    expect(existsSync(join(dir, "kb", "ops", "receipts", "alpha"))).toBe(false);
+    expect(existsSync(join(lane(dir), "_processed"))).toBe(false);
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+  }, 30_000);
+
+  it("no lease leaks when start() or a later startup step throws", async () => {
+    const dir = freshDir();
+    await expect(createHubServer({ dataDir: dir, port: 0, curator: curatorOpts({ pollMs: 1000, afterStart: () => { throw new Error("startup step failed"); } }) })).rejects.toThrow(/startup step failed/);
+    expect(existsSync(leaseFile(contributionsRoot(dir)))).toBe(false);
+    const again = await createHubServer({ dataDir: dir, port: 0, curator: curatorOpts() }); // and a retry can take it
+    servers.push(again);
+  }, 30_000);
+});
+
+describe("hub curator: entry_written dedupe is per commit", () => {
+  const roots = () => { const b = mkdtempSync(join(tmpdir(), "hubd-dedupe-")); tmp.push(b); return { kbBase: join(b, "base"), opsRoot: join(b, "ops"), denLocal: join(b, "den") } as any; };
+  const ew = (id: string) => ({ id: "x", at: "t", t: "entry_written", entryId: id, canonicalId: id, action: "create" }) as any;
+
+  it("drops one sweep entry_written per committed entry, keeps the others, and a patch adds none", async () => {
+    const r = roots();
+    const commits: unknown[] = [];
+    const w = createHubSweepWriter({ commit: async (_a: any, req: any) => (commits.push(req), {} as any), exclusive: async (fn: any) => fn() });
+    // two commits of the same id in one tick (create, then a merge rewrite): two pending
+    w.pending.set("kb-wp-aaaaaaa", 2);
+    await w.appendLedger(r, [ew("kb-wp-aaaaaaa"), ew("kb-wp-bbbbbbb")]);
+    expect(w.pending.get("kb-wp-aaaaaaa")).toBe(1); // one consumed, one still owed
+    expect(readLedger(r).map((e: any) => e.entryId)).toEqual(["kb-wp-bbbbbbb"]); // only the id nobody committed through commitKb
+    await w.appendLedger(r, [ew("kb-wp-aaaaaaa")]);
+    expect(w.pending.size).toBe(0);
+    // a patch of an existing entry goes through commit but owes no drop: its sweep-made entry_written (none) is never swallowed
+    await w.patchEntry(r, "wp", "kb-wp-ccccccc", "patched");
+    expect(w.pending.size).toBe(0);
+    await w.appendLedger(r, [ew("kb-wp-ccccccc")]);
+    expect(readLedger(r).map((e: any) => e.entryId)).toEqual(["kb-wp-bbbbbbb", "kb-wp-ccccccc"]);
+    expect(SYSTEM_ACTOR.kind).toBe("system");
+  });
+
+  it("a failed ledger append consumes nothing (the owed drops survive a retry)", async () => {
+    const r = roots();
+    const w = createHubSweepWriter({ commit: async () => ({}) as any, exclusive: async () => { throw new Error("append failed"); } });
+    w.pending.set("kb-wp-aaaaaaa", 1);
+    await expect(w.appendLedger(r, [ew("kb-wp-aaaaaaa"), ew("kb-wp-bbbbbbb")])).rejects.toThrow(/append failed/);
+    expect(w.pending.get("kb-wp-aaaaaaa")).toBe(1);
+  });
+});
+
+describe("hub curator: KNOWN WINDOW (documented, not a guarantee)", () => {
+  it("appendLedger failing after commitEntry leaves a live entry with the contribution unseen; the outcome of the next tick is pinned here", async () => {
+    let failed = false;
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, appendLedger: async (...a: unknown[]) => { if (!failed) { failed = true; throw new Error("ledger down"); } return w.appendLedger(...a); } }) }) });
+    drop(dir, 1);
+    const first = await hub.runCuratorOnce();
+    expect(first!.error).toMatch(/ledger down/);
+    expect(entryFiles(dir)).toHaveLength(1);
+    expect(ledgerCount(hub, "entry_written")).toBe(1); // commitKb logged it
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(1); // still queued, hash not marked seen
+    // sweep.ts keeps the unwritten batch and appends it again in its final ledger write, so a FAILING (not crashing) append is
+    // repaired in the same tick: the contribution is seen by the next tick, which retires it as a duplicate. Still one entry,
+    // one entry_written, no second create; the contributor gets no receipt for it (it was never answered).
+    expect(ledgerCount(hub, "contribution")).toBe(1);
+    await hub.runCuratorOnce();
+    expect(entryFiles(dir)).toHaveLength(1);
+    expect(ledgerCount(hub, "entry_written")).toBe(1);
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(0);
+    expect(existsSync(join(dir, "kb", "ops", "receipts", "alpha"))).toBe(false);
+    // NOT COVERED (this is the window): a CRASH between commitEntry and that ledger write leaves the contribution unseen, and the
+    // next tick routes it again (possibly creating a second entry). It cannot be closed from curator.ts; see RUNBOOK section 8.
   }, 30_000);
 });

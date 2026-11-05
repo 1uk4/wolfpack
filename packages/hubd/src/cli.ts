@@ -272,8 +272,8 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
 
 /**
  * The hub curator's options from env (see curator.ts): HUBD_CURATOR (1/true/on; default OFF), HUBD_CURATOR_POLL_MS (default 60000,
- * 0 = no timer), HUBD_CURATOR_MODELS (path of a models.json), HUBD_EMBED_URL / HUBD_EMBED_MODEL (the embedding service; they set
- * WOLFPACK_EMBED_URL / _MODEL for this process, only when the curator is on).
+ * 0 = no timer), HUBD_CURATOR_MODELS (path of a models.json), HUBD_EMBED_URL / HUBD_EMBED_MODEL (the embedding service, passed as options; the
+ * process environment is never changed).
  */
 export function curatorFromEnv(env: NodeJS.ProcessEnv): CuratorOptions {
   const enabled = /^(1|true|on|yes)$/i.test(env.HUBD_CURATOR?.trim() ?? "");
@@ -281,9 +281,13 @@ export function curatorFromEnv(env: NodeJS.ProcessEnv): CuratorOptions {
   const pollRaw = env.HUBD_CURATOR_POLL_MS?.trim();
   const pollMs = pollRaw ? Number(pollRaw) : DEFAULT_CURATOR_POLL_MS;
   if (!Number.isFinite(pollMs) || pollMs < 0) throw new Error(`HUBD_CURATOR_POLL_MS must be a number of milliseconds >= 0 (got ${JSON.stringify(pollRaw)})`);
-  if (env.HUBD_EMBED_URL?.trim()) process.env.WOLFPACK_EMBED_URL = env.HUBD_EMBED_URL.trim();
-  if (env.HUBD_EMBED_MODEL?.trim()) process.env.WOLFPACK_EMBED_MODEL = env.HUBD_EMBED_MODEL.trim();
-  return { enabled, pollMs, ...(env.HUBD_CURATOR_MODELS?.trim() ? { modelsFile: env.HUBD_CURATOR_MODELS.trim() } : {}) };
+  return {
+    enabled,
+    pollMs,
+    ...(env.HUBD_CURATOR_MODELS?.trim() ? { modelsFile: env.HUBD_CURATOR_MODELS.trim() } : {}),
+    ...(env.HUBD_EMBED_URL?.trim() ? { embedUrl: env.HUBD_EMBED_URL.trim() } : {}),
+    ...(env.HUBD_EMBED_MODEL?.trim() ? { embedModel: env.HUBD_EMBED_MODEL.trim() } : {}),
+  };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

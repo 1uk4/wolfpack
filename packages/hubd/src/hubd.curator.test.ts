@@ -391,6 +391,40 @@ describe("hub curator: failures", () => {
     await until(() => !existsSync(leaseFile(contributionsRoot(dir))), "lease released");
   }, 30_000);
 
+  it("unchanged path: close() after the ledger append (contribution seen, nothing committed) still gets the receipt and the _processed move", async () => {
+    let reached!: () => void;
+    const atLedger = new Promise<void>((r) => (reached = r));
+    let go!: () => void;
+    const gate = new Promise<void>((r) => (go = r));
+    let armed = false;
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, appendLedger: async (...a: unknown[]) => { const r = await w.appendLedger(...a); if (armed) { armed = false; reached(); await gate; } return r; } }) }) });
+    // An anchored verbatim contribution, sent twice with identical text and source (only the hash differs): the second one is
+    // "unchanged": nothing to commit, but its ledger append still marks the contribution seen.
+    const anchored = (n: number) => {
+      mkdirSync(lane(dir), { recursive: true });
+      writeFileSync(join(lane(dir), `rule-${n}-aaaaaaaaaa.md`), `---\nfrom: alpha\nden_topic_id: work-wp-FEAT001\ncontent_hash: sha256:c0de${n}\nprev_hash: null\ndomain_hint: wp\nanchor: work-wp-FEAT001\nverbatim: true\n---\n\n# A rule\n\nsame body\n`);
+    };
+    anchored(1);
+    await hub.runCuratorOnce(); // creates the entry
+    anchored(2);
+    const writtenBefore = ledgerCount(hub, "entry_written");
+    armed = true;
+    const tick = hub.runCuratorOnce();
+    await atLedger;
+    expect(ledgerCount(hub, "entry_written")).toBe(writtenBefore); // nothing was committed for this item
+    const closing = hub.close();
+    servers.pop();
+    await new Promise((r) => setTimeout(r, 100));
+    go();
+    const run = await tick;
+    await closing;
+    expect(run!.error).toBeUndefined();
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(0);
+    expect(readdirSync(join(lane(dir), "_processed"))).toHaveLength(2);
+    expect(readdirSync(join(dir, "kb", "ops", "receipts", "alpha"))).toHaveLength(2); // the unchanged item has its receipt
+    expect(entryFiles(dir)).toHaveLength(1);
+  }, 30_000);
+
   it("no lease leaks when start() or a later startup step throws", async () => {
     const dir = freshDir();
     await expect(createHubServer({ dataDir: dir, port: 0, curator: curatorOpts({ pollMs: 1000, afterStart: () => { throw new Error("startup step failed"); } }) })).rejects.toThrow(/startup step failed/);

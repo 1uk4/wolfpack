@@ -218,6 +218,8 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
   // leave a live entry whose contribution is unseen (it would be created again on the next boot). The item ends at its
   // markProcessed. Derived renders and the final ledger/section writes are bounded and let through as well. The tick itself ends
   // soon after: the next item cannot open.
+  // Its safety depends on sweep.ts handling exactly ONE item per tick (sweep.ts:412 `unseen.slice(0, 1)`) and on this writer being
+  // created per tick (runTick): the flag is per item only because there is never a second item in the same writer's life.
   let committed = false;
   const OPENS = new Set(["commitEntry", "patchEntry", "quarantine", "writeReceipt", "markProcessed"]);
   const gated = Object.fromEntries(
@@ -226,6 +228,9 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
       const r = await (fn as (...a: unknown[]) => unknown)(...args);
       if (k === "commitEntry" || k === "patchEntry") committed = true;
       else if (k === "markProcessed") committed = false;
+      // The unchanged path commits no entry but its ledger append marks the contribution seen: from there the item must finish
+      // (its receipt), or the next boot retires the file as a duplicate without one.
+      else if (k === "appendLedger" && (args[1] as Array<{ t?: string }> | undefined)?.some((e) => e.t === "contribution")) committed = true;
       return r;
     }])
   ) as unknown as SweepWriter;

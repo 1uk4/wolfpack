@@ -178,10 +178,10 @@ function takeover(dir: string, judgedRaw: string, body: string, opts: LeaseOptio
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       // Another taker holds the mutex. It is cleared when its holder is dead, when it is older than MUTEX_STALE_MS whatever the
       // holder's pid says (a crashed taker whose pid was reused), or when it is unreadable past the grace period; otherwise back off.
-      // The compare-then-unlink below is NOT atomic (the mutex could be replaced between the read and the unlink). That is accepted:
-      // it needs a stale mutex and a new taker racing in the same instant, and the worst case is two takers running the takeover
-      // together, which the re-judge under the mutex (and the final linkSync publish, which fails with EEXIST) still resolves to one
-      // lease: at most two sweepers overlap for a tick, never more, and the sweeps' own per-item commit checks catch the rest.
+      // The compare-then-unlink below is NOT atomic (the mutex could be replaced between the read and the unlink). In that rare race
+      // two takers can BOTH win: B can unlink the mutex A has just taken and then A's freshly published lease. That overlap is
+      // accepted: it needs a stale mutex plus a second taker racing at the same instant, and there are at most two sweepers (the hub
+      // and one wolf-side sweep), so the worst case is those two sweeping the same lane for one tick.
       let seen: string | undefined;
       try {
         seen = readFileSync(mf, "utf-8");

@@ -15,8 +15,8 @@
  * Electron shell does (electron/main.cjs) — with --electron it uses
  * Electron's bundled Node via ELECTRON_RUN_AS_NODE, otherwise host Node —
  * 127.0.0.1 on a kernel-assigned
- * free port, NODE_ENV=production, a THROWAWAY LH_DATA_DIR and an EMPTY
- * LH_AUTH_FILE under os.tmpdir() (no real keys or data ever touch it) —
+ * free port, NODE_ENV=production, a THROWAWAY WOLFPACK_DATA_DIR and an EMPTY
+ * WOLFPACK_AUTH_FILE under os.tmpdir() (no real keys or data ever touch it) —
  * polls GET / until 200, then probes the GET-only API surface (graph /
  * models / settings — no side effects). Any non-200, an early server
  * exit, or a 30s boot timeout fails the gate and prints the server's own
@@ -66,14 +66,14 @@ function probeEnv(env, home) {
 	const clean = Object.fromEntries(Object.entries(env).filter(([key]) =>
 		!/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key) &&
 		!/^(AWS_|GOOGLE_|GCLOUD_|CLOUDSDK_|AZURE_|ANTHROPIC_|OPENAI_|OPENROUTER_|GEMINI_)/.test(key) &&
-		!["NODE_OPTIONS", "NODE_PATH", "LH_DEV_URL", "ELECTRON_RUN_AS_NODE"].includes(key)));
+		!["NODE_OPTIONS", "NODE_PATH", "WOLFPACK_DEV_URL", "LH_DEV_URL", "ELECTRON_RUN_AS_NODE"].includes(key)));
 	return {
 		...clean,
 		HOME: home, USERPROFILE: home,
 		APPDATA: path.join(home, "config"), LOCALAPPDATA: path.join(home, "local"),
 		XDG_CONFIG_HOME: path.join(home, "config"), XDG_CACHE_HOME: path.join(home, "cache"),
-		LH_DATA_DIR: path.join(home, "data"), LH_AUTH_FILE: path.join(home, "auth.json"),
-		LH_IGNORE_ENV_KEYS: "1", NODE_ENV: "production",
+		WOLFPACK_DATA_DIR: path.join(home, "data"), WOLFPACK_AUTH_FILE: path.join(home, "auth.json"),
+		WOLFPACK_IGNORE_ENV_KEYS: "1", NODE_ENV: "production",
 	};
 }
 
@@ -126,8 +126,8 @@ async function main() {
 			NODE_ENV: "production",
 			PORT: String(port),
 			HOSTNAME: "127.0.0.1",
-			LH_DATA_DIR: dataDir,
-			LH_AUTH_FILE: authFile,
+			WOLFPACK_DATA_DIR: dataDir,
+			WOLFPACK_AUTH_FILE: authFile,
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});

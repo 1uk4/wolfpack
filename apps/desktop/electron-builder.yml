@@ -7,7 +7,7 @@
 #     server.js process.chdir()s into its own dir;
 #   - the asar holds only the shell (electron/main.cjs + package.json);
 #   - signed + notarized since 2026-10-08 (Developer ID Application cert in
-#     the login keychain; notary credentials in the LH_NOTARY keychain
+#     the login keychain; notary credentials in the WOLFPACK_NOTARY keychain
 #     profile; the profile + team env vars are baked into desktop:dist).
 appId: com.wolfpack.Console
 productName: Wolfpack Console
@@ -122,7 +122,7 @@ mac:
   # Developer ID Application certificate from the login keychain;
   # notarize: true makes electron-builder sign → submit to Apple's notary
   # service → staple the ticket, all inside this one build (credentials
-  # via the LH_NOTARY keychain profile, env baked into desktop:dist).
+  # via the WOLFPACK_NOTARY keychain profile, env baked into desktop:dist).
   # Adds minutes per build (Apple's scan queue). Verification battery:
   # codesign --verify --deep / spctl --assess / stapler validate.
   notarize: true

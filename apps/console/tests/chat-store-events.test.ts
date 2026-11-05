@@ -4,7 +4,7 @@
  * list-SHAPE writes (create/rename/delete) announce post-write; content
  * writes (messages/usage/settings/tree) are DELIBERATELY silent — the
  * silence law is pinned here so it reads as law, not oversight. Runs
- * under an isolated LH_DATA_DIR (the chat-birth-stamp discipline: the
+ * under an isolated WOLFPACK_DATA_DIR (the chat-birth-stamp discipline: the
  * seam is set before any config-loading import, so every app-module
  * import is dynamic).
  */
@@ -17,7 +17,7 @@ import { after, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-chat-store-events-"));
-process.env.LH_DATA_DIR = TMP_DATA;
+process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { chatStore } = await import("../src/store/chats.ts");
 const { subscribe } = await import("../src/core/events.ts");

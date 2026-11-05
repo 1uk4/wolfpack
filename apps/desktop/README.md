@@ -13,7 +13,7 @@ elsewhere (e.g. the VPS behind tailscale serve) instead, set the URL either way:
 
 Clear it (delete the file / unset the env) to return to local mode. Restart the app after changing.
 
-Rules: https only (plain http only for 127.0.0.1/localhost/[::1] and 100.64/10 tailnet IPs); no credentials in the URL; invalid values are logged and ignored (local mode). `LH_DEV_URL` takes precedence over both.
+Rules: https only (plain http only for 127.0.0.1/localhost/[::1] and 100.64/10 tailnet IPs); no credentials in the URL; invalid values are logged and ignored (local mode). `WOLFPACK_DEV_URL` takes precedence over both.
 
 In remote mode no server is spawned and `data/` + `auth.json` are untouched; permissions, notifications and navigation are pinned to the remote origin; other origins open in the browser. If the host is unreachable a local error page with a Retry button is shown.
 

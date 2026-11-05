@@ -1,3 +1,4 @@
+import { readEnv } from "../../env-compat.ts";
 /**
  * provider-events — the raw-wire recorder (owner, 2026-10-04).
  *
@@ -10,7 +11,7 @@
  * an inspectable artifact.
  *
  * Gating (owner choice, 2026-10-04): env var only —
- *   LH_PROVIDER_EVENTS=1 npm run dev
+ *   WOLFPACK_PROVIDER_EVENTS=1 npm run dev
  * Default off: raw events carry full prompts (privacy) and unbounded
  * volume (disk). No app surface; a debugging feature, not a feature.
  *
@@ -90,7 +91,7 @@ function encodeEvent(data: unknown): unknown {
 /** True when recording is on (read per call — toggling needs no restart
  *  beyond the next turn's agent construction). */
 export function providerEventsEnabled(): boolean {
-	return !!process.env.LH_PROVIDER_EVENTS;
+	return !!readEnv("WOLFPACK_PROVIDER_EVENTS", "LH_PROVIDER_EVENTS");
 }
 
 /**

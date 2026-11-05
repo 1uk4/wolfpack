@@ -1,3 +1,4 @@
+import { readEnv } from "./env-compat.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -5,7 +6,7 @@ import { fileURLToPath } from "node:url";
 export const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * THE data-location seam (the Electron contract, 2026-09-17): LH_DATA_DIR
+ * THE data-location seam (the Electron contract, 2026-09-17): WOLFPACK_DATA_DIR
  * relocates every MUTABLE record — chat sessions, graph ledgers, the
  * embedding model cache — when set. The desktop shell points it at
  * userData so nothing is written inside the read-only .app bundle
@@ -14,8 +15,8 @@ export const ROOT = path.dirname(fileURLToPath(import.meta.url));
  * byte-for-byte as before. Read-only assets (prompts) stay ROOT-anchored
  * on purpose: they ship inside the app bundle by design.
  */
-const DATA_ROOT = process.env.LH_DATA_DIR
-	? path.resolve(process.env.LH_DATA_DIR)
+const DATA_ROOT = readEnv("WOLFPACK_DATA_DIR", "LH_DATA_DIR")
+	? path.resolve(readEnv("WOLFPACK_DATA_DIR", "LH_DATA_DIR") as string)
 	: path.join(ROOT, "data");
 
 export const PATHS = {
@@ -89,7 +90,7 @@ export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
  * THE AUTH/KEY STORE (auth-keys wave, 2026-09-19): BYOK provider keys in a
  * flat {VAR: value} JSON map — the SAME file the Electron app has always
  * hand-edited (owner decision: option A, zero migration). Desktop main.cjs
- * passes LH_AUTH_FILE pointing at userData/auth.json (mode 0600); in dev
+ * passes WOLFPACK_AUTH_FILE pointing at userData/auth.json (mode 0600); in dev
  * (no Electron) the default is the repo-root auth.json (gitignored, same
  * pattern as .env.local — a worktree may symlink it to the master copy).
  * The SERVER reads/writes this file directly at call time (no restart to
@@ -99,6 +100,6 @@ export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
  * re-read from disk on every API access. Secrets NEVER go in settings.json
  * — this file keeps that role, alongside .env.local.
  */
-export const AUTH_FILE = process.env.LH_AUTH_FILE
-	? path.resolve(process.env.LH_AUTH_FILE)
+export const AUTH_FILE = readEnv("WOLFPACK_AUTH_FILE", "LH_AUTH_FILE")
+	? path.resolve(readEnv("WOLFPACK_AUTH_FILE", "LH_AUTH_FILE") as string)
 	: path.join(ROOT, "auth.json");

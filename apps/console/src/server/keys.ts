@@ -1,3 +1,4 @@
+import { readEnv } from "../../env-compat.ts";
 /**
  * The auth/keys composition (auth-keys wave, 2026-09-19): the server-side
  * key manager behind GET/PUT/DELETE /api/keys.
@@ -25,7 +26,7 @@
  * generic status rows (no catalog form to edit through — only curated
  * keys have shapes and docs; core/auth-keys.ts).
  *
- * THE FRESH-USER SWITCH (owner, interlude 2026-09-22): LH_IGNORE_ENV_KEYS=1
+ * THE FRESH-USER SWITCH (owner, interlude 2026-09-22): WOLFPACK_IGNORE_ENV_KEYS=1
  * makes every env key invisible APP-WIDE — the exact new-user simulation
  * (a fresh empty data dir + the switch = zero keys, zero federated
  * providers, setup stage 1). Under the switch real env vars are DELETED
@@ -89,7 +90,7 @@ export function providerKeyList() {
  *  invisible app-wide — deleted from the process at boot, file keys only.
  *  Read live per call (the launcher exports it before boot). */
 export function envKeysIgnored(): boolean {
-	return process.env.LH_IGNORE_ENV_KEYS === "1";
+	return readEnv("WOLFPACK_IGNORE_ENV_KEYS", "LH_IGNORE_ENV_KEYS") === "1";
 }
 
 /**

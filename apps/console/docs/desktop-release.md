@@ -29,7 +29,7 @@ Each OS installs its own dependencies and builds its own Next standalone tree:
 
 The shell/updater live in `app.asar`; the standalone server and native renderer binaries ship unpacked as `extraResources`. **Do not cross-build the server payload.** Next traces the build machine's native binaries, so a macOS-built standalone tree is not a Windows/Linux payload.
 
-`npm run desktop:dist` remains the local macOS signing path, using the `LH_NOTARY` keychain profile. For a local Windows/Linux build, run steps 1–5 above, then:
+`npm run desktop:dist` remains the local macOS signing path, using the `WOLFPACK_NOTARY` keychain profile. For a local Windows/Linux build, run steps 1–5 above, then:
 
 ```sh
 # On Windows:

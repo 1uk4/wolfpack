@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
  * Dev stack from the CURRENT checkout against a throwaway sandbox wolves folder, alongside the live stack.
- *   npm run dev:stack [-- --app console|desktop|none]
+ *   npm run dev:stack [-- --app console|none]
  * Env: DEV_WOLVES_DIR (default ~/wolves/dev-sandbox), DEV_WORKERD_PORT (7151), DEV_CONSOLE_PORT (3220),
  *      DEV_STACK_SKIP_BUILD=1 (skip the turbo build), WOLFPACK_MODELS_FILE (override the scaffolded models.json).
- * Never touches ~/wolves/local: sandbox paths that are, contain or sit inside it are refused, as are the live ports.
+ * Never touches ~/wolves/local: sandbox paths that are, contain or sit inside it are refused (symlink/case aliases too), as are the live ports.
+ * The child env drops the WOLF_ and WOLFPACK_ vars and runs with HOME=<sandbox>/.home, so ~/.wolfpack (hub, sockets, slots) is not shared.
  * First run scaffolds one minimal wolf ("sandbox"): wolf.yaml, AGENTS.md, den/, agent/, and a copy of a models.json
- * (tier/provider config only, no secrets) taken from a live wolf. Talking to a model needs the same auth as live:
- * a Claude login for the subscription transport, or ANTHROPIC_API_KEY when the models file's transport is "api".
+ * (tier/provider config only, no secrets) taken from a live wolf. Secrets come from $WOLFPACK_HOME/.env (default
+ * ~/.wolfpack/.env) and your Claude login (CLAUDE_CONFIG_DIR).
  */
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -15,8 +16,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { liveWolvesDir, packHome } from "./live-paths.mjs";
 
-export const APPS = ["console", "desktop", "none"];
+export const APPS = ["console", "none"];
 export const LIVE_PORTS = [7141, 3210];
 
 export function parseArgs(argv) {
@@ -25,7 +27,7 @@ export function parseArgs(argv) {
 		const a = argv[i];
 		if (a === "--app") app = argv[++i];
 		else if (a.startsWith("--app=")) app = a.slice(6);
-		else throw new Error(`unknown option "${a}" (usage: dev:stack [--app console|desktop|none])`);
+		else throw new Error(`unknown option "${a}" (usage: dev:stack [--app console|none])`);
 	}
 	if (!APPS.includes(app)) throw new Error(`--app must be one of ${APPS.join("|")}, got "${app}"`);
 	return { app };
@@ -38,32 +40,63 @@ const port = (name, v, dflt) => {
 	return n;
 };
 
-/** Resolve through symlinks as far as the path exists, so a link into ~/wolves/local can't sneak past the guard. */
+/** Resolve through symlinks (and on-disk case, APFS) as far as the path exists, so no alias of ~/wolves/local passes the guard. */
 const real = (p) => {
 	const abs = path.resolve(p);
 	const rest = [];
 	for (let cur = abs; ; cur = path.dirname(cur)) {
-		try { return path.join(fs.realpathSync(cur), ...rest.reverse()); } catch { rest.push(path.basename(cur)); }
+		try { return path.join(fs.realpathSync.native(cur), ...rest.reverse()); } catch { rest.push(path.basename(cur)); }
 		if (cur === path.dirname(cur)) return abs;
 	}
 };
 
 /** Throws unless `dir` is safely outside the live wolves folder (neither equal, inside, nor an ancestor of it). */
-export function assertSandboxDir(dir, home = os.homedir()) {
+export function assertSandboxDir(dir, home = os.homedir(), env = {}) {
 	const d = real(dir);
-	const live = real(path.join(home, "wolves/local"));
-	const rel = (a, b) => { const r = path.relative(a, b); return r === "" || (!r.startsWith("..") && !path.isAbsolute(r)); };
+	const live = real(liveWolvesDir(env, home));
+	const rel = (a, b) => { const r = path.relative(a.toLowerCase(), b.toLowerCase()); return r === "" || (!r.startsWith("..") && !path.isAbsolute(r)); };
 	if (rel(live, d) || rel(d, live)) throw new Error(`refusing sandbox dir ${d}: it is, contains or is inside the live wolves folder ${live}`);
 	if (d === path.parse(d).root || d === real(home)) throw new Error(`refusing sandbox dir ${d}: too broad`);
 	return d;
 }
 
 export function resolveConfig(env = process.env, home = os.homedir()) {
-	const wolves = assertSandboxDir(env.DEV_WOLVES_DIR || path.join(home, "wolves/dev-sandbox"), home);
+	const wolves = assertSandboxDir(env.DEV_WOLVES_DIR || path.join(home, "wolves/dev-sandbox"), home, env);
 	const workerdPort = port("DEV_WORKERD_PORT", env.DEV_WORKERD_PORT, 7151);
 	const consolePort = port("DEV_CONSOLE_PORT", env.DEV_CONSOLE_PORT, 3220);
 	if (workerdPort === consolePort) throw new Error("workerd and console ports must differ");
-	return { wolves, workerdPort, consolePort, home };
+	return { wolves, workerdPort, consolePort, home, sandboxHome: path.join(wolves, ".home") };
+}
+
+/** KEY=VALUE lines of a .env file (no expansion); empty when absent. */
+export function parseEnvFile(file) {
+	const out = {};
+	try {
+		for (const l of fs.readFileSync(file, "utf8").split("\n")) {
+			const m = l.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+			if (m) out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+		}
+	} catch { /* none */ }
+	return out;
+}
+
+/**
+ * Child env: the caller's env minus every WOLF_* / WOLFPACK_* (except the models file), plus the pack .env secrets (same
+ * filter), then the sandbox values. HOME points inside the sandbox, which is what wolfd/workerd resolve ~/.wolfpack
+ * (hub link, run sockets, subagent slots) from, so nothing lands in the live pack dir. Claude's own config stays
+ * reachable via CLAUDE_CONFIG_DIR (the subscription login).
+ */
+export function childEnv(cfg, env, dotenv = {}, models) {
+	const keep = ([k]) => !/^(WOLF_|WOLFPACK_)/.test(k) || k === "WOLFPACK_MODELS_FILE";
+	const out = { ...Object.fromEntries(Object.entries(env).filter(keep)), ...Object.fromEntries(Object.entries(dotenv).filter(keep)) };
+	return {
+		...out,
+		...(models ? { WOLFPACK_MODELS_FILE: models } : {}),
+		HOME: cfg.sandboxHome,
+		CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR || path.join(cfg.home, ".claude"),
+		WORKERD_CONFIG_DIR: path.join(cfg.sandboxHome, ".wolfpack/workerd"),
+		WOLFPACK_API_URL: `http://127.0.0.1:${cfg.workerdPort}`,
+	};
 }
 
 export function wolfYaml(name, dir) {
@@ -96,7 +129,7 @@ export function scaffold(cfg, modelsSource) {
 }
 
 export function findModelsSource(home = os.homedir()) {
-	const live = path.join(home, "wolves/local");
+	const live = liveWolvesDir({}, home);
 	try {
 		for (const n of fs.readdirSync(live)) { const f = path.join(live, n, "models.json"); if (fs.existsSync(f)) return f; }
 	} catch { /* none */ }
@@ -111,9 +144,12 @@ export function main(argv, env = process.env) {
 	if (made) console.log(`dev-stack: scaffolded ${made}`);
 	const wolfDirs = fs.readdirSync(cfg.wolves).map((n) => path.join(cfg.wolves, n)).filter((d) => fs.existsSync(path.join(d, "wolf.yaml")));
 	const models = env.WOLFPACK_MODELS_FILE || wolfDirs.map((d) => path.join(d, "models.json")).find((f) => fs.existsSync(f));
-	const childEnv = { ...env, ...(models ? { WOLFPACK_MODELS_FILE: models } : {}) };
+	fs.mkdirSync(path.join(cfg.sandboxHome, ".wolfpack/workerd"), { recursive: true });
+	const baseEnv = childEnv(cfg, env, parseEnvFile(path.join(packHome(env, cfg.home), ".env")), models);
 	console.log(`dev-stack: DEV (not live)  checkout=${root}\n  wolves=${cfg.wolves}  workerd=:${cfg.workerdPort}  app=${app}${app === "none" ? "" : ` console=:${cfg.consolePort}`}`);
-	if (env.DEV_STACK_SKIP_BUILD !== "1") {
+	if (env.DEV_STACK_SKIP_BUILD === "1") {
+		if (!fs.existsSync(path.join(root, "packages/workerd/dist/bin/workerd.js"))) throw new Error("DEV_STACK_SKIP_BUILD=1 but workerd.js is not built");
+	} else {
 		const b = spawnSync("npx", ["turbo", "run", "build", "--filter=@wolfpack/harness", "--filter=@wolfpack/workerd", "--filter=@wolfpack/cli", "--output-logs=errors-only"], { cwd: root, stdio: "inherit" });
 		if (b.status !== 0) throw new Error("build failed");
 	}
@@ -121,7 +157,7 @@ export function main(argv, env = process.env) {
 	let stopping = false;
 	// Each child gets its own process group (detached) so we can kill the whole tree (next dev, electron, wolfd...).
 	const run = (name, cmd, args, extraEnv = {}) => {
-		const c = spawn(cmd, args, { cwd: root, stdio: "inherit", detached: true, env: { ...childEnv, ...extraEnv } });
+		const c = spawn(cmd, args, { cwd: root, stdio: "inherit", detached: true, env: { ...baseEnv, ...extraEnv } });
 		kids.push(c);
 		c.on("exit", (code) => { if (!stopping) { console.error(`dev-stack: ${name} exited (${code}); stopping`); stop(code ?? 1); } });
 	};
@@ -140,9 +176,7 @@ export function main(argv, env = process.env) {
 	process.on("SIGHUP", () => stop(0));
 
 	run("workerd", process.execPath, [path.join(root, "packages/workerd/dist/bin/workerd.js"), "--wolves", cfg.wolves, "--port", String(cfg.workerdPort)]);
-	const api = { WOLFPACK_API_URL: `http://127.0.0.1:${cfg.workerdPort}`, CONSOLE_PORT: String(cfg.consolePort) };
-	if (app === "console") run("console", "npm", ["run", "dev", "-w", "@wolfpack/console", "--", "-p", String(cfg.consolePort)], api);
-	if (app === "desktop") run("desktop", "npm", ["run", "dev", "-w", "@wolfpack/desktop"], api);
+	if (app === "console") run("console", "npm", ["run", "dev", "-w", "@wolfpack/console", "--", "-p", String(cfg.consolePort)], { CONSOLE_PORT: String(cfg.consolePort) });
 	console.log("dev-stack: Ctrl-C stops everything");
 }
 

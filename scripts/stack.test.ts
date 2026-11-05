@@ -9,8 +9,8 @@ import * as dev from "./dev-stack.mjs";
 
 describe("stack args", () => {
 	it("parses commands and flags", () => {
-		expect(stack.parseArgs(["logs", "-f", "-n", "20"])).toEqual({ cmd: "logs", flags: { follow: true, lines: 20, yes: false, foreground: false } });
-		expect(stack.parseArgs(["adopt", "--yes"]).flags.yes).toBe(true);
+		expect(stack.parseArgs(["logs", "-f", "-n", "20"])).toEqual({ cmd: "logs", flags: { follow: true, lines: 20 } });
+		expect(() => stack.parseArgs(["adopt", "--yes"])).toThrow(/unknown command/);
 	});
 	it("rejects bad input", () => {
 		expect(() => stack.parseArgs([])).toThrow(/usage/);
@@ -29,9 +29,13 @@ describe("stack plist", () => {
 		expect(cfg.target).toBe("gui/501/com.wolfpack.stack");
 		expect(cfg.runtime).toBe("/Users/me/wolves/local/runtime/wolfpack");
 	});
-	it("builds the plist", () => {
+	it("builds the plist, sourcing the env file in an sh wrapper and holding no secrets", () => {
 		const x = stack.buildPlist(cfg, "/n/bin/node", "/n/bin:/usr/bin");
-		expect(x).toContain("<string>/usr/bin/caffeinate</string>\n\t\t<string>-is</string>\n\t\t<string>/n/bin/node</string>");
+		expect(x).toContain("<string>/bin/sh</string>");
+		expect(x).toContain('. "$1"');
+		expect(x).toContain("<string>/Users/me/.wolfpack/.env</string>\n\t\t<string>/usr/bin/caffeinate</string>\n\t\t<string>-is</string>\n\t\t<string>/n/bin/node</string>");
+		expect(x).not.toMatch(/ANTHROPIC|TOKEN|API_KEY/);
+		expect(stack.resolveConfig({ WOLFPACK_HOME: "/w" }, "/Users/me", 501).envFile).toBe("/w/.env");
 		expect(x).toContain("<string>--port</string>\n\t\t<string>7141</string>");
 		expect(x).toMatch(/<key>RunAtLoad<\/key>\s*<true\/>/);
 		expect(x).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
@@ -46,41 +50,28 @@ describe("stack plist", () => {
 		expect(() => stack.resolveConfig({ STACK_PORT: "0" })).toThrow(/bad STACK_PORT/);
 	});
 	it("puts node's dir first in PATH, deduped", () => {
-		expect(stack.servicePath("/n/bin/node", ["/n/bin", "/x"], { HOME: "/h" }).split(":").slice(0, 3)).toEqual(["/n/bin", "/x", "/opt/homebrew/bin"]);
+		expect(stack.servicePath("/n/bin/node", ["/n/bin", "/x"], "/h").split(":").slice(0, 3)).toEqual(["/n/bin", "/x", "/opt/homebrew/bin"]);
 	});
 });
 
-describe("stack parsing and conflicts", () => {
-	it("parses lsof and filters our own pid", () => {
-		const l = stack.parseLsof("p123\ncnode\np456\ncother\n");
-		expect(l).toEqual([{ pid: 123, command: "node" }, { pid: 456, command: "other" }]);
-		expect(stack.portConflicts(l, 123)).toEqual([{ pid: 456, command: "other" }]);
-		expect(stack.portConflicts(l, undefined)).toHaveLength(2);
-		expect(stack.conflictMessage({ port: 7141 }, l)).toMatch(/adopt --yes/);
-	});
-	it("parses launchctl print", () => {
+describe("stack parsing", () => {
+	it("parses lsof and launchctl print", () => {
+		expect(stack.parseLsof("p123\ncnode\np456\ncother\n")).toEqual([{ pid: 123, command: "node" }, { pid: 456, command: "other" }]);
 		expect(stack.parseLaunchctlPrint("\tstate = running\n\tpid = 42\n\tlast exit code = (never exited)\n")).toEqual({ state: "running", pid: 42, lastExit: "(never exited)" });
 		expect(stack.parseLaunchctlPrint("").state).toBe("unknown");
 	});
 	it("walks the process tree", () => {
 		const rows = stack.parsePs("  10 1 01:00 caffeinate\n  11 10 01:00 node workerd\n  12 11 00:10 wolfd\n  13 1 00:01 other\n");
 		expect(stack.descendants(rows, 10).map((r: { pid: number }) => r.pid).sort()).toEqual([11, 12]);
-		expect(stack.ancestors(rows, 12)).toEqual([11, 10]);
 	});
-});
-
-describe("stack log rotation", () => {
-	let tmp: string;
-	beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stack-")); });
-	afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
-	it("rotates only past the cap", () => {
-		const f = path.join(tmp, "s.log");
-		fs.writeFileSync(f, "12345");
-		stack.rotateLog(f, 10);
-		expect(fs.existsSync(f)).toBe(true);
-		stack.rotateLog(f, 3);
-		expect(fs.existsSync(f)).toBe(false);
-		expect(fs.existsSync(`${f}.1`)).toBe(true);
+	it("warns about a missing or group-readable env file", () => {
+		const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "stack-")), ".env");
+		expect(stack.envFileWarning(f)).toMatch(/not found/);
+		fs.writeFileSync(f, "A=1", { mode: 0o644 });
+		fs.chmodSync(f, 0o644);
+		expect(stack.envFileWarning(f)).toMatch(/chmod 600/);
+		fs.chmodSync(f, 0o600);
+		expect(stack.envFileWarning(f)).toBeUndefined();
 	});
 });
 
@@ -88,10 +79,19 @@ describe("dev-stack", () => {
 	let tmp: string;
 	beforeEach(() => { tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "devstack-"))); });
 	afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+	it("keeps sandbox paths, HOME and env inside the sandbox and strips live WOLF vars", () => {
+		const cfg = dev.resolveConfig({ DEV_WOLVES_DIR: path.join(tmp, "w") }, tmp);
+		const e = dev.childEnv(cfg, { WOLF_DEN: "/live", WOLFPACK_X: "1", WOLFPACK_MODELS_FILE: "/m.json", KEEP: "k", HOME: "/live" }, { WOLFPACK_Y: "2", ANTHROPIC_API_KEY: "sk" });
+		expect(e).toMatchObject({ KEEP: "k", ANTHROPIC_API_KEY: "sk", WOLFPACK_MODELS_FILE: "/m.json" });
+		expect(e.WOLF_DEN).toBeUndefined();
+		expect(e.WOLFPACK_X).toBeUndefined();
+		expect(e.WOLFPACK_Y).toBeUndefined();
+		for (const p of [e.HOME, e.WORKERD_CONFIG_DIR]) expect(p.startsWith(cfg.wolves + path.sep)).toBe(true);
+	});
 	it("parses --app", () => {
 		expect(dev.parseArgs([])).toEqual({ app: "console" });
 		expect(dev.parseArgs(["--app", "none"])).toEqual({ app: "none" });
-		expect(dev.parseArgs(["--app=desktop"])).toEqual({ app: "desktop" });
+		expect(() => dev.parseArgs(["--app=desktop"])).toThrow(/must be one of/);
 		expect(() => dev.parseArgs(["--app", "x"])).toThrow(/must be one of/);
 		expect(() => dev.parseArgs(["--zzz"])).toThrow(/unknown option/);
 	});

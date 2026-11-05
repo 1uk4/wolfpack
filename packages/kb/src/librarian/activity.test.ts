@@ -10,6 +10,7 @@ const id = () => `e${String(++n).padStart(6, "0")}`;
 const at = (m: number) => new Date(Date.UTC(2026, 10, 1, 0, m)).toISOString();
 const dec = (m: number, o: Partial<Extract<KbEvent, { t: "decision" }>> = {}): KbEvent => ({ t: "decision", id: id(), at: at(m), from: "w1", denTopicId: `t${m}`, hash: `h${m}`, outcome: "create", ...o }) as KbEvent;
 const written = (m: number, entryId: string, action: "create" | "merge" | "supersede" = "create"): KbEvent => ({ t: "entry_written", id: id(), at: at(m), entryId, canonicalId: entryId, action });
+const contrib = (m: number, from: string): KbEvent => ({ t: "contribution", id: id(), at: at(m), from, denTopicId: `c${m}`, hash: `c${m}`, prevHash: null, domainHint: "x" }) as KbEvent;
 const retired = (m: number, entryId: string): KbEvent => ({ t: "entry_retired", id: id(), at: at(m), entryId });
 
 describe("foldKbActivity decisions", () => {
@@ -85,8 +86,8 @@ describe("foldKbActivity changes", () => {
 
   it("maps create/merge/supersede/retire, joins the decision, resolves domain from files then entry_placed, else (unplaced)", () => {
     const evs: KbEvent[] = [
-      dec(1, { from: "w1", denTopicId: "tA", entryId: "kb-1" }),
       written(1, "kb-1", "create"),
+      dec(1, { from: "w1", denTopicId: "tA", entryId: "kb-1" }),
       written(2, "kb-1", "merge"),
       written(3, "kb-3", "supersede"),
       { t: "section_created", id: id(), at: at(4), sectionId: "s1", domain: "gamma", parent: null, label: "G" },
@@ -107,7 +108,7 @@ describe("foldKbActivity changes", () => {
   });
 
   it("keeps the latest 10 per domain, newest first", () => {
-    const evs = Array.from({ length: 14 }, (_, i) => written(i + 1, "kb-1"));
+    const evs = Array.from({ length: 14 }, (_, i) => [contrib(i + 1, "w1"), written(i + 1, "kb-1")]).flat(); // a contribution between writes: separate batches
     const items = foldKbActivity(evs, { entryInfo: scanEntryInfo(base) }).changes.domains[0].items;
     expect(items).toHaveLength(10);
     expect(items[0].at).toBe(at(14));
@@ -171,7 +172,7 @@ describe("attribution, redaction, ordering", () => {
   });
 
   it("also attributes when the decision precedes the write; falls back to the latest earlier decision; retire has none", () => {
-    const evs: KbEvent[] = [dec(1, { from: "w1", entryId: "kb-1" }), written(2, "kb-1", "create"), written(3, "kb-1", "supersede"), retired(4, "kb-1")];
+    const evs: KbEvent[] = [written(2, "kb-1", "create"), dec(2, { from: "w1", entryId: "kb-1" }), contrib(3, "w1"), written(3, "kb-1", "supersede"), contrib(4, "w1"), retired(4, "kb-1")];
     const items = foldKbActivity(evs, { entryInfo: new Map([["kb-1", { domain: "alpha" }]]) }).changes.domains[0].items;
     expect(items.map((c) => [c.action, c.from])).toEqual([["retire", undefined], ["supersede", "w1"], ["create", "w1"]]);
   });
@@ -233,5 +234,51 @@ describe("attribution, redaction, ordering", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("attribution safety, dedupe, routing ids", () => {
+  const info = new Map([["kb-1", { domain: "alpha" }]]);
+
+  it("does not credit another wolf through a fallback decision", () => {
+    // w1 created kb-1 earlier; a later merge write has no decision of its own and its batch is from w2.
+    const evs: KbEvent[] = [
+      written(1, "kb-1", "create"),
+      contrib(1, "w1"),
+      dec(1, { from: "w1", entryId: "kb-1", outcome: "create" }),
+      written(5, "kb-1", "merge"),
+      contrib(5, "w2"),
+    ];
+    const items = foldKbActivity(evs, { entryInfo: info }).changes.domains[0].items;
+    expect(items[0]).toMatchObject({ action: "merge" });
+    expect(items[0].from).toBeUndefined();
+    expect(items[0].denTopicId).toBeUndefined();
+    expect(items[1]).toMatchObject({ action: "create", from: "w1" });
+  });
+
+  it("still uses a fallback decision from the batch's own sender", () => {
+    const evs: KbEvent[] = [written(1, "kb-1", "create"), contrib(1, "w1"), dec(1, { from: "w1", entryId: "kb-1", outcome: "create" }), written(5, "kb-1", "merge"), contrib(5, "w1")];
+    expect(foldKbActivity(evs, { entryInfo: info }).changes.domains[0].items[0].from).toBe("w1");
+  });
+
+  it("collapses the two writes of one sweep write into one change", () => {
+    const evs: KbEvent[] = [written(1, "kb-1", "create"), written(1, "kb-1", "create"), contrib(1, "w1"), dec(1, { from: "w1", entryId: "kb-1" })];
+    const items = foldKbActivity(evs, { entryInfo: info }).changes.domains[0].items;
+    expect(items).toHaveLength(1);
+    expect(items[0].from).toBe("w1");
+    // the same action in a later batch is a separate change
+    const two = foldKbActivity([...evs, written(9, "kb-1", "merge"), written(9, "kb-1", "merge"), contrib(9, "w2"), dec(9, { from: "w2", entryId: "kb-1", outcome: "merge" })], { entryInfo: info }).changes.domains[0].items;
+    expect(two.map((c) => [c.action, c.from])).toEqual([["merge", "w2"], ["create", "w1"]]);
+  });
+
+  it("redacts and caps routing identifiers", () => {
+    const long = `${"z".repeat(300)}`;
+    const f = foldKbActivity([dec(1, { routing: { route: "similarity", candidates: [{ id: long, score: 1 }], band: long, subject: { match: `Bearer ${"x".repeat(30)} ${long}`, valid: true }, confirm: { candidate: long, score: 1, merge: true, valid: true } } })]);
+    const r = f.decisions.items[0].routing!;
+    expect(r.candidates[0].id.length).toBeLessThanOrEqual(120);
+    expect(r.band!.length).toBeLessThanOrEqual(120);
+    expect(r.confirm!.candidate.length).toBeLessThanOrEqual(120);
+    expect(r.subject!.match).toContain("[REDACTED]");
+    expect(r.subject!.match.length).toBeLessThanOrEqual(120);
   });
 });

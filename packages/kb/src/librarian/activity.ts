@@ -145,13 +145,19 @@ const asResolver = (x: Map<string, EntryInfo> | ((id: string) => EntryInfo | und
 
 /** Free text from the engine (reasons, warnings): redacted, first line, capped. */
 const clean = (s: string): string => oneLine(s, REASON_MAX);
+/** Identifier-like strings (band, candidate ids, the subject match): redacted and capped short. */
+const ID_MAX = 120;
+const short = (s: string): string => oneLine(s, ID_MAX);
 function cleanRouting(r: Decision["routing"]): Decision["routing"] {
   if (!r) return r;
   return {
     ...r,
+    candidates: r.candidates.map((c) => ({ ...c, id: short(c.id) })),
+    ...(r.band !== undefined ? { band: short(r.band) } : {}),
+    ...(r.target !== undefined ? { target: short(r.target) } : {}),
     ...(r.warning !== undefined ? { warning: clean(r.warning) } : {}),
-    ...(r.subject ? { subject: { ...r.subject, ...(r.subject.reason !== undefined ? { reason: clean(r.subject.reason) } : {}) } } : {}),
-    ...(r.confirm ? { confirm: { ...r.confirm, ...(r.confirm.reason !== undefined ? { reason: clean(r.confirm.reason) } : {}) } } : {}),
+    ...(r.subject ? { subject: { ...r.subject, match: short(r.subject.match), ...(r.subject.reason !== undefined ? { reason: clean(r.subject.reason) } : {}) } } : {}),
+    ...(r.confirm ? { confirm: { ...r.confirm, candidate: short(r.confirm.candidate), ...(r.confirm.reason !== undefined ? { reason: clean(r.confirm.reason) } : {}) } } : {}),
   } as Decision["routing"];
 }
 
@@ -169,9 +175,20 @@ export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
   const sectionDomain = new Map<string, string>();
   const placedSection = new Map<string, string>();
   let hasDecisions = false;
+  const contributions: Array<{ idx: number; from: string }> = [];
+  const writeIdx: number[] = []; // every entry_written / entry_retired position, ledger order
+  /** Writes folded into a later identical one of the same batch (W1 + W2 of one sweep write). */
+  const dropped = new Set<number>();
+  let boundaries = 0; // contribution / decision events seen: a batch edge
+  const lastWrite = new Map<string, { idx: number; action: string; boundaries: number }>();
   events.forEach((e, idx) => {
     switch (e.t) {
+      case "contribution":
+        boundaries++;
+        contributions.push({ idx, from: e.from });
+        break;
       case "decision": {
+        boundaries++;
         hasDecisions = true;
         const k = JSON.stringify([e.from, e.denTopicId, e.hash]);
         // "Latest" = last in ledger order; the ledger is append-only, so file order is time order.
@@ -185,6 +202,11 @@ export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
       }
       case "entry_written":
       case "entry_retired": {
+        const action = e.t === "entry_retired" ? "retire" : e.action;
+        const prev = lastWrite.get(e.entryId);
+        if (action !== "retire" && prev && prev.action === action && prev.boundaries === boundaries) dropped.add(prev.idx);
+        lastWrite.set(e.entryId, { idx, action, boundaries });
+        writeIdx.push(idx);
         const l = marks.get(e.entryId) ?? [];
         l.push(idx);
         marks.set(e.entryId, l);
@@ -228,16 +250,23 @@ export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
    */
   const attribute = (entryId: string, idx: number, action: "create" | "merge" | "supersede"): Decision | undefined => {
     const decs = decsOfEntry.get(entryId) ?? [];
-    const next = (marks.get(entryId) ?? []).find((m) => m > idx) ?? Infinity;
+    const next = (marks.get(entryId) ?? []).find((m) => m > idx && !dropped.has(m)) ?? Infinity;
     const ok = (o: ActivityOutcome) => ACCEPTS[action].includes(o);
     const after = decs.find((x) => x.idx >= idx && x.idx < next && ok(x.e.outcome));
     if (after) return after.e;
-    const before = decs.filter((x) => x.idx < idx);
+    // Fallbacks (an earlier decision) may credit another wolf: only use one whose sender is the batch's own contribution event.
+    const live = writeIdx.filter((m) => !dropped.has(m));
+    const nextAny = live.find((m) => m > idx) ?? Infinity;
+    const prevAny = [...live].reverse().find((m) => m < idx) ?? -1;
+    const adj = contributions.find((c) => c.idx > idx && c.idx < nextAny) ?? [...contributions].reverse().find((c) => c.idx < idx && c.idx > prevAny);
+    if (!adj) return undefined;
+    const before = decs.filter((x) => x.idx < idx && x.e.from === adj.from);
     return [...before].reverse().find((x) => ok(x.e.outcome))?.e ?? before[before.length - 1]?.e;
   };
   const changes: Array<ActivityChange & { id: string }> = [];
   events.forEach((e, idx) => {
     if (e.t !== "entry_written" && e.t !== "entry_retired") return;
+    if (dropped.has(idx)) return;
     const dec = e.t === "entry_written" ? attribute(e.entryId, idx, e.action) : undefined;
     changes.push({ id: e.id, at: e.at, entryId: e.entryId, action: e.t === "entry_retired" ? "retire" : e.action, ...(dec ? { from: dec.from, denTopicId: dec.denTopicId } : {}) });
   });
@@ -309,16 +338,16 @@ const safeDir = <T>(fn: () => T, fallback: T): T => {
   }
 };
 /** File names carry no time, so ages need a stat. At most this many files per wolf are stat'ed (the rest are only counted). */
-export const INCOMING_STAT_CAP = 200;
+export const INCOMING_STAT_CAP = 2000;
 
 /**
  * The pending lane `<inboxRoot>/<wolf>/<denTopicId>-<hash10>.md`. Top-level `.md` files only: `_processed/`, `_bad/` and dotfiles
  * (`.sweep-lease*`, `.*.tmp`) are never pending. `pending` is counted from the directory listing alone. `hash` is the 10-hex tag
  * of the file name (a prefix of the ledger hash).
  *
- * APPROXIMATION: ages come from mtimes, and only the first INCOMING_STAT_CAP files (by name) of a wolf are stat'ed. `items` (at most 20,
- * oldest first) and `oldestAgeMs` are taken from that sample, so with more than 200 pending files they describe the sample, not
- * necessarily the true 20 oldest. Up to 200 pending files per wolf the answer is exact.
+ * APPROXIMATION: ages come from mtimes, and only the first INCOMING_STAT_CAP (2000) files (by name) of a wolf are stat'ed; above that `pending` is still the exact listing count. `items` (at most 20,
+ * oldest first) and `oldestAgeMs` are taken from that sample, so with more than 2000 pending files `oldestAgeMs` and `items` describe a sample, not
+ * necessarily the true 20 oldest. Up to 2000 pending files per wolf the answer is exact.
  */
 export function readIncoming(inboxRoot: string, now: number = Date.now()): { total: number; wolves: IncomingWolf[] } {
   const wolves: IncomingWolf[] = [];

@@ -130,3 +130,4 @@ export {
   type EntryInfo,
   type IncomingWolf,
 } from "./activity.js";
+export { oneLine } from "./redact.js";

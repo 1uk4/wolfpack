@@ -932,7 +932,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
     curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator } });
     curator.start();
-    kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator });
+    kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator, now: opts.now });
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.

@@ -15,12 +15,22 @@
  */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { buildActivityIndex, fsEntryResolver, pageActivity, readIncoming, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
+import { oneLine, buildActivityIndex, fsEntryResolver, pageActivity, readIncoming, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
 import { ledgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import type { KbActivityResponse } from "@wolfpack/protocol";
 import type { Curator } from "./curator.js";
 import { HubError } from "./errors.js";
 import { CONTRIBUTIONS_LANE } from "./layout.js";
+
+/** A curator error for display: first line, absolute paths reduced to their basename (or <path>), secrets redacted, capped. */
+export function safeError(e: string): string {
+  const line = e.split("\n").find((l) => l.trim() !== "") ?? "";
+  const paths = line.replace(/(?:[A-Za-z]:)?(?:[\\/][^\s'"`:,;()<>\\/]+){2,}[\\/]?/g, (m) => {
+    const base = m.split(/[\\/]/).filter(Boolean).pop();
+    return base && base.length <= 60 ? base : "<path>";
+  });
+  return oneLine(paths, 240);
+}
 
 export const ENTRY_SCAN_TTL_MS = 5_000;
 
@@ -95,7 +105,7 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
         incoming,
         decisions: page.decisions,
         changes: page.changes,
-        ...(on && st ? { sweep: { running: st.running, ...(st.last ? { last: st.last } : {}) } } : {}),
+        ...(on && st ? { sweep: { running: st.running, ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),
       } as KbActivityResponse;
     },
   };

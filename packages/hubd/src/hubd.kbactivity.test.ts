@@ -8,7 +8,7 @@ import { appendLedger } from "@wolfpack/kb/librarian";
 import { ev, ledgerFile } from "@wolfpack/kb/shared";
 import { createHubServer, type HubServer, type HubOptions } from "./server.js";
 import { hubRoots } from "./layout.js";
-import { createKbActivity } from "./kb-activity.js";
+import { createKbActivity, safeError } from "./kb-activity.js";
 import { bearer, mintOperatorToken, mintWorkerToken, OP, seedTokens } from "./testing/tokens.js";
 
 const tmp: string[] = [];
@@ -55,7 +55,7 @@ describe("GET /v1/kb/activity", () => {
     const d = (from: string, topic: string, outcome: "create" | "reject", entryId?: string) => ev.decision({ from, denTopicId: topic, hash: `h-${topic}`, outcome, ...(entryId ? { entryId } : {}), ...(outcome === "reject" ? { reason: "token=abcdefghijklmnop why" } : {}) });
     mkdirSync(join(roots.kbBase, "domains", "alpha", "entries"), { recursive: true });
     writeFileSync(join(roots.kbBase, "domains", "alpha", "entries", "kb-1.md"), '---\nid: kb-1\ntitle: "One"\n---\nx\n');
-    appendLedger(roots, [d("w1", "a", "create", "kb-1"), ev.entryWritten("kb-1", "kb-1", "create"), d("w2", "b", "reject")]);
+    appendLedger(roots, [ev.entryWritten("kb-1", "kb-1", "create"), d("w1", "a", "create", "kb-1"), d("w2", "b", "reject")]);
     appendFileSync(ledgerFile(roots), '{"t":"decision","id":"torn');
     mkdirSync(join(roots.opsRoot, "contributions", "w1"), { recursive: true });
     writeFileSync(join(roots.opsRoot, "contributions", "w1", "topic-0123456789.md"), "x");
@@ -131,5 +131,21 @@ describe("GET /v1/kb/activity", () => {
     expect(act.read({}).changes.domains[0].domain).toBe("alpha"); // listing cached inside the TTL
     t += 5_000;
     expect(act.read({}).changes.domains[0].domain).toBe("beta"); // rescanned after the TTL
+  });
+
+  it("safeError drops absolute host paths, secrets and extra lines", () => {
+    const out = safeError("ENOENT: no such file or directory, open '/home/wolf/data/kb/base/domains/x/entries/kb-1.md'\nat stack /srv/app/x.js");
+    expect(out).not.toContain("/home");
+    expect(out).not.toContain("stack");
+    expect(out).toContain("kb-1.md");
+    expect(safeError("failed at /var/lib/hubd/secret-dir/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")).toContain("<path>");
+  });
+
+  it("generatedAt follows the injected clock", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kbactivity-now-"));
+    tmp.push(dir);
+    const roots = hubRoots(dir);
+    const act = createKbActivity({ roots, inboxRoot: join(roots.opsRoot, "contributions"), receiptsRoot: join(roots.opsRoot, "receipts"), now: () => Date.parse("2026-02-03T04:05:06Z") });
+    expect(act.read({}).generatedAt).toBe("2026-02-03T04:05:06.000Z");
   });
 });

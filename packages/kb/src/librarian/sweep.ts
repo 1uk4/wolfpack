@@ -60,12 +60,12 @@ import {
   type RelationResolver,
 } from "../schema/knowledge.js";
 import type { Engine } from "@wolfpack/engine";
-import { entriesDir, type KbRoots } from "../shared/index.js";
+import { entriesDir, type KbRoots, type DecisionSummary, type DecisionRouting } from "../shared/index.js";
 
 /** Structured sweep progress for hosts that surface it (wolfd's event stream). Metadata only. */
 export type SweepEvent =
   | { type: "started"; pending: number }
-  | { type: "item"; from: string; denTopicId: string; outcome: "create" | "merge" | "reject" | "parked"; entryId?: string };
+  | { type: "item"; from: string; denTopicId: string; outcome: "create" | "merge" | "reject" | "parked"; entryId?: string; decision?: DecisionSummary };
 
 export interface SweepContext {
   engine: Engine;
@@ -210,6 +210,20 @@ export interface RoutingRecord {
     subject?: { match: string; valid: boolean; reason?: string };
     confirm?: RoutingRecord["confirm"];
     error?: string;
+  };
+}
+
+/** The RoutingRecord fields the decision event carries (the same object the receipt gets; nothing recomputed). */
+export function routingSummary(r: RoutingRecord, target?: string): DecisionRouting {
+  const t = target ?? r.target;
+  return {
+    route: r.route,
+    candidates: r.candidates,
+    ...(r.band !== undefined ? { band: r.band } : {}),
+    ...(r.subject ? { subject: r.subject } : {}),
+    ...(r.confirm ? { confirm: r.confirm } : {}),
+    ...(t ? { target: t } : {}),
+    ...(r.warning ? { warning: r.warning } : {}),
   };
 }
 
@@ -440,7 +454,20 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     let route = "?";
     let outcome = "?";
     let llmMs = 0;
-    let itemEvent: { outcome: "create" | "merge" | "reject" | "parked"; entryId?: string } | undefined;
+    let itemEvent: { outcome: "create" | "merge" | "reject" | "parked"; entryId?: string; decision?: DecisionSummary } | undefined;
+    // The routing record of this item (set once it exists), for the decision of a park after a mid-item failure.
+    let itemRouting: RoutingRecord | undefined;
+    // Decision event for the paths that write no batch (reject, unclassified, parked). Best effort: the item is already
+    // handled (moved / parked), so a failing append must not turn it into an item error.
+    const recordDecision = async (d: DecisionSummary) => {
+      try {
+        const e = ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...d });
+        await w.appendLedger(roots, [e]);
+        log.push(e);
+      } catch (err) {
+        ctx.notify?.(`sweep: could not record the decision for ${c.from}/${c.denTopicId}: ${cleanError(err)}`);
+      }
+    };
     writeCurrent(roots, { from: c.from, denTopicId: c.denTopicId, startedAt: itemStart });
     const setRoute = (r: string) => {
       route = r;
@@ -473,12 +500,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       let domain = c.domainHint;
       // How this contribution was routed; written to its receipt.
       const routing: RoutingRecord = { route: "new", candidates: [] };
+      itemRouting = routing;
 
       // Declared-domain gate — never commit into an unmirrored, unreviewed domain.
       if (!isDeclared(declared, domain)) {
         await w.quarantine(roots, c, domain);
         await w.writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
         await w.markProcessed(c);
+        await recordDecision({ outcome: "unclassified", reason: `pending domain: ${domain}` });
         result.unclassified++;
         outcome = `unclassified (domain ${domain})`;
         return;
@@ -669,7 +698,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           );
           await w.markProcessed(c);
           result.rejected++;
-          itemEvent = { outcome: "reject" };
+          const decision: DecisionSummary = { outcome: "reject", reason: `archived-older-than-live: ${c.sourceUpdated} < ${existingUpdated}`, routing: routingSummary(routing) };
+          await recordDecision(decision);
+          itemEvent = { outcome: "reject", decision };
           outcome = "rejected (archived, older than live entry)";
           return null;
         }
@@ -828,6 +859,13 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         prevHash: c.prevHash,
         domainHint: domain,
       }));
+      // The decision lands in the same ledger append as the contribution event.
+      const decision: DecisionSummary = {
+        outcome: unchanged ? "unchanged" : action === "create" ? "create" : "merge",
+        entryId: entry.id,
+        routing: routingSummary(routing, entry.id),
+      };
+      batch.push(ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...decision }));
       if (!unchanged) {
         batch.push(ev.entryWritten(entry.id, entry.id, action));
         batch.push(ev.entryPlaced({
@@ -873,7 +911,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
-      return { entry, action, domain, overflow, route: routing.route };
+      return { entry, action, domain, overflow, route: routing.route, decision };
       };
 
       const placed = await place(c, domain, routing, !c.denTopicId.includes("~split-"));
@@ -905,7 +943,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       routing.target = entry.id;
       await w.writeReceipt(roots, c.from, c, action, entry.id, routing);
       await w.markProcessed(c);
-      itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id };
+      itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id, decision: placed.decision };
       outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;
       else result.merged++;
@@ -940,7 +978,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           : overrun ? `${reason} (${overruns} times)` : `failed ${attempts} times: ${reason}`;
         park(roots, c, why);
         outcome = `PARKED: ${why}`;
-        itemEvent = { outcome: "parked" };
+        const decision: DecisionSummary = { outcome: "parked", reason: why, ...(itemRouting ? { routing: routingSummary(itemRouting) } : {}) };
+        await recordDecision(decision);
+        itemEvent = { outcome: "parked", decision };
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
         await Promise.resolve(ctx.alert?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`)).catch(() => {});
         result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });

@@ -1,7 +1,7 @@
 /**
  * Event factories — build well-formed ledger events with id + timestamp filled.
  */
-import type { KbEvent, RouteKind, EntryAction } from "./schemas/events.js";
+import type { KbEvent, EntryAction, DecisionSummary } from "./schemas/events.js";
 import { eventId, now } from "./ids.js";
 
 const stamp = () => ({ id: eventId(), at: now() });
@@ -15,13 +15,12 @@ export const ev = {
     domainHint: string;
   }): KbEvent => ({ t: "contribution", ...stamp(), ...f }),
 
-  routed: (contribution: string, kind: RouteKind, target?: string): KbEvent => ({
-    t: "routed",
-    ...stamp(),
-    contribution,
-    kind,
-    target,
-  }),
+  /** One per contribution outcome; replaces the never-used routed / rejected helpers (their schemas stay so old ledgers parse). */
+  decision: (f: {
+    from: string;
+    denTopicId: string;
+    hash: string;
+  } & DecisionSummary): KbEvent => ({ t: "decision", ...stamp(), ...f }),
 
   entryWritten: (
     entryId: string,
@@ -34,13 +33,6 @@ export const ev = {
     ...stamp(),
     entryId,
     ...(reason ? { reason } : {}),
-  }),
-
-  rejected: (contribution: string, reason: string): KbEvent => ({
-    t: "rejected",
-    ...stamp(),
-    contribution,
-    reason,
   }),
 
   aliased: (

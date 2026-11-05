@@ -135,6 +135,10 @@ describe("hub curator", () => {
     expect(readFileSync(join(domainDir, "_registry.md"), "utf8")).toContain(id);
     const written = readLedger(hub.roots).filter((e) => (e as { t: string }).t === "entry_written");
     expect(written).toHaveLength(1);
+    // one decision event per contribution, next to the contribution event, carrying the routing; sweep_item carries the same summary
+    const decisions = readLedger(hub.roots).filter((e) => (e as { t: string }).t === "decision");
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({ outcome: "create", entryId: id, routing: { route: "new", target: id } });
     // the lane item moved, the receipt was written
     expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(0);
     expect(readdirSync(join(lane(dir), "_processed"))).toHaveLength(1);
@@ -149,6 +153,7 @@ describe("hub curator", () => {
     expect(types.filter((t) => t === "sweep_finished")).toHaveLength(1);
     expect(types).toContain("kb.changed");
     expect(events.text()).toContain(id);
+    expect(events.text()).toContain('"decision":{"outcome":"create"');
     // the receipt is relayed back over the link
     await until(() => conn.frame("receipt"), "receipt frame");
     expect(conn.frame("receipt")).toMatchObject({ wolf: "alpha", content: expect.stringContaining("outcome: create") });
@@ -455,6 +460,22 @@ describe("hub curator: entry_written dedupe is per commit", () => {
     await w.appendLedger(r, [ew("kb-wp-ccccccc")]);
     expect(readLedger(r).map((e: any) => e.entryId)).toEqual(["kb-wp-bbbbbbb", "kb-wp-ccccccc"]);
     expect(SYSTEM_ACTOR.kind).toBe("system");
+  });
+
+  it("a decision event is not an entry_written: it passes through, consumes no owed drop, and does not open the close gate's committed flag", async () => {
+    const r = roots();
+    let closing = false;
+    const w = createHubSweepWriter({ commit: async () => ({}) as any, exclusive: async (fn: any) => fn(), closing: () => closing });
+    w.pending.set("kb-wp-aaaaaaa", 1);
+    const dec = { id: "d", at: "t", t: "decision", from: "alpha", denTopicId: "x", hash: "h", outcome: "reject", reason: "r" } as any;
+    await w.appendLedger(r, [dec]);
+    expect(w.pending.get("kb-wp-aaaaaaa")).toBe(1);
+    expect(readLedger(r).map((e: any) => e.t)).toEqual(["decision"]);
+    // closing: the reject path's decision append (after its receipt and move) is allowed, but a decision alone does not mark the item
+    // committed, so a later write that opens a new item is still refused.
+    closing = true;
+    await w.appendLedger(r, [{ ...dec, id: "d2" }]);
+    await expect(w.writeReceipt(r, "alpha", {} as any, "reject", "x")).rejects.toThrow(/shutting down/);
   });
 
   it("a failed ledger append consumes nothing (the owed drops survive a retry)", async () => {

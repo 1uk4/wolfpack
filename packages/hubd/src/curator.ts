@@ -298,7 +298,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         else if (e.outcome === "merge") tally.merged++;
         else if (e.outcome === "reject") tally.rejected++;
         else tally.parked++;
-        emit({ type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome, ...(e.entryId ? { entryId: e.entryId } : {}) });
+        emit({ type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome, ...(e.entryId ? { entryId: e.entryId } : {}), ...(e.decision ? { decision: e.decision } : {}) });
       }
     };
     const base = createHubSweepWriter({ ...deps, closing: () => closing }, { afterEntryRead: o.afterEntryRead });

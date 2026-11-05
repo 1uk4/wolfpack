@@ -869,12 +869,32 @@ export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.
 export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
 /** The hub curator's sweep (KB curation in hubd): started once real work begins, one item per contribution, finished always follows a started (also on a throw: `error`). */
 export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
+/** The curator's decision for one contribution (the same summary the KB ledger `decision` event carries; optional: older hubs omit it). */
+export const HubSweepDecisionSchema = z.object({
+  /** `unchanged`: a merge the contribution agreed with; `unclassified`: no declared domain. */
+  outcome: z.enum(["create", "merge", "unchanged", "reject", "parked", "unclassified"]),
+  entryId: z.string().optional(),
+  reason: z.string().optional(),
+  routing: z
+    .object({
+      route: z.enum(["alias", "anchor", "similarity", "new"]),
+      candidates: z.array(z.object({ id: z.string(), score: z.number() })),
+      band: z.string().optional(),
+      subject: z.object({ match: z.string(), valid: z.boolean(), reason: z.string().optional() }).optional(),
+      confirm: z.object({ candidate: z.string(), score: z.number(), merge: z.boolean(), valid: z.boolean(), reason: z.string().optional() }).optional(),
+      target: z.string().optional(),
+      warning: z.string().optional(),
+    })
+    .optional(),
+});
+export type HubSweepDecision = z.infer<typeof HubSweepDecisionSchema>;
 export const HubSweepItemEventSchema = hubBase.extend({
   type: z.literal("sweep_item"),
   from: z.string(),
   denTopicId: z.string(),
   outcome: z.enum(["create", "merge", "reject", "parked"]),
   entryId: z.string().optional(),
+  decision: HubSweepDecisionSchema.optional(),
 });
 export const HubSweepFinishedEventSchema = hubBase.extend({
   type: z.literal("sweep_finished"),

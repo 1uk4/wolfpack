@@ -20,6 +20,37 @@ export type RouteKind = z.infer<typeof RouteKindSchema>;
 export const EntryActionSchema = z.enum(["create", "merge", "supersede"]);
 export type EntryAction = z.infer<typeof EntryActionSchema>;
 
+/** How the sweep routed a contribution: the RoutingRecord fields a receipt carries (sweep.ts), minus the overflow detail. */
+export const DecisionRoutingSchema = z.object({
+  route: z.enum(["alias", "anchor", "similarity", "new"]),
+  /** Top-3 similarity candidates, best first. */
+  candidates: z.array(z.object({ id: z.string(), score: z.number() })),
+  band: z.string().optional(),
+  subject: z.object({ match: z.string(), valid: z.boolean(), reason: z.string().optional() }).optional(),
+  confirm: z
+    .object({ candidate: z.string(), score: z.number(), merge: z.boolean(), valid: z.boolean(), reason: z.string().optional() })
+    .optional(),
+  /** The entry written. */
+  target: z.string().optional(),
+  warning: z.string().optional(),
+});
+export type DecisionRouting = z.infer<typeof DecisionRoutingSchema>;
+
+/** What the curator decided for one contribution. `unchanged`: a merge the contribution agreed with (no entry text written). */
+export const DecisionOutcomeSchema = z.enum(["create", "merge", "unchanged", "reject", "parked", "unclassified"]);
+export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
+
+/** The decision summary shared by the ledger `decision` event and the sweep_item event. */
+export const DecisionSummarySchema = z.object({
+  outcome: DecisionOutcomeSchema,
+  /** The resulting entry (create / merge / unchanged). */
+  entryId: z.string().optional(),
+  /** Why (reject / parked / unclassified). */
+  reason: z.string().optional(),
+  routing: DecisionRoutingSchema.optional(),
+});
+export type DecisionSummary = z.infer<typeof DecisionSummarySchema>;
+
 const base = { id: z.string(), at: z.string() };
 
 export const KbEventSchema = z.discriminatedUnion("t", [
@@ -31,6 +62,15 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     hash: z.string(),
     prevHash: z.string().nullable(),
     domainHint: z.string(),
+  }),
+  /** One per contribution per outcome (create, merge, unchanged, reject, parked, unclassified). Older ledgers have none; older readers skip it. */
+  z.object({
+    ...base,
+    t: z.literal("decision"),
+    from: z.string(),
+    denTopicId: z.string(),
+    hash: z.string(),
+    ...DecisionSummarySchema.shape,
   }),
   z.object({
     ...base,

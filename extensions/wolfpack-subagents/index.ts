@@ -331,7 +331,7 @@ const SUBAGENT_ALLOWLIST: Set<string> | null = (() => {
 /**
  * Agent dirs shipped by packages: this extension's own, then every local
  * package in the wolf's settings.json that declares `pi.agents` (e.g.
- * wolfpack-visual-tools' visualizer). Agents load straight from
+ * a package's own `pi.agents`). Agents load straight from
  * the repo, so no copy in the wolf's agent dir can drift from them.
  */
 function getPackageAgentsDirs(): string[] {

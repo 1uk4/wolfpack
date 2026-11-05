@@ -76,7 +76,6 @@ export * from "./kb-graph-model.ts";
 export * from "./graph-persistence.ts";
 export * from "./graph-pane.ts";
 export * from "./kb-activity-model.ts";
-export * from "./pipeline-model.ts";
 export * from "./entry-view.ts";
 export * from "./work-view.ts";
 export * from "./item-document.ts";

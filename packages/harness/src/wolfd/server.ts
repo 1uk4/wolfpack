@@ -35,7 +35,6 @@ import {
   type ConsolidateResponse,
   type ErrorCode,
   type GraduationResult,
-  type KbPipelineResponse,
   type LastPromote,
   type PromoteResponse,
   type WolfEvent,
@@ -830,15 +829,6 @@ export class WolfServer {
           const f = this.graduationFailure(e);
           throw new HttpError(f.code, f.message);
         }
-      }
-      case "kbPipeline": {
-        this.checkWolf(params.name);
-        if (!this.opts.librarian) throw new HttpError("kb_unavailable", `wolf ${this.name} is not the librarian`);
-        const roots = this.requireKb();
-        // Loaded on first use: only the librarian ever gets here, and the pipeline reader pulls in the librarian package.
-        const { readPipeline } = await import("@wolfpack/kb/librarian");
-        const body: KbPipelineResponse = readPipeline(roots);
-        return this.json(res, 200, body);
       }
       case "getKbGraph": {
         this.checkWolf(params.name);

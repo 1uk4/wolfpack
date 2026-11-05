@@ -55,7 +55,7 @@ function Placeholder({ title, children }: { title: string; children?: React.Reac
 /** Shown when the graph is read from a wolf's KB mirror because the librarian is offline. */
 export function KbMirrorLabel() {
 	return (
-		<div className="absolute left-3 top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg" data-testid="kb-mirror-label" title="Live sweep activity and the pipeline need the librarian">
+		<div className="absolute left-3 top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg" data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
 			{KB_MIRROR_LABEL}
 		</div>
 	);

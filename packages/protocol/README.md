@@ -74,9 +74,8 @@ Additive and read-only, served by the librarian wolf only (`WolfSummary.libraria
 | --- | --- | --- |
 | `GET /v1/wolves/:name/kb/graph[?domain=&archivedWork=&wikilinks=&denTopics=]` | `KbGraph` | `nodes` (domain/section/entry/work/den-topic; ids `dom:`/`sec:`/`ent:`/`work:`/`den:<wolf>:<topic>`, `depth` 0-4), `edges` (`hierarchy` parent→child, `partOf` child→parent, `dependsOn`, `related` with `relation`, `wikilink`), the applied `layers` and `domain`, all `domains` (`name`, `label`, optional `color`), `generated`. No positions. Flags are `true`\|`false` (default false; else 400); unknown `domain` is 404. `denTopics` adds the serving wolf's own den topics only |
 | `GET /v1/wolves/:name/kb/entries/:id` | `KbEntryDetail` | `frontmatter`, `body`, `wikilinks` (`target`, `exists`), `backlinks` (`id`, `title`, `via` wikilink\|related, `relation`). 400 malformed id, 404 unknown |
-| `GET /v1/wolves/:name/kb/pipeline` | `KbPipelineResponse` | `lanes` (`wolf`, `pending`, `oldestAgeMs?`), `receipts` (newest 50: `wolf`, `denTopicId`, `outcome` create\|merge\|reject\|parked\|unclassified, `entryId?`, `processed`, `detail?`), `parked` (`wolf`, `file`, `denTopicId?`, `reason?`), `sweep` (`current?` item in progress, `last?` persisted last run with counts, `durationMs`, `error?`) |
 
-Client: `getKbGraph(wolf, {domain?, archivedWork?, wikilinks?, denTopics?})`, `getKbEntry(wolf, id)`, `getKbPipeline(wolf)` (optional on `ConsoleClient`).
+Client: `getKbGraph(wolf, {domain?, archivedWork?, wikilinks?, denTopics?})`, `getKbEntry(wolf, id)`.
 
 ## Tool calls in history
 

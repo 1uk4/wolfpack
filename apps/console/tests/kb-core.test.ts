@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { KB_MIRROR_LABEL, PIPELINE_HREF, entryHref, findKbSource, findLibrarian, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
+import { KB_MIRROR_LABEL, entryHref, findKbSource, findLibrarian, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
 
 const base = { wolf: "1uk4", timestamp: "2026-10-26T00:00:00.000Z", domain: "d" };
 
@@ -53,7 +53,6 @@ describe("parseMemoryEventFrame", () => {
 
 describe("hrefs", () => {
 	it("builds and encodes", () => {
-		assert.equal(PIPELINE_HREF, "/pipeline");
 		assert.equal(entryHref("wolfpack/a b"), "/kb/entry/wolfpack%2Fa%20b");
 		assert.equal(workHref("work-1"), "/kb/work/work-1");
 	});

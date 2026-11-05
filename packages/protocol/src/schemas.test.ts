@@ -12,7 +12,6 @@ import {
   ErrorCodeSchema,
   ErrorEnvelopeSchema,
   MemoryEventSchema,
-  KbPipelineResponseSchema,
   KbActivityResponseSchema,
   parseMemoryEvent,
   EventEnvelopeSchema,
@@ -294,26 +293,6 @@ describe("memory action responses", () => {
 
 it("memory_busy maps to 409", () => {
   expect(ERROR_HTTP_STATUS.memory_busy).toBe(409);
-});
-
-describe("KbPipelineResponse", () => {
-  it("parses a full response and an empty one", () => {
-    const full = {
-      lanes: [{ wolf: "w", pending: 2, oldestAgeMs: 5000 }, { wolf: "x", pending: 0 }],
-      receipts: [
-        { wolf: "w", denTopicId: "caching", outcome: "create", entryId: "kb-caching-1", processed: "2026-10-25T10:00:00.000Z" },
-        { wolf: "w", denTopicId: "odd", outcome: "unclassified", processed: "2026-10-25T09:00:00.000Z", detail: "pending domain: foo" },
-      ],
-      parked: [{ wolf: "w", file: "stuck-1.md", denTopicId: "stuck", reason: "failed 3 times" }],
-      sweep: {
-        current: { from: "w", denTopicId: "caching", startedAt: "2026-10-25T10:00:00.000Z", route: "merge" },
-        last: { startedAt: "2026-10-25T09:59:00.000Z", finishedAt: "2026-10-25T10:00:00.000Z", processed: 1, created: 1, merged: 0, rejected: 0, parked: 0, remaining: 0, durationMs: 60000 },
-      },
-    };
-    expect(KbPipelineResponseSchema.parse(full)).toEqual(full);
-    expect(KbPipelineResponseSchema.safeParse({ lanes: [], receipts: [], parked: [], sweep: {} }).success).toBe(true);
-    expect(KbPipelineResponseSchema.safeParse({ ...full, receipts: [{ ...full.receipts[0], outcome: "created" }] }).success).toBe(false);
-  });
 });
 
 describe("structured objects", () => {

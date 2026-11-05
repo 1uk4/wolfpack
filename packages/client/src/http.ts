@@ -41,7 +41,6 @@ import {
   type GraduationObservations,
   type GraduationStatus,
   type WorkListResponse,
-  type KbPipelineResponse,
   type KbActivityResponse,
   type KbActivityQuery,
   type PendingCard,
@@ -468,11 +467,6 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async graduationObservations(wolf: string, workId: string): Promise<GraduationObservations> {
     return (await this.json("graduationObservations", { name: wolf, id: workId }, ROUTES.graduationObservations.response.schema, undefined, wolf)) as GraduationObservations;
-  }
-
-  /** Dewey's pipeline (lanes, receipts, parked, sweep). The wolf must be the librarian: others reject with a kb_unavailable error. */
-  async getKbPipeline(wolf: string): Promise<KbPipelineResponse> {
-    return (await this.json("kbPipeline", { name: wolf }, ROUTES.kbPipeline.response.schema, undefined, wolf)) as KbPipelineResponse;
   }
 
   async getKbGraph(wolf: string, opts: { domain?: string; archivedWork?: boolean; denTopics?: boolean } = {}): Promise<KbGraph> {

@@ -39,7 +39,6 @@ import {
   GraduationStatusSchema,
   GraduationPreviewSchema,
   GraduationResultSchema,
-  KbPipelineResponseSchema,
   KbActivityResponseSchema,
 } from "./schemas.js";
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
@@ -493,7 +492,6 @@ export const ROUTES = {
    * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
    * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).
    */
-  kbPipeline: { method: "GET", path: "/v1/wolves/:name/kb/pipeline", response: { kind: "json", schema: KbPipelineResponseSchema }, status: [200], error: err },
   /**
    * The KB graph, served by any wolf with KB roots (read-only; 409 `kb_unavailable` without them). Query: `domain` (one domain; unknown = 404 `not_found`),
    * and the layer flags `archivedWork`, `denTopics` (`true`|`false`, default false; anything else is 400 `invalid_request`).

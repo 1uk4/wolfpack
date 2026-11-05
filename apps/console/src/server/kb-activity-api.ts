@@ -1,6 +1,6 @@
 /**
  * THE KB ACTIVITY API: a thin Response-returning handler over a ConsoleClient for GET /api/kb/activity (the hub's GET /v1/kb/activity).
- * Same error mapping as pipeline-api.ts / memory-api.ts; a client without getKbActivity (no hub) answers 409 kb_unavailable. The query
+ * Same error mapping as memory-api.ts; a client without getKbActivity (no hub) answers 409 kb_unavailable. The query
  * (since, before, limit, domain) passes through; the hub validates it.
  */
 

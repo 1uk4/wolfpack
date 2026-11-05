@@ -5,17 +5,6 @@
  */
 export { sweep, type SweepContext, type SweepResult, type SweepEvent } from "./sweep.js";
 export { readLastSweep, writeLastSweep, lastSweepFile, type LastSweep } from "../shared/last-sweep.js";
-export {
-  readPipeline,
-  normalizeOutcome,
-  RECEIPT_CAP,
-  PARKED_CAP,
-  type Pipeline,
-  type PipelineLane,
-  type PipelineReceipt,
-  type PipelineParked,
-  type PipelineOutcome,
-} from "./pipeline.js";
 export { runSweepTick, type SweepTickOptions, type SweepTickResult } from "./tick.js";
 export { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 export { renderEntry, markProcessed } from "./commit.js";

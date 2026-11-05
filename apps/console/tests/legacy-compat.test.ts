@@ -85,7 +85,7 @@ describe("userData migration", () => {
 		}
 		assert.ok(!fs.existsSync(next), "no newDir after failure");
 		assert.ok(!fs.existsSync(`${next}.migrating`), "temp removed");
-		assert.match(logs[0], /failed/);
+		assert.match(logs[0] ?? "", /failed/);
 		assert.equal(migrateLegacyUserData(next).migrated, true, "retry succeeds");
 		assert.ok(fs.existsSync(path.join(next, "console.json")));
 		assert.ok(!fs.existsSync(path.join(next, "stale")));

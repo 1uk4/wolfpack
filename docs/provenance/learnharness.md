@@ -1,5 +1,7 @@
 # learnharness provenance
 
+> Snapshot against upstream `6cba9c8` taken on 2026-11-05.
+
 Inventory of what `apps/console` and `apps/desktop` took from **learnharness** (https://github.com/amosblomqvist/learnharness, Copyright (c) Amos Blomqvist, AGPL-3.0-only; all 712 upstream commits are by him).
 
 - Copied into wolfpack in commit `060c20cf` (2026-10-24) from upstream commit `6cba9c8c5afe8a63f47ea4ebae6e91d8a205cebb` (v0.3.4).
@@ -109,18 +111,26 @@ Note: the copy commit also brought compiled artifacts (`*.js`, `*.d.ts`, `*.map`
 ## Third-party and asset notes
 
 - `apps/console/public/fonts/cmunbx.ttf` and `OFL.txt`: Computer Modern Bold (SIL Open Font License 1.1), third-party, unchanged from upstream. Keep `OFL.txt` alongside it.
-- `apps/desktop/build/icon.icon/Assets/lh_0 2.svg`, `lh_1 2.svg`, `lh_2 2.svg`: byte-identical to upstream (learnharness artwork). Also byte-identical: `icon-flat.svg`, `icon.icns`, `icon.ico`, `icon.png`, `background*.png`, `icon.icon/icon.json`, `entitlements.mac.plist` (all 11 `apps/desktop/build` files are unchanged). `components/lh-mark.tsx` (logo component) is unchanged too. These are the learnharness identity and should be replaced.
+- `apps/desktop/build/icon.icon/Assets/lh_*.svg` (three files): byte-identical to upstream (learnharness artwork). The lh-debrand branch renames them to `wolfpack_*.svg`; the artwork is unchanged and still upstream-derived. Also byte-identical: `icon-flat.svg`, `icon.icns`, `icon.ico`, `icon.png`, `background*.png`, `icon.icon/icon.json`, `entitlements.mac.plist` (all 11 `apps/desktop/build` files are unchanged). `components/lh-mark.tsx` (logo component) is unchanged too; lh-debrand renames it to `wolfpack-mark.tsx` with the same content. The names are debranded, but the artwork is still upstream and should be replaced.
 
 ## Other third-party origins (outside apps/console and apps/desktop)
 
-Not part of the learnharness copy, listed for completeness:
+Not part of the learnharness copy. Upstream licences checked on 2026-11-05 (`gh api repos/amosblomqvist/<repo>/license` and repository contents):
 
-- `extensions/wolfpack-telegram`: based on badlogic/pi-telegram (MIT); keeps `"license": "MIT"`.
-- `extensions/ask-user-question`: vendored from amosblomqvist/pi-config; `extensions/wolfpack-subagents`: ported from amosblomqvist/pi-interactive-subagents; `extensions/wolfpack-visual-tools`: ported from amosblomqvist/learn. The upstream licences of these repositories have not been verified; check them before relying on the AGPL-3.0-only label for these packages.
+| Package | Upstream | Upstream licence | Status |
+|---|---|---|---|
+| `extensions/wolfpack-telegram` | badlogic/pi-telegram | MIT | Keeps `"license": "MIT"`; credited in NOTICE |
+| `extensions/wolfpack-subagents` | amosblomqvist/pi-interactive-subagents (original HazAT/pi-interactive-subagents) | MIT (Copyright (c) 2026 HazAT) | MIT notice reproduced in NOTICE; package stays AGPL-3.0-only |
+| `extensions/ask-user-question` | amosblomqvist/pi-config | **none** (no LICENSE file) | Needs the author's permission or a rewrite |
+| `extensions/wolfpack-visual-tools` | amosblomqvist/learn | **none** (no LICENSE file) | Needs the author's permission or a rewrite |
+| `extensions/wolfpack-memory` | none found | n/a | Written in this repo (first commit "replace packages/pi-extension with extensions/wolfpack-memory", no upstream references) |
 
-## Known leftovers (owned by the debranding work)
+## Known leftovers
 
-`apps/desktop/package.json` and `apps/console/package.json` `homepage`, `apps/desktop/electron-builder.yml` (`publish.owner: amosblomqvist`), and `apps/console/tests/desktop-platform.test.ts` (asserts the old author/homepage) still reference upstream.
+The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish.owner` and the desktop-platform test. After it merges, the remaining upstream references are:
+
+- `apps/console/docs/desktop-release.md` (one mention, if not reworded).
+- Credits in the extension READMEs and source comments listed above (kept on purpose).
 
 ## Files per class
 

@@ -10,5 +10,49 @@ https://github.com/amosblomqvist/learnharness, based on commit
 6cba9c8c5afe8a63f47ea4ebae6e91d8a205cebb; modified by Wolfpack contributors.
 See docs/provenance/learnharness.md.
 
+Third-party material
+--------------------
+
+apps/console/public/fonts/cmunbx.ttf: Computer Modern Bold, licensed under the
+SIL Open Font License 1.1. The licence text is in
+apps/console/public/fonts/OFL.txt.
+
 extensions/wolfpack-telegram is based on badlogic/pi-telegram (MIT) and keeps
 its MIT license.
+
+extensions/wolfpack-subagents is ported from amosblomqvist/pi-interactive-subagents
+(https://github.com/amosblomqvist/pi-interactive-subagents), which is MIT
+licensed (original project: HazAT/pi-interactive-subagents). The upstream
+copyright and permission notice follows. This MIT code is included in an
+AGPL-3.0-only work, which MIT permits.
+
+    MIT License
+
+    Copyright (c) 2026 HazAT
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+NOT YET CLEARED (no licence upstream)
+
+extensions/ask-user-question is vendored from
+https://github.com/amosblomqvist/pi-config (extensions/ask-user-question.ts)
+and extensions/wolfpack-visual-tools is ported from
+https://github.com/amosblomqvist/learn (extensions/visual-tools). Neither
+upstream repository carries a licence file, so no licence has been granted.
+They are credited here pending the author's permission or a rewrite.

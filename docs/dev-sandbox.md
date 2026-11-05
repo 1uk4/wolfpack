@@ -1,6 +1,6 @@
 # Dev sandbox: a production-like pack on this Mac
 
-`npm run sandbox:stack:desktop` starts workerd, which supervises every wolf in `~/wolves/dev`, plus the Electron app. Two
+The snapshot sandbox (started by hand, see "Running it") runs workerd, which supervises every wolf in `~/wolves/dev`. Two
 durable wolves there run **exactly like production, fully sandboxed**:
 
 | wolf | role | what it does |
@@ -98,24 +98,26 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 
 ## Running it
 
-```sh
-npm run sandbox:stack:desktop  # or sandbox:stack for the browser console
-```
+There are no `sandbox:stack*` or `dev:stack:desktop` scripts any more. Start the snapshot sandbox by hand:
+`WOLFPACK_MODELS_FILE=... node packages/workerd/dist/bin/workerd.js --wolves ~/wolves/dev --port <port>` (build first:
+`npx turbo run build --filter=@wolfpack/workerd --filter=@wolfpack/cli`), then the console with
+`WOLFPACK_API_URL=http://127.0.0.1:<port> npm run dev -w @wolfpack/console`. `npm run dev:stack` is only the scaffolded
+minimal sandbox (README "Live vs dev stack"); it does not run the extension install below, the Ollama check or the api-key check.
 
-`scripts/dev-stack.sh` needs `ANTHROPIC_API_KEY` only when the models file's transport is `api` (the dev `models.json` is
-`subscription`: the Claude Agent SDK uses your local login). `dewey-dev` embeds with local Ollama
-(`127.0.0.1:11434`, `nomic-embed-text`); the script warns if it is not answering.
+A models file with transport `api` needs `ANTHROPIC_API_KEY` (e.g. in `~/.wolfpack/.env`); the dev `models.json` is
+`subscription`: the Claude Agent SDK uses your local login. `dewey-dev` embeds with local Ollama
+(`127.0.0.1:11434`, `nomic-embed-text`); start it first or its sweep backs off.
 To keep model usage low while testing, add `tiers: {main: {model: claude-haiku-5-5}, smart: {model: claude-haiku-5-5}}` to
 the wolves' `wolf.yaml`.
 
 **Extension bundles.** wolfd loads each wolf's extensions from the installed bundle in its den
-(`<sandbox>/dens/<wolf>/extensions/<ext>/index.js`), which nothing else rebuilds. On every start `dev-stack.sh` builds the
+(`<sandbox>/dens/<wolf>/extensions/<ext>/index.js`), which nothing else rebuilds. Run `node scripts/dev-stack-extensions.mjs ~/wolves/dev` by hand before starting; it builds the
 CLI from this checkout and runs `sandbox install-extensions` for each sandboxed wolf whose bundle is missing or older than
-its sources (`scripts/dev-stack-extensions.mjs`; one line per wolf: installed / up to date). Non-sandbox dens are only
+its sources (one line per wolf: installed / up to date). Non-sandbox dens are only
 warned about, never written. Set `DEV_STACK_NO_EXT_INSTALL=1` to skip. Do not use a global `wolfpack` for this: the CLI
 bundles the checkout it lives in.
 
-**Desktop notifications.** The dev Electron app is "Electron" in macOS: allow it under System Settings → Notifications →
+**Desktop notifications.** The dev Electron app (`npm run dev -w @wolfpack/desktop`, by hand) is "Electron" in macOS: allow it under System Settings → Notifications →
 "Electron" (it only appears there after the first notification attempt). Every notification decision (received, rejected
 with the reason, shown, clicked) is written to the desktop main log; the renderer logs why it skipped one via
 `console.debug` ("needs-you: no notification ...").
@@ -125,7 +127,7 @@ with the reason, shown, clicked) is written to the desktop main log; the rendere
 Set `WOLFPACK_DEBUG_STREAM=1` in the environment of the wolf process (wolfd) to log, for every in-flight assistant
 `message_update`, the sequence of engine change types, e.g. `[wolfd stream] message_update changes=[text_start,text_delta]`.
 `text_start` / `thinking_start` / `block` / `message` entries are the restream shapes that used to be dropped; if a reply
-looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 npm run sandbox:stack:desktop`.
+looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 on the workerd you start`.
 Off by default.
 
 ## Updating the runtime checkout

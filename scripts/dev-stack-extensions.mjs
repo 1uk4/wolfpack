@@ -3,7 +3,7 @@
  * Keep the sandbox dens' installed extension bundles current for `npm run dev:stack`.
  * wolfd loads `<den>/extensions/<dir>/index.js`, which nothing else rebuilds, so it silently goes stale.
  *
- *   node scripts/dev-stack-extensions.mjs <wolves-dir>        (run from dev-stack.sh; uses THIS checkout's CLI, not PATH)
+ *   node scripts/dev-stack-extensions.mjs <wolves-dir>        (formerly run from dev-stack.sh; uses THIS checkout's CLI, not PATH)
  *
  * Wolf config and sandbox/den resolution reuse the engine's own loadWolfConfig + resolveSandbox (built dist), so this
  * cannot diverge from what wolfd does. Sandboxed wolves get `sandbox install-extensions` when their bundle is missing or
@@ -143,7 +143,7 @@ export function runPlans(plans, { cli, exec, log, warn }) {
 
 export async function main({ argv = process.argv.slice(2), env = process.env, repo, log = console.log, warn = console.warn, exec } = {}) {
 	if (env.DEV_STACK_NO_EXT_INSTALL === "1") return void log("dev-stack: extension install skipped (DEV_STACK_NO_EXT_INSTALL=1)");
-	if (!argv[0]) throw new Error("usage: dev-stack-extensions.mjs <wolves-dir> (no default: pass the WOLVES_DIR dev-stack.sh uses)");
+	if (!argv[0]) throw new Error("usage: dev-stack-extensions.mjs <wolves-dir> (no default: pass the sandbox wolves dir)");
 	const wolvesDir = path.resolve(argv[0]);
 	repo ??= path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 	log(`dev-stack: checking extension bundles for wolves in ${wolvesDir}`);

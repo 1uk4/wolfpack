@@ -59,7 +59,7 @@ export function classify(files, refreshedExtensions = []) {
 	else if (console_.length) action = "reload";
 	else if (files.length) action = "none"; // docs/tests only
 	const lines = [];
-	if (action === "restart") lines.push("restart the stack: Ctrl-C, then npm run dev:stack:desktop");
+	if (action === "restart") lines.push("restart the stack: npm run stack -- restart");
 	else if (action === "reload") lines.push("console only: reload the window (Cmd-R)");
 	else lines.push(files.length ? "docs/tests only: nothing to restart" : "already up to date");
 	if (agent) lines.push("sfo-01 runs packages/agent: redeploy needed");

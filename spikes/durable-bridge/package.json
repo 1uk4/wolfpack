@@ -1,5 +1,6 @@
 {
   "name": "durable-bridge-spike",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "description": "Standalone spike (NOT a workspace, NOT in turbo): raw pi-durable bridge behaviours. Run: node src/cli.ts <cmd>",

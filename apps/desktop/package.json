@@ -1,5 +1,6 @@
 {
 	"name": "@wolfpack/desktop",
+	"license": "AGPL-3.0-only",
 	"version": "0.3.4",
 	"private": true,
 	"type": "commonjs",
@@ -7,8 +8,8 @@
 	"main": "electron/main.cjs",
 	"desktopName": "wolfpack-console.desktop",
 	"author": {
-		"name": "Amos Blomqvist",
-		"email": "255718537+amosblomqvist@users.noreply.github.com"
+		"name": "Luka Flores",
+		"email": "85141937+1uk4@users.noreply.github.com"
 	},
 	"homepage": "https://github.com/amosblomqvist/learnharness",
 	"scripts": {

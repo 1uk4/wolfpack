@@ -153,7 +153,30 @@ describe("readIncoming", () => {
     const r = readIncoming(root);
     expect(r.wolves[0].pending).toBe(25);
     expect(r.wolves[0].items).toHaveLength(20);
-    expect(readIncoming(join(root, "nope"))).toEqual({ total: 0, wolves: [] });
+    expect(readIncoming(join(root, "nope"))).toEqual({ total: 0, wolves: [], bad: [], waitingByDomain: {} });
+  });
+
+  it("reads domain_hint from the file head and counts waiting per domain", () => {
+    mkdirSync(join(root, "w1"));
+    writeFileSync(join(root, "w1", "a-0123456789.md"), "---\nfrom: w1\ndomain_hint: alpha\n---\nbody\n");
+    writeFileSync(join(root, "w1", "b-0123456788.md"), "---\ndomain_hint: alpha\n---\n");
+    writeFileSync(join(root, "w1", "c-0123456787.md"), "no frontmatter");
+    const r = readIncoming(root);
+    expect(r.waitingByDomain).toEqual({ alpha: 2 });
+    expect(r.wolves[0].items.filter((i) => i.domain === "alpha")).toHaveLength(2);
+  });
+
+  it("lists _bad contributions with hint and reason, newest first, capped", () => {
+    mkdirSync(join(root, "w1", "_bad"), { recursive: true });
+    writeFileSync(join(root, "w1", "_bad", "s1.raw"), JSON.stringify({ denTopicId: "topic-x", domainHint: "nope" }));
+    writeFileSync(join(root, "w1", "_bad", "s1.raw.reason.txt"), "domain_hint \"nope\" is not subscribed\nsha256: x\n");
+    writeFileSync(join(root, "w1", "_bad", "s2.raw"), "{truncated");
+    const r = readIncoming(root);
+    expect(r.wolves[0].bad).toBe(2);
+    expect(r.bad).toHaveLength(2);
+    const one = r.bad.find((b) => b.denTopicId === "topic-x")!;
+    expect(one).toMatchObject({ wolf: "w1", domainHint: "nope", reason: "domain_hint \"nope\" is not subscribed" });
+    expect(r.bad.find((b) => b.denTopicId === undefined)?.reason).toBe("quarantined");
   });
 });
 
@@ -280,5 +303,34 @@ describe("attribution safety, dedupe, routing ids", () => {
     expect(r.confirm!.candidate.length).toBeLessThanOrEqual(120);
     expect(r.subject!.match).toContain("[REDACTED]");
     expect(r.subject!.match.length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe("per-domain attribution", () => {
+  const hinted = (m: number, from: string, topic: string, hint: string): KbEvent => ({ t: "contribution", id: id(), at: at(m), from, denTopicId: topic, hash: `h-${topic}`, prevHash: null, domainHint: hint }) as KbEvent;
+  const resolver = (map: Record<string, string>, known: string[]) => ({ domain: (i: string) => map[i], title: (i: string) => (map[i] ? `T ${i}` : undefined), known: () => new Set(known) });
+
+  it("tags decisions with the entry's domain, else the hinted real domain, else none", () => {
+    const evs = [
+      hinted(1, "w1", "a", "alpha"), dec(1, { denTopicId: "a", hash: "h-a", entryId: "kb-a" }),
+      hinted(2, "w2", "r", "beta"), dec(2, { from: "w2", denTopicId: "r", hash: "h-r", outcome: "reject" }),
+      hinted(3, "w2", "bad", "zzz"), dec(3, { from: "w2", denTopicId: "bad", hash: "h-bad", outcome: "reject" }),
+    ];
+    const p = pageActivity(buildActivityIndex(evs), {}, resolver({ "kb-a": "alpha" }, ["alpha", "beta"]));
+    const by = Object.fromEntries(p.decisions.items.map((d) => [d.denTopicId, d]));
+    expect(by.a).toMatchObject({ domain: "alpha", title: "T kb-a" });
+    expect(by.r!.domain).toBe("beta");
+    expect(by.bad!.domain).toBeUndefined();
+    expect(p.domains.find((d) => d.domain === "beta")!.contributors).toEqual([{ wolf: "w2", count: 1 }]);
+  });
+
+  it("domain filter pages hinted decisions with no entry; since applies to changes", () => {
+    const evs = [hinted(1, "w1", "r", "beta"), dec(1, { denTopicId: "r", hash: "h-r", outcome: "reject" }), written(1, "kb-a"), written(10, "kb-b")];
+    const idx = buildActivityIndex(evs);
+    const res = resolver({ "kb-a": "alpha", "kb-b": "alpha" }, ["alpha", "beta"]);
+    expect(pageActivity(idx, { domain: "beta" }, res).decisions.items.map((d) => d.denTopicId)).toEqual(["r"]);
+    const p = pageActivity(idx, { sinceMs: Date.parse(at(5)) }, res);
+    expect(p.changes.domains[0]!.items.map((c) => c.entryId)).toEqual(["kb-b"]);
+    expect(p.domains.find((d) => d.domain === "alpha")!.lastChangeAt).toBe(at(10));
   });
 });

@@ -3,8 +3,8 @@
  *
  * Query: `since` (7d|30d|all|ISO, default 30d), `before` (cursor), `limit` (1..200, default 50; larger values are clamped to 200),
  * `domain`. `domain` restricts `changes` and the decision feed to one domain (`(unplaced)` selects entries whose domain cannot be
- * resolved). A decision belongs to its entry's domain, so with `domain` set, decisions WITHOUT an entryId (reject, parked,
- * unclassified) are excluded from the feed and its counts.
+ * resolved). A decision belongs to its entry's domain, else to its contribution's domain hint when that is a real
+ * domain; with `domain` set, decisions with neither are excluded from the feed and its counts. `since` applies to decisions AND changes.
  *
  * Caches (two, independent):
  *  - ledger index (events -> ActivityIndex) keyed on the ledger file's (mtimeMs, size); rebuilt only when the ledger changes.
@@ -15,7 +15,7 @@
  */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { oneLine, buildActivityIndex, fsEntryResolver, pageActivity, readIncoming, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
+import { oneLine, buildActivityIndex, fsEntryResolver, listDomains, pageActivity, readIncoming, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
 import { ledgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import type { KbActivityResponse } from "@wolfpack/protocol";
 import type { Curator } from "./curator.js";
@@ -96,13 +96,24 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
 
       const idx = index();
       const page = pageActivity(idx, { sinceMs, ...(q.before != null ? { before: q.before } : {}), limit, ...(domain ? { domain } : {}) }, fsEntryResolver(d.roots.kbBase, entryDomains(t)));
-      const incoming = readIncoming(d.inboxRoot, t);
+      const { waitingByDomain, bad, ...lane_ } = readIncoming(d.inboxRoot, t);
+      const incoming = { ...lane_, bad: bad.map((b) => ({ ...b, reason: safeError(b.reason) })) };
+      const emap = entryDomains(t);
+      const entryCount = new Map<string, number>();
+      for (const dom of emap.values()) entryCount.set(dom, (entryCount.get(dom) ?? 0) + 1);
+      const act = new Map(page.domains.map((x) => [x.domain, x]));
+      const names = new Set([...listDomains(d.roots.kbBase), ...entryCount.keys()]);
+      const domainSummaries = [...names].sort().map((name) => {
+        const a = act.get(name);
+        return { domain: name, entries: entryCount.get(name) ?? 0, waiting: waitingByDomain[name] ?? 0, ...(a?.lastChangeAt ? { lastChangeAt: a.lastChangeAt } : {}), contributors: a?.contributors ?? [] };
+      });
       const st = d.curator?.status();
       const on = st?.enabled === true;
       return {
         generatedAt: new Date(t).toISOString(),
         source: { lane, hasDecisions: page.hasDecisions, curator: on ? "on" : "off" },
         incoming,
+        domains: domainSummaries,
         decisions: page.decisions,
         changes: page.changes,
         ...(on && st ? { sweep: { running: st.running, ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),

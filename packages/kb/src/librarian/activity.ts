@@ -9,7 +9,7 @@
  * The result shape is `KbActivityResponse` (@wolfpack/protocol) minus the fields only the caller knows (generatedAt, source, sweep).
  * Types are declared structurally here: kb does not depend on protocol.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
 import type { KbEvent } from "../shared/index.js";
@@ -35,6 +35,10 @@ export interface ActivityDecision {
   reason?: string;
   routing?: Decision["routing"];
   superseded?: number;
+  /** Entry's domain, else the contribution's hinted domain when it is a real domain. */
+  domain?: string;
+  /** Title of the resulting entry (read on demand). */
+  title?: string;
 }
 export interface ActivityChange {
   at: string;
@@ -56,8 +60,18 @@ export interface ActivityIndex {
   changes: Array<ActivityChange & { id: string }>;
   sectionDomain: Map<string, string>;
   placedSection: Map<string, string>;
+  /** domainHint of the contribution event, per `${from}|${denTopicId}|${hash}`. */
+  hints: Map<string, string>;
+}
+export interface DomainActivity {
+  domain: string;
+  /** Wolves with decisions in range for this domain. */
+  contributors: Array<{ wolf: string; count: number }>;
+  /** Latest entry change of the domain, any time. */
+  lastChangeAt?: string;
 }
 export interface ActivityPage {
+  domains: DomainActivity[];
   hasDecisions: boolean;
   decisions: { items: ActivityDecision[]; nextCursor?: string; total: number; counts: Record<ActivityOutcome, number> };
   changes: { domains: Array<{ domain: string; items: ActivityChange[] }> };
@@ -87,10 +101,12 @@ const newer = (a: { at: string; id?: string }, b: { at: string; id?: string }): 
 export interface EntryResolver {
   domain(id: string): string | undefined;
   title(id: string): string | undefined;
+  /** Real domains (a contribution's hint only counts when it is one of these). */
+  known?(): ReadonlySet<string>;
 }
 const NO_ENTRIES: EntryResolver = { domain: () => undefined, title: () => undefined };
 
-const listDomains = (kbBase: string): string[] => {
+export const listDomains = (kbBase: string): string[] => {
   try {
     return readdirSync(join(kbBase, "domains"), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name);
   } catch {
@@ -123,7 +139,8 @@ export function readEntryTitle(kbBase: string, domain: string, id: string): stri
 
 /** A resolver over the entry files, using a domain map the caller scanned (and may cache). Titles are read fresh. */
 export function fsEntryResolver(kbBase: string, domains: Map<string, string>): EntryResolver {
-  return { domain: (id) => domains.get(id), title: (id) => (domains.has(id) ? readEntryTitle(kbBase, domains.get(id)!, id) : undefined) };
+  const known = new Set([...listDomains(kbBase), ...domains.values()]);
+  return { domain: (id) => domains.get(id), title: (id) => (domains.has(id) ? readEntryTitle(kbBase, domains.get(id)!, id) : undefined), known: () => known };
 }
 
 /** entryId -> {domain,title} for every entry file (test / one-shot convenience). */
@@ -176,6 +193,7 @@ export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
   const placedSection = new Map<string, string>();
   let hasDecisions = false;
   const contributions: Array<{ idx: number; from: string }> = [];
+  const hints = new Map<string, string>();
   const writeIdx: number[] = []; // every entry_written / entry_retired position, ledger order
   /** Writes folded into a later identical one of the same batch (W1 + W2 of one sweep write). */
   const dropped = new Set<number>();
@@ -186,6 +204,7 @@ export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
       case "contribution":
         boundaries++;
         contributions.push({ idx, from: e.from });
+        if (e.domainHint) hints.set(`${e.from}|${e.denTopicId}|${e.hash}`, e.domainHint);
         break;
       case "decision": {
         boundaries++;
@@ -271,38 +290,65 @@ export function buildActivityIndex(events: KbEvent[]): ActivityIndex {
     changes.push({ id: e.id, at: e.at, entryId: e.entryId, action: e.t === "entry_retired" ? "retire" : e.action, ...(dec ? { from: dec.from, denTopicId: dec.denTopicId } : {}) });
   });
   changes.sort(newer);
-  return { hasDecisions, decisions, changes, sectionDomain, placedSection };
+  return { hasDecisions, decisions, changes, sectionDomain, placedSection, hints };
 }
 
 export function pageActivity(index: ActivityIndex, q: ActivityQuery = {}, entries: EntryResolver = NO_ENTRIES): ActivityPage {
   const limit = q.limit ?? 50;
+  const known = entries.known?.() ?? new Set<string>();
   const domainOf = (id: string): string => entries.domain(id) ?? index.sectionDomain.get(index.placedSection.get(id) ?? "") ?? UNPLACED;
-  const counts = Object.fromEntries(ACTIVITY_OUTCOMES.map((o) => [o, 0])) as Record<ActivityOutcome, number>;
-  const inWindow = index.decisions.filter((d) => {
-    // A decision belongs to its entry's domain; one with no entry (reject, parked, unclassified) belongs to none and is dropped by a domain filter.
-    if (q.domain !== undefined && (d.entryId === undefined || domainOf(d.entryId) !== q.domain)) return false;
-    if (q.sinceMs !== undefined) {
-      const t = Date.parse(d.at);
-      if (!Number.isFinite(t) || t < q.sinceMs) return false;
+  /** The entry's domain; else (no entry, or unplaced) the contribution's hint when it is a real domain; else none. */
+  const decisionDomain = (d: ActivityDecision): string | undefined => {
+    if (d.entryId) {
+      const dom = domainOf(d.entryId);
+      if (dom !== UNPLACED) return dom;
     }
-    return true;
-  });
-  for (const d of inWindow) counts[d.outcome]++;
+    const hint = index.hints.get(`${d.from}|${d.denTopicId}|${d.hash}`);
+    if (hint && known.has(hint)) return hint;
+    return d.entryId ? UNPLACED : undefined;
+  };
+  const sinceOk = (at: string): boolean => {
+    if (q.sinceMs === undefined) return true;
+    const t = Date.parse(at);
+    return Number.isFinite(t) && t >= q.sinceMs;
+  };
+  const counts = Object.fromEntries(ACTIVITY_OUTCOMES.map((o) => [o, 0])) as Record<ActivityOutcome, number>;
+  const inRange = index.decisions.filter((d) => sinceOk(d.at)).map((d) => ({ d, dom: decisionDomain(d) }));
+  const contrib = new Map<string, Map<string, number>>();
+  for (const { d, dom } of inRange) {
+    if (!dom || dom === UNPLACED) continue;
+    const m = contrib.get(dom) ?? new Map<string, number>();
+    m.set(d.from, (m.get(d.from) ?? 0) + 1);
+    contrib.set(dom, m);
+  }
+  const lastChange = new Map<string, string>();
+  for (const c of index.changes) {
+    const dom = domainOf(c.entryId);
+    if (!lastChange.has(dom)) lastChange.set(dom, c.at); // changes are newest first
+  }
+  const inWindow = inRange.filter(({ dom }) => q.domain === undefined || dom === q.domain).map(({ d, dom }) => ({ d, dom }));
+  for (const { d } of inWindow) counts[d.outcome]++;
   let rest = inWindow;
   if (q.before !== undefined) {
     const i = q.before.indexOf("|");
     const cur = { at: q.before.slice(0, i), id: q.before.slice(i + 1) };
-    rest = inWindow.filter((d) => newer(cur, d) < 0); // strictly older than the cursor
+    rest = inWindow.filter(({ d }) => newer(cur, d) < 0); // strictly older than the cursor
   }
   const page = rest.slice(0, limit);
-  const last = page[page.length - 1];
+  const last = page[page.length - 1]?.d;
+  const items = page.map(({ d, dom }) => {
+    const title = d.entryId ? entries.title(d.entryId) : undefined;
+    return { ...d, ...(dom && dom !== UNPLACED ? { domain: dom } : {}), ...(title ? { title } : {}) };
+  });
 
+  const perDomain = q.domain !== undefined ? Math.max(CHANGES_PER_DOMAIN, limit) : CHANGES_PER_DOMAIN;
   const byDomain = new Map<string, ActivityChange[]>();
   for (const { id: _id, ...c } of index.changes) {
+    if (!sinceOk(c.at)) continue;
     const dom = domainOf(c.entryId);
     if (q.domain !== undefined && dom !== q.domain) continue;
     const list = byDomain.get(dom) ?? [];
-    if (list.length >= CHANGES_PER_DOMAIN) continue;
+    if (list.length >= perDomain) continue;
     const title = entries.title(c.entryId);
     list.push({ ...c, ...(title ? { title } : {}) });
     byDomain.set(dom, list);
@@ -310,9 +356,19 @@ export function pageActivity(index: ActivityIndex, q: ActivityQuery = {}, entrie
   const domains = [...byDomain.keys()]
     .sort((a, b) => (a === UNPLACED ? 1 : b === UNPLACED ? -1 : a.localeCompare(b)))
     .map((domain) => ({ domain, items: byDomain.get(domain)! }));
+  const names = new Set([...contrib.keys(), ...lastChange.keys()]);
+  const summaries: DomainActivity[] = [...names]
+    .filter((n) => n !== UNPLACED)
+    .sort()
+    .map((domain) => ({
+      domain,
+      contributors: [...(contrib.get(domain) ?? [])].map(([wolf, count]) => ({ wolf, count })).sort((a, b) => b.count - a.count || a.wolf.localeCompare(b.wolf)),
+      ...(lastChange.has(domain) ? { lastChangeAt: lastChange.get(domain)! } : {}),
+    }));
   return {
     hasDecisions: index.hasDecisions,
-    decisions: { items: page, ...(rest.length > limit && last ? { nextCursor: `${last.at}|${last.id}` } : {}), total: inWindow.length, counts },
+    domains: summaries,
+    decisions: { items, ...(rest.length > limit && last ? { nextCursor: `${last.at}|${last.id}` } : {}), total: inWindow.length, counts },
     changes: { domains },
   };
 }
@@ -326,7 +382,87 @@ export interface IncomingWolf {
   pending: number;
   oldestAgeMs?: number;
   bad?: number;
-  items: Array<{ denTopicId: string; hash?: string; ageMs: number }>;
+  items: Array<{ denTopicId: string; hash?: string; ageMs: number; domain?: string }>;
+}
+export interface BadContribution {
+  wolf: string;
+  denTopicId?: string;
+  domainHint?: string;
+  /** First line of the reason sidecar, capped; callers sanitise further. */
+  reason: string;
+  at: string;
+}
+export const BAD_MAX = 50;
+export const BAD_REASON_MAX = 300;
+const HEAD_BYTES = 4096;
+const HINT_CACHE_MAX = 5000;
+const hintCache = new Map<string, string>();
+
+/** Read the first bytes of a file only. */
+function readHead(file: string, bytes: number): string {
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, n).toString("utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+/** `domain_hint:` of an inbox file's frontmatter (head only; cached by path + mtime). Empty string when absent. */
+function inboxHint(file: string, mtime: number): string {
+  const key = `${file}:${mtime}`;
+  const hit = hintCache.get(key);
+  if (hit !== undefined) return hit;
+  let hint = "";
+  try {
+    const head = readHead(file, HEAD_BYTES);
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head)?.[1] ?? head;
+    hint = /^domain_hint:[ \t]*(.*)$/m.exec(fm)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+    if (hint.length > 64) hint = "";
+  } catch {
+    /* unreadable: no hint */
+  }
+  if (hintCache.size >= HINT_CACHE_MAX) hintCache.clear();
+  hintCache.set(key, hint);
+  return hint;
+}
+
+function readBad(inboxRoot: string, wolf: string, badDir: string): BadContribution[] {
+  const out: BadContribution[] = [];
+  const files = safeDir(() => readdirSync(badDir).filter((f) => !f.startsWith(".") && !f.endsWith(".reason.txt")).sort().slice(0, INCOMING_STAT_CAP), [] as string[]);
+  for (const f of files) {
+    const file = join(badDir, f);
+    const st = safeDir(() => statSync(file), undefined);
+    if (!st?.isFile()) continue;
+    let denTopicId: string | undefined;
+    let domainHint: string | undefined;
+    try {
+      const head = readHead(file, HEAD_BYTES);
+      if (f.endsWith(".md")) {
+        const m = FILE_RE.exec(f);
+        denTopicId = m ? m[1] : f.slice(0, -3);
+        domainHint = /^domain_hint:[ \t]*(.*)$/m.exec(head)?.[1]?.trim().replace(/^["']|["']$/g, "");
+      } else {
+        const j = (() => {
+          try {
+            return JSON.parse(head) as Record<string, unknown>;
+          } catch {
+            return undefined;
+          }
+        })();
+        const pick = (k: string): string | undefined => (typeof j?.[k] === "string" ? (j[k] as string) : new RegExp(`"${k}"\\s*:\\s*"([^"\\n]{0,200})"`).exec(head)?.[1]);
+        denTopicId = pick("denTopicId");
+        domainHint = pick("domainHint");
+      }
+    } catch {
+      /* unreadable body: reason only */
+    }
+    const reasonRaw = safeDir(() => readHead(`${file}.reason.txt`, 1024), "");
+    const reason = oneLine(reasonRaw.split("\n").find((l) => l.trim() !== "") ?? "", BAD_REASON_MAX) || "quarantined";
+    out.push({ wolf, ...(denTopicId ? { denTopicId: oneLine(denTopicId, ID_MAX) } : {}), ...(domainHint ? { domainHint: oneLine(domainHint, 64) } : {}), reason, at: new Date(st.mtimeMs).toISOString() });
+  }
+  return out;
 }
 
 const FILE_RE = /^(.+)-([0-9a-f]{10})\.md$/;
@@ -349,8 +485,10 @@ export const INCOMING_STAT_CAP = 2000;
  * oldest first) and `oldestAgeMs` are taken from that sample, so with more than 2000 pending files `oldestAgeMs` and `items` describe a sample, not
  * necessarily the true 20 oldest. Up to 2000 pending files per wolf the answer is exact.
  */
-export function readIncoming(inboxRoot: string, now: number = Date.now()): { total: number; wolves: IncomingWolf[] } {
+export function readIncoming(inboxRoot: string, now: number = Date.now()): { total: number; wolves: IncomingWolf[]; bad: BadContribution[]; waitingByDomain: Record<string, number> } {
   const wolves: IncomingWolf[] = [];
+  const bad: BadContribution[] = [];
+  const waitingByDomain: Record<string, number> = {};
   let total = 0;
   const names = safeDir(() => readdirSync(inboxRoot, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name).sort(), [] as string[]);
   for (const wolf of names) {
@@ -363,19 +501,28 @@ export function readIncoming(inboxRoot: string, now: number = Date.now()): { tot
     }
     sampled.sort((a, b) => a.mtime - b.mtime || a.f.localeCompare(b.f));
     const badDir = join(dir, "_bad");
-    const bad = existsSync(badDir) ? safeDir(() => readdirSync(badDir).filter((f) => !f.startsWith(".") && !f.endsWith(".reason.txt")).length, 0) : undefined;
-    if (listed.length === 0 && !bad) continue;
+    const badCount = existsSync(badDir) ? safeDir(() => readdirSync(badDir).filter((f) => !f.startsWith(".") && !f.endsWith(".reason.txt")).length, 0) : undefined;
+    if (existsSync(badDir)) bad.push(...readBad(inboxRoot, wolf, badDir));
+    if (listed.length === 0 && !badCount) continue;
+    const hintOf = new Map<string, string>();
+    for (const { f, mtime } of sampled) {
+      const h = inboxHint(join(dir, f), mtime);
+      hintOf.set(f, h);
+      if (h) waitingByDomain[h] = (waitingByDomain[h] ?? 0) + 1;
+    }
     total += listed.length;
     wolves.push({
       wolf,
       pending: listed.length,
       ...(sampled.length ? { oldestAgeMs: Math.max(0, Math.round(now - sampled[0].mtime)) } : {}),
-      ...(bad !== undefined ? { bad } : {}),
+      ...(badCount !== undefined ? { bad: badCount } : {}),
       items: sampled.slice(0, INCOMING_ITEMS_PER_WOLF).map(({ f, mtime }) => {
         const m = FILE_RE.exec(f);
-        return { denTopicId: m ? m[1] : f.slice(0, -3), ...(m ? { hash: m[2] } : {}), ageMs: Math.max(0, Math.round(now - mtime)) };
+        const domain = hintOf.get(f);
+        return { denTopicId: m ? m[1] : f.slice(0, -3), ...(m ? { hash: m[2] } : {}), ageMs: Math.max(0, Math.round(now - mtime)), ...(domain ? { domain } : {}) };
       }),
     });
   }
-  return { total, wolves };
+  bad.sort((a, b) => b.at.localeCompare(a.at));
+  return { total, wolves, bad: bad.slice(0, BAD_MAX), waitingByDomain };
 }

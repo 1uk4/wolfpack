@@ -44,10 +44,39 @@ describe("GET /v1/kb/activity", () => {
     const { get } = await setup();
     const body = await parse(await get("/v1/kb/activity"));
     expect(body.source).toEqual({ lane: "hub", hasDecisions: false, curator: "off" });
-    expect(body.incoming).toEqual({ total: 0, wolves: [] });
+    expect(body.incoming).toEqual({ total: 0, wolves: [], bad: [] });
+    expect(body.domains).toEqual([]);
     expect(body.decisions).toMatchObject({ items: [], total: 0 });
     expect(body.changes.domains).toEqual([]);
     expect(body.sweep).toBeUndefined();
+  });
+
+  it("summarises every domain, tags decisions with a domain, lists bad contributions", async () => {
+    const { get, roots } = await setup();
+    mkdirSync(join(roots.kbBase, "domains", "alpha", "entries"), { recursive: true });
+    mkdirSync(join(roots.kbBase, "domains", "empty", "entries"), { recursive: true });
+    writeFileSync(join(roots.kbBase, "domains", "alpha", "entries", "kb-1.md"), '---\nid: kb-1\ntitle: "One"\n---\nx\n');
+    appendLedger(roots, [
+      ev.contribution({ from: "w1", denTopicId: "a", hash: "h-a", prevHash: null, domainHint: "alpha" }),
+      ev.entryWritten("kb-1", "kb-1", "create"),
+      ev.decision({ from: "w1", denTopicId: "a", hash: "h-a", outcome: "create", entryId: "kb-1" }),
+      ev.contribution({ from: "w2", denTopicId: "r", hash: "h-r", prevHash: null, domainHint: "alpha" }),
+      ev.decision({ from: "w2", denTopicId: "r", hash: "h-r", outcome: "reject", reason: "vague" }),
+    ]);
+    const lane = join(roots.opsRoot, "contributions", "w2");
+    mkdirSync(join(lane, "_bad"), { recursive: true });
+    writeFileSync(join(lane, "_bad", "s1.raw"), JSON.stringify({ denTopicId: "tt", domainHint: "nope" }));
+    writeFileSync(join(lane, "_bad", "s1.raw.reason.txt"), "domain_hint is not subscribed\n");
+    writeFileSync(join(lane, "p-0123456789.md"), "---\ndomain_hint: alpha\n---\nx");
+    const body = await parse(await get("/v1/kb/activity"));
+    expect(body.domains?.map((x) => x.domain)).toEqual(["alpha", "empty"]);
+    expect(body.domains![0]).toMatchObject({ entries: 1, waiting: 1, contributors: [{ wolf: "w1", count: 1 }, { wolf: "w2", count: 1 }] });
+    expect(body.domains![1]).toMatchObject({ entries: 0, waiting: 0, contributors: [] });
+    expect(body.decisions.items.every((d) => d.domain === "alpha")).toBe(true);
+    expect(body.incoming.bad).toEqual([expect.objectContaining({ wolf: "w2", denTopicId: "tt", domainHint: "nope", reason: "domain_hint is not subscribed" })]);
+    const only = await parse(await get("/v1/kb/activity?domain=alpha&limit=1"));
+    expect(only.decisions.total).toBe(2);
+    expect(only.decisions.nextCursor).toBeDefined();
   });
 
   it("reads the ledger and the lane; a torn line is skipped; params are validated", async () => {

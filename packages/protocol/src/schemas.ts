@@ -932,6 +932,8 @@ export const KbDecisionSchema = z.object({
   reason: z.string().optional(),
   routing: HubSweepDecisionSchema.shape.routing,
   superseded: z.number().int().nonnegative().optional(),
+  /** The entry's domain, else the contribution's hinted domain when it is a real domain. Absent when neither is known. */
+  domain: z.string().optional(),
 });
 export type KbDecision = z.infer<typeof KbDecisionSchema>;
 /** entry_written carries action create|merge|supersede; entry_retired maps to `retire`. Domain is resolved by the hub (entry_placed sectionId / entry file), not carried by the events. */
@@ -957,10 +959,26 @@ export const KbActivityResponseSchema = z.object({
         oldestAgeMs: z.number().nonnegative().optional(),
         bad: z.number().int().nonnegative().optional(),
         /** At most 20 per wolf. */
-        items: z.array(z.object({ denTopicId: z.string(), hash: z.string().optional(), ageMs: z.number().nonnegative() })),
+        items: z.array(z.object({ denTopicId: z.string(), hash: z.string().optional(), ageMs: z.number().nonnegative(), domain: z.string().optional() })),
       }),
     ),
+    /** Quarantined (`_bad/`) contributions with their reason, newest first, capped. */
+    bad: z
+      .array(z.object({ wolf: z.string(), denTopicId: z.string().optional(), domainHint: z.string().optional(), reason: z.string(), at: z.string() }))
+      .optional(),
   }),
+  /** One summary per domain under the KB (every domain, even with no activity). `contributors`: wolves with decisions in range. */
+  domains: z
+    .array(
+      z.object({
+        domain: z.string(),
+        entries: z.number().int().nonnegative(),
+        waiting: z.number().int().nonnegative(),
+        lastChangeAt: z.string().optional(),
+        contributors: z.array(z.object({ wolf: z.string(), count: z.number().int().nonnegative() })),
+      }),
+    )
+    .optional(),
   decisions: z.object({
     items: z.array(KbDecisionSchema),
     nextCursor: z.string().optional(),

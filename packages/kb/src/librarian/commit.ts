@@ -117,7 +117,7 @@ function yamlStr(s: string): string {
 /**
  * Render entry frontmatter + body. Writes section, placement, and typed relations.
  */
-function renderEntry(entry: Entry): string {
+export function renderEntry(entry: Entry): string {
   const lines: string[] = ["---"];
 
   // Core identity

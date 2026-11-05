@@ -59,8 +59,9 @@ function renderTopic(roots: KbRoots, t: RegistryTopic): string[] {
  * Render one `_registry.md` per domain from the folded registry. Returns the
  * list of domains written. `alsoDomains` are written even with no topics left
  * (otherwise a domain emptied by retirement keeps its stale registry).
+ * `sink`: when set the rendered text is handed to it instead of being written.
  */
-export function renderRegistry(roots: KbRoots, reg: Registry, alsoDomains: string[] = []): string[] {
+export function renderRegistry(roots: KbRoots, reg: Registry, alsoDomains: string[] = [], sink?: (file: string, content: string) => void): string[] {
   const byDomain = new Map<string, RegistryTopic[]>(alsoDomains.map((d) => [d, []]));
   for (const t of reg.values()) {
     const d = topicDomain(t);
@@ -80,6 +81,10 @@ export function renderRegistry(roots: KbRoots, reg: Registry, alsoDomains: strin
     ];
     for (const t of topics) lines.push(...renderTopic(roots, t));
     const file = domainRegistryFile(roots, domain);
+    if (sink) {
+      sink(file, lines.join("\n") + "\n"); // the caller writes it (hubd commits it through the KB commit path)
+      continue;
+    }
     mkdirSync(dirname(file), { recursive: true });
     atomicWrite(file, lines.join("\n") + "\n");
   }

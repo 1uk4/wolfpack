@@ -19,7 +19,8 @@ import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
-import { drainInbox, countPending } from "./intake.js";
+import { drainInbox, countPending, DEFAULT_LANE } from "./intake.js";
+import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { anchorIndex, anchorOf, groupOf, oldHubFor } from "./anchors.js";
@@ -84,6 +85,10 @@ export interface SweepContext {
   /** Called when the run starts real work ("started", once) and when a contribution ends in create/merge/reject/parked
    *  ("item"). Never called for an empty inbox. A throwing callback is ignored. */
   onEvent?: (event: SweepEvent) => void;
+  /** The lane under the ops root holding `<wolf>/*.md` (default `inbox`; hubd's is `contributions`). */
+  lane?: string;
+  /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
+  writer?: SweepWriter;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -256,8 +261,8 @@ export function overflowContribution(
 }
 
 /** Put the overflow contribution in the sender's inbox so the next tick routes it as its own item. */
-export function requeueOverflow(roots: KbRoots, o: ParsedContribution): void {
-  const dir = join(roots.opsRoot, "inbox", o.from);
+export function requeueOverflow(roots: KbRoots, o: ParsedContribution, lane: string = DEFAULT_LANE): void {
+  const dir = join(roots.opsRoot, lane, o.from);
   mkdirSync(dir, { recursive: true });
   const fm = [
     "---",
@@ -338,18 +343,20 @@ export function oversizedParents(roots: KbRoots, sections: Section[]): string[] 
 
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
+  const lane = ctx.lane ?? DEFAULT_LANE;
+  const w = ctx.writer ?? defaultSweepWriter;
   // A rebuild that crashed after its journal is finished first, under the lock (idempotent; a no-op without a journal).
   const recovery = tryRecoverAndRender(roots, ctx.notify);
   if (recovery.failed) {
     // Never place entries into a tree that may be half-committed: skip the run, the inbox waits.
-    return { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: recovery.failed, journalBad: badJournalNote(roots) };
+    return { ...emptyResult(), remaining: countPending(roots.opsRoot, { lane }).total, paused: recovery.failed, journalBad: badJournalNote(roots) };
   }
   const budgetMs = ctx.budgetMs ?? SWEEP.runBudgetMs;
 
   // One contribution per run, oldest first. The timer fires every minute, so the
   // next one is picked up within a minute. An empty inbox returns here: no
   // embedder, no ledger read, no LLM call, no writes, no log line.
-  const pending = drainInbox(roots).sort((a, b) =>
+  const pending = drainInbox(roots, { lane }).sort((a, b) =>
     (a.submitted || "").localeCompare(b.submitted || "")
   );
   if (pending.length === 0) return emptyResult();
@@ -366,7 +373,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // wait for the next tick.
   const log = readLedger(roots);
   const seen = seenHashes(log);
-  for (const dup of pending.filter((c) => seen.has(c.contentHash))) markProcessed(dup);
+  for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));
   if (unseen.length === 0) return emptyResult();
 
@@ -469,9 +476,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
 
       // Declared-domain gate — never commit into an unmirrored, unreviewed domain.
       if (!isDeclared(declared, domain)) {
-        quarantine(roots, c, domain);
-        writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
-        markProcessed(c);
+        await w.quarantine(roots, c, domain);
+        await w.writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
+        await w.markProcessed(c);
         result.unclassified++;
         outcome = `unclassified (domain ${domain})`;
         return;
@@ -656,11 +663,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         const existingLive = ef ? String(ef.currency ?? "live") !== "archived" : false;
         const existingUpdated = ef ? String(ef.updated ?? "") : "";
         if (existingLive && existingUpdated && c.sourceUpdated < existingUpdated) {
-          writeReceipt(
+          await w.writeReceipt(
             roots, c.from, c, "reject",
             `archived-older-than-live: ${c.sourceUpdated} < ${existingUpdated}`
           );
-          markProcessed(c);
+          await w.markProcessed(c);
           result.rejected++;
           itemEvent = { outcome: "reject" };
           outcome = "rejected (archived, older than live entry)";
@@ -806,10 +813,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
       // A decision the contribution agrees with is left exactly as it is.
-      if (!unchanged) commitEntry(roots, entry);
+      if (!unchanged) await w.commitEntry(roots, entry);
       else if (existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry)) {
         // The text is left as it is; only the code-set source properties move.
-        atomicWrite(join(entriesDir(roots, domain), `${targetId}.md`), patchSourceProperties(existingMarkdown, entry));
+        await w.patchEntry(roots, domain, targetId, patchSourceProperties(existingMarkdown, entry));
       }
       committed = true;
       if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
@@ -837,7 +844,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
 
       // The entry is live: record it in the ledger BEFORE anything else, so a
       // crash can't leave a live entry with no ledger record.
-      appendLedger(roots, batch);
+      await w.appendLedger(roots, batch);
       log.push(...batch);
       batch.length = 0;
       touchedDomains.add(domain);
@@ -849,7 +856,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         if (c.anchor) holderKeys.add(c.anchor);
         for (const key of holderKeys) {
           try {
-            if (syncDelivered(roots, domain, key)) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → Delivered list of ${key} updated`);
+            if (await w.syncDelivered(roots, domain, key)) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → Delivered list of ${key} updated`);
           } catch (err) {
             ctx.notify?.(`sweep: could not sync the Delivered list of ${key}: ${cleanError(err)}`);
           }
@@ -889,15 +896,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         } catch (err) {
           // The main entry is live and the contribution counts as seen: the
           // second subject must not be lost, so it is queued as its own item.
-          requeueOverflow(roots, o);
+          requeueOverflow(roots, o, lane);
           routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: "queued", error: cleanError(err) };
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" queued for the next tick: ${cleanError(err)}`);
         }
       }
 
       routing.target = entry.id;
-      writeReceipt(roots, c.from, c, action, entry.id, routing);
-      markProcessed(c);
+      await w.writeReceipt(roots, c.from, c, action, entry.id, routing);
+      await w.markProcessed(c);
       itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id };
       outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;
@@ -962,11 +969,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // The ledger already has this run's events; if rendering fails, the next tick
   // or a reorg re-renders, so log it and carry on to the registry and commit.
   try {
-    if (touchedDomains.size > 0 && sections.length > 0) writeSections(roots, sections);
-    for (const domain of touchedDomains) {
-      renderDomainIndex(roots, domain);
-      renderDomainDigest(roots, domain);
-    }
+    if (touchedDomains.size > 0 && sections.length > 0) await w.writeSections(roots, sections);
+    for (const domain of touchedDomains) await w.renderDomain(roots, domain);
   } catch (err) {
     ctx.notify?.(`sweep: index/digest rendering failed (ledger is written; next tick or reorg re-renders): ${cleanError(err)}`);
   }
@@ -974,9 +978,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // ── PERSIST ────────────────────────────────────────────────────────────────
   try {
     if (batch.length > 0 || committed) {
-      if (batch.length > 0) appendLedger(roots, batch);
-      renderRegistry(roots, foldRegistry([...log, ...batch]));
-      gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+      if (batch.length > 0) await w.appendLedger(roots, batch);
+      await w.renderRegistry(roots, foldRegistry([...log, ...batch]));
+      await w.gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
     }
   } finally {
     for (const e of itemEvents) emit(e);

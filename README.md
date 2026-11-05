@@ -38,6 +38,12 @@ npm run dev -w @wolfpack/desktop
 
 `npm run dev` does not start Electron. Packages have no linter yet (`lint` is a no-op there). The console test script (`apps/console/scripts/test.sh`) excludes known-failing files; see the TODO in it.
 
+## Live vs dev stack
+
+- **Live** (headless workerd + wolfd for `~/wolves/local`, port 7141, run from the runtime checkout `~/wolves/local/runtime/wolfpack`) is a launchd agent `com.wolfpack.stack`: starts at login, restarts on crash, `caffeinate -is`, logs to `~/wolves/local/logs/stack.log` (rotated at 10 MB on start/restart).
+  `npm run stack -- install|uninstall|start|stop|restart|status|logs [-f] [-n N]|adopt --yes`. `restart` is safe from inside a wolf turn. `start` refuses if something else (e.g. a hand-started workerd) holds :7141; `adopt --yes` stops that tree and hands over to launchd. After `npm run runtime:update` run `npm run stack -- restart`.
+- **Dev**: `npm run dev:stack [-- --app console|desktop|none]` runs workerd (:7151) and the console (:3220) from the *current* checkout against a sandbox folder (`DEV_WOLVES_DIR`, default `~/wolves/dev-sandbox`; ports `DEV_WORKERD_PORT`, `DEV_CONSOLE_PORT`). First run scaffolds one minimal wolf and copies a `models.json` (no secrets); a model reply needs the same Claude login (or `ANTHROPIC_API_KEY` for an `api` transport). It refuses any path touching `~/wolves/local` and the live ports, and Ctrl-C stops every process.
+
 Legacy CLI commands (`wolfpack add wolf`, `launch`, `sync`, ...) still work from `main`'s tooling: `npm run build && npm run install:cli`.
 
 ## Docs

@@ -1,6 +1,6 @@
 # Dev sandbox: a production-like pack on this Mac
 
-`npm run sandbox:stack:desktop` starts workerd, which supervises every wolf in `~/wolves/dev`, plus the Electron app. Two
+The snapshot sandbox (formerly `npm run sandbox:stack:desktop`, now started by hand, see "Running it") runs workerd, which supervises every wolf in `~/wolves/dev`, plus the Electron app. Two
 durable wolves there run **exactly like production, fully sandboxed**:
 
 | wolf | role | what it does |
@@ -98,18 +98,18 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 
 ## Running it
 
-```sh
-npm run sandbox:stack:desktop  # or sandbox:stack for the browser console
-```
+The old `sandbox:stack*` / `dev:stack:desktop` entry points are gone. Run the snapshot-based sandbox wolves with
+`WOLFPACK_MODELS_FILE=... node packages/workerd/dist/bin/workerd.js --wolves ~/wolves/dev --port <port>` by hand, or use
+the scaffolded minimal sandbox (`npm run dev:stack`, see README "Live vs dev stack").
 
-`scripts/dev-stack.sh` needs `ANTHROPIC_API_KEY` only when the models file's transport is `api` (the dev `models.json` is
+The stack scripts need `ANTHROPIC_API_KEY` only when the models file's transport is `api` (the dev `models.json` is
 `subscription`: the Claude Agent SDK uses your local login). `dewey-dev` embeds with local Ollama
 (`127.0.0.1:11434`, `nomic-embed-text`); the script warns if it is not answering.
 To keep model usage low while testing, add `tiers: {main: {model: claude-haiku-5-5}, smart: {model: claude-haiku-5-5}}` to
 the wolves' `wolf.yaml`.
 
 **Extension bundles.** wolfd loads each wolf's extensions from the installed bundle in its den
-(`<sandbox>/dens/<wolf>/extensions/<ext>/index.js`), which nothing else rebuilds. On every start `dev-stack.sh` builds the
+(`<sandbox>/dens/<wolf>/extensions/<ext>/index.js`), which nothing else rebuilds. `scripts/dev-stack-extensions.mjs` builds the
 CLI from this checkout and runs `sandbox install-extensions` for each sandboxed wolf whose bundle is missing or older than
 its sources (`scripts/dev-stack-extensions.mjs`; one line per wolf: installed / up to date). Non-sandbox dens are only
 warned about, never written. Set `DEV_STACK_NO_EXT_INSTALL=1` to skip. Do not use a global `wolfpack` for this: the CLI
@@ -125,7 +125,7 @@ with the reason, shown, clicked) is written to the desktop main log; the rendere
 Set `WOLFPACK_DEBUG_STREAM=1` in the environment of the wolf process (wolfd) to log, for every in-flight assistant
 `message_update`, the sequence of engine change types, e.g. `[wolfd stream] message_update changes=[text_start,text_delta]`.
 `text_start` / `thinking_start` / `block` / `message` entries are the restream shapes that used to be dropped; if a reply
-looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 npm run sandbox:stack:desktop`.
+looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 on the workerd you start`.
 Off by default.
 
 ## Updating the runtime checkout

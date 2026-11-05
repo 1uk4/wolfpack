@@ -163,6 +163,6 @@ describe("classify", () => {
 		expect(classify([], ["1uk4"]).action).toBe("restart");
 	});
 	it("agent adds the redeploy note", () => {
-		expect(classify(["packages/agent/src/a.ts"]).lines).toEqual(["restart the stack: Ctrl-C, then npm run dev:stack:desktop", "sfo-01 runs packages/agent: redeploy needed"]);
+		expect(classify(["packages/agent/src/a.ts"]).lines).toEqual(["restart the stack: npm run stack -- restart", "sfo-01 runs packages/agent: redeploy needed"]);
 	});
 });

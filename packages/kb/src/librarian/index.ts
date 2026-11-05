@@ -106,3 +106,22 @@ export {
   checkInvariants,
   shouldRecalculate,
 } from "./section-tree.js";
+
+export {
+  buildActivityIndex,
+  pageActivity,
+  foldKbActivity,
+  readIncoming,
+  scanEntryInfo,
+  UNPLACED,
+  CHANGES_PER_DOMAIN,
+  INCOMING_ITEMS_PER_WOLF,
+  type ActivityIndex,
+  type ActivityPage,
+  type ActivityQuery,
+  type ActivityDecision,
+  type ActivityChange,
+  type ActivityOutcome,
+  type EntryInfo,
+  type IncomingWolf,
+} from "./activity.js";

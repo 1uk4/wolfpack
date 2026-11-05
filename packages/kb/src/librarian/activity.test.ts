@@ -1,0 +1,157 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { KbEvent } from "../shared/index.js";
+import { ACTIVITY_OUTCOMES, buildActivityIndex, foldKbActivity, pageActivity, readIncoming, scanEntryInfo } from "./activity.js";
+
+let n = 0;
+const id = () => `e${String(++n).padStart(6, "0")}`;
+const at = (m: number) => new Date(Date.UTC(2026, 10, 1, 0, m)).toISOString();
+const dec = (m: number, o: Partial<Extract<KbEvent, { t: "decision" }>> = {}): KbEvent => ({ t: "decision", id: id(), at: at(m), from: "w1", denTopicId: `t${m}`, hash: `h${m}`, outcome: "create", ...o }) as KbEvent;
+const written = (m: number, entryId: string, action: "create" | "merge" | "supersede" = "create"): KbEvent => ({ t: "entry_written", id: id(), at: at(m), entryId, canonicalId: entryId, action });
+const retired = (m: number, entryId: string): KbEvent => ({ t: "entry_retired", id: id(), at: at(m), entryId });
+
+describe("foldKbActivity decisions", () => {
+  it("latest decision per (from, denTopicId, hash) wins and counts superseded", () => {
+    const f = foldKbActivity([dec(1, { denTopicId: "a", hash: "x", outcome: "parked", reason: "no" }), dec(5, { denTopicId: "a", hash: "x", outcome: "merge", entryId: "kb-1" }), dec(3, { denTopicId: "a", hash: "y" })]);
+    expect(f.decisions.total).toBe(2);
+    expect(f.decisions.items.map((d) => [d.hash, d.outcome, d.superseded])).toEqual([["x", "merge", 1], ["y", "create", undefined]]);
+    expect(f.decisions.counts.parked).toBe(0);
+  });
+
+  it("carries all six outcomes, an unclassified one and a parked one with its reason", () => {
+    const f = foldKbActivity(ACTIVITY_OUTCOMES.map((o, i) => dec(i + 1, { outcome: o, ...(o === "parked" ? { reason: "budget" } : {}) })));
+    expect(f.decisions.counts).toEqual({ create: 1, merge: 1, unchanged: 1, reject: 1, parked: 1, unclassified: 1 });
+    expect(f.decisions.items.find((d) => d.outcome === "parked")?.reason).toBe("budget");
+    expect(f.decisions.items.some((d) => d.outcome === "unclassified")).toBe(true);
+  });
+
+  it("a legacy ledger without decisions: hasDecisions false, empty feed", () => {
+    const f = foldKbActivity([written(1, "kb-1")]);
+    expect(f.hasDecisions).toBe(false);
+    expect(f.decisions).toEqual({ items: [], total: 0, counts: { create: 0, merge: 0, unchanged: 0, reject: 0, parked: 0, unclassified: 0 } });
+  });
+
+  it("pages by cursor without overlap, newest first", () => {
+    const evs = [1, 2, 3, 4, 5].map((m) => dec(m));
+    const idx = buildActivityIndex(evs);
+    const seen: string[] = [];
+    let before: string | undefined;
+    for (let i = 0; i < 5; i++) {
+      const p = pageActivity(idx, { limit: 2, before });
+      seen.push(...p.decisions.items.map((d) => d.denTopicId));
+      expect(p.decisions.total).toBe(5);
+      if (!p.decisions.nextCursor) break;
+      before = p.decisions.nextCursor;
+    }
+    expect(seen).toEqual(["t5", "t4", "t3", "t2", "t1"]);
+  });
+
+  it("clips by window; counts follow the window", () => {
+    const f = foldKbActivity([dec(1), dec(10, { outcome: "reject" })], { sinceMs: Date.parse(at(5)) });
+    expect(f.decisions.total).toBe(1);
+    expect(f.decisions.counts.reject).toBe(1);
+    expect(f.decisions.counts.create).toBe(0);
+  });
+
+  it("filters by domain through the decision's entry", () => {
+    const info = new Map([["kb-a", { domain: "alpha" }], ["kb-b", { domain: "beta" }]]);
+    const f = foldKbActivity([dec(1, { entryId: "kb-a" }), dec(2, { entryId: "kb-b" }), dec(3, { outcome: "reject" })], { domain: "alpha", entryInfo: info });
+    expect(f.decisions.items.map((d) => d.entryId)).toEqual(["kb-a"]);
+    expect(f.changes.domains).toEqual([]);
+  });
+
+  it("redacts and caps the reason", () => {
+    const f = foldKbActivity([dec(1, { outcome: "reject", reason: `leaked sk-${"a".repeat(30)} ${"z".repeat(500)}\nsecond line` })]);
+    const r = f.decisions.items[0].reason!;
+    expect(r).toContain("[REDACTED]");
+    expect(r).not.toContain("sk-aaaa");
+    expect(r).not.toContain("second line");
+    expect(r.length).toBeLessThanOrEqual(240);
+  });
+});
+
+describe("foldKbActivity changes", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "kb-activity-"));
+    for (const [d, i, t] of [["alpha", "kb-1", "One"], ["alpha", "kb-2", "Two"], ["beta", "kb-3", "Three"]]) {
+      mkdirSync(join(base, "domains", d, "entries"), { recursive: true });
+      writeFileSync(join(base, "domains", d, "entries", `${i}.md`), `---\nid: ${i}\ntitle: "${t}"\n---\n\nBody\n`);
+    }
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  it("maps create/merge/supersede/retire, joins the decision, resolves domain from files then entry_placed, else (unplaced)", () => {
+    const evs: KbEvent[] = [
+      dec(1, { from: "w1", denTopicId: "tA", entryId: "kb-1" }),
+      written(1, "kb-1", "create"),
+      written(2, "kb-1", "merge"),
+      written(3, "kb-3", "supersede"),
+      { t: "section_created", id: id(), at: at(4), sectionId: "s1", domain: "gamma", parent: null, label: "G" },
+      { t: "entry_placed", id: id(), at: at(4), entryId: "kb-4", sectionId: "s1", basis: "routed", fit: 1 },
+      written(4, "kb-4"),
+      retired(5, "kb-2"),
+      written(6, "kb-ghost"),
+    ];
+    const f = foldKbActivity(evs, { entryInfo: scanEntryInfo(base) });
+    const by = Object.fromEntries(f.changes.domains.map((d) => [d.domain, d.items]));
+    expect(f.changes.domains.map((d) => d.domain)).toEqual(["alpha", "beta", "gamma", "(unplaced)"]);
+    expect(by.alpha.map((c) => c.action)).toEqual(["retire", "merge", "create"]);
+    expect(by.alpha[2]).toMatchObject({ entryId: "kb-1", title: "One", from: "w1", denTopicId: "tA" });
+    expect(by.alpha[0].from).toBeUndefined();
+    expect(by.beta[0]).toMatchObject({ action: "supersede", title: "Three" });
+    expect(by.gamma[0].entryId).toBe("kb-4");
+    expect(by["(unplaced)"][0].entryId).toBe("kb-ghost");
+  });
+
+  it("keeps the latest 10 per domain, newest first", () => {
+    const evs = Array.from({ length: 14 }, (_, i) => written(i + 1, "kb-1"));
+    const items = foldKbActivity(evs, { entryInfo: scanEntryInfo(base) }).changes.domains[0].items;
+    expect(items).toHaveLength(10);
+    expect(items[0].at).toBe(at(14));
+    expect(items[9].at).toBe(at(5));
+  });
+});
+
+describe("readIncoming", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "kb-incoming-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("groups top-level .md by wolf and ignores _processed, _bad contents, dotfiles", () => {
+    const now = Date.now();
+    mkdirSync(join(root, "w1", "_processed"), { recursive: true });
+    mkdirSync(join(root, "w1", "_bad"), { recursive: true });
+    mkdirSync(join(root, "w2"), { recursive: true });
+    mkdirSync(join(root, "_x"), { recursive: true });
+    writeFileSync(join(root, "w1", "topic-one-abcdef0123.md"), "x");
+    writeFileSync(join(root, "w1", "topic-two-0123456789.md"), "x");
+    utimesSync(join(root, "w1", "topic-one-abcdef0123.md"), new Date(now - 60_000), new Date(now - 60_000));
+    writeFileSync(join(root, "w1", "_processed", "old-0000000000.md"), "x");
+    writeFileSync(join(root, "w1", "_bad", "b-1111111111.md"), "x");
+    writeFileSync(join(root, "w1", "_bad", "b-1111111111.md.reason.txt"), "why");
+    writeFileSync(join(root, "w1", ".sweep-lease"), "{}");
+    writeFileSync(join(root, "w1", ".t.abcd.tmp"), "x");
+    writeFileSync(join(root, "w2", "note.txt"), "x");
+    const r = readIncoming(root, now);
+    expect(r.total).toBe(2);
+    expect(r.wolves.map((w) => w.wolf)).toEqual(["w1"]);
+    const w = r.wolves[0];
+    expect(w).toMatchObject({ pending: 2, bad: 1 });
+    expect(w.oldestAgeMs).toBeGreaterThanOrEqual(59_000);
+    expect(w.items[0]).toMatchObject({ denTopicId: "topic-one", hash: "abcdef0123" });
+  });
+
+  it("caps items at 20 per wolf and tolerates a missing root", () => {
+    mkdirSync(join(root, "w1"));
+    for (let i = 0; i < 25; i++) writeFileSync(join(root, "w1", `t${i}-0123456789.md`), "x");
+    const r = readIncoming(root);
+    expect(r.wolves[0].pending).toBe(25);
+    expect(r.wolves[0].items).toHaveLength(20);
+    expect(readIncoming(join(root, "nope"))).toEqual({ total: 0, wolves: [] });
+  });
+});

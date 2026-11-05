@@ -1,4 +1,4 @@
-> Inherited from learnharness; applies to `apps/console` and `apps/desktop`.
+> Applies to `apps/console` and `apps/desktop`.
 
 # Keyboard shortcuts
 

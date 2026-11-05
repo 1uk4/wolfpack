@@ -1,7 +1,7 @@
 /**
  * The AuthStore fs adapter (auth-keys wave, 2026-09-19) — flat {VAR: value}
  * map at config.AUTH_FILE. THIS FILE is the sole owner of its auth file:
- * LH_AUTH_FILE is redirected to a fresh tmp dir BEFORE the first config
+ * WOLFPACK_AUTH_FILE is redirected to a fresh tmp dir BEFORE the first config
  * import (the seam is module-load-bound — data-dir-seam precedent), so no
  * hand-edited dev/desktop auth.json is ever touched.
  *
@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-auth-store-"));
-process.env.LH_AUTH_FILE = path.join(TMP, "auth.json");
+process.env.WOLFPACK_AUTH_FILE = path.join(TMP, "auth.json");
 
 // Import AFTER the env redirect — module-load-bound seam.
 const { authStore } = await import("../src/store/auth.ts");

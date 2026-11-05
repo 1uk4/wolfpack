@@ -1,5 +1,5 @@
 /**
- * LH_IGNORE_ENV_KEYS=1 — the fresh-user switch (owner, interlude,
+ * WOLFPACK_IGNORE_ENV_KEYS=1 — the fresh-user switch (owner, interlude,
  * 2026-09-22): env keys invisible app-wide; only auth.json counts.
  *
  * This file is deliberately its OWN PROCESS under node:test: the switch
@@ -15,7 +15,7 @@
  * switch works by DELETING the vars from the process — assert the
  * deletion directly, because that is what a fresh user's engines see.
  *
- * LH_AUTH_FILE redirects to a fresh tmp dir BEFORE the imports (the
+ * WOLFPACK_AUTH_FILE redirects to a fresh tmp dir BEFORE the imports (the
  * seam is module-load bound). All values are throwaway test strings —
  * never real secrets.
  */
@@ -42,7 +42,7 @@ for (const varName of [
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-fresh-env-keys-"));
 const AUTH = path.join(TMP, "auth.json");
-process.env.LH_AUTH_FILE = AUTH;
+process.env.WOLFPACK_AUTH_FILE = AUTH;
 
 // The file BEFORE first boot: one file-only key.
 fs.writeFileSync(AUTH, JSON.stringify({ OPENAI_API_KEY: "sk-file-fresh-file-fresh" }));
@@ -55,7 +55,7 @@ process.env.OPENROUTER_API_KEY = "sk-or-env-env-env";
 process.env.OPENAI_API_KEY = "sk-openai-env-env-env";
 
 // THE SWITCH — set before first import (exactly how the launcher boots).
-process.env.LH_IGNORE_ENV_KEYS = "1";
+process.env.WOLFPACK_IGNORE_ENV_KEYS = "1";
 
 // Import AFTER env setup — module init runs the boot deletion + fill-gap.
 const { deleteKey, envKeysIgnored, initAuthEnv, keyStatuses, keyValue, saveKey } = await import(
@@ -67,7 +67,7 @@ after(() => {
 	fs.rmSync(TMP, { recursive: true, force: true });
 });
 
-describe("the fresh-user switch (boot under LH_IGNORE_ENV_KEYS=1)", () => {
+describe("the fresh-user switch (boot under WOLFPACK_IGNORE_ENV_KEYS=1)", () => {
 	it("the switch reads live (the launcher exports it before boot)", () => {
 		assert.equal(envKeysIgnored(), true);
 	});
@@ -98,14 +98,14 @@ describe("the fresh-user switch (boot under LH_IGNORE_ENV_KEYS=1)", () => {
 		// The dynamic half of the seam: WITHOUT the switch, keyValue reads
 		// env first — today's behavior, byte-for-byte (the boot-snapshot
 		// half is pinned in tests/server-keys.test.ts, the visible case).
-		process.env.LH_IGNORE_ENV_KEYS = undefined;
+		process.env.WOLFPACK_IGNORE_ENV_KEYS = undefined;
 		process.env.OPENROUTER_API_KEY = "sk-or-env-wins";
 		try {
 			assert.equal(keyValue("OPENROUTER_API_KEY"), "sk-or-env-wins", "env wins without the switch");
 			assert.equal(keyValue("OPENAI_API_KEY"), "sk-file-fresh-file-fresh", "file is the fallback without the switch");
 		} finally {
 			delete process.env.OPENROUTER_API_KEY;
-			process.env.LH_IGNORE_ENV_KEYS = "1";
+			process.env.WOLFPACK_IGNORE_ENV_KEYS = "1";
 		}
 	});
 

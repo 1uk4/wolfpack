@@ -6,16 +6,16 @@
     {
       "layers" : [
         {
-          "image-name" : "lh_2 2.svg",
-          "name" : "lh_2 2"
+          "image-name" : "wolfpack_2.svg",
+          "name" : "wolfpack_2"
         },
         {
-          "image-name" : "lh_1 2.svg",
-          "name" : "lh_1 2"
+          "image-name" : "wolfpack_1.svg",
+          "name" : "wolfpack_1"
         },
         {
-          "image-name" : "lh_0 2.svg",
-          "name" : "lh_0 2"
+          "image-name" : "wolfpack_0.svg",
+          "name" : "wolfpack_0"
         }
       ],
       "shadow" : {

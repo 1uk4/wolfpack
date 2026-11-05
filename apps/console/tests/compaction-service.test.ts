@@ -20,7 +20,7 @@ import { after, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import (the birth-stamp discipline) ─
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-compaction-"));
-process.env.LH_DATA_DIR = TMP_DATA;
+process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { chatStore } = await import("../src/store/chats.ts");
 const {

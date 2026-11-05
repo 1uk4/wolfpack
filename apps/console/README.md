@@ -1,6 +1,6 @@
 # Wolfpack Console
 
-The control plane for wolfpack agents — a Next.js app (web + Electron desktop) built on the harness shell converted from LearnHarness. This package is the app; the Electron wrapper lives in [`apps/desktop`](../desktop).
+The control plane for wolfpack agents — a Next.js app (web + Electron desktop) built on an in-house harness shell (third-party credit: see [NOTICE](../../NOTICE)). This package is the app; the Electron wrapper lives in [`apps/desktop`](../desktop).
 
 ## What's here
 
@@ -12,7 +12,7 @@ The generic harness shell:
 - **Graph rendering** — `graph-view`, `graph-canvas`, `layout`, and the dagre DAG diagram (`plan-block`). Currently **inert**: nothing writes the ledgers and the view is unrouted; they are kept for the wolfpack knowledge graph and quest map.
 - **Electron shell + packaging** (in `apps/desktop`).
 
-The learnharness teaching domain (teacher/prober/practice agents, plan tree, phases, extraction pipeline, demo/visual/pdf/research sub-agents) has been removed.
+The original teaching domain (teacher/prober/practice agents, plan tree, phases, extraction pipeline, demo/visual/pdf/research sub-agents) has been removed.
 
 ## Develop
 
@@ -24,7 +24,7 @@ npm run build
 npm test
 ```
 
-Licensed AGPL-3.0 (see the repo-level ATTRIBUTION).
+Licensed AGPL-3.0 (see [NOTICE](../../NOTICE), [LICENSE](../../LICENSE) and [docs/provenance/learnharness.md](../../docs/provenance/learnharness.md)).
 
 ## Hub relay mode (default with a hub)
 

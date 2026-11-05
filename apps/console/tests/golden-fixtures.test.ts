@@ -2,7 +2,7 @@
  * GOLDEN FIXTURES (owner ruling, 2026-10-10): real user data, verbatim,
  * read through the PRODUCTION read paths. tests/fixtures/golden-data/ is a
  * real data dir (see its README); this suite copies it to a temp dir, points
- * the stores at it via the LH_DATA_DIR seam (set BEFORE any config-loading
+ * the stores at it via the WOLFPACK_DATA_DIR seam (set BEFORE any config-loading
  * import — every app-module import is dynamic), and asserts:
  *
  *   1. every record parses and passes the contract folds the app itself
@@ -30,7 +30,7 @@ const GOLDEN = path.join(HERE, "fixtures", "golden-data");
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-golden-"));
 fs.cpSync(GOLDEN, TMP, { recursive: true });
-process.env.LH_DATA_DIR = TMP;
+process.env.WOLFPACK_DATA_DIR = TMP;
 
 const { chatStore } = await import("../src/store/chats.ts");
 const { jobStore } = await import("../src/store/jobs.ts");

@@ -8,7 +8,7 @@
  *
  * These pins hold both halves: the pure park registry + apply against
  * fixture records, and the route's park contract under an isolated
- * LH_DATA_DIR (the birth-stamp discipline — the seam is set before any
+ * WOLFPACK_DATA_DIR (the birth-stamp discipline — the seam is set before any
  * config-loading import, every app-module import dynamic).
  */
 
@@ -20,7 +20,7 @@ import { after, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-dismissal-park-"));
-process.env.LH_DATA_DIR = TMP_DATA;
+process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { chatStore } = await import("../src/store/chats.ts");
 const { applyParkedDismissal, parkDismissal, takeParkedDismissal } = await import(

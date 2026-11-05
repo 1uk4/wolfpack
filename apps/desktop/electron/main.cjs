@@ -1,10 +1,10 @@
 /**
- * LearnHarness — the Electron shell (wrapper milestone, 2026-09-17).
+ * Wolfpack Console — the Electron shell (wrapper milestone, 2026-09-17).
  *
  * What this process is and is not:
  *   IS:  a thin launcher + security guard around the app's real server —
  *        `next build`'s standalone server.js (Next 16), spawned as a child
- *        on 127.0.0.1 with the BYOK auth file and the LH_DATA_DIR seam.
+ *        on 127.0.0.1 with the BYOK auth file and the WOLFPACK_DATA_DIR seam.
  *   NOT: a host for any app logic. Everything — teacher turns, extraction,
  *        the graph — runs in the Next server, unchanged.
  *
@@ -19,7 +19,7 @@
  *   - keys ride the child's ENV, never argv; auth.json (BYOK) is a flat
  *     {VAR: value} JSON map, plaintext, mode 0600 — server-managed since
  *     the auth-keys wave (2026-09-19): the child reads/writes it DIRECTLY
- *     (LH_AUTH_FILE below) and reflects values into its own env. The old
+ *     (WOLFPACK_AUTH_FILE below) and reflects values into its own env. The old
  *     spawn-time env injection retired with that wave — a copy made here
  *     would shadow every settings-page key change until restart.
  */
@@ -31,26 +31,31 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
+const { migrateLegacyUserData } = require("./userdata-migrate.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
-const PRODUCT_NAME = "LearnHarness";
+// legacy LH_ name fallback, remove after 2026-12-05.
+// MUST stay in sync with apps/console/env-compat.ts (same semantics).
+const readEnv = (name, legacy) => process.env[name] || process.env[legacy] || undefined;
+
+const PRODUCT_NAME = "Wolfpack Console";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
-// exactly "LearnHarness" in dev AND packaged. Packaged Electron would
-// otherwise derive it from package.json "name" (now lowercase
-// "learnharness"), and productName metadata alone doesn't reach app.name.
-// Must run before the LH_DEV_URL suffix below — dev becomes
-// "LearnHarness-dev".
+// exactly "Wolfpack Console" in dev AND packaged. Packaged Electron would
+// otherwise derive it from package.json "name", and productName metadata
+// alone doesn't reach app.name.
+// Must run before the WOLFPACK_DEV_URL suffix below — dev becomes
+// "Wolfpack Console-dev".
 app.setName(PRODUCT_NAME);
 const AUTH_FILE = () => path.join(app.getPath("userData"), "auth.json");
 const DATA_DIR = () => path.join(app.getPath("userData"), "data");
 
 /** The packaged standalone server (extraResources → Resources/server).
- *  In dev LH_DEV_URL short-circuits everything: no spawn, no packaging —
+ *  In dev WOLFPACK_DEV_URL short-circuits everything: no spawn, no packaging —
  *  the window points at the running `next dev` server (full HMR). */
 function serverEntry() {
 	// extraResources ships the whole .next payload under server/standalone/
@@ -59,12 +64,18 @@ function serverEntry() {
 }
 
 // ─── Single instance: two instances would fight over the data dir ─────────
-// Dev shell (LH_DEV_URL) runs BESIDE the packaged app, not instead of it:
+// Dev shell (WOLFPACK_DEV_URL) runs BESIDE the packaged app, not instead of it:
 // its own userData so (a) the single-instance lock — checked below — doesn't
 // silently kill it, and (b) it never reads/writes the real app's
 // localStorage, auth.json, or logs. Must run before the lock check.
-if (process.env.LH_DEV_URL) {
+if (readEnv("WOLFPACK_DEV_URL", "LH_DEV_URL")) {
 	app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+// One-time copy from the pre-rename userData folder (see userdata-migrate.cjs).
+try {
+	migrateLegacyUserData(app.getPath("userData"), (m) => console.log(m));
+} catch (err) {
+	console.error("userData migration error:", err);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -109,7 +120,7 @@ function freePort() {
 
 /** BYOK keys: auth.json in userData, flat {VAR: value} map, 0600 —
  *  SERVER-MANAGED since the auth-keys wave (2026-09-19). This shell no
- *  longer reads or injects it: the child gets LH_AUTH_FILE below and does
+ *  longer reads or injects it: the child gets WOLFPACK_AUTH_FILE below and does
  *  its own read/reflect/write, so a key saved in the settings page takes
  *  effect on the next model call — no restart. Real environment variables
  *  still win over the file inside the child (its documented rule). */
@@ -149,11 +160,11 @@ function startServer(port) {
 					NODE_ENV: "production",
 					PORT: String(port),
 					HOSTNAME: "127.0.0.1", // the server defaults to 0.0.0.0 — never
-					LH_DATA_DIR: DATA_DIR(),
+					WOLFPACK_DATA_DIR: DATA_DIR(),
 					// The auth/keys store — the child reads AND writes this file itself
 					// (no env injection anymore: a spawn-time copy would shadow every
 					// settings-page key change until restart; env wins over file).
-					LH_AUTH_FILE: AUTH_FILE(),
+					WOLFPACK_AUTH_FILE: AUTH_FILE(),
 				},
 				stdio: ["ignore", "pipe", "pipe"],
 			},
@@ -365,7 +376,7 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
  *  - THE UPDATER CAN NEVER TAKE THE APP DOWN: every event and check is
  *    caught and logged (feed down, disk full, bad signature — all just
  *    log lines; the app keeps working, update or no update).
- *  - LH_UPDATE_FEED (env): overrides the baked GitHub feed with a generic
+ *  - WOLFPACK_UPDATE_FEED (env): overrides the baked GitHub feed with a generic
  *    local server — the pre-release verification drill (serve
  *    latest-mac.yml + zip + blockmap from any localhost HTTP dir and
  *    watch a real installed copy find/download/restart). Test-only seam.
@@ -398,7 +409,7 @@ function checkForUpdates({ manual = false } = {}) {
 			// update-downloaded. Manual checks additionally answer directly.
 			if (!manual) return;
 			const version = result?.updateInfo?.version;
-			if (!version) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `LearnHarness ${app.getVersion()} is the latest version.` });
+			if (!version) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.` });
 		})
 		.catch((err) => {
 			log(`update check failed: ${err?.message ?? err}`);
@@ -427,10 +438,10 @@ function setupAutoUpdater() {
 		log(`auto-update: electron-updater unavailable (${err?.message ?? err}) — updates disabled`);
 		return;
 	}
-	const feed = process.env.LH_UPDATE_FEED;
+	const feed = readEnv("WOLFPACK_UPDATE_FEED", "LH_UPDATE_FEED");
 	if (feed) {
 		autoUpdater.setFeedURL({ provider: "generic", url: feed });
-		log(`auto-update: LH_UPDATE_FEED override → ${feed}`);
+		log(`auto-update: WOLFPACK_UPDATE_FEED override → ${feed}`);
 	}
 	autoUpdater.autoDownload = true;
 	autoUpdater.autoInstallOnAppQuit = true;
@@ -541,12 +552,12 @@ async function main() {
 
 	await app.whenReady();
 
-	// Dev mode: point at a running `next dev` server (LH_DEV_URL) — no
+	// Dev mode: point at a running `next dev` server (WOLFPACK_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies
 	// (guards, menu, single instance).
 	// Remote mode (WOLFPACK_CONSOLE_URL / console.json consoleUrl, see remote.cjs):
-	// no server spawn, no DATA_DIR/auth.json. LH_DEV_URL takes precedence.
-	const devUrl = process.env.LH_DEV_URL;
+	// no server spawn, no DATA_DIR/auth.json. WOLFPACK_DEV_URL takes precedence.
+	const devUrl = readEnv("WOLFPACK_DEV_URL", "LH_DEV_URL");
 	const target = devUrl ? { mode: "local" } : resolveConsoleTarget({ env: process.env, userDataDir: app.getPath("userData"), log });
 	remoteTarget = target.mode === "remote";
 	if (remoteTarget) remoteUrl = target.url;

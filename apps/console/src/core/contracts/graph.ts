@@ -1,6 +1,6 @@
 /**
  * Graph-adjacent contracts: a node's stored position and the chat auto-title
- * helper. (The learnharness proposition/chain/snapshot model is gone; the
+ * helper. (The original proposition/chain/snapshot model is gone; the
  * knowledge graph is the KB graph served by the librarian — see
  * src/core/kb-graph-model.ts.)
  *

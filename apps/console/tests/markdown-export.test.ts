@@ -5,7 +5,7 @@
  * the ROUTE contract: 404 unknown chat, the attachment headers, the
  * slugified filename, the anchorless document with the title header.
  *
- * Runs under an isolated LH_DATA_DIR (the chat-birth-stamp discipline:
+ * Runs under an isolated WOLFPACK_DATA_DIR (the chat-birth-stamp discipline:
  * the seam is set before any config-loading import, so every
  * app-module import is dynamic).
  */
@@ -17,7 +17,7 @@ import { after, before, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-md-export-"));
-process.env.LH_DATA_DIR = TMP_DATA;
+process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 /** The route handler + the store seam, loaded AFTER the env is set. */
 type Get = (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;

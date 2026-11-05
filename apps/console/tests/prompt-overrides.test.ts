@@ -8,7 +8,7 @@
  * TEST-DIR ISOLATION (contract fix, interlude 2026-09-26): data/prompts
  * holds REAL user override files — this suite must never touch it (the
  * old after() wiped it as "disposable scratch", killing real overrides
- * and orphaning their ON switches). LH_DATA_DIR is the established
+ * and orphaning their ON switches). WOLFPACK_DATA_DIR is the established
  * data-location seam (Electron contract, 2026-09-17; see
  * data-dir-seam.test.ts), evaluated at config.ts's MODULE LOAD — so it
  * must be set before the first import that (transitively) loads config.
@@ -33,7 +33,7 @@ import type { PiEngine } from "../src/agent/models.ts";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-prompt-overrides-"));
-process.env.LH_DATA_DIR = TMP_DATA;
+process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { PROMPTS_OVERRIDE_DIR } = await import("../config.ts");
 const assistantAgent = await import("../src/agent/assistant-agent.ts");
@@ -41,7 +41,7 @@ const { allSegmentPaths, effectivePromptSegments } = await import("../src/agent/
 const { isValidSegmentPath } = await import("../src/core/prompt-segments.ts");
 const { promptOverrides } = await import("../src/store/prompt-overrides.ts");
 // Route-level pins drive the actual app/api handlers (framework-free
-// Request/Response), isolated under the same temp LH_DATA_DIR.
+// Request/Response), isolated under the same temp WOLFPACK_DATA_DIR.
 const { PUT: putSettingsSection } = await import("../app/api/settings/[section]/route.ts");
 const { DELETE: deletePromptText } = await import("../app/api/settings/prompts/[...segment]/route.ts");
 const { readSettingsRecord } = await import("../src/server/index.ts");
@@ -318,7 +318,7 @@ describe("an orphaned ON heals to OFF on write — never a 400 (the invariant: a
 });
 
 describe("test isolation (the suite must never touch real user data)", () => {
-	it("every write this suite makes lands under the LH_DATA_DIR seam, not the repo data dir", () => {
+	it("every write this suite makes lands under the WOLFPACK_DATA_DIR seam, not the repo data dir", () => {
 		assert.ok(
 			PROMPTS_OVERRIDE_DIR.startsWith(TMP_DATA),
 			`PROMPTS_OVERRIDE_DIR (${PROMPTS_OVERRIDE_DIR}) must live under the temp seam (${TMP_DATA})`,

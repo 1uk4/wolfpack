@@ -63,7 +63,21 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     prevHash: z.string().nullable(),
     domainHint: z.string(),
   }),
-  /** One per contribution per outcome (create, merge, unchanged, reject, parked, unclassified). Older ledgers have none; older readers skip it. */
+  /**
+   * The curator's decision for one contribution (create, merge, unchanged, reject, parked, unclassified). Older ledgers have none;
+   * older readers skip it, and no fold or `seenHashes` counts it (only `contribution` marks a hash seen).
+   *
+   * Reading rules for consumers:
+   *  - A hash can legitimately get several decisions over time: parked now, then create/merge after an unpark. Take the LATEST
+   *    decision per (from, denTopicId, hash).
+   *  - create / merge / unchanged are appended in the same batch as the item's `contribution` event. reject, unclassified and
+   *    parked are appended on their own, AFTER the receipt / `_processed` move / park (so a crash in between leaves no decision:
+   *    best-effort, and a failing append never fails the item).
+   *  - An item that already has its create/merge decision and is parked afterwards (receipt or move threw) gets no second one.
+   *  - The duplicate path (the hash was already seen and the file is simply retired) emits NO decision: the hash already has one.
+   *  - A split-out second subject is a contribution of its own (denTopicId `<topic>~split-...`) with its own decision.
+   *  - Infrastructure errors and retryable skips are not outcomes and write nothing.
+   */
   z.object({
     ...base,
     t: z.literal("decision"),

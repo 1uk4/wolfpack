@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep, type SweepEvent } from "./sweep.js";
 import { readLedger, seenHashes, foldRegistry } from "./ledger.js";
+import { recordFailure, recordOverrun } from "./park.js";
+import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
+import { SWEEP } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
 import { ledgerFile } from "../shared/index.js";
 
@@ -60,7 +63,7 @@ describe("sweep decision events", () => {
     expect(d).toHaveLength(1);
     const id = item()[0].entryId!;
     expect(d[0]).toMatchObject({ from: "w1", denTopicId: "alpha", outcome: "create", entryId: id, routing: { route: "new", candidates: [], band: "create", target: id } });
-    expect(d[0].hash).toMatch(/^sha256:|^c0de/);
+    expect(d[0].hash).toBe("c0de1");
     const log = readLedger(roots);
     const i = log.findIndex((e) => e.t === "decision");
     expect(log[i - 1].t).toBe("contribution");
@@ -139,6 +142,88 @@ describe("sweep decision events", () => {
     });
     expect(r.rejected).toBe(1);
     expect(r.errors).toBe(0);
+  });
+
+  const runW = (over: Partial<Parameters<typeof sweep>[0]>) =>
+    sweep({
+      engine, roots, notify: () => {}, onEvent: (e) => events.push(e),
+      getEmbedder: () => ({ embed: async () => [1, 0, 0] }),
+      loadEntryVectors: async () => [],
+      ...over,
+    });
+  const failing = (over: Partial<SweepWriter>): SweepWriter => ({ ...defaultSweepWriter, ...over });
+  const seed = (hash: string, kind: "attempts" | "overruns") => {
+    const c = { contentHash: hash } as never;
+    if (kind === "attempts") for (let i = 1; i < SWEEP.maxAttempts; i++) recordFailure(roots, c, "earlier failure");
+    else for (let i = 1; i <= SWEEP.budgetRetries; i++) recordOverrun(roots, c, "earlier overrun");
+  };
+
+  it("an item that errors AFTER its create batch and is then parked keeps exactly one decision (the create)", async () => {
+    drop("alpha");
+    seed("c0de1", "attempts");
+    const r = await runW({ writer: failing({ writeReceipt: () => { throw new Error("receipt disk full"); } }) });
+    expect(r.parked).toHaveLength(1);
+    const d = decisions();
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ outcome: "create", denTopicId: "alpha" });
+    expect(item()[0]).toMatchObject({ outcome: "parked" }); // sweep_item behaviour is unchanged
+  });
+
+  it("parked after retries are exhausted: decision with the reason and the routing the item had reached", async () => {
+    drop("alpha");
+    seed("c0de1", "attempts");
+    const bad = { call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+      if (step === "classifyToSection") return schema.parse({ section: "NEW", confidence: "low" });
+      throw new Error("model returned junk");
+    }, usage: { summarize: () => ({}) } } as unknown as Engine;
+    const r = await runW({ engine: bad });
+    expect(r.parked).toHaveLength(1);
+    const d = decisions();
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ outcome: "parked", reason: `failed ${SWEEP.maxAttempts} times: model returned junk`, routing: { route: "new", candidates: [], band: "create" } });
+    expect(item()[0].decision).toEqual({ outcome: "parked", reason: d[0].reason, routing: d[0].routing });
+  });
+
+  it("parked after a budget overrun: decision with the reason and routing", async () => {
+    drop("alpha");
+    seed("c0de1", "overruns");
+    const hang = { call: async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { signal?: AbortSignal }) => {
+      if (step === "classifyToSection") return schema.parse({ section: "NEW", confidence: "low" });
+      return new Promise((_, reject) => opts.signal?.addEventListener("abort", () => reject(opts.signal!.reason), { once: true }));
+    }, usage: { summarize: () => ({}) } } as unknown as Engine;
+    const r = await runW({ engine: hang, budgetMs: 100 });
+    expect(r.parked).toHaveLength(1);
+    const d = decisions();
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ outcome: "parked", reason: expect.stringMatching(/time budget \(2 times\)/), routing: { route: "new", band: "create" } });
+  });
+
+  it("a failing decision append on the parked path does not fail the item", async () => {
+    drop("nodomain", "", null);
+    const r = await runW({ writer: failing({ appendLedger: () => { throw new Error("disk full"); } }) });
+    expect(r.parked).toHaveLength(1);
+    expect(r.errors).toBe(1); // the park itself is the item error it always was
+    expect(decisions()).toHaveLength(0);
+    expect(item()[0].outcome).toBe("parked");
+  });
+
+  it("a failing decision append on the unclassified path does not fail the item", async () => {
+    writeFileSync(join(roots.kbBase, "domains.yaml"), "domains:\n  wp: {}\n");
+    drop("odd", "", "ghost");
+    const r = await runW({ writer: failing({ appendLedger: () => { throw new Error("disk full"); } }) });
+    expect(r.unclassified).toBe(1);
+    expect(r.errors).toBe(0);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it("the duplicate path (hash already seen) emits no decision", async () => {
+    drop("alpha");
+    await run();
+    expect(decisions()).toHaveLength(1);
+    // same file again (same hash): retired as a duplicate
+    writeFileSync(join(inbox(), "again.md"), `---\nfrom: w1\nden_topic_id: alpha\ncontent_hash: c0de1\nprev_hash: null\ndomain_hint: wp\n---\n\n# alpha\n\nbody 1\n`);
+    await run();
+    expect(decisions()).toHaveLength(1);
   });
 
   describe("old ledgers", () => {

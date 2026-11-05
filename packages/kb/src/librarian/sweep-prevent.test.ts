@@ -136,6 +136,33 @@ describe("sweep: prevent at source", () => {
       expect(receipt()).toMatch(/"overflow":\{"title":"Syncthing setup","denTopicId":"some-topic~split-syncthing-setup","target":"kb-wp-/);
     });
 
+    it("decisions: a committed overflow gets its own decision next to the main one", async () => {
+      produceOpinions = [{ overflow }];
+      await run({ "kb-wp-AAAAAAA": 0.3 });
+      const d = readLedger(roots).filter((e) => e.t === "decision") as any[];
+      expect(d.map((x) => [x.denTopicId, x.outcome])).toEqual([["some-topic", "create"], ["some-topic~split-syncthing-setup", "create"]]);
+      expect(d[1].routing.target).toMatch(/^kb-wp-/);
+      expect(d[1].routing.target).not.toBe(d[0].entryId);
+    });
+
+    it("decisions: a requeued overflow has no decision until it is processed on a later tick", async () => {
+      produceOpinions = [{ overflow }];
+      let n = 0;
+      const e = engine.call as unknown as ReturnType<typeof vi.fn>;
+      const orig = e.getMockImplementation()!;
+      e.mockImplementation(async (s: string, schema: any, opts: any) => {
+        if (s === "produce" && ++n === 2) throw new Error("model said something broken");
+        return orig(s, schema, opts);
+      });
+      await run({ "kb-wp-AAAAAAA": 0.3 });
+      e.mockImplementation(orig);
+      let d = readLedger(roots).filter((x) => x.t === "decision") as any[];
+      expect(d.map((x) => x.denTopicId)).toEqual(["some-topic"]);
+      await run({ "kb-wp-AAAAAAA": 0.3 });
+      d = readLedger(roots).filter((x) => x.t === "decision") as any[];
+      expect(d.map((x) => [x.denTopicId, x.outcome])).toEqual([["some-topic", "create"], ["some-topic~split-syncthing-setup", "create"]]);
+    });
+
     it("an overflow never routes back into the entry it was split from", async () => {
       produceOpinions = [{ overflow }];
       // The embedder is constant: the overflow would score 0.95 against kb-wp-AAAAAAA too.

@@ -869,7 +869,11 @@ export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.
 export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
 /** The hub curator's sweep (KB curation in hubd): started once real work begins, one item per contribution, finished always follows a started (also on a throw: `error`). */
 export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
-/** The curator's decision for one contribution (the same summary the KB ledger `decision` event carries; optional: older hubs omit it). */
+/**
+ * The curator's decision for one contribution (the same summary the KB ledger `decision` event carries; optional: older hubs omit it).
+ * Must stay in step with DecisionSummarySchema in packages/kb/src/shared/schemas/events.ts (hubd's decision-drift test checks it).
+ * `unchanged` (a merge the contribution agreed with) is reported as sweep_item outcome `merge`; `unclassified` has no sweep_item.
+ */
 export const HubSweepDecisionSchema = z.object({
   /** `unchanged`: a merge the contribution agreed with; `unclassified`: no declared domain. */
   outcome: z.enum(["create", "merge", "unchanged", "reject", "parked", "unclassified"]),

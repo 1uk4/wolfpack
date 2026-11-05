@@ -218,7 +218,7 @@ export function routingSummary(r: RoutingRecord, target?: string): DecisionRouti
   const t = target ?? r.target;
   return {
     route: r.route,
-    candidates: r.candidates,
+    candidates: r.candidates.map((x) => ({ ...x })),
     ...(r.band !== undefined ? { band: r.band } : {}),
     ...(r.subject ? { subject: r.subject } : {}),
     ...(r.confirm ? { confirm: r.confirm } : {}),
@@ -457,6 +457,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     let itemEvent: { outcome: "create" | "merge" | "reject" | "parked"; entryId?: string; decision?: DecisionSummary } | undefined;
     // The routing record of this item (set once it exists), for the decision of a park after a mid-item failure.
     let itemRouting: RoutingRecord | undefined;
+    // True once a ledger append carrying this item's decision went through (the create/merge batch, or a reject/unclassified
+    // append). A later failure that parks the item (receipt or move threw) must not add a second, contradicting decision.
+    let decided = false;
     // Decision event for the paths that write no batch (reject, unclassified, parked). Best effort: the item is already
     // handled (moved / parked), so a failing append must not turn it into an item error.
     const recordDecision = async (d: DecisionSummary) => {
@@ -464,6 +467,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         const e = ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...d });
         await w.appendLedger(roots, [e]);
         log.push(e);
+        decided = true;
       } catch (err) {
         ctx.notify?.(`sweep: could not record the decision for ${c.from}/${c.denTopicId}: ${cleanError(err)}`);
       }
@@ -883,6 +887,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // The entry is live: record it in the ledger BEFORE anything else, so a
       // crash can't leave a live entry with no ledger record.
       await w.appendLedger(roots, batch);
+      decided = true;
       log.push(...batch);
       batch.length = 0;
       touchedDomains.add(domain);
@@ -979,7 +984,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         park(roots, c, why);
         outcome = `PARKED: ${why}`;
         const decision: DecisionSummary = { outcome: "parked", reason: why, ...(itemRouting ? { routing: routingSummary(itemRouting) } : {}) };
-        await recordDecision(decision);
+        if (!decided) await recordDecision(decision);
         itemEvent = { outcome: "parked", decision };
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
         await Promise.resolve(ctx.alert?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`)).catch(() => {});

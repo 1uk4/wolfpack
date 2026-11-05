@@ -54,6 +54,11 @@ export interface SweepTickOptions {
   postSweepReorg?: boolean;
   /** The lane under the ops root holding the contributions (default `inbox`; hubd's is `contributions`). */
   lane?: string;
+  /**
+   * Who holds the sweep lease for this tick (curator-lease.ts). "wolf" (default): this tick takes a wolf lease on both lanes and
+   * skips while a hub lease is fresh. "none": the caller manages the lease (the hub curator holds the hub lease).
+   */
+  leaseOwner?: "wolf" | "none";
   /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). Not used by the post-sweep reorg. */
   writer?: SweepWriter;
 }
@@ -78,17 +83,22 @@ export interface SweepTickResult {
  * back as outcome "backoff"; any other error is thrown for the caller to report.
  */
 export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickResult> {
-  // A wolf-side sweep (harness timer, kb CLI) never runs with the hub's curator on the same KB: it skips the tick (silently,
-  // like an idle one) while a fresh hub lease exists, and holds a wolf lease while it runs. The hub curator passes its own
-  // lane/writer and manages its lease itself.
-  if (opts.lane === undefined && opts.writer === undefined) {
+  // A wolf-side sweep (harness timer, kb CLI) never runs with the hub's curator on the same KB: it skips the tick (like an idle
+  // one) while a fresh hub lease exists, and holds a wolf lease while it runs. The hub curator passes leaseOwner "none" and
+  // manages its own lease. NOT covered by the lease: reorg, rebuild, retire, split-fat and tryRecoverAndRender; they take only
+  // the den-local KB lock and write the KB directly (they bypass hubd's commitKb), so never run them against a live hub KB.
+  if ((opts.leaseOwner ?? "wolf") === "wolf") {
     const dirs = wolfLeaseDirs(opts.roots);
-    if (freshLeaseIn(dirs, "hub")) {
-      opts.notify?.("sweep: skipped, the hub curator holds the sweep lease");
-      return { outcome: "idle", sweep: emptyResult() };
-    }
+    const key = opts.roots.opsRoot;
+    const skip = (why: string) => {
+      if (lastSkip.get(key) !== why) opts.notify?.(`sweep: skipped, ${why}`); // tell once per change, not every tick
+      lastSkip.set(key, why);
+      return { outcome: "idle" as const, sweep: emptyResult() };
+    };
+    if (freshLeaseIn(dirs, "hub")) return skip("the hub curator holds the sweep lease");
     const lease = acquireLease(dirs, "wolf");
-    if (!lease) return { outcome: "idle", sweep: emptyResult() };
+    if (!lease) return skip("another sweeper holds the sweep lease");
+    lastSkip.delete(key);
     try {
       return await runSweepTickLeased(opts);
     } finally {
@@ -97,6 +107,9 @@ export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickRes
   }
   return runSweepTickLeased(opts);
 }
+
+/** Last skip reason per ops root (so the wolf-side skip notice is sent when the state changes, not every tick). */
+const lastSkip = new Map<string, string>();
 
 async function runSweepTickLeased(opts: SweepTickOptions): Promise<SweepTickResult> {
   const result = await runTick(opts);

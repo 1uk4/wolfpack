@@ -112,3 +112,107 @@ describe("curator lease", () => {
     expect(readFileSync(join(r.opsRoot, "inbox", ".sweep-lease"), "utf-8")).toBe("{}");
   });
 });
+
+describe("curator lease races", () => {
+  const lease = (d: string, o: object = {}) => writeFileSync(leaseFile(d), JSON.stringify({ owner: "wolf", pid: process.pid + 99999, host: "elsewhere", at: "x", ...o }));
+  const old = (d: string, ms = LEASE_STALE_MS + 1000) => { const t = new Date(Date.now() - ms); utimesSync(leaseFile(d), t, t); };
+  const mk = () => { const d = mkdtempSync(join(tmpdir(), "kb-lease-")); dirs.push(d); return d; };
+
+  it("an empty / unreadable lease is HELD inside the grace period, stale after it (no takeover of a half-written file)", () => {
+    const d = mk();
+    writeFileSync(leaseFile(d), "");
+    expect(acquireLease([d], "hub")).toBeNull();
+    expect(readFileSync(leaseFile(d), "utf-8")).toBe("");
+    old(d, 60_000);
+    const h = acquireLease([d], "hub")!;
+    expect(h).toBeTruthy();
+    expect(freshLease(d)?.owner).toBe("hub");
+    h.release();
+  });
+
+  it("the lease is published whole: no empty file is ever visible, and no temp files are left", () => {
+    const d = mk();
+    const h = acquireLease([d], "hub")!;
+    expect(JSON.parse(readFileSync(leaseFile(d), "utf-8")).owner).toBe("hub");
+    expect(readdirSync(d).filter((f) => f.includes(".sweep-lease."))).toEqual([]);
+    h.release();
+  });
+
+  it("two takers interleaved over a stale lease: exactly one wins", () => {
+    const d = mk();
+    lease(d);
+    old(d);
+    let inner: ReturnType<typeof acquireLease> | undefined;
+    let fired = false;
+    // The first taker has judged the lease stale; before it takes over, a second taker runs the whole takeover.
+    const first = acquireLease([d], "hub", {
+      afterJudgedStale: () => {
+        if (fired) return;
+        fired = true;
+        inner = acquireLease([d], "wolf", { afterJudgedStale: () => undefined });
+      },
+    });
+    expect(inner).toBeTruthy(); // the interleaved taker took the stale lease
+    expect(first).toBeNull(); // the first one finds a fresh lease now and does not remove it
+    expect(JSON.parse(readFileSync(leaseFile(d), "utf-8"))).toMatchObject({ owner: "wolf", pid: process.pid });
+    inner!.release();
+    expect(existsSync(leaseFile(d))).toBe(false);
+    expect(existsSync(`${leaseFile(d)}.takeover`)).toBe(false);
+  });
+
+  it("a held takeover mutex makes the other taker back off, a dead holder's mutex is cleared", () => {
+    const d = mk();
+    lease(d);
+    old(d);
+    writeFileSync(`${leaseFile(d)}.takeover`, JSON.stringify({ pid: process.pid, nonce: "n" })); // a live taker is mid-takeover
+    expect(acquireLease([d], "hub")).toBeNull();
+    expect(JSON.parse(readFileSync(leaseFile(d), "utf-8")).pid).toBe(process.pid + 99999); // untouched
+    writeFileSync(`${leaseFile(d)}.takeover`, JSON.stringify({ pid: 2147483000, nonce: "n" })); // a dead one
+    expect(acquireLease([d], "hub", { pidAlive: (p) => p !== 2147483000 })).toBeNull(); // this call clears it
+    const h = acquireLease([d], "hub")!;
+    expect(h).toBeTruthy();
+    h.release();
+  });
+
+  it("re-entry by the same owner takes every dir and the first release keeps the lease", () => {
+    const a = mk();
+    const b = mk();
+    const h1 = acquireLease([a], "wolf")!;
+    const h2 = acquireLease([a, b], "wolf")!;
+    expect(h2).toBeTruthy();
+    expect(existsSync(leaseFile(b))).toBe(true); // the second dir was not skipped
+    h1.release();
+    expect(existsSync(leaseFile(a))).toBe(true); // still used by h2
+    h2.release();
+    expect(existsSync(leaseFile(a))).toBe(false);
+    expect(existsSync(leaseFile(b))).toBe(false);
+    // a different owner in the same process is refused, and nothing is left behind
+    const w = acquireLease([a], "wolf")!;
+    expect(acquireLease([b, a], "hub")).toBeNull();
+    expect(existsSync(leaseFile(b))).toBe(false);
+    w.release();
+  });
+
+  it("the wolf-side skip is announced once per state change, not every tick", async () => {
+    const r = setup("inbox");
+    const hub = acquireLease([join(r.opsRoot, "contributions")], "hub")!;
+    const notes: string[] = [];
+    for (let i = 0; i < 3; i++) await runSweepTick({ roots: r, createEngine: () => engine, notify: (m) => notes.push(m) });
+    expect(notes.filter((m) => m.includes("skipped"))).toHaveLength(1);
+    hub.release();
+    await runSweepTick({ roots: r, createEngine: () => engine, getEmbedder: () => ({ embed: async () => [1, 0, 0], shouldCompact: () => false, compact: () => 0 }) as any, notePoster: null });
+    const hub2 = acquireLease([join(r.opsRoot, "contributions")], "hub")!;
+    await runSweepTick({ roots: r, createEngine: () => engine, notify: (m) => notes.push(m) });
+    expect(notes.filter((m) => m.includes("skipped"))).toHaveLength(2); // announced again after the state changed
+    hub2.release();
+  });
+
+  it("leaseOwner none: no wolf lease is taken (the caller owns the lease)", async () => {
+    const r = setup("inbox");
+    const hub = acquireLease([join(r.opsRoot, "contributions")], "hub")!;
+    let owner: string | undefined;
+    await runSweepTick({ roots: r, createEngine: () => engine, leaseOwner: "none", getEmbedder: () => ({ embed: async () => [1, 0, 0], shouldCompact: () => false, compact: () => 0 }) as any, notePoster: null, notify: () => { owner ??= freshLease(join(r.opsRoot, "inbox"))?.owner; } });
+    expect(owner).toBeUndefined();
+    hub.release();
+  });
+});

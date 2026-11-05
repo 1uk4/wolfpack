@@ -9,7 +9,7 @@
  */
 
 import { parseArgs } from "node:util";
-import { startLocalWorkServer } from "../work-server.js";
+import { startLocalWorkServer } from "@wolfpack/work-server";
 
 const { values } = parseArgs({
   options: {

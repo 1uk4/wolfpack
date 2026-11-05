@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Pi extension for wolfpack memory system \u2014 observer, consolidator, den management",
   "dependencies": {
+    "@wolfpack/work-server": "*",
     "@anthropic-ai/sdk": "^0.39.0",
     "zod": "^3.24.0",
     "@wolfpack/client": "*",

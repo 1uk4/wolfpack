@@ -1,0 +1,24 @@
+{
+  "name": "@wolfpack/work-server",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The Work API router and a standalone local Work server over any ledger dir (sandbox, hubd dev mode, integration tests).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/work-server\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/work-server/src"
+  },
+  "dependencies": {
+    "@wolfpack/engine": "*",
+    "@wolfpack/kb": "*",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -33,14 +33,15 @@ import {
   type WorkQuery,
 } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { kbBase, kbOps, workLedgerDir } from "../paths.js";
+import path from "node:path";
 
 /** KbRoots the Work API runs on, from the agent's env (the default mount). */
-export function defaultWorkRoots(): KbRoots {
+export function defaultWorkRoots(env: NodeJS.ProcessEnv = process.env): KbRoots {
+  const kbRoot = env.WOLFPACK_KB_ROOT || "/var/wolfpack/kb";
   return {
-    kbBase: kbBase(),
-    opsRoot: kbOps(),
-    denLocal: workLedgerDir(),
+    kbBase: env.KB_BASE || path.join(kbRoot, "base"),
+    opsRoot: env.KB_OPS || path.join(kbRoot, "ops"),
+    denLocal: env.WORK_LEDGER_DIR || path.join(kbRoot, "work"),
   };
 }
 

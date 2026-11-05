@@ -11,6 +11,6 @@ export { authMiddleware } from "./auth.js";
 export { wolvesRouter } from "./routes/wolves.js";
 export { logsRouter } from "./routes/logs.js";
 export { healthRouter } from "./routes/health.js";
-export { workRouter, defaultWorkRoots } from "./routes/work.js";
-export { startLocalWorkServer, type LocalWorkServer, type LocalWorkServerOptions } from "./work-server.js";
+export { workRouter, defaultWorkRoots } from "@wolfpack/work-server";
+export { startLocalWorkServer, type LocalWorkServer, type LocalWorkServerOptions } from "@wolfpack/work-server";
 export * from "./types.js";

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
-import { startLocalWorkServer } from "@wolfpack/agent";
+import { startLocalWorkServer } from "@wolfpack/work-server";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
 import { conversationReaderFor } from "../../packages/harness/src/engine/conversation-reader.js";

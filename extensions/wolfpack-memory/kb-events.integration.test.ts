@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
-import { startLocalWorkServer } from "@wolfpack/agent";
+import { startLocalWorkServer } from "@wolfpack/work-server";
 import { runSweepTick, type CachedEmbedder } from "@wolfpack/kb/librarian";
 import { KbPipelineResponseSchema, MemoryEventSchema, type MemoryEvent } from "@wolfpack/protocol";
 import { ProtocolError } from "@wolfpack/client";

@@ -8,6 +8,10 @@ PREV=$(git tag --list "$COMP/v[0-9]*" --sort=-v:refname | grep -vxF "$TAG" | whi
   git merge-base --is-ancestor "$t" "$TAG^{commit}" && { echo "$t"; break; }; done || true)
 if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; echo "Changes in \`$COMP\` since \`$PREV\`:"; else RANGE="$TAG"; echo "First release of \`$COMP\`. All commits:"; fi
 echo
-git log --no-merges --format='- %h %s' "$RANGE"
+# GitHub caps a release body at 125000 characters: list at most MAX commits (subjects cut to 200 chars), then a count of the rest.
+MAX=${RELEASE_NOTES_MAX:-300}
+TOTAL=$(git rev-list --no-merges --count "$RANGE")
+git log --no-merges -n "$MAX" --format='- %h %s' "$RANGE" | cut -c1-200
+if [ "$TOTAL" -gt "$MAX" ]; then echo "- … and $((TOTAL - MAX)) older commits"; fi
 echo
 echo "Commit: $(git rev-parse "$TAG^{commit}")"

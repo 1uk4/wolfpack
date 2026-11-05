@@ -68,6 +68,24 @@ describe("startWolf", () => {
     }
   });
 
+  it("exports the wolf's subscriptions as WOLF_DOMAINS, overriding an inherited value, restored on close", async () => {
+    writeFileSync(join(root, "wolf.yaml"), `name: bootwolf\nworkspace: ${join(root, "work")}\ndomains: [personal, snapjack]\n`);
+    const saved = process.env.WOLF_DOMAINS;
+    process.env.WOLF_DOMAINS = "stale";
+    try {
+      const w = await startWolf({ configPath: join(root, "wolf.yaml"), home: root });
+      expect(process.env.WOLF_DOMAINS).toBe("personal,snapjack");
+      await w.close();
+      expect(process.env.WOLF_DOMAINS).toBe("stale");
+      let seen: NodeJS.ProcessEnv | undefined;
+      const w2 = await startWolf({ configPath: join(root, "wolf.yaml"), env: { ...env, WOLF_DOMAINS: "stale" }, home: root, extraExtensions: (c) => { seen = c.env; return []; } });
+      running.push(w2);
+      expect(seen?.WOLF_DOMAINS).toBe("personal,snapjack");
+    } finally {
+      if (saved === undefined) delete process.env.WOLF_DOMAINS; else process.env.WOLF_DOMAINS = saved;
+    }
+  });
+
   it("serves /v1, applies project context + tools to the home conversation, persists across restarts", async () => {
     const w = await start();
     expect(w.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

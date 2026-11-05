@@ -128,6 +128,8 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
     ...(hubKb ? { KB_BASE: env.KB_BASE || hubKb.mirrorDir, KB_OPS: env.KB_OPS || hubKb.kbOps } : {}),
     WOLF_DEN: config.den,
     WOLF_NAME: config.identity.name,
+    // The wolf's subscriptions, overriding any inherited value: memory promote maps every contribution's domain_hint into this list.
+    WOLF_DOMAINS: config.identity.domains.join(","),
   };
   const restoreEnv = !opts.env ? patchProcessEnv(denEnv) : () => {};
   try {

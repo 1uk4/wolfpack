@@ -642,6 +642,7 @@ export default function createMemoryExtension(
               kbRoots,
               defaultDomain,
               domains,
+              env: context.env ?? process.env,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
               onEmit: mem.contribution,
               onArchive: mem.topicArchived,

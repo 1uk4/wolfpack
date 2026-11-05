@@ -148,6 +148,7 @@ export {
   existingFor,
   subscribedDomain,
   envDomains,
+  resetNoDomainsWarning,
   type PromoteTopic,
   type PromoteOptions,
   type PromoteStats,

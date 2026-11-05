@@ -352,6 +352,8 @@ export interface PromoteOptions {
   defaultDomain: string;
   /** The wolf's subscribed domains. A topic tagged outside them is emitted under a subscribed one. Omitted: `WOLF_DOMAINS`, else the default domain. */
   allowedDomains?: readonly string[];
+  /** The wolf's own env, consulted for `WOLF_DOMAINS` only when `allowedDomains` is omitted (default: process.env). */
+  env?: NodeJS.ProcessEnv;
   session?: string;
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the inbox (id = the inbox file stem). Metadata only. */
@@ -378,7 +380,11 @@ export interface PromoteStats {
   emitted: number;
 }
 
-/** The wolf's subscribed domains from the environment (`WOLF_DOMAINS`, exported by the harness from wolf.yaml). */
+/**
+ * The wolf's subscribed domains from an environment (`WOLF_DOMAINS`, exported by the harness from wolf.yaml).
+ * Pass the wolf's own env when you have it; process.env is only the last resort. Exact names, trimmed: hubd
+ * compares domain_hint exactly (contributions.ts), so no case folding here.
+ */
 export function envDomains(env: NodeJS.ProcessEnv = process.env): string[] {
   return (env.WOLF_DOMAINS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
 }
@@ -387,21 +393,34 @@ let warnedNoDomains = false;
 
 /**
  * The domain a topic is emitted under. A subscribed domain is kept; anything else (an LLM topic tag such as
- * "fitness") falls back to the default domain if subscribed, else the first subscribed one. With no known
- * subscriptions it fails closed to the default domain (logged once) rather than passing a raw tag through.
+ * "fitness") falls back to the default domain if subscribed, else the first subscribed one.
+ *
+ * With no known subscriptions (`allowed` empty or undefined) it fails closed: the result is `defaultDomain`
+ * EVEN WHEN the tag is a real domain, because nothing can vouch for it. If `defaultDomain` is itself empty, the
+ * raw tag (or default) passes through unchanged. The no-list case is logged once via `warn` (default console.warn).
  * The single place this mapping happens.
  */
-export function subscribedDomain(topicDomain: string | undefined, defaultDomain: string, allowed?: readonly string[]): string {
+export function subscribedDomain(
+  topicDomain: string | undefined,
+  defaultDomain: string,
+  allowed?: readonly string[],
+  warn: (msg: string) => void = console.warn
+): string {
   const want = topicDomain || defaultDomain;
   if (!allowed?.length) {
     if (!warnedNoDomains) {
       warnedNoDomains = true;
-      console.warn(`[memory] no subscribed domains known; emitting under the default domain "${defaultDomain}"`);
+      warn(`[memory] no subscribed domains known; emitting under the default domain "${defaultDomain}"`);
     }
     return defaultDomain || want;
   }
   if (allowed.includes(want)) return want;
   return allowed.includes(defaultDomain) ? defaultDomain : allowed[0]!;
+}
+
+/** Test hook: re-arm the once-only warning. */
+export function resetNoDomainsWarning(): void {
+  warnedNoDomains = false;
 }
 
 /**
@@ -411,12 +430,12 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
   const topics = refuseTagged(allTopics, opts.onProgress);
   const { engine, roots, wolf, defaultDomain, onProgress, force } = opts;
   // Callers that omit the list (CLI, orchestrator, resend, an older extension) get the wolf's own from WOLF_DOMAINS.
-  const allowedDomains = opts.allowedDomains?.length ? opts.allowedDomains : envDomains();
+  const allowedDomains = opts.allowedDomains?.length ? opts.allowedDomains : envDomains(opts.env);
   const stats: PromoteStats = { distilled: 0, split: 0, held: 0, trivialSkipped: 0, pending: 0, emitted: 0 };
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
 
   for (const topic of topics) {
-    const domain = subscribedDomain(topic.domain, defaultDomain, allowedDomains);
+    const domain = subscribedDomain(topic.domain, defaultDomain, allowedDomains, (m) => (onProgress ?? console.warn)(m));
     const rawHash = contentHash(topic.body);
     const rec = readDistillRecord(roots, topic.id);
 

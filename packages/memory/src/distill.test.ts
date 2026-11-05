@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LlmInfraError, type Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { promoteTopics, distillTopic, existingFor, readDistillRecord, DistillOutputSchema, type PromoteTopic } from "./distill.js";
+import { promoteTopics, subscribedDomain, envDomains, resetNoDomainsWarning, distillTopic, existingFor, readDistillRecord, DistillOutputSchema, type PromoteTopic } from "./distill.js";
 import { writeDenTopic, readDenTopics } from "./den.js";
 import { denTopicStates, isAbsorbed } from "./den-reconcile.js";
 
@@ -16,7 +16,11 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "distill-"));
   roots = { kbBase: join(root, "kb"), opsRoot: join(root, "ops"), denLocal: join(root, "den", "kb") };
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  resetNoDomainsWarning();
+  rmSync(root, { recursive: true, force: true });
+});
 
 const topic = (id: string, body: string, extra: Partial<PromoteTopic> = {}): PromoteTopic => ({ id, title: id, summary: "s", body, change: "create", ...extra });
 const clean = { slug: "main", title: "Sweep performance", summary: "How the sweep budgets its time.", body: "## Design\nOne item per run." };
@@ -143,17 +147,34 @@ describe("promoteTopics domain mapping (work-wolfpack-0BdguCL)", () => {
   it("fails closed to the default domain when no domains are known", async () => {
     vi.stubEnv("WOLF_DOMAINS", "");
     expect(await run("fitness")).toBe("wolfpack");
-    vi.unstubAllEnvs();
   });
   it("treats an empty allowedDomains like none", async () => {
     vi.stubEnv("WOLF_DOMAINS", "");
     expect(await run("fitness", { allowedDomains: [] })).toBe("wolfpack");
-    vi.unstubAllEnvs();
   });
   it("falls back to WOLF_DOMAINS when allowedDomains is omitted", async () => {
     vi.stubEnv("WOLF_DOMAINS", "personal,snapjack");
     expect(await run("fitness")).toBe("personal");
-    vi.unstubAllEnvs();
+  });
+  it("a wrong WOLF_DOMAINS never overrides an explicit allowedDomains", async () => {
+    vi.stubEnv("WOLF_DOMAINS", "snapjack");
+    expect(await run("fitness", { allowedDomains: ["personal"] })).toBe("personal");
+  });
+  it("an explicit env wins over process.env when allowedDomains is omitted", async () => {
+    vi.stubEnv("WOLF_DOMAINS", "snapjack");
+    expect(await run("fitness", { env: { WOLF_DOMAINS: "personal" } })).toBe("personal");
+  });
+  it("the no-list warning goes through onProgress, once", async () => {
+    vi.stubEnv("WOLF_DOMAINS", "");
+    const lines: string[] = [];
+    await run("a", { onProgress: (m: string) => lines.push(m) });
+    expect(lines.filter((l) => l.includes("no subscribed domains known"))).toHaveLength(1);
+  });
+  it("subscribedDomain: no list fails closed to the default even for a real tag; an empty default passes the tag", () => {
+    const warn = () => {};
+    expect(subscribedDomain("personal", "wolfpack", [], warn)).toBe("wolfpack");
+    expect(subscribedDomain("personal", "", undefined, warn)).toBe("personal");
+    expect(envDomains({ WOLF_DOMAINS: " a , b ,," })).toEqual(["a", "b"]);
   });
   it("a topic with no domain and an unsubscribed default gets the first subscribed domain", async () => {
     expect(await run(undefined, { allowedDomains: ["snapjack", "personal"] })).toBe("snapjack");

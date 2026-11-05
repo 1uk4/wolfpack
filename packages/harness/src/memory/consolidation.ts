@@ -42,6 +42,7 @@ import {
   reconcileDen,
   promoteTopics,
   subscribedDomain,
+  envDomains,
   consolidateWorkRecords,
   HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
@@ -721,6 +722,8 @@ export interface PromoteSessionConfig {
   defaultDomain?: string;
   /** The wolf's subscribed domains. A topic tagged outside them is emitted under a subscribed one. Omitted: `WOLF_DOMAINS` (set by the harness from wolf.yaml), else `defaultDomain`. */
   domains?: readonly string[];
+  /** The wolf's own env (the extension's `context.env`), read for `WOLF_DOMAINS` when `domains` is omitted. Default: process.env. */
+  env?: NodeJS.ProcessEnv;
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the KB inbox (metadata only). */
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
@@ -741,7 +744,7 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     sessionId: loc.sessionId,
     kbRoots: config.kbRoots,
     defaultDomain: config.defaultDomain,
-    allowedDomains: config.domains,
+    allowedDomains: config.domains?.length ? config.domains : envDomains(config.env),
     skipClaims: false,
     onProgress: config.onProgress,
     onEmit: config.onEmit,

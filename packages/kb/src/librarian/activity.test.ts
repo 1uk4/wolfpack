@@ -371,7 +371,7 @@ describe("readIncoming hardening", () => {
     expect(r.bad[0].denTopicId).toBe(`t${BAD_MAX + 4}`);
     expect(r.bad[1].denTopicId).toBe(`t${BAD_MAX + 3}`);
     expect(r.bad.map((b) => b.at)).toEqual([...r.bad.map((b) => b.at)].sort().reverse());
-    expect(r.bad[0].id).toMatch(/^s\d{3}$/);
+    expect(r.bad[0].id).toMatch(/^s\d{3}\.raw$/);
   });
 
   it("listDomains drops names the hub would refuse", () => {

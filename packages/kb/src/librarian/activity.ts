@@ -425,13 +425,14 @@ export interface IncomingWolf {
   items: Array<{ denTopicId: string; hash?: string; ageMs: number; domain?: string }>;
 }
 export interface BadContribution {
-  /** The quarantined file's name without extension (stable key). */
+  /** The quarantined file's full name (stable key; `x.md` and `x.raw` stay distinct). */
   id: string;
   wolf: string;
   denTopicId?: string;
   domainHint?: string;
   /** First line of the reason sidecar, capped; callers sanitise further. */
   reason: string;
+  /** The body file's mtime, i.e. when it was submitted / quarantined (not when the sidecar was written). */
   at: string;
 }
 export const BAD_MAX = 50;
@@ -461,6 +462,15 @@ function readHeadSafe(file: string, bytes: number): string | undefined {
     return undefined;
   }
 }
+/** True for a real directory (not a symlink to one). The inbox is wolf-writable: never list through a symlinked directory. */
+function realDir(path: string): boolean {
+  try {
+    const l = lstatSync(path);
+    return l.isDirectory() && !l.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
 /** lstat of a regular, non-symlink file, or undefined. */
 function regularStat(file: string): { mtimeMs: number } | undefined {
   try {
@@ -484,7 +494,7 @@ function frontmatterHint(head: string): string {
 
 /** Per-path caches keyed by mtime; entries of a scanned directory that are no longer listed are pruned (no whole-cache wipe). */
 const hintCache = new Map<string, { mtime: number; hint: string }>();
-const badCache = new Map<string, { mtime: number; info: Omit<BadContribution, "wolf" | "at" | "id"> }>();
+const badCache = new Map<string, { mtime: number; sidecarMtime: number; info: Omit<BadContribution, "wolf" | "at" | "id"> }>();
 function prune(cache: Map<string, unknown>, dir: string, keep: Set<string>): void {
   const prefix = dir + "/";
   for (const k of cache.keys()) if (k.startsWith(prefix) && !keep.has(k)) cache.delete(k);
@@ -500,8 +510,9 @@ function inboxHint(file: string, mtime: number): string {
 }
 
 function readBadInfo(file: string, name: string, mtime: number): Omit<BadContribution, "wolf" | "at" | "id"> {
+  const sidecarMtime = regularStat(`${file}.reason.txt`)?.mtimeMs ?? 0; // 0: no sidecar (yet); a later one changes the key
   const hit = badCache.get(file);
-  let info = hit && hit.mtime === mtime ? hit.info : undefined;
+  let info = hit && hit.mtime === mtime && hit.sidecarMtime === sidecarMtime ? hit.info : undefined;
   if (!info) {
     let denTopicId: string | undefined;
     let domainHint: string | undefined;
@@ -526,7 +537,7 @@ function readBadInfo(file: string, name: string, mtime: number): Omit<BadContrib
     const sidecar = readHeadSafe(`${file}.reason.txt`, 1024) ?? "";
     const reason = oneLine(sidecar.split("\n").find((l) => l.trim() !== "") ?? "", BAD_REASON_MAX) || "quarantined";
     info = { ...(denTopicId ? { denTopicId: oneLine(denTopicId, ID_MAX) } : {}), ...(domainHint ? { domainHint: oneLine(domainHint, 64) } : {}), reason };
-    badCache.set(file, { mtime, info });
+    badCache.set(file, { mtime, sidecarMtime, info });
   }
   return info;
 }
@@ -567,10 +578,13 @@ export function readIncoming(inboxRoot: string, now: number = Date.now(), known?
   const waitingByDomain = new Map<string, number>();
   const badCandidates: Array<{ wolf: string; dir: string; name: string; mtime: number }> = [];
   let total = 0;
+  const keptHint = new Set<string>();
+  const keptBad = new Set<string>();
   const names = safeDir(() => readdirSync(inboxRoot, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name).sort(), [] as string[]);
   const okHint = (h: string): boolean => h !== "" && DOMAIN_RE.test(h) && (known ? known.has(h) : true);
   for (const wolf of names) {
     const dir = join(inboxRoot, wolf);
+    if (!realDir(dir)) continue;
     const listed = safeDir(() => readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && !e.name.startsWith(".") && e.name.endsWith(".md")).map((e) => e.name).sort(), [] as string[]);
     const sampled: Array<{ f: string; mtime: number }> = [];
     for (const f of listed.slice(0, INCOMING_STAT_CAP)) {
@@ -579,7 +593,7 @@ export function readIncoming(inboxRoot: string, now: number = Date.now(), known?
     }
     sampled.sort((a, b) => a.mtime - b.mtime || a.f.localeCompare(b.f));
     const badDir = join(dir, "_bad");
-    const badFiles = safeDir(() => readdirSync(badDir).filter((f) => !f.startsWith(".") && !f.endsWith(".reason.txt")).sort(), undefined as string[] | undefined);
+    const badFiles = !realDir(badDir) ? undefined : safeDir(() => readdirSync(badDir).filter((f) => !f.startsWith(".") && !f.endsWith(".reason.txt")).sort(), undefined as string[] | undefined);
     if (badFiles) {
       for (const name of badFiles.slice(0, INCOMING_STAT_CAP)) {
         const st = regularStat(join(badDir, name));
@@ -587,7 +601,8 @@ export function readIncoming(inboxRoot: string, now: number = Date.now(), known?
       }
     }
     const badCount = badFiles?.length;
-    prune(badCache, badDir, new Set(badFiles?.map((f) => join(badDir, f)) ?? []));
+    for (const f of badFiles ?? []) keptBad.add(join(badDir, f));
+    for (const f of listed) keptHint.add(join(dir, f));
     if (listed.length === 0 && !badCount) continue;
     total += listed.length;
     // Hints only for the 20 shown items are NOT enough for the per-domain count, so read every sampled file (head only, cached by mtime).
@@ -599,7 +614,6 @@ export function readIncoming(inboxRoot: string, now: number = Date.now(), known?
         waitingByDomain.set(h, (waitingByDomain.get(h) ?? 0) + 1);
       }
     }
-    prune(hintCache, dir, new Set(listed.map((f) => join(dir, f))));
     wolves.push({
       wolf,
       pending: listed.length,
@@ -612,9 +626,12 @@ export function readIncoming(inboxRoot: string, now: number = Date.now(), known?
       }),
     });
   }
+  // Drop cache entries of files that are gone, including those of drained or vanished wolves.
+  prune(hintCache, inboxRoot, keptHint);
+  prune(badCache, inboxRoot, keptBad);
   badCandidates.sort((a, b) => b.mtime - a.mtime || a.wolf.localeCompare(b.wolf) || a.name.localeCompare(b.name));
   const bad = badCandidates.slice(0, BAD_MAX).map((c) => {
-    const id = oneLine(c.name.replace(/\.[^.]*$/, "") || c.name, 80);
+    const id = oneLine(c.name, 120);
     return { id, wolf: c.wolf, ...readBadInfo(join(c.dir, c.name), c.name, c.mtime), at: new Date(c.mtime).toISOString() } as BadContribution;
   });
   return { total, wolves, bad, waitingByDomain };

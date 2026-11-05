@@ -232,7 +232,7 @@ export function hubIsOlder(data: KbActivityResponse): boolean {
 
 type Summary = Omit<KbActivityDomain, "entries" | "waiting"> & { entries?: number; waiting?: number };
 
-/** The domains of a response; an older hub without `domains` falls back to those seen in changes and decisions (counts unknown). */
+/** The domains of a response. An older hub sends no `domains` and no per-decision domain, so the fallback only knows domains seen in `changes` (change rows only; counts unknown). */
 function domainSummaries(data: KbActivityResponse): Summary[] {
 	if (data.domains) return data.domains;
 	const names = new Set<string>();
@@ -351,6 +351,8 @@ export function attentionGroups(data: KbActivityResponse): AttentionGroup[] {
 		if (d.domain) item.domainHint = d.domain;
 		add(d.from, item);
 	}
+	// An older hub has no totals: the loaded rows are a lower bound, so say so when more pages exist.
+	const lowerBound = !data.attention && data.decisions.nextCursor !== undefined;
 	if (data.attention) for (const a of data.attention) totals.set(a.wolf, a.reject + a.parked + a.unclassified + a.bad);
 	return [...items.keys(), ...totals.keys()]
 		.filter((w, i, all) => all.indexOf(w) === i)
@@ -360,7 +362,7 @@ export function attentionGroups(data: KbActivityResponse): AttentionGroup[] {
 			const reasons = new Set(sorted.map((i) => i.reason));
 			const noun = n === 1 ? "contribution" : "contributions";
 			const summary = reasons.size === 1 && sorted.length === n ? `${n} ${noun}: ${sorted[0]!.reason}` : `${n} ${noun} need attention`;
-			return { wolf, count: n, items: sorted, summary, truncated: sorted.length < n };
+			return { wolf, count: n, items: sorted, summary: lowerBound ? `${n}+ contributions need attention` : summary, truncated: lowerBound || sorted.length < n };
 		})
 		.filter((g) => g.count > 0)
 		.sort((a, b) => b.count - a.count || a.wolf.localeCompare(b.wolf));

@@ -22,6 +22,10 @@ export function kbActivityFixture(over: Partial<KbActivityResponse> = {}): KbAct
 			{ domain: "personal", entries: 20, waiting: 1, lastChangeAt: "2026-11-05T09:50:00Z", contributors: [{ wolf: "ada", count: 5 }], decided: 5 },
 			{ domain: "wolfpack", entries: 167, waiting: 2, lastChangeAt: "2026-11-05T09:58:00Z", contributors: [{ wolf: "hal", count: 1 }], decided: 1 },
 		],
+		attention: [
+			{ wolf: "ada", reject: 1, parked: 0, unclassified: 0, bad: 0, items: [{ id: "d2", at: "2026-11-05T09:40:00Z", from: "ada", denTopicId: "t2", hash: "hh2", outcome: "reject", reason: "too vague", domain: "personal" }] },
+			{ wolf: "hal", reject: 0, parked: 1, unclassified: 0, bad: 2, items: [{ id: "d1", at: "2026-11-05T09:30:00Z", from: "hal", denTopicId: "t1", hash: "hh1", outcome: "parked", reason: "no domain" }] },
+		],
 		decisions: {
 			items: [
 				{

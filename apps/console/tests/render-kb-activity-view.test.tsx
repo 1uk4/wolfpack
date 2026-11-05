@@ -53,6 +53,7 @@ describe("empty and degraded states", () => {
 	it("no domains and nothing to attend to", () => {
 		const empty = kbActivityFixture({
 			incoming: { total: 0, wolves: [] },
+			attention: [],
 			domains: [],
 			decisions: { items: [], total: 0, counts: { create: 0, merge: 0, unchanged: 0, reject: 0, parked: 0, unclassified: 0 } },
 			changes: { domains: [] },

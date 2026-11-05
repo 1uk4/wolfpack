@@ -489,10 +489,6 @@ export const ROUTES = {
    */
   graduationObservations: { method: "GET", path: "/v1/wolves/:name/work/:id/graduate/observations", response: { kind: "json", schema: GraduationObservationsSchema }, status: [200], error: err },
   /**
-   * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
-   * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).
-   */
-  /**
    * The KB graph, served by any wolf with KB roots (read-only; 409 `kb_unavailable` without them). Query: `domain` (one domain; unknown = 404 `not_found`),
    * and the layer flags `archivedWork`, `denTopics` (`true`|`false`, default false; anything else is 400 `invalid_request`).
    * `denTopics` adds the serving wolf's own den topics only. Work items hang off one `fac:<domain>` Factory node per domain (sourced from the Work API, else the KB work files); there are no cross-entry relation edges.

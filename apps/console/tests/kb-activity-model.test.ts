@@ -131,14 +131,16 @@ describe("kb-activity model", () => {
 		assert.deepEqual(blocks[0]!.contributors, [{ wolf: "ada", count: 2 }]);
 	});
 	it("attentionGroups: bad items and rejected/parked decisions by wolf, with reasons", () => {
-		const g = attentionGroups(kbActivityFixture());
+		const all = kbActivityFixture();
+		delete all.decisions.nextCursor; // everything is loaded: the counts are exact
+		const g = attentionGroups(all);
 		assert.deepEqual(g.map((x) => [x.wolf, x.count]), [["hal", 3], ["ada", 1]]);
 		const hal = g[0]!;
 		assert.match(hal.summary, /3 contributions need attention/);
 		assert.deepEqual(hal.items.map((i) => i.kind), ["decision", "bad", "bad"]);
 		assert.equal(hal.items[1]!.domainHint, "nope");
 		assert.equal(g[1]!.summary, "1 contribution: too vague");
-		assert.deepEqual(attentionGroups(kbActivityFixture({ decisions: { items: [], total: 0, counts: kbActivityFixture().decisions.counts }, incoming: { total: 0, wolves: [] } })), []);
+		assert.deepEqual(attentionGroups(kbActivityFixture({ attention: [], decisions: { items: [], total: 0, counts: kbActivityFixture().decisions.counts }, incoming: { total: 0, wolves: [] } })), []);
 	});
 	it("mergeDecisionPages takes total/counts from the newer snapshot", () => {
 		const a = kbActivityFixture().decisions;
@@ -189,6 +191,17 @@ describe("kb-activity model", () => {
 		// the same input in a different order yields the same keys
 		d.incoming.bad = [...d.incoming.bad!].reverse();
 		assert.deepEqual(attentionGroups(d)[0]!.items.map((i) => i.key).sort(), ["bad/hal/sha-1", "bad/hal/sha-2", "r1"]);
+	});
+	it("attentionGroups without hub totals (older hub) does not present a lower bound as exact", () => {
+		const d = kbActivityFixture();
+		delete (d as { attention?: unknown }).attention;
+		const lower = attentionGroups(d).find((g) => g.wolf === "ada")!;
+		assert.equal(lower.summary, "1+ contributions need attention");
+		assert.equal(lower.truncated, true); // the fixture has a nextCursor: more pages exist
+		delete d.decisions.nextCursor;
+		const exact = attentionGroups(d).find((g) => g.wolf === "ada")!;
+		assert.equal(exact.summary, "1 contribution: too vague");
+		assert.equal(exact.truncated, false);
 	});
 	it("backfill-shaped data (old dates, one decision per item) renders per domain with the right wolves", () => {
 		const mk = (id: string, from: string, domain: string, outcome: "create" | "reject", entryId?: string) => ({ id, at: "2025-01-02T00:00:00Z", from, denTopicId: `t-${id}`, hash: id, outcome, domain, ...(entryId ? { entryId, title: `Title ${id}` } : {}) });

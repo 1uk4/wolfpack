@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
-import { consolidatePool, drainWorkObservations, durableSessionTopics } from "./consolidation.js";
+import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
 let root: string;
@@ -455,5 +455,21 @@ describe("drainWorkObservations (graduation)", () => {
     expect(a.observationsProcessed + b.folded).toBeGreaterThanOrEqual(4);
     expect(m.writes.length).toBeGreaterThanOrEqual(2);
     expect(poolLines().filter((c: string) => c !== "observation 0")).toEqual([]);
+  });
+});
+
+describe("promoteSessionTopics domain hint (work-wolfpack-0BdguCL)", () => {
+  it("emits a subscribed domain_hint for a session topic tagged with a topic word", async () => {
+    const loc = durableSessionTopics(den);
+    const dir = join(loc.memoryRoot, loc.sessionId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "gym.md"), "---\nid: gym\ntitle: Gym\nsummary: s\nupdated: 2026-10-20 10:00\ndomain: fitness\n---\n\ngym body about lifting\n");
+    const clean = { slug: "main", title: "Gym log", summary: "Lifting.", body: "## Design\nSquats." };
+    const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+    await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "personal", domains: ["personal"] });
+    const inbox = join(roots.opsRoot, "inbox", WOLF);
+    const files = readdirSync(inbox);
+    expect(files.length).toBe(1);
+    expect(readFileSync(join(inbox, files[0]), "utf8")).toContain("domain_hint: personal");
   });
 });

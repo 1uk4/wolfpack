@@ -719,6 +719,8 @@ export interface PromoteSessionConfig {
   engine: Engine;
   kbRoots?: KbRoots;
   defaultDomain?: string;
+  /** The wolf's subscribed domains: a topic tagged outside them is emitted under a subscribed one. */
+  domains?: readonly string[];
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the KB inbox (metadata only). */
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
@@ -739,6 +741,7 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     sessionId: loc.sessionId,
     kbRoots: config.kbRoots,
     defaultDomain: config.defaultDomain,
+    allowedDomains: config.domains,
     skipClaims: false,
     onProgress: config.onProgress,
     onEmit: config.onEmit,

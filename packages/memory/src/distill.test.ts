@@ -124,6 +124,27 @@ describe("distillTopic: standing feature graduation", () => {
   });
 });
 
+describe("promoteTopics domain mapping (work-wolfpack-0BdguCL)", () => {
+  const hintOf = () => /domain_hint: (\S+)/.exec(readFileSync(join(roots.opsRoot, "inbox", WOLF, inbox()[0]), "utf8"))![1];
+  const run = async (domain: string | undefined, extra = {}) => {
+    await promoteTopics([topic("t", "body about things", { domain })], opts(engineOf().engine, extra));
+    return hintOf();
+  };
+
+  it("maps a non-subscribed tag to the default domain when subscribed", async () => {
+    expect(await run("fitness", { allowedDomains: ["personal", "wolfpack"] })).toBe("wolfpack");
+  });
+  it("maps to the first subscribed domain when the default is not subscribed", async () => {
+    expect(await run("fitness", { allowedDomains: ["personal"] })).toBe("personal");
+  });
+  it("keeps a subscribed domain", async () => {
+    expect(await run("personal", { allowedDomains: ["personal", "wolfpack"] })).toBe("personal");
+  });
+  it("keeps today's behaviour when no domains are known", async () => {
+    expect(await run("fitness")).toBe("fitness");
+  });
+});
+
 describe("promoteTopics", () => {
   it("emits the distilled body (not the raw one) and records the raw body", async () => {
     const raw = "# Raw\n\nCommit dd44478 fixed it. 682 tests pass.";

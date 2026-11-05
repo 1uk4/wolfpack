@@ -379,6 +379,17 @@ export interface PromoteStats {
 }
 
 /**
+ * The domain a topic is emitted under. A subscribed domain is kept; anything else (an LLM topic tag such as
+ * "fitness") falls back to the default domain if subscribed, else the first subscribed one. With no known
+ * subscriptions the topic's own domain (or the default) stands. The single place this mapping happens.
+ */
+export function subscribedDomain(topicDomain: string | undefined, defaultDomain: string, allowed?: readonly string[]): string {
+  const want = topicDomain || defaultDomain;
+  if (!allowed?.length || allowed.includes(want)) return want;
+  return allowed.includes(defaultDomain) ? defaultDomain : allowed[0]!;
+}
+
+/**
  * Distill and emit a set of den topics. Never throws for one bad topic.
  */
 export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOptions): Promise<PromoteStats> {
@@ -388,7 +399,7 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
 
   for (const topic of topics) {
-    const domain = topic.domain || defaultDomain;
+    const domain = subscribedDomain(topic.domain, defaultDomain, opts.allowedDomains);
     const rawHash = contentHash(topic.body);
     const rec = readDistillRecord(roots, topic.id);
 

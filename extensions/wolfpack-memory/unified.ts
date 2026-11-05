@@ -641,6 +641,7 @@ export default function createMemoryExtension(
               engine: getEngine(),
               kbRoots,
               defaultDomain,
+              domains,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
               onEmit: mem.contribution,
               onArchive: mem.topicArchived,

@@ -37,8 +37,16 @@ import {
   writeFileSync,
 } from "./_common.ts"
 
-const TOOL_DIR = dirname(fileURLToPath(import.meta.url))
-const EXTENSION_DIR = dirname(TOOL_DIR)
+// Bundled to CJS for the durable runtime, import.meta.url is empty: fall back to
+// WOLFPACK_VISUAL_TOOLS_DIR (the package dir holding node_modules/@mermaid-js).
+function extensionDir(): string {
+  try {
+    return dirname(dirname(fileURLToPath(import.meta.url)))
+  } catch {
+    return process.env.WOLFPACK_VISUAL_TOOLS_DIR?.trim() || process.cwd()
+  }
+}
+const EXTENSION_DIR = extensionDir()
 // Point at the mmdc CLI entry (an ESM .js) and run it with the CURRENT node
 // (process.execPath), rather than the ./.bin/mmdc symlink via its env-node
 // shebang. This is immune to PATH ordering and stray old `node` binaries.

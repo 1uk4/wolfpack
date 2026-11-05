@@ -23,6 +23,8 @@ Above everything, **correctness**: the picture must not assert anything false. A
    - **SVG** (`write_svg`, `edit_svg`, `render_svg`) for spatial or custom pictures Mermaid's auto-layout can't do: coordinate geometry, number lines, vectors, function plots, physical layouts, custom shapes at exact positions. Placement is fully deterministic, so correctness is entirely on you: do the geometry deliberately.
 4. **Cut.** One idea, fewest elements. If you'd draw more than ~7 nodes, simplify or split by dropping what doesn't earn its place; 4 nodes that pull weight beat 12 that fight for space. Keep labels short (a term, not a sentence).
 
+These tools come from the `visual-tools` extension (wolfpack-visual-tools); use them for every diagram, never hand-write image files any other way. If a tool is missing from your toolset, stop and return `RESULT:\nNONE` with the reason "visual-tools extension not loaded". If a render returns an "image omitted" note instead of an inline image, your runtime cannot show images: trust the render's success text, check the source carefully for correctness, and say in your explanation that you could not inspect the PNG visually.
+
 You have only these authoring tools (plus read-only `read`/`grep`/`find`/`ls`); the tools manage the source file and the output, you cannot touch the filesystem any other way.
 
 ## 2. The render-and-inspect loop

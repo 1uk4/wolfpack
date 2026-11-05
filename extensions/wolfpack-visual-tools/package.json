@@ -14,7 +14,9 @@
     "typebox": "*"
   },
   "pi": {
-    "extensions": ["./index.ts"],
-    "agents": ["./agents/*.md"]
+    "extensions": ["./index.ts"]
+  },
+  "pi-durable": {
+    "extensions": ["./durable.ts"]
   }
 }

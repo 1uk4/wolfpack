@@ -8,7 +8,7 @@
  * The child env drops the WOLF_ and WOLFPACK_ vars and runs with HOME=<sandbox>/.home, so ~/.wolfpack (hub, sockets, slots) is not shared.
  * First run scaffolds one minimal wolf ("sandbox"): wolf.yaml, AGENTS.md, den/, agent/, and a copy of a models.json
  * (tier/provider config only, no secrets) taken from a live wolf. Secrets come from $WOLFPACK_HOME/.env (default
- * ~/.wolfpack/.env) and your Claude login (CLAUDE_CONFIG_DIR).
+ * ~/.wolfpack/.env) and your Claude login (CLAUDE_CONFIG_DIR). HOME is the sandbox, so git identity, ~/.npmrc and the npm cache are not shared.
  */
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -16,6 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 import { liveWolvesDir, packHome } from "./live-paths.mjs";
 
 export const APPS = ["console", "none"];
@@ -68,16 +69,9 @@ export function resolveConfig(env = process.env, home = os.homedir()) {
 	return { wolves, workerdPort, consolePort, home, sandboxHome: path.join(wolves, ".home") };
 }
 
-/** KEY=VALUE lines of a .env file (no expansion); empty when absent. */
+/** The pack .env parsed by node's own parser (the same one the live service uses via --env-file); empty when absent. */
 export function parseEnvFile(file) {
-	const out = {};
-	try {
-		for (const l of fs.readFileSync(file, "utf8").split("\n")) {
-			const m = l.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-			if (m) out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
-		}
-	} catch { /* none */ }
-	return out;
+	try { return parseEnv(fs.readFileSync(file, "utf8")); } catch { return {}; }
 }
 
 /**
@@ -128,8 +122,8 @@ export function scaffold(cfg, modelsSource) {
 	return dir;
 }
 
-export function findModelsSource(home = os.homedir()) {
-	const live = liveWolvesDir({}, home);
+export function findModelsSource(home = os.homedir(), env = process.env) {
+	const live = liveWolvesDir(env, home);
 	try {
 		for (const n of fs.readdirSync(live)) { const f = path.join(live, n, "models.json"); if (fs.existsSync(f)) return f; }
 	} catch { /* none */ }
@@ -140,7 +134,7 @@ export function main(argv, env = process.env) {
 	const { app } = parseArgs(argv);
 	const cfg = resolveConfig(env);
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-	const made = scaffold(cfg, env.WOLFPACK_MODELS_FILE || findModelsSource(cfg.home));
+	const made = scaffold(cfg, env.WOLFPACK_MODELS_FILE || findModelsSource(cfg.home, env));
 	if (made) console.log(`dev-stack: scaffolded ${made}`);
 	const wolfDirs = fs.readdirSync(cfg.wolves).map((n) => path.join(cfg.wolves, n)).filter((d) => fs.existsSync(path.join(d, "wolf.yaml")));
 	const models = env.WOLFPACK_MODELS_FILE || wolfDirs.map((d) => path.join(d, "models.json")).find((f) => fs.existsSync(f));

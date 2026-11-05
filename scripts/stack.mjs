@@ -11,7 +11,7 @@
  *   logs [-f] [-n N]   tail the log
  *   uninstall          stop + remove the plist
  *
- * Secrets: the service sources $WOLFPACK_HOME/.env (default ~/.wolfpack/.env) at process start via an sh wrapper; nothing
+ * Secrets: node loads $WOLFPACK_HOME/.env (default ~/.wolfpack/.env) at process start via --env-file-if-exists; nothing
  * secret is written to the plist. Env overrides (tests): STACK_LABEL, STACK_PORT, STACK_WOLVES, STACK_RUNTIME, STACK_LOG, STACK_PLIST_DIR.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -69,10 +69,13 @@ export function servicePath(nodePath, extraDirs = [], home = os.homedir()) {
 	return [...new Set(dirs)].join(":");
 }
 
-/** sh sources the .env (set -a exports it), then execs caffeinate -> node workerd. $1 is the env file; the rest is the command. */
+/**
+ * node is the job pid (so launchctl kill / kill -0 hit workerd itself): sh starts `caffeinate -w $$` (it watches the pid,
+ * which survives the exec) and execs node. node loads the env file with its own parser (same as dev-stack's util.parseEnv):
+ * a bad line is skipped, not run as shell, and variables already in the plist (HOME, PATH) are not overridden.
+ */
 export function programArguments(cfg, nodePath) {
-	const script = 'set -a; [ -f "$1" ] && . "$1"; set +a; shift; exec "$@"';
-	return ["/bin/sh", "-c", script, "sh", cfg.envFile, "/usr/bin/caffeinate", "-is", nodePath, cfg.workerdJs, "--wolves", cfg.wolves, "--port", String(cfg.port)];
+	return ["/bin/sh", "-c", '/usr/bin/caffeinate -is -w $$ & exec "$@"', "sh", nodePath, `--env-file-if-exists=${cfg.envFile}`, cfg.workerdJs, "--wolves", cfg.wolves, "--port", String(cfg.port)];
 }
 
 /** launchd plist. KeepAlive restarts on any exit (`stop` boots it out, so it stays down). No secrets in here. */
@@ -147,8 +150,11 @@ const psRows = () => parsePs(sh("ps", ["-axo", "pid=,ppid=,etime=,command="]).st
 /** Listeners on the port. lsof exits 1 with no output when there are none; anything else is a failure. */
 const listeners = (port) => {
 	const r = sh("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"]);
-	if (r.error || r.status > 1 || (r.status === 1 && r.stdout.trim())) throw new Error(`lsof failed: ${r.error?.message ?? r.stderr.trim() ?? `exit ${r.status}`}`);
-	return parseLsof(r.stdout);
+	const parsed = r.error || r.status === null ? [] : parseLsof(r.stdout);
+	if (r.error || r.status === null || r.status > 1 || (r.status === 1 && !parsed.length && r.stdout.trim())) {
+		throw new Error(`lsof failed: ${r.error?.message ?? (r.status === null ? `killed by ${r.signal}` : r.stderr.trim() || `exit ${r.status}`)}`);
+	}
+	return parsed;
 };
 const printService = (cfg) => {
 	const r = sh("launchctl", ["print", cfg.target]);
@@ -157,6 +163,8 @@ const printService = (cfg) => {
 const which = (bin) => { const r = sh("/usr/bin/which", [bin]); return r.status === 0 ? r.stdout.trim() : undefined; };
 
 function writePlist(cfg) {
+	const [maj, min] = process.versions.node.split(".").map(Number);
+	if (maj < 22 || (maj === 22 && min < 9)) throw new Error(`node ${process.versions.node}: the service needs node >= 22.9 (--env-file-if-exists)`);
 	if (!fs.existsSync(cfg.workerdJs)) throw new Error(`${cfg.workerdJs} not found; build the runtime checkout first (${cfg.runtime}: npm install && npx turbo run build)`);
 	const extra = ["git", "claude"].map(which).filter(Boolean).map((p) => path.dirname(p));
 	fs.mkdirSync(cfg.plistDir, { recursive: true });
@@ -174,11 +182,8 @@ function start(cfg) {
 	if (svc?.state === "running") return say(`already running (pid ${svc.pid})`);
 	const foreign = listeners(cfg.port).filter((l) => l.pid !== svc?.pid);
 	if (foreign.length) throw new Error(`port ${cfg.port} is in use by ${foreign.map((l) => `${l.command} (pid ${l.pid})`).join(", ")}; stop it first (its wolfd children exit with it)`);
-	if (svc) sh("launchctl", ["kickstart", cfg.target]);
-	else {
-		const r = sh("launchctl", ["bootstrap", cfg.domain, cfg.plist]);
-		if (r.status !== 0) throw new Error(`launchctl bootstrap failed: ${(r.stderr || r.stdout).trim()}`);
-	}
+	const r = svc ? sh("launchctl", ["kickstart", cfg.target]) : sh("launchctl", ["bootstrap", cfg.domain, cfg.plist]);
+	if (r.status !== 0) throw new Error(`launchctl ${svc ? "kickstart" : "bootstrap"} failed: ${(r.stderr || r.stdout).trim()}`);
 	say(`started ${cfg.label}`);
 }
 
@@ -197,14 +202,14 @@ function stop(cfg) {
 function restart(cfg) {
 	const svc = printService(cfg);
 	if (!svc?.pid) return start(cfg);
-	const t = cfg.target;
-	const script = `exec >>"$1" 2>&1; echo "--- $(date) restart ${t} pid ${svc.pid}"; sleep 2; launchctl kill SIGTERM ${t}; i=0
-while kill -0 ${svc.pid} 2>/dev/null && [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done
-kill -0 ${svc.pid} 2>/dev/null && { echo "pid ${svc.pid} still alive after 40s: SIGKILL"; launchctl kill SIGKILL ${t}; }
-sleep 3; echo "after:"; launchctl print ${t} | grep -E "^\\s*(state|pid) ="`;
+	const script = `exec >>"$1" 2>&1; t=$2; p=$3; echo "--- $(date) restart $t pid $p"; sleep 2; launchctl kill SIGTERM "$t"; i=0
+while kill -0 "$p" 2>/dev/null && [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done
+echo "old pid exited after ~$i s"
+kill -0 "$p" 2>/dev/null && { echo "pid $p still alive after 40s: SIGKILL"; launchctl kill SIGKILL "$t"; }
+sleep 3; echo "after:"; launchctl print "$t" | grep -E "^[[:space:]]*(state|pid) ="`;
 	const helperLog = path.join(path.dirname(cfg.log), "restart.log");
 	fs.mkdirSync(path.dirname(helperLog), { recursive: true });
-	spawn("/bin/sh", ["-c", script, "sh", helperLog], { detached: true, stdio: "ignore" }).unref();
+	spawn("/bin/sh", ["-c", script, "sh", helperLog, cfg.target, String(svc.pid)], { detached: true, stdio: "ignore" }).unref();
 	say(`restart requested (SIGTERM; kills all in-flight turns, including this one). Helper output: ${helperLog}. Check: npm run stack -- status`);
 }
 
@@ -215,15 +220,17 @@ function status(cfg) {
 	const rows = psRows();
 	const me = svc?.pid && rows.find((r) => r.pid === svc.pid);
 	if (me) say(`uptime:    ${me.etime}`);
-	const ls = listeners(cfg.port);
-	say(`port ${cfg.port}:   ${ls.length ? `listening (${ls.map((l) => `${l.command} ${l.pid}`).join(", ")})` : "NOT listening"}`);
+	let ls = [];
+	let lsErr;
+	try { ls = listeners(cfg.port); } catch (e) { lsErr = e; }
+	say(`port ${cfg.port}:   ${lsErr ? `unknown (${lsErr.message})` : ls.length ? `listening (${ls.map((l) => `${l.command} ${l.pid}`).join(", ")})` : "NOT listening"}`);
 	const mine = svc?.pid && descendants(rows, svc.pid).concat(me || []).some((r) => ls.some((l) => l.pid === r.pid));
 	if (ls.length && svc?.pid && !mine) say(`WARNING:   port ${cfg.port} is held by a process that is not the service`);
 	if (svc?.pid) {
 		const kids = descendants(rows, svc.pid).filter((r) => /wolfd/.test(r.command));
 		say(`wolfd:     ${kids.length ? kids.map((k) => `pid ${k.pid} (up ${k.etime})`).join(", ") : "none"}`);
 	}
-	if (!(svc?.state === "running" && ls.length)) {
+	if (lsErr || !(svc?.state === "running" && ls.length)) {
 		say(`\nlast log lines (${cfg.log}):`);
 		const t = sh("tail", ["-n", "15", cfg.log]);
 		say(t.status === 0 ? t.stdout.trimEnd() : "(no log)");

@@ -29,11 +29,12 @@ describe("stack plist", () => {
 		expect(cfg.target).toBe("gui/501/com.wolfpack.stack");
 		expect(cfg.runtime).toBe("/Users/me/wolves/local/runtime/wolfpack");
 	});
-	it("builds the plist, sourcing the env file in an sh wrapper and holding no secrets", () => {
+	it("builds the plist, node loading the env file, node as job pid and holding no secrets", () => {
 		const x = stack.buildPlist(cfg, "/n/bin/node", "/n/bin:/usr/bin");
 		expect(x).toContain("<string>/bin/sh</string>");
-		expect(x).toContain('. "$1"');
-		expect(x).toContain("<string>/Users/me/.wolfpack/.env</string>\n\t\t<string>/usr/bin/caffeinate</string>\n\t\t<string>-is</string>\n\t\t<string>/n/bin/node</string>");
+		expect(x).toContain("caffeinate -is -w $$ &amp; exec");
+		expect(x).toContain("<string>/n/bin/node</string>\n\t\t<string>--env-file-if-exists=/Users/me/.wolfpack/.env</string>");
+		expect(x).not.toContain("<string>/usr/bin/caffeinate</string>");
 		expect(x).not.toMatch(/ANTHROPIC|TOKEN|API_KEY/);
 		expect(stack.resolveConfig({ WOLFPACK_HOME: "/w" }, "/Users/me", 501).envFile).toBe("/w/.env");
 		expect(x).toContain("<string>--port</string>\n\t\t<string>7141</string>");

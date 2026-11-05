@@ -47,6 +47,7 @@ function fixture() {
   return { root, receipts, inbox, dataDir, deweyLedger: dewey };
 }
 
+const ledgerAfter = (r: { samples: unknown[] }) => r.samples;
 const ledger = (dataDir: string): KbEvent[] =>
   readFileSync(ledgerFile(hubRoots(dataDir)), "utf-8").split("\n").filter(Boolean).map((l) => KbEventSchema.parse(JSON.parse(l)));
 
@@ -68,6 +69,18 @@ describe("kb-backfill", () => {
     expect(evs.filter((e) => e.t === "entry_written").map((e) => (e as { entryId: string }).entryId).sort()).toEqual(["kb-snapjack-BBB", "kb-wolfpack-AAA", "kb-wolfpack-DDD"]);
     // kb-repair via aliased
     expect(evs.find((e) => e.t === "decision" && e.hash === "sha256:h4")).toMatchObject({ from: "kb-repair", outcome: "create", entryId: "kb-wolfpack-DDD" });
+  });
+
+  it("joins graduation receipts by den topic + hash tag, and falls back to entry_id + submitted", async () => {
+    const f = fixture();
+    put(join(f.receipts, "1uk4", "work-x-ZZZ-6ddda4775r.md"), `---\nfrom: 1uk4\nden_topic_id: work-x-ZZZ\noutcome: merge\nprocessed: "2026-10-19 20:19"\n---\nkb-wolfpack-ZZZ\n`);
+    put(join(f.inbox, "1uk4", "_processed", "grad-feature-work-x-ZZZ-1792.md"), `---\nfrom: 1uk4\nden_topic_id: work-x-ZZZ\nchange: create\ncontent_hash: 46bc5f56ddda4775r1\nprev_hash: null\ndomain_hint: wolfpack\nsubmitted: 2026-10-19T20:15:37.526Z\n---\nb\n`);
+    put(join(f.inbox, "kb-repair", "_processed", "grad-feature-work-y-YYY-1.md"), `---\nfrom: 1uk4\nden_topic_id: work-y-YYY\nchange: create\ncontent_hash: zz99\nprev_hash: null\ndomain_hint: wolfpack\nentry_id: kb-wolfpack-YYY\nsubmitted: 2026-10-20T01:00:00Z\n---\nb\n`);
+    const r = await kbBackfill({ ...f, dryRun: true });
+    expect(r.items).toBe(6); // a, b, c, d + ZZZ (tag join) + YYY (entry_id fallback)
+    expect(r.skipped).toHaveLength(1);
+    const evs = ledgerAfter(r);
+    expect(evs).toBeDefined();
   });
 
   it("is idempotent", async () => {

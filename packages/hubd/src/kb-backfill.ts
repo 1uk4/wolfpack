@@ -140,19 +140,39 @@ export async function kbBackfill(opts: BackfillOptions): Promise<BackfillReport>
   }
 
   const items: Item[] = [];
-  const receiptKeys = new Set<string>();
+  const usedProcessed = new Set<string>();
+  const procIndex = new Map<string, Array<{ f: string; fields: Record<string, string> }>>();
+  const procOf = (wolf: string) => {
+    let l = procIndex.get(wolf);
+    if (!l) {
+      l = mdFiles(join(opts.inbox, wolf, "_processed")).map((f) => ({ f, fields: parseSimple(readFileSync(join(opts.inbox, wolf, "_processed", f), "utf-8")).fields }));
+      procIndex.set(wolf, l);
+    }
+    return l;
+  };
+  /** The _processed file of a receipt: same name; else (graduation / migration files, whose names carry no hash tag) same den topic and a content_hash that contains the receipt's tag. */
+  const findProcessed = (wolf: string, f: string, topic: string): { f: string; fields: Record<string, string> } | undefined => {
+    const list = procOf(wolf);
+    const exact = list.find((x) => x.f === f);
+    if (exact) return exact;
+    const tag = /-([0-9a-z]{9,10})\.md$/.exec(f)?.[1];
+    if (!tag) return undefined;
+    const tags = [tag, tag.replace(/r$/, "")];
+    const cands = list.filter((x) => !usedProcessed.has(`${wolf}/${x.f}`) && x.fields.den_topic_id === topic && x.fields.content_hash && tags.some((t) => bare(x.fields.content_hash!).includes(t)));
+    return cands.length === 1 ? cands[0] : undefined;
+  };
   for (const wolf of dirs(opts.receipts)) {
     for (const f of mdFiles(join(opts.receipts, wolf))) {
       const key = `${wolf}/${f}`;
-      receiptKeys.add(key);
       const r = parseSimple(readFileSync(join(opts.receipts, wolf, f), "utf-8"));
       const outcome = r.fields.outcome;
       const processed = toIsoUtc(r.fields.processed, tz);
       if (outcome !== "create" && outcome !== "merge" && outcome !== "parked") { skip(key, `unknown outcome ${JSON.stringify(outcome)}`); continue; }
       if (!processed) { skip(key, "receipt has no parseable processed time"); continue; }
-      const pf = join(opts.inbox, wolf, "_processed", f);
-      if (!existsSync(pf)) { skip(key, "no matching _processed file"); continue; }
-      const p = parseSimple(readFileSync(pf, "utf-8")).fields;
+      const found = findProcessed(wolf, f, r.fields.den_topic_id ?? "");
+      if (!found) { skip(key, "no matching _processed file (by name, or by den topic + hash tag; may be a duplicate receipt)"); continue; }
+      usedProcessed.add(`${wolf}/${found.f}`);
+      const p = found.fields;
       if (!p.content_hash) { skip(key, "_processed file has no content_hash"); continue; }
       const entryId = r.body.split(/\s+/)[0] ?? "";
       if (outcome !== "parked" && !entryId) { skip(key, `${outcome} receipt has no entry id`); continue; }
@@ -166,13 +186,18 @@ export async function kbBackfill(opts: BackfillOptions): Promise<BackfillReport>
   }
   // _processed files without a receipt: via Dewey's aliased events.
   for (const wolf of dirs(opts.inbox)) {
-    for (const f of mdFiles(join(opts.inbox, wolf, "_processed"))) {
+    for (const { f, fields: p } of procOf(wolf)) {
       const key = `${wolf}/${f}`;
-      if (receiptKeys.has(key)) continue;
-      const p = parseSimple(readFileSync(join(opts.inbox, wolf, "_processed", f), "utf-8")).fields;
+      if (usedProcessed.has(key)) continue;
       if (!p.content_hash) { skip(key, "no receipt; _processed has no content_hash"); continue; }
       const a = aliasByHash.get(bare(p.content_hash));
-      if (!a) { skip(key, opts.deweyLedger ? "no receipt and no aliased event with this hash" : "no receipt and no --dewey-ledger"); continue; }
+      if (!a) {
+        // No receipt and no aliased event: the file itself may carry the entry (graduation / repair files: entry_id + submitted).
+        const at = toIsoUtc(p.submitted, tz);
+        if (!p.entry_id || !at) { skip(key, "no receipt, no aliased event with this hash, and no entry_id + submitted in the file"); continue; }
+        items.push({ key, at, submitted: at, from: p.from || wolf, denTopicId: p.den_topic_id || f.replace(/\.md$/, ""), hash: p.content_hash, prevHash: p.prev_hash && p.prev_hash !== "null" ? p.prev_hash : null, domainHint: p.domain_hint ?? "", outcome: p.change === "create" ? "create" : "merge", entryId: p.entry_id, canonicalId: p.entry_id });
+        continue;
+      }
       const at = toIsoUtc(a.at, tz);
       if (!at) { skip(key, "aliased event has no parseable time"); continue; }
       const w = (writesOfCanon.get(a.canonicalId) ?? []).find((x) => x.at === a.at) ?? [...(writesOfCanon.get(a.canonicalId) ?? [])].reverse().find((x) => x.at <= a.at);

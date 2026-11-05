@@ -867,6 +867,26 @@ const hubBase = z.object({ id: EventIdSchema, at: IsoSchema });
 /** `domain`: the item's domain when the hub could fold it (absent for a deleted item). */
 export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string(), domain: z.string().optional() });
 export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
+/** The hub curator's sweep (KB curation in hubd): started once real work begins, one item per contribution, finished always follows a started (also on a throw: `error`). */
+export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
+export const HubSweepItemEventSchema = hubBase.extend({
+  type: z.literal("sweep_item"),
+  from: z.string(),
+  denTopicId: z.string(),
+  outcome: z.enum(["create", "merge", "reject", "parked"]),
+  entryId: z.string().optional(),
+});
+export const HubSweepFinishedEventSchema = hubBase.extend({
+  type: z.literal("sweep_finished"),
+  processed: z.number().int().nonnegative(),
+  created: z.number().int().nonnegative(),
+  merged: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  parked: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  durationMs: z.number().nonnegative(),
+  error: z.string().optional(),
+});
 export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf.presence"), wolf: z.string(), state: z.enum(["online", "offline"]), host: z.string().optional() });
 /**
  * The cursor cannot be replayed (too old, another hub boot, ahead of the hub) or the hub missed a ledger append: refetch.
@@ -874,7 +894,7 @@ export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf
  * it as Last-Event-ID resumes with exactly the events after it.
  */
 export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync"), id: z.number().int().nonnegative() });
-export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
+export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
 export type HubEvent = z.infer<typeof HubEventSchema>;
 const HUB_EVENT_TYPES: ReadonlySet<string> = new Set(HubEventSchema.options.map((o) => o.shape.type.value));
 export type ParsedHubEvent = { kind: "event"; event: HubEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };

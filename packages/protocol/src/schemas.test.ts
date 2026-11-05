@@ -13,6 +13,7 @@ import {
   ErrorEnvelopeSchema,
   MemoryEventSchema,
   KbPipelineResponseSchema,
+  KbActivityResponseSchema,
   parseMemoryEvent,
   EventEnvelopeSchema,
   PROTOCOL_VERSION,
@@ -525,5 +526,38 @@ describe("subagent threads", () => {
     expect(LedgerEntrySchema.safeParse({ ...entry, kind: "shout" }).success).toBe(false);
     const ev = { type: "thread-updated", id: 3, wolf: "w", at: "2026-10-27T10:00:00.000Z", thread: { id: "w/sub-1", wolf: "w", kind: "subagent", title: "t", state: "running" } };
     expect(parseWolfEvent(ev).kind).toBe("event");
+  });
+});
+
+describe("KbActivityResponseSchema", () => {
+  const full = {
+    generatedAt: "2026-11-05T10:00:00.000Z",
+    source: { lane: "hub", hasDecisions: true, curator: "on" },
+    incoming: { total: 2, wolves: [{ wolf: "fenrir", pending: 2, oldestAgeMs: 5000, bad: 1, items: [{ denTopicId: "caching", hash: "abc1234567", ageMs: 5000 }, { denTopicId: "x", ageMs: 10 }] }] },
+    decisions: {
+      items: [{ id: "e1", at: "2026-11-05T09:00:00.000Z", from: "fenrir", denTopicId: "caching", hash: "abc", outcome: "merge", entryId: "kb-1", reason: "r", superseded: 1,
+        routing: { route: "similarity", candidates: [{ id: "kb-1", score: 0.9 }], band: "merge" } }],
+      nextCursor: "c1",
+      total: 1,
+      counts: { create: 0, merge: 1, unchanged: 0, reject: 0, parked: 0, unclassified: 0 },
+    },
+    changes: { domains: [{ domain: "wolfpack", items: [{ at: "2026-11-05T09:00:00.000Z", entryId: "kb-1", title: "T", action: "retire", from: "fenrir", denTopicId: "caching" }] }] },
+    sweep: { running: false, last: { finishedAt: "2026-11-05T09:30:00.000Z", processed: 3, error: "boom" } },
+  };
+  const empty = {
+    generatedAt: "2026-11-05T10:00:00.000Z",
+    source: { lane: "custom", hasDecisions: false, curator: "unknown" },
+    incoming: { total: 0, wolves: [] },
+    decisions: { items: [], total: 0, counts: { create: 0, merge: 0, unchanged: 0, reject: 0, parked: 0, unclassified: 0 } },
+    changes: { domains: [] },
+  };
+  it("round-trips a full and an empty response", () => {
+    expect(KbActivityResponseSchema.parse(full)).toEqual(full);
+    expect(KbActivityResponseSchema.parse(empty)).toEqual(empty);
+  });
+  it("tolerates unknown fields and rejects unknown outcomes", () => {
+    expect(KbActivityResponseSchema.safeParse({ ...empty, extra: 1 }).success).toBe(true);
+    const bad = { ...full, decisions: { ...full.decisions, items: [{ ...full.decisions.items[0], outcome: "weird" }] } };
+    expect(KbActivityResponseSchema.safeParse(bad).success).toBe(false);
   });
 });

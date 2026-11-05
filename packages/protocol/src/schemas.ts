@@ -913,6 +913,77 @@ export const HubSweepFinishedEventSchema = hubBase.extend({
   durationMs: z.number().nonnegative(),
   error: z.string().optional(),
 });
+/**
+ * `GET /v1/kb/activity` (hub): the hub curator's own ledger and receipts, no relay to a wolf.
+ * Query: `since` = "7d" | "30d" | "all" | ISO timestamp (default "30d"), `before` = opaque cursor from `decisions.nextCursor`,
+ * `limit` 1..200 (default 50, decisions page size), `domain` (restrict `changes` and growth to one domain).
+ */
+export const KbDecisionOutcomeSchema = HubSweepDecisionSchema.shape.outcome;
+export type KbDecisionOutcome = z.infer<typeof KbDecisionOutcomeSchema>;
+/** The latest ledger `decision` per (from, denTopicId, hash). `id`: the ledger event id. `superseded`: earlier decisions it replaced (e.g. parked, then merge). */
+export const KbDecisionSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  from: z.string(),
+  denTopicId: z.string(),
+  hash: z.string(),
+  outcome: KbDecisionOutcomeSchema,
+  entryId: z.string().optional(),
+  reason: z.string().optional(),
+  routing: HubSweepDecisionSchema.shape.routing,
+  superseded: z.number().int().nonnegative().optional(),
+});
+export type KbDecision = z.infer<typeof KbDecisionSchema>;
+/** entry_written carries action create|merge|supersede; entry_retired maps to `retire`. Domain is resolved by the hub (entry_placed sectionId / entry file), not carried by the events. */
+export const KbActivityChangeSchema = z.object({
+  at: z.string(),
+  entryId: z.string(),
+  title: z.string().optional(),
+  action: z.enum(["create", "merge", "supersede", "retire"]),
+  from: z.string().optional(),
+  denTopicId: z.string().optional(),
+});
+export type KbActivityChange = z.infer<typeof KbActivityChangeSchema>;
+export const KbActivityResponseSchema = z.object({
+  generatedAt: z.string(),
+  /** No absolute host paths. `hasDecisions`: the ledger holds any `decision` event (older ledgers have none). */
+  source: z.object({ lane: z.enum(["hub", "custom"]), hasDecisions: z.boolean(), curator: z.enum(["on", "off", "unknown"]) }),
+  incoming: z.object({
+    total: z.number().int().nonnegative(),
+    wolves: z.array(
+      z.object({
+        wolf: z.string(),
+        pending: z.number().int().nonnegative(),
+        oldestAgeMs: z.number().nonnegative().optional(),
+        bad: z.number().int().nonnegative().optional(),
+        /** At most 20 per wolf. */
+        items: z.array(z.object({ denTopicId: z.string(), hash: z.string().optional(), ageMs: z.number().nonnegative() })),
+      }),
+    ),
+  }),
+  decisions: z.object({
+    items: z.array(KbDecisionSchema),
+    nextCursor: z.string().optional(),
+    total: z.number().int().nonnegative(),
+    counts: z.object({
+      create: z.number().int().nonnegative(),
+      merge: z.number().int().nonnegative(),
+      unchanged: z.number().int().nonnegative(),
+      reject: z.number().int().nonnegative(),
+      parked: z.number().int().nonnegative(),
+      unclassified: z.number().int().nonnegative(),
+    }),
+  }),
+  /** Latest 10 per domain, newest first. */
+  changes: z.object({ domains: z.array(z.object({ domain: z.string(), items: z.array(KbActivityChangeSchema) })) }),
+  sweep: z
+    .object({
+      running: z.boolean(),
+      last: z.object({ finishedAt: z.string(), processed: z.number().int().nonnegative(), error: z.string().optional() }).optional(),
+    })
+    .optional(),
+});
+export type KbActivityResponse = z.infer<typeof KbActivityResponseSchema>;
 export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf.presence"), wolf: z.string(), state: z.enum(["online", "offline"]), host: z.string().optional() });
 /**
  * The cursor cannot be replayed (too old, another hub boot, ahead of the hub) or the hub missed a ledger append: refetch.

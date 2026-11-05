@@ -40,6 +40,7 @@ import {
   GraduationPreviewSchema,
   GraduationResultSchema,
   KbPipelineResponseSchema,
+  KbActivityResponseSchema,
 } from "./schemas.js";
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
@@ -412,6 +413,12 @@ export const ROUTES = {
    * Answers `{status:"ok", domain, epoch, since, revision, truncated, files:[{path,contentHash,encoding:"utf8",content}], deletes:[{path}]}` (coalesced per path; `truncated` = ask again with since=revision), or `{status:"reset", reason}` with reason `below_floor` (the log no longer reaches `since`), `epoch_mismatch` or `ahead_of_hub`: fall back to the manifest diff.
    * Worker tokens may read only domains their host's wolves subscribe to (403 otherwise). 404 on a subscribed domain means "not scanned yet, retry shortly" (the hub creates a domain's revision log on its first scan or commit), NOT "deleted".
    */
+  /**
+   * KB activity from the hub curator's own ledger and receipts (no wolf relay): incoming contributions per wolf, the decision feed
+   * (latest decision per contribution), recent entry changes per domain. Query `since` ("7d" | "30d" | "all" | ISO; default "30d"),
+   * `before` (cursor), `limit` (1..200, default 50), `domain`. Console/browser tokens only.
+   */
+  hubKbActivity: { scope: "hub", method: "GET", path: "/v1/kb/activity", response: { kind: "json", schema: KbActivityResponseSchema }, status: [200], error: err },
   hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
   /**
    * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker

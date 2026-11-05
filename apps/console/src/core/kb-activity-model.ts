@@ -9,10 +9,18 @@ import type { HubEvent, KbActivityChange, KbActivityResponse, KbDecision, KbDeci
 export type { KbActivityChange, KbActivityResponse, KbDecision, KbDecisionOutcome };
 
 export type KbActivityRouting = KbDecision["routing"];
+export type KbActivityBad = NonNullable<KbActivityResponse["incoming"]["bad"]>[number];
+export type KbActivityDomain = NonNullable<KbActivityResponse["domains"]>[number];
 export type KbActivityIncomingWolf = KbActivityResponse["incoming"]["wolves"][number];
 export type KbActivitySince = "7d" | "30d" | "all";
 export const KB_ACTIVITY_SINCE: readonly KbActivitySince[] = ["7d", "30d", "all"];
+/** Per-domain page ('show all'). */
 export const KB_ACTIVITY_PAGE = 50;
+/** The overview request: enough decisions for every domain block's recent rows. */
+export const KB_ACTIVITY_OVERVIEW = 200;
+/** Rows shown per domain block before 'show all'. */
+export const KB_ACTIVITY_DOMAIN_ROWS = 8;
+export const KB_ACTIVITY_ATTENTION_ROWS = 20;
 export const KB_ACTIVITY_CHANGES_PER_DOMAIN = 10;
 
 /** Display order of the outcome filter. */
@@ -77,29 +85,9 @@ export function sinceCutoff(since: string | undefined, now: number = Date.now())
 	return Number.isNaN(t) ? null : t;
 }
 
-/**
- * A first-page refetch folded into the state: the fresh first page replaces the head (provisional rows go), the ledger rows already
- * loaded beyond it stay (and the cursor of the deepest page with them). If the fresh page does not overlap the loaded rows (more than a page
- * of new decisions arrived), paging restarts from the fresh page so the list never has a hole.
- */
-export function refreshDecisions(prev: KbActivityResponse["decisions"] | null, fresh: KbActivityResponse["decisions"]): KbActivityResponse["decisions"] {
-	const ledger = prev ? prev.items.filter((d) => !d.id.startsWith(PROVISIONAL_PREFIX)) : [];
-	const freshIds = new Set(fresh.items.map((d) => d.id));
-	const overlap = ledger.some((d) => freshIds.has(d.id));
-	if (!prev || ledger.length === 0 || !overlap) return fresh;
-	const tail = ledger.filter((d) => !freshIds.has(d.id));
-	if (tail.length === 0) return fresh;
-	const out: KbActivityResponse["decisions"] = { items: [...fresh.items, ...tail], total: fresh.total, counts: fresh.counts };
-	const cursor = prev.nextCursor;
-	if (cursor) out.nextCursor = cursor;
-	return out;
-}
-
+/** A refetch replaces the data (provisional rows go); the sweeping flag carries over when the response does not say. */
 export function reconcileActivity(prev: KbActivityState | null, data: KbActivityResponse, scope?: KbActivityScope): KbActivityState {
 	const next = initialActivityState(data, scope);
-	if (prev && prev.scope?.since === scope?.since && prev.scope?.domain === scope?.domain) {
-		next.data = { ...data, decisions: refreshDecisions(prev.data.decisions, data.decisions) };
-	}
 	if (!data.sweep && prev) next.sweeping = prev.sweeping;
 	return next;
 }
@@ -152,19 +140,6 @@ export function decisionRows(decisions: readonly KbDecision[]): DecisionRow[] {
 	});
 }
 
-/** `outcome` "all" keeps everything. */
-export function filterDecisions(rows: readonly DecisionRow[], outcome: KbDecisionOutcome | "all"): DecisionRow[] {
-	return outcome === "all" ? [...rows] : rows.filter((r) => r.outcome === outcome);
-}
-
-/** Filter chips with counts, "all" first; outcomes with a zero count are kept (the owner sees what never happened). */
-export function outcomeFilters(data: KbActivityResponse): { key: KbDecisionOutcome | "all"; label: string; count: number }[] {
-	return [
-		{ key: "all", label: "all", count: data.decisions.total },
-		...DECISION_OUTCOMES.map((o) => ({ key: o, label: DECISION_LABEL[o], count: data.decisions.counts[o] })),
-	];
-}
-
 /** Routing detail lines for the expandable row: route + band, top-3 candidates, subject, confirm, warning. Empty when there is no routing. */
 export function routingSummary(routing: KbActivityRouting): string[] {
 	if (!routing) return [];
@@ -198,14 +173,10 @@ export function mergeDecisionPages(prev: KbActivityResponse["decisions"], next: 
 	return out;
 }
 
-// ── changes ─────────────────────────────────────────────────────────────────
+// ── domain blocks ───────────────────────────────────────────────────────────
 
 export const CHANGE_LABEL: Record<KbActivityChange["action"], string> = { create: "created", merge: "merged", supersede: "superseded", retire: "retired" };
-
-export interface ChangeColumn {
-	domain: string;
-	rows: { key: string; at: string; action: KbActivityChange["action"]; label: string; entryId: string; title: string; wolf?: string }[];
-}
+const MARK: Record<string, string> = { create: "+", merge: "~", unchanged: "=", reject: "×", parked: "…", unclassified: "?", supersede: "~", retire: "−" };
 
 /** Newest first; an unparseable time compares equal, so the hub's order stands (the sort is stable). */
 function timeDesc(a: string, b: string): number {
@@ -213,21 +184,161 @@ function timeDesc(a: string, b: string): number {
 	return Number.isNaN(d) ? 0 : d;
 }
 
-/** One column per domain (by name), the latest 10 each, newest first. */
-export function changeColumns(data: KbActivityResponse, perDomain: number = KB_ACTIVITY_CHANGES_PER_DOMAIN): ChangeColumn[] {
-	return [...data.changes.domains]
-		.sort((a, b) => a.domain.localeCompare(b.domain))
-		.map((d) => ({
-			domain: d.domain,
-			rows: [...d.items]
-				.sort((a, b) => timeDesc(a.at, b.at))
-				.slice(0, perDomain)
-				.map((c, i) => {
-					const row: ChangeColumn["rows"][number] = { key: `${i}/${c.at}/${c.entryId}/${c.action}`, at: c.at, action: c.action, label: CHANGE_LABEL[c.action], entryId: c.entryId, title: c.title || c.entryId };
-					if (c.from) row.wolf = c.from;
-					return row;
-				}),
-		}));
+/** One line of a domain block: a decision (merged with the entry change it produced) or an unmatched change. */
+export interface FeedRow {
+	key: string;
+	at: string;
+	/** "+" created, "~" merged, "×" rejected, ... */
+	mark: string;
+	label: string;
+	/** The outcome, for decisions. */
+	outcome?: KbDecisionOutcome;
+	/** Entry title (or id / topic id when there is none). */
+	title: string;
+	entryId?: string;
+	wolf?: string;
+	denTopicId?: string;
+	superseded: number;
+	provisional: boolean;
+}
+
+/** Further pages the view loaded for one domain ('show all'). */
+export interface DomainExtra {
+	items: KbDecision[];
+	nextCursor?: string;
+	/** The changes of that fetch (so a deep page still has its entry rows). */
+	changes: KbActivityChange[];
+}
+
+export interface DomainBlock {
+	domain: string;
+	entries: number;
+	waiting: number;
+	lastChangeAt?: string;
+	contributors: { wolf: string; count: number }[];
+	rows: FeedRow[];
+	/** Decisions in range for this domain (sum of contributor counts). */
+	decided: number;
+	/** 'show all' is useful: more decisions exist than the rows shown, or a further page is loaded and has a cursor. */
+	more: boolean;
+	expanded: boolean;
+}
+
+/** The domains of a response; an older hub without `domains` falls back to those seen in changes and decisions. */
+function domainSummaries(data: KbActivityResponse): KbActivityDomain[] {
+	if (data.domains) return data.domains;
+	const names = new Set<string>();
+	for (const c of data.changes.domains) names.add(c.domain);
+	for (const d of data.decisions.items) if (d.domain) names.add(d.domain);
+	return [...names].sort().map((domain) => {
+		const counts = new Map<string, number>();
+		for (const d of data.decisions.items) if (d.domain === domain) counts.set(d.from, (counts.get(d.from) ?? 0) + 1);
+		return { domain, entries: 0, waiting: 0, contributors: [...counts].map(([wolf, count]) => ({ wolf, count })) };
+	});
+}
+
+const matches = (c: KbActivityChange, d: KbDecision): boolean => c.from !== undefined && c.from === d.from && c.denTopicId === d.denTopicId;
+
+export function domainBlocks(data: KbActivityResponse, extras: Readonly<Record<string, DomainExtra>> = {}, perDomain: number = KB_ACTIVITY_DOMAIN_ROWS): DomainBlock[] {
+	// entry -> domain, to place provisional rows and changes
+	return domainSummaries(data).map((sum) => {
+		const extra = extras[sum.domain];
+		const seen = new Set<string>();
+		const decisions: KbDecision[] = [];
+		for (const d of [...data.decisions.items, ...(extra?.items ?? [])]) {
+			if (d.domain !== sum.domain || seen.has(d.id)) continue;
+			seen.add(d.id);
+			decisions.push(d);
+		}
+		const changes = [...(data.changes.domains.find((c) => c.domain === sum.domain)?.items ?? []), ...(extra?.changes ?? [])];
+		const rows: FeedRow[] = decisions.map((d) => {
+			const row: FeedRow = {
+				key: d.id,
+				at: d.at,
+				mark: MARK[d.outcome] ?? "?",
+				label: DECISION_LABEL[d.outcome] ?? d.outcome,
+				outcome: d.outcome,
+				title: d.title || d.entryId || d.denTopicId,
+				wolf: d.from,
+				denTopicId: d.denTopicId,
+				superseded: d.superseded ?? 0,
+				provisional: d.id.startsWith(PROVISIONAL_PREFIX),
+			};
+			if (d.entryId) row.entryId = d.entryId;
+			return row;
+		});
+		const keys = new Set<string>();
+		changes.forEach((c, i) => {
+			if (decisions.some((d) => matches(c, d))) return; // one row per item
+			const key = `${i}/${c.at}/${c.entryId}/${c.action}`;
+			if (keys.has(`${c.at}/${c.entryId}/${c.action}`)) return;
+			keys.add(`${c.at}/${c.entryId}/${c.action}`);
+			const row: FeedRow = { key, at: c.at, mark: MARK[c.action] ?? "·", label: CHANGE_LABEL[c.action], title: c.title || c.entryId, entryId: c.entryId, superseded: 0, provisional: false };
+			if (c.from) row.wolf = c.from;
+			rows.push(row);
+		});
+		rows.sort((a, b) => timeDesc(a.at, b.at));
+		const decided = sum.contributors.reduce((n, c) => n + c.count, 0);
+		const expanded = extra !== undefined;
+		const shown = expanded ? rows : rows.slice(0, perDomain);
+		const out: DomainBlock = {
+			domain: sum.domain,
+			entries: sum.entries,
+			waiting: sum.waiting,
+			contributors: sum.contributors,
+			rows: shown,
+			decided,
+			more: expanded ? extra.nextCursor !== undefined : decided > shown.filter((r) => r.outcome !== undefined).length,
+			expanded,
+		};
+		if (sum.lastChangeAt) out.lastChangeAt = sum.lastChangeAt;
+		return out;
+	});
+}
+
+// ── needs attention ─────────────────────────────────────────────────────────
+
+export interface AttentionItem {
+	key: string;
+	kind: "bad" | "decision";
+	denTopicId?: string;
+	domainHint?: string;
+	reason: string;
+	at: string;
+	outcome?: KbDecisionOutcome;
+}
+export interface AttentionGroup {
+	wolf: string;
+	summary: string;
+	count: number;
+	items: AttentionItem[];
+}
+
+/** Quarantined contributions plus rejected / parked / unclassified decisions, grouped by wolf (most first). */
+export function attentionGroups(data: KbActivityResponse): AttentionGroup[] {
+	const by = new Map<string, AttentionItem[]>();
+	const add = (wolf: string, item: AttentionItem) => by.set(wolf, [...(by.get(wolf) ?? []), item]);
+	(data.incoming.bad ?? []).forEach((b, i) => {
+		const item: AttentionItem = { key: `bad/${i}/${b.at}`, kind: "bad", reason: b.reason, at: b.at };
+		if (b.denTopicId) item.denTopicId = b.denTopicId;
+		if (b.domainHint) item.domainHint = b.domainHint;
+		add(b.wolf, item);
+	});
+	for (const d of data.decisions.items) {
+		if (d.outcome !== "reject" && d.outcome !== "parked" && d.outcome !== "unclassified") continue;
+		const item: AttentionItem = { key: d.id, kind: "decision", denTopicId: d.denTopicId, reason: d.reason ?? DECISION_LABEL[d.outcome], at: d.at, outcome: d.outcome };
+		if (d.domain) item.domainHint = d.domain;
+		add(d.from, item);
+	}
+	return [...by]
+		.map(([wolf, items]) => {
+			const sorted = items.sort((a, b) => timeDesc(a.at, b.at));
+			const reasons = new Set(sorted.map((i) => i.reason));
+			const n = sorted.length;
+			const noun = n === 1 ? "contribution" : "contributions";
+			return { wolf, count: n, items: sorted, summary: reasons.size === 1 ? `${n} ${noun}: ${sorted[0]!.reason}` : `${n} ${noun} need attention` };
+		})
+		.sort((a, b) => b.count - a.count || a.wolf.localeCompare(b.wolf));
 }
 
 /** Why the decision feed may be empty: the curator is off, or the ledger holds no decision yet. */
@@ -327,6 +438,9 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 			const row: KbDecision = { id, at: f.at, from: f.from, denTopicId: f.denTopicId, hash: "", outcome };
 			const entryId = decision?.entryId ?? f.entryId;
 			if (entryId) row.entryId = entryId;
+			const known = d.decisions.items.find((x) => sameContribution(x, row) && x.domain) ?? (entryId ? d.decisions.items.find((x) => x.entryId === entryId && x.domain) : undefined);
+			const dom = known?.domain ?? (entryId ? d.changes.domains.find((c) => c.items.some((i) => i.entryId === entryId))?.domain : undefined);
+			if (dom) row.domain = dom;
 			if (decision?.reason) row.reason = decision.reason;
 			if (decision?.routing) row.routing = decision.routing;
 

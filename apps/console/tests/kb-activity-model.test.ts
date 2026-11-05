@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	applyHubEvent,
-	changeColumns,
+	attentionGroups,
+	domainBlocks,
 	curatorNote,
 	decisionOutcome,
 	decisionRows,
-	filterDecisions,
 	groupIncoming,
 	initialActivityState,
 	kbAge,
@@ -15,7 +15,6 @@ import {
 	needsRefetch,
 	reconcileActivity,
 	sinceCutoff,
-	outcomeFilters,
 	routingSummary,
 } from "../src/core/kb-activity-model.ts";
 import { kbActivityFixture } from "./fixtures/kb-activity.ts";
@@ -43,14 +42,6 @@ describe("kb-activity model", () => {
 		assert.equal(rows[0]!.superseded, 1);
 		assert.equal(rows[1]!.superseded, 0);
 		assert.equal(rows[0]!.provisional, false);
-		assert.deepEqual(filterDecisions(rows, "reject").map((r) => r.id), ["d2"]);
-		assert.equal(filterDecisions(rows, "all").length, 4);
-	});
-	it("outcomeFilters carries counts, all first", () => {
-		const f = outcomeFilters(kbActivityFixture());
-		assert.deepEqual(f[0], { key: "all", label: "all", count: 9 });
-		assert.equal(f.find((x) => x.key === "reject")?.count, 2);
-		assert.equal(f.length, 7);
 	});
 	it("routingSummary lists route, top-3 candidates by score, subject, confirm, warning", () => {
 		const lines = routingSummary(kbActivityFixture().decisions.items[0]!.routing);
@@ -60,18 +51,6 @@ describe("kb-activity model", () => {
 		assert.match(lines[3]!, /^confirm: c-top 0.93 · merge \(valid\)/);
 		assert.equal(lines[4], "warning: close call");
 		assert.deepEqual(routingSummary(undefined), []);
-	});
-	it("changeColumns: one per domain by name, newest first, capped, action labels", () => {
-		const cols = changeColumns(kbActivityFixture());
-		assert.deepEqual(cols.map((c) => c.domain), ["personal", "wolfpack"]);
-		assert.deepEqual(cols[1]!.rows.map((r) => r.label), ["merged", "retired"]);
-		assert.equal(cols[1]!.rows[1]!.title, "ent-old"); // no title: falls back to the id
-		assert.equal(cols[1]!.rows[0]!.wolf, "hal");
-		const many = kbActivityFixture({ changes: { domains: [{ domain: "x", items: Array.from({ length: 15 }, (_, i) => ({ at: `2026-11-05T09:${String(10 + i)}:00Z`, entryId: `e${i}`, action: "supersede" as const })) }] } });
-		const rows = changeColumns(many)[0]!.rows;
-		assert.equal(rows.length, 10);
-		assert.equal(rows[0]!.entryId, "e14");
-		assert.equal(rows[0]!.label, "superseded");
 	});
 	it("curatorNote", () => {
 		assert.equal(curatorNote(kbActivityFixture()), null);
@@ -92,12 +71,6 @@ describe("kb-activity model", () => {
 		assert.deepEqual(m.items.map((d) => d.id), ["d4", "d3", "d2", "d1", "d0"]);
 		assert.equal(m.nextCursor, undefined);
 	});
-	it("changeColumns keeps the hub's order for unparseable times and keys are unique", () => {
-		const d = kbActivityFixture({ changes: { domains: [{ domain: "x", items: [{ at: "bad", entryId: "e1", action: "create" }, { at: "bad", entryId: "e1", action: "create" }, { at: "also-bad", entryId: "e2", action: "merge" }] }] } });
-		const rows = changeColumns(d)[0]!.rows;
-		assert.deepEqual(rows.map((r) => r.entryId), ["e1", "e1", "e2"]);
-		assert.equal(new Set(rows.map((r) => r.key)).size, 3);
-	});
 	it("sinceCutoff", () => {
 		const now = Date.parse("2026-11-05T00:00:00Z");
 		assert.equal(sinceCutoff("all", now), null);
@@ -105,35 +78,66 @@ describe("kb-activity model", () => {
 		assert.equal(sinceCutoff("2026-11-01T00:00:00Z", now), Date.parse("2026-11-01T00:00:00Z"));
 		assert.equal(sinceCutoff("junk", now), null);
 	});
-	describe("reconcileActivity / refreshDecisions", () => {
-		const page = (ids: string[], cursor?: string) => {
-			const d = kbActivityFixture();
-			return { ...d, decisions: { ...d.decisions, items: ids.map((id) => ({ id, at: "2026-11-05T09:00:00Z", from: "w", denTopicId: id, hash: id, outcome: "create" as const })), ...(cursor ? { nextCursor: cursor } : { nextCursor: undefined }) } };
-		};
-		it("keeps deeper pages and the deepest cursor when the first page overlaps", () => {
-			const prev = initialActivityState(page(["a", "b", "c", "d"], "deep"), { since: "30d" });
-			const next = reconcileActivity(prev, page(["n", "a", "b"], "shallow"), { since: "30d" });
-			assert.deepEqual(next.data.decisions.items.map((d) => d.id), ["n", "a", "b", "c", "d"]);
-			assert.equal(next.data.decisions.nextCursor, "deep");
-		});
-		it("drops provisional rows", () => {
-			const base = page(["a", "b"], "c1");
+	describe("reconcileActivity", () => {
+		it("a refetch replaces the data and drops provisional rows", () => {
+			const base = kbActivityFixture();
 			base.decisions.items.unshift({ id: "live:1", at: "2026-11-05T09:00:00Z", from: "w", denTopicId: "z", hash: "", outcome: "create" });
-			const next = reconcileActivity(initialActivityState(base, { since: "30d" }), page(["a", "b"], "c1"), { since: "30d" });
-			assert.deepEqual(next.data.decisions.items.map((d) => d.id), ["a", "b"]);
-		});
-		it("restarts paging when there is no overlap (a gap) or the range changed", () => {
-			const prev = initialActivityState(page(["a", "b"], "deep"), { since: "30d" });
-			assert.deepEqual(reconcileActivity(prev, page(["x", "y"], "s"), { since: "30d" }).data.decisions.items.map((d) => d.id), ["x", "y"]);
-			assert.equal(reconcileActivity(prev, page(["a", "x"], "s"), { since: "7d" }).data.decisions.items.length, 2);
+			const next = reconcileActivity(initialActivityState(base, { since: "30d" }), kbActivityFixture(), { since: "30d" });
+			assert.deepEqual(next.data.decisions.items.map((d) => d.id), ["d4", "d3", "d2", "d1"]);
 		});
 		it("sweeping follows the response when it says, else the previous state", () => {
-			const prev = { ...initialActivityState(page(["a"]), { since: "30d" }), sweeping: true };
-			const d = page(["a"]);
+			const prev = { ...initialActivityState(kbActivityFixture(), { since: "30d" }), sweeping: true };
+			const d = kbActivityFixture();
 			delete (d as { sweep?: unknown }).sweep;
 			assert.equal(reconcileActivity(prev, d, { since: "30d" }).sweeping, true);
 			assert.equal(reconcileActivity(prev, { ...d, sweep: { running: false } }, { since: "30d" }).sweeping, false);
 		});
+	});
+	it("domainBlocks: one block per domain (even empty), one row per item, summary and contributors", () => {
+		const blocks = domainBlocks(kbActivityFixture());
+		assert.deepEqual(blocks.map((b) => b.domain), ["empty", "personal", "wolfpack"]);
+		const wp = blocks[2]!;
+		assert.equal(wp.entries, 167);
+		assert.equal(wp.waiting, 2);
+		assert.deepEqual(wp.contributors, [{ wolf: "hal", count: 1 }]);
+		// the merge decision and the entry change it produced are ONE row; the unmatched retire stays
+		assert.deepEqual(wp.rows.map((r) => [r.label, r.title, r.wolf]), [["merged", "Merged entry", "hal"], ["retired", "ent-old", undefined]]);
+		const personal = blocks[1]!;
+		assert.deepEqual(personal.rows.map((r) => [r.mark, r.label, r.title]), [["+", "created", "New entry"], ["×", "rejected", "t2"]]);
+		assert.equal(blocks[0]!.rows.length, 0);
+		assert.equal(blocks[0]!.more, false);
+	});
+	it("domainBlocks: caps rows, offers show all, and an expanded domain lists its further page", () => {
+		const items = Array.from({ length: 12 }, (_, i) => ({ id: `x${i}`, at: `2026-11-05T09:${String(10 + i)}:00Z`, from: "w", denTopicId: `t${i}`, hash: `h${i}`, outcome: "reject" as const, domain: "alpha" }));
+		const d = kbActivityFixture({ domains: [{ domain: "alpha", entries: 3, waiting: 0, contributors: [{ wolf: "w", count: 30 }] }], decisions: { items, total: 12, counts: { create: 0, merge: 0, unchanged: 0, reject: 12, parked: 0, unclassified: 0 } }, changes: { domains: [] } });
+		const b = domainBlocks(d)[0]!;
+		assert.equal(b.rows.length, 8);
+		assert.equal(b.rows[0]!.title, "t11");
+		assert.equal(b.more, true);
+		assert.equal(b.decided, 30);
+		const more = { id: "y0", at: "2026-11-04T09:00:00Z", from: "w", denTopicId: "old", hash: "o", outcome: "reject" as const, domain: "alpha" };
+		const e = domainBlocks(d, { alpha: { items: [more, items[0]!], changes: [], nextCursor: "c" } })[0]!;
+		assert.equal(e.rows.length, 13); // deduped by id
+		assert.equal(e.expanded, true);
+		assert.equal(e.more, true);
+		assert.equal(domainBlocks(d, { alpha: { items: [], changes: [] } })[0]!.more, false);
+	});
+	it("domainBlocks falls back to domains seen in the data when the hub sends no summary", () => {
+		const d = kbActivityFixture();
+		delete (d as { domains?: unknown }).domains;
+		const blocks = domainBlocks(d);
+		assert.deepEqual(blocks.map((b) => b.domain), ["personal", "wolfpack"]);
+		assert.deepEqual(blocks[0]!.contributors, [{ wolf: "ada", count: 2 }]);
+	});
+	it("attentionGroups: bad items and rejected/parked decisions by wolf, with reasons", () => {
+		const g = attentionGroups(kbActivityFixture());
+		assert.deepEqual(g.map((x) => [x.wolf, x.count]), [["hal", 3], ["ada", 1]]);
+		const hal = g[0]!;
+		assert.match(hal.summary, /3 contributions need attention/);
+		assert.deepEqual(hal.items.map((i) => i.kind), ["decision", "bad", "bad"]);
+		assert.equal(hal.items[1]!.domainHint, "nope");
+		assert.equal(g[1]!.summary, "1 contribution: too vague");
+		assert.deepEqual(attentionGroups(kbActivityFixture({ decisions: { items: [], total: 0, counts: kbActivityFixture().decisions.counts }, incoming: { total: 0, wolves: [] } })), []);
 	});
 	it("mergeDecisionPages takes total/counts from the newer snapshot", () => {
 		const a = kbActivityFixture().decisions;
@@ -171,12 +175,18 @@ describe("kb-activity model", () => {
 			assert.equal(top.id, "live:7");
 			assert.equal(top.outcome, "create");
 			assert.equal(top.entryId, "ent-x");
+			assert.equal(top.domain, undefined);
 			assert.equal(s.data.decisions.counts.create, 4);
 			assert.equal(s.data.decisions.total, 10);
 			assert.equal(s.sweeping, true);
 			assert.equal(decisionRows(s.data.decisions.items)[0]!.provisional, true);
 			// the same frame twice changes nothing more
 			assert.equal(applyHubEvent(s, { type: "sweep_item", id: 7, at, from: "hal", denTopicId: "t-hal-1", outcome: "create" }), s);
+		});
+		it("a provisional row inherits the domain of the row it replaces", () => {
+			const s = applyHubEvent(base(), { type: "sweep_item", id: 40, at, from: "ada", denTopicId: "t2", outcome: "reject" });
+			assert.equal(s.data.decisions.items[0]!.domain, "personal");
+			assert.equal(domainBlocks(s.data).find((b) => b.domain === "personal")!.rows[0]!.provisional, true);
 		});
 		it("a parked item whose decision differs uses the committed decision", () => {
 			const s = applyHubEvent(base(), {

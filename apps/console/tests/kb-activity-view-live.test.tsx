@@ -47,14 +47,19 @@ beforeEach(() => {
 		})) as typeof fetch;
 });
 
-/** A response with decisions `ids` (newest first) and an optional cursor. */
+/** Newest first: a stable time per id across responses. */
+const ORDER = ["n", "a", "b", "c", "d", "e"];
+
+/** A response whose wolfpack block holds decisions `ids` (newest first); `cursor` is the domain page cursor. */
 function page(ids: string[], cursor?: string): KbActivityResponse {
 	const d = kbActivityFixture();
 	const out: KbActivityResponse = {
 		...d,
+		domains: [{ domain: "wolfpack", entries: 5, waiting: 0, contributors: [{ wolf: "w", count: ids.length + 10 }] }],
+		changes: { domains: [] },
 		decisions: {
 			...d.decisions,
-			items: ids.map((id) => ({ id, at: "2026-11-05T09:00:00Z", from: "w", denTopicId: id, hash: id, outcome: "create" as const })),
+			items: ids.map((id) => ({ id, at: `2026-11-05T09:${String(59 - Math.max(0, ORDER.indexOf(id))).padStart(2, "0")}:00Z`, from: "w", denTopicId: id, hash: id, outcome: "create" as const, domain: "wolfpack" })),
 			total: ids.length,
 		},
 	};
@@ -91,18 +96,21 @@ const ids = () => [...document.querySelectorAll("[data-decision]")].map((e) => e
 const click = (el: Element) => act(async () => void el.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true })));
 const resolve = (c: Call, d: KbActivityResponse) => act(async () => void c.respond(d));
 
+const showAll = () => document.querySelector('[data-testid="kb-show-all"]')!;
+
 describe("KbActivityView live behaviour", () => {
 	it("debounces event-driven refetches into one request", async () => {
 		await mount();
 		await resolve(calls[0]!, page(["a"]));
 		assert.equal(calls.length, 1);
+		assert.equal(calls[0]!.url.searchParams.get("limit"), "200");
 		await hubEvent("kb.changed");
 		await hubEvent("sweep_finished");
 		await hubEvent("resync");
 		assert.equal(calls.length, 1); // still waiting out the debounce
 		await settle(60);
 		assert.equal(calls.length, 2);
-		assert.equal(calls[1]!.url.searchParams.get("limit"), "50");
+		assert.equal(calls[1]!.url.searchParams.get("domain"), null);
 		assert.equal(calls[1]!.url.searchParams.get("before"), null);
 	});
 
@@ -119,55 +127,36 @@ describe("KbActivityView live behaviour", () => {
 		assert.deepEqual(ids(), ["new"]);
 	});
 
-	it("a refetch that lands while Load more is in flight keeps the list; the page is merged", async () => {
+	it("show all pages one domain (50 per page) and a refetch keeps what was loaded", async () => {
 		await mount();
-		await resolve(calls[0]!, page(["a", "b"], "c1"));
-		await click(document.querySelector('[data-testid="kb-load-more"]')!);
-		const more = calls[1]!;
-		assert.equal(more.url.searchParams.get("before"), "c1");
-		await hubEvent("kb.changed");
-		await settle(60);
-		await resolve(calls[2]!, page(["n", "a", "b"], "c1")); // refetch lands first, same cursor
-		await resolve(more, page(["c", "d"], "c2"));
-		assert.deepEqual(ids(), ["n", "a", "b", "c", "d"]);
-		assert.equal(document.querySelector('[data-testid="kb-load-more"]')!.textContent, "Load more");
-	});
-
-	it("when the refetch moved the cursor the stale page is dropped and Load more retries from the new cursor", async () => {
-		await mount();
-		await resolve(calls[0]!, page(["a", "b"], "c1"));
-		await click(document.querySelector('[data-testid="kb-load-more"]')!);
-		const more = calls[1]!;
-		await hubEvent("kb.changed");
-		await settle(60);
-		await resolve(calls[2]!, page(["x", "y"], "c9")); // no overlap: paging restarts, new cursor
-		await resolve(more, page(["c", "d"], "c2"));
-		assert.deepEqual(ids(), ["x", "y"]); // the old page was not spliced in
-		assert.equal(calls.length, 4);
-		assert.equal(calls[3]!.url.searchParams.get("before"), "c9");
-		await resolve(calls[3]!, page(["z"]));
-		assert.deepEqual(ids(), ["x", "y", "z"]);
-		assert.equal(document.querySelector('[data-testid="kb-load-more"]'), null);
-	});
-
-	it("the poll refetches only the first page and keeps loaded pages", async () => {
-		await mount(POLLING);
-		await resolve(calls[0]!, page(["a", "b"], "c1"));
-		await click(document.querySelector('[data-testid="kb-load-more"]')!);
-		await resolve(calls[1]!, page(["c", "d"], "c2"));
+		await resolve(calls[0]!, page(["a", "b"]));
+		await click(showAll());
+		const first = calls[1]!;
+		assert.equal(first.url.searchParams.get("domain"), "wolfpack");
+		assert.equal(first.url.searchParams.get("limit"), "50");
+		assert.equal(first.url.searchParams.get("before"), null);
+		assert.equal(showAll().textContent, "Loading…");
+		await resolve(first, page(["a", "b", "c", "d"], "c1"));
 		assert.deepEqual(ids(), ["a", "b", "c", "d"]);
+		await hubEvent("kb.changed");
+		await settle(60);
+		await resolve(calls[2]!, page(["n", "a", "b"]));
+		assert.deepEqual(ids(), ["n", "a", "b", "c", "d"]); // the loaded page survives the refetch
+		await click(showAll());
+		assert.equal(calls[3]!.url.searchParams.get("before"), "c1"); // continues from the domain cursor
+		await resolve(calls[3]!, page(["e"]));
+		assert.deepEqual(ids(), ["n", "a", "b", "c", "d", "e"]);
+		assert.equal(document.querySelector('[data-testid="kb-show-all"]'), null); // last page: no cursor left
+	});
+
+	it("the poll refetches the overview and stops on unmount", async () => {
+		await mount(POLLING);
+		await resolve(calls[0]!, page(["a", "b"]));
 		await settle(150);
-		const poll = calls[2]!;
-		assert.equal(poll.url.searchParams.get("limit"), "50");
-		await resolve(poll, page(["a", "b"], "c1"));
-		assert.deepEqual(ids(), ["a", "b", "c", "d"]);
-		await click(document.querySelector('[data-testid="kb-load-more"]')!);
-		assert.equal(calls[3]!.url.searchParams.get("before"), "c2"); // the deepest cursor survived
-	});
-
-	it("the poll and a pending debounce stop on unmount", async () => {
-		await mount(POLLING);
-		await resolve(calls[0]!, page(["a"]));
+		const poll = calls[1]!;
+		assert.equal(poll.url.searchParams.get("limit"), "200");
+		await resolve(poll, page(["a", "b", "c"]));
+		assert.deepEqual(ids(), ["a", "b", "c"]);
 		await hubEvent("kb.changed");
 		await act(async () => root!.unmount());
 		root = null;
@@ -176,20 +165,23 @@ describe("KbActivityView live behaviour", () => {
 		assert.equal(calls.length, n);
 	});
 
-	it("the since toggle starts paging over and ignores the old range's in-flight Load more", async () => {
+	it("the since toggle starts over and ignores the old range's in-flight show all", async () => {
 		await mount();
-		await resolve(calls[0]!, page(["a", "b"], "c1"));
-		await click(document.querySelector('[data-testid="kb-load-more"]')!);
+		await resolve(calls[0]!, page(["a", "b"]));
+		await click(showAll());
 		const more = calls[1]!;
 		await click(document.querySelector('[data-since="7d"]')!);
 		const reset = calls[2]!;
 		assert.equal(reset.url.searchParams.get("since"), "7d");
-		assert.equal(reset.url.searchParams.get("before"), null);
-		await resolve(reset, page(["s1"], "d1"));
-		await resolve(more, page(["old"], "c2")); // belongs to 30d: dropped
+		assert.equal(reset.url.searchParams.get("domain"), null);
+		await resolve(reset, page(["s1"]));
+		await resolve(more, page(["old1", "old2"], "c2")); // belongs to 30d: dropped
 		assert.deepEqual(ids(), ["s1"]);
 		assert.equal(document.querySelector('[data-since="7d"]')!.getAttribute("aria-pressed"), "true");
-		assert.equal(document.querySelector('[data-testid="kb-load-more"]')!.textContent, "Load more");
+		assert.equal(showAll().textContent, "show all 11 →");
+		// the range applies to a domain page too
+		await click(showAll());
+		assert.equal(calls[3]!.url.searchParams.get("since"), "7d");
 	});
 
 	it("a 401 with the hub-auth marker shows the unpaired message", async () => {
@@ -203,26 +195,5 @@ describe("KbActivityView live behaviour", () => {
 		await act(async () => calls[0]!.respond(401));
 		assert.match(document.body.textContent ?? "", /Unauthorized/);
 		assert.doesNotMatch(document.body.textContent ?? "", /not paired/);
-	});
-
-	it("when the cursor moves twice during Load more it retries once and then stops", async () => {
-		await mount();
-		await resolve(calls[0]!, page(["a", "b"], "c1"));
-		await click(document.querySelector('[data-testid="kb-load-more"]')!);
-		const first = calls[1]!; // before=c1
-		await hubEvent("kb.changed");
-		await settle(60);
-		await resolve(calls[2]!, page(["x", "y"], "c9")); // cursor moved once
-		await resolve(first, page(["c"], "c2")); // stale: dropped, one retry from c9
-		const retry = calls[3]!;
-		assert.equal(retry.url.searchParams.get("before"), "c9");
-		await hubEvent("kb.changed");
-		await settle(60);
-		await resolve(calls[4]!, page(["p", "q"], "c10")); // cursor moved a second time
-		await resolve(retry, page(["r"], "c11")); // stale again: dropped, NO second retry
-		await settle(30);
-		assert.equal(calls.length, 5);
-		assert.deepEqual(ids(), ["p", "q"]);
-		assert.equal(document.querySelector('[data-testid="kb-load-more"]')!.textContent, "Load more"); // not stuck loading
 	});
 });

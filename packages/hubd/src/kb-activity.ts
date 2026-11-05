@@ -96,24 +96,33 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
 
       const idx = index();
       const page = pageActivity(idx, { sinceMs, ...(q.before != null ? { before: q.before } : {}), limit, ...(domain ? { domain } : {}) }, fsEntryResolver(d.roots.kbBase, entryDomains(t)));
-      const { waitingByDomain, bad, ...lane_ } = readIncoming(d.inboxRoot, t);
-      const incoming = { ...lane_, bad: bad.map((b) => ({ ...b, reason: safeError(b.reason) })) };
       const emap = entryDomains(t);
+      const knownDomains = new Set([...listDomains(d.roots.kbBase), ...emap.values()]);
+      const { waitingByDomain, bad, ...lane_ } = readIncoming(d.inboxRoot, t, knownDomains);
+      const incoming = { ...lane_, bad: bad.map((b) => ({ ...b, reason: safeError(b.reason) })) };
       const entryCount = new Map<string, number>();
       for (const dom of emap.values()) entryCount.set(dom, (entryCount.get(dom) ?? 0) + 1);
       const act = new Map(page.domains.map((x) => [x.domain, x]));
       const names = new Set([...listDomains(d.roots.kbBase), ...entryCount.keys()]);
       const domainSummaries = [...names].sort().map((name) => {
         const a = act.get(name);
-        return { domain: name, entries: entryCount.get(name) ?? 0, waiting: waitingByDomain[name] ?? 0, ...(a?.lastChangeAt ? { lastChangeAt: a.lastChangeAt } : {}), contributors: a?.contributors ?? [] };
+        return { domain: name, entries: entryCount.get(name) ?? 0, waiting: waitingByDomain.get(name) ?? 0, ...(a?.lastChangeAt ? { lastChangeAt: a.lastChangeAt } : {}), contributors: a?.contributors ?? [], decided: a?.decided ?? 0, recent: a?.recent ?? [] };
       });
       const st = d.curator?.status();
       const on = st?.enabled === true;
+      const badBy = new Map<string, number>();
+      for (const w of incoming.wolves) if (w.bad) badBy.set(w.wolf, w.bad);
+      const attWolves = new Set([...page.attention.map((a) => a.wolf), ...badBy.keys()]);
+      const attention = [...attWolves].sort().map((wolf) => {
+        const a = page.attention.find((x) => x.wolf === wolf);
+        return { wolf, reject: a?.reject ?? 0, parked: a?.parked ?? 0, unclassified: a?.unclassified ?? 0, bad: badBy.get(wolf) ?? 0, items: a?.items ?? [] };
+      });
       return {
         generatedAt: new Date(t).toISOString(),
         source: { lane, hasDecisions: page.hasDecisions, curator: on ? "on" : "off" },
         incoming,
         domains: domainSummaries,
+        attention,
         decisions: page.decisions,
         changes: page.changes,
         ...(on && st ? { sweep: { running: st.running, ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),

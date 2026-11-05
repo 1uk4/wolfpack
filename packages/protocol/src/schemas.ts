@@ -966,7 +966,7 @@ export const KbActivityResponseSchema = z.object({
     ),
     /** Quarantined (`_bad/`) contributions with their reason, newest first, capped. */
     bad: z
-      .array(z.object({ wolf: z.string(), denTopicId: z.string().optional(), domainHint: z.string().optional(), reason: z.string(), at: z.string() }))
+      .array(z.object({ id: z.string().optional(), wolf: z.string(), denTopicId: z.string().optional(), domainHint: z.string().optional(), reason: z.string(), at: z.string() }))
       .optional(),
   }),
   /** One summary per domain under the KB (every domain, even with no activity). `contributors`: wolves with decisions in range. */
@@ -977,9 +977,17 @@ export const KbActivityResponseSchema = z.object({
         entries: z.number().int().nonnegative(),
         waiting: z.number().int().nonnegative(),
         lastChangeAt: z.string().optional(),
+        /** Wolves with create / merge / unchanged decisions in range (a rejected contribution does not make a contributor). */
         contributors: z.array(z.object({ wolf: z.string(), count: z.number().int().nonnegative() })),
+        /** All decisions in range for the domain, and the newest few (so a block never depends on the overall page). */
+        decided: z.number().int().nonnegative().optional(),
+        recent: z.array(KbDecisionSchema).optional(),
       }),
     )
+    .optional(),
+  /** Per wolf, over the whole range: contributions that were rejected / parked / unclassified, with the latest few (see `incoming.bad` for quarantined). */
+  attention: z
+    .array(z.object({ wolf: z.string(), reject: z.number().int().nonnegative(), parked: z.number().int().nonnegative(), unclassified: z.number().int().nonnegative(), bad: z.number().int().nonnegative(), items: z.array(KbDecisionSchema) }))
     .optional(),
   decisions: z.object({
     items: z.array(KbDecisionSchema),

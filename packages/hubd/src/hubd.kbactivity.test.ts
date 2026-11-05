@@ -70,7 +70,10 @@ describe("GET /v1/kb/activity", () => {
     writeFileSync(join(lane, "p-0123456789.md"), "---\ndomain_hint: alpha\n---\nx");
     const body = await parse(await get("/v1/kb/activity"));
     expect(body.domains?.map((x) => x.domain)).toEqual(["alpha", "empty"]);
-    expect(body.domains![0]).toMatchObject({ entries: 1, waiting: 1, contributors: [{ wolf: "w1", count: 1 }, { wolf: "w2", count: 1 }] });
+    expect(body.domains![0]).toMatchObject({ entries: 1, waiting: 1, contributors: [{ wolf: "w1", count: 1 }], decided: 2 });
+    expect(body.domains![0]!.recent).toHaveLength(2);
+    expect(body.domains![0]!.recent).toEqual(expect.arrayContaining([expect.objectContaining({ denTopicId: "r", outcome: "reject" }), expect.objectContaining({ denTopicId: "a", title: "One" })]));
+    expect(body.attention).toEqual([expect.objectContaining({ wolf: "w2", reject: 1, parked: 0, unclassified: 0, bad: 1 })]);
     expect(body.domains![1]).toMatchObject({ entries: 0, waiting: 0, contributors: [] });
     expect(body.decisions.items.every((d) => d.domain === "alpha")).toBe(true);
     expect(body.incoming.bad).toEqual([expect.objectContaining({ wolf: "w2", denTopicId: "tt", domainHint: "nope", reason: "domain_hint is not subscribed" })]);

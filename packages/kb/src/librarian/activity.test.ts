@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { KbEvent } from "../shared/index.js";
-import { ACTIVITY_OUTCOMES, INCOMING_STAT_CAP, buildActivityIndex, foldKbActivity, pageActivity, readIncoming, scanEntryInfo } from "./activity.js";
+import { ACTIVITY_OUTCOMES, BAD_MAX, listDomains, INCOMING_STAT_CAP, buildActivityIndex, foldKbActivity, pageActivity, readIncoming, scanEntryInfo } from "./activity.js";
 
 let n = 0;
 const id = () => `e${String(++n).padStart(6, "0")}`;
@@ -153,7 +154,7 @@ describe("readIncoming", () => {
     const r = readIncoming(root);
     expect(r.wolves[0].pending).toBe(25);
     expect(r.wolves[0].items).toHaveLength(20);
-    expect(readIncoming(join(root, "nope"))).toEqual({ total: 0, wolves: [], bad: [], waitingByDomain: {} });
+    expect(readIncoming(join(root, "nope"))).toEqual({ total: 0, wolves: [], bad: [], waitingByDomain: new Map() });
   });
 
   it("reads domain_hint from the file head and counts waiting per domain", () => {
@@ -162,7 +163,7 @@ describe("readIncoming", () => {
     writeFileSync(join(root, "w1", "b-0123456788.md"), "---\ndomain_hint: alpha\n---\n");
     writeFileSync(join(root, "w1", "c-0123456787.md"), "no frontmatter");
     const r = readIncoming(root);
-    expect(r.waitingByDomain).toEqual({ alpha: 2 });
+    expect(Object.fromEntries(r.waitingByDomain)).toEqual({ alpha: 2 });
     expect(r.wolves[0].items.filter((i) => i.domain === "alpha")).toHaveLength(2);
   });
 
@@ -306,6 +307,79 @@ describe("attribution safety, dedupe, routing ids", () => {
   });
 });
 
+describe("readIncoming hardening", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "act-hard-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("never follows a symlinked sidecar, body or inbox file, and skips a FIFO without blocking", () => {
+    const secret = join(root, "secret.txt");
+    writeFileSync(secret, "TOP-SECRET first line\n");
+    mkdirSync(join(root, "w1", "_bad"), { recursive: true });
+    const bad = join(root, "w1", "_bad");
+    writeFileSync(join(bad, "a.raw"), JSON.stringify({ denTopicId: "t-a" }));
+    symlinkSync(secret, join(bad, "a.raw.reason.txt")); // sidecar -> secret
+    symlinkSync(secret, join(bad, "b.raw")); // body -> secret
+    execFileSync("mkfifo", [join(bad, "c.raw")]);
+    writeFileSync(join(bad, "d.raw"), JSON.stringify({ denTopicId: "t-d" }));
+    execFileSync("mkfifo", [join(bad, "d.raw.reason.txt")]);
+    symlinkSync(secret, join(root, "w1", "linked-0123456789.md"));
+    execFileSync("mkfifo", [join(root, "w1", "pipe-0123456788.md")]);
+    const r = readIncoming(root);
+    const text = JSON.stringify(r.bad);
+    expect(text).not.toContain("TOP-SECRET");
+    expect(r.bad.map((b) => b.denTopicId).sort()).toEqual(["t-a", "t-d"]); // symlink and FIFO bodies are not listed
+    expect(r.bad.every((b) => b.reason === "quarantined")).toBe(true);
+    expect(r.wolves[0].items).toEqual([]); // neither the symlink nor the FIFO is a pending item
+  });
+
+  it("waitingByDomain is a Map of known domains only; prototype-ish hints are ignored", () => {
+    mkdirSync(join(root, "w1"));
+    const f = (n: string, hint: string) => writeFileSync(join(root, "w1", `${n}-0123456789.md`), `---\ndomain_hint: ${hint}\n---\n`);
+    f("a", "alpha"); f("b", "__proto__"); f("c", "constructor"); f("d", "ghost"); f("e", '"alpha"');
+    const r = readIncoming(root, Date.now(), new Set(["alpha"]));
+    expect([...r.waitingByDomain]).toEqual([["alpha", 2]]);
+    expect(r.wolves[0].items.map((i) => i.domain).filter(Boolean)).toEqual(["alpha", "alpha"]);
+    expect(Object.keys(r.waitingByDomain)).toEqual([]);
+  });
+
+  it("takes domain_hint from the frontmatter only, in inbox files and bad .md files", () => {
+    mkdirSync(join(root, "w1", "_bad"), { recursive: true });
+    writeFileSync(join(root, "w1", "x-0123456789.md"), "---\nfrom: w1\n---\ndomain_hint: alpha\n");
+    writeFileSync(join(root, "w1", "_bad", "y-0123456788.md"), "---\nfrom: w1\n---\ndomain_hint: beta\n");
+    writeFileSync(join(root, "w1", "_bad", "z-0123456787.md"), "---\ndomain_hint: 'gamma'\n---\n");
+    const r = readIncoming(root);
+    expect(r.waitingByDomain.size).toBe(0);
+    expect(r.bad.find((b) => b.denTopicId === "y")?.domainHint).toBeUndefined();
+    expect(r.bad.find((b) => b.denTopicId === "z")?.domainHint).toBe("gamma");
+  });
+
+  it("bad: newest first across all files and the cap applies before any file is read", () => {
+    mkdirSync(join(root, "w1", "_bad"), { recursive: true });
+    mkdirSync(join(root, "w2", "_bad"), { recursive: true });
+    const base = Date.now() - 1_000_000;
+    for (let i = 0; i < BAD_MAX + 5; i++) {
+      const w = i % 2 ? "w1" : "w2";
+      const f = join(root, w, "_bad", `s${String(i).padStart(3, "0")}.raw`);
+      writeFileSync(f, JSON.stringify({ denTopicId: `t${i}` }));
+      utimesSync(f, new Date(base + i * 1000), new Date(base + i * 1000));
+    }
+    const r = readIncoming(root);
+    expect(r.bad).toHaveLength(BAD_MAX);
+    expect(r.bad[0].denTopicId).toBe(`t${BAD_MAX + 4}`);
+    expect(r.bad[1].denTopicId).toBe(`t${BAD_MAX + 3}`);
+    expect(r.bad.map((b) => b.at)).toEqual([...r.bad.map((b) => b.at)].sort().reverse());
+    expect(r.bad[0].id).toMatch(/^s\d{3}$/);
+  });
+
+  it("listDomains drops names the hub would refuse", () => {
+    for (const d of ["good", "bad name", ".hid", "_x", "ok.1"]) mkdirSync(join(root, "domains", d), { recursive: true });
+    expect(listDomains(root).sort()).toEqual(["good", "ok.1"]);
+  });
+});
+
 describe("per-domain attribution", () => {
   const hinted = (m: number, from: string, topic: string, hint: string): KbEvent => ({ t: "contribution", id: id(), at: at(m), from, denTopicId: topic, hash: `h-${topic}`, prevHash: null, domainHint: hint }) as KbEvent;
   const resolver = (map: Record<string, string>, known: string[]) => ({ domain: (i: string) => map[i], title: (i: string) => (map[i] ? `T ${i}` : undefined), known: () => new Set(known) });
@@ -321,7 +395,11 @@ describe("per-domain attribution", () => {
     expect(by.a).toMatchObject({ domain: "alpha", title: "T kb-a" });
     expect(by.r!.domain).toBe("beta");
     expect(by.bad!.domain).toBeUndefined();
-    expect(p.domains.find((d) => d.domain === "beta")!.contributors).toEqual([{ wolf: "w2", count: 1 }]);
+    const beta = p.domains.find((d) => d.domain === "beta")!;
+    expect(beta.contributors).toEqual([]); // a rejected contribution does not make a contributor
+    expect(beta).toMatchObject({ decided: 1, recent: [{ denTopicId: "r", domain: "beta" }] });
+    expect(p.domains.find((d) => d.domain === "alpha")!.contributors).toEqual([{ wolf: "w1", count: 1 }]);
+    expect(p.attention.map((a) => [a.wolf, a.reject, a.items.length])).toEqual([["w2", 2, 2]]);
   });
 
   it("domain filter pages hinted decisions with no entry; since applies to changes", () => {
@@ -332,5 +410,34 @@ describe("per-domain attribution", () => {
     const p = pageActivity(idx, { sinceMs: Date.parse(at(5)) }, res);
     expect(p.changes.domains[0]!.items.map((c) => c.entryId)).toEqual(["kb-b"]);
     expect(p.domains.find((d) => d.domain === "alpha")!.lastChangeAt).toBe(at(10));
+  });
+});
+
+describe("backfill-shaped ledger", () => {
+  it("contribution (with domainHint) + entry_written + decision per item, bf- ids, old dates, reads per domain with the right wolf", () => {
+    const old = (d: number, m: number) => new Date(Date.UTC(2025, 0, d, 0, m)).toISOString();
+    const evs: KbEvent[] = [];
+    const item = (k: number, wolf: string, hint: string, entry: string | null, outcome: "create" | "reject") => {
+      evs.push({ t: "contribution", id: `bf-c${k}`, at: old(k, 0), from: wolf, denTopicId: `topic-${k}`, hash: `hash-${k}`, prevHash: null, domainHint: hint } as KbEvent);
+      if (entry) evs.push({ t: "entry_written", id: `bf-w${k}`, at: old(k, 1), entryId: entry, canonicalId: entry, action: "create" } as KbEvent);
+      evs.push({ t: "decision", id: `bf-d${k}`, at: old(k, 2), from: wolf, denTopicId: `topic-${k}`, hash: `hash-${k}`, outcome, ...(entry ? { entryId: entry } : { reason: "backfilled" }) } as KbEvent);
+    };
+    item(1, "hal2", "alpha", "kb-alpha-1", "create");
+    item(2, "1uk4", "beta", "kb-beta-1", "create");
+    item(3, "1uk4", "beta", "kb-beta-2", "create");
+    item(4, "hal2", "beta", null, "reject");
+    const res = { domain: (i: string) => ({ "kb-alpha-1": "alpha", "kb-beta-1": "beta", "kb-beta-2": "beta" })[i], title: (i: string) => `T ${i}`, known: () => new Set(["alpha", "beta", "gamma"]) };
+    const p = pageActivity(buildActivityIndex(evs), {}, res);
+    const alpha = p.domains.find((d) => d.domain === "alpha")!;
+    const beta = p.domains.find((d) => d.domain === "beta")!;
+    expect(alpha.contributors).toEqual([{ wolf: "hal2", count: 1 }]);
+    expect(beta.contributors).toEqual([{ wolf: "1uk4", count: 2 }]); // hal2's rejected item is not a contribution
+    expect(beta.decided).toBe(3);
+    expect(beta.recent.map((d) => d.denTopicId)).toEqual(["topic-4", "topic-3", "topic-2"]);
+    expect(beta.recent[0].domain).toBe("beta"); // the reject lands in the hinted domain
+    // changes fold into the same item: one change per entry, attributed to the wolf
+    const ch = p.changes.domains.find((d) => d.domain === "beta")!.items;
+    expect(ch.map((c) => [c.entryId, c.from])).toEqual([["kb-beta-2", "1uk4"], ["kb-beta-1", "1uk4"]]);
+    expect(p.attention).toMatchObject([{ wolf: "hal2", reject: 1 }]);
   });
 });

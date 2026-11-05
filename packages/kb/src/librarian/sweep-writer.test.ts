@@ -6,7 +6,7 @@ import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
 import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 import { readLedger } from "./ledger.js";
-import { acquireLease, freshLease, freshLeaseIn, leaseFile, LEASE_STALE_MS } from "./curator-lease.js";
+import { acquireLease, freshLease, freshLeaseIn, leaseFile, LEASE_STALE_MS, MUTEX_STALE_MS } from "./curator-lease.js";
 import { runSweepTick } from "./tick.js";
 import { countPending } from "./intake.js";
 import type { KbRoots } from "../shared/index.js";
@@ -172,6 +172,33 @@ describe("curator lease races", () => {
     const h = acquireLease([d], "hub")!;
     expect(h).toBeTruthy();
     h.release();
+  });
+
+  it("a live-pid mutex older than the stale age is cleared (a crashed taker whose pid was reused)", () => {
+    const d = mk();
+    lease(d);
+    old(d);
+    const mf = `${leaseFile(d)}.takeover`;
+    writeFileSync(mf, JSON.stringify({ pid: process.pid, nonce: "n" })); // holder pid is alive
+    expect(acquireLease([d], "hub")).toBeNull(); // young mutex: back off
+    expect(existsSync(mf)).toBe(true);
+    const t = new Date(Date.now() - 2 * MUTEX_STALE_MS);
+    utimesSync(mf, t, t);
+    expect(acquireLease([d], "hub")).toBeNull(); // this call clears it
+    expect(existsSync(mf)).toBe(false);
+    const h = acquireLease([d], "hub")!;
+    expect(h).toBeTruthy();
+    h.release();
+  });
+
+  it("a heartbeat that lands between the stale judgment and the mutex is not stolen", () => {
+    const d = mk();
+    lease(d);
+    old(d);
+    const got = acquireLease([d], "hub", { afterJudgedStale: () => { const t = new Date(); utimesSync(leaseFile(d), t, t); } }); // the holder beats
+    expect(got).toBeNull();
+    expect(JSON.parse(readFileSync(leaseFile(d), "utf-8")).pid).toBe(process.pid + 99999); // untouched
+    expect(existsSync(`${leaseFile(d)}.takeover`)).toBe(false);
   });
 
   it("re-entry by the same owner takes every dir and the first release keeps the lease", () => {

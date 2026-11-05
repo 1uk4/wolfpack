@@ -362,6 +362,35 @@ describe("hub curator: failures", () => {
     expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(1);
   }, 30_000);
 
+  it("close() landing between commitEntry and appendLedger lets the item finish: one entry, one entry_written, a receipt, the _processed move, then the lease goes", async () => {
+    let reached!: () => void;
+    const atLedger = new Promise<void>((r) => (reached = r));
+    let go!: () => void;
+    const gate = new Promise<void>((r) => (go = r));
+    let first = true;
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, appendLedger: async (...a: unknown[]) => { if (first) { first = false; reached(); await gate; } return w.appendLedger(...a); } }) }) });
+    drop(dir, 1);
+    const tick = hub.runCuratorOnce();
+    await atLedger; // the entry is committed, the contribution is not yet marked seen
+    expect(entryFiles(dir)).toHaveLength(1);
+    const closing = hub.close();
+    servers.pop();
+    await new Promise((r) => setTimeout(r, 100));
+    go();
+    const run = await tick;
+    await closing;
+    expect(run!.error).toBeUndefined();
+    expect(run).toMatchObject({ processed: 1, created: 1 });
+    expect(entryFiles(dir)).toHaveLength(1);
+    const ledger = readLedger(hub.roots) as Array<{ t: string }>;
+    expect(ledger.filter((e) => e.t === "entry_written")).toHaveLength(1);
+    expect(ledger.filter((e) => e.t === "contribution")).toHaveLength(1); // seen: a restart does not create it again
+    expect(readdirSync(join(dir, "kb", "ops", "receipts", "alpha"))).toHaveLength(1);
+    expect(readdirSync(join(lane(dir), "_processed"))).toHaveLength(1);
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(0);
+    await until(() => !existsSync(leaseFile(contributionsRoot(dir))), "lease released");
+  }, 30_000);
+
   it("no lease leaks when start() or a later startup step throws", async () => {
     const dir = freshDir();
     await expect(createHubServer({ dataDir: dir, port: 0, curator: curatorOpts({ pollMs: 1000, afterStart: () => { throw new Error("startup step failed"); } }) })).rejects.toThrow(/startup step failed/);

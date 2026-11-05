@@ -45,6 +45,7 @@ export { drainInbox, countPending, parseContribution, DEFAULT_LANE, type LaneOpt
 export {
   createEmbedder,
   resolveEmbedConfig,
+  isNomicModel,
   embedInput,
   buildEntryVectors,
   currentEntryHashes,

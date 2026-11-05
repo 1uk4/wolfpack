@@ -19,6 +19,8 @@
  * host and ONE clock (mtime vs. Date.now(), and a pid check only on the same hostname); the file must never be synced
  * (Syncthing `.stignore`: `.sweep-lease*`), or a second machine would read a copy of it. A lease left by a crashed hub with a
  * different live pid or another hostname blocks the next start until it is stale (2x the tick budget) or removed by hand.
+ * Leftovers: a crash can leave `.sweep-lease.<pid>.<hex>` / `.sweep-lease.takeover.<pid>.<hex>` temp files (and a stale `.sweep-lease.takeover`) in the lane dir; they are harmless
+ * (never read as contributions), safe to delete, and the takeover mutex clears itself after MUTEX_STALE_MS.
  * A dotfile in a lane directory is never read as a contribution (intake lists wolf DIRECTORIES and `*.md`).
  */
 import { closeSync, linkSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeSync } from "node:fs";
@@ -35,6 +37,8 @@ export const LEASE_STALE_MS = 2 * TICK_BUDGET_MS;
 const HEARTBEAT_MS = 30_000;
 /** An unparseable lease file is probably being replaced; treat it as held this long after its mtime. */
 export const UNREADABLE_GRACE_MS = 10_000;
+/** A takeover mutex older than this is cleared whatever its holder pid says (a takeover takes milliseconds). */
+export const MUTEX_STALE_MS = 60_000;
 
 export type LeaseOwner = "hub" | "wolf";
 export interface Lease {
@@ -172,7 +176,12 @@ function takeover(dir: string, judgedRaw: string, body: string, opts: LeaseOptio
       linkSync(tmp, mf);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      // Another taker holds the mutex. A dead holder's mutex is cleared (only if unchanged since read); otherwise back off.
+      // Another taker holds the mutex. It is cleared when its holder is dead, when it is older than MUTEX_STALE_MS whatever the
+      // holder's pid says (a crashed taker whose pid was reused), or when it is unreadable past the grace period; otherwise back off.
+      // The compare-then-unlink below is NOT atomic (the mutex could be replaced between the read and the unlink). That is accepted:
+      // it needs a stale mutex and a new taker racing in the same instant, and the worst case is two takers running the takeover
+      // together, which the re-judge under the mutex (and the final linkSync publish, which fails with EEXIST) still resolves to one
+      // lease: at most two sweepers overlap for a tick, never more, and the sweeps' own per-item commit checks catch the rest.
       let seen: string | undefined;
       try {
         seen = readFileSync(mf, "utf-8");
@@ -180,8 +189,8 @@ function takeover(dir: string, judgedRaw: string, body: string, opts: LeaseOptio
         return false;
       }
       const holder = pidOf(seen);
-      const old = Date.now() - (statSync(mf, { throwIfNoEntry: false })?.mtimeMs ?? Date.now()) > UNREADABLE_GRACE_MS;
-      if ((holder !== undefined && !(opts.pidAlive ?? alive)(holder)) || (holder === undefined && old)) {
+      const age = Date.now() - (statSync(mf, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+      if ((holder !== undefined && !(opts.pidAlive ?? alive)(holder)) || age > MUTEX_STALE_MS || (holder === undefined && age > UNREADABLE_GRACE_MS)) {
         try {
           if (readFileSync(mf, "utf-8") === seen) unlinkSync(mf);
         } catch (er) {
@@ -191,9 +200,11 @@ function takeover(dir: string, judgedRaw: string, body: string, opts: LeaseOptio
       return false; // the caller treats it as "held"; the next tick re-judges
     }
     try {
-      const cur = readRaw(dir);
-      if (cur.kind === "none") return publish(dir, body) === "ok";
-      if (cur.raw !== judgedRaw) return false; // changed since judged (a fresh lease): not ours to remove
+      // Re-judge UNDER the mutex (age and pid liveness, not just the bytes): a heartbeat or a new lease that landed between the
+      // first judgment and the mutex makes it held, and it is not ours to remove.
+      const again = judge(dir, opts);
+      if (again.state === "none") return publish(dir, body) === "ok";
+      if (again.state === "held" || again.raw !== judgedRaw) return false;
       try {
         unlinkSync(leaseFile(dir));
       } catch (e) {

@@ -28,6 +28,7 @@ import {
   createLibrarianEngine,
   defaultSweepWriter,
   resolveEmbedConfig,
+  isNomicModel,
   freshLeaseIn,
   renderDomainDigest,
   renderDomainIndex,
@@ -210,11 +211,22 @@ export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"
     // The hub's KB is not a git repo of its own (and `git -C` would climb into whatever repo holds the data dir): never commit.
     gitCommit: () => undefined,
   };
-  // Closing gate: nothing is written once the curator is closing, not even by the default (plain disk) methods.
+  // Closing gate. Once the curator is closing, only writes that OPEN a new item are refused (commitEntry, patchEntry, quarantine,
+  // and a writeReceipt / markProcessed with no committed item: the reject and duplicate paths). After an item has committed
+  // (`committed` is set by a successful commitEntry / patchEntry) every later write goes through, so the ledger append that marks
+  // its contribution as seen, the Delivered sync, the receipt and the _processed move all complete: a routine restart must not
+  // leave a live entry whose contribution is unseen (it would be created again on the next boot). The item ends at its
+  // markProcessed. Derived renders and the final ledger/section writes are bounded and let through as well. The tick itself ends
+  // soon after: the next item cannot open.
+  let committed = false;
+  const OPENS = new Set(["commitEntry", "patchEntry", "quarantine", "writeReceipt", "markProcessed"]);
   const gated = Object.fromEntries(
-    Object.entries(w).map(([k, fn]) => [k, (...args: unknown[]) => {
-      if (d.closing?.()) throw new Error("the hub is shutting down");
-      return (fn as (...a: unknown[]) => unknown)(...args);
+    Object.entries(w).map(([k, fn]) => [k, async (...args: unknown[]) => {
+      if (d.closing?.() && OPENS.has(k) && !(committed && k !== "quarantine")) throw new Error("the hub is shutting down");
+      const r = await (fn as (...a: unknown[]) => unknown)(...args);
+      if (k === "commitEntry" || k === "patchEntry") committed = true;
+      else if (k === "markProcessed") committed = false;
+      return r;
     }])
   ) as unknown as SweepWriter;
   return Object.assign(gated, { pending });
@@ -229,6 +241,11 @@ export function createCurator(deps: CuratorDeps): Curator {
   let inflight: Promise<CuratorRun | undefined> | undefined;
   let closing = false;
   let warnedWolf = false;
+
+  if (enabled && o.embedModel && !isNomicModel(o.embedModel) && process.env.WOLFPACK_EMBED_MODEL !== o.embedModel) {
+    // The task prefix (nomic only) is keyed on the process-wide model name, which sweep.ts reads itself; an option cannot reach it.
+    console.warn(`[curator] HUBD_EMBED_MODEL=${o.embedModel} is not a nomic model but WOLFPACK_EMBED_MODEL is not set to it: the embedding prefix logic still assumes ${resolveEmbedConfig().model}. Set WOLFPACK_EMBED_MODEL as well.`);
+  }
 
   if (enabled) {
     // Startup preconditions: the lane and receipts must be the hub's own (the sweep reads <opsRoot>/contributions and writes

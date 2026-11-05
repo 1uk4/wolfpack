@@ -42,6 +42,8 @@ import {
   type GraduationStatus,
   type WorkListResponse,
   type KbPipelineResponse,
+  type KbActivityResponse,
+  type KbActivityQuery,
   type PendingCard,
   type PromoteResponse,
   type MemoryEvent,
@@ -492,6 +494,17 @@ export class HttpConsoleClient implements ConsoleClient {
     if (opts.domain) q.set("domain", opts.domain);
     if (opts.archivedWork !== undefined) q.set("archivedWork", String(opts.archivedWork));
     return (await this.json("hubKbGraph", {}, ROUTES.hubKbGraph.response.schema, undefined, undefined, q.size ? `?${q}` : "")) as KbGraph;
+  }
+
+  /** The hub curator's KB activity from the hub's own ledger (GET /v1/kb/activity). Hub clients only. */
+  async getKbActivity(query: KbActivityQuery = {}): Promise<KbActivityResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "getKbActivity needs a hub client", false);
+    const q = new URLSearchParams();
+    if (query.since) q.set("since", query.since);
+    if (query.before) q.set("before", query.before);
+    if (query.limit !== undefined) q.set("limit", String(query.limit));
+    if (query.domain) q.set("domain", query.domain);
+    return (await this.json("hubKbActivity", {}, ROUTES.hubKbActivity.response.schema, undefined, undefined, q.size ? `?${q}` : "")) as KbActivityResponse;
   }
 
   /** One KB entry from the HUB's read-only KB copy (GET /v1/kb/entries/:id), scoped to the token's readable domains. */

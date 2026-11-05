@@ -97,6 +97,7 @@ export function parseMemoryEventFrame(raw: string): MemoryEventFrame | null {
 }
 
 export const PIPELINE_HREF = "/pipeline";
+export const KB_ACTIVITY_HREF = "/kb-activity";
 export const entryHref = (id: string): string => `/kb/entry/${encodeURIComponent(id)}`;
 export const workHref = (id: string): string => `/kb/work/${encodeURIComponent(id)}`;
 

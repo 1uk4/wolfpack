@@ -67,6 +67,9 @@ export interface ServerEvents {
 		thread: import("./subagents.ts").ChildThread & { wolf?: string; kind?: string; status?: "idle" | "busy" | "needs-you" };
 		chatId?: undefined;
 	};
+	/** A hub event the KB activity page follows (sweep_started / sweep_item / sweep_finished / kb.changed / resync), bridged per connection
+	 *  from the hub's event stream. Unlike the pokes above it carries the frame: the page folds sweep_item in optimistically, then refetches. */
+	"hub-event": { frame: { type: string; [k: string]: unknown }; chatId?: undefined };
 }
 
 export type ServerEventType = keyof ServerEvents;
@@ -84,6 +87,7 @@ export const SERVER_EVENT_TYPES = [
 	"compaction-changed",
 	"needs-you-changed",
 	"thread-updated",
+	"hub-event",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */

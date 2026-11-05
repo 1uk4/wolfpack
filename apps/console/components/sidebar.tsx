@@ -208,7 +208,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	);
 }
 
-/** Phone only: a fixed back-to-list button for pages that render no SidebarToggle (graph "/", pipeline). */
+/** Phone only: a fixed back-to-list button for pages that render no SidebarToggle (graph "/", KB activity). */
 function FloatingBack({ toggles, open, mobile, onClick }: { toggles: number; open: boolean; mobile: boolean; onClick: () => void }) {
 	if (!needsFloatingBack(mobile, open, toggles)) return null;
 	return (
@@ -964,17 +964,17 @@ export function SessionsSidebar() {
 						Graph
 					</Link>
 					<Link
-						href="/pipeline"
+						href="/kb-activity"
 						onClick={closeList}
-						data-testid="nav-pipeline"
-						aria-current={pathname === "/pipeline" ? "page" : undefined}
+						data-testid="nav-kb-activity"
+						aria-current={pathname === "/kb-activity" ? "page" : undefined}
 						className={cn(
 							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
-							pathname === "/pipeline" ? "bg-accent text-foreground" : "text-muted-foreground",
+							pathname === "/kb-activity" ? "bg-accent text-foreground" : "text-muted-foreground",
 						)}
 					>
 						<WorkflowIcon className="size-3" />
-						Pipeline
+						KB activity
 					</Link>
 					<WorkNavEntry />
 				</div>

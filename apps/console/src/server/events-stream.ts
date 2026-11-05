@@ -29,6 +29,7 @@ import type { ConsoleClient } from "@wolfpack/client";
 import { createConsoleClient, getConsoleClient, nextRequestToken } from "./console-client.ts";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { createActivityBridge } from "./needs-you-api.ts";
+import { createHubEventsBridge } from "./hub-events-bridge.ts";
 
 /**
  * PER-CONNECTION BRIDGE (owner decision): every SSE connection runs its OWN activity bridge on THAT connection's device token; there is
@@ -54,6 +55,8 @@ export interface EventsOptions {
 	clientFor?: () => Promise<ConsoleClient>;
 	/** Bridge tuning (tests). */
 	bridge?: Parameters<typeof createActivityBridge>[1];
+	/** Hub-events bridge tuning (tests). */
+	hubBridge?: Parameters<typeof createHubEventsBridge>[1];
 }
 
 /** One window's subscription as an SSE Response. */
@@ -66,6 +69,7 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 			let heartbeat: ReturnType<typeof setInterval> | undefined;
 			let unsubscribe: (() => void) | undefined;
 			let bridge: ReturnType<typeof createActivityBridge> | undefined;
+			let hubBridge: ReturnType<typeof createHubEventsBridge> | undefined;
 			let client: ConsoleClient | undefined;
 
 			const stop = () => {
@@ -74,6 +78,7 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 				unsubscribe?.();
 				if (heartbeat) clearInterval(heartbeat);
 				bridge?.stop(); // no leaked loops: this connection's wolf streams end with it
+				hubBridge?.stop();
 			};
 			/** This connection's token was rejected: end the connection (the browser signs itself out on its next /api 401). */
 			const authLost = () => {
@@ -91,6 +96,7 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 				if (closed || !client) return;
 				try {
 					bridge?.ensure(client);
+					hubBridge?.ensure(client);
 				} catch {
 					/* the channel works without it; the next ping retries */
 				}
@@ -118,6 +124,7 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 			// not at the first ping 25s later.
 			frame(": connected\n\n");
 			bridge = createActivityBridge(undefined, { ...eo.bridge, onAuthLost: authLost });
+			hubBridge = createHubEventsBridge(undefined, { ...eo.hubBridge, onAuthLost: authLost });
 			void (eo.clientFor ?? connectionClient)().then(
 				(c) => {
 					client = c;

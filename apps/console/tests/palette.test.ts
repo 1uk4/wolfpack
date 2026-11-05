@@ -26,7 +26,7 @@ describe("currentWolfOf", () => {
 	});
 	it("is null off wolf routes", () => {
 		assert.equal(currentWolfOf("/"), null);
-		assert.equal(currentWolfOf("/pipeline"), null);
+		assert.equal(currentWolfOf("/kb-activity"), null);
 		assert.equal(currentWolfOf("/wolves"), null);
 		assert.equal(currentWolfOf(null), null);
 	});
@@ -35,12 +35,12 @@ describe("currentWolfOf", () => {
 describe("buildCommandItems", () => {
 	it("hides memory commands without a current wolf", () => {
 		const ids = buildCommandItems(null).map((i) => i.id);
-		assert.deepEqual(ids, ["cmd:graph", "cmd:pipeline", "cmd:model"]);
+		assert.deepEqual(ids, ["cmd:graph", "cmd:kb-activity", "cmd:model"]);
 	});
 	it("adds consolidate/promote for the current wolf", () => {
 		const items = buildCommandItems("1uk4");
 		assert.deepEqual(items.filter((i) => i.command === "consolidate" || i.command === "promote").map((i) => i.hint), ["1uk4", "1uk4"]);
-		assert.equal(items.find((i) => i.id === "cmd:pipeline")?.href, "/pipeline");
+		assert.equal(items.find((i) => i.id === "cmd:kb-activity")?.href, "/kb-activity");
 		assert.equal(items.find((i) => i.id === "cmd:graph")?.href, "/");
 		assert.equal(items.find((i) => i.label === "Switch model")?.command, "switch-model");
 	});

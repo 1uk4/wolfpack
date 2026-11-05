@@ -15,7 +15,7 @@
  *     work.staged  ─┼──▶  reduce ───────────▶  Map<WorkId, WorkItem>
  *     work.noted   ─┘
  *
- * Two orthogonal axes (see docs/factory-design.md):
+ * Two orthogonal axes:
  *   • work tree  — `partOf` (initiative → feature → task)   [vertical decomposition]
  *   • area       — `area` field (marketing, analysis, …)    [horizontal grouping]
  * Both live inside one `domain` (the hard boundary + the KB propagation unit).

@@ -140,8 +140,26 @@ describe("promoteTopics domain mapping (work-wolfpack-0BdguCL)", () => {
   it("keeps a subscribed domain", async () => {
     expect(await run("personal", { allowedDomains: ["personal", "wolfpack"] })).toBe("personal");
   });
-  it("keeps today's behaviour when no domains are known", async () => {
-    expect(await run("fitness")).toBe("fitness");
+  it("fails closed to the default domain when no domains are known", async () => {
+    vi.stubEnv("WOLF_DOMAINS", "");
+    expect(await run("fitness")).toBe("wolfpack");
+    vi.unstubAllEnvs();
+  });
+  it("treats an empty allowedDomains like none", async () => {
+    vi.stubEnv("WOLF_DOMAINS", "");
+    expect(await run("fitness", { allowedDomains: [] })).toBe("wolfpack");
+    vi.unstubAllEnvs();
+  });
+  it("falls back to WOLF_DOMAINS when allowedDomains is omitted", async () => {
+    vi.stubEnv("WOLF_DOMAINS", "personal,snapjack");
+    expect(await run("fitness")).toBe("personal");
+    vi.unstubAllEnvs();
+  });
+  it("a topic with no domain and an unsubscribed default gets the first subscribed domain", async () => {
+    expect(await run(undefined, { allowedDomains: ["snapjack", "personal"] })).toBe("snapjack");
+  });
+  it("default differs from the allowed list: tag and default both unsubscribed -> first allowed", async () => {
+    expect(await run("memory", { defaultDomain: "tooling", allowedDomains: ["personal"] })).toBe("personal");
   });
 });
 

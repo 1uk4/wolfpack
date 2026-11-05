@@ -466,10 +466,31 @@ describe("promoteSessionTopics domain hint (work-wolfpack-0BdguCL)", () => {
     writeFileSync(join(dir, "gym.md"), "---\nid: gym\ntitle: Gym\nsummary: s\nupdated: 2026-10-20 10:00\ndomain: fitness\n---\n\ngym body about lifting\n");
     const clean = { slug: "main", title: "Gym log", summary: "Lifting.", body: "## Design\nSquats." };
     const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
-    await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "personal", domains: ["personal"] });
+    await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "wolfpack", domains: ["personal"] });
     const inbox = join(roots.opsRoot, "inbox", WOLF);
     const files = readdirSync(inbox);
     expect(files.length).toBe(1);
     expect(readFileSync(join(inbox, files[0]), "utf8")).toContain("domain_hint: personal");
+  });
+
+  it("an old extension that passes no domains still gets a subscribed hint (WOLF_DOMAINS, else the default)", async () => {
+    for (const [env, want] of [["personal", "personal"], ["", "wolfpack"]] as const) {
+      const wolf = `w-${want}`;
+      const loc = durableSessionTopics(den);
+      const dir = join(loc.memoryRoot, loc.sessionId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `t-${want}.md`), `---\nid: t-${want}\ntitle: T\nsummary: s\nupdated: 2026-10-20 10:00\ndomain: vehicles\n---\n\nbody ${want} about cars\n`);
+      const clean = { slug: "main", title: `Cars ${want}`, summary: "Cars.", body: "## Design\nOil." };
+      const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+      const prev = process.env.WOLF_DOMAINS;
+      process.env.WOLF_DOMAINS = env;
+      try {
+        await promoteSessionTopics({ wolfDen: den, wolfName: wolf, engine, kbRoots: roots, defaultDomain: "wolfpack" });
+      } finally {
+        if (prev === undefined) delete process.env.WOLF_DOMAINS; else process.env.WOLF_DOMAINS = prev;
+      }
+      const inbox = join(roots.opsRoot, "inbox", wolf);
+      expect(readFileSync(join(inbox, readdirSync(inbox)[0]), "utf8")).toContain(`domain_hint: ${want}`);
+    }
   });
 });

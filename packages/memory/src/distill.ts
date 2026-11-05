@@ -350,7 +350,7 @@ export interface PromoteOptions {
   roots: KbRoots;
   wolf: string;
   defaultDomain: string;
-  /** The wolf's subscribed domains: a topic whose domain is outside them is not emitted (refused, stays pending). */
+  /** The wolf's subscribed domains. A topic tagged outside them is emitted under a subscribed one. Omitted: `WOLF_DOMAINS`, else the default domain. */
   allowedDomains?: readonly string[];
   session?: string;
   onProgress?: (msg: string) => void;
@@ -378,14 +378,29 @@ export interface PromoteStats {
   emitted: number;
 }
 
+/** The wolf's subscribed domains from the environment (`WOLF_DOMAINS`, exported by the harness from wolf.yaml). */
+export function envDomains(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.WOLF_DOMAINS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
+}
+
+let warnedNoDomains = false;
+
 /**
  * The domain a topic is emitted under. A subscribed domain is kept; anything else (an LLM topic tag such as
  * "fitness") falls back to the default domain if subscribed, else the first subscribed one. With no known
- * subscriptions the topic's own domain (or the default) stands. The single place this mapping happens.
+ * subscriptions it fails closed to the default domain (logged once) rather than passing a raw tag through.
+ * The single place this mapping happens.
  */
 export function subscribedDomain(topicDomain: string | undefined, defaultDomain: string, allowed?: readonly string[]): string {
   const want = topicDomain || defaultDomain;
-  if (!allowed?.length || allowed.includes(want)) return want;
+  if (!allowed?.length) {
+    if (!warnedNoDomains) {
+      warnedNoDomains = true;
+      console.warn(`[memory] no subscribed domains known; emitting under the default domain "${defaultDomain}"`);
+    }
+    return defaultDomain || want;
+  }
+  if (allowed.includes(want)) return want;
   return allowed.includes(defaultDomain) ? defaultDomain : allowed[0]!;
 }
 
@@ -395,11 +410,13 @@ export function subscribedDomain(topicDomain: string | undefined, defaultDomain:
 export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOptions): Promise<PromoteStats> {
   const topics = refuseTagged(allTopics, opts.onProgress);
   const { engine, roots, wolf, defaultDomain, onProgress, force } = opts;
+  // Callers that omit the list (CLI, orchestrator, resend, an older extension) get the wolf's own from WOLF_DOMAINS.
+  const allowedDomains = opts.allowedDomains?.length ? opts.allowedDomains : envDomains();
   const stats: PromoteStats = { distilled: 0, split: 0, held: 0, trivialSkipped: 0, pending: 0, emitted: 0 };
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
 
   for (const topic of topics) {
-    const domain = subscribedDomain(topic.domain, defaultDomain, opts.allowedDomains);
+    const domain = subscribedDomain(topic.domain, defaultDomain, allowedDomains);
     const rawHash = contentHash(topic.body);
     const rec = readDistillRecord(roots, topic.id);
 
@@ -471,7 +488,7 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
           denTopicId: o.id,
           change: topic.change,
           domainHint: domain,
-          ...(opts.allowedDomains?.length ? { allowedDomains: opts.allowedDomains } : {}),
+          ...(allowedDomains.length ? { allowedDomains } : {}),
           summary: o.summary,
           body: o.body,
           session: opts.session,

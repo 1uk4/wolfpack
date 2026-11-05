@@ -41,6 +41,7 @@ import {
   type ConsolidateResult,
   reconcileDen,
   promoteTopics,
+  subscribedDomain,
   consolidateWorkRecords,
   HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
@@ -540,9 +541,8 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   // itself not subscribed (e.g. "wolfpack" on a personal-only wolf), to its first
   // subscribed domain: the emit guard refuses any other hint, so the topic would
   // otherwise be skipped forever.
-  const allowedDomains = new Set(config.domains?.length ? config.domains : [defaultDomain]);
-  const fallbackDomain = allowedDomains.has(defaultDomain) ? defaultDomain : [...allowedDomains][0]!;
-  const domainOf = (d: string | undefined) => (d && allowedDomains.has(d) ? d : fallbackDomain);
+  const allowedList = config.domains?.length ? config.domains : [defaultDomain];
+  const domainOf = (d: string | undefined) => subscribedDomain(d, defaultDomain, allowedList);
 
   for (const action of result.actions) {
     if (action.action === "skip" || !action.result) {
@@ -719,7 +719,7 @@ export interface PromoteSessionConfig {
   engine: Engine;
   kbRoots?: KbRoots;
   defaultDomain?: string;
-  /** The wolf's subscribed domains: a topic tagged outside them is emitted under a subscribed one. */
+  /** The wolf's subscribed domains. A topic tagged outside them is emitted under a subscribed one. Omitted: `WOLF_DOMAINS` (set by the harness from wolf.yaml), else `defaultDomain`. */
   domains?: readonly string[];
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the KB inbox (metadata only). */

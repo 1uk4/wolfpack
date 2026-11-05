@@ -146,6 +146,8 @@ export {
   readDistillRecord,
   DistillOutputSchema,
   existingFor,
+  subscribedDomain,
+  envDomains,
   type PromoteTopic,
   type PromoteOptions,
   type PromoteStats,

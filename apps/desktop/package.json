@@ -7,7 +7,10 @@
 	"description": "Wolfpack Console desktop shell (Electron)",
 	"main": "electron/main.cjs",
 	"desktopName": "wolfpack-console.desktop",
-	"author": "Luka Flores",
+	"author": {
+		"name": "Luka Flores",
+		"email": "85141937+1uk4@users.noreply.github.com"
+	},
 	"homepage": "https://github.com/amosblomqvist/learnharness",
 	"scripts": {
 		"dev": "concurrently -k -n console,electron \"npm run dev -w @wolfpack/console -- -p 3210\" \"until curl -sf -o /dev/null http://localhost:3210; do sleep 1; done; LH_DEV_URL=http://localhost:3210 electron .\"",

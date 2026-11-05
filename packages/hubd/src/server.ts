@@ -37,6 +37,7 @@ import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
+import { createCurator, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
@@ -131,6 +132,12 @@ export interface HubOptions {
   inboxRoot?: string;
   /** Librarian receipts root the hub watches (`<root>/<wolf>/*.md`). Default `<dataDir>/kb/ops/receipts`. Set by the `hubd` CLI from env HUBD_RECEIPTS_ROOT (no flag). */
   receiptsRoot?: string;
+  /**
+   * The hub curator (KB sweep in hubd, see curator.ts). Off unless `enabled`; the hubd CLI sets it from env HUBD_CURATOR,
+   * HUBD_CURATOR_POLL_MS, HUBD_CURATOR_MODELS. Refuses to start while a wolf-side sweep holds the lease or when inboxRoot is not
+   * the hub's own contributions lane.
+   */
+  curator?: CuratorOptions;
   /** Embedding service for POST /v1/kb/match (default from env HUBD_OLLAMA_URL / HUBD_OLLAMA_MODEL; no URL = text matching only). */
   ollama?: OllamaConfig;
   /** Receipts lane poll, ms (default 3000; 0 = off). */
@@ -156,6 +163,8 @@ export interface HubServer {
    * Same validation, atomicity and kb.changed emission as POST /v1/kb/commits. A `wolf` actor rejects `forbidden`.
    */
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
+  /** Run one curator tick now (undefined when the curator is off or a tick is already running). */
+  runCuratorOnce(): Promise<CuratorRun | undefined>;
   /**
    * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated.
    */
@@ -292,6 +301,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     onRevision: (d, rev, epoch) => linkRef?.pushKbChanged(d, rev, epoch),
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
+  let curator: Curator | undefined;
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({
     roots,
@@ -911,6 +921,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     });
     if (opts.socketPath === undefined) port = (server.address() as AddressInfo).port;
     revisions.start();
+    // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
+    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: opts.curator });
+    curator.start();
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
@@ -918,6 +931,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     if (opts.socketPath !== undefined) removeSocket(opts.socketPath, socketId);
     stopWatcher();
     revisions.stop();
+    void curator?.close();
     kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
     writerLock.release();
     throw e;
@@ -934,6 +948,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     onRevoke: (l) => onRevokeFn(l),
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     commitKb: (actor, req) => kbWriter!.commit(actor, req),
+    runCuratorOnce: async () => curator?.runOnce(),
     scanKb: async (o) => void (await kbWriter!.exclusive(() => revisions.scan(o))),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
@@ -941,7 +956,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         revisions.stop(); // before the KB writer closes
-        const drained = Promise.all([writer.close(), kbWriter!.close()]).then(() => undefined);
+        // The curator drains first (bounded): a tick in flight commits through the KB writer, which must still be open.
+        const drained = (curator?.close() ?? Promise.resolve()).then(() => Promise.all([writer.close(), kbWriter!.close()])).then(() => undefined);
         stopWatcher();
         tokensFlush();
         bus.closeAll();

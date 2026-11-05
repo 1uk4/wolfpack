@@ -8,6 +8,7 @@ import { formatReport, importWork } from "./work-import.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
+import { DEFAULT_CURATOR_POLL_MS, type CuratorOptions } from "./curator.js";
 import { assertSocketPath, parseSocketMode } from "./socket.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
@@ -75,7 +76,8 @@ const USAGE = `usage:
                                                               merge the legacy work store (its domains dir and ledger, read-only) into this hub: migration duplicates collapsed, missing ledger events added (each source keeps its order, merged by time), legacy-only .md copied, newer-wins for items in both, file-only items seeded into the ledger. Backs up under <dir>/backups first. hubd must be STOPPED (work-writer lock); safe to re-run.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
-env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
+env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_POLL_MS (default 60000) / HUBD_CURATOR_MODELS (models.json path) / HUBD_EMBED_URL / HUBD_EMBED_MODEL
+     HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
      HUBD_INBOX_ROOT / HUBD_RECEIPTS_ROOT (librarian inbox + receipts roots, e.g. /home/wolf-W1hOrJ/librarian/inbox; default <data-dir>/kb/ops/contributions and /receipts)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
 
@@ -257,13 +259,31 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   if (socketMode !== undefined && socket === undefined) throw new Error("HUBD_SOCKET_MODE / --socket-mode needs a unix socket (HUBD_SOCKET or --socket)");
   if (socket !== undefined) assertSocketPath(socket);
   const listen = socket !== undefined ? { socketPath: socket, ...(socketMode !== undefined ? { socketMode } : {}) } : { port: args.port, host: args.host };
-  const hub = await createHubServer({ dataDir, ...listen, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
+  const curator = curatorFromEnv(env);
+  if (curator.enabled && args.command === "dev") throw new Error("HUBD_CURATOR is not allowed in dev mode (a snapshot must never run the sweep)");
+  const hub = await createHubServer({ dataDir, ...listen, curator, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   return hub;
+}
+
+/**
+ * The hub curator's options from env (see curator.ts): HUBD_CURATOR (1/true/on; default OFF), HUBD_CURATOR_POLL_MS (default 60000,
+ * 0 = no timer), HUBD_CURATOR_MODELS (path of a models.json), HUBD_EMBED_URL / HUBD_EMBED_MODEL (the embedding service; they set
+ * WOLFPACK_EMBED_URL / _MODEL for this process, only when the curator is on).
+ */
+export function curatorFromEnv(env: NodeJS.ProcessEnv): CuratorOptions {
+  const enabled = /^(1|true|on|yes)$/i.test(env.HUBD_CURATOR?.trim() ?? "");
+  if (!enabled) return { enabled: false };
+  const pollRaw = env.HUBD_CURATOR_POLL_MS?.trim();
+  const pollMs = pollRaw ? Number(pollRaw) : DEFAULT_CURATOR_POLL_MS;
+  if (!Number.isFinite(pollMs) || pollMs < 0) throw new Error(`HUBD_CURATOR_POLL_MS must be a number of milliseconds >= 0 (got ${JSON.stringify(pollRaw)})`);
+  if (env.HUBD_EMBED_URL?.trim()) process.env.WOLFPACK_EMBED_URL = env.HUBD_EMBED_URL.trim();
+  if (env.HUBD_EMBED_MODEL?.trim()) process.env.WOLFPACK_EMBED_MODEL = env.HUBD_EMBED_MODEL.trim();
+  return { enabled, pollMs, ...(env.HUBD_CURATOR_MODELS?.trim() ? { modelsFile: env.HUBD_CURATOR_MODELS.trim() } : {}) };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

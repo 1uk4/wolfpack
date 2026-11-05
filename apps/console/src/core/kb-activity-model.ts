@@ -182,11 +182,18 @@ export function routingSummary(routing: KbActivityRouting): string[] {
 	return lines;
 }
 
-/** Append a further page, dropping rows already present (by id); totals, counts and the cursor come from the newer page. */
-export function mergeDecisionPages(prev: KbActivityResponse["decisions"], next: KbActivityResponse["decisions"]): KbActivityResponse["decisions"] {
+/**
+ * Append a further page, dropping rows already present (by id). The cursor is the further page's. `total` and `counts` come from whichever
+ * snapshot is newer: pass each side's `generatedAt` (`prevAt` = the refetch the loaded data came from, `nextAt` = the Load more page's);
+ * the Load more page wins only when it is strictly newer, and without timestamps the loaded data stands.
+ */
+export function mergeDecisionPages(prev: KbActivityResponse["decisions"], next: KbActivityResponse["decisions"], prevAt?: string, nextAt?: string): KbActivityResponse["decisions"] {
 	const seen = new Set(prev.items.map((d) => d.id));
 	const items = [...prev.items, ...next.items.filter((d) => !seen.has(d.id))];
-	const out: KbActivityResponse["decisions"] = { items, total: next.total, counts: next.counts };
+	const tp = prevAt === undefined ? NaN : Date.parse(prevAt);
+	const tn = nextAt === undefined ? NaN : Date.parse(nextAt);
+	const nextIsNewer = !Number.isNaN(tp) && !Number.isNaN(tn) && tn > tp;
+	const out: KbActivityResponse["decisions"] = { items, total: nextIsNewer ? next.total : prev.total, counts: nextIsNewer ? next.counts : prev.counts };
 	if (next.nextCursor) out.nextCursor = next.nextCursor;
 	return out;
 }
@@ -263,16 +270,18 @@ export function needsRefetch(frame: KbHubFrame): boolean {
 
 const dec = (n: number): number => Math.max(0, n - 1);
 
-/** The identity of a contribution in the feed: from + denTopicId (+ hash where both sides know it). */
-function sameContribution(a: { from: string; denTopicId: string; hash?: string | undefined }, b: { from: string; denTopicId: string; hash?: string | undefined }): boolean {
-	if (a.from !== b.from || a.denTopicId !== b.denTopicId) return false;
-	return a.hash && b.hash ? a.hash === b.hash : true;
+/**
+ * The identity of a contribution in the feed. A live sweep_item carries no hash, so live matching uses from + denTopicId only; if one topic
+ * was resubmitted with a different hash the match can be coarse, and the refetch after sweep_finished corrects it.
+ */
+function sameContribution(a: { from: string; denTopicId: string }, b: { from: string; denTopicId: string }): boolean {
+	return a.from === b.from && a.denTopicId === b.denTopicId;
 }
 
 /**
  * Optimistic fold of one hub event. sweep_started → sweeping; sweep_item → a provisional decision row (`item.decision` wins over
  * `item.outcome`: a post-commit failure reports outcome `parked` with the committed decision) and one fewer pending for that wolf (not for a
- * parked item: it was never pending work that got decided, the ledger shows it); sweep_finished → not sweeping. An item that already has a
+ * plain parked item, which stays pending; a parked item whose decision is a committed create/merge does leave it); sweep_finished → not sweeping. An item that already has a
  * row (same contribution) REPLACES it instead of counting twice. Rows outside the active range are not added. Anything else returns the same
  * state. The refetch that follows sweep_finished replaces the provisional rows.
  */
@@ -283,7 +292,7 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 		case "sweep_finished":
 			return state.sweeping ? { ...state, sweeping: false } : state;
 		case "sweep_item": {
-			const f = frame as Extract<HubEvent, { type: "sweep_item" }> & { hash?: string };
+			const f = frame as Extract<HubEvent, { type: "sweep_item" }>;
 			if (typeof f.from !== "string" || typeof f.denTopicId !== "string") return state;
 			const d = state.data;
 			const decision = f.decision;
@@ -291,14 +300,16 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 			const id = `${PROVISIONAL_PREFIX}${f.id}`;
 			if (d.decisions.items.some((x) => x.id === id)) return state;
 
-			// incoming: parked items leave the pending count alone; otherwise drop ONE matching item (hash compared where both sides have it)
+			// incoming: a plain parked item stays pending; but a parked item whose decision carries a committed create/merge (post-commit
+			// failure) was decided, so it leaves the pending count. Match on from + denTopicId only (the event has no hash).
 			let incoming = d.incoming;
-			if (f.outcome !== "parked") {
+			const committed = outcome === "create" || outcome === "merge" || outcome === "unchanged";
+			if (f.outcome !== "parked" || committed) {
 				let removed = false;
 				const wolves = d.incoming.wolves.map((w) => {
 					if (w.wolf !== f.from || w.pending === 0) return w;
 					removed = true;
-					const at = w.items.findIndex((i) => i.denTopicId === f.denTopicId && (!i.hash || !f.hash || i.hash === f.hash));
+					const at = w.items.findIndex((i) => i.denTopicId === f.denTopicId);
 					const items = at < 0 ? w.items : w.items.filter((_, k) => k !== at);
 					const next = { ...w, pending: dec(w.pending), items };
 					if (next.pending === 0) delete next.oldestAgeMs;
@@ -313,13 +324,13 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 			const outside = state.scope?.domain !== undefined || (cutoff !== null && !Number.isNaN(t) && t < cutoff);
 			if (outside) return { ...state, sweeping: true, data: { ...d, incoming } };
 
-			const row: KbDecision = { id, at: f.at, from: f.from, denTopicId: f.denTopicId, hash: f.hash ?? "", outcome };
+			const row: KbDecision = { id, at: f.at, from: f.from, denTopicId: f.denTopicId, hash: "", outcome };
 			const entryId = decision?.entryId ?? f.entryId;
 			if (entryId) row.entryId = entryId;
 			if (decision?.reason) row.reason = decision.reason;
 			if (decision?.routing) row.routing = decision.routing;
 
-			const existing = d.decisions.items.findIndex((x) => sameContribution({ from: x.from, denTopicId: x.denTopicId, hash: x.hash }, { from: row.from, denTopicId: row.denTopicId, hash: f.hash }));
+			const existing = d.decisions.items.findIndex((x) => sameContribution(x, { from: row.from, denTopicId: row.denTopicId }));
 			const counts = { ...d.decisions.counts };
 			let items: KbDecision[];
 			let total = d.decisions.total;

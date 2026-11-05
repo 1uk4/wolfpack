@@ -135,6 +135,17 @@ describe("kb-activity model", () => {
 			assert.equal(reconcileActivity(prev, { ...d, sweep: { running: false } }, { since: "30d" }).sweeping, false);
 		});
 	});
+	it("mergeDecisionPages takes total/counts from the newer snapshot", () => {
+		const a = kbActivityFixture().decisions;
+		const next = { items: [], total: 99, counts: { ...a.counts, create: 50 } };
+		const newer = mergeDecisionPages(a, next, "2026-11-05T10:00:00Z", "2026-11-05T10:00:05Z");
+		assert.equal(newer.total, 99);
+		assert.equal(newer.counts.create, 50);
+		const older = mergeDecisionPages(a, next, "2026-11-05T10:00:05Z", "2026-11-05T10:00:00Z");
+		assert.equal(older.total, a.total);
+		assert.equal(older.counts.create, a.counts.create);
+		assert.equal(mergeDecisionPages(a, next).total, a.total);
+	});
 	it("formatters", () => {
 		assert.equal(kbAge(5_000), "just now");
 		assert.equal(kbAge(120_000), "2m");
@@ -184,9 +195,9 @@ describe("kb-activity model", () => {
 			assert.equal(top.routing?.route, "alias");
 			assert.equal(s.data.decisions.counts.merge, 3);
 			assert.equal(s.data.decisions.counts.parked, 1);
-			// a parked item does not touch the pending count
-			assert.equal(s.data.incoming.wolves.find((w) => w.wolf === "ada")!.pending, 1);
-			assert.equal(s.data.incoming.total, 4);
+			// its decision is a committed merge, so the item leaves the pending count
+			assert.equal(s.data.incoming.wolves.find((w) => w.wolf === "ada")!.pending, 0);
+			assert.equal(s.data.incoming.total, 3);
 		});
 		it("the last pending item clears the oldest age", () => {
 			const s = applyHubEvent(base(), { type: "sweep_item", id: 8, at, from: "ada", denTopicId: "t-ada-1", outcome: "create" });
@@ -194,12 +205,23 @@ describe("kb-activity model", () => {
 			assert.equal(ada.pending, 0);
 			assert.equal(ada.oldestAgeMs, undefined);
 		});
-		it("removes only the item with the matching hash from incoming", () => {
+		it("a plain parked item stays pending; a parked item with a committed decision leaves it", () => {
+			const plain = applyHubEvent(base(), { type: "sweep_item", id: 30, at, from: "hal", denTopicId: "t-hal-1", outcome: "parked" });
+			assert.equal(plain.data.incoming.wolves.find((w) => w.wolf === "hal")!.pending, 3);
+			assert.equal(plain.data.incoming.total, 4);
+			const done = applyHubEvent(base(), { type: "sweep_item", id: 31, at, from: "hal", denTopicId: "t-hal-1", outcome: "parked", decision: { outcome: "create", entryId: "e" } });
+			assert.equal(done.data.incoming.wolves.find((w) => w.wolf === "hal")!.pending, 2);
+			assert.equal(done.data.incoming.total, 3);
+			// a parked decision (no commit) does not
+			const still = applyHubEvent(base(), { type: "sweep_item", id: 32, at, from: "hal", denTopicId: "t-hal-1", outcome: "parked", decision: { outcome: "parked" } });
+			assert.equal(still.data.incoming.total, 4);
+		});
+		it("live matching removes one item by from + denTopicId only", () => {
 			const d = kbActivityFixture();
 			d.incoming.wolves[0]!.pending = 2;
 			d.incoming.wolves[0]!.items = [{ denTopicId: "t-ada-1", hash: "h1", ageMs: 5 }, { denTopicId: "t-ada-1", hash: "h2", ageMs: 9 }];
-			const s = applyHubEvent(initialActivityState(d), { type: "sweep_item", id: 3, at, from: "ada", denTopicId: "t-ada-1", outcome: "create", hash: "h2" } as never);
-			assert.deepEqual(s.data.incoming.wolves[0]!.items.map((i) => i.hash), ["h1"]);
+			const s = applyHubEvent(initialActivityState(d), { type: "sweep_item", id: 3, at, from: "ada", denTopicId: "t-ada-1", outcome: "create" });
+			assert.deepEqual(s.data.incoming.wolves[0]!.items.map((i) => i.hash), ["h2"]);
 		});
 		it("an item that already has a row replaces it instead of counting twice", () => {
 			const s1 = applyHubEvent(base(), { type: "sweep_item", id: 20, at, from: "hal", denTopicId: "t1", outcome: "create", entryId: "e9" });

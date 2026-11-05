@@ -296,7 +296,7 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 				setState((prev) => reconcileActivity(prev, res.data, { since }));
 				setLoad({ kind: "ready" });
 			} else {
-				const message = res.reason === "unauthorized" ? "This browser is not paired with the hub." : res.message;
+				const message = res.reason === "unauthorized" ? (res.hubAuth ? "This browser is not paired with the hub." : "Unauthorized.") : res.message;
 				setLoad((prev) => (res.reason === "unavailable" || res.reason === "unauthorized" || prev.kind !== "ready" ? { kind: "unavailable", message } : prev));
 			}
 		});
@@ -354,7 +354,7 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 				const cur = stateRef.current?.data.decisions.nextCursor;
 				if (res.ok && cur === cursor) {
 					const page = res.data.decisions;
-					setState((s) => (s ? { ...s, data: { ...s.data, decisions: mergeDecisionPages(s.data.decisions, page) } } : s));
+					setState((s) => (s ? { ...s, data: { ...s.data, decisions: mergeDecisionPages(s.data.decisions, page, s.data.generatedAt, res.data.generatedAt) } } : s));
 				} else if (res.ok && retry && cur && stillMine) {
 					fetchMore(false); // the list moved under us: continue from where it is now
 					return;

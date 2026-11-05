@@ -6,7 +6,7 @@ import type { KbFailureReason } from "./kb-client";
 
 /** `unauthorized`: the browser has no (or a revoked) hub token. */
 export type KbActivityFailureReason = KbFailureReason | "unauthorized";
-export type KbActivityResult = { ok: true; data: KbActivityResponse } | { ok: false; reason: KbActivityFailureReason; message: string; code?: string };
+export type KbActivityResult = { ok: true; data: KbActivityResponse } | { ok: false; reason: KbActivityFailureReason; message: string; code?: string; hubAuth?: boolean };
 
 export interface KbActivityParams {
 	since?: string;
@@ -37,5 +37,9 @@ export async function fetchKbActivity(params: KbActivityParams = {}): Promise<Kb
 	const body = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
 	const reason: KbActivityFailureReason = res.status === 401 ? "unauthorized" : res.status === 409 ? "unavailable" : res.status === 404 ? "not_found" : "error";
 	const message = body?.error ?? `HTTP ${res.status}`;
-	return body?.code ? { ok: false, reason, message, code: body.code } : { ok: false, reason, message };
+	const out: KbActivityResult = { ok: false, reason, message };
+	if (body?.code) out.code = body.code;
+	// Only the hub's own marker means "this browser is not paired"; any other 401 is just unauthorized.
+	if (res.status === 401 && res.headers.get("X-Wolfpack-Hub-Auth")?.toLowerCase() === "required") out.hubAuth = true;
+	return out;
 }

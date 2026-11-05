@@ -32,7 +32,7 @@ const POLLING = { debounceMs: 25, pollMs: 120 };
 
 interface Call {
 	url: URL;
-	respond(data: KbActivityResponse | number): void;
+	respond(data: KbActivityResponse | number, headers?: Record<string, string>): void;
 }
 let calls: Call[] = [];
 const realFetch = globalThis.fetch;
@@ -42,7 +42,7 @@ beforeEach(() => {
 		new Promise<Response>((resolve) => {
 			calls.push({
 				url: new URL(input, "http://x"),
-				respond: (d) => resolve(typeof d === "number" ? Response.json({ error: "e" }, { status: d }) : Response.json(d)),
+				respond: (d, headers) => resolve(typeof d === "number" ? Response.json({ error: "e" }, { status: d, ...(headers ? { headers } : {}) }) : Response.json(d)),
 			});
 		})) as typeof fetch;
 });
@@ -192,9 +192,37 @@ describe("KbActivityView live behaviour", () => {
 		assert.equal(document.querySelector('[data-testid="kb-load-more"]')!.textContent, "Load more");
 	});
 
-	it("a 401 shows the unpaired message", async () => {
+	it("a 401 with the hub-auth marker shows the unpaired message", async () => {
+		await mount();
+		await act(async () => calls[0]!.respond(401, { "X-Wolfpack-Hub-Auth": "required" }));
+		assert.match(document.body.textContent ?? "", /not paired with the hub/);
+	});
+
+	it("any other 401 shows a generic unauthorized message", async () => {
 		await mount();
 		await act(async () => calls[0]!.respond(401));
-		assert.match(document.body.textContent ?? "", /not paired with the hub/);
+		assert.match(document.body.textContent ?? "", /Unauthorized/);
+		assert.doesNotMatch(document.body.textContent ?? "", /not paired/);
+	});
+
+	it("when the cursor moves twice during Load more it retries once and then stops", async () => {
+		await mount();
+		await resolve(calls[0]!, page(["a", "b"], "c1"));
+		await click(document.querySelector('[data-testid="kb-load-more"]')!);
+		const first = calls[1]!; // before=c1
+		await hubEvent("kb.changed");
+		await settle(60);
+		await resolve(calls[2]!, page(["x", "y"], "c9")); // cursor moved once
+		await resolve(first, page(["c"], "c2")); // stale: dropped, one retry from c9
+		const retry = calls[3]!;
+		assert.equal(retry.url.searchParams.get("before"), "c9");
+		await hubEvent("kb.changed");
+		await settle(60);
+		await resolve(calls[4]!, page(["p", "q"], "c10")); // cursor moved a second time
+		await resolve(retry, page(["r"], "c11")); // stale again: dropped, NO second retry
+		await settle(30);
+		assert.equal(calls.length, 5);
+		assert.deepEqual(ids(), ["p", "q"]);
+		assert.equal(document.querySelector('[data-testid="kb-load-more"]')!.textContent, "Load more"); // not stuck loading
 	});
 });

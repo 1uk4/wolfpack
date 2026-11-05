@@ -8,6 +8,7 @@
  * `invalid_request` and `not_found` are terminal too (retrying cannot fix them); anything else restarts with backoff, and every restart
  * forwards a synthetic `resync` (frames in the gap may have been missed, so the page refetches). The backoff resets only after a stream
  * stayed up for `stableMs`. `stop` ends it.
+ * After a terminal code the bridge logs once and stays down for the connection's life: the page then relies on its 60 s poll.
  */
 import type { ConsoleClient, HubEvent } from "@wolfpack/client";
 import { abortableSleep } from "./needs-you-api.ts";
@@ -50,7 +51,10 @@ export function createHubEventsBridge(forward: (frame: HubEvent) => void, opts: 
 					}
 					return;
 				}
-				if (e?.name === "ProtocolError" && e.code && TERMINAL_CODES.has(e.code)) return;
+				if (e?.name === "ProtocolError" && e.code && TERMINAL_CODES.has(e.code)) {
+					console.error(`[hub-events-bridge] stopped on terminal error ${e.code}; the KB activity page falls back to its 60 s poll`);
+					return;
+				}
 			}
 			if (ctl.signal.aborted) return;
 			if (now() - startedAt >= stableMs) attempt = 0;

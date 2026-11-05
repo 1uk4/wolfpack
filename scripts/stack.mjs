@@ -6,7 +6,7 @@
  *
  *   start              write the plist if missing, bootstrap + start the service
  *   stop               bootout: stops it now; stays installed and starts again at next login (or `start`)
- *   restart            graceful: SIGTERM, wait for exit, launchd (KeepAlive) relaunches. Kills in-flight turns, including the caller's.
+ *   restart            SIGTERM, then SIGKILL after 40s; launchd (KeepAlive) relaunches. Kills in-flight turns, including the caller's.
  *   status             loaded/running, PID, uptime, port, wolfd children, log tail on trouble
  *   logs [-f] [-n N]   tail the log
  *   uninstall          stop + remove the plist
@@ -195,7 +195,7 @@ function stop(cfg) {
 }
 
 /**
- * Graceful restart. The caller may be a wolf turn inside the service's process tree, which dies with it, so the work is
+ * Restart: SIGTERM, then SIGKILL after 40s. The caller may be a wolf turn inside the service's process tree, which dies with it, so the work is
  * handed to a helper in its own session (detached), logging to restart.log: SIGTERM the service, wait for the pid to exit
  * (SIGKILL after 40s), and launchd's KeepAlive relaunches it. This kills ALL in-flight turns, including the caller's.
  */

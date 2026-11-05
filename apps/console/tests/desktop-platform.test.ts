@@ -22,13 +22,13 @@ function windowOptions(platform: string) {
 		once() {}
 	}
 	const electron = {
-		app: { setName() {}, requestSingleInstanceLock: () => false, quit() {} },
+		app: { setName() {}, getPath: () => "/nonexistent/wolfpack-test-userdata", requestSingleInstanceLock: () => false, quit() {} },
 		BrowserWindow: FakeWindow,
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
 	const context = {
 		require: (id: string) =>
-			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : id === "./remote.cjs" ? require("../../desktop/electron/remote.cjs") : require(id),
+			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : id === "./remote.cjs" ? require("../../desktop/electron/remote.cjs") : id === "./userdata-migrate.cjs" ? require("../../desktop/electron/userdata-migrate.cjs") : require(id),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};
@@ -110,9 +110,10 @@ describe("desktop packaging policy", () => {
 
 	it("deb has public maintainer metadata and a matching desktop identity", () => {
 		const pkg = JSON.parse(readFileSync(new URL("../../desktop/package.json", import.meta.url), "utf8"));
-		assert.equal(pkg.author.name, "Amos Blomqvist");
-		assert.equal(pkg.author.email, "255718537+amosblomqvist@users.noreply.github.com");
-		assert.equal(pkg.homepage, "https://github.com/amosblomqvist/learnharness");
+		// author shape the deb target needs: name + email (value set by the provenance branch).
+		assert.equal(pkg.author.name, "Luka Flores");
+		assert.match(pkg.author.email, /^[^@\s]+@[^@\s]+$/);
+		assert.equal(pkg.homepage, "https://github.com/1uk4/wolfpack");
 		assert.equal(pkg.desktopName, "wolfpack-console.desktop");
 	});
 });

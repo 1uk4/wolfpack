@@ -1,4 +1,4 @@
-# electron-builder config — LearnHarness desktop (macOS arm64; Windows/Linux x64).
+# electron-builder config — Wolfpack Console desktop (macOS arm64; Windows/Linux x64).
 #
 # Shape (fact-checked 2026-09-17):
 #   - the app's real server (.next/standalone, curated by
@@ -115,7 +115,7 @@ mac:
   # Laid for the STT milestone (researcher-verified): the TCC mic prompt
   # reads this string; macOS asks regardless of Electron's own handlers.
   extendInfo:
-    NSMicrophoneUsageDescription: "LearnHarness uses the microphone only for speech-to-text input into your sessions."
+    NSMicrophoneUsageDescription: "Wolfpack Console uses the microphone only for speech-to-text input into your sessions."
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   # Signing + notarization (flipped 2026-10-08): identity auto-detects the
@@ -178,7 +178,7 @@ publish:
   # would be a leak. desktop:dist passes no --publish flag, so builds never
   # upload; publishing happens at release time (GH_TOKEN + --publish).
   - provider: github
-    owner: amosblomqvist
-    repo: learnharness
+    owner: 1uk4
+    repo: wolfpack
     # All three CI jobs contribute assets; only the owner publishes it.
     releaseType: draft

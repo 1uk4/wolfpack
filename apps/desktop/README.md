@@ -8,7 +8,7 @@ By default the app starts its bundled local server. To open a console served
 elsewhere (e.g. the VPS behind tailscale serve) instead, set the URL either way:
 
 - env: `WOLFPACK_CONSOLE_URL=https://sfo-01.<tailnet>.ts.net` (wins over the file)
-- file: `~/Library/Application Support/LearnHarness/console.json`
+- file: `~/Library/Application Support/Wolfpack Console/console.json`
   `{ "consoleUrl": "https://sfo-01.<tailnet>.ts.net" }`
 
 Clear it (delete the file / unset the env) to return to local mode. Restart the app after changing.

@@ -19,7 +19,7 @@ Next.js App Router app, served in the browser and wrapped by `apps/desktop` (Ele
 
 Routes: `/` (home placeholder), `/wolf/[name]` and `/wolf/[name]/thread/[threadId]` (chat). `/work/*` is reserved. The thread URL segment is a slug derived by `threadSlug` in `src/core/thread-adapter.ts`, not the client's raw thread id.
 
-The shell inherited from learnharness (sidebar, composer, settings, keyboard system, tool-card registry, event bus, jobs) is present. The graph canvas and plan DAG components are kept but inert (unrouted).
+The inherited shell (sidebar, composer, settings, keyboard system, tool-card registry, event bus, jobs) is present. The graph canvas and plan DAG components are kept but inert (unrouted).
 
 ### The ConsoleClient seam (`packages/client`)
 

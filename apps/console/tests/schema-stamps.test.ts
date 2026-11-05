@@ -1,7 +1,7 @@
 /**
  * SCHEMA STAMPS (schema-versioning wave, owner 2026-10-10): LAZY v1 for
  * chats (record.version, stamped at the write choke point). (The graph
- * family's format.json sidecar died with the learnharness ledgers; the
+ * family's format.json sidecar died with the original ledgers; the
  * graph's render-settings and positions are plain sanitized JSON.)
  * Honest refusal: records stamped NEWER than this build are refused on
  * read (the downgrade scenario) — never misparsed, never rewritten.

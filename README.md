@@ -10,7 +10,7 @@ npm workspaces (`packages/*`, `apps/*`), orchestrated by turbo.
 
 | Path | Package | What it is |
 |---|---|---|
-| `apps/console` | `@wolfpack/console` | Next.js app (browser + served web): chat shell, sidebar, settings, keyboard system. Lifted from learnharness, see [ATTRIBUTION.md](ATTRIBUTION.md). |
+| `apps/console` | `@wolfpack/console` | Next.js app (browser + served web): chat shell, sidebar, settings, keyboard system. Third-party credit: see [NOTICE](NOTICE), [LICENSE](LICENSE) and [docs/provenance/learnharness.md](docs/provenance/learnharness.md). |
 | `apps/desktop` | `@wolfpack/desktop` | Thin Electron shell that spawns the console server on 127.0.0.1. |
 | `packages/client` | `@wolfpack/client` | `ConsoleClient` interface, event/thread types, `MockConsoleClient` + fixture. |
 | `packages/harness` | `@wolfpack/harness` | Wolf runtime: extensions, lifecycle, sweep worker, adapters. |
@@ -46,5 +46,5 @@ Legacy CLI commands (`wolfpack add wolf`, `launch`, `sync`, ...) still work from
 - [docs/architecture.md](docs/architecture.md): what is built vs planned.
 - [docs/decisions/](docs/decisions/): architecture decision records.
 - [docs/development.md](docs/development.md): contributor guide and docs rules.
-- Console-specific, inherited from learnharness: [keyboard shortcuts](apps/console/docs/keyboard.md), [desktop release](apps/console/docs/desktop-release.md).
+- Console-specific: [keyboard shortcuts](apps/console/docs/keyboard.md), [desktop release](apps/console/docs/desktop-release.md).
 - Legacy operations (CLI reference, `wolf.yaml`, install, Tailscale/Syncthing health): see the [README on `main`](https://github.com/1uk4/wolfpack/blob/main/README.md) — those systems run production until cutover.

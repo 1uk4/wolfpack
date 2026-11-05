@@ -21,7 +21,7 @@ const TSX_LOADER = path.join(path.dirname(createRequire(import.meta.url).resolve
 
 describe("WOLFPACK_DATA_DIR seam", () => {
 	it("relocates data/chats/graph under WOLFPACK_DATA_DIR, keeps prompts ROOT-anchored", async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-seam-"));
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wp-seam-"));
 		process.env.WOLFPACK_DATA_DIR = dir;
 		try {
 			const { PATHS, ROOT } = await import("../config.ts");

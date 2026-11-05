@@ -6,7 +6,7 @@
 		"name": "Amos Blomqvist",
 		"email": "255718537+amosblomqvist@users.noreply.github.com"
 	},
-	"homepage": "https://github.com/amosblomqvist/learnharness",
+	"homepage": "https://github.com/1uk4/wolfpack",
 	"description": "Wolfpack Console: the control plane for wolfpack agents.",
 	"type": "module",
 	"private": true,

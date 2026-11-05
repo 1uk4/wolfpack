@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Idempotent hubd setup/install for sfo-01. Run as root ON the host, after the owner confirms.
 #   setup.sh [--dry-run] setup    [--bind IP] [--port N] [--wolf NAME]... [--hub-writes [--work-user USER]...]
+#   setup.sh --dry-run setup --curator   (print-only: the hub curator cutover steps; never applied)
 #   setup.sh [--dry-run] install  --bundle <dir with hubd.mjs, RUNBOOK.md, VERSION>
 #   setup.sh [--dry-run] rollback
 #   setup.sh [--dry-run] uninstall [--purge]
@@ -8,7 +9,7 @@
 # No ACLs and no changes to Dewey's dirs except creating missing per-wolf lane dirs (owner wolf-W1hOrJ, mode 777).
 set -euo pipefail
 
-DRY=0 CMD="" BUNDLE="" BIND="" PORT=3150 HUB_WRITES=0 PURGE=0
+DRY=0 CMD="" BUNDLE="" BIND="" PORT=3150 HUB_WRITES=0 PURGE=0 CURATOR=0
 WOLVES=()
 WORK_USERS=()
 WORK_GROUP=wolfpack-work
@@ -60,6 +61,7 @@ while (($#)); do
     --port) PORT="${2:?--port needs a number}"; shift ;;
     --wolf) valid_wolf "${2:?--wolf needs a name}" || die "bad wolf name $2"; WOLVES+=("$2"); shift ;;
     --hub-writes) HUB_WRITES=1 ;;
+    --curator) CURATOR=1 ;;
     --work-user) [[ ${2:?--work-user needs a user name} =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "bad user name $2"; WORK_USERS+=("$2"); shift ;;
     --purge) PURGE=1 ;;
     setup | install | rollback | uninstall) CMD="$1" ;;
@@ -71,6 +73,18 @@ done
 valid_port "$PORT" || die "bad --port $PORT (1024-65535, and never 3141: wolfpack-agent)"
 ((${#WOLVES[@]})) || WOLVES=(1uk4)
 ((DRY)) || [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
+# --curator (hub curator cutover, RUNBOOK.md section 8): print-only. It is an owner step and is never applied by this script.
+if ((CURATOR)); then
+  ((DRY)) || die "--curator only prints the cutover (an owner step, RUNBOOK.md section 8): run it with --dry-run"
+  [[ $CMD == setup ]] || die "--curator goes with setup"
+  log "hub curator cutover (print-only; nothing is changed)"
+  echo "DRY-RUN: stop Dewey's sweep (librarian sweep timer, kb sweep cron) and let it drain $INBOX"
+  echo "DRY-RUN: make the KB hub-owned and writable for hubd (copy domains/ into $DATA_DIR/kb/base/domains, or BindPaths + ReadWritePaths for $DOMAINS and group-writable dirs)"
+  echo "DRY-RUN: remove HUBD_INBOX_ROOT and HUBD_RECEIPTS_ROOT from $ENV_FILE and the inbox/receipts BindPaths/ReadWritePaths from $UNIT"
+  echo "DRY-RUN: set in $ENV_FILE: HUBD_CURATOR=1 HUBD_CURATOR_POLL_MS=60000 HUBD_CURATOR_MODELS=<models.json> HUBD_EMBED_URL=<ollama>"
+  echo "DRY-RUN: systemctl daemon-reload && systemctl restart hubd"
+  exit 0
+fi
 
 hasuser() { id "$1" >/dev/null 2>&1; }
 hubd_user_exists() { id "$HUBD_USER" >/dev/null 2>&1; }

@@ -4,6 +4,7 @@
  * (since, before, limit, domain) passes through; the hub validates it.
  */
 
+import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
@@ -28,7 +29,9 @@ function failure(err: unknown): Response {
 		if (err.name === "BusyError") return json({ error: err.message, code: "busy" }, 409);
 		if (err.name === "ProtocolError") {
 			const code = (err as Error & { code?: string }).code ?? "engine_error";
-			return json({ error: err.message, code }, STATUS_BY_CODE[code] ?? 502);
+			// A hub-auth 401 is marked so the browser signs out (as memory-api / devices-api do); other 401s are not its token's fault.
+			const hubAuth = (err as Error & { hubAuth?: boolean }).hubAuth === true;
+			return Response.json({ error: err.message, code }, { status: STATUS_BY_CODE[code] ?? 502, ...(hubAuth ? { headers: { [HUB_AUTH_HEADER]: "required" } } : {}) });
 		}
 		console.error("[kb-activity-api] unexpected error:", err);
 	}

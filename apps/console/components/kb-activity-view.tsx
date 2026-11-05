@@ -11,7 +11,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	KB_ACTIVITY_PAGE,
 	KB_ACTIVITY_SINCE,
-	PROVISIONAL_PREFIX,
 	applyHubEvent,
 	changeColumns,
 	curatorNote,
@@ -19,10 +18,10 @@ import {
 	entryHref,
 	filterDecisions,
 	groupIncoming,
-	initialActivityState,
 	kbAge,
 	kbRelativeTime,
 	mergeDecisionPages,
+	reconcileActivity,
 	needsRefetch,
 	outcomeFilters,
 	routingSummary,
@@ -61,7 +60,7 @@ export function KbActivityUnavailable({ message }: { message: string }) {
 	);
 }
 
-export function IncomingPanel({ data }: { data: KbActivityResponse; now?: number }) {
+export function IncomingPanel({ data }: { data: KbActivityResponse }) {
 	const wolves = groupIncoming(data);
 	return (
 		<Section title="Incoming" aside={`${data.incoming.total} waiting`} testId="kb-incoming">
@@ -79,8 +78,8 @@ export function IncomingPanel({ data }: { data: KbActivityResponse; now?: number
 							</div>
 							{w.items.length > 0 ? (
 								<ul className="ml-[140px] mt-0.5 text-[12px] text-muted-foreground/70">
-									{w.items.map((i) => (
-										<li key={`${i.denTopicId}/${i.hash ?? ""}`} className="truncate">
+									{w.items.map((i, k) => (
+										<li key={`${k}/${i.denTopicId}/${i.hash ?? ""}`} className="truncate">
 											{i.denTopicId} <span className="text-muted-foreground/50">· {kbAge(i.ageMs)}</span>
 										</li>
 									))}
@@ -252,7 +251,7 @@ export function KbActivityBody({
 				KB activity
 				{state.sweeping ? <span className="text-[12px] text-muted-foreground" data-testid="kb-sweeping">sweeping…</span> : null}
 			</h1>
-			<IncomingPanel data={data} now={now} />
+			<IncomingPanel data={data} />
 			<DecisionFeed data={data} now={now} outcome={outcome} since={since} {...(loadingMore !== undefined ? { loadingMore } : {})} {...(onOutcome ? { onOutcome } : {})} {...(onSince ? { onSince } : {})} {...(onLoadMore ? { onLoadMore } : {})} />
 			<ChangesPanel data={data} now={now} />
 		</div>
@@ -261,31 +260,45 @@ export function KbActivityBody({
 
 type Load = { kind: "loading" } | { kind: "unavailable"; message: string } | { kind: "ready" };
 
-const DEBOUNCE_MS = 500;
-const POLL_MS = 60_000;
+export interface KbActivityTiming {
+	/** Trailing debounce of event-driven refetches (default 500 ms). */
+	debounceMs?: number;
+	/** Fallback poll (default 60 s). */
+	pollMs?: number;
+}
 
-export function KbActivityView() {
+export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
+	const debounceMs = timing?.debounceMs ?? 500;
+	const pollMs = timing?.pollMs ?? 60_000;
 	const [load, setLoad] = useState<Load>({ kind: "loading" });
 	const [state, setState] = useState<KbActivityState | null>(null);
 	const [since, setSince] = useState<KbActivitySince>("30d");
 	const [outcome, setOutcome] = useState<KbDecisionOutcome | "all">("all");
 	const [loadingMore, setLoadingMore] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
+	/** Refetch sequence: only the newest first-page request may land. */
 	const seq = useRef(0);
+	/** Bumped when `since` changes (and on unmount): results fetched for another range are never merged. */
+	const gen = useRef(0);
+	/** The Load more request that owns `loadingMore`. */
+	const moreSeq = useRef(0);
+	const stateRef = useRef<KbActivityState | null>(null);
+	stateRef.current = state;
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const loaded = useRef(0);
-	loaded.current = state ? state.data.decisions.items.filter((d) => !d.id.startsWith(PROVISIONAL_PREFIX)).length : 0;
 
-	/** Fetch the first page(s) and REPLACE the data (provisional rows go with it). Keeps as many rows as were already loaded. */
+	/** Fetch the FIRST page only and fold it into what is loaded (deeper pages and their cursor stay; provisional rows go). */
 	const refetch = useCallback(() => {
 		const mine = ++seq.current;
-		const limit = Math.min(200, Math.max(KB_ACTIVITY_PAGE, loaded.current));
-		void fetchKbActivity({ since, limit }).then((res) => {
-			if (mine !== seq.current) return; // a newer request owns the screen
+		const myGen = gen.current;
+		void fetchKbActivity({ since, limit: KB_ACTIVITY_PAGE }).then((res) => {
+			if (mine !== seq.current || myGen !== gen.current) return; // a newer request (or range) owns the screen
 			if (res.ok) {
-				setState(initialActivityState(res.data));
+				setState((prev) => reconcileActivity(prev, res.data, { since }));
 				setLoad({ kind: "ready" });
-			} else setLoad((prev) => (res.reason === "unavailable" || prev.kind !== "ready" ? { kind: "unavailable", message: res.message } : prev));
+			} else {
+				const message = res.reason === "unauthorized" ? "This browser is not paired with the hub." : res.message;
+				setLoad((prev) => (res.reason === "unavailable" || res.reason === "unauthorized" || prev.kind !== "ready" ? { kind: "unavailable", message } : prev));
+			}
 		});
 	}, [since]);
 
@@ -294,13 +307,16 @@ export function KbActivityView() {
 		timer.current = setTimeout(() => {
 			timer.current = null;
 			refetch();
-		}, DEBOUNCE_MS);
-	}, [refetch]);
+		}, debounceMs);
+	}, [refetch, debounceMs]);
 
+	// A new range starts over: paging, filter results and in-flight requests of the old range are dropped.
 	useEffect(() => {
+		gen.current++;
 		setLoad({ kind: "loading" });
 		setState(null);
-		loaded.current = 0;
+		setLoadingMore(false);
+		moreSeq.current++;
 		refetch();
 		return () => {
 			seq.current++;
@@ -311,12 +327,12 @@ export function KbActivityView() {
 
 	useEffect(() => {
 		const id = setInterval(() => setNow(Date.now()), 30_000);
-		const poll = setInterval(refetch, POLL_MS);
+		const poll = setInterval(refetch, pollMs);
 		return () => {
 			clearInterval(id);
 			clearInterval(poll);
 		};
-	}, [refetch]);
+	}, [refetch, pollMs]);
 
 	useOptionalServerEvent("hub-event", ({ frame }) => {
 		setState((s) => (s ? applyHubEvent(s, frame) : s));
@@ -324,18 +340,33 @@ export function KbActivityView() {
 	});
 	useOptionalServerResync(refetchSoon);
 
+	/** One page after `cursor`. If a refetch moved the cursor meanwhile, the result is merged only when it still continues the list; else it is retried once with the current cursor. */
+	const fetchMore = useCallback(
+		(retry: boolean) => {
+			const cursor = stateRef.current?.data.decisions.nextCursor;
+			if (!cursor) return;
+			const mine = ++moreSeq.current;
+			const myGen = gen.current;
+			setLoadingMore(true);
+			void fetchKbActivity({ since, before: cursor, limit: KB_ACTIVITY_PAGE }).then((res) => {
+				if (myGen !== gen.current) return; // another range: the reset already cleared loadingMore
+				const stillMine = mine === moreSeq.current;
+				const cur = stateRef.current?.data.decisions.nextCursor;
+				if (res.ok && cur === cursor) {
+					const page = res.data.decisions;
+					setState((s) => (s ? { ...s, data: { ...s.data, decisions: mergeDecisionPages(s.data.decisions, page) } } : s));
+				} else if (res.ok && retry && cur && stillMine) {
+					fetchMore(false); // the list moved under us: continue from where it is now
+					return;
+				}
+				if (stillMine) setLoadingMore(false);
+			});
+		},
+		[since],
+	);
 	const loadMore = useCallback(() => {
-		const cursor = state?.data.decisions.nextCursor;
-		if (!cursor || loadingMore) return;
-		const mine = seq.current;
-		setLoadingMore(true);
-		void fetchKbActivity({ since, before: cursor, limit: KB_ACTIVITY_PAGE }).then((res) => {
-			setLoadingMore(false);
-			if (mine !== seq.current || !res.ok) return;
-			const page = res.data.decisions;
-			setState((s) => (s ? { ...s, data: { ...s.data, decisions: mergeDecisionPages(s.data.decisions, page) } } : s));
-		});
-	}, [state, since, loadingMore]);
+		if (!loadingMore) fetchMore(true);
+	}, [fetchMore, loadingMore]);
 
 	if (load.kind === "unavailable") return <KbActivityUnavailable message={load.message} />;
 	if (load.kind === "loading" || !state) return <div className="p-6 text-sm text-muted-foreground" data-testid="kb-activity-view">Loading…</div>;

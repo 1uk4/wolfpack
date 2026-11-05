@@ -67,9 +67,10 @@ export interface ServerEvents {
 		thread: import("./subagents.ts").ChildThread & { wolf?: string; kind?: string; status?: "idle" | "busy" | "needs-you" };
 		chatId?: undefined;
 	};
-	/** A hub event the KB activity page follows (sweep_started / sweep_item / sweep_finished / kb.changed / resync), bridged per connection
-	 *  from the hub's event stream. Unlike the pokes above it carries the frame: the page folds sweep_item in optimistically, then refetches. */
-	"hub-event": { frame: { type: string; [k: string]: unknown }; chatId?: undefined };
+	/** A hub event the KB activity page follows (sweep_started / sweep_item / sweep_finished / kb.changed / resync). NOT on the bus: each SSE
+	 *  connection's own hub bridge writes it to that connection only (server/events-stream.ts), so one device's frames never reach another.
+	 *  It carries the frame: the page folds sweep_item in optimistically, then refetches. */
+	"hub-event": { frame: import("@wolfpack/client").HubEvent; chatId?: undefined };
 }
 
 export type ServerEventType = keyof ServerEvents;

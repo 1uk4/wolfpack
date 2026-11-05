@@ -124,7 +124,11 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 			// not at the first ping 25s later.
 			frame(": connected\n\n");
 			bridge = createActivityBridge(undefined, { ...eo.bridge, onAuthLost: authLost });
-			hubBridge = createHubEventsBridge(undefined, { ...eo.hubBridge, onAuthLost: authLost });
+			hubBridge = createHubEventsBridge(
+				// Straight to THIS connection (never the process-wide bus: another device's token may have a narrower scope).
+				(ev) => frame(`event: hub-event\ndata: ${JSON.stringify({ frame: ev })}\n\n`),
+				{ ...eo.hubBridge, onAuthLost: authLost },
+			);
 			void (eo.clientFor ?? connectionClient)().then(
 				(c) => {
 					client = c;

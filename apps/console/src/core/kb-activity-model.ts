@@ -27,7 +27,7 @@ export const DECISION_LABEL: Record<KbDecisionOutcome, string> = {
 	unclassified: "unclassified",
 };
 
-/** Spelling-tolerant outcome (ledgers and older receipts say created/merged/updated/rejected); anything unknown is `unclassified`. */
+/** Spelling-tolerant outcome (past-tense spellings); anything unknown is `unclassified`. */
 export function decisionOutcome(raw: string | null | undefined): KbDecisionOutcome {
 	switch ((raw ?? "").trim().toLowerCase()) {
 		case "create":
@@ -35,7 +35,6 @@ export function decisionOutcome(raw: string | null | undefined): KbDecisionOutco
 			return "create";
 		case "merge":
 		case "merged":
-		case "updated":
 			return "merge";
 		case "unchanged":
 			return "unchanged";
@@ -43,7 +42,6 @@ export function decisionOutcome(raw: string | null | undefined): KbDecisionOutco
 		case "rejected":
 			return "reject";
 		case "parked":
-		case "park":
 			return "parked";
 		default:
 			return "unclassified";
@@ -54,10 +52,56 @@ export function decisionOutcome(raw: string | null | undefined): KbDecisionOutco
 export interface KbActivityState {
 	data: KbActivityResponse;
 	sweeping: boolean;
+	/** The range and domain the data was fetched for: provisional rows outside them are not added. */
+	scope?: KbActivityScope;
 }
 
-export function initialActivityState(data: KbActivityResponse): KbActivityState {
-	return { data, sweeping: data.sweep?.running === true };
+export interface KbActivityScope {
+	/** "7d" | "30d" | "all" | an ISO timestamp. */
+	since?: string;
+	domain?: string;
+}
+
+export function initialActivityState(data: KbActivityResponse, scope?: KbActivityScope): KbActivityState {
+	return { data, sweeping: data.sweep?.running === true, ...(scope ? { scope } : {}) };
+}
+
+const DAY_MS = 86_400_000;
+
+/** The earliest time a decision may have to belong to `since` (null: no lower bound, or an unparseable value). */
+export function sinceCutoff(since: string | undefined, now: number = Date.now()): number | null {
+	if (!since || since === "all") return null;
+	if (since === "7d") return now - 7 * DAY_MS;
+	if (since === "30d") return now - 30 * DAY_MS;
+	const t = Date.parse(since);
+	return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * A first-page refetch folded into the state: the fresh first page replaces the head (provisional rows go), the ledger rows already
+ * loaded beyond it stay (and the cursor of the deepest page with them). If the fresh page does not overlap the loaded rows (more than a page
+ * of new decisions arrived), paging restarts from the fresh page so the list never has a hole.
+ */
+export function refreshDecisions(prev: KbActivityResponse["decisions"] | null, fresh: KbActivityResponse["decisions"]): KbActivityResponse["decisions"] {
+	const ledger = prev ? prev.items.filter((d) => !d.id.startsWith(PROVISIONAL_PREFIX)) : [];
+	const freshIds = new Set(fresh.items.map((d) => d.id));
+	const overlap = ledger.some((d) => freshIds.has(d.id));
+	if (!prev || ledger.length === 0 || !overlap) return fresh;
+	const tail = ledger.filter((d) => !freshIds.has(d.id));
+	if (tail.length === 0) return fresh;
+	const out: KbActivityResponse["decisions"] = { items: [...fresh.items, ...tail], total: fresh.total, counts: fresh.counts };
+	const cursor = prev.nextCursor;
+	if (cursor) out.nextCursor = cursor;
+	return out;
+}
+
+export function reconcileActivity(prev: KbActivityState | null, data: KbActivityResponse, scope?: KbActivityScope): KbActivityState {
+	const next = initialActivityState(data, scope);
+	if (prev && prev.scope?.since === scope?.since && prev.scope?.domain === scope?.domain) {
+		next.data = { ...data, decisions: refreshDecisions(prev.data.decisions, data.decisions) };
+	}
+	if (!data.sweep && prev) next.sweeping = prev.sweeping;
+	return next;
 }
 
 // ── incoming ────────────────────────────────────────────────────────────────
@@ -156,6 +200,12 @@ export interface ChangeColumn {
 	rows: { key: string; at: string; action: KbActivityChange["action"]; label: string; entryId: string; title: string; wolf?: string }[];
 }
 
+/** Newest first; an unparseable time compares equal, so the hub's order stands (the sort is stable). */
+function timeDesc(a: string, b: string): number {
+	const d = Date.parse(b) - Date.parse(a);
+	return Number.isNaN(d) ? 0 : d;
+}
+
 /** One column per domain (by name), the latest 10 each, newest first. */
 export function changeColumns(data: KbActivityResponse, perDomain: number = KB_ACTIVITY_CHANGES_PER_DOMAIN): ChangeColumn[] {
 	return [...data.changes.domains]
@@ -163,10 +213,10 @@ export function changeColumns(data: KbActivityResponse, perDomain: number = KB_A
 		.map((d) => ({
 			domain: d.domain,
 			rows: [...d.items]
-				.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+				.sort((a, b) => timeDesc(a.at, b.at))
 				.slice(0, perDomain)
-				.map((c) => {
-					const row: ChangeColumn["rows"][number] = { key: `${c.at}/${c.entryId}/${c.action}`, at: c.at, action: c.action, label: CHANGE_LABEL[c.action], entryId: c.entryId, title: c.title || c.entryId };
+				.map((c, i) => {
+					const row: ChangeColumn["rows"][number] = { key: `${i}/${c.at}/${c.entryId}/${c.action}`, at: c.at, action: c.action, label: CHANGE_LABEL[c.action], entryId: c.entryId, title: c.title || c.entryId };
 					if (c.from) row.wolf = c.from;
 					return row;
 				}),
@@ -213,53 +263,76 @@ export function needsRefetch(frame: KbHubFrame): boolean {
 
 const dec = (n: number): number => Math.max(0, n - 1);
 
+/** The identity of a contribution in the feed: from + denTopicId (+ hash where both sides know it). */
+function sameContribution(a: { from: string; denTopicId: string; hash?: string | undefined }, b: { from: string; denTopicId: string; hash?: string | undefined }): boolean {
+	if (a.from !== b.from || a.denTopicId !== b.denTopicId) return false;
+	return a.hash && b.hash ? a.hash === b.hash : true;
+}
+
 /**
- * Optimistic fold of one hub event. sweep_started → sweeping; sweep_item → one fewer pending for that wolf and a provisional decision row
- * (`item.decision` wins over `item.outcome`: a post-commit failure reports outcome `parked` with the committed decision); sweep_finished →
- * not sweeping. Anything else returns the same state. The refetch that follows sweep_finished replaces the provisional rows.
+ * Optimistic fold of one hub event. sweep_started → sweeping; sweep_item → a provisional decision row (`item.decision` wins over
+ * `item.outcome`: a post-commit failure reports outcome `parked` with the committed decision) and one fewer pending for that wolf (not for a
+ * parked item: it was never pending work that got decided, the ledger shows it); sweep_finished → not sweeping. An item that already has a
+ * row (same contribution) REPLACES it instead of counting twice. Rows outside the active range are not added. Anything else returns the same
+ * state. The refetch that follows sweep_finished replaces the provisional rows.
  */
-export function applyHubEvent(state: KbActivityState, frame: KbHubFrame): KbActivityState {
+export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: number = Date.now()): KbActivityState {
 	switch (frame.type) {
 		case "sweep_started":
 			return state.sweeping ? state : { ...state, sweeping: true };
 		case "sweep_finished":
 			return state.sweeping ? { ...state, sweeping: false } : state;
 		case "sweep_item": {
-			const f = frame as Extract<HubEvent, { type: "sweep_item" }>;
+			const f = frame as Extract<HubEvent, { type: "sweep_item" }> & { hash?: string };
 			if (typeof f.from !== "string" || typeof f.denTopicId !== "string") return state;
 			const d = state.data;
 			const decision = f.decision;
 			const outcome = decision ? decisionOutcome(decision.outcome) : decisionOutcome(f.outcome);
 			const id = `${PROVISIONAL_PREFIX}${f.id}`;
 			if (d.decisions.items.some((x) => x.id === id)) return state;
-			const row: KbDecision = { id, at: f.at, from: f.from, denTopicId: f.denTopicId, hash: "", outcome };
+
+			// incoming: parked items leave the pending count alone; otherwise drop ONE matching item (hash compared where both sides have it)
+			let incoming = d.incoming;
+			if (f.outcome !== "parked") {
+				let removed = false;
+				const wolves = d.incoming.wolves.map((w) => {
+					if (w.wolf !== f.from || w.pending === 0) return w;
+					removed = true;
+					const at = w.items.findIndex((i) => i.denTopicId === f.denTopicId && (!i.hash || !f.hash || i.hash === f.hash));
+					const items = at < 0 ? w.items : w.items.filter((_, k) => k !== at);
+					const next = { ...w, pending: dec(w.pending), items };
+					if (next.pending === 0) delete next.oldestAgeMs;
+					return next;
+				});
+				if (removed) incoming = { total: dec(d.incoming.total), wolves };
+			}
+
+			// decisions: only inside the fetched range (a domain filter cannot be checked on a provisional row, so it adds none)
+			const cutoff = sinceCutoff(state.scope?.since, now);
+			const t = Date.parse(f.at);
+			const outside = state.scope?.domain !== undefined || (cutoff !== null && !Number.isNaN(t) && t < cutoff);
+			if (outside) return { ...state, sweeping: true, data: { ...d, incoming } };
+
+			const row: KbDecision = { id, at: f.at, from: f.from, denTopicId: f.denTopicId, hash: f.hash ?? "", outcome };
 			const entryId = decision?.entryId ?? f.entryId;
 			if (entryId) row.entryId = entryId;
 			if (decision?.reason) row.reason = decision.reason;
 			if (decision?.routing) row.routing = decision.routing;
-			let removed = false;
-			const wolves = d.incoming.wolves.map((w) => {
-				if (w.wolf !== f.from || w.pending === 0) return w;
-				removed = true;
-				const items = w.items.filter((i) => i.denTopicId !== f.denTopicId);
-				const next = { ...w, pending: dec(w.pending), items };
-				if (next.pending === 0) delete next.oldestAgeMs;
-				return next;
-			});
-			return {
-				...state,
-				sweeping: true,
-				data: {
-					...d,
-					incoming: { total: removed ? dec(d.incoming.total) : d.incoming.total, wolves },
-					decisions: {
-						...d.decisions,
-						items: [row, ...d.decisions.items],
-						total: d.decisions.total + 1,
-						counts: { ...d.decisions.counts, [outcome]: d.decisions.counts[outcome] + 1 },
-					},
-				},
-			};
+
+			const existing = d.decisions.items.findIndex((x) => sameContribution({ from: x.from, denTopicId: x.denTopicId, hash: x.hash }, { from: row.from, denTopicId: row.denTopicId, hash: f.hash }));
+			const counts = { ...d.decisions.counts };
+			let items: KbDecision[];
+			let total = d.decisions.total;
+			if (existing >= 0) {
+				const old = d.decisions.items[existing]!;
+				counts[old.outcome] = dec(counts[old.outcome]);
+				items = [row, ...d.decisions.items.filter((_, k) => k !== existing)];
+			} else {
+				items = [row, ...d.decisions.items];
+				total += 1;
+			}
+			counts[outcome] += 1;
+			return { ...state, sweeping: true, data: { ...d, incoming, decisions: { ...d.decisions, items, total, counts } } };
 		}
 		default:
 			return state;

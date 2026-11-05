@@ -43,4 +43,12 @@ describe("kb activity API", () => {
 		assert.equal(res.status, 409);
 		assert.equal((await res.json()).code, "kb_unavailable");
 	});
+	it("a hub-auth 401 carries the sign-out marker; a plain 401 does not", async () => {
+		const hub = await failing(Object.assign(new ProtocolError("unauthorized", "revoked", false), { hubAuth: true })).kbActivity();
+		assert.equal(hub.status, 401);
+		assert.equal(hub.headers.get("X-Wolfpack-Hub-Auth"), "required");
+		const plain = await failing(new ProtocolError("unauthorized", "wolf host", false)).kbActivity();
+		assert.equal(plain.status, 401);
+		assert.equal(plain.headers.get("X-Wolfpack-Hub-Auth"), null);
+	});
 });

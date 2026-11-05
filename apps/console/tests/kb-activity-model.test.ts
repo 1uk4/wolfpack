@@ -13,6 +13,8 @@ import {
 	kbRelativeTime,
 	mergeDecisionPages,
 	needsRefetch,
+	reconcileActivity,
+	sinceCutoff,
 	outcomeFilters,
 	routingSummary,
 } from "../src/core/kb-activity-model.ts";
@@ -21,7 +23,9 @@ import { kbActivityFixture } from "./fixtures/kb-activity.ts";
 describe("kb-activity model", () => {
 	it("decisionOutcome normalises spellings", () => {
 		assert.equal(decisionOutcome("created"), "create");
-		assert.equal(decisionOutcome("updated"), "merge");
+		assert.equal(decisionOutcome("merged"), "merge");
+		assert.equal(decisionOutcome("updated"), "unclassified");
+		assert.equal(decisionOutcome("park"), "unclassified");
 		assert.equal(decisionOutcome("rejected"), "reject");
 		assert.equal(decisionOutcome("unchanged"), "unchanged");
 		assert.equal(decisionOutcome("???"), "unclassified");
@@ -88,6 +92,49 @@ describe("kb-activity model", () => {
 		assert.deepEqual(m.items.map((d) => d.id), ["d4", "d3", "d2", "d1", "d0"]);
 		assert.equal(m.nextCursor, undefined);
 	});
+	it("changeColumns keeps the hub's order for unparseable times and keys are unique", () => {
+		const d = kbActivityFixture({ changes: { domains: [{ domain: "x", items: [{ at: "bad", entryId: "e1", action: "create" }, { at: "bad", entryId: "e1", action: "create" }, { at: "also-bad", entryId: "e2", action: "merge" }] }] } });
+		const rows = changeColumns(d)[0]!.rows;
+		assert.deepEqual(rows.map((r) => r.entryId), ["e1", "e1", "e2"]);
+		assert.equal(new Set(rows.map((r) => r.key)).size, 3);
+	});
+	it("sinceCutoff", () => {
+		const now = Date.parse("2026-11-05T00:00:00Z");
+		assert.equal(sinceCutoff("all", now), null);
+		assert.equal(sinceCutoff("7d", now), now - 7 * 86_400_000);
+		assert.equal(sinceCutoff("2026-11-01T00:00:00Z", now), Date.parse("2026-11-01T00:00:00Z"));
+		assert.equal(sinceCutoff("junk", now), null);
+	});
+	describe("reconcileActivity / refreshDecisions", () => {
+		const page = (ids: string[], cursor?: string) => {
+			const d = kbActivityFixture();
+			return { ...d, decisions: { ...d.decisions, items: ids.map((id) => ({ id, at: "2026-11-05T09:00:00Z", from: "w", denTopicId: id, hash: id, outcome: "create" as const })), ...(cursor ? { nextCursor: cursor } : { nextCursor: undefined }) } };
+		};
+		it("keeps deeper pages and the deepest cursor when the first page overlaps", () => {
+			const prev = initialActivityState(page(["a", "b", "c", "d"], "deep"), { since: "30d" });
+			const next = reconcileActivity(prev, page(["n", "a", "b"], "shallow"), { since: "30d" });
+			assert.deepEqual(next.data.decisions.items.map((d) => d.id), ["n", "a", "b", "c", "d"]);
+			assert.equal(next.data.decisions.nextCursor, "deep");
+		});
+		it("drops provisional rows", () => {
+			const base = page(["a", "b"], "c1");
+			base.decisions.items.unshift({ id: "live:1", at: "2026-11-05T09:00:00Z", from: "w", denTopicId: "z", hash: "", outcome: "create" });
+			const next = reconcileActivity(initialActivityState(base, { since: "30d" }), page(["a", "b"], "c1"), { since: "30d" });
+			assert.deepEqual(next.data.decisions.items.map((d) => d.id), ["a", "b"]);
+		});
+		it("restarts paging when there is no overlap (a gap) or the range changed", () => {
+			const prev = initialActivityState(page(["a", "b"], "deep"), { since: "30d" });
+			assert.deepEqual(reconcileActivity(prev, page(["x", "y"], "s"), { since: "30d" }).data.decisions.items.map((d) => d.id), ["x", "y"]);
+			assert.equal(reconcileActivity(prev, page(["a", "x"], "s"), { since: "7d" }).data.decisions.items.length, 2);
+		});
+		it("sweeping follows the response when it says, else the previous state", () => {
+			const prev = { ...initialActivityState(page(["a"]), { since: "30d" }), sweeping: true };
+			const d = page(["a"]);
+			delete (d as { sweep?: unknown }).sweep;
+			assert.equal(reconcileActivity(prev, d, { since: "30d" }).sweeping, true);
+			assert.equal(reconcileActivity(prev, { ...d, sweep: { running: false } }, { since: "30d" }).sweeping, false);
+		});
+	});
 	it("formatters", () => {
 		assert.equal(kbAge(5_000), "just now");
 		assert.equal(kbAge(120_000), "2m");
@@ -137,9 +184,49 @@ describe("kb-activity model", () => {
 			assert.equal(top.routing?.route, "alias");
 			assert.equal(s.data.decisions.counts.merge, 3);
 			assert.equal(s.data.decisions.counts.parked, 1);
+			// a parked item does not touch the pending count
+			assert.equal(s.data.incoming.wolves.find((w) => w.wolf === "ada")!.pending, 1);
+			assert.equal(s.data.incoming.total, 4);
+		});
+		it("the last pending item clears the oldest age", () => {
+			const s = applyHubEvent(base(), { type: "sweep_item", id: 8, at, from: "ada", denTopicId: "t-ada-1", outcome: "create" });
 			const ada = s.data.incoming.wolves.find((w) => w.wolf === "ada")!;
 			assert.equal(ada.pending, 0);
 			assert.equal(ada.oldestAgeMs, undefined);
+		});
+		it("removes only the item with the matching hash from incoming", () => {
+			const d = kbActivityFixture();
+			d.incoming.wolves[0]!.pending = 2;
+			d.incoming.wolves[0]!.items = [{ denTopicId: "t-ada-1", hash: "h1", ageMs: 5 }, { denTopicId: "t-ada-1", hash: "h2", ageMs: 9 }];
+			const s = applyHubEvent(initialActivityState(d), { type: "sweep_item", id: 3, at, from: "ada", denTopicId: "t-ada-1", outcome: "create", hash: "h2" } as never);
+			assert.deepEqual(s.data.incoming.wolves[0]!.items.map((i) => i.hash), ["h1"]);
+		});
+		it("an item that already has a row replaces it instead of counting twice", () => {
+			const s1 = applyHubEvent(base(), { type: "sweep_item", id: 20, at, from: "hal", denTopicId: "t1", outcome: "create", entryId: "e9" });
+			// d1 (hal / t1, parked) is replaced by the live create: total unchanged, counts moved
+			assert.equal(s1.data.decisions.total, 9);
+			assert.equal(s1.data.decisions.counts.parked, 0);
+			assert.equal(s1.data.decisions.counts.create, 4);
+			assert.equal(s1.data.decisions.items.filter((d) => d.from === "hal" && d.denTopicId === "t1").length, 1);
+			assert.equal(s1.data.decisions.items[0]!.id, "live:20");
+			// a second live frame for the same contribution replaces the provisional row
+			const s2 = applyHubEvent(s1, { type: "sweep_item", id: 21, at, from: "hal", denTopicId: "t1", outcome: "merge" });
+			assert.equal(s2.data.decisions.total, 9);
+			assert.equal(s2.data.decisions.items.filter((d) => d.denTopicId === "t1").length, 1);
+			assert.equal(s2.data.decisions.counts.create, 3);
+			assert.equal(s2.data.decisions.counts.merge, 3);
+		});
+		it("rows outside the active range or domain are not added (incoming still moves)", () => {
+			const d = kbActivityFixture();
+			const iso = initialActivityState(d, { since: "2026-11-06T00:00:00Z" });
+			const s = applyHubEvent(iso, { type: "sweep_item", id: 4, at, from: "hal", denTopicId: "t-hal-1", outcome: "create" });
+			assert.equal(s.data.decisions.items.length, 4);
+			assert.equal(s.data.decisions.total, 9);
+			assert.equal(s.data.incoming.wolves.find((w) => w.wolf === "hal")!.pending, 2);
+			const dom = applyHubEvent(initialActivityState(d, { since: "30d", domain: "wolfpack" }), { type: "sweep_item", id: 5, at, from: "hal", denTopicId: "z", outcome: "create" });
+			assert.equal(dom.data.decisions.items.length, 4);
+			const inside = applyHubEvent(initialActivityState(d, { since: "7d" }), { type: "sweep_item", id: 6, at: new Date().toISOString(), from: "hal", denTopicId: "z", outcome: "create" });
+			assert.equal(inside.data.decisions.items.length, 5);
 		});
 		it("an unknown wolf only adds the row; other events are ignored", () => {
 			const b = base();

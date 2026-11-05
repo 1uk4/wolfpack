@@ -291,12 +291,13 @@ export async function handleChatInput(
 		// JSONL event stream with the record's turns; no-op unless
 		// WOLFPACK_PROVIDER_EVENTS=1.
 		providerEventNote(chatId, "turn", `run start (base: ${merged.length} messages)`);
+		const updateFlushEnv = readEnv("WOLFPACK_UPDATE_FLUSH_MS", "LH_UPDATE_FLUSH_MS");
 		const handle = runPiTurn({
 			agent: constructed,
 			// The coalescing window seam (COMPACTION LAW, 2026-10-09): tests
 			// tighten it via WOLFPACK_UPDATE_FLUSH_MS; production rides the 100ms
 			// default in ui-stream.
-			...(readEnv("WOLFPACK_UPDATE_FLUSH_MS", "LH_UPDATE_FLUSH_MS") ? { updateFlushMs: Number(readEnv("WOLFPACK_UPDATE_FLUSH_MS", "LH_UPDATE_FLUSH_MS")) } : {}),
+			...(updateFlushEnv ? { updateFlushMs: Number(updateFlushEnv) } : {}),
 			// THE LACAN FIX (2026-10-04): seed the uniquifier with every
 			// tool-call id the record already holds — a provider that resets
 			// ids per response (DeepSeek) then gets fresh unique ids for this

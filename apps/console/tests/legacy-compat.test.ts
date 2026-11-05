@@ -52,6 +52,44 @@ describe("userData migration", () => {
 		assert.equal(migrateLegacyUserData(path.join(root, "Wolfpack Console-dev")).migrated, true);
 		assert.ok(fs.existsSync(path.join(root, "Wolfpack Console-dev", "console.json")));
 	});
+	it("skips Chromium Singleton* entries and leaves no .migrating dir", () => {
+		const root = mk();
+		const old = path.join(root, OLD);
+		fs.mkdirSync(old);
+		fs.writeFileSync(path.join(old, "console.json"), "{}");
+		for (const n of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) fs.writeFileSync(path.join(old, n), "x");
+		const next = path.join(root, "Wolfpack Console");
+		assert.equal(migrateLegacyUserData(next).migrated, true);
+		assert.ok(fs.existsSync(path.join(next, "console.json")));
+		for (const n of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) assert.ok(!fs.existsSync(path.join(next, n)), n);
+		assert.ok(!fs.existsSync(`${next}.migrating`));
+	});
+	it("a failed copy leaves no newDir and the next run retries; stale .migrating is cleared", () => {
+		const root = mk();
+		const old = path.join(root, OLD);
+		fs.mkdirSync(old);
+		fs.writeFileSync(path.join(old, "console.json"), "{}");
+		const next = path.join(root, "Wolfpack Console");
+		fs.mkdirSync(`${next}.migrating`);
+		fs.writeFileSync(path.join(`${next}.migrating`, "stale"), "s");
+		const cjsFs = require("node:fs");
+		const orig = cjsFs.cpSync;
+		cjsFs.cpSync = () => {
+			throw new Error("boom");
+		};
+		const logs: string[] = [];
+		try {
+			assert.equal(migrateLegacyUserData(next, (m: string) => logs.push(m)).migrated, false);
+		} finally {
+			cjsFs.cpSync = orig;
+		}
+		assert.ok(!fs.existsSync(next), "no newDir after failure");
+		assert.ok(!fs.existsSync(`${next}.migrating`), "temp removed");
+		assert.match(logs[0], /failed/);
+		assert.equal(migrateLegacyUserData(next).migrated, true, "retry succeeds");
+		assert.ok(fs.existsSync(path.join(next, "console.json")));
+		assert.ok(!fs.existsSync(path.join(next, "stale")));
+	});
 	it("does nothing when the new folder exists or no legacy folder", () => {
 		const root = mk();
 		fs.mkdirSync(path.join(root, OLD));

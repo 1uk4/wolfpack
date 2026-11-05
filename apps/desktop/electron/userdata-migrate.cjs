@@ -20,14 +20,28 @@ function migrateLegacyUserData(newDir, log = () => {}) {
 	const parent = path.dirname(newDir);
 	const base = path.basename(newDir);
 	const isDev = base.endsWith("-dev");
+	const tmpDir = `${newDir}.migrating`;
 	for (const legacy of LEGACY_NAMES) {
 		const oldDir = path.join(parent, isDev ? `${legacy}-dev` : legacy);
 		if (!fs.existsSync(oldDir)) continue;
 		try {
-			fs.cpSync(oldDir, newDir, { recursive: true, errorOnExist: false });
+			// A crash mid-copy can leave a stale temp dir; start clean.
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+			fs.cpSync(oldDir, tmpDir, {
+				recursive: true,
+				errorOnExist: false,
+				// Chromium's SingletonLock/Socket/Cookie are per-process; never copy them.
+				filter: (src) => !path.basename(src).startsWith("Singleton"),
+			});
+			fs.renameSync(tmpDir, newDir);
 			log(`userData migration: copied ${oldDir} → ${newDir}`);
 			return { migrated: true, from: oldDir };
 		} catch (err) {
+			try {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			} catch {
+				/* best effort: next launch cleans it up */
+			}
 			log(`userData migration failed (${oldDir}): ${err?.message ?? err}`);
 			return { migrated: false };
 		}

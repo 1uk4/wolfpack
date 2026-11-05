@@ -38,7 +38,8 @@ const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs")
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
-// legacy LH_ name fallback, remove after 2026-12-05
+// legacy LH_ name fallback, remove after 2026-12-05.
+// MUST stay in sync with apps/console/env-compat.ts (same semantics).
 const readEnv = (name, legacy) => process.env[name] || process.env[legacy] || undefined;
 
 const PRODUCT_NAME = "Wolfpack Console";

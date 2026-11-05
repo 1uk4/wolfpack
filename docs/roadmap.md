@@ -84,7 +84,7 @@ is service-backed with no data-model change (same WorkItem files, now behind the
 
 ---
 
-## Phase 3 — Containerize wolves + `DockerBackend` ⬜
+## Phase 3 — Containerize wolves ⬜
 
 Wolves become ephemeral containers managed by the Wolfpack CLI.
 
@@ -93,8 +93,6 @@ Wolves become ephemeral containers managed by the Wolfpack CLI.
 - **Dev wolf:** `docker run -it`, repo bind-mounted, `KB_ENDPOINT`/`KB_TOKEN` injected.
 - **Daemon wolf:** `docker run -dit` + restart policy (replaces systemd + tmux); Telegram
   outbound.
-- **`DockerBackend`** implementing the existing `WolfBackend` contract
-  (`list/status/logs/restart/remove` → docker API); `wolfpack launch` drives Docker.
 
 *Milestone:* `wolfpack launch dev-wolf` gives you a containerized dev environment wired to
 the VPS KB; VPS daemon wolves run as containers.

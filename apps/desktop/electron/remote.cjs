@@ -5,7 +5,7 @@
  * apps/console/tests/desktop-remote.test.ts.
  *
  * Config: env WOLFPACK_CONSOLE_URL wins over `consoleUrl` in <userData>/console.json
- * (macOS: ~/Library/Application Support/LearnHarness/console.json).
+ * (macOS: ~/Library/Application Support/Wolfpack Console/console.json).
  * Accepted: https://host[:port][/path]; plain http only for loopback
  * (127.0.0.1, localhost, [::1]) and tailnet CGNAT 100.64.0.0/10 IPs.
  * Rejected: credentials, other schemes, query/hash (dropped, not rejected).

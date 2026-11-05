@@ -16,7 +16,7 @@ import { join } from "node:path";
 import esbuild from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { takeSnapshot } from "@wolfpack/engine";
-import { startLocalWorkServer } from "@wolfpack/agent";
+import { startLocalWorkServer } from "@wolfpack/work-server";
 import { HttpConsoleClient } from "@wolfpack/client";
 import { ConsolidateResponseSchema, MemoryEventSchema, PROTOCOL_VERSION, type MemoryEvent } from "@wolfpack/protocol";
 import { defineExtension } from "@wolfpack/harness/extension";

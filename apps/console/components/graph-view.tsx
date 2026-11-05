@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The knowledge-graph canvas view: the learnharness Knowledge map, repurposed
+ * The knowledge-graph canvas view: the original Knowledge map, repurposed
  * for the KB graph the librarian serves.
  *
  * The renderer (./graph-canvas.ts) is a dumb draw function over plain data

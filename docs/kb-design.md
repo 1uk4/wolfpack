@@ -3,7 +3,6 @@
 > How the shared knowledge base works **today**. Design history (the v1 graph,
 > the phased v2 rebuild plan) lives in git: see `docs/kb-v2-implementation.md`
 > at commit `d5a9439`. Crawl ingestion: `packages/memory/docs/crawl-spec.md`.
-> The work layer (Factory): `docs/factory-design.md`.
 
 ## Principles
 1. **Make illegal states unrepresentable.** Zod schemas are the single source of
@@ -15,7 +14,7 @@
    placement, link resolution and validation are code.
 4. **Behavior lives in editable config:** prompts, vocabularies, numeric knobs.
 5. **One substrate, two layers:** the Library (durable entries) and the Factory
-   (live work items, `docs/factory-design.md`).
+   (live work items).
 
 ---
 
@@ -40,7 +39,7 @@ knowledge/base/domains/<domain>/
   INDEX.md              entry list (title + summary), rendered each sweep
   _registry.md          topic registry (aliases, subscribers), from the ledger
   _digest.json          section tree projection ("what the pack knows")
-  work/<work-id>.md     Factory work items (see factory-design.md)
+  work/<work-id>.md     Factory work items
 <denLocal>/
   ledger/events.jsonl   KB event log (append-only source of truth)
   sections/_sections.json   section tree snapshot

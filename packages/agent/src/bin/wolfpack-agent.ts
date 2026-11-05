@@ -11,7 +11,7 @@ import { authMiddleware } from "../auth.js";
 import { wolvesRouter } from "../routes/wolves.js";
 import { logsRouter } from "../routes/logs.js";
 import { healthRouter } from "../routes/health.js";
-import { workRouter } from "../routes/work.js";
+import { workRouter } from "@wolfpack/work-server";
 import { dashboardRouter } from "../routes/dashboard.js";
 import { transcribeRouter } from "../routes/transcribe.js";
 

@@ -61,7 +61,7 @@ export interface AgentBuildOptions {
 	 *  exists); absent → the cached pure-source composition. */
 	promptSwitches?: Record<string, boolean>;
 	/** Native conversation identity: the existing persisted chat id.
-	 * Debug: when set AND LH_PROVIDER_EVENTS=1, raw provider stream events
+	 * Debug: when set AND WOLFPACK_PROVIDER_EVENTS=1, raw provider stream events
 	 *  (pre-normalization) append to data/debug/provider-events/
 	 *  <chatId>.jsonl via providerEventObserver — the GLM-truncation /
 	 *  DeepSeek-id incident layer. Absent or env-off → no observer. */
@@ -78,7 +78,7 @@ export function createAssistantAgent(opts: AgentBuildOptions = {}) {
 	const systemPrompt = opts.promptSwitches
 		? composeInstructions("assistant", opts.promptSwitches)
 		: composedInstructions.assistant;
-	// Debug recorder: raw provider events when LH_PROVIDER_EVENTS=1 and the
+	// Debug recorder: raw provider events when WOLFPACK_PROVIDER_EVENTS=1 and the
 	// caller handed a chatId; undefined is the normal no-observer path.
 	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, "assistant") : undefined;
 	const agent = new Agent({

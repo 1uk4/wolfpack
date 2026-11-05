@@ -2,7 +2,7 @@
  * Engine events -> protocol ThreadEvents.
  *
  * `watchEvents` is EXPERIMENTAL upstream; this file is the only consumer of its event shapes. Rules (all taken from
- * the durable-bridge spike, spikes/durable-bridge/FINDINGS.md, and pinned by fixture tests):
+ * the durable-bridge spike, docs/decisions/durable-bridge-findings.md, and pinned by fixture tests):
  *
  * - A protocol turn is an engine RUN (run_start..run_end), not an engine turn: one run spans several model rounds
  *   (tool calls) and a steer lands inside it. Engine turn_start/turn_end are ignored. turnId = `turn-<first input id>`.

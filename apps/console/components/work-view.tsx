@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * THE WORK VIEW: a read-only, full-bleed overlay over the domain's work, repurposed from learnharness's chain table.
+ * THE WORK VIEW: a read-only, full-bleed overlay over the domain's work, repurposed from the original chain table.
  * Initiative groups hold feature rows, which hold task rows, all collapsed to begin with; indentation carries the
  * structure. Dependencies among siblings are lanes in a narrow left gutter (one SVG per group, work-connectors.ts):
  * a line down from the prerequisite ending in an elbow arrow at the dependent; a dependency outside the parent is a

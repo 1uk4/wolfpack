@@ -7,7 +7,7 @@ an unintentional change fails `tests/golden-fixtures.test.ts`. When schema
 stamps land (Wave D), the stamping commit updates these files with it.
 
 `tests/golden-fixtures.test.ts` copies this dir to a temp dir, points the
-production stores at it via the `LH_DATA_DIR` seam, and reads EVERYTHING
+production stores at it via the `WOLFPACK_DATA_DIR` seam, and reads EVERYTHING
 through the real read paths — chat records (contract folds + the LLM wire
 flattening), graph render settings, jobs,
 settings. It also pins marker COVERAGE: every custom-marker kind and the

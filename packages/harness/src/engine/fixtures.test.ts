@@ -1,5 +1,5 @@
 /**
- * Mapper tests driven by real engine captures (spikes/durable-bridge/evidence, pi-durable 1.4.0), copied to
+ * Mapper tests driven by real engine captures (pi-durable 1.4.0 durable-bridge spike evidence), stored in
  * __fixtures__ so the suite is self-contained. If an engine upgrade changes event shapes, this suite fails first.
  */
 import { readFileSync } from "node:fs";

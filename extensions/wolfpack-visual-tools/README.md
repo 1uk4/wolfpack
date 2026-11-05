@@ -4,6 +4,11 @@ Mermaid + SVG authoring tools for the visualization subagents. Ported from
 [amosblomqvist/learn](https://github.com/amosblomqvist/learn/tree/main/extensions/visual-tools)
 and wired into **wolfpack-subagents** via its tool-extension bridge.
 
+The `visualizer` agent profile lives in `packages/agents/agents/visualizer.md`
+(the bundled roster), so both pi and wolfd see it. For wolfd (pi-durable) the
+tools load through `durable.ts`; add `visual-tools` to the wolf's `extensions:`
+and run `wolfpack sync` (the extension bundle must be rebuilt) then restart.
+
 Replaces the old `wolfpack-show-me` skill.
 
 ## What it provides

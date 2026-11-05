@@ -85,7 +85,7 @@ function listChats(): ChatSummary[] {
 				// must not blank the whole sidebar — same isolation getChat's
 				// per-file catch gives.
 				try {
-					// Legacy fields from the learnharness era may still ride old
+					// Legacy fields from the pre-fork era may still ride old
 					// records; they never reach the list payload.
 					const { tree: _tree, extractions: _extractions, kind: _kind, ...clean } = summary as typeof summary & {
 						tree?: unknown;

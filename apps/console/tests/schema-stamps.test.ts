@@ -1,12 +1,12 @@
 /**
  * SCHEMA STAMPS (schema-versioning wave, owner 2026-10-10): LAZY v1 for
  * chats (record.version, stamped at the write choke point). (The graph
- * family's format.json sidecar died with the learnharness ledgers; the
+ * family's format.json sidecar died with the original ledgers; the
  * graph's render-settings and positions are plain sanitized JSON.)
  * Honest refusal: records stamped NEWER than this build are refused on
  * read (the downgrade scenario) — never misparsed, never rewritten.
  *
- * Runs under an isolated LH_DATA_DIR (the chat-birth-stamp discipline:
+ * Runs under an isolated WOLFPACK_DATA_DIR (the chat-birth-stamp discipline:
  * the seam is set before any config-loading import, so every app-module
  * import is dynamic).
  */
@@ -19,7 +19,7 @@ import test from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-stamps-"));
-process.env.LH_DATA_DIR = TMP_DATA;
+process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { chatStore } = await import("../src/store/chats.ts");
 

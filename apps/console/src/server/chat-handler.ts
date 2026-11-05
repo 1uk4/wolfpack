@@ -1,3 +1,4 @@
+import { readEnv } from "../../env-compat.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createAssistantAgent, type AgentBuildOptions, type AssistantAgent } from "../agent/assistant-agent.ts";
 import { piEngineForSpec } from "../agent/models.ts";
@@ -259,7 +260,7 @@ export async function handleChatInput(
 		messages: asAgentMessages(merged),
 		onUsage: collectUsage,
 		// Debug (owner, 2026-10-04): raw provider events under
-		// LH_PROVIDER_EVENTS=1 (provider-events.ts); no-op otherwise.
+		// WOLFPACK_PROVIDER_EVENTS=1 (provider-events.ts); no-op otherwise.
 		chatId,
 		// The prompt-override switches (P2, 2026-09-19): same resolution
 		// point as the tool delta — the agent layer composes the system
@@ -288,14 +289,15 @@ export async function handleChatInput(
 		registerLiveAgent(chatId, constructed);
 		// Debug recorder run marker (owner, 2026-10-04): correlates the
 		// JSONL event stream with the record's turns; no-op unless
-		// LH_PROVIDER_EVENTS=1.
+		// WOLFPACK_PROVIDER_EVENTS=1.
 		providerEventNote(chatId, "turn", `run start (base: ${merged.length} messages)`);
+		const updateFlushEnv = readEnv("WOLFPACK_UPDATE_FLUSH_MS", "LH_UPDATE_FLUSH_MS");
 		const handle = runPiTurn({
 			agent: constructed,
 			// The coalescing window seam (COMPACTION LAW, 2026-10-09): tests
-			// tighten it via LH_UPDATE_FLUSH_MS; production rides the 100ms
+			// tighten it via WOLFPACK_UPDATE_FLUSH_MS; production rides the 100ms
 			// default in ui-stream.
-			...(process.env.LH_UPDATE_FLUSH_MS ? { updateFlushMs: Number(process.env.LH_UPDATE_FLUSH_MS) } : {}),
+			...(updateFlushEnv ? { updateFlushMs: Number(updateFlushEnv) } : {}),
 			// THE LACAN FIX (2026-10-04): seed the uniquifier with every
 			// tool-call id the record already holds — a provider that resets
 			// ids per response (DeepSeek) then gets fresh unique ids for this

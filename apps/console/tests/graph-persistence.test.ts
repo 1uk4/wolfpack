@@ -1,6 +1,6 @@
 /**
  * Graph persistence: the pure rules (src/core/graph-persistence.ts) and the
- * console-store round trip (positions.json under an isolated LH_DATA_DIR).
+ * console-store round trip (positions.json under an isolated WOLFPACK_DATA_DIR).
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import {
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-graph-pos-"));
-process.env.LH_DATA_DIR = TMP;
+process.env.WOLFPACK_DATA_DIR = TMP;
 const { commitGraphPositions, graphPositions } = await import("../src/server/graph-positions.ts");
 const { POSITIONS_FILE } = await import("../config.ts");
 

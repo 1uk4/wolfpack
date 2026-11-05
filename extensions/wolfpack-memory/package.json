@@ -1,10 +1,12 @@
 {
   "name": "wolfpack-memory",
+  "license": "AGPL-3.0-only",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Pi extension for wolfpack memory system \u2014 observer, consolidator, den management",
   "dependencies": {
+    "@wolfpack/work-server": "*",
     "@anthropic-ai/sdk": "^0.39.0",
     "zod": "^3.24.0",
     "@wolfpack/client": "*",

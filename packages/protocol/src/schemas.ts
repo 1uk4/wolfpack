@@ -934,6 +934,8 @@ export const KbDecisionSchema = z.object({
   superseded: z.number().int().nonnegative().optional(),
   /** The entry's domain, else the contribution's hinted domain when it is a real domain. Absent when neither is known. */
   domain: z.string().optional(),
+  /** Title of the resulting entry, when there is one. */
+  title: z.string().optional(),
 });
 export type KbDecision = z.infer<typeof KbDecisionSchema>;
 /** entry_written carries action create|merge|supersede; entry_retired maps to `retire`. Domain is resolved by the hub (entry_placed sectionId / entry file), not carried by the events. */

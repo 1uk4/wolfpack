@@ -873,6 +873,8 @@ export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("swee
  * The curator's decision for one contribution (the same summary the KB ledger `decision` event carries; optional: older hubs omit it).
  * Must stay in step with DecisionSummarySchema in packages/kb/src/shared/schemas/events.ts (hubd's decision-drift test checks it).
  * `unchanged` (a merge the contribution agreed with) is reported as sweep_item outcome `merge`; `unclassified` has no sweep_item.
+ * On a post-commit failure (receipt or move threw, then the item was parked) sweep_item.outcome is `parked` but `decision` carries the
+ * committed outcome (create / merge / unchanged), matching the ledger.
  */
 export const HubSweepDecisionSchema = z.object({
   /** `unchanged`: a merge the contribution agreed with; `unclassified`: no declared domain. */

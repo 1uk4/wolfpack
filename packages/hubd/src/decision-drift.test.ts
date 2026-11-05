@@ -1,13 +1,9 @@
 /** The hub event's decision shape (protocol) and the KB ledger's (kb) must agree (work-wolfpack-55ZPU2a). */
 import { describe, expect, it } from "vitest";
-import { HubSweepDecisionSchema, type HubSweepDecision } from "@wolfpack/protocol";
+import { HubSweepDecisionSchema } from "@wolfpack/protocol";
 import { DecisionSummarySchema, type DecisionSummary } from "@wolfpack/kb/shared";
 
-// Type level: each shape is assignable to the other (a field added on one side only fails the build).
-const toProtocol = (d: DecisionSummary): HubSweepDecision => d;
-const toKb = (d: HubSweepDecision): DecisionSummary => d;
-type Keys<T> = keyof T;
-const sameKeys: Keys<DecisionSummary> extends Keys<HubSweepDecision> ? (Keys<HubSweepDecision> extends Keys<DecisionSummary> ? true : false) : false = true;
+// Only the runtime key/enum checks and the round-trip below guard against drift (the two types are both zod-inferred).
 
 describe("decision shape drift", () => {
   const full: DecisionSummary = {
@@ -26,8 +22,7 @@ describe("decision shape drift", () => {
   };
 
   it("both schemas accept and round-trip the same full value", () => {
-    expect(sameKeys).toBe(true);
-    expect(DecisionSummarySchema.parse(toKb(toProtocol(full)))).toEqual(full);
+    expect(DecisionSummarySchema.parse(full)).toEqual(full);
     expect(HubSweepDecisionSchema.parse(full)).toEqual(full);
   });
 

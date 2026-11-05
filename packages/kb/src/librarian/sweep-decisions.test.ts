@@ -166,7 +166,8 @@ describe("sweep decision events", () => {
     const d = decisions();
     expect(d).toHaveLength(1);
     expect(d[0]).toMatchObject({ outcome: "create", denTopicId: "alpha" });
-    expect(item()[0]).toMatchObject({ outcome: "parked" }); // sweep_item behaviour is unchanged
+    expect(item()[0]).toMatchObject({ outcome: "parked" }); // sweep_item outcome is unchanged
+    expect(item()[0].decision).toEqual({ outcome: "create", entryId: d[0].entryId, routing: d[0].routing }); // the live feed agrees with the ledger
   });
 
   it("parked after retries are exhausted: decision with the reason and the routing the item had reached", async () => {
@@ -195,7 +196,7 @@ describe("sweep decision events", () => {
     expect(r.parked).toHaveLength(1);
     const d = decisions();
     expect(d).toHaveLength(1);
-    expect(d[0]).toMatchObject({ outcome: "parked", reason: expect.stringMatching(/time budget \(2 times\)/), routing: { route: "new", band: "create" } });
+    expect(d[0]).toMatchObject({ outcome: "parked", reason: expect.stringMatching(new RegExp(`time budget \\(${SWEEP.budgetRetries + 1} times\\)`)), routing: { route: "new", band: "create" } });
   });
 
   it("a failing decision append on the parked path does not fail the item", async () => {

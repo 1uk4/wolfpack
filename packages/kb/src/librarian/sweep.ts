@@ -460,6 +460,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     // True once a ledger append carrying this item's decision went through (the create/merge batch, or a reject/unclassified
     // append). A later failure that parks the item (receipt or move threw) must not add a second, contradicting decision.
     let decided = false;
+    // The decision already in the ledger for the item itself (not a split-out overflow): the live feed reports it, so it agrees
+    // with the ledger even when a later failure parks the item.
+    let committedDecision: DecisionSummary | undefined;
     // Decision event for the paths that write no batch (reject, unclassified, parked). Best effort: the item is already
     // handled (moved / parked), so a failing append must not turn it into an item error.
     const recordDecision = async (d: DecisionSummary) => {
@@ -888,6 +891,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // crash can't leave a live entry with no ledger record.
       await w.appendLedger(roots, batch);
       decided = true;
+      if (exclude === undefined) committedDecision = decision; // the main call; an overflow passes `exclude`
       log.push(...batch);
       batch.length = 0;
       touchedDomains.add(domain);
@@ -985,7 +989,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         outcome = `PARKED: ${why}`;
         const decision: DecisionSummary = { outcome: "parked", reason: why, ...(itemRouting ? { routing: routingSummary(itemRouting) } : {}) };
         if (!decided) await recordDecision(decision);
-        itemEvent = { outcome: "parked", decision };
+        itemEvent = { outcome: "parked", decision: decided && committedDecision ? committedDecision : decision };
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
         await Promise.resolve(ctx.alert?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`)).catch(() => {});
         result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });

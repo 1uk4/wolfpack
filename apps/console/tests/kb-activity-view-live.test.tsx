@@ -103,7 +103,7 @@ describe("KbActivityView live behaviour", () => {
 		await mount();
 		await resolve(calls[0]!, page(["a"]));
 		assert.equal(calls.length, 1);
-		assert.equal(calls[0]!.url.searchParams.get("limit"), "200");
+		assert.equal(calls[0]!.url.searchParams.get("limit"), "50");
 		await hubEvent("kb.changed");
 		await hubEvent("sweep_finished");
 		await hubEvent("resync");
@@ -154,7 +154,7 @@ describe("KbActivityView live behaviour", () => {
 		await resolve(calls[0]!, page(["a", "b"]));
 		await settle(150);
 		const poll = calls[1]!;
-		assert.equal(poll.url.searchParams.get("limit"), "200");
+		assert.equal(poll.url.searchParams.get("limit"), "50");
 		await resolve(poll, page(["a", "b", "c"]));
 		assert.deepEqual(ids(), ["a", "b", "c"]);
 		await hubEvent("kb.changed");

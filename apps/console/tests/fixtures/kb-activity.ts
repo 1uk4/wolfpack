@@ -13,14 +13,14 @@ export function kbActivityFixture(over: Partial<KbActivityResponse> = {}): KbAct
 				{ wolf: "idle", pending: 0, items: [] },
 			],
 			bad: [
-				{ wolf: "hal", denTopicId: "t-bad-1", domainHint: "nope", reason: "domain_hint is not subscribed", at: "2026-11-05T08:00:00Z" },
-				{ wolf: "hal", reason: "request body is not valid JSON", at: "2026-11-05T07:00:00Z" },
+				{ id: "sha-1", wolf: "hal", denTopicId: "t-bad-1", domainHint: "nope", reason: "domain_hint is not subscribed", at: "2026-11-05T08:00:00Z" },
+				{ id: "sha-2", wolf: "hal", reason: "request body is not valid JSON", at: "2026-11-05T07:00:00Z" },
 			],
 		},
 		domains: [
 			{ domain: "empty", entries: 0, waiting: 0, contributors: [] },
-			{ domain: "personal", entries: 20, waiting: 1, lastChangeAt: "2026-11-05T09:50:00Z", contributors: [{ wolf: "ada", count: 5 }] },
-			{ domain: "wolfpack", entries: 167, waiting: 2, lastChangeAt: "2026-11-05T09:58:00Z", contributors: [{ wolf: "hal", count: 1 }] },
+			{ domain: "personal", entries: 20, waiting: 1, lastChangeAt: "2026-11-05T09:50:00Z", contributors: [{ wolf: "ada", count: 5 }], decided: 5 },
+			{ domain: "wolfpack", entries: 167, waiting: 2, lastChangeAt: "2026-11-05T09:58:00Z", contributors: [{ wolf: "hal", count: 1 }], decided: 1 },
 		],
 		decisions: {
 			items: [

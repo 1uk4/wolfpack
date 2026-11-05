@@ -16,8 +16,8 @@ export type KbActivitySince = "7d" | "30d" | "all";
 export const KB_ACTIVITY_SINCE: readonly KbActivitySince[] = ["7d", "30d", "all"];
 /** Per-domain page ('show all'). */
 export const KB_ACTIVITY_PAGE = 50;
-/** The overview request: enough decisions for every domain block's recent rows. */
-export const KB_ACTIVITY_OVERVIEW = 200;
+/** The overview request. Blocks read the hub's per-domain `recent`, so this list only feeds provisional rows and an older hub. */
+export const KB_ACTIVITY_OVERVIEW = 50;
 /** Rows shown per domain block before 'show all'. */
 export const KB_ACTIVITY_DOMAIN_ROWS = 8;
 export const KB_ACTIVITY_ATTENTION_ROWS = 20;
@@ -212,20 +212,28 @@ export interface DomainExtra {
 
 export interface DomainBlock {
 	domain: string;
-	entries: number;
-	waiting: number;
+	/** Undefined when the hub is older than this console (no domain summary): shown as "–", never as a fake zero. */
+	entries: number | undefined;
+	waiting: number | undefined;
 	lastChangeAt?: string;
 	contributors: { wolf: string; count: number }[];
 	rows: FeedRow[];
-	/** Decisions in range for this domain (sum of contributor counts). */
+	/** Decisions in range for this domain (any outcome). */
 	decided: number;
 	/** 'show all' is useful: more decisions exist than the rows shown, or a further page is loaded and has a cursor. */
 	more: boolean;
 	expanded: boolean;
 }
 
-/** The domains of a response; an older hub without `domains` falls back to those seen in changes and decisions. */
-function domainSummaries(data: KbActivityResponse): KbActivityDomain[] {
+/** True when the hub sent no per-domain summary: it is older than this console. */
+export function hubIsOlder(data: KbActivityResponse): boolean {
+	return data.domains === undefined;
+}
+
+type Summary = Omit<KbActivityDomain, "entries" | "waiting"> & { entries?: number; waiting?: number };
+
+/** The domains of a response; an older hub without `domains` falls back to those seen in changes and decisions (counts unknown). */
+function domainSummaries(data: KbActivityResponse): Summary[] {
 	if (data.domains) return data.domains;
 	const names = new Set<string>();
 	for (const c of data.changes.domains) names.add(c.domain);
@@ -233,19 +241,19 @@ function domainSummaries(data: KbActivityResponse): KbActivityDomain[] {
 	return [...names].sort().map((domain) => {
 		const counts = new Map<string, number>();
 		for (const d of data.decisions.items) if (d.domain === domain) counts.set(d.from, (counts.get(d.from) ?? 0) + 1);
-		return { domain, entries: 0, waiting: 0, contributors: [...counts].map(([wolf, count]) => ({ wolf, count })) };
+		return { domain, contributors: [...counts].map(([wolf, count]) => ({ wolf, count })) };
 	});
 }
 
 const matches = (c: KbActivityChange, d: KbDecision): boolean => c.from !== undefined && c.from === d.from && c.denTopicId === d.denTopicId;
 
 export function domainBlocks(data: KbActivityResponse, extras: Readonly<Record<string, DomainExtra>> = {}, perDomain: number = KB_ACTIVITY_DOMAIN_ROWS): DomainBlock[] {
-	// entry -> domain, to place provisional rows and changes
 	return domainSummaries(data).map((sum) => {
 		const extra = extras[sum.domain];
 		const seen = new Set<string>();
 		const decisions: KbDecision[] = [];
-		for (const d of [...data.decisions.items, ...(extra?.items ?? [])]) {
+		// The hub's per-domain `recent` is the base; the overall page adds live (provisional) rows and, for an older hub, everything.
+		for (const d of [...(sum.recent ?? []), ...data.decisions.items, ...(extra?.items ?? [])]) {
 			if (d.domain !== sum.domain || seen.has(d.id)) continue;
 			seen.add(d.id);
 			decisions.push(d);
@@ -278,7 +286,7 @@ export function domainBlocks(data: KbActivityResponse, extras: Readonly<Record<s
 			rows.push(row);
 		});
 		rows.sort((a, b) => timeDesc(a.at, b.at));
-		const decided = sum.contributors.reduce((n, c) => n + c.count, 0);
+		const decided = sum.decided ?? sum.contributors.reduce((n, c) => n + c.count, 0);
 		const expanded = extra !== undefined;
 		const shown = expanded ? rows : rows.slice(0, perDomain);
 		const out: DomainBlock = {
@@ -312,32 +320,49 @@ export interface AttentionGroup {
 	summary: string;
 	count: number;
 	items: AttentionItem[];
+	/** More contributions than listed: the list is the latest ones. */
+	truncated: boolean;
 }
 
-/** Quarantined contributions plus rejected / parked / unclassified decisions, grouped by wolf (most first). */
+/**
+ * Per wolf: the hub's totals over the whole range (rejected + parked + unclassified, plus quarantined files) and the latest items it
+ * sent (decisions and bad files). Without the hub totals (older hub) it counts what is loaded, a lower bound.
+ */
 export function attentionGroups(data: KbActivityResponse): AttentionGroup[] {
-	const by = new Map<string, AttentionItem[]>();
-	const add = (wolf: string, item: AttentionItem) => by.set(wolf, [...(by.get(wolf) ?? []), item]);
-	(data.incoming.bad ?? []).forEach((b, i) => {
-		const item: AttentionItem = { key: `bad/${i}/${b.at}`, kind: "bad", reason: b.reason, at: b.at };
+	const items = new Map<string, AttentionItem[]>();
+	const totals = new Map<string, number>();
+	const add = (wolf: string, item: AttentionItem) => items.set(wolf, [...(items.get(wolf) ?? []), item]);
+	const seen = new Set<string>();
+	for (const b of data.incoming.bad ?? []) {
+		const key = `bad/${b.wolf}/${b.id ?? `${b.denTopicId ?? ""}/${b.at}/${b.reason}`}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const item: AttentionItem = { key, kind: "bad", reason: b.reason, at: b.at };
 		if (b.denTopicId) item.denTopicId = b.denTopicId;
 		if (b.domainHint) item.domainHint = b.domainHint;
 		add(b.wolf, item);
-	});
-	for (const d of data.decisions.items) {
+	}
+	const decisions = data.attention ? data.attention.flatMap((a) => a.items) : data.decisions.items;
+	for (const d of decisions) {
 		if (d.outcome !== "reject" && d.outcome !== "parked" && d.outcome !== "unclassified") continue;
+		if (seen.has(d.id)) continue;
+		seen.add(d.id);
 		const item: AttentionItem = { key: d.id, kind: "decision", denTopicId: d.denTopicId, reason: d.reason ?? DECISION_LABEL[d.outcome], at: d.at, outcome: d.outcome };
 		if (d.domain) item.domainHint = d.domain;
 		add(d.from, item);
 	}
-	return [...by]
-		.map(([wolf, items]) => {
-			const sorted = items.sort((a, b) => timeDesc(a.at, b.at));
+	if (data.attention) for (const a of data.attention) totals.set(a.wolf, a.reject + a.parked + a.unclassified + a.bad);
+	return [...items.keys(), ...totals.keys()]
+		.filter((w, i, all) => all.indexOf(w) === i)
+		.map((wolf) => {
+			const sorted = (items.get(wolf) ?? []).sort((a, b) => timeDesc(a.at, b.at));
+			const n = Math.max(totals.get(wolf) ?? 0, sorted.length);
 			const reasons = new Set(sorted.map((i) => i.reason));
-			const n = sorted.length;
 			const noun = n === 1 ? "contribution" : "contributions";
-			return { wolf, count: n, items: sorted, summary: reasons.size === 1 ? `${n} ${noun}: ${sorted[0]!.reason}` : `${n} ${noun} need attention` };
+			const summary = reasons.size === 1 && sorted.length === n ? `${n} ${noun}: ${sorted[0]!.reason}` : `${n} ${noun} need attention`;
+			return { wolf, count: n, items: sorted, summary, truncated: sorted.length < n };
 		})
+		.filter((g) => g.count > 0)
 		.sort((a, b) => b.count - a.count || a.wolf.localeCompare(b.wolf));
 }
 
@@ -440,6 +465,7 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 			if (entryId) row.entryId = entryId;
 			const known = d.decisions.items.find((x) => sameContribution(x, row) && x.domain) ?? (entryId ? d.decisions.items.find((x) => x.entryId === entryId && x.domain) : undefined);
 			const dom = known?.domain ?? (entryId ? d.changes.domains.find((c) => c.items.some((i) => i.entryId === entryId))?.domain : undefined);
+			// No known domain (a new contribution): the row is not shown in any block until the refetch that sweep_finished triggers.
 			if (dom) row.domain = dom;
 			if (decision?.reason) row.reason = decision.reason;
 			if (decision?.routing) row.routing = decision.routing;

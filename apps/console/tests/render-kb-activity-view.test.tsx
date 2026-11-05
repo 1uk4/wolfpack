@@ -77,6 +77,20 @@ describe("empty and degraded states", () => {
 		delete (d as { domains?: unknown }).domains;
 		assert.match(renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />), /data-domain="wolfpack"/);
 	});
+	it("an older hub: dashes instead of zeros and a note", () => {
+		const d = kbActivityFixture();
+		delete (d as { domains?: unknown }).domains;
+		const h = renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />);
+		assert.match(h, /data-testid="kb-hub-older"/);
+		assert.match(h, /– entries · – waiting/);
+		assert.doesNotMatch(h, /0 entries/);
+	});
+	it("a truncated attention list says latest N", () => {
+		const d = kbActivityFixture({ attention: [{ wolf: "hal", reject: 40, parked: 0, unclassified: 0, bad: 0, items: [] }] });
+		const h = renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />);
+		assert.match(h, /40 contributions need attention/);
+		assert.match(h, /latest 2/);
+	});
 	it("unavailable", () => {
 		assert.match(renderToStaticMarkup(<KbActivityUnavailable message="needs a hub" />), /data-testid="kb-activity-unavailable"[\s\S]*needs a hub/);
 	});

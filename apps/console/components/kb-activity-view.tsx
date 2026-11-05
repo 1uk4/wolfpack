@@ -17,6 +17,7 @@ import {
 	applyHubEvent,
 	attentionGroups,
 	curatorNote,
+	hubIsOlder,
 	domainBlocks,
 	entryHref,
 	kbAge,
@@ -77,7 +78,7 @@ export function DomainBlockView({ block, now, loading, onShowAll }: { block: Dom
 			<h2 className="mb-1 font-ui text-[11px] uppercase tracking-wide text-muted-foreground">
 				{block.domain}
 				<span className="ml-3 normal-case tracking-normal text-muted-foreground/70" data-testid="kb-domain-summary">
-					{block.entries} {block.entries === 1 ? "entry" : "entries"} · {block.waiting} waiting{last}
+					{block.entries ?? "–"} {block.entries === 1 ? "entry" : "entries"} · {block.waiting ?? "–"} waiting{last}
 				</span>
 			</h2>
 			<div className="ml-3 text-[12px]">
@@ -117,6 +118,7 @@ export function NeedsAttention({ data, now }: { data: KbActivityResponse; now: n
 							<summary className="cursor-pointer select-none">
 								<span className="mr-3 text-foreground">{g.wolf}</span>
 								<span className="text-muted-foreground">{g.summary}</span>
+								{g.truncated ? <span className="ml-2 text-muted-foreground/50">latest {g.items.length}</span> : null}
 							</summary>
 							<ul className="ml-4 mt-0.5 space-y-0.5 text-muted-foreground/80">
 								{g.items.slice(0, KB_ACTIVITY_ATTENTION_ROWS).map((i) => (
@@ -172,6 +174,7 @@ export function KbActivityBody({
 				</span>
 			</h1>
 			{note ? <p className="mb-4 text-sm text-muted-foreground" data-testid="kb-curator-note">{note}</p> : null}
+			{hubIsOlder(data) ? <p className="mb-4 text-[12px] text-muted-foreground/70" data-testid="kb-hub-older">The hub is older than this console: entry and waiting counts are unavailable.</p> : null}
 			{blocks.length === 0 ? <p className="mb-6 text-sm text-muted-foreground" data-testid="kb-domains-empty">No domains yet.</p> : null}
 			{blocks.map((b) => (
 				<DomainBlockView key={b.domain} block={b} now={now} loading={loadingDomain === b.domain} {...(onShowAll ? { onShowAll } : {})} />

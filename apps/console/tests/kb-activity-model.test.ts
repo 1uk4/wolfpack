@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	applyHubEvent,
 	attentionGroups,
+	hubIsOlder,
 	domainBlocks,
 	curatorNote,
 	decisionOutcome,
@@ -156,6 +157,58 @@ describe("kb-activity model", () => {
 		assert.equal(kbRelativeTime("2026-11-05T09:55:00Z", Date.parse("2026-11-05T10:00:00Z")), "5m ago");
 	});
 
+	it("domainBlocks reads the hub's per-domain recent, so a domain is not empty when the overall page is full of others", () => {
+		const d = kbActivityFixture({
+			domains: [{ domain: "quiet", entries: 3, waiting: 0, contributors: [{ wolf: "w", count: 1 }], decided: 1, recent: [{ id: "q1", at: "2026-10-01T00:00:00Z", from: "w", denTopicId: "old", hash: "h", outcome: "create", domain: "quiet", title: "Quiet one", entryId: "e-q" }] }],
+			decisions: { items: [{ id: "o1", at: "2026-11-05T09:00:00Z", from: "w", denTopicId: "x", hash: "x", outcome: "create", domain: "busy" }], total: 1, counts: kbActivityFixture().decisions.counts },
+			changes: { domains: [] },
+		});
+		const b = domainBlocks(d)[0]!;
+		assert.deepEqual(b.rows.map((r) => r.title), ["Quiet one"]);
+		assert.equal(b.more, false);
+	});
+	it("a hub without domains: counts are unknown (undefined), not zero, and hubIsOlder says so", () => {
+		const d = kbActivityFixture();
+		delete (d as { domains?: unknown }).domains;
+		assert.equal(hubIsOlder(d), true);
+		assert.equal(hubIsOlder(kbActivityFixture()), false);
+		const b = domainBlocks(d)[0]!;
+		assert.equal(b.entries, undefined);
+		assert.equal(b.waiting, undefined);
+	});
+	it("attentionGroups uses the hub's per-wolf totals, marks a truncated list, and keys rows by stable ids", () => {
+		const d = kbActivityFixture({
+			attention: [{ wolf: "hal", reject: 30, parked: 5, unclassified: 0, bad: 2, items: [{ id: "r1", at: "2026-11-05T09:00:00Z", from: "hal", denTopicId: "t1", hash: "h", outcome: "reject", reason: "vague" }] }],
+		});
+		const g = attentionGroups(d);
+		assert.equal(g[0]!.wolf, "hal");
+		assert.equal(g[0]!.count, 37); // 35 decisions + 2 bad as the hub counted, not just the loaded rows
+		assert.equal(g[0]!.truncated, true);
+		assert.match(g[0]!.summary, /37 contributions need attention/);
+		assert.deepEqual(g[0]!.items.map((i) => i.key).sort(), ["bad/hal/sha-1", "bad/hal/sha-2", "r1"]);
+		// the same input in a different order yields the same keys
+		d.incoming.bad = [...d.incoming.bad!].reverse();
+		assert.deepEqual(attentionGroups(d)[0]!.items.map((i) => i.key).sort(), ["bad/hal/sha-1", "bad/hal/sha-2", "r1"]);
+	});
+	it("backfill-shaped data (old dates, one decision per item) renders per domain with the right wolves", () => {
+		const mk = (id: string, from: string, domain: string, outcome: "create" | "reject", entryId?: string) => ({ id, at: "2025-01-02T00:00:00Z", from, denTopicId: `t-${id}`, hash: id, outcome, domain, ...(entryId ? { entryId, title: `Title ${id}` } : {}) });
+		const recent = [mk("bf-d3", "hal2", "beta", "reject"), mk("bf-d2", "1uk4", "beta", "create", "kb-beta-1"), mk("bf-d1", "hal2", "alpha", "create", "kb-alpha-1")];
+		const d = kbActivityFixture({
+			incoming: { total: 0, wolves: [] },
+			attention: [],
+			domains: [
+				{ domain: "alpha", entries: 1, waiting: 0, contributors: [{ wolf: "hal2", count: 1 }], decided: 1, recent: [recent[2]!] },
+				{ domain: "beta", entries: 1, waiting: 0, contributors: [{ wolf: "1uk4", count: 1 }], decided: 2, recent: [recent[0]!, recent[1]!] },
+			],
+			decisions: { items: recent, total: 3, counts: kbActivityFixture().decisions.counts },
+			changes: { domains: [{ domain: "beta", items: [{ at: "2025-01-02T00:00:01Z", entryId: "kb-beta-1", title: "Title bf-d2", action: "create", from: "1uk4", denTopicId: "t-bf-d2" }] }] },
+		});
+		const [alpha, beta] = domainBlocks(d);
+		assert.deepEqual(alpha!.contributors, [{ wolf: "hal2", count: 1 }]);
+		assert.deepEqual(beta!.contributors, [{ wolf: "1uk4", count: 1 }]);
+		assert.deepEqual(beta!.rows.map((r) => [r.label, r.wolf]), [["rejected", "hal2"], ["created", "1uk4"]]); // the change folded into its decision
+		assert.equal(alpha!.rows[0]!.wolf, "hal2");
+	});
 	describe("applyHubEvent", () => {
 		const base = () => initialActivityState(kbActivityFixture());
 		const at = "2026-11-05T10:01:00Z";

@@ -22,7 +22,12 @@ export function writeCurrent(roots: KbRoots, item: CurrentItem): void {
   mkdirSync(dirname(file), { recursive: true });
   // Temp file + rename: a reader (the hub's activity route, a file watcher) sees the old or the new file, never half of one.
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(item));
+  try {
+    unlinkSync(tmp); // best effort: a leftover of a crashed write; "wx" below then never follows a stale link or reuses a stale file
+  } catch {
+    /* none */
+  }
+  writeFileSync(tmp, JSON.stringify(item), { flag: "wx" });
   try {
     renameSync(tmp, file);
   } catch (e) {

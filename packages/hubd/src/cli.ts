@@ -91,7 +91,7 @@ const USAGE = `usage:
                                                               copy Dewey's aliased + entry_retired events (bf- ids, idempotent) so the curator routes known den topics by alias. Skips keys the hub curator already aliased. hubd must be STOPPED (takes the KB writer lock). Safe on a ledger with curator events (no --force). Dry run lists skipped keys and unresolved targets.
   hubd kb-backfill --receipts <dir> --inbox <dir> --dewey-ledger <file> --data-dir <dir> [--tz <IANA, default UTC>] [--dry-run] [--force]
                                                               one-off, idempotent: append Dewey's past curation decisions (receipts + _processed, kb-repair via the Dewey ledger's aliased events) to the hub KB ledger so /kb-activity shows history. Run as the hubd user (file ownership); stop hubd or rely on the KB writer lock. Events carry ids starting "bf-".
-  hubd kb-rehome --data-dir <dir> --move <entryId>=<sectionId> ... [--remove-section <sectionId> ...] [--apply]
+  hubd kb-rehome --data-dir <dir> --move <entryId>=<sectionId> ... [--remove-section <sectionId> ...] [--apply | --dry-run]
                                                               move entries between sections and remove emptied sections, through the hub write path (commitKb, ledger entry_placed / sections_replaced, _sections.json, digest/INDEX/registry re-rendered). Dry run unless --apply. hubd must be STOPPED (writer lock) and the curator sweep lease free.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
@@ -141,6 +141,7 @@ export function parseArgs(argv: string[]): CliArgs {
     }
     if (command === "kb-rehome") {
       if (flag === "--apply") { out.apply = true; continue; }
+      if (flag === "--dry-run") { out.dryRun = true; continue; }
       if (flag === "--move") {
         const v = val0();
         const i2 = v.indexOf("=");
@@ -207,6 +208,7 @@ export function parseArgs(argv: string[]): CliArgs {
   }
   if ((command === "pair" || command === "tokens" || command === "work-orphans" || command === "work-import" || command === "kb-backfill" || command === "kb-rehome") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
   if (command === "work-import" && (!out.fromDomains || !out.fromLedger)) throw new Error("work-import requires --from-domains and --from-ledger");
+  if (command === "kb-rehome" && out.apply && out.dryRun) throw new Error("kb-rehome: --apply and --dry-run exclude each other");
   if (command === "kb-rehome" && !out.moves?.length && !out.removeSections?.length) throw new Error("kb-rehome needs at least one --move or --remove-section");
   if (command === "kb-backfill" && !out.aliases && (!out.receipts || !out.inbox)) throw new Error("kb-backfill requires --receipts and --inbox");
   if (command === "kb-backfill" && out.aliases && !out.deweyLedger) throw new Error("kb-backfill --aliases requires --dewey-ledger");
@@ -254,7 +256,9 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     return;
   }
   if (args.command === "kb-rehome") {
-    for (const l of formatRehomeReport(await kbRehome({ dataDir: args.dataDir!, moves: args.moves ?? [], removeSections: args.removeSections ?? [], apply: !!args.apply }))) log(l);
+    const r = await kbRehome({ dataDir: args.dataDir!, moves: args.moves ?? [], removeSections: args.removeSections ?? [], apply: !!args.apply });
+    for (const l of formatRehomeReport(r)) log(l);
+    if (r.errors.length) throw new Error(`kb-rehome: ${r.errors.length} problem(s), nothing written`);
     return;
   }
   if (args.command === "kb-backfill") {

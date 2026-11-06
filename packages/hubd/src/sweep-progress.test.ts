@@ -1,8 +1,8 @@
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { watchSweepProgress } from "./sweep-progress.js";
+import { cleanStaleCurrentTmp, watchSweepProgress } from "./sweep-progress.js";
 
 const dirs: string[] = [];
 const stops: Array<() => void> = [];
@@ -57,5 +57,13 @@ describe("watchSweepProgress", () => {
     writeCurrent(roots, { from: "w", denTopicId: "t", startedAt: 5 });
     await new Promise((r) => setTimeout(r, 150));
     expect(seen).toEqual([]);
+  });
+  it("cleanStaleCurrentTmp removes a dead writer's temp file and keeps a live one's", () => {
+    const { d } = mk();
+    writeFileSync(join(d, "sweep-current.json.999999999.tmp"), "x");
+    writeFileSync(join(d, `sweep-current.json.${process.pid}.tmp`), "x");
+    writeFileSync(join(d, "other.tmp"), "x");
+    cleanStaleCurrentTmp(d);
+    expect(readdirSync(d).sort()).toEqual(["other.tmp", `sweep-current.json.${process.pid}.tmp`]);
   });
 });

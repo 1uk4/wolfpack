@@ -314,7 +314,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         emit({ type: "sweep_started", pending: e.pending });
         // sweep_progress: the sweep rewrites sweep-current.json when an item starts and when its route is known; observe it from here.
         stopProgress = watchSweepProgress(deps.roots.denLocal, (c) => {
-          if (!finished) emit({ type: "sweep_progress", from: c.from, denTopicId: c.denTopicId, startedAt: c.startedAt, ...(c.route ? { route: c.route } : {}) });
+          if (!finished && !closing) emit({ type: "sweep_progress", from: c.from, denTopicId: c.denTopicId, startedAt: c.startedAt, ...(c.route ? { route: c.route } : {}) });
         }, t0 - 1000);
       } else {
         if (!started) return;

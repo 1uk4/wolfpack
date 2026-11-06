@@ -37,7 +37,7 @@
     "wolfd": "dist/bin/wolfd.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node -e \"import('node:fs').then(f=>{f.chmodSync('dist/bin/harness.js',0o755);})\"",
     "typecheck": "tsc --noEmit",
     "start": "node dist/bin/harness.js",
     "lint": "echo \"no lint configured for @wolfpack/harness\"",

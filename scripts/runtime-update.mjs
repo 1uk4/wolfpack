@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * npm run runtime:update [branch] [--dry-run]
+ * npm run runtime:update [--dry-run]
  *
- * feature branch -> integration (wolf/1uk4) -> runtime (stable) -> build -> refresh den extensions -> push.
- * All branches are worktrees of one repo; located with `git worktree list`. Never rebases, never runs git in the
- * feature branch's worktree. Env: INTEGRATION_BRANCH (wolf/1uk4), RUNTIME_BRANCH (stable), WOLVES_DIR (~/wolves/local).
+ * origin/stable -> runtime (stable worktree) -> build -> refresh den extensions. Fetches, fast-forwards only (refuses if the
+ * runtime cannot fast-forward), never merges a branch, never rebases, never pushes. Merging into stable is the owner's job on
+ * GitHub (`wolfpack pr prepare` opens the PR). A branch argument is refused. All branches are worktrees of one repo; located
+ * with `git worktree list`. Env: RUNTIME_BRANCH (stable), WOLVES_DIR (~/wolves/local).
  * Build and extension refresh are injectable (`steps`) so tests can stub them.
  */
 import { execFileSync } from "node:child_process";
@@ -134,7 +135,6 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	const st = { ...defaultSteps, ...steps };
 	const dryRun = argv.includes("--dry-run");
 	const branch = argv.find((a) => !a.startsWith("--"));
-	const integration = env.INTEGRATION_BRANCH || "wolf/1uk4";
 	const runtime = env.RUNTIME_BRANCH || "stable";
 	const wolvesDir = env.WOLVES_DIR || path.join(os.homedir(), "wolves", "local");
 	const tag = dryRun ? "[dry-run] " : "";
@@ -143,55 +143,46 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 		return { exitCode: 1 };
 	};
 
-	const wts = worktrees(cwd);
-	const intWt = wts.get(integration);
-	const rtWt = wts.get(runtime);
-	if (!intWt) return fail(`branch ${integration} is not checked out in any worktree`);
-	if (!rtWt) return fail(`branch ${runtime} is not checked out in any worktree`);
-	log(`${tag}integration ${integration} @ ${intWt}\n${tag}runtime ${runtime} @ ${rtWt}`);
-
-	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first`);
+	// Merging is the owner's job now, on GitHub. Refuse the old argument instead of silently ignoring it.
 	if (branch) {
-		if (isDirty(intWt)) return fail(`integration worktree ${intWt} has uncommitted changes; commit or stash them first`);
-		if (!tryGit(intWt, "rev-parse", "--verify", `${branch}^{commit}`).ok) return fail(`unknown branch ${branch}`);
+		return fail(
+			`this command no longer merges a branch (got "${branch}"): it only updates the ${runtime} runtime from origin/${runtime}. ` +
+				"Release work with `wolfpack pr prepare`; the owner merges the PR, then run `npm run runtime:update` (or `wolfpack pr post-merge --apply`).",
+		);
 	}
+
+	const wts = worktrees(cwd);
+	const rtWt = wts.get(runtime);
+	if (!rtWt) return fail(`branch ${runtime} is not checked out in any worktree`);
+	log(`${tag}runtime ${runtime} @ ${rtWt}`);
+	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first`);
+
+	// Fetch only the remote-tracking ref; nothing is pushed or merged anywhere.
+	const remoteRef = `origin/${runtime}`;
+	if (dryRun) log(`${tag}not fetching; using the local ${remoteRef}`);
+	else {
+		const f = tryGit(rtWt, "fetch", "origin", `+refs/heads/${runtime}:refs/remotes/origin/${runtime}`);
+		if (!f.ok) return fail(`git fetch failed: ${f.out.split("\n")[0]}. Nothing was changed.`);
+	}
+	const target = tryGit(rtWt, "rev-parse", "--verify", `refs/remotes/origin/${runtime}^{commit}`);
+	if (!target.ok) return fail(`cannot read ${remoteRef}: ${target.out.split("\n")[0]}`);
 
 	const oldRuntime = git(rtWt, "rev-parse", "HEAD");
-	let target = git(intWt, "rev-parse", "HEAD"); // tip the runtime will be fast-forwarded to
-
-	if (branch) {
-		if (dryRun) {
-			log(`${tag}would merge ${branch} into ${integration}`);
-			target = branch; // approximation: diff the branch tip
-			const ancestor = tryGit(intWt, "merge-base", "--is-ancestor", runtime, branch).ok;
-			if (!ancestor) log(`${tag}note: ${branch} does not contain ${runtime}; classification is approximate`);
-		} else {
-			const m = tryGit(intWt, "merge", "--no-edit", branch);
-			if (!m.ok) {
-				const files = tryGit(intWt, "diff", "--name-only", "--diff-filter=U").out.split("\n").filter(Boolean);
-				tryGit(intWt, "merge", "--abort");
-				warn(`runtime:update: merge of ${branch} into ${integration} conflicted; aborted (tree is clean). Conflicting files:`);
-				for (const f of files) warn(`  ${f}`);
-				if (!files.length) warn(m.out);
-				return { exitCode: 1, conflicts: files };
-			}
-			log(`merged ${branch} into ${integration}`);
-			target = git(intWt, "rev-parse", "HEAD");
+	// Runtime must be able to fast-forward to origin/<runtime>.
+	if (!tryGit(rtWt, "merge-base", "--is-ancestor", oldRuntime, target.out).ok) {
+		if (tryGit(rtWt, "merge-base", "--is-ancestor", target.out, oldRuntime).ok) {
+			return fail(`${runtime} is ahead of ${remoteRef} (it has local commits that are not on the remote); there is nothing to fast-forward. Nothing was changed in ${rtWt}.`);
 		}
+		return fail(`${runtime} has diverged from ${remoteRef} (cannot fast-forward). Resolve by hand in ${rtWt}; nothing was changed there.`);
 	}
-
-	// Runtime must be able to fast-forward to the integration tip.
-	if (!tryGit(rtWt, "merge-base", "--is-ancestor", oldRuntime, target).ok) {
-		return fail(`${runtime} has diverged from ${integration} (cannot fast-forward). Resolve by hand in ${rtWt}; nothing was changed there.`);
-	}
-	const files = git(rtWt, "diff", "--name-only", oldRuntime, target).split("\n").filter(Boolean);
+	const files = git(rtWt, "diff", "--name-only", oldRuntime, target.out).split("\n").filter(Boolean);
 	if (dryRun) {
-		log(`${tag}would fast-forward ${runtime} to ${integration} (${files.length} changed files)`);
+		log(`${tag}would fast-forward ${runtime} to ${remoteRef} (${files.length} changed files)`);
 		log(`${tag}would run: npx turbo run build`);
 	} else {
-		if (oldRuntime !== target) {
-			const ff = tryGit(rtWt, "merge", "--ff-only", integration);
-			if (!ff.ok) return fail(`${runtime} cannot fast-forward to ${integration}: ${ff.out}`);
+		if (oldRuntime !== target.out) {
+			const ff = tryGit(rtWt, "merge", "--ff-only", remoteRef);
+			if (!ff.ok) return fail(`${runtime} cannot fast-forward to ${remoteRef}: ${ff.out}`);
 			log(`fast-forwarded ${runtime} (${files.length} changed files)`);
 		}
 		log("building…");
@@ -206,16 +197,8 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	const cls = classify(files, refreshed.map((r) => r.wolf));
 	log("");
 	for (const l of cls.lines) log(`=> ${l}`);
-
-	let pushed = false;
-	if (dryRun) log(`${tag}would push origin ${integration} ${runtime}`);
-	else {
-		const p = tryGit(rtWt, "push", "origin", integration, runtime);
-		pushed = p.ok;
-		if (!p.ok) warn(`runtime:update: warning: push failed (${p.out.split("\n")[0]}); local update is complete`);
-	}
-	log(`\n${tag}summary: ${branch ? `merged ${branch}; ` : ""}${files.length} files changed, ${refreshed.length} den(s) refreshed, ${dryRun ? "nothing changed" : pushed ? "pushed" : "not pushed"}`);
-	return { exitCode: 0, classification: cls, files, refreshed, pushed };
+	log(`\n${tag}summary: ${files.length} files changed, ${refreshed.length} den(s) refreshed, ${dryRun ? "nothing changed" : "nothing pushed"}`);
+	return { exitCode: 0, classification: cls, files, refreshed };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

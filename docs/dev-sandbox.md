@@ -136,8 +136,9 @@ Off by default.
 
 ## Updating the runtime checkout
 
-`npm run runtime:update [feature-branch] [-- --dry-run]` promotes work into the live stack: it merges the branch into
-`wolf/1uk4` (never rebases; aborts cleanly on conflict), fast-forwards `stable` in the runtime checkout, runs
-`turbo run build`, rebuilds stale den extension bundles for non-sandbox wolves (old dir kept as `extensions.bak-<ts>`),
-pushes both branches (a failed push only warns), and says whether to reload the console (Cmd-R) or restart the stack.
-Branches are found via `git worktree list`; override with `INTEGRATION_BRANCH`, `RUNTIME_BRANCH`, `WOLVES_DIR`.
+`npm run runtime:update [-- --dry-run]` brings the live stack up to `origin/stable` after the owner has merged a release PR:
+it fetches `stable`, fast-forwards the `stable` runtime checkout (and refuses if it cannot), runs `turbo run build`,
+rebuilds stale den extension bundles for non-sandbox wolves (old dir kept as `extensions.bak-<ts>`), and says whether to
+reload the console (Cmd-R) or restart the stack. It never merges a branch, never rebases and never pushes; a branch argument
+is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
+override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).

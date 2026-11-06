@@ -15,7 +15,7 @@
  */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { oneLine, buildActivityIndex, fsEntryResolver, listDomains, pageActivity, readIncoming, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
+import { oneLine, buildActivityIndex, fsEntryResolver, listDomains, pageActivity, readIncoming, readSweepCurrent, readLedger, scanEntryDomains, UNPLACED, type ActivityIndex } from "@wolfpack/kb/librarian";
 import { ledgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import type { KbActivityResponse } from "@wolfpack/protocol";
 import type { Curator } from "./curator.js";
@@ -117,6 +117,7 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
         const a = page.attention.find((x) => x.wolf === wolf);
         return { wolf, reject: a?.reject ?? 0, parked: a?.parked ?? 0, unclassified: a?.unclassified ?? 0, bad: badBy.get(wolf) ?? 0, items: a?.items ?? [] };
       });
+      const current = on && st?.running ? readSweepCurrent(d.roots.denLocal) : undefined;
       return {
         generatedAt: new Date(t).toISOString(),
         source: { lane, hasDecisions: page.hasDecisions, curator: on ? "on" : "off" },
@@ -125,7 +126,7 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
         attention,
         decisions: page.decisions,
         changes: page.changes,
-        ...(on && st ? { sweep: { running: st.running, ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),
+        ...(on && st ? { sweep: { running: st.running, ...(st.running && current ? { current } : {}), ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),
       } as KbActivityResponse;
     },
   };

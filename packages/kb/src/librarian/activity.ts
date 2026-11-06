@@ -462,6 +462,22 @@ function readHeadSafe(file: string, bytes: number): string | undefined {
     return undefined;
   }
 }
+/** The item the sweep is working on right now (`<denLocal>/sweep-current.json`), read as a regular non-symlink file; absent on any problem. */
+export interface SweepCurrent { from: string; denTopicId: string; startedAt: number; route?: string }
+export function readSweepCurrent(denLocal: string): SweepCurrent | undefined {
+  const raw = readHeadSafe(join(denLocal, "sweep-current.json"), 4096);
+  if (raw === undefined) return undefined;
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof j.from !== "string" || !j.from || typeof j.denTopicId !== "string" || !j.denTopicId) return undefined;
+    if (typeof j.startedAt !== "number" || !Number.isFinite(j.startedAt)) return undefined;
+    const out: SweepCurrent = { from: oneLine(j.from, 80), denTopicId: oneLine(j.denTopicId, 200), startedAt: j.startedAt };
+    if (typeof j.route === "string" && j.route) out.route = oneLine(j.route, 200);
+    return out;
+  } catch {
+    return undefined;
+  }
+}
 /** True for a real directory (not a symlink to one). The inbox is wolf-writable: never list through a symlinked directory. */
 function realDir(path: string): boolean {
   try {

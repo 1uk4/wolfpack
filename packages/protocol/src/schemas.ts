@@ -1007,6 +1007,8 @@ export const KbActivityResponseSchema = z.object({
   sweep: z
     .object({
       running: z.boolean(),
+      /** The contribution being worked on (from the sweep's sweep-current.json); absent when idle or on an older hub. */
+      current: z.object({ from: z.string(), denTopicId: z.string(), startedAt: z.number(), route: z.string().optional() }).optional(),
       last: z.object({ finishedAt: z.string(), processed: z.number().int().nonnegative(), error: z.string().optional() }).optional(),
     })
     .optional(),

@@ -101,6 +101,8 @@ export {
   pageActivity,
   foldKbActivity,
   readIncoming,
+  readSweepCurrent,
+  type SweepCurrent,
   scanEntryInfo,
   scanEntryDomains,
   readEntryTitle,

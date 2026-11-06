@@ -1,5 +1,5 @@
 /** Tool registry: wolf.yaml `tools:` names -> engine extensions + the tool names they provide. */
-import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
+import { createBashTool, createEditTool, type BashExecution, createReadTool, createWriteTool, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
 import { bashViolation, fenceWriteTool } from "./fence.js";
@@ -113,6 +113,16 @@ export function lazyImageProcessor(load: () => Promise<ImageProcessor> = createN
   };
 }
 
+/**
+ * Runs before every command of the coding bash tool: the off-limits fence, and the agent-run marker. The marker goes
+ * into this execution's env only, never wolfd's process.env: whatever else wolfd starts (a terminal, a dev stack) is not an agent shell.
+ */
+export function prepareCodingBash(execution: BashExecution): void {
+  const refused = bashViolation(execution.cwd, execution.command);
+  if (refused) throw new Error(refused);
+  execution.env.WOLFPACK_AGENT_RUN = "1";
+}
+
 // (the same four tools as createCodingTools, with write and edit held to a worktree child's root: see fence.ts)
 const CodingTools = defineExtension({
   name: "coding-tools",
@@ -120,12 +130,7 @@ const CodingTools = defineExtension({
     createReadTool({ images: lazyImageProcessor() }),
     fenceWriteTool(createWriteTool()),
     fenceWriteTool(createEditTool()),
-    createBashTool({
-      prepare: (execution) => {
-        const refused = bashViolation(execution.cwd, execution.command);
-        if (refused) throw new Error(refused);
-      },
-    }),
+    createBashTool({ prepare: prepareCodingBash }),
   ],
 });
 

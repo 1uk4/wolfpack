@@ -50,6 +50,11 @@ function parseEnvFile(file: string): Record<string, string> {
   return out;
 }
 
+/** How the terminal `pi` child is spawned: a terminal pi wolf is an agent, so its env carries the agent-run marker. */
+export function piSpawnOptions(workDir: string, env: NodeJS.ProcessEnv) {
+  return { cwd: workDir, env: { ...env, WOLFPACK_AGENT_RUN: "1" }, stdio: "inherit" as const };
+}
+
 export async function wolfLaunch(
   name: string,
   opts: { host?: string; dir?: string; session?: string },
@@ -185,11 +190,7 @@ export async function wolfLaunch(
   // --session resumes a specific pi session (file or partial UUID) as this wolf.
   const piArgs = ["--model", mainModel, ...(opts.session ? ["--session", opts.session] : [])];
   await ingestUsageQuietly();
-  const child = spawn("pi", piArgs, {
-    cwd: workDir,
-    env,
-    stdio: "inherit",
-  });
+  const child = spawn("pi", piArgs, piSpawnOptions(workDir, env));
 
   // Restore the terminal to a sane state. Pi normally does this itself on a
   // clean exit, but if it crashes, is killed by a signal, or exits uncleanly

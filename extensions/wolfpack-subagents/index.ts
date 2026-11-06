@@ -37,6 +37,7 @@ import {
   readScreen,
   wolfEnvPrefix,
 } from "./mux/index.ts";
+import { subagentEnvPrefix } from "./env-prefix.ts";
 
 import {
   countSessionEntryLines,
@@ -1452,28 +1453,18 @@ async function launchSubagent(
   // the shared helper (same code path resume uses — they can't drift).
   applySandboxToParts(parts, loadout, { artifactDir, name: params.name });
 
-  // Build env prefix: subagent identity + config dir propagation + spawn allowlist
-  const envParts: string[] = [];
-
-  if (resolvedAgentDir) {
-    envParts.push(`PI_CODING_AGENT_DIR=${shellEscape(resolvedAgentDir)}`);
-  }
-
-  if (grantSpawning && agentDefs?.subagentAgents) {
-    envParts.push(`PI_SUBAGENT_ALLOWED=${shellEscape(agentDefs.subagentAgents.join(","))}`);
-  }
-  envParts.push(`PI_SUBAGENT_NAME=${shellEscape(params.name)}`);
-  if (params.agent) {
-    envParts.push(`PI_SUBAGENT_AGENT=${shellEscape(params.agent)}`);
-  }
-  if (autonomous) {
-    envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
-  }
-  envParts.push(`PI_SUBAGENT_SESSION=${shellEscape(subagentSessionFile)}`);
-  envParts.push(`PI_SUBAGENT_ID=${shellEscape(id)}`);
-  envParts.push(`PI_SUBAGENT_ACTIVITY_FILE=${shellEscape(activityFile)}`);
-  envParts.push(`PI_SUBAGENT_SURFACE=${shellEscape(surface)}`);
-  const envPrefix = envParts.join(" ") + " ";
+  // Build env prefix: subagent identity + config dir propagation + spawn allowlist (+ the agent-run marker)
+  const envPrefix = subagentEnvPrefix({
+    name: params.name,
+    session: subagentSessionFile,
+    id,
+    activityFile,
+    surface,
+    agent: params.agent ?? null,
+    agentDir: resolvedAgentDir,
+    autoExit: autonomous,
+    ...(grantSpawning && agentDefs?.subagentAgents ? { allowed: agentDefs.subagentAgents } : {}),
+  });
 
   // Pass task and skill prompts to the sub-agent.
   // Only full-context fork mode gets a direct task argument because it already
@@ -2295,25 +2286,17 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Build env prefix — replay the snapshot's config dir + spawn whitelist
         // so the resumed process resolves the same agents/extensions and keeps
         // the same nested-spawn restriction it originally ran with.
-        const resumeEnvParts: string[] = [];
         const resumeAgentDir = loadout.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? null;
-        if (resumeAgentDir) {
-          resumeEnvParts.push(`PI_CODING_AGENT_DIR=${shellEscape(resumeAgentDir)}`);
-        }
-        if (loadout.spawnable && loadout.spawnable.length > 0) {
-          resumeEnvParts.push(`PI_SUBAGENT_ALLOWED=${shellEscape(loadout.spawnable.join(","))}`);
-        }
-        if (loadout.agent) {
-          resumeEnvParts.push(`PI_SUBAGENT_AGENT=${shellEscape(loadout.agent)}`);
-        }
-        resumeEnvParts.push(`PI_SUBAGENT_NAME=${shellEscape(name)}`);
-        resumeEnvParts.push(`PI_SUBAGENT_SESSION=${shellEscape(sessionPath)}`);
-        resumeEnvParts.push(`PI_SUBAGENT_ID=${shellEscape(id)}`);
-        resumeEnvParts.push(`PI_SUBAGENT_ACTIVITY_FILE=${shellEscape(activityFile)}`);
-        if (autoExit) {
-          resumeEnvParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
-        }
-        const resumeEnvPrefix = resumeEnvParts.join(" ") + " ";
+        const resumeEnvPrefix = subagentEnvPrefix({
+          name,
+          session: sessionPath,
+          id,
+          activityFile,
+          agent: loadout.agent,
+          agentDir: resumeAgentDir,
+          autoExit,
+          ...(loadout.spawnable && loadout.spawnable.length > 0 ? { allowed: loadout.spawnable } : {}),
+        });
 
         // Resume in the subagent's original cwd so its tools (safe_bash, edits)
         // operate where they did before.

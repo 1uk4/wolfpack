@@ -13,6 +13,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
 	buildSwitcher,
 	loadAttached,
+	loadHomeWolf,
+	saveHomeWolf,
 	loadMinimized,
 	resolveAttached,
 	saveAttached,
@@ -33,6 +35,9 @@ export interface AttachedThreadApi {
 	/** The quiet one-liner after a fallback to the home thread. */
 	note: string | null;
 	minimized: boolean;
+	/** The owner's "Home wolf" setting (null = default guess). */
+	homeWolf: string | null;
+	setHomeWolf: (wolf: string | null) => void;
 	setMinimized: (v: boolean) => void;
 	wolves: readonly WolfLite[];
 	threads: ThreadsByWolf;
@@ -103,6 +108,8 @@ export function AttachedThreadProvider({
 	const attachedRef = useRef<AttachedRef | null>(null);
 	const [note, setNote] = useState<string | null>(null);
 	const [minimized, setMinimizedState] = useState(false);
+	const [homeWolf, setHomeWolfState] = useState<string | null>(null);
+	const homeWolfRef = useRef<string | null>(null);
 	const [wolves, setWolves] = useState<readonly WolfLite[]>([]);
 	const [threads, setThreads] = useState<ThreadsByWolf>({});
 	const [sent, setSent] = useState(false);
@@ -120,10 +127,12 @@ export function AttachedThreadProvider({
 		attachedRef.current = loadAttached(storeRef.current);
 		setAttachedState(attachedRef.current);
 		setMinimizedState(loadMinimized(storeRef.current));
+		homeWolfRef.current = loadHomeWolf(storeRef.current);
+		setHomeWolfState(homeWolfRef.current);
 	}, []);
 
 	const settle = useCallback((ws: readonly WolfLite[], ts: ThreadsByWolf) => {
-		const res = resolveAttached(attachedRef.current, ws, ts);
+		const res = resolveAttached(attachedRef.current, ws, ts, homeWolfRef.current);
 		const cur = attachedRef.current;
 		if (res.attached && (res.attached.threadId !== cur?.threadId || res.attached.wolf !== cur?.wolf)) setAttached(res.attached, res.note);
 	}, [setAttached]);
@@ -188,6 +197,12 @@ export function AttachedThreadProvider({
 
 	const attachWorkItem = useCallback((wolf: string, id: string) => attachToWorkItem(wolf, id, openThread, attach), [openThread, attach]);
 
+	const setHomeWolf = useCallback((wolf: string | null) => {
+		homeWolfRef.current = wolf?.trim() || null;
+		setHomeWolfState(homeWolfRef.current);
+		saveHomeWolf(storeRef.current, homeWolfRef.current);
+	}, []);
+
 	const setMinimized = useCallback((v: boolean) => {
 		setMinimizedState(v);
 		saveMinimized(storeRef.current, v);
@@ -206,8 +221,8 @@ export function AttachedThreadProvider({
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, note, minimized, setMinimized, wolves, threads, groups, attachedThread, working, markSent, attach, attachWorkItem, refresh }),
-		[attached, note, minimized, setMinimized, wolves, threads, groups, attachedThread, working, markSent, attach, attachWorkItem, refresh],
+		() => ({ attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, attach, attachWorkItem, refresh }),
+		[attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, attach, attachWorkItem, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

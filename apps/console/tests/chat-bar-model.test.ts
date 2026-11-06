@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ATTACHED_KEY, buildSwitcher, loadAttached, resolveAttached, saveAttached, pickOwnerWolf, type BarThread, type KeyValueStore } from "../src/core/chat-bar.ts";
+import { HOME_WOLF_KEY, loadHomeWolf, saveHomeWolf, resolveHomeWolf, SWITCHER_RECENT, ATTACHED_KEY, buildSwitcher, loadAttached, resolveAttached, saveAttached, pickOwnerWolf, type BarThread, type KeyValueStore } from "../src/core/chat-bar.ts";
 import { KEYBOARD_ACTIONS, actionForBinding, bindingForAction, loadOverrides, saveOverrides } from "../src/core/keyboard.ts";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 
@@ -71,5 +71,35 @@ describe("chat bar shortcuts", () => {
 		} finally {
 			delete (globalThis as any).window;
 		}
+	});
+});
+
+describe("home wolf setting", () => {
+	it("defaults to the guess; the setting overrides; reset restores", () => {
+		const { s, m } = mem();
+		assert.equal(loadHomeWolf(s), null);
+		assert.equal(resolveHomeWolf(loadHomeWolf(s), wolves), "1uk4");
+		saveHomeWolf(s, "lib");
+		assert.equal(m.get(HOME_WOLF_KEY), "lib");
+		assert.equal(resolveHomeWolf(loadHomeWolf(s), wolves), "lib");
+		const r = resolveAttached({ wolf: "1uk4", slug: "gone", threadId: "1uk4/gone" }, wolves, threads, "lib");
+		assert.equal(r.attached?.threadId, "lib/home", "falls back to the SET wolf's home");
+		saveHomeWolf(s, null);
+		assert.equal(m.has(HOME_WOLF_KEY), false);
+		assert.equal(resolveHomeWolf(loadHomeWolf(s), wolves), "1uk4");
+	});
+	it("an offline or unknown home wolf keeps the stored target (no jump)", () => {
+		const stored = { wolf: "1uk4", slug: "gone", threadId: "1uk4/gone" };
+		for (const home of ["ghost", "lib"]) {
+			const r = resolveAttached(stored, wolves, { "1uk4": threads["1uk4"], lib: undefined }, home);
+			assert.equal(r.attached, stored);
+			assert.equal(r.note, null);
+		}
+		assert.equal(resolveAttached(null, wolves, threads, "ghost").attached, null);
+	});
+	it("the switcher cut-off is the named constant", () => {
+		const many = Array.from({ length: SWITCHER_RECENT + 4 }, (_, i) => t(`1uk4/n${i}`));
+		const g = buildSwitcher(wolves, { "1uk4": [t("1uk4/home", { kind: "home" }), ...many] });
+		assert.equal(g[0]!.entries.length, 1 + SWITCHER_RECENT);
 	});
 });

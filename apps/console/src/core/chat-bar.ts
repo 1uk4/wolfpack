@@ -21,6 +21,27 @@ export interface ChatBarState {
 
 export const ATTACHED_KEY = "wolfpack:chatbar:attached";
 export const MINIMIZED_KEY = "wolfpack:chatbar:minimized";
+/** The owner's "Home wolf" setting (a wolf name); absent = the guess in {@link pickOwnerWolf}. Stored on this device, like the shortcut overrides. */
+export const HOME_WOLF_KEY = "wolfpack:chatbar:home-wolf";
+
+export function loadHomeWolf(s: KeyValueStore | null): string | null {
+	try {
+		return s?.getItem(HOME_WOLF_KEY)?.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+/** null (or empty) resets to the default. */
+export function saveHomeWolf(s: KeyValueStore | null, wolf: string | null): void {
+	try {
+		if (!s) return;
+		if (wolf?.trim()) s.setItem(HOME_WOLF_KEY, wolf.trim());
+		else s.removeItem(HOME_WOLF_KEY);
+	} catch {
+		/* best effort */
+	}
+}
 
 export interface KeyValueStore {
 	getItem(k: string): string | null;
@@ -94,6 +115,15 @@ export function pickOwnerWolf(wolves: readonly WolfLite[]): string | null {
 	return (online.find((w) => !w.librarian) ?? online[0])?.name ?? null;
 }
 
+/**
+ * The wolf whose home thread the bar falls back to. The console has NO reliable signal for the wolf it runs as (a wolf
+ * summary carries only id/name/host/status/librarian; WOLFPACK_API_URL names no wolf), so the default stays the
+ * {@link pickOwnerWolf} guess. The owner's setting, when present, wins even if that wolf is offline or unknown.
+ */
+export function resolveHomeWolf(setting: string | null | undefined, wolves: readonly WolfLite[]): string | null {
+	return setting?.trim() || pickOwnerWolf(wolves);
+}
+
 /** A wolf's home thread (kind "home", not archived). */
 export function homeThread(threads: readonly BarThread[]): BarThread | undefined {
 	return threads.find((t) => t.kind === "home" && !t.closed);
@@ -114,14 +144,15 @@ export interface Resolution {
  * the stored target stands. A target that is missing or archived on a wolf whose list is known falls back to the owner
  * wolf's home thread with a note; with no stored target at all it is the home thread, no note.
  */
-export function resolveAttached(stored: AttachedRef | null, wolves: readonly WolfLite[], threads: ThreadsByWolf): Resolution {
+export function resolveAttached(stored: AttachedRef | null, wolves: readonly WolfLite[], threads: ThreadsByWolf, homeWolfSetting: string | null = null): Resolution {
 	if (stored) {
 		const list = threads[stored.wolf];
 		if (!list) return { attached: stored, note: null };
 		const hit = list.find((t) => t.id === stored.threadId);
 		if (hit && !hit.closed) return { attached: stored, note: null };
 	}
-	const owner = pickOwnerWolf(wolves);
+	// A home wolf that is offline or unknown has no thread list: nothing to jump to, the stored target stays.
+	const owner = resolveHomeWolf(homeWolfSetting, wolves);
 	const ownerList = owner ? threads[owner] : undefined;
 	const home = owner && ownerList ? homeThread(ownerList) : undefined;
 	if (!owner || !home) return { attached: stored, note: null };
@@ -144,7 +175,7 @@ export interface SwitcherGroup {
 	entries: SwitcherEntry[];
 }
 
-/** Recent feature threads shown per wolf besides its home thread and any thread that needs the owner. */
+/** Recent feature threads the switcher shows per wolf, besides its home thread and every needs-you thread. Owner decision: 6, no search. */
 export const SWITCHER_RECENT = 6;
 
 /**

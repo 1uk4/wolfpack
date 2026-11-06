@@ -27,6 +27,47 @@ import {
 	type KeyScope,
 } from "@/src/core";
 import { SettingsRow } from "./controls.tsx";
+import { useAttachedThread } from "@/components/attached-thread";
+import { fetchWolves } from "@/components/kb-client";
+import { pickOwnerWolf } from "@/src/core";
+
+/** Chat bar → "Home wolf": whose home thread the bar falls back to. Empty = the default guess (first online non-librarian wolf). */
+function HomeWolfRow() {
+	const api = useAttachedThread();
+	const [names, setNames] = useState<string[]>([]);
+	const [def, setDef] = useState<string | null>(null);
+	useEffect(() => {
+		void fetchWolves().then((r) => {
+			if (!r.ok) return;
+			setNames(r.data.wolves.map((w) => w.name));
+			setDef(pickOwnerWolf(r.data.wolves));
+		});
+	}, []);
+	if (!api) return null;
+	const options = api.homeWolf && !names.includes(api.homeWolf) ? [...names, api.homeWolf] : names;
+	return (
+		<SettingsRow label="Home wolf" hint="The bar falls back to this wolf's home thread" testid="chatbar-home-wolf">
+			<span className="flex items-center gap-2">
+				<select
+					data-testid="chatbar-home-wolf-select"
+					value={api.homeWolf ?? ""}
+					onChange={(e) => api.setHomeWolf(e.target.value || null)}
+					className="rounded-sm border border-border bg-muted px-1.5 py-0.5 font-ui text-xs"
+				>
+					<option value="">{def ? `Default (${def})` : "Default"}</option>
+					{options.map((n) => (
+						<option key={n} value={n}>{n}</option>
+					))}
+				</select>
+				{api.homeWolf && (
+					<button type="button" data-testid="chatbar-home-wolf-reset" onClick={() => api.setHomeWolf(null)} className="text-xs text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline">
+						Reset
+					</button>
+				)}
+			</span>
+		</SettingsRow>
+	);
+}
 
 const SCOPES: { scope: KeyScope; label: string }[] = [
 	{ scope: "global", label: "Global" },
@@ -104,6 +145,7 @@ export function KeyboardSection() {
 					<div key={scope} data-testid={`kbd-scope-${scope}`}>
 						<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">{label}</p>
 						<div className="flex flex-col gap-2">
+							{scope === "chatbar" && <HomeWolfRow />}
 							{actions.map((def) => {
 								const effective = overrides[def.id] ?? def.binding;
 								return (

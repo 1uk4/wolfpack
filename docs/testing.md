@@ -17,3 +17,5 @@ The agents loader always appends the `testing` standard to the profiles named `w
 
 House rules (ours, not cited): when not to test; seams listed in the plan and the
 reviewer seam check; red evidence; no "known failing"; no retries for flakes.
+
+The git commit standard lives in [`packages/agents/standards/git.md`](../packages/agents/standards/git.md). The loader always appends it to `worker` and `reviewer` (not the planner), after `testing`.

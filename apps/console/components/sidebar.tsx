@@ -11,6 +11,7 @@ import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
+import { ChatBar } from "@/components/chat-bar";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { WorkNavEntry } from "@/components/work-nav-link";
 import { CommandPalette } from "@/components/command-palette";
@@ -1257,6 +1258,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 		<SettingsDialogProvider>
 			<SessionsSidebar />
 			<main className="min-w-0 flex-1">{children}</main>
+			{/* The floating chat bar: one per window, on every route (draws nothing without its provider). */}
+			<ChatBar />
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}

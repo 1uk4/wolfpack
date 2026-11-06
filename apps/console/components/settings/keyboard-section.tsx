@@ -32,6 +32,7 @@ const SCOPES: { scope: KeyScope; label: string }[] = [
 	{ scope: "global", label: "Global" },
 	{ scope: "chat", label: "Chat" },
 	{ scope: "graph", label: "Graph" },
+	{ scope: "chatbar", label: "Chat bar" },
 ];
 
 /** The overrides map after ONE change (pure — exported for tests):

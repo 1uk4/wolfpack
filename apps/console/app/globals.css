@@ -716,3 +716,10 @@ body {
 		font-size: 16px;
 	}
 }
+
+/* The floating chat bar covers the page bottom: give scrolling pages room under it. */
+@media (min-width: 768px) {
+	html[data-chat-bar="open"] main {
+		padding-bottom: 7rem;
+	}
+}

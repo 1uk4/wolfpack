@@ -64,6 +64,9 @@ export * from "./thread-adapter.ts";
 export * from "./objects.ts";
 // needs-you.ts: the cross-wolf pending-card list + the notification trigger logic. Pure.
 export * from "./needs-you.ts";
+
+// chat-bar.ts: the floating chat bar's attached-thread model + switcher list. Pure.
+export * from "./chat-bar.ts";
 export * from "./graph-layout.ts";
 export * from "./thread-cards.ts";
 export * from "./tool-rows.ts";

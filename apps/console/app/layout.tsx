@@ -10,6 +10,7 @@ import { ActivityProvider } from "@/components/activity-dock";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
+import { AttachedThreadProvider } from "@/components/attached-thread";
 import { NavTracker } from "@/components/nav-tracker";
 import HubAuth from "@/components/hub-auth";
 import UpdateBanner from "@/components/update-banner";
@@ -52,7 +53,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 						<SidebarProvider>
 							<ActivityProvider>
 								<SubagentModalProvider>
-									<AppShell>{children}</AppShell>
+									<AttachedThreadProvider>
+										<AppShell>{children}</AppShell>
+									</AttachedThreadProvider>
 									<GraduateToasts />
 								</SubagentModalProvider>
 							</ActivityProvider>

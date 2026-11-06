@@ -130,6 +130,12 @@ export function KeyboardShortcuts() {
 				case "cheat-sheet":
 					handlersRef.current.setCheatOpen(true);
 					break;
+				case "focus-chat-bar":
+				case "chat-bar-switcher":
+					// Browsers bind Mod+J (downloads): claim it before the bar answers.
+					e.preventDefault();
+					window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
+					break;
 				case "find":
 					// The mounted surface owns Find (session text / graph nodes).
 					// Claim Mod+F so Chromium's whole-window finder cannot open too.
@@ -153,11 +159,12 @@ export function KeyboardShortcuts() {
 function CheatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 	const backdropDismiss = useBackdropDismiss(onClose);
 	if (!open) return null;
-	const scopes = ["global", "chat", "graph"] as const;
+	const scopes = ["global", "chat", "graph", "chatbar"] as const;
 	const scopeLabels: Record<(typeof scopes)[number], string> = {
 		global: "Global",
 		chat: "Chat",
 		graph: "Graph view",
+		chatbar: "Chat bar",
 	};
 	return (
 		<div

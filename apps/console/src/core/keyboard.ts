@@ -37,11 +37,13 @@ export type KeyAction =
 	| "question-pick-row"
 	| "question-submit"
 	| "open-settings"
-	| "toggle-user-thinking";
+	| "toggle-user-thinking"
+	| "focus-chat-bar"
+	| "chat-bar-switcher";
 
 /** Where the cheat sheet groups an action (display only — dispatch is
  *  global; a seam that isn't mounted simply no-ops). */
-export type KeyScope = "global" | "chat" | "graph";
+export type KeyScope = "global" | "chat" | "graph" | "chatbar";
 
 export interface KeyActionDef {
 	id: KeyAction;
@@ -71,6 +73,9 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
 	{ id: "toggle-user-thinking", label: "Toggle all thinking", scope: "chat", binding: "mod+t" },
+	// The floating chat bar (mounted on every route). Both rebindable under Settings → Keyboard → Chat bar.
+	{ id: "focus-chat-bar", label: "Focus the chat bar", scope: "chatbar", binding: "mod+j" },
+	{ id: "chat-bar-switcher", label: "Chat bar · switch thread", scope: "chatbar", binding: "mod+shift+j" },
 	// Mod+F is surface-scoped: graph node search and session text Find share
 	// one action/binding. Only the currently mounted surface listens.
 	{ id: "find", label: "Find", scope: "global", binding: "mod+f" },

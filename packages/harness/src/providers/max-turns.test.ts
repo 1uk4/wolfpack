@@ -40,4 +40,32 @@ describe("withMaxTurnsAsTurnEnd (work-wolfpack-beKfWkW)", () => {
     w.close();
     expect(q.close).toHaveBeenCalled();
   });
+  it("keeps no state between two queryFn calls", async () => {
+    const wrapped = withMaxTurnsAsTurnEnd(fake([maxTurns]), vi.fn());
+    const first = withMaxTurnsAsTurnEnd(fake([toolStart, maxTurns]), vi.fn())({});
+    expect((await collect(first)).at(-1).subtype).toBe("success");
+    expect((await collect(wrapped({}))).at(-1).subtype).toBe("error_max_turns");
+  });
+  it("a tool_use of an earlier message does not excuse a max-turns error after a later tool-less message", async () => {
+    const start = { type: "stream_event", event: { type: "message_start" } };
+    expect((await collect(withMaxTurnsAsTurnEnd(fake([start, toolStart, start, maxTurns]), vi.fn())({}))).at(-1).subtype).toBe("error_max_turns");
+  });
+  it("an early break reaches the inner iterator", async () => {
+    let finished = false;
+    const inner = () => ({ async *[Symbol.asyncIterator]() { try { yield toolStart; yield maxTurns; } finally { finished = true; } }, close: vi.fn() });
+    for await (const _ of withMaxTurnsAsTurnEnd(inner, vi.fn())({}) as any) break;
+    expect(finished).toBe(true);
+  });
+  it("preserves usage, num_turns, session_id and cost on the rewritten result", async () => {
+    const full = { ...maxTurns, usage: { input_tokens: 3 }, num_turns: 2, session_id: "sid", total_cost_usd: 0.5 };
+    const r = (await collect(withMaxTurnsAsTurnEnd(fake([toolStart, full]), vi.fn())({}))).at(-1);
+    expect(r).toMatchObject({ usage: { input_tokens: 3 }, num_turns: 2, session_id: "sid", total_cost_usd: 0.5 });
+  });
+  it("the default logger is console.warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await collect(withMaxTurnsAsTurnEnd(fake([toolStart, maxTurns]))({}));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("rewrote error_max_turns"));
+    } finally { warn.mockRestore(); }
+  });
 });

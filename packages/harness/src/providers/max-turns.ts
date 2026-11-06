@@ -8,6 +8,16 @@
  * This wrapper rewrites such a result (the stream saw a tool_use / stop_reason tool_use) to a plain success, so the bridge
  * ends the round normally and hands tool calls to the harness. The limit is NOT raised: the SDK never gets a second turn
  * and never executes anything. A max-turns result with no tool_use stays an error.
+ *
+ * Only valid with `maxTurns: 1`: the state below is per MESSAGE (reset on message_start), which is per query only when the SDK
+ * never starts a second turn. With a larger limit a tool_use of turn 1 must not excuse a max-turns error after turn 2.
+ *
+ * Bridge: `pi-claude-bridge-stateless/stateless` (dist/stateless/provider.js consume()), which is what claude-stateless
+ * imports. It is NOT the `pi-claude-bridge` (durable-core) package. Verified by max-turns.bridge.test.ts: the rewritten
+ * `success` result ends an unmapped-tool round as done/stop (the call itself is lost; the log line says so).
+ *
+ * CHECK ON BRIDGE UPGRADE: the bridge only uses the async iterator and close() (like lazySdkQuery); interrupt(),
+ * setModel() and the other Query methods are not forwarded. Re-check if a bridge version calls them.
  */
 export const withMaxTurnsAsTurnEnd = (queryFn: (args: any) => any, log: (line: string) => void = (l) => console.warn(l)) => (args: any) => {
   const q = queryFn(args);
@@ -18,9 +28,9 @@ export const withMaxTurnsAsTurnEnd = (queryFn: (args: any) => any, log: (line: s
       for await (const m of q as AsyncIterable<any>) {
         if (m?.type === "stream_event" && !m.parent_tool_use_id) {
           const e = m.event;
-          if (e?.type === "content_block_start" && e.content_block?.type === "tool_use") sawTool = true;
-          if (e?.type === "message_delta" && e.delta?.stop_reason) sdkStop = e.delta.stop_reason;
-          if (e?.type === "message_delta" && e.delta?.stop_reason === "tool_use") sawTool = true;
+          if (e?.type === "message_start") { sawTool = false; sdkStop = undefined; }
+          else if (e?.type === "content_block_start" && e.content_block?.type === "tool_use") sawTool = true;
+          else if (e?.type === "message_delta" && e.delta?.stop_reason) { sdkStop = e.delta.stop_reason; if (sdkStop === "tool_use") sawTool = true; }
         } else if (m?.type === "assistant" && !m.parent_tool_use_id) {
           if (m.message?.stop_reason === "tool_use" || (Array.isArray(m.message?.content) && m.message.content.some((b: any) => b?.type === "tool_use"))) sawTool = true;
         } else if (m?.type === "result" && m.subtype === "error_max_turns" && sawTool) {

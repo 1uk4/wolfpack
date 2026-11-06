@@ -1,11 +1,15 @@
 /**
  * wolfpack pr prepare [--full] [--dry-run] [--base stable]
  * Opens (or updates) the release PR from the current wolf/<wolf> branch into stable. The owner merges it.
- * This file only wires the real git, gh, build and work-API access into prPrepare (pr-prepare.ts).
+ * wolfpack pr post-merge [--dry-run] [--apply]
+ * Bookkeeping after the owner merged: fetch, fast-forward, archive and clean up feature branches, rebuild.
+ * This file only wires the real git, gh, build and work-API access into prPrepare (pr-prepare.ts) and prPostMerge (pr-post-merge.ts).
  */
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { prPostMerge, type PostMergeOptions } from "../pr-post-merge.js";
 import { parseTotals, prPrepare, PrRefusal, type CmdResult, type PrDeps, type PrPrepareOptions } from "../pr-prepare.js";
 
 export interface PrCmdOptions extends PrPrepareOptions {
@@ -68,6 +72,32 @@ export async function prCmd(opts: PrCmdOptions): Promise<void> {
   const root = sh("git", ["rev-parse", "--show-toplevel"], opts.cwd ?? process.cwd()).out.trim();
   try {
     await prPrepare(opts, realDeps(root));
+  } catch (err) {
+    if (err instanceof PrRefusal) {
+      console.error(`refused: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+
+export async function postMergeCmd(opts: PostMergeOptions & { cwd?: string }): Promise<void> {
+  const cwd = opts.cwd ?? process.cwd();
+  try {
+    const r = await prPostMerge(opts, {
+      git: (args, at) => sh("git", args, at ?? cwd),
+      // The same command as scripts/runtime-update.mjs. The root "build" script is plain tsc; turbo is what the runtime uses.
+      build: (at) => sh("npx", ["turbo", "run", "build"], at, undefined, STEP_TIMEOUT_MS),
+      realpath: (p) => {
+        try {
+          return realpathSync(p);
+        } catch {
+          return p;
+        }
+      },
+      log: (l) => console.log(l),
+    });
+    if (r.failed) process.exit(1);
   } catch (err) {
     if (err instanceof PrRefusal) {
       console.error(`refused: ${err.message}`);

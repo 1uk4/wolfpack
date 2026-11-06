@@ -47,7 +47,7 @@ while (($#)); do
     --bind) BIND="${2:?--bind needs an IP}"; shift ;;
     --port) PORT="${2:?--port needs a number}"; shift ;;
     # Removed with the Dewey retirement (per-wolf lane dirs in a wolf's home, work dirs shared with a wolf user): accepted and ignored.
-    --wolf | --work-user) warn "$1 is obsolete (no wolf dirs are managed any more); ignoring"; shift ;;
+    --wolf | --work-user) warn "$1 is obsolete (no wolf dirs are managed any more); ignoring"; [[ -z ${2:-} ]] || shift ;;
     --hub-writes) warn "--hub-writes is obsolete (the KB and work dirs are under $DATA_DIR and writable by hubd); ignoring" ;;
     --purge) PURGE=1 ;;
     setup | install | rollback | uninstall) CMD="$1" ;;
@@ -72,12 +72,30 @@ port_foreign_listener() {
   echo "$line"
 }
 
-# Install the unit from <template> (substituting @NODE@) and remove the drop-ins that only existed to patch Dewey's paths.
+# Node path for the unit's ExecStart: the sandbox hides /home, so it must be /usr/bin/node or /usr/local/bin/node. Prefer the node on PATH;
+# else reuse the ExecStart path of the installed unit when it qualifies. Prints the path; returns 1 if neither works.
+resolve_node() {
+  local n u
+  n="$(command -v node || true)"
+  if [[ $n == /usr/bin/node || $n == /usr/local/bin/node ]]; then echo "$n"; return 0; fi
+  if [[ -f $UNIT ]]; then
+    u="$(sed -n 's|^ExecStart=\(/[^ ]*\) .*|\1|p' "$UNIT" | head -n1)"
+    if [[ $u == /usr/bin/node || $u == /usr/local/bin/node ]] && [[ -x $u ]]; then echo "$u"; return 0; fi
+  fi
+  return 1
+}
+
+# Install the unit from <template> (substituting @NODE@), then remove the drop-ins that only existed to patch Dewey's paths.
+# Every step of the unit write is fatal, and the drop-ins are deleted only after the new unit is confirmed in place (no /home path in it).
 # Idempotent. Does NOT daemon-reload or restart (callers do).
 write_unit() { # write_unit <template> <node>
   local tpl=$1 node=$2 f body
   if ((DRY)); then echo "DRY-RUN: install $UNIT from $tpl with @NODE@=$node"; else
-    sed "s|@NODE@|$node|" "$tpl" >"$UNIT.tmp" && chmod 644 "$UNIT.tmp" && mv "$UNIT.tmp" "$UNIT"
+    sed "s|@NODE@|$node|" "$tpl" >"$UNIT.tmp" || die "could not render $tpl to $UNIT.tmp"
+    chmod 644 "$UNIT.tmp" || die "chmod $UNIT.tmp failed"
+    mv -T "$UNIT.tmp" "$UNIT" || die "could not move $UNIT.tmp into place; the old unit and its drop-ins are untouched"
+    if grep -Ev '^[[:space:]]*#' "$UNIT" | grep -q '/home'; then die "$UNIT still has a /home path after the write; drop-ins NOT removed"; fi
+    grep -q '^ExecStart=' "$UNIT" || die "$UNIT has no ExecStart= after the write; drop-ins NOT removed"
   fi
   [[ -d $DROPIN_DIR ]] || return 0
   # work-writes.conf (--hub-writes, bound domains/*/work under Dewey's home) and its disabled/renamed copies: obsolete, nothing to keep.
@@ -158,13 +176,21 @@ cmd_setup() {
 # `install` (every release deploy) refreshes the unit only when the installed one still binds a /home path (the pre-2026-11-06 unit).
 # A current unit is left alone, so a hand-tuned unit is not overwritten on every deploy.
 migrate_old_unit() {
-  local tpl node
+  local tpl node ts bak
   [[ -f $UNIT ]] || return 0
   grep -Eq '^(BindReadOnlyPaths|BindPaths|ReadWritePaths)=.*/home/' "$UNIT" || return 0
   tpl="$BUNDLE/hubd.service"; [[ -f $tpl ]] || tpl="$HERE/hubd.service"
   [[ -f $tpl ]] || { warn "installed $UNIT binds /home paths but no hubd.service template was found next to the bundle or setup.sh; run 'setup.sh setup' by hand"; return 0; }
-  node="$(command -v node || true)"; [[ -n $node ]] || node=/usr/bin/node
-  log "installed unit still binds /home paths: replacing it from $tpl and removing obsolete drop-ins"
+  node="$(resolve_node)" || die "cannot fill @NODE@: node on PATH is not /usr/bin/node or /usr/local/bin/node and the installed unit's ExecStart does not name one; nothing changed (run 'setup.sh setup' by hand)"
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  bak="$OPT/unit-backup-$ts"
+  log "installed unit still binds /home paths: backing up to $UNIT.bak-$ts and $bak, then replacing it from $tpl"
+  # The unit copy sits beside the unit (not a *.service, systemd ignores it); the drop-ins go outside /etc/systemd so they are never loaded.
+  run cp -a "$UNIT" "$UNIT.bak-$ts"
+  run install -d -m 0700 "$bak"
+  run cp -a "$UNIT" "$bak/hubd.service"
+  if [[ -d $DROPIN_DIR ]]; then run cp -a "$DROPIN_DIR" "$bak/hubd.service.d"; fi
+  echo "backup: $UNIT.bak-$ts and $bak (restore: copy back, systemctl daemon-reload, restart hubd)"
   write_unit "$tpl" "$node"
   run systemctl daemon-reload
 }

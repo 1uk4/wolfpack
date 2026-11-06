@@ -84,6 +84,13 @@ describe("no browser token = 401, never the console's own token", () => {
 			assert.deepEqual(await hubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "console-own-token" }), { ok: true, status: 200 });
 			assert.deepEqual(seen, ["/v1/wolves Bearer console-own-token"]);
 			assert.equal((await hubHealth({})).ok, false);
+			seen.length = 0;
+			assert.deepEqual(await hubHealth({ WOLFPACK_HUB_URL: url }), { ok: true, status: 200 });
+			assert.deepEqual(seen, []);
+			let calls = 0;
+			const f401 = (async () => { calls++; return new Response(null, { status: 401 }); }) as typeof fetch;
+			assert.deepEqual(await hubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "t" }, f401), { ok: false, status: 503, reason: "hub answered 401 (the configured WOLFPACK_HUB_TOKEN was rejected)" });
+			assert.equal(calls, 1);
 		} finally {
 			hub.closeAllConnections();
 			hub.close();
@@ -102,7 +109,7 @@ describe("no browser token = 401, never the console's own token", () => {
 			t = 6000;
 			await h();
 			assert.equal(seen.length, 2);
-			const bad = cachedHubHealth({ WOLFPACK_HUB_URL: url }, { fetchImpl: (async () => new Response(null, { status: 502 })) as typeof fetch, log: (m) => logs.push(m) });
+			const bad = cachedHubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: OWN }, { fetchImpl: (async () => new Response(null, { status: 502 })) as typeof fetch, log: (m) => logs.push(m) });
 			assert.deepEqual(await bad(), { ok: false, status: 503 });
 			assert.ok(logs.some((l) => l.includes("hub answered 502")));
 		} finally {

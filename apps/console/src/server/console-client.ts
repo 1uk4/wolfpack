@@ -122,10 +122,11 @@ export async function hubHealth(env: Record<string, string | undefined> = proces
 	const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
 	if (!base) return { ok: false, status: 503, reason: "WOLFPACK_HUB_URL is not set" };
 	const token = env.WOLFPACK_HUB_TOKEN?.trim();
+	if (!token) return { ok: true, status: 200 }; // no console token: nothing to probe the hub with (it requires auth on every route), so report on the console itself
 	try {
-		const r = await fetchImpl(`${base}/v1/wolves`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000) });
+		const r = await fetchImpl(`${base}/v1/wolves`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
 		await r.body?.cancel();
-		return r.ok ? { ok: true, status: 200 } : { ok: false, status: 503, reason: `hub answered ${r.status}${r.status === 401 ? " (the console's own token is missing or revoked)" : ""}` };
+		return r.ok ? { ok: true, status: 200 } : { ok: false, status: 503, reason: `hub answered ${r.status}${r.status === 401 ? " (the configured WOLFPACK_HUB_TOKEN was rejected)" : ""}` };
 	} catch {
 		return { ok: false, status: 503, reason: "hub unreachable" };
 	}

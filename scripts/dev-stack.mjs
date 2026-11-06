@@ -155,7 +155,7 @@ export function main(argv, env = process.env) {
 	if (env.DEV_STACK_SKIP_BUILD === "1") {
 		if (!fs.existsSync(path.join(root, "packages/workerd/dist/bin/workerd.js"))) throw new Error("DEV_STACK_SKIP_BUILD=1 but workerd.js is not built");
 	} else {
-		const b = spawnSync("pnpm", ["exec", "turbo", "run", "build", "--filter=@wolfpack/harness", "--filter=@wolfpack/workerd", "--filter=@wolfpack/cli", "--output-logs=errors-only"], { cwd: root, stdio: "inherit" });
+		const b = spawnSync(process.execPath, ["scripts/turbo.mjs", "run", "build", "--filter=@wolfpack/harness", "--filter=@wolfpack/workerd", "--filter=@wolfpack/cli", "--output-logs=errors-only"], { cwd: root, stdio: "inherit" });
 		if (b.status !== 0) throw new Error("build failed");
 	}
 	const kids = [];

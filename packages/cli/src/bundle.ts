@@ -571,9 +571,10 @@ export async function installDevExtensions(
  * resolvable from harness.cjs on a VPS (global install, no node_modules above the bundle), so a plain external
  * require would throw when the bridge initialises. The harness always injects the query function it resolved
  * itself (engine loadQuery: harness tree, NODE_PATH, global install), so the bridge's own import is stubbed.
- * Both stubs apply to importers under pi-claude-bridge-stateless only (BRIDGE_IMPORTER).
+ * Both stubs apply to importers under pi-claude-bridge-stateless only (BRIDGE_IMPORTER). pnpm names the git dependency
+ * by its package.json name (pi-claude-bridge), npm by the dependency key (-stateless), so both directory names match.
  */
-const BRIDGE_IMPORTER = /[\\/]pi-claude-bridge-stateless[\\/]/;
+const BRIDGE_IMPORTER = /[\\/]pi-claude-bridge(-stateless)?[\\/]/;
 
 export function stubBridgeSdkPlugin(): esbuild.Plugin {
   return {

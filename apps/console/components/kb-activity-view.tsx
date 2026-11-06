@@ -16,6 +16,7 @@ import {
 	KB_ACTIVITY_SINCE,
 	applyHubEvent,
 	attentionGroups,
+	contributionRows,
 	curatorNote,
 	hubIsOlder,
 	domainBlocks,
@@ -25,6 +26,7 @@ import {
 	reconcileActivity,
 	needsRefetch,
 	type AttentionGroup,
+	type ContributionRow,
 	type DomainBlock,
 	type DomainExtra,
 	type FeedRow,
@@ -105,6 +107,43 @@ export function DomainBlockView({ block, now, loading, onShowAll }: { block: Dom
 	);
 }
 
+/** The live Contributions list: each incoming item by wolf, topic, domain and age, with queued / in progress / decided. */
+export function ContributionsList({ data, now }: { data: KbActivityResponse; now: number }) {
+	const rows: ContributionRow[] = contributionRows(data, now);
+	return (
+		<section className="mb-6" data-testid="kb-contributions">
+			<h2 className="mb-1 font-ui text-[11px] uppercase tracking-wide text-muted-foreground">Contributions</h2>
+			{rows.length === 0 ? (
+				<p className="ml-3 text-[12px] text-muted-foreground/60" data-testid="kb-contributions-empty">Nothing incoming.</p>
+			) : (
+				<ul className="ml-3 space-y-0.5 text-[12px]">
+					{rows.map((r) => (
+						<li key={r.key} className="flex items-baseline gap-2" data-state={r.state} data-outcome={r.outcome} data-wolf={r.wolf} data-topic={r.denTopicId}>
+							<span className="w-28 shrink-0 text-muted-foreground" data-testid="kb-contribution-state">
+								{r.label}
+							</span>
+							<span className="shrink-0 text-foreground">{r.wolf}</span>
+							<span className="truncate text-foreground">{r.denTopicId}</span>
+							{r.domain ? <span className="shrink-0 text-muted-foreground/70">{r.domain}</span> : null}
+							{r.route ? <span className="truncate text-muted-foreground" data-testid="kb-contribution-route">{r.route}</span> : null}
+							{r.entryId ? (
+								<Link href={entryHref(r.entryId)} className="truncate text-foreground underline underline-offset-2">
+									{r.entryId}
+								</Link>
+							) : r.reason ? (
+								<span className="truncate text-muted-foreground/70">{r.reason}</span>
+							) : null}
+							<span className="ml-auto shrink-0 text-muted-foreground/60" title={absolute(new Date(r.at).toISOString())}>
+								{kbAge(Math.max(0, now - r.at))}
+							</span>
+						</li>
+					))}
+				</ul>
+			)}
+		</section>
+	);
+}
+
 export function NeedsAttention({ data, now }: { data: KbActivityResponse; now: number }) {
 	const groups: AttentionGroup[] = attentionGroups(data);
 	if (groups.length === 0) return null;
@@ -175,6 +214,7 @@ export function KbActivityBody({
 			</h1>
 			{note ? <p className="mb-4 text-sm text-muted-foreground" data-testid="kb-curator-note">{note}</p> : null}
 			{hubIsOlder(data) ? <p className="mb-4 text-[12px] text-muted-foreground/70" data-testid="kb-hub-older">The hub is older than this console: entry and waiting counts are unavailable.</p> : null}
+			<ContributionsList data={data} now={now} />
 			{blocks.length === 0 ? <p className="mb-6 text-sm text-muted-foreground" data-testid="kb-domains-empty">No domains yet.</p> : null}
 			{blocks.map((b) => (
 				<DomainBlockView key={b.domain} block={b} now={now} loading={loadingDomain === b.domain} {...(onShowAll ? { onShowAll } : {})} />

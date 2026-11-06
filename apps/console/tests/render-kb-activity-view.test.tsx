@@ -96,3 +96,25 @@ describe("empty and degraded states", () => {
 		assert.match(renderToStaticMarkup(<KbActivityUnavailable message="needs a hub" />), /data-testid="kb-activity-unavailable"[\s\S]*needs a hub/);
 	});
 });
+
+describe("Contributions list", () => {
+	it("shows queued, in progress with route, and decided with entry link", () => {
+		const d = kbActivityFixture();
+		d.sweep = { running: true, current: { from: "hal", denTopicId: "t-hal-3", startedAt: now - 4000, route: "merge into kb-wolfpack-X (9391 chars)" } };
+		const html = renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />);
+		assert.match(html, /data-testid="kb-contributions"/);
+		assert.match(html, /data-state="running"[^>]*data-wolf="hal" data-topic="t-hal-3"/);
+		assert.match(html, /merge into kb-wolfpack-X \(9391 chars\)/);
+		assert.match(html, /data-state="queued"[^>]*data-topic="t-ada-1"/);
+		assert.match(html, /data-state="decided" data-outcome="merge"/);
+		assert.match(html, /href="\/kb\/entry\/ent-merge"/);
+	});
+	it("empty state, and an old hub without sweep.current still renders", () => {
+		const d = kbActivityFixture();
+		d.incoming = { total: 0, wolves: [] };
+		d.decisions.items = [];
+		d.domains = [];
+		delete d.sweep;
+		assert.match(renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />), /Nothing incoming\./);
+	});
+});

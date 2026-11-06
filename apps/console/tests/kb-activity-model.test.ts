@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	applyHubEvent,
+	contributionRows,
 	attentionGroups,
 	hubIsOlder,
 	domainBlocks,
@@ -62,8 +63,9 @@ describe("kb-activity model", () => {
 		assert.equal(needsRefetch({ type: "sweep_finished" }), true);
 		assert.equal(needsRefetch({ type: "kb.changed" }), true);
 		assert.equal(needsRefetch({ type: "resync" }), true);
-		assert.equal(needsRefetch({ type: "sweep_item" }), false);
-		assert.equal(needsRefetch({ type: "sweep_started" }), false);
+		assert.equal(needsRefetch({ type: "sweep_item" }), true);
+		assert.equal(needsRefetch({ type: "sweep_started" }), true);
+		assert.equal(needsRefetch({ type: "wolf.presence" }), false);
 	});
 	it("mergeDecisionPages dedupes by id and takes cursor/totals from the newer page", () => {
 		const a = kbActivityFixture().decisions;
@@ -332,6 +334,80 @@ describe("kb-activity model", () => {
 			assert.equal(s.data.incoming.total, 4);
 			assert.equal(s.data.decisions.items[0]!.outcome, "reject");
 			assert.equal(applyHubEvent(b, { type: "work.changed", id: 10, at }), b);
+		});
+	});
+
+	describe("contributionRows", () => {
+		const NOW = Date.parse("2026-11-05T10:00:00Z");
+		const base = () => {
+			const d = kbActivityFixture();
+			d.decisions.items = [];
+			d.domains = [];
+			d.incoming.wolves = [{ wolf: "hal", pending: 2, oldestAgeMs: 120_000, items: [{ denTopicId: "a", ageMs: 120_000, domain: "wolfpack" }, { denTopicId: "b", ageMs: 5_000 }] }];
+			return d;
+		};
+		it("queued rows, oldest first, with wolf, topic, domain, age", () => {
+			const rows = contributionRows(base(), NOW);
+			assert.deepEqual(rows.map((r) => [r.state, r.wolf, r.denTopicId, r.domain]), [["queued", "hal", "a", "wolfpack"], ["queued", "hal", "b", undefined]]);
+			assert.equal(NOW - rows[0]!.at, 120_000);
+		});
+		it("old hub (no sweep.current, no sweep): nothing is running", () => {
+			const d = base();
+			delete d.sweep;
+			assert.ok(contributionRows(d, NOW).every((r) => r.state === "queued"));
+			d.sweep = { running: true };
+			assert.ok(contributionRows(d, NOW).every((r) => r.state === "queued"));
+		});
+		it("sweep.current marks its item in progress, first, with the route and the domain from the lane", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW - 3000, route: "merge into kb-wolfpack-X (9391 chars)" } };
+			const rows = contributionRows(d, NOW);
+			assert.equal(rows.length, 2);
+			assert.deepEqual([rows[0]!.state, rows[0]!.label, rows[0]!.route, rows[0]!.domain, rows[1]!.state], ["running", "in progress", "merge into kb-wolfpack-X (9391 chars)", "wolfpack", "queued"]);
+		});
+		it("a running item that is no longer listed in the lane still shows", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "ada", denTopicId: "zz", startedAt: NOW - 1000 } };
+			assert.equal(contributionRows(d, NOW)[0]!.denTopicId, "zz");
+		});
+		it("decided rows: created/merged with entry, 15 minute window; rejected and parked stay longer", () => {
+			const d = base();
+			d.incoming.wolves = [];
+			const dec = (id: string, outcome: "create" | "merge" | "reject" | "parked", minsAgo: number, extra = {}) => ({ id, at: new Date(NOW - minsAgo * 60_000).toISOString(), from: "hal", denTopicId: id, hash: "h", outcome, ...extra });
+			d.decisions.items = [dec("c1", "create", 2, { entryId: "kb-new", domain: "wolfpack" }), dec("m1", "merge", 20), dec("r1", "reject", 120, { reason: "too vague" }), dec("p1", "parked", 60)];
+			const rows = contributionRows(d, NOW);
+			assert.deepEqual(rows.map((r) => [r.denTopicId, r.state, r.label, r.entryId]), [["c1", "decided", "created", "kb-new"], ["p1", "decided", "parked", undefined], ["r1", "decided", "rejected", undefined]]);
+			assert.equal(rows[2]!.reason, "too vague");
+		});
+		it("a parked item still in the lane stays, as parked, however old", () => {
+			const d = base();
+			d.decisions.items = [{ id: "p", at: new Date(NOW - 3 * 86_400_000).toISOString(), from: "hal", denTopicId: "a", hash: "h", outcome: "parked" }];
+			d.incoming.wolves[0]!.items[0]!.ageMs = 4 * 86_400_000;
+			assert.equal(contributionRows(d, NOW).find((r) => r.denTopicId === "a")!.label, "parked");
+		});
+		it("a resubmission after a decision is queued again", () => {
+			const d = base();
+			d.decisions.items = [{ id: "x", at: new Date(NOW - 600_000).toISOString(), from: "hal", denTopicId: "b", hash: "h", outcome: "reject" }];
+			assert.equal(contributionRows(d, NOW).find((r) => r.denTopicId === "b")!.state, "queued");
+		});
+		it("empty", () => {
+			const d = base();
+			d.incoming = { total: 0, wolves: [] };
+			assert.deepEqual(contributionRows(d, NOW), []);
+		});
+		it("applyHubEvent: sweep_item clears sweep.current for that item; sweep_finished clears it", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW } };
+			let st = initialActivityState(d);
+			st = applyHubEvent(st, { type: "sweep_item", id: 1, at: "2026-11-05T10:00:01Z", from: "hal", denTopicId: "a", outcome: "create", entryId: "kb-n" } as never, NOW);
+			assert.equal(st.data.sweep?.current, undefined);
+			const rows = contributionRows(st.data, NOW);
+			assert.equal(rows.find((r) => r.denTopicId === "a")!.state, "decided");
+			const d2 = base();
+			d2.sweep = { running: true, current: { from: "hal", denTopicId: "b", startedAt: NOW } };
+			const fin = applyHubEvent(initialActivityState(d2), { type: "sweep_finished" } as never, NOW);
+			assert.equal(fin.data.sweep?.current, undefined);
+			assert.equal(fin.sweeping, false);
 		});
 	});
 });

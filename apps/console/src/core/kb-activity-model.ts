@@ -401,9 +401,21 @@ export function kbRelativeTime(iso: string, now: number = Date.now()): string {
 /** A hub event frame as the browser receives it (only the fields this page reads). */
 export type KbHubFrame = HubEvent | { type: string; [k: string]: unknown };
 
-/** True when a frame means "the ledger moved or may have: refetch" (sweep_finished, kb.changed, resync). */
+/**
+ * True when a frame means "the ledger or the item in progress moved or may have: refetch" (sweep_started, sweep_item, sweep_finished,
+ * kb.changed, resync). sweep_started / sweep_item matter for the Contributions list: the item in progress (sweep.current) only comes from the hub.
+ */
 export function needsRefetch(frame: KbHubFrame): boolean {
-	return frame.type === "sweep_finished" || frame.type === "kb.changed" || frame.type === "resync";
+	return frame.type === "sweep_started" || frame.type === "sweep_item" || frame.type === "sweep_finished" || frame.type === "kb.changed" || frame.type === "resync";
+}
+
+type Sweep = NonNullable<KbActivityResponse["sweep"]>;
+function withoutCurrent(sw: Sweep): Sweep {
+	const { current: _drop, ...rest } = sw;
+	return rest;
+}
+function clearCurrentItem(state: KbActivityState, d: KbActivityResponse): KbActivityState {
+	return { ...state, data: { ...d, sweep: withoutCurrent(d.sweep!) } };
 }
 
 const dec = (n: number): number => Math.max(0, n - 1);
@@ -427,8 +439,11 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 	switch (frame.type) {
 		case "sweep_started":
 			return state.sweeping ? state : { ...state, sweeping: true };
-		case "sweep_finished":
-			return state.sweeping ? { ...state, sweeping: false } : state;
+		case "sweep_finished": {
+			const sw = state.data.sweep;
+			const data = sw?.current ? { ...state.data, sweep: withoutCurrent(sw) } : state.data;
+			return state.sweeping || data !== state.data ? { ...state, data, sweeping: false } : state;
+		}
 		case "sweep_item": {
 			const f = frame as Extract<HubEvent, { type: "sweep_item" }>;
 			if (typeof f.from !== "string" || typeof f.denTopicId !== "string") return state;
@@ -437,6 +452,11 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 			const outcome = decision ? decisionOutcome(decision.outcome) : decisionOutcome(f.outcome);
 			const id = `${PROVISIONAL_PREFIX}${f.id}`;
 			if (d.decisions.items.some((x) => x.id === id)) return state;
+			// the item in progress ended: drop it from sweep.current (the next one arrives with the refetch)
+			if (d.sweep?.current && sameContribution(d.sweep.current, f)) {
+				const next = clearCurrentItem(state, d);
+				return applyHubEvent(next, frame, now);
+			}
 
 			// incoming: a plain parked item stays pending; but a parked item whose decision carries a committed create/merge (post-commit
 			// failure) was decided, so it leaves the pending count. Match on from + denTopicId only (the event has no hash).
@@ -490,4 +510,94 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 		default:
 			return state;
 	}
+}
+
+// ── contributions list ──────────────────────────────────────────────────────
+
+/** Decided create / merge / unchanged items stay listed this long. */
+export const KB_CONTRIBUTION_DECIDED_MS = 15 * 60_000;
+/** Rejected and parked items stay listed longer: they need a look. */
+export const KB_CONTRIBUTION_ATTENTION_MS = 24 * 3_600_000;
+export const KB_CONTRIBUTION_ROWS = 30;
+
+export type ContributionState = "queued" | "running" | "decided";
+
+export interface ContributionRow {
+	key: string;
+	state: ContributionState;
+	wolf: string;
+	denTopicId: string;
+	domain?: string;
+	/** Epoch ms: arrival (queued), start (running) or decision time (decided). Age = now - at. */
+	at: number;
+	/** Running: the curator's current route, e.g. "merge into kb-x (9391 chars)". */
+	route?: string;
+	/** Decided. */
+	outcome?: KbDecisionOutcome;
+	label: string;
+	entryId?: string;
+	reason?: string;
+}
+
+const STATE_ORDER: Record<ContributionState, number> = { running: 0, queued: 1, decided: 2 };
+
+/**
+ * The live Contributions list: one row per incoming item, by wolf + topic. Running = the hub's `sweep.current` (absent on an older hub or
+ * when idle: then nothing is running); queued = waiting in the lane; decided = a recent decision (create / merge / unchanged for 15 minutes,
+ * reject / parked for 24 hours; a parked item still in the lane stays). A decision older than the item's arrival (a resubmission) does not
+ * hide the queued item. Order: running, queued (oldest first), decided (newest first), capped.
+ */
+export function contributionRows(data: KbActivityResponse, now: number = Date.now(), cap: number = KB_CONTRIBUTION_ROWS): ContributionRow[] {
+	const base = Date.parse(data.generatedAt);
+	const ref = Number.isNaN(base) ? now : base;
+	const id = (w: string, t: string) => `${w}\u0000${t}`;
+	const rows = new Map<string, ContributionRow>();
+
+	const queued = new Map<string, ContributionRow>();
+	for (const w of data.incoming.wolves)
+		for (const i of w.items) {
+			const row: ContributionRow = { key: id(w.wolf, i.denTopicId), state: "queued", wolf: w.wolf, denTopicId: i.denTopicId, at: ref - i.ageMs, label: "queued" };
+			if (i.domain) row.domain = i.domain;
+			queued.set(row.key, row);
+		}
+
+	const seen = new Set<string>();
+	const decisions: KbDecision[] = [];
+	for (const d of [...(data.domains ?? []).flatMap((x) => x.recent ?? []), ...data.decisions.items]) {
+		if (seen.has(d.id)) continue;
+		seen.add(d.id);
+		decisions.push(d);
+	}
+	decisions.sort((a, b) => timeDesc(a.at, b.at));
+	for (const d of decisions) {
+		const key = id(d.from, d.denTopicId);
+		if (rows.has(key)) continue; // newest decision per item
+		const t = Date.parse(d.at);
+		if (Number.isNaN(t)) continue;
+		const q = queued.get(key);
+		if (q && q.at > t) continue; // resubmitted after this decision
+		const attention = d.outcome === "reject" || d.outcome === "parked" || d.outcome === "unclassified";
+		if (now - t > (attention ? KB_CONTRIBUTION_ATTENTION_MS : KB_CONTRIBUTION_DECIDED_MS) && !(q && d.outcome === "parked")) continue;
+		const row: ContributionRow = { key, state: "decided", wolf: d.from, denTopicId: d.denTopicId, at: t, outcome: d.outcome, label: DECISION_LABEL[d.outcome] ?? d.outcome };
+		if (d.domain ?? q?.domain) row.domain = (d.domain ?? q?.domain)!;
+		if (d.entryId) row.entryId = d.entryId;
+		if (d.reason) row.reason = d.reason;
+		rows.set(key, row);
+	}
+
+	for (const [k, q] of queued) if (!rows.has(k)) rows.set(k, q);
+
+	const cur = data.sweep?.current;
+	if (cur && typeof cur.from === "string" && typeof cur.denTopicId === "string") {
+		const key = id(cur.from, cur.denTopicId);
+		const known = rows.get(key) ?? queued.get(key);
+		const row: ContributionRow = { key, state: "running", wolf: cur.from, denTopicId: cur.denTopicId, at: cur.startedAt, label: "in progress" };
+		if (known?.domain) row.domain = known.domain;
+		if (cur.route) row.route = cur.route;
+		rows.set(key, row);
+	}
+
+	return [...rows.values()]
+		.sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (a.state === "decided" ? b.at - a.at : a.at - b.at))
+		.slice(0, cap);
 }

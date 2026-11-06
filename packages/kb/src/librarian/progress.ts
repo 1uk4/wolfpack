@@ -2,7 +2,7 @@
  * progress — what the sweep is working on right now, for `wolfpack-kb status`.
  * A den-local file written when an item starts and removed when it ends.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { KbRoots } from "../shared/index.js";
 
@@ -18,8 +18,21 @@ export interface CurrentItem {
 const currentFile = (roots: KbRoots) => join(roots.denLocal, "sweep-current.json");
 
 export function writeCurrent(roots: KbRoots, item: CurrentItem): void {
-  mkdirSync(dirname(currentFile(roots)), { recursive: true });
-  writeFileSync(currentFile(roots), JSON.stringify(item));
+  const file = currentFile(roots);
+  mkdirSync(dirname(file), { recursive: true });
+  // Temp file + rename: a reader (the hub's activity route, a file watcher) sees the old or the new file, never half of one.
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(item));
+  try {
+    renameSync(tmp, file);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* gone */
+    }
+    throw e;
+  }
 }
 
 export function clearCurrent(roots: KbRoots): void {

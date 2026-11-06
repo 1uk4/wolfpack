@@ -471,7 +471,10 @@ export function readSweepCurrent(denLocal: string): SweepCurrent | undefined {
     const j = JSON.parse(raw) as Record<string, unknown>;
     if (typeof j.from !== "string" || !j.from || typeof j.denTopicId !== "string" || !j.denTopicId) return undefined;
     if (typeof j.startedAt !== "number" || !Number.isFinite(j.startedAt)) return undefined;
-    const out: SweepCurrent = { from: oneLine(j.from, 80), denTopicId: oneLine(j.denTopicId, 200), startedAt: j.startedAt };
+    // from / denTopicId are matching keys (against the lane and the ledger): never truncated or rewritten, so an odd one is dropped instead.
+    const key = (v: string) => v.length <= 256 && !/[\u0000-\u001f\u007f]/.test(v);
+    if (!key(j.from) || !key(j.denTopicId)) return undefined;
+    const out: SweepCurrent = { from: j.from, denTopicId: j.denTopicId, startedAt: j.startedAt };
     if (typeof j.route === "string" && j.route) out.route = oneLine(j.route, 200);
     return out;
   } catch {

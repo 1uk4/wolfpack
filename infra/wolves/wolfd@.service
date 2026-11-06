@@ -1,0 +1,73 @@
+# One wolfd per wolf: `systemctl start wolfd@<name>` runs wolfd as the Linux user wolf-<name> with ITS home, ITS .env and ITS memory cap.
+# Started/stopped by workerd-wolves.service (through wolfd-unit.sh + the polkit rule) or by an operator. Layout per wolf:
+#   /home/wolf-<name>/{.env (600), wolf.yaml, release/ (unpacked tarball), den/, claude-stateless/, work/ (workspace)}
+# Per-wolf overrides (memory cap etc.) go in /etc/systemd/system/wolfd@<name>.service.d/*.conf (provision-wolf.sh writes memory.conf).
+[Unit]
+Description=wolfd wolf %i (user wolf-%i)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/home/wolf-%i/.env
+ConditionPathExists=/home/wolf-%i/release/launch.sh
+# 5 failed starts in 5 minutes => stop retrying (failed state, visible in `systemctl --failed`); a crash loop must not eat the 1 CPU / 2 GB host.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=wolf-%i
+Group=wolf-%i
+# Read by systemd as root BEFORE dropping privileges (so .env may be 600 owned by the wolf); no leading "-": a missing file is a hard failure.
+EnvironmentFile=/home/wolf-%i/.env
+Environment=HOME=/home/wolf-%i WOLF_HOME=/home/wolf-%i
+# Few concurrent claude children on a 2 GB / 1 CPU host (measured ~250 MiB each; see infra/wolves/README.md). Override per wolf in a drop-in.
+Environment=WOLFPACK_SUBAGENT_HOST_MAX=3
+WorkingDirectory=/home/wolf-%i
+# Guards in front of launch.sh (which repeats the key/token checks): .env must be 600, no metered key.
+ExecStartPre=/bin/bash -c '[ "$(stat -c %%a /home/wolf-%i/.env)" = 600 ] || { echo ".env must be mode 600" >&2; exit 78; }; [ -z "$${ANTHROPIC_API_KEY}" ] || { echo "ANTHROPIC_API_KEY is set: a wolfd wolf never runs on a metered key" >&2; exit 78; }'
+# Socket in the runtime dir (group wolf-%i, 0750): workerd-wolves is a member of that group and dials it; nobody else can.
+ExecStart=/home/wolf-%i/release/launch.sh --socket /run/wolfd-%i/serve.sock
+RuntimeDirectory=wolfd-%i
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+# Cgroup cap for THIS wolfd and its claude children (the cgroup is the unit). MemoryHigh throttles before the OOM kill.
+MemoryHigh=600M
+MemoryMax=700M
+MemorySwapMax=0
+TasksMax=256
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wolfd-%i
+
+# Hardening. The wolf sees the OS read-only, its own home read-write, and no other home (ProtectHome=tmpfs hides /home, BindPaths puts only its own back).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/wolf-%i
+ReadWritePaths=/home/wolf-%i
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# node's JIT needs W+X pages, so MemoryDenyWriteExecute stays off.
+
+[Install]
+WantedBy=multi-user.target

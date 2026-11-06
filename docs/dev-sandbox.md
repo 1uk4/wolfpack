@@ -98,11 +98,15 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 
 ## Running it
 
-There are no `sandbox:stack*` or `dev:stack:desktop` scripts any more. Start the snapshot sandbox by hand:
-`WOLFPACK_MODELS_FILE=... node packages/workerd/dist/bin/workerd.js --wolves ~/wolves/dev --port <port>` (build first:
-`npx turbo run build --filter=@wolfpack/workerd --filter=@wolfpack/cli`), then the console with
-`WOLFPACK_API_URL=http://127.0.0.1:<port> npm run dev -w @wolfpack/console`. `npm run dev:stack` is only the scaffolded
-minimal sandbox (README "Live vs dev stack"); it does not run the extension install below, the Ollama check or the api-key check.
+Run the sandbox with `npm run dev:stack [-- --app console|none]` (`scripts/dev-stack.mjs`). It builds this checkout (turbo;
+`DEV_STACK_SKIP_BUILD=1` skips it), then starts workerd (`DEV_WORKERD_PORT`, default 7151) and, unless `--app none`, the
+console (`DEV_CONSOLE_PORT`, default 3220) against the wolves folder `DEV_WOLVES_DIR` (default `~/wolves/dev-sandbox`).
+If that folder holds no wolf it scaffolds one minimal wolf ("sandbox"); wolves already there (e.g. a snapshot taken above)
+are used as they are. It refuses any path touching `~/wolves/local` and the live ports, runs with `HOME=<sandbox>/.home` and
+no inherited `WOLF_*`/`WOLFPACK_*` vars, and Ctrl-C stops every process. `WOLFPACK_MODELS_FILE` overrides the scaffolded
+`models.json`. It does not run the extension install below, the Ollama check or the api-key check. There is no
+attach mode and there are no `sandbox:stack*` or `dev:stack:desktop` scripts; the desktop app is started by hand
+(`npm run dev -w @wolfpack/desktop`).
 
 A models file with transport `api` needs `ANTHROPIC_API_KEY` (e.g. in `~/.wolfpack/.env`); the dev `models.json` is
 `subscription`: the Claude Agent SDK uses your local login. `dewey-dev` embeds with local Ollama

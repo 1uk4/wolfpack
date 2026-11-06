@@ -13,6 +13,6 @@ fails, an `error` event quotes the text and it is retried once.
 it.") and is aborted; queued owner messages then flow into the next turn and held subagent results are delivered.
 Queued owner submissions and snapshots do not count as activity. Long-running tools never trip it.
 
-- Default: 120000 ms (above the pi-claude-bridge 90 s idle timeout, so it only fires if the bridge itself is wedged).
+- Default: 120000 ms (above the claude-stateless provider's own idle timeout, so it only fires if the provider itself is wedged).
 - `0` disables it.
 - Set with `WolfServerOptions.stallTimeoutMs` or the `WOLFPACK_STALL_TIMEOUT_MS` environment variable of wolfd.

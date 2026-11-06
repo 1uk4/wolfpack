@@ -292,6 +292,12 @@ export interface ExtensionLifecycle {
   stop?(): void | Promise<void>;
 }
 
+/** Passed to `Extension.onEngineReady`. `hostConsolidationTimer` is true when the host runs its own timer. */
+export interface EngineReadyInfo {
+  hostConsolidationTimer: boolean;
+  onEngineClose(fn: () => void): void;
+}
+
 export interface Extension {
   /** Unique extension name */
   name: string;
@@ -310,6 +316,12 @@ export interface Extension {
 
   /** Start/stop hooks for background work (timers, watchers) */
   lifecycle?: ExtensionLifecycle;
+
+  /**
+   * Durable hosts only (they have no `lifecycle.start`): called once when the wolf's engine is attached, i.e. at boot
+   * rather than on the first conversation event. `hostConsolidationTimer` is true when the host runs its own timer.
+   */
+  onEngineReady?(info: EngineReadyInfo): void;
 }
 
 /** Extension factory function signature */

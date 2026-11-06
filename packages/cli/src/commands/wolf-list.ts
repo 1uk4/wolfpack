@@ -89,6 +89,7 @@ function formatStatus(s: string): string {
 function formatRuntime(rt: string): string {
   if (rt === "pi") return c.cyan("pi");
   if (rt === "pi-durable") return c.cyan("pi-dur");
+  if (rt === "wolfd") return c.cyan("wolfd");
   return rt || "";
 }
 

@@ -100,4 +100,8 @@ export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
  * — this file keeps that role, alongside .env.local.
  */
 const AUTH_FILE_ENV = readEnv("WOLFPACK_AUTH_FILE", "LH_AUTH_FILE");
-export const AUTH_FILE = AUTH_FILE_ENV ? path.resolve(AUTH_FILE_ENV) : path.join(ROOT, "auth.json");
+export const AUTH_FILE = AUTH_FILE_ENV
+	? path.resolve(AUTH_FILE_ENV)
+	: DATA_DIR_ENV
+		? path.join(DATA_ROOT, "auth.json")
+		: path.join(ROOT, "auth.json");

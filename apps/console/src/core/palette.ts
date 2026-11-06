@@ -7,7 +7,7 @@
 
 import { fuzzyScore } from "./fuzzy.ts";
 import { isSettled, type SubagentState } from "./subagents.ts";
-import { PIPELINE_HREF } from "./kb.ts";
+import { KB_ACTIVITY_HREF } from "./kb.ts";
 import type { KbGraphNode } from "./kb.ts";
 import { threadHref, threadLabel } from "./thread-adapter.ts";
 
@@ -68,7 +68,7 @@ export function currentWolfOf(pathname: string | null | undefined): string | nul
 export function buildCommandItems(currentWolf: string | null): PaletteItem[] {
 	const items: PaletteItem[] = [
 		{ id: "cmd:graph", kind: "command", label: "Open graph", href: "/", keywords: ["home", "knowledge"] },
-		{ id: "cmd:pipeline", kind: "command", label: "Open pipeline", href: PIPELINE_HREF, keywords: ["kb", "librarian"] },
+		{ id: "cmd:kb-activity", kind: "command", label: "Open KB activity", href: KB_ACTIVITY_HREF, keywords: ["kb", "curator", "pipeline", "decisions"] },
 		{ id: "cmd:model", kind: "command", label: "Switch model", command: "switch-model", keywords: ["picker", "llm"] },
 	];
 	if (currentWolf) {

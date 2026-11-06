@@ -70,6 +70,23 @@ export function wolvesRouter(manager: WolfManager): Router {
       }
       const body = req.body as Record<string, unknown>;
       
+      // wolfd release format: {runtime: "wolfd", tarball, wolfYaml, models?, env?}
+      if (body.runtime === "wolfd") {
+        if (!body.tarball || !body.wolfYaml) {
+          res.status(400).json({ error: "tarball and wolfYaml are required for runtime wolfd" });
+          return;
+        }
+        const updated = await manager.updateWolfdRelease(
+          config.id,
+          body.tarball as string,
+          body.wolfYaml as string,
+          body.models as string | undefined,
+          body.env as Record<string, string> | undefined,
+        );
+        res.json({ wolf: updated });
+        return;
+      }
+
       // Detect pi-durable format: {runtime, harness, wolfYaml, agentsMd, models, extensions}
       if (body.runtime === "pi-durable" && body.harness) {
         const updated = await manager.updatePiDurableBundle(

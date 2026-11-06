@@ -146,6 +146,9 @@ export {
   readDistillRecord,
   DistillOutputSchema,
   existingFor,
+  subscribedDomain,
+  envDomains,
+  resetNoDomainsWarning,
   type PromoteTopic,
   type PromoteOptions,
   type PromoteStats,
@@ -182,7 +185,7 @@ export {
   type WorkRecordOutcome,
   type ConsolidateWorkOptions,
 } from "./work-record.js";
-export { scanSecrets, type SecretScan } from "./work/secrets.js";
+export { scanSecrets, scanSecretsForCrawl, looksSecretForCrawl, type SecretScan } from "./work/secrets.js";
 
 // Resend (Dewey rebuild from scratch)
 export { readResendSet, resendDenTopics, type ResendSet } from "./resend.js";

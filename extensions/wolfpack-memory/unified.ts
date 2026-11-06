@@ -38,7 +38,7 @@ import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
-import { assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
+import { DEFAULT_CONSOLIDATION_INTERVAL_MS, parseConsolidationInterval, effectiveConsolidationInterval, assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -125,13 +125,6 @@ const COMMIT_WAITS_MS = [10, 20, 40, 80, 160, 160, 160, 160, 160];
 /** Pi's defaults (extensions/wolfpack-memory/index.ts CONSOLIDATE_AT / POOL_TARGET). */
 export const DEFAULT_CONSOLIDATE_AT = 20000;
 export const DEFAULT_POOL_TARGET = 10000;
-
-/** "30s" | "15m" | "4h" | "1d" -> ms; anything else falls back to 4h. */
-function parseInterval(interval: string): number {
-  const m = interval.match(/^(\d+)(s|m|h|d)$/);
-  if (!m) return 4 * 3600_000;
-  return Number(m[1]) * { s: 1000, m: 60_000, h: 3600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
-}
 
 // ─── Watermarks ────────────────────────────────────────────────────────────
 
@@ -309,6 +302,18 @@ function renderSplitResult(
   return lines.join("\n");
 }
 
+/** The pool's raw lines (append order); [] when absent or unreadable. */
+async function readPoolLines(wolfDen: string): Promise<string[]> {
+  try {
+    return (await readFile(join(wolfDen, ".memory", "pool", "observations.jsonl"), "utf-8")).split("\n").filter((l) => l.trim());
+  } catch {
+    return [];
+  }
+}
+
+/** Dens whose consolidation timer is owned by an extension instance: one timer per den (see startTimer). */
+const timerOwners = new Map<string, symbol>();
+
 async function getPoolStats(wolfDen: string): Promise<{ count: number; tokens: number }> {
   const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
   if (!existsSync(poolFile)) return { count: 0, tokens: 0 };
@@ -355,6 +360,13 @@ export default function createMemoryExtension(
   const consolidationThreshold = consolidation?.threshold ?? DEFAULT_CONSOLIDATE_AT;
   const poolTarget = consolidation?.poolTarget ?? DEFAULT_POOL_TARGET;
   const consolidationTrigger = consolidation?.trigger ?? "hybrid";
+  // A bad interval string warns once and falls back to 4h; it never stops the wolf starting.
+  const intervalText = consolidation?.interval ?? "4h";
+  const parsedMs = parseConsolidationInterval(intervalText);
+  if (parsedMs === undefined && (consolidationTrigger === "timer" || consolidationTrigger === "hybrid")) {
+    console.warn(`[memory] invalid memory.consolidation.interval "${intervalText}": using ${effectiveConsolidationInterval(undefined)}`);
+  }
+  const timerMs = config.intervalMs ?? parsedMs ?? DEFAULT_CONSOLIDATION_INTERVAL_MS;
 
   // Which tier each memory step uses (fixed map, STEP_TIERS in @wolfpack/engine; wolf.yaml `tiers:` overrides apply):
   //   fast : classify (observer), contradict, classifyToSection, matchSubject, confirmSubject, sectionSummary, labelSection, splitSection
@@ -484,7 +496,7 @@ export default function createMemoryExtension(
       await writeWatermark(ctx.wolfDen, ctx.conversationId, last ? next : { lastEntryId: at });
     }
 
-    startTimer(ctx);
+    startTimer(ctx.conversation as Parameters<typeof startTimer>[0]);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
   }
 
@@ -529,18 +541,31 @@ export default function createMemoryExtension(
 
   // ─── Interval timer (trigger: timer | hybrid) ─────────────────────────────
   let timer: ReturnType<typeof setInterval> | undefined;
+  const owner = Symbol(wolfDen);
+  /** Set by lifecycle.stop: an instance stopped before the engine attached must never start a timer. */
+  let stopped = false;
   const stopTimer = () => {
     if (timer) clearInterval(timer);
     timer = undefined;
+    if (timerOwners.get(wolfDen) === owner) timerOwners.delete(wolfDen);
   };
-  /** Started on the first observation (durable has no extension start hook); cleared when the engine closes. */
-  function startTimer(ctx: HookContext): void {
-    if (timer || ctx.conversation?.hostConsolidationTimer || (consolidationTrigger !== "timer" && consolidationTrigger !== "hybrid")) return;
-    const ms = config.intervalMs ?? parseInterval(consolidation?.interval ?? "4h");
+  /** Pool size at the last successful consolidation: a tick with the same pool has nothing new to save. */
+  let lastSavedPool: string | undefined;
+  const poolSig = (s: { count: number; tokens: number }) => `${s.count}:${s.tokens}`;
+  /**
+   * Started once at boot (onEngineReady), with a first-observation fallback for hosts that never call it; idempotent,
+   * so there is exactly one per instance. One instance per den is the rule: a process-wide registry (timerOwners) lets
+   * only the first live instance on a den run a timer, so duplicate instances built before attach add none. Needs a
+   * host (for onEngineClose); without one no timer starts. Cleared when the engine closes or the instance stops.
+   */
+  function startTimer(host: { hostConsolidationTimer?: boolean; onEngineClose?(fn: () => void): void } | undefined): void {
+    if (!host || stopped || timer || timerOwners.has(wolfDen) || host.hostConsolidationTimer || (consolidationTrigger !== "timer" && consolidationTrigger !== "hybrid")) return;
     timer = setInterval(() => {
       void (async () => {
         try {
-          if (consolidating || (await getPoolStats(wolfDen)).count === 0) return;
+          if (consolidating) return;
+          const stats = await getPoolStats(wolfDen);
+          if (stats.count === 0 || poolSig(stats) === lastSavedPool) return; // empty, or nothing new since the last save
           if (!actions.promoteEnabled) {
             console.log("[memory] Timer-triggered consolidation (session topics only)");
             await actions.consolidate();
@@ -553,9 +578,10 @@ export default function createMemoryExtension(
           console.error("[memory] timer error:", err instanceof Error ? err.message : err);
         }
       })();
-    }, ms);
+    }, timerMs);
     timer.unref?.();
-    ctx.conversation?.onEngineClose?.(stopTimer);
+    timerOwners.set(wolfDen, owner);
+    host.onEngineClose?.(stopTimer);
   }
 
   function maybeConsolidate(ctx: HookContext): Promise<void> {
@@ -576,7 +602,22 @@ export default function createMemoryExtension(
   }
 
   /** Pool → session topics (pi's consolidation), unserialized: callers hold the queue. poolTarget undefined: the whole pool. */
-  function consolidateInner(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+  async function consolidateInner(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+    const before = new Set(await readPoolLines(wolfDen));
+    const result = await consolidatePoolRaw(opts);
+    // Marker rule: remember the post-run pool (what the run left behind) as "already saved", unless a line appeared
+    // that was not in the pre-run pool: an observation arrived mid-run and is unsaved, so clear the marker and let the
+    // next tick (the only trigger under `timer`) pick it up. A stats failure must not fail a save that succeeded.
+    try {
+      const after = await readPoolLines(wolfDen);
+      const arrived = after.some((l) => !before.has(l));
+      lastSavedPool = arrived ? undefined : poolSig(await getPoolStats(wolfDen));
+    } catch {
+      lastSavedPool = undefined;
+    }
+    return result; // a failed run threw above, leaving the old marker
+  }
+  function consolidatePoolRaw(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
     return consolidatePool({
       wolfDen,
       wolfName,
@@ -641,6 +682,8 @@ export default function createMemoryExtension(
               engine: getEngine(),
               kbRoots,
               defaultDomain,
+              domains,
+              env: context.env ?? process.env,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
               onEmit: mem.contribution,
               onArchive: mem.topicArchived,
@@ -667,7 +710,9 @@ export default function createMemoryExtension(
     name: "wolfpack-memory",
     runtimes: ["pi", "pi-durable"],
 
-    lifecycle: { stop: () => { stopTimer(); unregisterMemoryActions(wolfDen, actions); mem.dispose(); } },
+    onEngineReady: (info) => startTimer(info),
+
+    lifecycle: { stop: () => { stopped = true; stopTimer(); unregisterMemoryActions(wolfDen, actions); mem.dispose(); } },
 
     tools: [
       defineTool({

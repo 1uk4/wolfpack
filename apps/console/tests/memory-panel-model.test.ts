@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary,
+	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary, triggerText,
 	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
@@ -80,6 +80,14 @@ describe("memory panel model", () => {
 		assert.equal(poolSummary({ count: 1, tokens: 1, consolidateAtTokens: 2, poolTarget: 0, trigger: "manual" })?.observationsText, "1 observation");
 		assert.equal(poolSummary(null), null);
 		assert.equal(poolSummary({ count: 0, tokens: 5, consolidateAtTokens: 0, poolTarget: 0, trigger: "manual" })?.fill, 0);
+	});
+	it("triggerText shows the effective trigger and interval", () => {
+		const base = { consolidateAtTokens: 20000 };
+		assert.equal(triggerText({ ...base, trigger: "hybrid", interval: "2h" }), "hybrid: at 20,000 tokens or every 2h");
+		assert.equal(triggerText({ ...base, trigger: "hybrid" }), "hybrid: at 20,000 tokens or every 4h");
+		assert.equal(triggerText({ ...base, trigger: "timer", interval: "30m" }), "timer: every 30m");
+		assert.equal(triggerText({ ...base, trigger: "threshold" }), "threshold: at 20,000 tokens");
+		assert.equal(triggerText({ ...base, trigger: "manual" }), "manual: only on Promote");
 	});
 	it("destination labels", () => {
 		assert.equal(destinationLabel({ kind: "den", topicId: "t1" }), "den topic t1");

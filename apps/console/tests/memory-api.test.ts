@@ -89,6 +89,59 @@ describe("memory API: pass-through", () => {
 	});
 });
 
+describe("memory API: kbGraphAuto source selection", () => {
+	it("relay mode reads the graph from the hub, no KB wolf needed", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				kbFromHub: true,
+				listWolves: async () => [],
+				getHubKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [{ id: "dom:a" }] }),
+				getKbGraph: async () => assert.fail("must not use a wolf"),
+			}),
+		);
+		const res = await api.kbGraphAuto(new URLSearchParams("domain=a&archivedWork=1&denTopics=1"));
+		assert.equal(res.status, 200);
+		assert.deepEqual(calls[0], [{ domain: "a", archivedWork: true }]);
+		assert.equal(((await res.json()) as { hubCopy?: boolean }).hubCopy, true);
+	});
+
+	it("local mode is unchanged: the librarian / a kbReadable wolf serves it; none = 409", async () => {
+		const calls: unknown[][] = [];
+		const wolves = [{ name: "mir", status: "online", kbReadable: true }, { name: "lib", status: "online", librarian: true }];
+		const api = createMemoryApi(
+			stub({
+				listWolves: async () => wolves,
+				getKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [] }),
+				getHubKbGraph: async () => assert.fail("must not use the hub"),
+			}),
+		);
+		assert.equal((await api.kbGraphAuto(new URLSearchParams("denTopics=1"))).status, 200);
+		assert.deepEqual(calls[0], ["lib", { denTopics: true }]);
+		const none = createMemoryApi(stub({ listWolves: async () => [{ name: "x", status: "online" }], getKbGraph: async () => ({}) }));
+		const r = await none.kbGraphAuto(new URLSearchParams());
+		assert.equal(r.status, 409);
+		assert.equal((await body(r)).code, "kb_unavailable");
+	});
+});
+
+describe("memory API: kbEntryAuto source selection", () => {
+	it("relay mode reads the entry from the hub", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ kbFromHub: true, listWolves: async () => [], getHubKbEntry: async (...a: unknown[]) => (calls.push(a), { id: "e1" }), getKbEntry: async () => assert.fail("no wolf") }));
+		assert.equal((await api.kbEntryAuto("e1")).status, 200);
+		assert.deepEqual(calls[0], ["e1"]);
+	});
+	it("local mode is unchanged: the librarian serves it; none = 409", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWolves: async () => [{ name: "lib", status: "online", librarian: true }], getKbEntry: async (...a: unknown[]) => (calls.push(a), { id: "e1" }), getHubKbEntry: async () => assert.fail("no hub") }));
+		assert.equal((await api.kbEntryAuto("e1")).status, 200);
+		assert.deepEqual(calls[0], ["lib", "e1"]);
+		const none = createMemoryApi(stub({ listWolves: async () => [], getKbEntry: async () => ({}) }));
+		assert.equal((await none.kbEntryAuto("e1")).status, 409);
+	});
+});
+
 describe("memory API: error mapping", () => {
 	const failing = (err: Error) => {
 		const reject = async () => {

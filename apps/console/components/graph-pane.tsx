@@ -10,7 +10,7 @@
  * fetched lazily when the shown node changes, through a small cache:
  *   work   GET /api/wolves/:wolf/work/:id/record  (plan, Record, log, children,
  *          success criteria) — the same lookup the work page does
- *   entry  GET /api/wolves/:librarian/kb/entries/:id — rendered by the entry
+ *   entry  GET /api/kb/entries/:id — rendered by the entry
  *          reader's body
  *   other  nothing to fetch; a summary from the card
  * The route stepper sits in the pane unchanged (graph-route-nav.tsx); the
@@ -27,7 +27,6 @@ import {
 	clampPaneWidth,
 	featureGraduateState,
 	featureThreadWolves,
-	findKbSource,
 	findLibrarian,
 	paneWork,
 	parsePaneWidth,
@@ -87,10 +86,8 @@ async function loadPaneData(card: NodeCard): Promise<PaneData> {
 		return { kind: "work", item, work: paneWork(item), threadWolves: item.kind === "feature" && !item.container ? featureThreadWolves(wolves) : [] };
 	}
 	if (card.kind === "entry") {
-		const source = findKbSource(wolves)?.name;
-		if (!source) return { kind: "error", message: "The knowledge base is unavailable: no wolf can read it right now." };
-		const res = await fetchKbEntry(source, card.id.slice("ent:".length));
-		if (!res.ok) return { kind: "error", message: res.reason === "not_found" ? "No such entry." : res.message };
+		const res = await fetchKbEntry(card.id.slice("ent:".length));
+		if (!res.ok) return { kind: "error", message: res.reason === "unavailable" ? "The knowledge base is unavailable: no wolf can read it right now." : res.reason === "not_found" ? "No such entry." : res.message };
 		return { kind: "entry", entry: res.data };
 	}
 	return { kind: "none" };

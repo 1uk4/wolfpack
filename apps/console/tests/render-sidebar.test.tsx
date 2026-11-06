@@ -13,7 +13,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SessionRow, timeAgo } from "../components/sidebar.tsx";
+import { SessionRow, WolfBadge, WolfHeaderRow, timeAgo } from "../components/sidebar.tsx";
 import type { ChatListItem } from "../src/core/index.ts";
 
 function item(overrides: Partial<ChatListItem>): ChatListItem {
@@ -151,5 +151,33 @@ describe("timeAgo", () => {
 
 	it("negative drift (clock skew) reads as just now, never a future date", () => {
 		assert.equal(timeAgo("2026-01-02T12:01:00.000Z", now), "just now");
+	});
+});
+
+describe("wolf header badge", () => {
+	it("labels an offline wolf offline and an online wolf online, with an aria-label", () => {
+		const off = renderToStaticMarkup(<WolfBadge wolf={{ name: "hal2", online: false }} />);
+		assert.ok(off.includes("offline") && off.includes('data-online="false"') && off.includes('aria-label="hal2, offline"'));
+		const on = renderToStaticMarkup(<WolfBadge wolf={{ name: "1uk4", online: true }} />);
+		assert.ok(/data-online="true"/.test(on) && /online<\/span>/.test(on) && !/offline/.test(on));
+	});
+	it("renders inside the Home row (the wolf's group header) and nowhere else", () => {
+		const home = renderToStaticMarkup(<SessionRow chat={{ ...item({}), kind: "home" } as never} active={false} wolfStatus={{ name: "w", online: true }} onOpen={() => {}} />);
+		assert.ok(home.includes('data-testid="wolf-badge"') && home.includes("orchestrator"));
+		const feature = renderToStaticMarkup(<SessionRow chat={item({})} active={false} wolfStatus={{ name: "w", online: true }} onOpen={() => {}} />);
+		assert.ok(!feature.includes("wolf-badge"));
+	});
+	it("a wolf with no threads gets a header with its badge; offline is greyed", () => {
+		const html = renderToStaticMarkup(<WolfHeaderRow wolf={{ name: "hal", online: false }} />);
+		assert.ok(html.includes('data-testid="wolf-header"') && html.includes("hal") && html.includes("orchestrator") && html.includes("offline") && html.includes("opacity-50"));
+		assert.ok(!html.includes("wolf-roster"));
+	});
+});
+
+describe("SessionRow offline", () => {
+	it("greys a held row of an offline wolf and labels it offline", () => {
+		const html = renderToStaticMarkup(<SessionRow chat={item({})} active={false} offline onOpen={() => {}} />);
+		assert.ok(html.includes("opacity-50") && html.includes('title="offline"') && html.includes("(offline)"));
+		assert.ok(!render(item({})).includes("opacity-50"));
 	});
 });

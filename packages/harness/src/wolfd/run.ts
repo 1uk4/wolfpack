@@ -2,7 +2,7 @@
  * startWolf: boot ONE wolf process serving /v1 on 127.0.0.1.
  *
  * Sequence: load wolf.yaml -> sandbox redirect -> resolve the main-tier model (WOLFPACK_MODELS_FILE / models.json beside the wolf /
- * pack config; subscription transport builds the claude-bridge provider) -> wolf.yaml `extensions` via the harness loader
+ * pack config; subscription transport builds the claude-stateless provider) -> wolf.yaml `extensions` via the harness loader
  * (same as createWolfHarness, on the redirected den/env) -> open the engine store at `<den>/session.sqlite` (backup on) ->
  * root conversation (= the home thread; feature threads are further ownerless conversations) -> bring its agent state in line with config + project context ->
  * attach the server's watcher -> engine.resume() -> listen.
@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { effectiveConsolidationInterval, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   objectsExtension,
   openWolfEngine,
@@ -45,6 +45,7 @@ import { startLibrarianSweep, startSweepTimer } from "../sweep-host.js";
 import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
+import { hubKbFromEnv, startHubKb, type RunningHubKb } from "./hub-kb.js";
 import { prepareSocketPath } from "./socket.js";
 import { loadHomeSettings, loadThreads, setThreadWorkspace, settingsOfSaved } from "./threads.js";
 
@@ -95,6 +96,8 @@ export interface RunningWolf {
   kbRoots?: KbRoots;
   /** Set when wolf.yaml has `sandbox`: the redirect in force and the local Work server behind WORK_ENDPOINT. */
   sandbox?: RunningSandbox;
+  /** Set when WOLFPACK_HUB_KB=1: the hub KB mirror sync + contribution feeder. */
+  hubKb?: RunningHubKb;
   close(): Promise<void>;
 }
 
@@ -118,10 +121,29 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   // One sandboxed wolf per process (startSandbox enforces it).
   // The den env always comes from the config: a sandbox's redirect, else the wolf's own den. An inherited WOLF_DEN
   // (a stale launcher env) must never win: engine usage logs and memory pools read it.
-  const denEnv: Record<string, string> = { ...(sandbox ? sandbox.env : {}), WOLF_DEN: config.den, WOLF_NAME: config.identity.name };
+  // Hub-backed KB (opt-in WOLFPACK_HUB_KB=1, VPS wolves): KB_BASE = the hub-synced mirror in the wolf's home, KB_OPS = its local inbox root.
+  const hubKb = hubKbFromEnv(config, env);
+  const denEnv: Record<string, string> = {
+    ...(sandbox ? sandbox.env : {}),
+    ...(hubKb ? { KB_BASE: env.KB_BASE || hubKb.mirrorDir, KB_OPS: env.KB_OPS || hubKb.kbOps } : {}),
+    WOLF_DEN: config.den,
+    WOLF_NAME: config.identity.name,
+    // The wolf's subscriptions, overriding any inherited value: memory promote maps every contribution's domain_hint into this list.
+    WOLF_DOMAINS: config.identity.domains.join(","),
+  };
   const restoreEnv = !opts.env ? patchProcessEnv(denEnv) : () => {};
   try {
-    return await startConfigured(opts, config, { ...env, ...denEnv }, log, sandbox, restoreEnv);
+    const running = await startConfigured(opts, config, { ...env, ...denEnv }, log, sandbox, restoreEnv);
+    if (!hubKb) return running;
+    let hub: RunningHubKb;
+    try {
+      hub = startHubKb(hubKb, config, env, log);
+    } catch (e) {
+      await running.close().catch(() => {});
+      throw e;
+    }
+    const close = running.close;
+    return { ...running, hubKb: hub, close: async () => { hub.stop(); await close(); } };
   } catch (e) {
     restoreEnv();
     await sandbox?.close().catch(() => {});
@@ -219,7 +241,16 @@ async function startConfigured(
     const withTier = (base: ConfigureOptions, tier: ThreadTier): ConfigureOptions => (tier === "main" ? base : { ...base, ...modelFor(tier) });
     const homeTier = loadHomeSettings(config.den).tier;
     const conversation = await engine.conversations.root(desired);
-    await reconcile(conversation, withTier(desired, homeTier));
+    // Best-effort cleanup: it must never fail startup or a thread open.
+    const dropProviderSession = (conv: EngineConversation) => async () => {
+      try {
+        const sessionId = await engine.conversations.providerSessionId(conv.id);
+        if (sessionId) (opts.modelRelease ?? wolfModels.forget)(sessionId);
+      } catch (e) {
+        log(`server error: could not drop the provider session of ${conv.id} after an instructions change: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+    await reconcile(conversation, withTier(desired, homeTier), dropProviderSession(conversation));
 
     const stallEnv = Number(env.WOLFPACK_STALL_TIMEOUT_MS);
     const server = new WolfServer({
@@ -242,7 +273,7 @@ async function startConfigured(
             workspace = undefined;
           }
           const want = workspace ? { ...desired, cwd: workspace.path, instructions: contextFor(workspace.path).instructions } : desired;
-          if (conv) await reconcile(conv, withTier(want, saved ? settingsOfSaved(saved).tier : "main"));
+          if (conv) await reconcile(conv, withTier(want, saved ? settingsOfSaved(saved).tier : "main"), dropProviderSession(conv));
           return conv;
         },
         setTier: (conv, tier) => conv.configure(modelFor(tier)),
@@ -279,7 +310,7 @@ async function startConfigured(
       memoryConfig: {
         sandbox: !!config.sandbox,
         disabled: config.extensionConfig.memory?.enabled === false,
-        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger },
+        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger, interval: effectiveConsolidationInterval(config.memory.consolidation.interval) },
       },
       work: { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN },
       onError: (e) => log(`server error: ${String(e)}`),
@@ -377,7 +408,7 @@ export function withExtensionTools(configured: readonly string[], registered: re
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */
-async function reconcile(conv: EngineConversation, want: ConfigureOptions): Promise<void> {
+async function reconcile(conv: EngineConversation, want: ConfigureOptions, onInstructionsChanged?: () => Promise<void>): Promise<void> {
   const w = await conv.watch();
   const have = w.snapshot.agent;
   await w.stop();
@@ -391,6 +422,8 @@ async function reconcile(conv: EngineConversation, want: ConfigureOptions): Prom
     (have.thinkingLevel ?? undefined) === (want.thinkingLevel ?? undefined) &&
     sameTools;
   if (!same) await conv.configure(want);
+  // A recorded (snapshotted) Claude system prompt would outlive the edit: drop the provider session so the next round rebuilds it.
+  if (have.instructions !== want.instructions) await onInstructionsChanged?.();
 }
 
 /** The `workspaces:` block of wolf.yaml (its root); the engine's config loader does not model it. */

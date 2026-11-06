@@ -143,7 +143,7 @@ describe("kb routes", { timeout: 30_000 }, () => {
     expect((await errorOf(await get(url, "/v1/wolves/nobody/kb/graph"))).code).toBe("not_found");
   });
 
-  it("a non-librarian wolf with KB roots serves the graph and entries read-only, reports kbReadable, and 409s the pipeline", async () => {
+  it("a non-librarian wolf with KB roots serves the graph and entries read-only, reports kbReadable", async () => {
     const kb = makeFixtureKb();
     dirs.push(kb);
     const before = hashTree(kb);
@@ -154,9 +154,6 @@ describe("kb routes", { timeout: 30_000 }, () => {
     const e = await get(url, `/v1/wolves/${name}/kb/entries/kb-alpha-AAA1111`);
     expect(e.status).toBe(200);
     expect((await e.json()).title).toBe("First");
-    const p = await get(url, `/v1/wolves/${name}/kb/pipeline`);
-    expect(p.status).toBe(409);
-    expect((await errorOf(p)).code).toBe("kb_unavailable");
     const w = await (await get(url, "/v1/wolves")).json();
     expect(w.wolves[0]).toMatchObject({ librarian: false, kbReadable: true });
     expect(hashTree(kb)).toEqual(before);

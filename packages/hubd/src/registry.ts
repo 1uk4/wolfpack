@@ -137,6 +137,8 @@ export interface Registry {
   /** Worker link: a wolf appeared on `hostId`. */
   addWolf(hostId: string, wolf: LinkWolf): Promise<"ok" | "retired" | "rejected">;
   /** Worker link: a wolf left `hostId`: its host is cleared, the entry is kept. */
+  /** KB capability flags last reported by the wolf's worker over the link (in memory only; never persisted, never operator-set). Absent = none claimed. */
+  kbFlags(name: string): { librarian: boolean; kbReadable: boolean };
   removeWolf(hostId: string, name: string): Promise<void>;
   /** Called after every registry change that reached memory (grants may have moved). Returns an unsubscribe. */
   onChange(l: () => void): () => void;
@@ -238,6 +240,7 @@ export function createRegistry(opts: RegistryOptions): Registry {
       log(`hubd: link ${hostId}: wolf ${q(w.name)} belongs to host ${q(existing.host)}; refused`);
       return "rejected";
     }
+    reportedFlags.set(w.name, { librarian: w.librarian === true, kbReadable: w.kbReadable === true || w.librarian === true });
     existing.host = hostId; // operator fields (domains, tiers, workspace, tools, status) are never written by the worker
     const reported = [...new Set(w.domains)].sort();
     const granted = [...new Set(existing.domains)].sort();
@@ -247,6 +250,7 @@ export function createRegistry(opts: RegistryOptions): Registry {
     }
     return "ok";
   }
+  const reportedFlags = new Map<string, { librarian: boolean; kbReadable: boolean }>();
   const ensureHost = (d: RegistryFile, hostId: string) => {
     if (!d.hosts.some((h) => h.name === hostId)) d.hosts.push({ name: hostId });
   };
@@ -266,7 +270,7 @@ export function createRegistry(opts: RegistryOptions): Registry {
           else if (r === "rejected") rejected.push(w.name);
         }
         // Wolves the hub had on this host but the hello omits: host cleared, entry kept.
-        for (const w of d.wolves) if (w.host === hostId && !names.has(w.name)) delete w.host;
+        for (const w of d.wolves) if (w.host === hostId && !names.has(w.name)) { delete w.host; reportedFlags.delete(w.name); }
         return { retired, rejected, domainMismatch };
       }, true);
     },
@@ -278,8 +282,9 @@ export function createRegistry(opts: RegistryOptions): Registry {
     removeWolf: (hostId, name) =>
       mutate((d) => {
         const w = d.wolves.find((x) => x.name === name);
-        if (w && w.host === hostId) delete w.host;
+        if (w && w.host === hostId) { delete w.host; reportedFlags.delete(name); }
       }, true),
+    kbFlags: (name) => reportedFlags.get(name) ?? { librarian: false, kbReadable: false },
     list: (c) => items(c).map((x) => strip2(c, x)),
     get(c, name) {
       const x = find(c, name);
@@ -387,8 +392,18 @@ export function createRegistry(opts: RegistryOptions): Registry {
  * Release every claim `wolf` holds: one work.unbound per item with boundBy === wolf, via `unclaimItem` (operator actor).
  * Run it INSIDE the hub work writer queue (`writeWork(actor, () => releaseWolfClaims(roots, wolf))`). Returns the item ids.
  */
-export function releaseWolfClaims(roots: KbRoots, wolf: string): string[] {
+export function releaseWolfClaims(roots: KbRoots, wolf: string, unclaim: typeof unclaimItem = unclaimItem): string[] {
   const held = [...loadWorkState(roots).values()].filter((i) => i.boundBy === wolf).map((i) => i.id as string);
-  for (const id of held) unclaimItem(roots, id, { id: "system", kind: "operator" });
-  return held;
+  const released: string[] = [];
+  for (const id of held) {
+    // One failing item must not leave the remaining claims held: log and continue (unclaimItem is ledger-first and tolerates a read-only .md).
+    try {
+      unclaim(roots, id, { id: "system", kind: "operator" });
+      released.push(id);
+    } catch (e) {
+      // A non-filesystem error may have appended work.unbound before throwing: the id is reported as failed though the ledger may show it released.
+      console.error(`hubd: could not release ${wolf}'s claim on ${id} (reported as not released; check the ledger):`, e);
+    }
+  }
+  return released;
 }

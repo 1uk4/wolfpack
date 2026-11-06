@@ -159,6 +159,30 @@ describe("subagent modal", () => {
 		assert.equal(f.calls.aborts, 1);
 	});
 
+	it("running: empty field shows one Stop button (no Steer); typing swaps it to Steer; clearing swaps back", async () => {
+		await mount(fake({}));
+		assert.equal(qa('[data-testid="subagent-stop"]').length, 1);
+		assert.equal(q('[data-testid="subagent-send"]'), null);
+		assert.equal(q('[data-testid="subagent-stop"]')!.getAttribute("aria-label"), "Stop subagent");
+		const ta = q('[data-testid="subagent-input"]') as HTMLTextAreaElement;
+		await type(ta, "   ");
+		assert.ok(q('[data-testid="subagent-stop"]'));
+		await type(ta, "go");
+		assert.equal(q('[data-testid="subagent-stop"]'), null);
+		assert.equal(q('[data-testid="subagent-send"]')!.textContent, "Steer");
+		await type(ta, "");
+		assert.ok(q('[data-testid="subagent-stop"]'));
+		assert.equal(q('[data-testid="subagent-send"]'), null);
+	});
+
+	it("not running: empty field offers a disabled Resume, never Stop", async () => {
+		await mount(fake({ state: "done", finishedAt: new Date().toISOString() }));
+		assert.equal(q('[data-testid="subagent-stop"]'), null);
+		const b = q('[data-testid="subagent-send"]') as HTMLButtonElement;
+		assert.equal(b.textContent, "Resume");
+		assert.equal(b.disabled, true);
+	});
+
 	it("running: the message field steers", async () => {
 		const f = fake({});
 		await mount(f);
@@ -333,10 +357,10 @@ describe("subagent modal", () => {
 		assert.equal(closed.length, 2);
 	});
 
-	it("the header row is title, then Stop, then close", async () => {
+	it("the header row is title, then close (the switch wraps below on a phone)", async () => {
 		await mount(fake({}));
 		const row = q('[data-testid="subagent-title"]')!.parentElement!;
-		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-meta", "subagent-stop", "subagent-modal-close"]);
+		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-meta", "subagent-modal-close", "subagent-switch"]);
 		assert.match(q('[data-testid="subagent-title"]')!.className, /truncate/);
 		assert.match(q('[data-testid="subagent-meta"]')!.className, /flex-wrap/);
 		assert.match(q('[data-testid="subagent-modal-close"]')!.className, /shrink-0/);
@@ -364,6 +388,23 @@ describe("subagent modal", () => {
 		assert.ok(right.contains(q('[data-testid="subagent-input"]')));
 		assert.ok(!ledger.contains(q('[data-testid="subagent-input"]')));
 		assert.ok(q('[data-testid="subagent-ledger-scroll"]') && q('[data-testid="subagent-transcript-scroll"]'));
+	});
+
+	it("the Ledger | Transcript switch is a tablist at the top: Transcript by default, toggling swaps the visible pane", async () => {
+		await mount(fake({}));
+		const sw = q('[data-testid="subagent-switch"]')!;
+		assert.equal(sw.getAttribute("role"), "tablist");
+		assert.ok(q('[data-testid="subagent-header"]')!.contains(sw));
+		const tl = q('[data-testid="subagent-tab-ledger"]')!;
+		const tt = q('[data-testid="subagent-tab-transcript"]')!;
+		assert.equal(tt.getAttribute("aria-selected"), "true");
+		assert.equal(tl.getAttribute("aria-selected"), "false");
+		assert.match(q('[data-testid="subagent-ledger"]')!.className, /\bhidden\b/);
+		await act(async () => void (tl as HTMLElement).click());
+		assert.equal(tl.getAttribute("aria-selected"), "true");
+		assert.equal(tt.getAttribute("aria-selected"), "false");
+		assert.doesNotMatch(q('[data-testid="subagent-ledger"]')!.className, /\bhidden\b/);
+		assert.match(q('[data-testid="subagent-transcript-column"]')!.className, /\bhidden\b/);
 	});
 
 	it("an empty ledger still shows the column; a ledger entry expands on click", async () => {

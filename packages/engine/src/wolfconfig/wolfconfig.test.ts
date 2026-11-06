@@ -41,6 +41,10 @@ describe("loadWolfConfig", () => {
     expect(extra.config.prompts).toEqual({ structuredOutput: "custom" });
   });
 
+  it("memory.hubKb: true loads as config.memory.hubKb; absent leaves it unset", () => {
+    expect(loadWolfConfig(wolf("hk", "name: hk\nextensions: [memory]\nmemory:\n  live: true\n  hubKb: true\n"), { home: "/h" }).config.memory.hubKb).toBe(true);
+    expect(loadWolfConfig(wolf("nk", "name: nk\nextensions: [memory]\nmemory:\n  live: true\n"), { home: "/h" }).config.memory.hubKb).toBeUndefined();
+  });
   it("warns when memory settings exist but the memory extension is not listed", () => {
     const warn = (yaml: string) => loadWolfConfig(wolf("w", yaml), { home: "/h" }).warnings.filter((w) => w.includes("memory configured but not in extensions: memory is off"));
     expect(warn("name: w\nmemory:\n  defaultDomain: x\ndomains: [x]\n")).toHaveLength(1);
@@ -168,18 +172,18 @@ describe("resolveWolfModel", () => {
     expect(r).toMatchObject({ modelId: "claude-sonnet-5-5", thinking: "low", overridden: true });
   });
 
-  it("resolves subscription transport to the claude-bridge provider", () => {
+  it("resolves subscription transport to the claude-stateless provider", () => {
     const sub = resolveModelTable({ pack: STARTER_PACK_MODELS, location: "local" });
     expect(sub.transport).toBe("subscription");
     expect(resolveWolfModel(cfg(), "main", sub)).toMatchObject({
       transport: "subscription",
-      provider: "claude-bridge",
-      piModel: "claude-bridge/claude-opus-5-5",
+      provider: "claude-stateless",
+      piModel: "claude-stateless/claude-opus-5-5",
       modelId: "claude-opus-5-5",
       overridden: false,
     });
     const over = resolveWolfModel(cfg({ main: { model: "claude-haiku-5-5" } }), "main", sub);
-    expect(over).toMatchObject({ provider: "claude-bridge", piModel: "claude-bridge/claude-haiku-5-5", overridden: true });
+    expect(over).toMatchObject({ provider: "claude-stateless", piModel: "claude-stateless/claude-haiku-5-5", overridden: true });
   });
 
   it("rejects unknown transports", () => {
@@ -321,9 +325,9 @@ describe("wolf.yaml models:", () => {
       transport: "subscription",
       transportSource: "pack",
       tiers: {
-        main: tier("claude-opus-5-5", "pack", "claude-bridge"),
+        main: tier("claude-opus-5-5", "pack", "claude-stateless"),
         smart: tier("claude-sonnet-5-5", "wolf", "claude-stateless"),
-        fast: tier("claude-haiku-5-5", "pack", "claude-bridge"),
+        fast: tier("claude-haiku-5-5", "pack", "claude-stateless"),
       },
       steps: {
         classify: fast, consolidate: smart, distill: smart, workRecord: smart, produce: smart, contradict: fast,

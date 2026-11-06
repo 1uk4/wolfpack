@@ -5,19 +5,19 @@ Each tier in `models.json` carries `{ provider, model }` (`piModel` is `<provide
 
 ```json
 { "tiers": {
-    "main":  { "model": "claude-opus-5-5",   "piProvider": "claude-bridge", "piModel": "claude-bridge/claude-opus-5-5" },
-    "smart": { "model": "claude-sonnet-5-5", "piProvider": "claude-bridge", "piModel": "claude-bridge/claude-sonnet-5-5" },
+    "main":  { "model": "claude-opus-5-5",   "piProvider": "claude-stateless", "piModel": "claude-stateless/claude-opus-5-5" },
+    "smart": { "model": "claude-sonnet-5-5", "piProvider": "claude-stateless", "piModel": "claude-stateless/claude-sonnet-5-5" },
     "fast":  { "model": "claude-haiku-5-5",  "piProvider": "anthropic",     "piModel": "anthropic/claude-haiku-5-5" } } }
 ```
 
 Naming: in config INPUT (`config.yaml` / `wolf.yaml` `models.<tier>.provider`) `provider` is the pi provider. In the resolved
-`models.json`, `provider` is the ENGINE provider (`claude-bridge` → `claude-agent-sdk`) and `piProvider` is the pi provider.
+`models.json`, `provider` is the ENGINE provider (`claude-stateless` → `claude-agent-sdk`) and `piProvider` is the pi provider.
 
 Author it in `~/.wolfpack/config.yaml` (or `wolf.yaml`): `models: { fast: { provider: anthropic, model: claude-haiku-5-5 } }`.
-A tier without `provider` takes the legacy `transport` default (`subscription` → claude-bridge, `api` → anthropic), so old
+A tier without `provider` takes the legacy `transport` default (`subscription` → claude-stateless, `api` → anthropic), so old
 configs and old `models.json` files (no `piProvider`) keep working. Keys come from `~/.wolfpack/.env`.
 
-Only the providers actually named are built: a config with no `claude-bridge` tier never loads the bridge.
+Only the providers actually named are built: a config with no `claude-stateless` tier never loads it.
 
 ## Adding a provider (OpenRouter example)
 
@@ -35,53 +35,24 @@ Only the providers actually named are built: a config with no `claude-bridge` ti
 
 This is one map entry plus config for the main and subagent (pi-durable) paths. Engine steps (memory, consolidation,
 KB sweep, librarian) read `smart` / `fast` through the engine adapters, which exist only for anthropic and
-claude-bridge: `resolveModelTable` refuses any other provider on those two tiers, so only `main` can use a new provider today.
+the Agent SDK providers: `resolveModelTable` refuses any other provider on those two tiers, so only `main` can use a new provider today.
 
 A den may hold stored model refs to providers a wolf no longer uses; those register lookup-only (resolvable, never served).
 
 Subagent and memory paths do not require thinking or prompt caching: thinking is only passed when a tier sets it.
 
-## Rolling out `claude-stateless` (the stateless Claude bridge)
+## `claude-stateless` (the subscription provider)
 
-`claude-stateless` (`providers/claude-stateless.ts`) is the same Max-subscription transport as `claude-bridge`, but each
-model round is one short-lived Agent SDK query over a resumable session file instead of a parked child. Both stay
-installed; `claude-bridge` stays the default. It needs `CLAUDE_CODE_OAUTH_TOKEN` like claude-bridge. State lives in a
-state dir next to the den, NOT in it (the den is Syncthing-synced on VPS wolves): `<dirname(WOLF_DEN)>/claude-stateless/<basename(WOLF_DEN)>/`
-holds `sessions/` (session files, the fixed CLI cwd) and `debug.log` (JSON lines, always on). wolfd sets `WOLF_DEN`; the
-factory throws without it. It reuses claude-bridge's model table (same ids).
+`claude-stateless` (`providers/claude-stateless.ts`) is the default Max-subscription provider for every tier. Each model
+round is one short-lived Agent SDK query over a resumable session file (no parked child). It needs
+`CLAUDE_CODE_OAUTH_TOKEN`. State lives in a state dir next to the den, NOT in it (the den is Syncthing-synced on VPS wolves):
+`<dirname(WOLF_DEN)>/claude-stateless/<basename(WOLF_DEN)>/` holds `sessions/` (session files, the fixed CLI cwd) and
+`debug.log` (JSON lines, always on). wolfd sets `WOLF_DEN`; the factory throws without it. The model table is pi-ai's
+anthropic catalog (no dated ids, zero cost, 1M context only for ids measured to serve it), built in `claude-stateless.ts`.
 
-> The dependency `pi-claude-bridge-stateless` is a LOCAL git ref (`git+file:///…/workspaces/pi-claude-bridge#stateless-core`,
-> commit pinned in the lockfile, dist built by the fork's `prepare`). It works on this machine only: it must become a pushed
-> `github:` ref before any VPS deploy.
+Engine steps (memory, consolidation, KB sweep, librarian) reach it through the `claude-agent-sdk` adapter.
 
-**Who uses which tier.** Subagents take their tier from the agent profile's `model:` frontmatter, else the `model` argument
-of the spawn call, else **`smart`** (`subagents.ts`: `params.model ?? def.model ?? "smart"`). Nothing is subagent-only:
-`smart` is also what engine steps (memory, consolidation, KB sweep) and a thread's "smart" tier switch use. Engine steps
-reach `claude-stateless` through the `claude-agent-sdk` adapter (the engine maps the id like claude-bridge), so for them
-nothing changes. The smallest change is therefore to move **`smart`** only.
-
-**Step 1: subagents on claude-stateless, main stays on claude-bridge** (`~/.wolfpack/config.yaml` or the wolf's
-`wolf.yaml`; then restart the wolf so `models.json` is rewritten and the registry rebuilt):
-
-```yaml
-models:
-  smart: { provider: claude-stateless, model: claude-sonnet-5-5 }
-```
-
-Resolved `models.json` tiers: `main` stays `claude-bridge/claude-opus-5-5`, `smart` becomes
-`{ "model": "claude-sonnet-5-5", "provider": "claude-agent-sdk", "piProvider": "claude-stateless", "piModel": "claude-stateless/claude-sonnet-5-5" }`.
-Agents whose profile says `model: main` or `fast` (or a spawn with `model: "main"`) still run on claude-bridge. The owner can
-also pick the smart tier for a thread; that thread then runs stateless too (accepted for the trial). `fast` is untouched in step 1. Memory
-steps on `smart` go through the engine's SDK adapter (`claude-agent-sdk`), not the stateless bridge. Roll back by deleting the
-`smart` line.
-
-**Step 2: threads too** (home and feature threads run on `main`):
-
-```yaml
-models:
-  main:  { provider: claude-stateless, model: claude-opus-5-5 }
-  smart: { provider: claude-stateless, model: claude-sonnet-5-5 }
-```
-
-(and `fast` likewise if wanted). A conversation that was stored with a `claude-bridge` ref keeps resolving (lookup-only when
-no tier uses it; built when one does). Not applied here.
+**The retired `claude-bridge` provider (pi-claude-bridge durable-core) is gone.** Old `models.json` files that say
+`"piProvider": "claude-bridge"` / `"piModel": "claude-bridge/<model>"`, and `provider: claude-bridge` in config, are aliased to
+`claude-stateless` when the table is loaded (one log line; regenerate with `wolfpack sync` to drop it). Stored conversation
+refs `claude-bridge/<model>` still resolve (a lookup-only entry in `LOOKUP_MODELS`).

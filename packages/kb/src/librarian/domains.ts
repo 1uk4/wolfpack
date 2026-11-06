@@ -104,7 +104,7 @@ export function orderGroups<T extends GroupInfo>(items: T[]): { ordered: T[]; fo
  * Regenerate `domains/<domain>/INDEX.md` from the entries on disk. Deterministic
  * (reads each entry's frontmatter). Call for each domain touched in a sweep.
  */
-export function renderDomainIndex(roots: KbRoots, domain: string): void {
+export function renderDomainIndex(roots: KbRoots, domain: string, sink?: (file: string, content: string) => void): void {
   const dir = entriesDir(roots, domain);
   const rows: Array<GroupInfo & { title: string; summary: string; sub: string }> = [];
   if (existsSync(dir)) {
@@ -145,6 +145,7 @@ export function renderDomainIndex(roots: KbRoots, domain: string): void {
     ),
     "",
   ];
+  if (sink) return sink(domainIndex(roots, domain), lines.join("\n"));
   mkdirSync(dir, { recursive: true });
   atomicWrite(domainIndex(roots, domain), lines.join("\n"));
 }
@@ -154,7 +155,7 @@ export function renderDomainIndex(roots: KbRoots, domain: string): void {
  * Deterministic, hierarchical projection of the KB. Hash-guarded write: only
  * rewrites the file if the content (excluding the `generated` timestamp) changed.
  */
-export function renderDomainDigest(roots: KbRoots, domain: string): void {
+export function renderDomainDigest(roots: KbRoots, domain: string, sink?: (file: string, content: string) => void): void {
   const sections = readSections(roots);
   const domainRoots = getRoots(sections, domain as any);
   const parentIndex = buildParentIndex(sections);
@@ -287,6 +288,7 @@ export function renderDomainDigest(roots: KbRoots, domain: string): void {
     }
   }
 
+  if (shouldWrite && sink) return sink(digestPath, JSON.stringify(digest, null, 2));
   if (shouldWrite) {
     const dir = entriesDir(roots, domain);
     mkdirSync(dir, { recursive: true });

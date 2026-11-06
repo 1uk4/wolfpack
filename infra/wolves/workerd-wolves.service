@@ -1,0 +1,61 @@
+# Supervising workerd for VPS wolves (NOT link-only). Sits NEXT TO the untouched link-only workerd.service:
+# own name, own user (workerd-wolves), own state dir (/var/lib/workerd-wolves), own env file, own port (7143), own bundle dir.
+# It supervises the wolves registered in /etc/wolfpack/wolves/<name>/wolf.yaml (name + serve.socket only; the real config lives in the
+# wolf's home), and "starts" each by running wolfd-unit.sh, which asks systemd for wolfd@<name>.service (user wolf-<name>, MemoryMax).
+# workerd itself needs no root and no access to /home: the polkit rule infra/wolves/50-workerd-wolves.rules lets it manage wolfd@*.service only.
+[Unit]
+Description=Wolfpack workerd (supervises wolfd@ units for VPS wolves)
+After=network-online.target dbus.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/workerd-wolves/hub.json
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=workerd-wolves
+Group=workerd-wolves
+# Root-owned 600: WORKERD_PORT=7143 WORKERD_FEED=0|1 (see README). HOME and WORKERD_CONFIG_DIR are set below, not in the file.
+EnvironmentFile=/etc/wolfpack/workerd-wolves.env
+Environment=HOME=/var/lib/workerd-wolves WORKERD_CONFIG_DIR=/var/lib/workerd-wolves
+# Guards: NOT link-only (a link-only workerd would supervise nothing), loopback, sane port.
+ExecStartPre=/bin/bash -c '[[ -z "$${WORKERD_LINK_ONLY}" || "$${WORKERD_LINK_ONLY}" == 0 ]] || { echo "workerd-wolves must not be link-only" >&2; exit 1; }; [[ "$${WORKERD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${WORKERD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 && p != 3150 && p != 7141 && p != 7142 )) || { echo "bad WORKERD_PORT=$${WORKERD_PORT}" >&2; exit 1; }'
+ExecStart=/usr/bin/node /opt/wolfpack-workerd-wolves/current/workerd.mjs --wolves /etc/wolfpack/wolves --host 127.0.0.1 --port ${WORKERD_PORT} --wolfd "/opt/wolfpack-workerd-wolves/current/wolfd-unit.sh" --wolfd-transport socket
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+# Stopping workerd must NOT stop the wolves: wolfd-unit.sh leaves wolfd@ running and a restarted workerd adopts it from its socket.
+KillMode=control-group
+StateDirectory=workerd-wolves
+StateDirectoryMode=0700
+MemoryHigh=150M
+MemoryMax=200M
+
+# Hardening. Same set as the link-only unit, minus nothing it needs: it only has to talk to the system bus (AF_UNIX) and read /etc/wolfpack/wolves.
+# No CAP_SETUID: the user switch is done by systemd (PID 1) when it starts wolfd@, not by workerd. /home is invisible.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/workerd-wolves
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

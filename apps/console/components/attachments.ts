@@ -9,6 +9,7 @@
  */
 
 import type { UiAttachment } from "@/src/core";
+import { RELAY_ATTACHMENT_BYTES } from "@/src/core/attachment-budget";
 import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_NAME_HEADER } from "@wolfpack/protocol/attachments";
 
 export interface PendingAttachment {
@@ -27,21 +28,72 @@ export interface PendingAttachment {
 export type AttachmentInfo = UiAttachment;
 
 /** The client-side precheck (same limits as the wolf): the chip's error text, or undefined when the file may upload. */
-export function precheckFile(file: { type: string; size: number }): string | undefined {
+export function precheckFile(file: { type: string; size: number }, maxBytes: number = ATTACHMENT_MAX_BYTES, relay = false): string | undefined {
 	const mime = file.type.split(";")[0]!.trim().toLowerCase();
 	if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(mime)) {
 		return `Unsupported type ${mime || "(unknown)"}: images only (${ATTACHMENT_IMAGE_TYPES.map((t) => t.slice(6)).join(", ")}).`;
 	}
 	if (file.size === 0) return "The file is empty.";
-	if (file.size > ATTACHMENT_MAX_BYTES) return `Too large (${(file.size / 1024 / 1024).toFixed(1)} MB; limit ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB).`;
+	if (file.size > maxBytes) return tooLargeMessage(maxBytes, relay, file.size);
 	return undefined;
 }
 
+const mb = (n: number) => (n / 1024 / 1024).toFixed(1).replace(/\.0$/, "");
+
+/** The composer's text for a file over the budget. */
+export function tooLargeMessage(maxBytes: number, relay: boolean, size?: number): string {
+	const got = size ? ` (${mb(size)} MB)` : "";
+	return relay ? `Photo too large to send over the hub${got}, max ${mb(maxBytes)} MB.` : `Too large${got}; limit ${mb(maxBytes)} MB.`;
+}
+
+/** The hub's own wording for a body over its cap. */
+const RELAY_TOO_LARGE = /too large for the relay/i;
+
+/** A size refusal (a 413, the hub's "request body too large for the relay", the wolf's "attachment too large") as the friendly text; every other error (e.g. "header too large") passes through. */
+export function friendlyUploadError(message: string, status: number | undefined, maxBytes: number, relay: boolean): string {
+	return status === 413 || RELAY_TOO_LARGE.test(message) || /attachment too large/i.test(message) ? tooLargeMessage(maxBytes, relay) : message;
+}
+
+/** The chip text for each way fitting an image can fail. */
+export function fitFailureMessage(reason: "too-large" | "gif-too-large" | "undecodable" | "unsupported", maxBytes: number, relay: boolean, size?: number): string {
+	switch (reason) {
+		case "undecodable":
+			return "Couldn't read this image.";
+		case "unsupported":
+			return `Unsupported image type: ${ATTACHMENT_IMAGE_TYPES.map((t) => t.slice(6)).join(", ")} only.`;
+		case "gif-too-large":
+			return `This GIF is too large to send (${mb(maxBytes)} MB max) and can't be shrunk without losing the animation.`;
+		default:
+			return tooLargeMessage(maxBytes, relay, size);
+	}
+}
+
 /** The chip for a file about to upload, or an error chip (nothing to upload) when the precheck refuses it. */
-export function chipFor(file: File, key: string): { chip: PendingAttachment; upload: boolean } {
+export function chipFor(file: File, key: string, maxBytes: number = ATTACHMENT_MAX_BYTES, relay = false): { chip: PendingAttachment; upload: boolean } {
 	const name = file.name || "pasted image";
-	const error = precheckFile(file);
+	const error = precheckFile(file, maxBytes, relay);
 	return error ? { chip: { key, name, status: "error", error }, upload: false } : { chip: { key, name, status: "uploading", mimeType: file.type, size: file.size }, upload: true };
+}
+
+export interface AttachmentLimit {
+	mode: "local" | "relay";
+	maxBytes: number;
+}
+
+/** The budget used while the real one is unknown: relay mode's (1.8 MB), so a failed fetch can never let an oversize body through. */
+export const FALLBACK_LIMIT: AttachmentLimit = { mode: "relay", maxBytes: RELAY_ATTACHMENT_BYTES };
+
+/** The console's per-file budget (/api/attachment-limit), or undefined when it could not be read (callers use FALLBACK_LIMIT and must not cache the failure). */
+export async function fetchAttachmentLimit(fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<AttachmentLimit | undefined> {
+	try {
+		const res = await fetchFn("/api/attachment-limit");
+		if (!res.ok) return undefined;
+		const j = (await res.json()) as Partial<AttachmentLimit>;
+		if ((j.mode === "local" || j.mode === "relay") && typeof j.maxBytes === "number" && j.maxBytes > 0) return { mode: j.mode, maxBytes: j.maxBytes };
+	} catch {
+		/* unknown */
+	}
+	return undefined;
 }
 
 /** `accept` for the file picker input. */
@@ -73,6 +125,12 @@ export function pastedImages(data: ClipboardLike | null | undefined): File[] {
 	return out;
 }
 
+export class UploadError extends Error {
+	constructor(message: string, readonly status: number) {
+		super(message);
+	}
+}
+
 /** POST the file's bytes to the thread's upload route; resolves with the wolf's attachment id. */
 export async function uploadFile(
 	uploadUrl: string,
@@ -89,7 +147,7 @@ export async function uploadFile(
 	} catch {
 		/* non-JSON failure body */
 	}
-	if (!res.ok) throw new Error(typeof body.error === "string" ? body.error : text || `Upload failed (${res.status}).`);
+	if (!res.ok) throw new UploadError(typeof body.error === "string" ? body.error : text || `Upload failed (${res.status}).`, res.status);
 	if (typeof body.id !== "string") throw new Error("Upload failed: unexpected response.");
 	const b = body as { mimeType?: unknown; size?: unknown };
 	return {

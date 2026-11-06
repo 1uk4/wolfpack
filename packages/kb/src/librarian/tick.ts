@@ -16,6 +16,7 @@ import { readDeclaredDomains } from "./domains.js";
 import { rebuildJournalFile } from "./rebuild-commit.js";
 import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
 import type { KbRoots } from "../shared/index.js";
+import type { SweepWriter } from "./sweep-writer.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
 import { countPending } from "./intake.js";
@@ -26,6 +27,7 @@ import { withBudget } from "./park.js";
 import { noteDrainProgress, flushDrain } from "./drain.js";
 import { flushWorkLinks, hasPendingWorkLinks, httpNotePoster, type NotePoster } from "./work-links.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
+import { acquireLease, freshLeaseIn, wolfLeaseDirs } from "./curator-lease.js";
 
 export interface SweepTickOptions {
   roots: KbRoots;
@@ -50,6 +52,15 @@ export interface SweepTickOptions {
    * turns it on when this option is unset.
    */
   postSweepReorg?: boolean;
+  /** The lane under the ops root holding the contributions (default `inbox`; hubd's is `contributions`). */
+  lane?: string;
+  /**
+   * Who holds the sweep lease for this tick (curator-lease.ts). "wolf" (default): this tick takes a wolf lease on both lanes and
+   * skips while a hub lease is fresh. "none": the caller manages the lease (the hub curator holds the hub lease).
+   */
+  leaseOwner?: "wolf" | "none";
+  /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). Not used by the post-sweep reorg. */
+  writer?: SweepWriter;
 }
 
 function postSweepReorgEnabled(opts: SweepTickOptions): boolean {
@@ -72,6 +83,35 @@ export interface SweepTickResult {
  * back as outcome "backoff"; any other error is thrown for the caller to report.
  */
 export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickResult> {
+  // A wolf-side sweep (harness timer, kb CLI) never runs with the hub's curator on the same KB: it skips the tick (like an idle
+  // one) while a fresh hub lease exists, and holds a wolf lease while it runs. The hub curator passes leaseOwner "none" and
+  // manages its own lease. NOT covered by the lease: reorg, rebuild, retire, split-fat and tryRecoverAndRender; they take only
+  // the den-local KB lock and write the KB directly (they bypass hubd's commitKb), so never run them against a live hub KB.
+  if ((opts.leaseOwner ?? "wolf") === "wolf") {
+    const dirs = wolfLeaseDirs(opts.roots);
+    const key = opts.roots.opsRoot;
+    const skip = (why: string) => {
+      if (lastSkip.get(key) !== why) opts.notify?.(`sweep: skipped, ${why}`); // tell once per change, not every tick
+      lastSkip.set(key, why);
+      return { outcome: "idle" as const, sweep: emptyResult() };
+    };
+    if (freshLeaseIn(dirs, "hub")) return skip("the hub curator holds the sweep lease");
+    const lease = acquireLease(dirs, "wolf");
+    if (!lease) return skip("another sweeper holds the sweep lease");
+    lastSkip.delete(key);
+    try {
+      return await runSweepTickLeased(opts);
+    } finally {
+      lease.release();
+    }
+  }
+  return runSweepTickLeased(opts);
+}
+
+/** Last skip reason per ops root (so the wolf-side skip notice is sent when the state changes, not every tick). */
+const lastSkip = new Map<string, string>();
+
+async function runSweepTickLeased(opts: SweepTickOptions): Promise<SweepTickResult> {
   const result = await runTick(opts);
   const bad = badJournalNote(opts.roots);
   if (bad && !result.sweep.journalBad) result.sweep = { ...result.sweep, journalBad: bad };
@@ -102,7 +142,7 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
       const failed = await withKbLock(roots, async () => tryRecoverAndRender(roots, opts.notify).failed);
       // outcome "backoff" is used on purpose WITHOUT touching the backoff state (backoff.json): it is the existing "did no work, retry next
       // run" outcome; setting real backoff state would delay the retry by minutes and raise outage alerts for a local file problem.
-      if (failed) return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: failed, journalBad: badJournalNote(roots) } };
+      if (failed) return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot, { lane: opts.lane }).total, paused: failed, journalBad: badJournalNote(roots) } };
     } catch (err) {
       if (!(err instanceof KbLockBusy)) throw err;
     }
@@ -112,7 +152,7 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   if (waitMs > 0) {
     return { outcome: "backoff", sweep: { ...emptyResult(), paused: `backing off, ${Math.ceil(waitMs / 1000)}s left` } };
   }
-  if (countPending(roots.opsRoot).total === 0) {
+  if (countPending(roots.opsRoot, { lane: opts.lane }).total === 0) {
     await flushDrain(roots, opts.alert);
     return { outcome: "idle", sweep: emptyResult() };
   }
@@ -123,14 +163,14 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   } catch (err) {
     if (!(err instanceof DomainsFileError)) throw err;
     opts.notify?.(`sweep: skipped, ${err.message}`);
-    return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: err.message } };
+    return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot, { lane: opts.lane }).total, paused: err.message } };
   }
 
   try {
     const result = await tick(opts);
     // Tally this tick; once the inbox is really empty, send the one summary.
     noteDrainProgress(roots, result.sweep);
-    if (!result.sweep.paused && countPending(roots.opsRoot).total === 0) await flushDrain(roots, opts.alert);
+    if (!result.sweep.paused && countPending(roots.opsRoot, { lane: opts.lane }).total === 0) await flushDrain(roots, opts.alert);
     return result;
   } catch (err) {
     if (classifyError(err) !== "infra") throw err;
@@ -157,7 +197,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   // A hung call must never hold the tick: past the run budget plus slack, give
   // up (the KB lock still guards against overlap).
   const swept = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
-    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent })
+    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer })
   );
 
   let reorged: ReorgResult | undefined;

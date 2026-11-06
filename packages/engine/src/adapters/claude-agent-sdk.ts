@@ -6,7 +6,7 @@
  * Why: the Agent SDK authenticates with the user's Claude subscription (MAX/Pro
  * OAuth), so memory consolidation and KB work run on the subscription with no
  * `ANTHROPIC_API_KEY` and no per-token billing. It is the same transport the
- * `pi-claude-bridge` provider uses for the interactive session.
+ * `claude-stateless` provider uses for the interactive session.
  *
  * Strategy mirrors the Anthropic adapter: prompt for raw JSON, parse, validate
  * against the Zod schema, and retry with the validation error on failure. Each
@@ -38,7 +38,7 @@ export interface ClaudeAgentSdkAdapterOptions {
   query?: QueryFn;
 }
 
-// Child-process env hardening, matching pi-claude-bridge: keep the one-shot call
+// Child-process env hardening, matching pi-claude-bridge-stateless: keep the one-shot call
 // isolated from claude.ai MCP servers and auto-compaction.
 const CC_CHILD_ENV = {
   ENABLE_CLAUDEAI_MCP_SERVERS: "0",

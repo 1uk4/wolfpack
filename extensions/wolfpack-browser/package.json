@@ -1,0 +1,28 @@
+{
+  "name": "wolfpack-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "pi-durable extension: a guarded headless Chromium (Playwright) for wolves. Written from scratch; OFF unless wolf.yaml `browser: { enabled: true }`.",
+  "keywords": [
+    "wolfpack",
+    "browser"
+  ],
+  "dependencies": {
+    "playwright-core": "1.63.0",
+    "tldts": "7.4.19"
+  },
+  "wolfpack": {
+    "playwrightCore": true,
+    "externals": [
+      "chromium-bidi",
+      "chromium-bidi/*",
+      "electron"
+    ]
+  },
+  "pi-durable": {
+    "extensions": [
+      "./durable.ts"
+    ]
+  }
+}

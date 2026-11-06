@@ -51,7 +51,7 @@ export interface KbSource {
 
 /**
  * The KB source: the librarian when it is online, else the first online wolf that can read the KB (kbReadable,
- * a Syncthing mirror), else null. Only for the read-only graph/entry routes; the pipeline and sweep need the librarian.
+ * a Syncthing mirror), else null. Only for the read-only graph/entry routes; KB activity and sweep need the librarian.
  */
 export function findKbSource<W extends { name: string; status?: string; librarian?: boolean; kbReadable?: boolean }>(wolves: readonly W[]): KbSource | null {
 	const online = wolves.filter((w) => w.status !== "offline");
@@ -96,7 +96,7 @@ export function parseMemoryEventFrame(raw: string): MemoryEventFrame | null {
 	return o as MemoryEventFrame;
 }
 
-export const PIPELINE_HREF = "/pipeline";
+export const KB_ACTIVITY_HREF = "/kb-activity";
 export const entryHref = (id: string): string => `/kb/entry/${encodeURIComponent(id)}`;
 export const workHref = (id: string): string => `/kb/work/${encodeURIComponent(id)}`;
 

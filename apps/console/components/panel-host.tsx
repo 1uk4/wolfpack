@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory-panel";
-import { MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
+import { MOBILE_QUERY, MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
 
 export type PanelProps = Record<string, unknown>;
 
@@ -115,7 +115,9 @@ export function PanelHostProvider({ wolf, slug, threadId, panels = PANELS, child
 	const [st, setSt] = useState<HostState>({ selections: {}, props: {}, open: true });
 	useEffect(() => {
 		try {
-			const open = parseOpen(localStorage.getItem(MEMORY_PANEL_OPEN_KEY));
+			// Phone: the panel is a full-screen overlay, so it starts closed (the stored desktop preference is left alone).
+			const phone = typeof window.matchMedia === "function" && window.matchMedia(MOBILE_QUERY).matches;
+			const open = phone ? false : parseOpen(localStorage.getItem(MEMORY_PANEL_OPEN_KEY));
 			setSt((s) => ({ ...s, selections: readStored(), open }));
 		} catch {}
 	}, []);
@@ -187,9 +189,10 @@ export function RightPanelHost() {
 	if (!actions || !state || !state.selected) return null;
 	const { selected, open, available, contexts } = state;
 	const mounted = available.filter((p) => p.id === selected || seen.includes(p.id));
+	// < md: open = a full-screen overlay (never a 320px column squeezing the transcript); closed = a floating 44px handle. md+ unchanged.
 	return (
 		<aside
-			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm" : "flex w-9 shrink-0 flex-col items-center border-l border-border py-2"}
+			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full max-md:border-l-0 max-md:bg-background max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "hidden"}
 			data-testid="panel-host"
 			data-open={open}
 			data-panel={selected}
@@ -234,5 +237,28 @@ export function RightPanelHost() {
 				);
 			})}
 		</aside>
+	);
+}
+
+/**
+ * The closed-panel handle: a floating button anchored to the top-right of the chat area (render it inside the
+ * conversation wrapper, a sibling of the scroller, so it stays put while the list scrolls). Hidden while the panel
+ * is open or when no panel is available. 44px tap target on the phone, 32px from md up.
+ */
+export function PanelFloatingHandle() {
+	const actions = useContext(ActionsContext);
+	const state = useContext(StateContext);
+	if (!actions || !state || !state.selected || state.open) return null;
+	return (
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label="Open side panel"
+			data-testid="panel-handle"
+			className="absolute right-2 top-2 z-20 size-11 rounded-full border border-border bg-card/90 shadow-md backdrop-blur md:size-8 md:right-3 md:top-3"
+			onClick={actions.toggle}
+		>
+			<ChevronsLeftIcon />
+		</Button>
 	);
 }

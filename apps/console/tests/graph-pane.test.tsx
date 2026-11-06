@@ -222,7 +222,7 @@ describe("GraphPane content", () => {
 		assert.ok(text().includes("stable") && text().includes("Entry X"));
 		await settle();
 		assert.ok(text().includes("Entry body text"));
-		assert.ok(calls.some((c) => c.url === "/api/wolves/lib/kb/entries/x"));
+		assert.ok(calls.some((c) => c.url === "/api/kb/entries/x"));
 		assert.ok(q("pane-open").getAttribute("href") === "/kb/entry/x");
 	});
 

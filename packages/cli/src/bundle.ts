@@ -377,12 +377,21 @@ export interface BuiltHarnessBundle {
   tmpDir: string;
 }
 
+/** Why an extension was skipped by the last buildDurableExtension call (key -> reason); `wolfpack sync` prints it. */
+export const skipReasons = new Map<string, string>();
+
+export interface BuildDurableOptions {
+  /** Test seam: how `playwright-core/package.json` is resolved (default: Node resolution from this module). */
+  resolvePackage?: (id: string) => string;
+}
+
 /**
  * Build one pi-durable extension into `<extDir>/<dir>/index.js` (the layout `wolfpack sync` ships and wolfd/harness
  * load from `<den>/extensions/`). A repo extension is bundled from its package.json `pi-durable` entrypoint; any other
  * key is an owner extension looked up in `denExtensionsDir`. Returns false (skipped) when it can't be built.
  */
-export async function buildDurableExtension(key: string, extDir: string, denExtensionsDir?: string): Promise<boolean> {
+export async function buildDurableExtension(key: string, extDir: string, denExtensionsDir?: string, opts: BuildDurableOptions = {}): Promise<boolean> {
+  skipReasons.delete(key);
   const ext = getExtension(key);
   if (!ext) {
     // Not a repo extension: an owner extension from the wolf's den?
@@ -402,6 +411,8 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
   const pkgPath = path.join(srcDir, "package.json");
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
     "pi-durable"?: { extensions?: string[] };
+    /** Optional dynamic requires the bundle never reaches (kept out of the bundle instead of failing the build). */
+    wolfpack?: { externals?: string[]; playwrightCore?: boolean };
   };
   const durableEntries = pkg["pi-durable"]?.extensions;
   if (!durableEntries || durableEntries.length === 0) return false;
@@ -413,21 +424,82 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
   }
 
   const extOutDir = path.join(extDir, ext.dir);
-  fs.mkdirSync(extOutDir, { recursive: true });
-  await esbuild.build({
-    entryPoints: [entryFile],
-    outfile: path.join(extOutDir, "index.js"),
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    target: "node20",
-    external: [
-      "@earendil-works/pi-coding-agent",
-      "@earendil-works/pi-tui",
-      "grammy",
-    ],
-    logLevel: "silent",
-  });
+
+  // playwright-core resolves its package root as `__dirname/..` and reads package.json / browsers.json there. Bundled,
+  // that would be the den's extensions/ dir; point it at the extension's own dir and ship the two files beside index.js.
+  // Everything playwright-specific is best effort: if it can't be done, THIS extension is skipped with a warning and the
+  // build for every other extension (and wolf) is unaffected.
+  let playwrightRoot: esbuild.Plugin[] = [];
+  let playwrightFiles: { pkgJson: string; browsersJson: string } | undefined;
+  if (pkg.wolfpack?.playwrightCore) {
+    try {
+      const pwPkg = (opts.resolvePackage ?? ((id: string) => createRequire(import.meta.url).resolve(id)))("playwright-core/package.json");
+      const pwDir = path.dirname(pwPkg);
+      const browsersJson = path.join(pwDir, "browsers.json");
+      if (!fs.existsSync(browsersJson)) throw new Error(`browsers.json not found in ${pwDir}`);
+      const version = (JSON.parse(fs.readFileSync(pwPkg, "utf8")) as { version: string }).version;
+      playwrightFiles = { pkgJson: JSON.stringify({ name: "playwright-core", version }) + "\n", browsersJson };
+      playwrightRoot = [
+        {
+          name: "playwright-core-root",
+          setup(b) {
+            b.onLoad({ filter: /playwright-core[\\/]lib[\\/]coreBundle\.js$/ }, (a) => {
+              const src = fs.readFileSync(a.path, "utf8");
+              const re = /packageRoot\s*=\s*(\w+)\.default\.join\(__dirname,\s*"\.\."\)/;
+              if (!re.test(src)) throw new Error("playwright-core: packageRoot assignment not found (unsupported version)");
+              return { contents: src.replace(re, "packageRoot = __dirname"), loader: "js", resolveDir: path.dirname(a.path) };
+            });
+          },
+        },
+      ];
+    } catch (err) {
+      const why = `playwright-core unavailable: ${err instanceof Error ? err.message.split("\n")[0] : err}`;
+      skipReasons.set(key, why);
+      console.warn(`Extension ${key}: skipped (${why})`);
+      return false;
+    }
+  }
+
+  // Build beside the target and swap in only on success: a failed rebuild must not delete a working install.
+  // (Beside the target, not in os.tmpdir(): rename across filesystems fails with EXDEV.) Staging dirs a crashed build
+  // left behind are swept first.
+  fs.mkdirSync(path.dirname(extOutDir), { recursive: true });
+  for (const n of fs.readdirSync(path.dirname(extOutDir))) {
+    if (n.startsWith(`.${ext.dir}-build-`)) fs.rmSync(path.join(path.dirname(extOutDir), n), { recursive: true, force: true });
+  }
+  const stage = fs.mkdtempSync(path.join(path.dirname(extOutDir), `.${ext.dir}-build-`));
+  try {
+    await esbuild.build({
+      entryPoints: [entryFile],
+      outfile: path.join(stage, "index.js"),
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      target: "node20",
+      plugins: playwrightRoot,
+      external: [
+        "@earendil-works/pi-coding-agent",
+        "@earendil-works/pi-tui",
+        "grammy",
+        ...(pkg.wolfpack?.externals ?? []),
+      ],
+      logLevel: "silent",
+    });
+    if (playwrightFiles) {
+      fs.copyFileSync(playwrightFiles.browsersJson, path.join(stage, "browsers.json"));
+      fs.writeFileSync(path.join(stage, "package.json"), playwrightFiles.pkgJson);
+    }
+    // Swap in (same cleanup path as a failure): the old install is only removed once the new one is complete.
+    fs.rmSync(extOutDir, { recursive: true, force: true });
+    fs.renameSync(stage, extOutDir);
+  } catch (err) {
+    fs.rmSync(stage, { recursive: true, force: true });
+    if (!playwrightFiles) throw err; // other extensions keep their existing failure behaviour
+    const why = `build failed: ${err instanceof Error ? err.message.split("\n")[0] : err}`;
+    skipReasons.set(key, why);
+    console.warn(`Extension ${key}: skipped (${why})`);
+    return false;
+  }
   return true;
 }
 
@@ -463,30 +535,33 @@ export async function installDevExtensions(
 }
 
 /**
- * pi-claude-bridge imports the Agent SDK statically (only as the default `queryFn`). The SDK is ESM and is not
+ * pi-claude-bridge-stateless imports the Agent SDK statically (only as the default `queryFn`). The SDK is ESM and is not
  * resolvable from harness.cjs on a VPS (global install, no node_modules above the bundle), so a plain external
  * require would throw when the bridge initialises. The harness always injects the query function it resolved
  * itself (engine loadQuery: harness tree, NODE_PATH, global install), so the bridge's own import is stubbed.
+ * Both stubs apply to importers under pi-claude-bridge-stateless only (BRIDGE_IMPORTER).
  */
+const BRIDGE_IMPORTER = /[\\/]pi-claude-bridge-stateless[\\/]/;
+
 export function stubBridgeSdkPlugin(): esbuild.Plugin {
   return {
     name: "stub-bridge-agent-sdk",
     setup(build) {
       build.onResolve({ filter: /^@anthropic-ai\/claude-agent-sdk$/ }, (args) =>
-        /[\\/]pi-claude-bridge(?:-stateless)?[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
+        BRIDGE_IMPORTER.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-sdk-stub" }, () => ({
-        contents: 'export function query() { throw new Error("claude-bridge: the Agent SDK query function must be injected (queryFn)"); }',
+        contents: 'export function query() { throw new Error("claude-stateless: the Agent SDK query function must be injected (queryFn)"); }',
         loader: "js",
       }));
       // The stateless bridge's skills.ts imports pi-coding-agent for formatSkillsForPrompt, which the stateless provider
       // never calls. Bundled, pi-coding-agent's config.js runs fileURLToPath(import.meta.url) at load, which is undefined
       // in CJS and crashes the harness. Stub it for the bridge only.
       build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, (args) =>
-        /[\\/]pi-claude-bridge(?:-stateless)?[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
+        BRIDGE_IMPORTER.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-pca-stub" }, () => ({
-        contents: 'export function formatSkillsForPrompt() { throw new Error("claude-bridge: pi-coding-agent is not available in the harness bundle"); }',
+        contents: 'export function formatSkillsForPrompt() { throw new Error("claude-stateless: pi-coding-agent is not available in the harness bundle"); }',
         loader: "js",
       }));
     },

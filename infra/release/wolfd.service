@@ -1,0 +1,62 @@
+# GENERATED from infra/wolves/wolfd@.service by infra/wolves/render-wolfd-service.sh (do not edit). Placeholders: @NAME@ wolf name, @USER@ wolf-<name>, @HOME@ its home, @RELEASE@ unpacked release dir, @MEMORY_MAX@ (default 700M).
+[Unit]
+Description=wolfd wolf @NAME@ (user @USER@)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=@HOME@/.env
+ConditionPathExists=@RELEASE@/launch.sh
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+EnvironmentFile=@HOME@/.env
+Environment=HOME=@HOME@ WOLF_HOME=@HOME@
+Environment=WOLFPACK_SUBAGENT_HOST_MAX=3
+WorkingDirectory=@HOME@
+ExecStartPre=/bin/bash -c '[ "$(stat -c %%a @HOME@/.env)" = 600 ] || { echo ".env must be mode 600" >&2; exit 78; }; [ -z "$${ANTHROPIC_API_KEY}" ] || { echo "ANTHROPIC_API_KEY is set: a wolfd wolf never runs on a metered key" >&2; exit 78; }'
+ExecStart=@RELEASE@/launch.sh --socket /run/wolfd-@NAME@/serve.sock
+RuntimeDirectory=wolfd-@NAME@
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+MemoryHigh=600M
+MemoryMax=@MEMORY_MAX@
+MemorySwapMax=0
+TasksMax=256
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wolfd-@NAME@
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=@HOME@
+ReadWritePaths=@HOME@
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

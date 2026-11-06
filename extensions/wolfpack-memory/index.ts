@@ -44,6 +44,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig, type WorkSystemHandle } from "./work-system.js";
 import { WorkClient } from "./work-client.js";
+export { WorkStoreReadOnlyError, WorkStorePermissionError } from "./work-client.js";
 import { writeParentBody } from "./parent-embed.js";
 import {
   getStageContext,

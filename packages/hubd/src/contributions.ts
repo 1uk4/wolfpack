@@ -9,11 +9,12 @@ import { createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import type { Actor } from "@wolfpack/protocol";
+import { SECRET_REFUSAL_REASON, type Actor } from "@wolfpack/protocol";
 import { ContributionSchema, contentHash, isSafeSegment, type Contribution } from "@wolfpack/kb/shared";
 import { contributionFileName, renderContribution } from "@wolfpack/kb/client";
 import { parseContribution } from "@wolfpack/kb/librarian";
 import { contributionsRoot } from "./layout.js";
+import { safeToKeep, secretFindings } from "./secret-check.js";
 
 /** Largest accepted request body. */
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -27,7 +28,7 @@ const LANE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 const REASON_MAX = 300;
 
 export class ContributionError extends Error {
-  constructor(readonly code: "invalid_request", message: string) {
+  constructor(readonly code: "invalid_request", message: string, readonly details?: Record<string, string>) {
     super(message);
   }
 }
@@ -82,7 +83,7 @@ function quarantine(laneRoot: string, wolf: string, text: string, reason: string
     }
     const buf = Buffer.from(text, "utf-8");
     const kept = buf.length > MAX_QUARANTINE_BYTES ? `${buf.subarray(0, MAX_QUARANTINE_BYTES).toString("utf-8")}\n[truncated: ${buf.length} bytes in total]` : text;
-    writeFileSync(file, kept);
+    writeFileSync(file, safeToKeep(kept)); // never keep a possible secret in _bad/ (the kept piece is <= 64 KiB, within the scan cap)
     writeFileSync(`${file}.reason.txt`, `${reason}\nsha256: ${sha}\nbytes: ${buf.length}\n`);
   } catch (e) {
     console.warn(`hubd: could not quarantine a contribution (${reason.slice(0, 120)}): ${e instanceof Error ? e.message : e}`);
@@ -122,8 +123,8 @@ function syncDir(dir: string): void {
 
 const shorten = (v: unknown) => JSON.stringify(String(v)).slice(0, 60);
 
-/** Validate + store one contribution submitted by `actor`. Throws ContributionError (invalid_request) when rejected. */
-export function storeContribution(dataDir: string, actor: Actor, submitted: SubmittedBody, inboxRoot?: string): StoredContribution {
+/** Validate + store one (`allowedDomains`: the sending wolf's subscriptions, if known; a domain_hint outside them is refused and quarantined) contribution submitted by `actor`. Throws ContributionError (invalid_request) when rejected. */
+export function storeContribution(dataDir: string, actor: Actor, submitted: SubmittedBody, inboxRoot?: string, allowedDomains?: readonly string[]): StoredContribution {
   const laneRoot = inboxRoot ?? contributionsRoot(dataDir);
   const raw = submitted.json;
   if (actor.kind !== "wolf" && actor.kind !== "operator") throw new ContributionError("invalid_request", "contributions are submitted by a wolf or an operator");
@@ -144,7 +145,27 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
   const parsed = ContributionSchema.safeParse(raw);
   if (!parsed.success) return reject(parsed.error.issues.map((i) => `${i.path.join(".") || "(body)"}: ${i.message}`).join("; ").slice(0, REASON_MAX));
   const c = parsed.data;
+  // Defence in depth: the wolf side filters too. Only checked when the hub knows the wolf's subscriptions (non-empty list).
+  if (allowedDomains?.length && !allowedDomains.includes(c.domainHint)) {
+    return reject(`domain_hint ${shorten(c.domainHint)} is not one of the wolf's subscribed domains [${allowedDomains.join(", ").slice(0, 100)}]`);
+  }
   if (c.from !== wolf) return reject(`from ${shorten(c.from)} does not match the lane ${shorten(wolf)}`);
+  // NOT A SECURITY BOUNDARY: `origin` is set by the sender, so "crawl-only refusal" guards against ACCIDENTS (a crawl that swept up a credential),
+  // not against a sender that leaves `origin` out: that one only gets the warning below. Refusing non-crawl contributions too is a follow-up task.
+  // Secret check (seam: work-wolfpack-VO2wX3I), after the actor is authorized and the contribution validated. EVERY string of the validated
+  // contribution is scanned (it is what gets stored), not only body/summary. Crawl contributions are refused (the owner's no-override rule);
+  // others only log, until the pattern is calibrated. The answer names the field and pattern and a short hash of the topic id, never a value
+  // and never the (caller-supplied) topic id itself.
+  const flagged = secretFindings(c);
+  if (flagged.length) {
+    const ref = createHash("sha256").update(c.denTopicId).digest("hex").slice(0, 8);
+    const list = flagged.map((f) => `${f.field} (${f.pattern})`).join(", ");
+    if (c.origin === "crawl") {
+      console.warn(`hubd: refused crawl contribution ${wolf}/${ref}: possible secret in ${list.slice(0, 300)}`);
+      throw new ContributionError("invalid_request", `contribution rejected: possible secret in ${list.slice(0, 300)} (entry ref ${ref}). Edit the entry or leave it out of the release.`, { reason: SECRET_REFUSAL_REASON, ref, field: flagged[0]!.field, pattern: flagged[0]!.pattern });
+    }
+    console.warn(`hubd: possible secret in ${wolf} contribution ${isSafeSegment(c.denTopicId) ? c.denTopicId.slice(0, 80) : ref}: ${list.slice(0, 300)} (stored; only crawl contributions are refused)`);
+  }
   const lb = lineBreakIn(c);
   if (lb) return reject(`${lb} contains a line break`);
   if (c.contentHash !== contentHash(c.body)) return reject("contentHash does not match the body");

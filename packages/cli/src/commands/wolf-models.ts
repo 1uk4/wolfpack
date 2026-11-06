@@ -321,12 +321,16 @@ export interface ModelList {
   reason?: string;
 }
 
-/** Model IDs on the subscription bridge, from `pi --list-models` output. */
+/**
+ * Model IDs on the Claude subscription, from `pi --list-models` output. A pi CLI lists them under `claude-bridge` (the
+ * machine-local pi-claude-bridge package, same model ids); `claude-stateless` is registered in-process by wolfd only, but
+ * is accepted too in case a pi build lists it.
+ */
 export function parseBridgeModels(output: string): string[] {
   const ids: string[] = [];
   for (const line of output.split("\n")) {
     const [provider, model] = line.trim().split(/\s+/);
-    if (provider === "claude-bridge" && model) ids.push(model);
+    if ((provider === "claude-bridge" || provider === "claude-stateless") && model) ids.push(model);
   }
   return ids;
 }
@@ -349,8 +353,8 @@ export function readEnvValue(file: string, key: string): string | undefined {
 }
 
 async function fetchBridgeModels(): Promise<string[]> {
-  // The bridge is installed per wolf (its agent dir), not in ~/.pi/agent, so a
-  // plain `pi` from the user's shell lists no claude-bridge models.
+  // pi-claude-bridge is installed per wolf (its agent dir), not in ~/.pi/agent, so a
+  // plain `pi` from the user's shell lists no subscription models.
   const agentDir = bridgeAgentDir();
   const { stdout } = await execFileAsync("pi", ["--list-models"], {
     timeout: 60_000,
@@ -358,11 +362,11 @@ async function fetchBridgeModels(): Promise<string[]> {
     env: agentDir ? { ...process.env, PI_CODING_AGENT_DIR: agentDir } : process.env,
   });
   const ids = parseBridgeModels(stdout);
-  if (ids.length === 0) throw new Error("`pi --list-models` listed no claude-bridge models");
+  if (ids.length === 0) throw new Error("`pi --list-models` listed no claude subscription models");
   return ids;
 }
 
-/** Agent dir of the first local wolf whose pi settings install pi-claude-bridge. */
+/** Agent dir of the first local wolf whose pi settings install pi-claude-bridge (the provider pi subagent children use). */
 function bridgeAgentDir(): string | undefined {
   if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
   const localRoot = path.join(loadConfig().wolvesRoot, LOCAL_HOST);

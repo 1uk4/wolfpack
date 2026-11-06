@@ -1,5 +1,7 @@
 # Runtime secrets
 keys/
+# ...but the console's /api/keys route is source, not a secret dir
+!apps/console/app/api/keys/
 *.env
 .vault_pass
 
@@ -47,3 +49,7 @@ coverage/
 viz/
 .turbo/
 .next/
+dist-release/
+
+# tracer --console output (screenshots)
+infra/tracer/out/

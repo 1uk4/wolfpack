@@ -18,8 +18,11 @@ import { atomicWrite } from "@wolfpack/engine";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
+import { writeIntent, clearIntent, replayIntent, intentDigest, intentWrittenCount } from "./intent.js";
+import { renderEntry } from "./commit.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
-import { drainInbox, countPending } from "./intake.js";
+import { drainInbox, countPending, DEFAULT_LANE } from "./intake.js";
+import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { anchorIndex, anchorOf, groupOf, oldHubFor } from "./anchors.js";
@@ -59,12 +62,12 @@ import {
   type RelationResolver,
 } from "../schema/knowledge.js";
 import type { Engine } from "@wolfpack/engine";
-import { entriesDir, type KbRoots } from "../shared/index.js";
+import { entriesDir, type KbRoots, type DecisionSummary, type DecisionRouting } from "../shared/index.js";
 
 /** Structured sweep progress for hosts that surface it (wolfd's event stream). Metadata only. */
 export type SweepEvent =
   | { type: "started"; pending: number }
-  | { type: "item"; from: string; denTopicId: string; outcome: "create" | "merge" | "reject" | "parked"; entryId?: string };
+  | { type: "item"; from: string; denTopicId: string; outcome: "create" | "merge" | "reject" | "parked"; entryId?: string; decision?: DecisionSummary };
 
 export interface SweepContext {
   engine: Engine;
@@ -84,6 +87,10 @@ export interface SweepContext {
   /** Called when the run starts real work ("started", once) and when a contribution ends in create/merge/reject/parked
    *  ("item"). Never called for an empty inbox. A throwing callback is ignored. */
   onEvent?: (event: SweepEvent) => void;
+  /** The lane under the ops root holding `<wolf>/*.md` (default `inbox`; hubd's is `contributions`). */
+  lane?: string;
+  /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
+  writer?: SweepWriter;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -208,6 +215,20 @@ export interface RoutingRecord {
   };
 }
 
+/** The RoutingRecord fields the decision event carries (the same object the receipt gets; nothing recomputed). */
+export function routingSummary(r: RoutingRecord, target?: string): DecisionRouting {
+  const t = target ?? r.target;
+  return {
+    route: r.route,
+    candidates: r.candidates.map((x) => ({ ...x })),
+    ...(r.band !== undefined ? { band: r.band } : {}),
+    ...(r.subject ? { subject: r.subject } : {}),
+    ...(r.confirm ? { confirm: r.confirm } : {}),
+    ...(t ? { target: t } : {}),
+    ...(r.warning ? { warning: r.warning } : {}),
+  };
+}
+
 /** Ids of every live entry in every domain (a directory listing). */
 export function liveEntryIds(roots: KbRoots): Set<string> {
   const ids = new Set<string>();
@@ -256,8 +277,8 @@ export function overflowContribution(
 }
 
 /** Put the overflow contribution in the sender's inbox so the next tick routes it as its own item. */
-export function requeueOverflow(roots: KbRoots, o: ParsedContribution): void {
-  const dir = join(roots.opsRoot, "inbox", o.from);
+export function requeueOverflow(roots: KbRoots, o: ParsedContribution, lane: string = DEFAULT_LANE): void {
+  const dir = join(roots.opsRoot, lane, o.from);
   mkdirSync(dir, { recursive: true });
   const fm = [
     "---",
@@ -338,18 +359,29 @@ export function oversizedParents(roots: KbRoots, sections: Section[]): string[] 
 
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
+  const lane = ctx.lane ?? DEFAULT_LANE;
+  const w = ctx.writer ?? defaultSweepWriter;
   // A rebuild that crashed after its journal is finished first, under the lock (idempotent; a no-op without a journal).
   const recovery = tryRecoverAndRender(roots, ctx.notify);
   if (recovery.failed) {
     // Never place entries into a tree that may be half-committed: skip the run, the inbox waits.
-    return { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: recovery.failed, journalBad: badJournalNote(roots) };
+    return { ...emptyResult(), remaining: countPending(roots.opsRoot, { lane }).total, paused: recovery.failed, journalBad: badJournalNote(roots) };
   }
   const budgetMs = ctx.budgetMs ?? SWEEP.runBudgetMs;
 
   // One contribution per run, oldest first. The timer fires every minute, so the
   // next one is picked up within a minute. An empty inbox returns here: no
   // embedder, no ledger read, no LLM call, no writes, no log line.
-  const pending = drainInbox(roots).sort((a, b) =>
+  // A commit intent left by a crash between "entry live" and "ledger appended" is finished (or dropped) first.
+  // If this replay's append throws, the intent is kept and the error propagates: the tick is BLOCKED (nothing is drained or routed)
+  // until the ledger append works again, because routing on with an unrecorded live entry is what makes a twin entry.
+  try {
+    await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify });
+  } catch (err) {
+    ctx.notify?.(`sweep: BLOCKED: could not replay the pending commit intent (pending-commit.json is kept; the next tick retries): ${cleanError(err)}`);
+    throw err;
+  }
+  const pending = drainInbox(roots, { lane }).sort((a, b) =>
     (a.submitted || "").localeCompare(b.submitted || "")
   );
   if (pending.length === 0) return emptyResult();
@@ -366,7 +398,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // wait for the next tick.
   const log = readLedger(roots);
   const seen = seenHashes(log);
-  for (const dup of pending.filter((c) => seen.has(c.contentHash))) markProcessed(dup);
+  for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));
   if (unseen.length === 0) return emptyResult();
 
@@ -433,7 +465,29 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     let route = "?";
     let outcome = "?";
     let llmMs = 0;
-    let itemEvent: { outcome: "create" | "merge" | "reject" | "parked"; entryId?: string } | undefined;
+    let itemEvent: { outcome: "create" | "merge" | "reject" | "parked"; entryId?: string; decision?: DecisionSummary } | undefined;
+    // The routing record of this item (set once it exists), for the decision of a park after a mid-item failure.
+    let itemRouting: RoutingRecord | undefined;
+    // True once a ledger append carrying this item's decision went through (the create/merge batch, or a reject/unclassified
+    // append). A later failure that parks the item (receipt or move threw) must not add a second, contradicting decision.
+    let decided = false;
+    // The decision already in the ledger for the item itself (not a split-out overflow): the live feed reports it, so it agrees
+    // with the ledger even when a later failure parks the item.
+    let committedDecision: DecisionSummary | undefined;
+    // The events the live commit intent owns (set when it is written, cleared with it). `pend` is the part pushed to `batch` after the commit.
+    let intentOwn: { events: KbEvent[]; pend: KbEvent[]; committed: boolean } | undefined;
+    // Decision event for the paths that write no batch (reject, unclassified, parked). Best effort: the item is already
+    // handled (moved / parked), so a failing append must not turn it into an item error.
+    const recordDecision = async (d: DecisionSummary) => {
+      try {
+        const e = ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...d });
+        await w.appendLedger(roots, [e]);
+        log.push(e);
+        decided = true;
+      } catch (err) {
+        ctx.notify?.(`sweep: could not record the decision for ${c.from}/${c.denTopicId}: ${cleanError(err)}`);
+      }
+    };
     writeCurrent(roots, { from: c.from, denTopicId: c.denTopicId, startedAt: itemStart });
     const setRoute = (r: string) => {
       route = r;
@@ -466,12 +520,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       let domain = c.domainHint;
       // How this contribution was routed; written to its receipt.
       const routing: RoutingRecord = { route: "new", candidates: [] };
+      itemRouting = routing;
 
       // Declared-domain gate — never commit into an unmirrored, unreviewed domain.
       if (!isDeclared(declared, domain)) {
-        quarantine(roots, c, domain);
-        writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
-        markProcessed(c);
+        await w.quarantine(roots, c, domain);
+        await w.writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
+        await w.markProcessed(c);
+        await recordDecision({ outcome: "unclassified", reason: `pending domain: ${domain}` });
         result.unclassified++;
         outcome = `unclassified (domain ${domain})`;
         return;
@@ -656,13 +712,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         const existingLive = ef ? String(ef.currency ?? "live") !== "archived" : false;
         const existingUpdated = ef ? String(ef.updated ?? "") : "";
         if (existingLive && existingUpdated && c.sourceUpdated < existingUpdated) {
-          writeReceipt(
+          await w.writeReceipt(
             roots, c.from, c, "reject",
             `archived-older-than-live: ${c.sourceUpdated} < ${existingUpdated}`
           );
-          markProcessed(c);
+          await w.markProcessed(c);
           result.rejected++;
-          itemEvent = { outcome: "reject" };
+          const decision: DecisionSummary = { outcome: "reject", reason: `archived-older-than-live: ${c.sourceUpdated} < ${existingUpdated}`, routing: routingSummary(routing) };
+          await recordDecision(decision);
+          itemEvent = { outcome: "reject", decision };
           outcome = "rejected (archived, older than live entry)";
           return null;
         }
@@ -804,40 +862,60 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       if (overflow) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} covers two subjects: "${overflow.title}" is split out`);
       if (historyRestored?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → restored ${historyRestored.length} History line(s) the model dropped from ${entry.id}`);
 
-      // ── COMMIT (entry is live NOW) ──────────────────────────────────────
-      // A decision the contribution agrees with is left exactly as it is.
-      if (!unchanged) commitEntry(roots, entry);
-      else if (existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry)) {
-        // The text is left as it is; only the code-set source properties move.
-        atomicWrite(join(entriesDir(roots, domain), `${targetId}.md`), patchSourceProperties(existingMarkdown, entry));
-      }
-      committed = true;
-      if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
-
-      batch.push(ev.contribution({
+      const pend: KbEvent[] = [];
+      pend.push(ev.contribution({
         from: c.from,
         denTopicId: c.denTopicId,
         hash: c.contentHash,
         prevHash: c.prevHash,
         domainHint: domain,
       }));
+      // The decision lands in the same ledger append as the contribution event.
+      const decision: DecisionSummary = {
+        outcome: unchanged ? "unchanged" : action === "create" ? "create" : "merge",
+        entryId: entry.id,
+        routing: routingSummary(routing, entry.id),
+      };
+      pend.push(ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...decision }));
       if (!unchanged) {
-        batch.push(ev.entryWritten(entry.id, entry.id, action));
-        batch.push(ev.entryPlaced({
+        pend.push(ev.entryWritten(entry.id, entry.id, action));
+        pend.push(ev.entryPlaced({
           entryId: entry.id,
           sectionId,
           basis: placement.basis,
           fit: placement.fit,
         }));
       }
+      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+      // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
+      const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
+      const expectText = !unchanged ? renderEntry(entry) : patched;
+      writeIntent(roots, { hash: c.contentHash, entryId: entry.id, domain, events: [...batch, ...pend], written: intentWrittenCount(log, entry.id), ...(existingMarkdown !== undefined ? { prev: intentDigest(existingMarkdown) } : {}), ...(expectText !== undefined ? { expect: intentDigest(expectText) } : {}) });
+      intentOwn = { events: [...batch, ...pend], pend, committed: false };
+
+      // ── COMMIT (entry is live NOW) ──────────────────────────────────────
+      // A decision the contribution agrees with is left exactly as it is.
+      if (!unchanged) await w.commitEntry(roots, entry);
+      else if (existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry)) {
+        // The text is left as it is; only the code-set source properties move.
+        await w.patchEntry(roots, domain, targetId, patchSourceProperties(existingMarkdown, entry));
+      }
+      committed = true;
+      if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
+
+      if (intentOwn) intentOwn.committed = true;
+      batch.push(...pend);
       // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
       // by alias and update in place. Re-fold so later items in THIS batch see it.
-      batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
       reg = foldRegistry([...log, ...batch]);
 
       // The entry is live: record it in the ledger BEFORE anything else, so a
       // crash can't leave a live entry with no ledger record.
-      appendLedger(roots, batch);
+      await w.appendLedger(roots, batch);
+      clearIntent(roots);
+      intentOwn = undefined;
+      decided = true;
+      if (exclude === undefined) committedDecision = decision; // the main call; an overflow passes `exclude`
       log.push(...batch);
       batch.length = 0;
       touchedDomains.add(domain);
@@ -849,7 +927,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         if (c.anchor) holderKeys.add(c.anchor);
         for (const key of holderKeys) {
           try {
-            if (syncDelivered(roots, domain, key)) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → Delivered list of ${key} updated`);
+            if (await w.syncDelivered(roots, domain, key)) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → Delivered list of ${key} updated`);
           } catch (err) {
             ctx.notify?.(`sweep: could not sync the Delivered list of ${key}: ${cleanError(err)}`);
           }
@@ -866,7 +944,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
-      return { entry, action, domain, overflow, route: routing.route };
+      return { entry, action, domain, overflow, route: routing.route, decision };
       };
 
       const placed = await place(c, domain, routing, !c.denTopicId.includes("~split-"));
@@ -889,16 +967,34 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         } catch (err) {
           // The main entry is live and the contribution counts as seen: the
           // second subject must not be lost, so it is queued as its own item.
-          requeueOverflow(roots, o);
-          routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: "queued", error: cleanError(err) };
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" queued for the next tick: ${cleanError(err)}`);
+          // The overflow entry may be live with its events unrecorded: finish the intent; only a still-unrecorded overflow is requeued.
+          const own = intentOwn;
+          intentOwn = undefined;
+          let recorded = false;
+          let replayFailed = false;
+          try {
+            recorded = (await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify })) === "recorded";
+          } catch {
+            replayFailed = true; // the intent stays; the next tick replays it
+          }
+          // Only the intent's own events leave `batch` (events pushed before the intent existed, e.g. section_created, stay for PERSIST
+          // unless the intent has them: recorded, or kept for a later replay). Nothing else is dropped.
+          if (own) {
+            // A failed replay keeps the intent with ALL its events (pre-intent ones included), so none of them may stay in `batch` too.
+            const drop = new Set<KbEvent>(recorded || replayFailed ? own.events : own.pend);
+            for (let i = batch.length - 1; i >= 0; i--) if (drop.has(batch[i])) batch.splice(i, 1);
+          }
+          const alreadySeen = recorded || seenHashes(readLedger(roots)).has(o.contentHash); // the append went through and something later threw
+          if (!alreadySeen) requeueOverflow(roots, o, lane);
+          routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: alreadySeen ? "recorded" : "queued", error: cleanError(err) };
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" ${alreadySeen ? "already recorded" : "queued for the next tick"}: ${cleanError(err)}`);
         }
       }
 
       routing.target = entry.id;
-      writeReceipt(roots, c.from, c, action, entry.id, routing);
-      markProcessed(c);
-      itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id };
+      await w.writeReceipt(roots, c.from, c, action, entry.id, routing);
+      await w.markProcessed(c);
+      itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id, decision: placed.decision };
       outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;
       else result.merged++;
@@ -933,7 +1029,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           : overrun ? `${reason} (${overruns} times)` : `failed ${attempts} times: ${reason}`;
         park(roots, c, why);
         outcome = `PARKED: ${why}`;
-        itemEvent = { outcome: "parked" };
+        const decision: DecisionSummary = { outcome: "parked", reason: why, ...(itemRouting ? { routing: routingSummary(itemRouting) } : {}) };
+        if (!decided) await recordDecision(decision);
+        itemEvent = { outcome: "parked", decision: decided && committedDecision ? committedDecision : decision };
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
         await Promise.resolve(ctx.alert?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`)).catch(() => {});
         result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });
@@ -962,11 +1060,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // The ledger already has this run's events; if rendering fails, the next tick
   // or a reorg re-renders, so log it and carry on to the registry and commit.
   try {
-    if (touchedDomains.size > 0 && sections.length > 0) writeSections(roots, sections);
-    for (const domain of touchedDomains) {
-      renderDomainIndex(roots, domain);
-      renderDomainDigest(roots, domain);
-    }
+    if (touchedDomains.size > 0 && sections.length > 0) await w.writeSections(roots, sections);
+    for (const domain of touchedDomains) await w.renderDomain(roots, domain);
   } catch (err) {
     ctx.notify?.(`sweep: index/digest rendering failed (ledger is written; next tick or reorg re-renders): ${cleanError(err)}`);
   }
@@ -974,9 +1069,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // ── PERSIST ────────────────────────────────────────────────────────────────
   try {
     if (batch.length > 0 || committed) {
-      if (batch.length > 0) appendLedger(roots, batch);
-      renderRegistry(roots, foldRegistry([...log, ...batch]));
-      gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+      if (batch.length > 0) await w.appendLedger(roots, batch);
+      await w.renderRegistry(roots, foldRegistry([...log, ...batch]));
+      await w.gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
     }
   } finally {
     for (const e of itemEvents) emit(e);

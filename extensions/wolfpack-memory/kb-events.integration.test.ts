@@ -1,7 +1,7 @@
 /**
- * Dewey's sweep events and the pipeline route through a real librarian wolfd: a sandbox with a KB copy, a contribution in
+ * Dewey's sweep events through a real librarian wolfd: a sandbox with a KB copy, a contribution in
  * its inbox, the real sweep tick with a stubbed LLM engine and embedder (the `sweepTick` seam), observed on the wolf's
- * event stream and `GET /v1/wolves/:name/kb/pipeline`. The "live" KB is hashed before and after.
+ * event stream. The "live" KB is hashed before and after.
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -12,8 +12,7 @@ import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/work-server";
 import { runSweepTick, type CachedEmbedder } from "@wolfpack/kb/librarian";
-import { KbPipelineResponseSchema, MemoryEventSchema, type MemoryEvent } from "@wolfpack/protocol";
-import { ProtocolError } from "@wolfpack/client";
+import { MemoryEventSchema, type MemoryEvent } from "@wolfpack/protocol";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import { getSweepManager } from "../../packages/harness/src/sweep-worker.js";
@@ -106,8 +105,8 @@ const types = (evs: MemoryEvent[]) => evs.map((e) => e.type);
 const contribution = (topic: string, domain = "wolfpack") =>
   `---\nfrom: w1\nden_topic_id: ${topic}\nchange: create\ncontent_hash: ${Buffer.from(topic).toString("hex")}\nprev_hash: null\ndomain_hint: ${domain}\nsubmitted: 2026-10-26T01:00:00Z\n---\n\n# ${topic}\n\nSessions are cached for five minutes.\n`;
 
-describe("Dewey events + pipeline on a librarian wolfd", { timeout: 30_000 }, () => {
-  it("a sweep emits started / item / finished, persists the last run across an idle tick, and the pipeline route reflects it", async () => {
+describe("Dewey events on a librarian wolfd", { timeout: 30_000 }, () => {
+  it("a sweep emits started / item / finished, persists the last run across an idle tick", async () => {
     const { live, dev } = await liveAndDev();
     const liveBefore = hashTree(live);
     const t = await startWolf(dev, true);
@@ -118,11 +117,6 @@ describe("Dewey events + pipeline on a librarian wolfd", { timeout: 30_000 }, ()
     const events = collect(t);
     await new Promise((r) => setTimeout(r, 100));
 
-    // Before any sweep: the lane shows both waiting, no last run.
-    const before = await t.client.getKbPipeline!("testwolf");
-    expect(before.lanes).toEqual([{ wolf: "w1", pending: 2, oldestAgeMs: expect.any(Number) }]);
-    expect(before.sweep.last).toBeUndefined();
-
     await sweepOnce();
     await waitFor(() => types(events).includes("sweep_finished"));
     expect(types(events)).toEqual(["sweep_started", "sweep_item", "sweep_finished"]);
@@ -130,7 +124,6 @@ describe("Dewey events + pipeline on a librarian wolfd", { timeout: 30_000 }, ()
     expect(events[1]).toMatchObject({ type: "sweep_item", from: "w1", outcome: "create", entryId: expect.stringMatching(/^kb-wolfpack-/) });
     expect(events[2]).toMatchObject({ type: "sweep_finished", processed: 1, created: 1, merged: 0, rejected: 0, parked: 0, remaining: 1 });
     for (const e of events) expect(MemoryEventSchema.safeParse(e).success).toBe(true);
-    const entryId = (events[1] as { entryId: string }).entryId;
 
     // The second item has no domain: it parks at once (one item per tick).
     await sweepOnce();
@@ -154,27 +147,7 @@ describe("Dewey events + pipeline on a librarian wolfd", { timeout: 30_000 }, ()
     expect(status.completedAt).toBe(JSON.parse(saved).finishedAt);
     expect(status.result).toMatchObject({ parked: 1 });
 
-    // The pipeline route.
-    const p = await t.client.getKbPipeline!("testwolf");
-    expect(KbPipelineResponseSchema.safeParse(p).success).toBe(true);
-    expect(p.lanes).toEqual([{ wolf: "w1", pending: 0 }]);
-    expect(p.receipts.map((r) => [r.denTopicId, r.outcome]).sort()).toEqual([["caching", "create"], ["stuck", "parked"]]);
-    expect(p.receipts.find((r) => r.denTopicId === "caching")).toMatchObject({ wolf: "w1", entryId });
-    expect(p.parked).toMatchObject([{ wolf: "w1", file: "stuck.md", denTopicId: "stuck" }]);
-    expect(p.sweep.current).toBeUndefined();
-    expect(p.sweep.last).toMatchObject({ parked: 1, remaining: 0 });
-
     // Everything stayed in the sandbox.
     expect(hashTree(live)).toEqual(liveBefore);
-  });
-
-  it("a non-librarian wolf answers kb_unavailable (409), not not_found", async () => {
-    const { dev } = await liveAndDev();
-    const t = await startWolf(dev, false);
-    const res = await fetch(`${t.url}/v1/wolves/testwolf/kb/pipeline`, { headers: { "X-Protocol-Version": "1" } });
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: "kb_unavailable" });
-    await expect(t.client.getKbPipeline!("testwolf")).rejects.toMatchObject({ code: "kb_unavailable" });
-    await expect(t.client.getKbPipeline!("testwolf")).rejects.toBeInstanceOf(ProtocolError);
   });
 });

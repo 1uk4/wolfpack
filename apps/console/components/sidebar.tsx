@@ -5,21 +5,21 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
-import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
-import { WorkNavEntry } from "@/components/work-view-entry";
+import { WorkNavEntry } from "@/components/work-nav-link";
 import { CommandPalette } from "@/components/command-palette";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
+import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
@@ -81,9 +81,12 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
+const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean; closeList: () => void; registerToggle: () => () => void }>({
 	open: false,
 	toggle: () => {},
+	mobile: false,
+	closeList: () => {},
+	registerToggle: () => () => {},
 });
 
 export function useSidebar() {
@@ -96,6 +99,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
+	// Phone (< 768px): the sidebar is the full-screen LIST layer, not a persisted side panel (see src/core/mobile-layout.ts).
+	const [mobile, setMobile] = useState(false);
+	const [toggles, setToggles] = useState(0);
+	const pathname = usePathname();
+	const pathRef = useRef(pathname);
+	pathRef.current = pathname;
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -118,11 +127,31 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		const off = window.lh?.onZoom?.(setZoomVar);
 		void window.lh?.getZoom?.().then(setZoomVar);
 
-		const stored = localStorage.getItem(STORAGE_KEY);
-		// Default: open (first run introduces the sidebar).
-		setOpen(stored === null ? true : stored === "1");
+		// Default: open (first run introduces the sidebar). A phone starts on the list at "/".
+		const mq = typeof window.matchMedia === "function" ? window.matchMedia(MOBILE_QUERY) : null; // absent in the DOM test shims
+		// This effect runs once, so `pathname` here is the FIRST render's value (deliberately: it only decides the initial state);
+		// later reads go through pathRef, which tracks the current route.
+		const apply = (path: string) => {
+			const isMobile = mq?.matches ?? false;
+			setMobile(isMobile);
+			setOpen(initialListOpen(isMobile, localStorage.getItem(STORAGE_KEY), path));
+		};
+		apply(pathname ?? "/");
 		setMounted(true);
-		return () => off?.();
+		// Rotation / resize across 768px: recompute (back to >= 768 restores the stored desktop preference).
+		const onMq = () => apply(pathRef.current ?? "/");
+		mq?.addEventListener("change", onMq);
+		return () => {
+			off?.();
+			mq?.removeEventListener("change", onMq);
+		};
+	}, []);
+
+	// Selecting something in the list on a phone closes it (never persisted); called from the click handlers.
+	const closeList = useCallback(() => setOpen((o) => listOpenAfterSelect(mobile, o)), [mobile]);
+	const registerToggle = useCallback(() => {
+		setToggles((n) => n + 1);
+		return () => setToggles((n) => n - 1);
 	}, []);
 
 	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):
@@ -149,11 +178,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			window.lh?.expandWindow();
 			return;
 		}
+		if (mobile) return setOpen((v) => !v); // a phone's list layer is transient: no persisted preference
 		setOpen((v) => {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [narrow, open, mobile]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -169,10 +199,29 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider value={{ open: open && !narrow, toggle, mobile, closeList, registerToggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
-			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			{/* phone: the shell owns the top safe-area inset (pages without a header must not draw under the notch) */}
+			<div data-lh-shell className={cn("flex h-dvh max-md:pt-[env(safe-area-inset-top)]", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			<FloatingBack toggles={toggles} open={open && !narrow} mobile={mobile} onClick={toggle} />
 		</SidebarContext.Provider>
+	);
+}
+
+/** Phone only: a fixed back-to-list button for pages that render no SidebarToggle (graph "/", KB activity). */
+function FloatingBack({ toggles, open, mobile, onClick }: { toggles: number; open: boolean; mobile: boolean; onClick: () => void }) {
+	if (!needsFloatingBack(mobile, open, toggles)) return null;
+	return (
+		<button
+			type="button"
+			aria-label={MOBILE_BACK_LABEL}
+			data-testid="mobile-back"
+			onClick={onClick}
+			className="fixed left-2 z-30 flex size-11 items-center justify-center rounded-full border bg-card/90 text-muted-foreground shadow-lg backdrop-blur"
+			style={{ top: "calc(env(safe-area-inset-top) + 0.5rem)" }}
+		>
+			<ArrowLeftIcon className="size-5" />
+		</button>
 	);
 }
 
@@ -189,7 +238,22 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
  *  The icon fades with the slot and is clipped by it as it collapses —
  *  no popping in either direction. */
 export function SidebarToggle() {
-	const { open, toggle } = useSidebar();
+	const { open, toggle, mobile, registerToggle } = useSidebar();
+	useEffect(() => registerToggle(), [registerToggle]);
+	// Phone: the clear back control (list <- content). Plain 44px button, no slot animation.
+	if (mobile) {
+		return (
+			<button
+				type="button"
+				aria-label={MOBILE_BACK_LABEL}
+				data-testid="mobile-back"
+				onClick={toggle}
+				className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+			>
+				<ArrowLeftIcon className="size-5" />
+			</button>
+		);
+	}
 	return (
 		<span
 			className={cn(
@@ -287,8 +351,14 @@ export function SessionRow({
 	onContextMenu,
 	nested = false,
 	indented = false,
+	offline = false,
+	wolfStatus,
 }: {
 	chat: SessionItem;
+	/** The wolf's liveness, drawn as a badge on its group header (the Home row). */
+	wolfStatus?: WolfStatus;
+	/** Its wolf is offline: the row we still hold is greyed and says so. */
+	offline?: boolean;
 	/** A subagent row under its feature: two steps in, compact single line. */
 	nested?: boolean;
 	/** A feature thread (or archived one) under Home: one step in, with a left guide line. */
@@ -310,7 +380,9 @@ export function SessionRow({
 		const running = chat.state === "running";
 		return (
 			<div
+				title={offline ? "offline" : undefined}
 				className={cn(
+					offline && "opacity-50",
 					"relative mb-px ml-8 flex w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border-l border-border pl-2 pr-2 text-xs leading-5 text-muted-foreground transition-colors hover:bg-accent",
 					active && "bg-accent text-foreground",
 					kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
@@ -350,7 +422,11 @@ export function SessionRow({
 			onClick={onOpen}
 			onContextMenu={onContextMenu}
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
+			data-offline={offline || undefined}
+			title={offline ? "offline" : undefined}
+			aria-label={offline ? `${chat.title} (offline)` : undefined}
 			className={cn(
+				offline && "opacity-50",
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
 				active && "bg-accent",
@@ -381,6 +457,7 @@ export function SessionRow({
 					) : null;
 				})()}
 			</span>
+			{home && wolfStatus && <WolfBadge wolf={wolfStatus} />}
 		</button>
 	);
 }
@@ -435,15 +512,59 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	);
 }
 
+/** The wolf's liveness on its own group header: a dot plus an explicit word (never colour-only). Compact on phones. */
+export function WolfBadge({ wolf }: { wolf: WolfStatus }) {
+	return (
+		<span
+			data-testid="wolf-badge"
+			data-wolf={wolf.name}
+			data-online={wolf.online}
+			role="status"
+			aria-label={`${wolf.name}, ${wolf.online ? "online" : "offline"}`}
+			className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+		>
+			<span aria-hidden className={cn("size-2 rounded-full", wolf.online ? "bg-emerald-500" : "bg-muted-foreground/40")} />
+			<span aria-hidden>{wolf.online ? "online" : "offline"}</span>
+		</span>
+	);
+}
+
+/** Header for a known wolf with no Home thread held (zero threads, or only features): same look as the Home row. */
+export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
+	return (
+		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
+			<span className="min-w-0 flex-1">
+				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--lh-prose-size)">
+					<WorkflowIcon aria-hidden className="size-[1em] shrink-0 text-muted-foreground" />
+					<span className="truncate">{wolf.name}</span>
+				</span>
+				<span className="block truncate text-xs text-muted-foreground">orchestrator</span>
+			</span>
+			<WolfBadge wolf={wolf} />
+		</div>
+	);
+}
+
+/** Re-check liveness this often while the tab is visible (/api/wolves only; no SSE event fires on presence change). */
+const ROSTER_POLL_MS = 20_000;
+
 export function SessionsSidebar() {
-	const { open, toggle } = useSidebar();
+	const { open, toggle, closeList, mobile } = useSidebar();
 	const [chats, setChats] = useState<SessionItem[] | null>(null);
+	const [roster, setRoster] = useState<WolfStatus[]>([]);
+	const rosterRef = useRef(roster);
+	rosterRef.current = roster;
+	const rosterByName = useMemo(() => new Map(roster.map((w) => [w.name, w] as const)), [roster]);
+	const offlineWolves = useMemo(() => new Set(roster.filter((w) => !w.online).map((w) => w.name)), [roster]);
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
 	const { openSubagent } = useSubagentModal();
 	/** A subagent opens its modal over this page; anything else navigates. */
-	const openItem = (c: SessionItem) => (isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c)));
+	const openItem = (c: SessionItem) => {
+		closeList();
+		return isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c));
+	};
 	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
@@ -451,8 +572,9 @@ export function SessionsSidebar() {
 	   message is sent (and that message becomes its title). Search: a
 	   client-side filter over the poll snapshot — no server round trip. */
 	const newSession = useCallback(() => {
+		closeList();
 		router.push("/chat/new"); // redirects to a thread (see app/chat/new)
-	}, [router]);
+	}, [router, closeList]);
 
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
 	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
@@ -502,6 +624,8 @@ export function SessionsSidebar() {
 										chat={c}
 										nested={nested}
 										indented={indented}
+										offline={offlineWolves.has(rowWolf(c))}
+										wolfStatus={rosterByName.get(rowWolf(c))}
 										active={pathname === itemHref(c)}
 										kbdSelected={at === kbdIndex}
 										onOpen={() => {
@@ -523,9 +647,14 @@ export function SessionsSidebar() {
 		// fetch follows, so the final event of a burst is never lost.
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
-			const wolves = (await (await fetch("/api/wolves", { cache: "no-store" })).json()) as {
-				wolves: { name: string }[];
+			const wolvesRes = await fetch("/api/wolves", { cache: "no-store" });
+			// 401 = auth lost, not offline: the fetch wrapper sends the browser to /pair; leave the list as it is.
+			if (wolvesRes.status === 401) return;
+			if (!wolvesRes.ok) throw new Error(`roster ${wolvesRes.status}`);
+			const wolves = (await wolvesRes.json()) as {
+				wolves: { name: string; status?: string }[];
 			};
+			if (!Array.isArray(wolves.wolves)) throw new Error("bad roster");
 			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {
 					try {
@@ -538,8 +667,10 @@ export function SessionsSidebar() {
 				}),
 			);
 			setChats((prev) => foldWolfThreads(prev, results));
+			setRoster((prev) => foldWolfRoster(prev, wolves.wolves));
 		} catch {
-			// a transient failure keeps the last snapshot
+			// a transient failure keeps the last snapshot; the server is unreachable, so every known wolf reads offline
+			setRoster((prev) => foldWolfRoster(prev, undefined));
 			setChats((prev) => prev ?? []);
 		}
 	}), []);
@@ -617,12 +748,28 @@ export function SessionsSidebar() {
 	useServerEvent("needs-you-changed", scheduleEventRefresh);
 	useServerEvent("thread-updated", scheduleEventRefresh);
 	useServerResync(() => void refreshRef.current());
-	useEffect(
-		() => () => {
-			if (eventDebounceRef.current) clearTimeout(eventDebounceRef.current);
-		},
-		[],
-	);
+	/* Presence changes fire no event, so re-check liveness on a timer (paused while the tab is hidden). The tick is ONE
+	   /api/wolves call; threads are fetched only for a wolf that just came back online (the SSE/resync paths cover the rest). */
+	useEffect(() => {
+		const tick = async () => {
+			const { roster: next, recovered } = await checkRoster((u, i) => fetch(u, i), rosterRef.current);
+			setRoster(next);
+			if (recovered.length === 0) return;
+			const got = await Promise.all(
+				recovered.map(async (wolf) => {
+					try {
+						const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`, { cache: "no-store" });
+						const d = (await res.json()) as { threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] };
+						return { wolf, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+					} catch {
+						return { wolf, threads: undefined }; // keeps its stale rows; the roster status is untouched
+					}
+				}),
+			);
+			setChats((prev) => foldWolfThreads(prev, next.map((w) => got.find((g) => g.wolf === w.name) ?? { wolf: w.name, threads: undefined })));
+		};
+		return startVisibleTimer(() => void tick(), ROSTER_POLL_MS, document);
+	}, []);
 
 	/* ── Keyboard seams (shortcut wave A, 2026-09-17; search-walk round
 	   2026-10-10) ── ⌘⇧F focuses the search field — and THE SEARCH OWNS THE
@@ -744,10 +891,13 @@ export function SessionsSidebar() {
 
 	return (
 		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
+			// < md: the open sidebar is the full-screen list layer (fixed, above everything but dialogs); md+ is the original inline panel.
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full md:w-72" : "w-0")}
 			aria-hidden={!open}
+			data-testid="sidebar"
+			data-mobile-list={(open && mobile) || undefined}
 		>
-			<div className="flex h-full w-72 flex-col border-r bg-background">
+			<div className="flex h-full w-72 flex-col border-r bg-background max-md:w-full max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
 				{/* LH wordmark — the owner's header; close toggle sits at the edge.
 				    Merged chrome (2026-09-17): in Electron this band is the
 				    window's drag surface and starts after the traffic lights
@@ -770,6 +920,7 @@ export function SessionsSidebar() {
 					>
 						<Link
 							href="/"
+							onClick={closeList}
 							aria-label="Home"
 							className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
 						>
@@ -801,6 +952,7 @@ export function SessionsSidebar() {
 					</button>
 					<Link
 						href="/"
+						onClick={closeList}
 						data-testid="nav-graph"
 						aria-current={pathname === "/" ? "page" : undefined}
 						className={cn(
@@ -812,16 +964,17 @@ export function SessionsSidebar() {
 						Graph
 					</Link>
 					<Link
-						href="/pipeline"
-						data-testid="nav-pipeline"
-						aria-current={pathname === "/pipeline" ? "page" : undefined}
+						href="/kb-activity"
+						onClick={closeList}
+						data-testid="nav-kb-activity"
+						aria-current={pathname === "/kb-activity" ? "page" : undefined}
 						className={cn(
 							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
-							pathname === "/pipeline" ? "bg-accent text-foreground" : "text-muted-foreground",
+							pathname === "/kb-activity" ? "bg-accent text-foreground" : "text-muted-foreground",
 						)}
 					>
 						<WorkflowIcon className="size-3" />
-						Pipeline
+						KB activity
 					</Link>
 					<WorkNavEntry />
 				</div>
@@ -893,12 +1046,15 @@ export function SessionsSidebar() {
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
 					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
-					) : shown.length === 0 && archived.length === 0 ? (
+					) : shown.length === 0 && archived.length === 0 && (searching || roster.length === 0) ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top))))
+						[
+							...groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
+							...(searching ? [] : roster.filter((w) => !homeWolves.has(w.name)).map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} />)),
+						]
 					)}
 					{archived.length > 0 && (
 						<>
@@ -940,7 +1096,10 @@ export function SessionsSidebar() {
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
-								onClick={() => openSettings()}
+								onClick={() => {
+									closeList(); // the dialog must not open behind the full-screen list
+									openSettings();
+								}}
 								data-testid="settings-entry"
 								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 							>

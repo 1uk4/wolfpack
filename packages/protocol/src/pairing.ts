@@ -20,3 +20,29 @@ export type PairRequest = z.infer<typeof PairRequestSchema>;
 
 export const PairResponseSchema = z.object({ token: z.string().min(1), tokenId: z.string().min(1), hostId: z.string().optional() });
 export type PairResponse = z.infer<typeof PairResponseSchema>;
+
+/**
+ * Device management (GET/DELETE /v1/tokens, POST /v1/tokens/pairing-codes). Callers: console and browser tokens only; a worker
+ * token gets 403. The list covers console/browser devices (never worker tokens) and never carries a secret or hash.
+ */
+export const DeviceSchema = z.object({
+  id: z.string().min(1),
+  label: z.string(),
+  kind: z.enum(["console", "browser"]),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+  /** True for the device whose token made this request. */
+  self: z.boolean(),
+  /** Label of the device that minted this one's pairing code; null when minted on the host CLI (or the minter is gone / predates provenance). */
+  addedBy: z.string().nullable(),
+  /** Id of that minting device (kept even if it was revoked since), null when unknown. */
+  addedById: z.string().nullable(),
+});
+export type Device = z.infer<typeof DeviceSchema>;
+export const DeviceListSchema = z.object({ devices: z.array(DeviceSchema) });
+export type DeviceList = z.infer<typeof DeviceListSchema>;
+/** `revoked`: the id asked for; `cascaded`: the other devices revoked with it (`?cascade=1`); `self`: the caller's own token was among them. */
+export const RevokeDeviceResponseSchema = z.object({ revoked: z.string(), self: z.boolean(), cascaded: z.array(z.string()).default([]) });
+export const MintPairingCodeRequestSchema = z.object({ label: z.string().max(64).optional() }).strict();
+export const MintPairingCodeResponseSchema = z.object({ code: z.string().min(1), expiresAt: z.string() });
+export type MintPairingCodeResponse = z.infer<typeof MintPairingCodeResponseSchema>;

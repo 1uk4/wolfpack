@@ -19,6 +19,7 @@ const ALIASES: Record<string, string> = {
   tasks: "wolfpack-tasks",
   ask: "ask-user-question",
   "visual-tools": "wolfpack-visual-tools",
+  browser: "wolfpack-browser",
 };
 
 export function resolveName(name: string): string {

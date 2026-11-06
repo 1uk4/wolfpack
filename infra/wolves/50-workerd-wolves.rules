@@ -1,0 +1,7 @@
+// workerd-wolves may start/stop/restart wolfd@<name>.service and nothing else.
+polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "workerd-wolves") {
+    var unit = action.lookup("unit"), verb = action.lookup("verb");
+    if (/^wolfd@[a-z0-9][a-z0-9-]*\.service$/.test(unit) && (verb == "start" || verb == "stop" || verb == "restart")) return polkit.Result.YES;
+  }
+});

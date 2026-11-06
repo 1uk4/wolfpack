@@ -2,9 +2,9 @@
  * Event factories — build well-formed ledger events with id + timestamp filled.
  */
 import type { KbEvent, EntryAction, DecisionSummary } from "./schemas/events.js";
-import { eventId, now } from "./ids.js";
+import { eventId, isoNow } from "./ids.js";
 
-const stamp = () => ({ id: eventId(), at: now() });
+const stamp = () => ({ id: eventId(), at: isoNow() });
 
 export const ev = {
   contribution: (f: {

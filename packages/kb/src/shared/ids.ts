@@ -31,3 +31,8 @@ export function eventId(): string {
 export function now(): string {
   return new Date().toISOString().replace("T", " ").slice(0, 16);
 }
+
+/** Current timestamp as a full ISO string with zone ("2026-11-05T22:56:00.000Z"). Ledger events use this; `now()` has no zone and reads as local time in a browser. */
+export function isoNow(): string {
+  return new Date().toISOString();
+}

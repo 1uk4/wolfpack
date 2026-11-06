@@ -118,3 +118,12 @@ describe("Contributions list", () => {
 		assert.match(renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />), /Nothing incoming\./);
 	});
 });
+
+describe("Contributions list cap", () => {
+	it("shows +N more when rows are cut", () => {
+		const d = kbActivityFixture();
+		d.incoming.wolves = [{ wolf: "hal", pending: 40, items: Array.from({ length: 40 }, (_, i) => ({ denTopicId: `q${i}`, ageMs: 1000 + i })) }];
+		const html = renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />);
+		assert.match(html, /data-testid="kb-contributions-more">\+\d+ more</);
+	});
+});

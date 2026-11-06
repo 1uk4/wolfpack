@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	applyHubEvent,
+	contributionList,
 	contributionRows,
 	attentionGroups,
 	hubIsOlder,
@@ -66,6 +67,7 @@ describe("kb-activity model", () => {
 		assert.equal(needsRefetch({ type: "sweep_item" }), true);
 		assert.equal(needsRefetch({ type: "sweep_started" }), true);
 		assert.equal(needsRefetch({ type: "wolf.presence" }), false);
+		assert.equal(needsRefetch({ type: "sweep_progress" }), false); // folded in optimistically
 	});
 	it("mergeDecisionPages dedupes by id and takes cursor/totals from the newer page", () => {
 		const a = kbActivityFixture().decisions;
@@ -408,6 +410,65 @@ describe("kb-activity model", () => {
 			const fin = applyHubEvent(initialActivityState(d2), { type: "sweep_finished" } as never, NOW);
 			assert.equal(fin.data.sweep?.current, undefined);
 			assert.equal(fin.sweeping, false);
+		});
+
+		const frameAt = (o: object) => ({ id: 1, at: "2026-11-05T10:00:01Z", ...o }) as never;
+		it("sweep_progress shows the item in progress at once, and the route when it arrives", () => {
+			const d = base();
+			let st = initialActivityState(d);
+			st = applyHubEvent(st, frameAt({ type: "sweep_progress", from: "hal", denTopicId: "a", startedAt: NOW }), NOW);
+			assert.equal(contributionRows(st.data, NOW)[0]!.state, "running");
+			assert.equal(contributionRows(st.data, NOW)[0]!.route, undefined);
+			st = applyHubEvent(st, frameAt({ type: "sweep_progress", from: "hal", denTopicId: "a", startedAt: NOW, route: "merge into kb-x" }), NOW);
+			assert.equal(contributionRows(st.data, NOW)[0]!.route, "merge into kb-x");
+			assert.equal(st.sweeping, true);
+		});
+		it("a duplicate sweep_item (provisional row already there) still clears sweep.current", () => {
+			const d = base();
+			let st = initialActivityState(d);
+			const item = frameAt({ type: "sweep_item", id: 9, from: "hal", denTopicId: "a", outcome: "create", entryId: "kb-n" });
+			st = applyHubEvent(st, item, NOW);
+			st = applyHubEvent(st, frameAt({ type: "sweep_progress", from: "hal", denTopicId: "a", startedAt: NOW }), NOW); // current is back (e.g. reconciled state)
+			st = applyHubEvent(st, item, NOW); // duplicate: early return path
+			assert.equal(st.data.sweep?.current, undefined);
+		});
+		it("a refetch issued before a sweep_item cannot bring sweep.current back", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW - 1000, route: "merge into kb-x" } };
+			let st = initialActivityState(d); // the request goes out here (current present)
+			st = applyHubEvent(st, frameAt({ type: "sweep_item", id: 3, from: "hal", denTopicId: "a", outcome: "merge", entryId: "kb-x" }), NOW);
+			// ... and the stale response lands after the event
+			st = reconcileActivity(st, structuredClone(d));
+			assert.equal(st.data.sweep?.current, undefined);
+			// a later item (another topic) is not affected
+			const d2 = base();
+			d2.sweep = { running: true, current: { from: "hal", denTopicId: "b", startedAt: NOW } };
+			assert.equal(reconcileActivity(st, d2).data.sweep?.current?.denTopicId, "b");
+			// the same item starting again (new sweep_progress) is shown again
+			st = applyHubEvent(st, frameAt({ type: "sweep_progress", from: "hal", denTopicId: "a", startedAt: NOW + 5 }), NOW);
+			assert.equal(reconcileActivity(st, structuredClone(d)).data.sweep?.current?.denTopicId, "a");
+		});
+		it("a refetch issued before sweep_finished cannot bring sweep.current back", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW } };
+			let st = initialActivityState(d);
+			st = applyHubEvent(st, frameAt({ type: "sweep_finished" }), NOW);
+			assert.equal(reconcileActivity(st, structuredClone(d)).data.sweep?.current, undefined);
+			st = applyHubEvent(st, frameAt({ type: "sweep_started", pending: 1 }), NOW);
+			assert.equal(reconcileActivity(st, structuredClone(d)).data.sweep?.current?.denTopicId, "a");
+		});
+		it("over the cap, rows for rejected / parked are kept and the rest is counted as +N more", () => {
+			const d = base();
+			d.incoming.wolves = [{ wolf: "hal", pending: 40, items: Array.from({ length: 40 }, (_, i) => ({ denTopicId: `q${i}`, ageMs: 1000 + i })) }];
+			d.decisions.items = [
+				{ id: "r1", at: new Date(NOW - 60_000).toISOString(), from: "hal", denTopicId: "rej1", hash: "h", outcome: "reject" },
+				{ id: "p1", at: new Date(NOW - 90_000).toISOString(), from: "hal", denTopicId: "par1", hash: "h", outcome: "parked" },
+			];
+			const { rows, more } = contributionList(d, NOW, 30);
+			assert.equal(rows.length, 30);
+			assert.equal(more, 42 - 30);
+			assert.deepEqual(rows.filter((r) => r.state === "decided").map((r) => r.denTopicId).sort(), ["par1", "rej1"]);
+			assert.equal(contributionList(d, NOW, 100).more, 0);
 		});
 	});
 });

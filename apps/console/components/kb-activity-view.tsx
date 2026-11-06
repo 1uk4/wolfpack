@@ -16,7 +16,7 @@ import {
 	KB_ACTIVITY_SINCE,
 	applyHubEvent,
 	attentionGroups,
-	contributionRows,
+	contributionList,
 	curatorNote,
 	hubIsOlder,
 	domainBlocks,
@@ -109,7 +109,7 @@ export function DomainBlockView({ block, now, loading, onShowAll }: { block: Dom
 
 /** The live Contributions list: each incoming item by wolf, topic, domain and age, with queued / in progress / decided. */
 export function ContributionsList({ data, now }: { data: KbActivityResponse; now: number }) {
-	const rows: ContributionRow[] = contributionRows(data, now);
+	const { rows, more }: { rows: ContributionRow[]; more: number } = contributionList(data, now);
 	return (
 		<section className="mb-6" data-testid="kb-contributions">
 			<h2 className="mb-1 font-ui text-[11px] uppercase tracking-wide text-muted-foreground">Contributions</h2>
@@ -138,6 +138,7 @@ export function ContributionsList({ data, now }: { data: KbActivityResponse; now
 							</span>
 						</li>
 					))}
+					{more > 0 ? <li className="text-muted-foreground/50" data-testid="kb-contributions-more">+{more} more</li> : null}
 				</ul>
 			)}
 		</section>

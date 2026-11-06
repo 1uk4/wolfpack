@@ -62,6 +62,13 @@ export interface KbActivityState {
 	sweeping: boolean;
 	/** The range and domain the data was fetched for: provisional rows outside them are not added. */
 	scope?: KbActivityScope;
+	/**
+	 * Items whose sweep_item was seen (key from + topic), and whether the sweep finished: a refetch issued BEFORE those events can land
+	 * after them carrying `sweep.current` again, so reconcileActivity drops a `current` that these say is over. Cleared by the next
+	 * sweep_started / sweep_progress for that item.
+	 */
+	ended?: string[];
+	idle?: boolean;
 }
 
 export interface KbActivityScope {
@@ -87,8 +94,13 @@ export function sinceCutoff(since: string | undefined, now: number = Date.now())
 
 /** A refetch replaces the data (provisional rows go); the sweeping flag carries over when the response does not say. */
 export function reconcileActivity(prev: KbActivityState | null, data: KbActivityResponse, scope?: KbActivityScope): KbActivityState {
-	const next = initialActivityState(data, scope);
+	let d = data;
+	const cur = data.sweep?.current;
+	if (cur && prev && (prev.idle || prev.ended?.includes(itemKey(cur)))) d = { ...data, sweep: withoutCurrent(data.sweep!) }; // a stale response: that item already ended
+	const next = initialActivityState(d, scope);
 	if (!data.sweep && prev) next.sweeping = prev.sweeping;
+	if (prev?.ended) next.ended = prev.ended;
+	if (prev?.idle) next.idle = true;
 	return next;
 }
 
@@ -409,13 +421,11 @@ export function needsRefetch(frame: KbHubFrame): boolean {
 	return frame.type === "sweep_started" || frame.type === "sweep_item" || frame.type === "sweep_finished" || frame.type === "kb.changed" || frame.type === "resync";
 }
 
+const itemKey = (x: { from: string; denTopicId: string }): string => `${x.from}\u0000${x.denTopicId}`;
 type Sweep = NonNullable<KbActivityResponse["sweep"]>;
 function withoutCurrent(sw: Sweep): Sweep {
 	const { current: _drop, ...rest } = sw;
 	return rest;
-}
-function clearCurrentItem(state: KbActivityState, d: KbActivityResponse): KbActivityState {
-	return { ...state, data: { ...d, sweep: withoutCurrent(d.sweep!) } };
 }
 
 const dec = (n: number): number => Math.max(0, n - 1);
@@ -437,26 +447,42 @@ function sameContribution(a: { from: string; denTopicId: string }, b: { from: st
  */
 export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: number = Date.now()): KbActivityState {
 	switch (frame.type) {
-		case "sweep_started":
-			return state.sweeping ? state : { ...state, sweeping: true };
+		case "sweep_started": {
+			if (!state.idle) return state.sweeping ? state : { ...state, sweeping: true };
+			const { idle: _i, ...rest } = state;
+			return { ...rest, sweeping: true };
+		}
+		case "sweep_progress": {
+			// the item in progress (or its route) changed: show it now, without a refetch
+			const f = frame as Extract<HubEvent, { type: "sweep_progress" }>;
+			if (typeof f.from !== "string" || typeof f.denTopicId !== "string" || typeof f.startedAt !== "number") return state;
+			const current: NonNullable<Sweep["current"]> = { from: f.from, denTopicId: f.denTopicId, startedAt: f.startedAt };
+			if (f.route) current.route = f.route;
+			const { idle: _i, ...rest } = state;
+			const ended = state.ended?.filter((k) => k !== itemKey(f));
+			const next: KbActivityState = { ...rest, sweeping: true, data: { ...state.data, sweep: { ...(state.data.sweep ?? { running: true }), running: true, current } } };
+			if (ended && ended.length > 0) next.ended = ended;
+			else delete next.ended;
+			return next;
+		}
 		case "sweep_finished": {
 			const sw = state.data.sweep;
 			const data = sw?.current ? { ...state.data, sweep: withoutCurrent(sw) } : state.data;
-			return state.sweeping || data !== state.data ? { ...state, data, sweeping: false } : state;
+			return state.sweeping || data !== state.data || !state.idle ? { ...state, data, sweeping: false, idle: true } : state;
 		}
 		case "sweep_item": {
 			const f = frame as Extract<HubEvent, { type: "sweep_item" }>;
 			if (typeof f.from !== "string" || typeof f.denTopicId !== "string") return state;
+			// The item ended: it is no longer in progress, whether or not the rest of this event is new (a duplicate or already-reconciled
+			// event still clears it), and a response fetched before this event must not bring it back (state.ended, see reconcileActivity).
+			const key = itemKey(f);
+			if (state.data.sweep?.current && itemKey(state.data.sweep.current) === key) state = { ...state, data: { ...state.data, sweep: withoutCurrent(state.data.sweep) } };
+			if (!state.ended?.includes(key)) state = { ...state, ended: [...(state.ended ?? []), key].slice(-20) };
 			const d = state.data;
 			const decision = f.decision;
 			const outcome = decision ? decisionOutcome(decision.outcome) : decisionOutcome(f.outcome);
 			const id = `${PROVISIONAL_PREFIX}${f.id}`;
 			if (d.decisions.items.some((x) => x.id === id)) return state;
-			// the item in progress ended: drop it from sweep.current (the next one arrives with the refetch)
-			if (d.sweep?.current && sameContribution(d.sweep.current, f)) {
-				const next = clearCurrentItem(state, d);
-				return applyHubEvent(next, frame, now);
-			}
 
 			// incoming: a plain parked item stays pending; but a parked item whose decision carries a committed create/merge (post-commit
 			// failure) was decided, so it leaves the pending count. Match on from + denTopicId only (the event has no hash).
@@ -519,6 +545,8 @@ export const KB_CONTRIBUTION_DECIDED_MS = 15 * 60_000;
 /** Rejected and parked items stay listed longer: they need a look. */
 export const KB_CONTRIBUTION_ATTENTION_MS = 24 * 3_600_000;
 export const KB_CONTRIBUTION_ROWS = 30;
+/** Of the cap, up to this many rows are kept for rejected / parked / unclassified items when a busy lane would push them out. */
+export const KB_CONTRIBUTION_ATTENTION_RESERVE = 10;
 
 export type ContributionState = "queued" | "running" | "decided";
 
@@ -544,10 +572,17 @@ const STATE_ORDER: Record<ContributionState, number> = { running: 0, queued: 1, 
 /**
  * The live Contributions list: one row per incoming item, by wolf + topic. Running = the hub's `sweep.current` (absent on an older hub or
  * when idle: then nothing is running); queued = waiting in the lane; decided = a recent decision (create / merge / unchanged for 15 minutes,
- * reject / parked for 24 hours; a parked item still in the lane stays). A decision older than the item's arrival (a resubmission) does not
+ * reject / parked / unclassified for 24 hours; a parked item still in the lane stays). A decision older than the item's arrival (a resubmission) does not
  * hide the queued item. Order: running, queued (oldest first), decided (newest first), capped.
  */
 export function contributionRows(data: KbActivityResponse, now: number = Date.now(), cap: number = KB_CONTRIBUTION_ROWS): ContributionRow[] {
+	return contributionList(data, now, cap).rows;
+}
+
+const needsLook = (r: ContributionRow): boolean => r.state === "decided" && (r.outcome === "reject" || r.outcome === "parked" || r.outcome === "unclassified");
+
+/** The rows plus how many were cut by the cap. Up to KB_CONTRIBUTION_ATTENTION_RESERVE rows of the cap are kept for items that need a look. */
+export function contributionList(data: KbActivityResponse, now: number = Date.now(), cap: number = KB_CONTRIBUTION_ROWS): { rows: ContributionRow[]; more: number } {
 	const base = Date.parse(data.generatedAt);
 	const ref = Number.isNaN(base) ? now : base;
 	const id = (w: string, t: string) => `${w}\u0000${t}`;
@@ -597,7 +632,13 @@ export function contributionRows(data: KbActivityResponse, now: number = Date.no
 		rows.set(key, row);
 	}
 
-	return [...rows.values()]
-		.sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (a.state === "decided" ? b.at - a.at : a.at - b.at))
-		.slice(0, cap);
+	const all = [...rows.values()].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (a.state === "decided" ? b.at - a.at : a.at - b.at));
+	if (all.length <= cap) return { rows: all, more: 0 };
+	// Over the cap: fill with the other rows first, but leave room for the ones that need a look; keep the display order.
+	const att = all.filter(needsLook);
+	const reserve = Math.min(att.length, KB_CONTRIBUTION_ATTENTION_RESERVE, cap);
+	const keep = new Set<ContributionRow>(att.slice(0, reserve));
+	for (const r of all) if (keep.size < cap && !needsLook(r)) keep.add(r);
+	for (const r of att) if (keep.size < cap) keep.add(r);
+	return { rows: all.filter((r) => keep.has(r)), more: all.length - keep.size };
 }

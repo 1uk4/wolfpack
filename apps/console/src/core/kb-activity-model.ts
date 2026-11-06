@@ -4,6 +4,7 @@
  * Browser-safe; no I/O. The ledger (what GET /v1/kb/activity returns) is the truth: events only add provisional rows until the refetch.
  */
 
+import { parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 import type { HubEvent, KbActivityChange, KbActivityResponse, KbDecision, KbDecisionOutcome } from "@wolfpack/client";
 
 export type { KbActivityChange, KbActivityResponse, KbDecision, KbDecisionOutcome };
@@ -194,7 +195,7 @@ const MARK: Record<string, string> = { create: "+", merge: "~", unchanged: "=", 
 
 /** Newest first; an unparseable time compares equal, so the hub's order stands (the sort is stable). */
 function timeDesc(a: string, b: string): number {
-	const d = Date.parse(b) - Date.parse(a);
+	const d = parseLedgerTime(b) - parseLedgerTime(a);
 	return Number.isNaN(d) ? 0 : d;
 }
 
@@ -404,7 +405,7 @@ export function kbAge(ms: number): string {
 
 /** "3m ago" / "just now"; `now` injectable for tests. */
 export function kbRelativeTime(iso: string, now: number = Date.now()): string {
-	const t = Date.parse(iso);
+	const t = parseLedgerTime(iso);
 	if (Number.isNaN(t)) return iso;
 	const age = kbAge(Math.max(0, now - t));
 	return age === "just now" ? age : `${age} ago`;
@@ -515,7 +516,7 @@ export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: nu
 
 			// decisions: only inside the fetched range (a domain filter cannot be checked on a provisional row, so it adds none)
 			const cutoff = sinceCutoff(state.scope?.since, now);
-			const t = Date.parse(f.at);
+			const t = parseLedgerTime(f.at);
 			const outside = state.scope?.domain !== undefined || (cutoff !== null && !Number.isNaN(t) && t < cutoff);
 			if (outside) return { ...state, sweeping: true, data: { ...d, incoming } };
 
@@ -618,7 +619,7 @@ export function contributionList(data: KbActivityResponse, now: number = Date.no
 	for (const d of decisions) {
 		const key = id(d.from, d.denTopicId);
 		if (rows.has(key)) continue; // newest decision per item
-		const t = Date.parse(d.at);
+		const t = parseLedgerTime(d.at);
 		if (Number.isNaN(t)) continue;
 		const q = queued.get(key);
 		if (q && q.at > t) continue; // resubmitted after this decision

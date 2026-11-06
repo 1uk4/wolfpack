@@ -496,3 +496,14 @@ describe("kb-activity model", () => {
 		});
 	});
 });
+
+describe("zone-less ledger times (run under TZ=America/Los_Angeles)", () => {
+	it("reads 'YYYY-MM-DD HH:MM' as UTC, so it is not 'just now' and not in the future", () => {
+		const now = Date.parse("2026-11-06T03:00:00Z");
+		assert.equal(kbRelativeTime("2026-11-06 00:49", now), "2h ago");
+		assert.equal(kbRelativeTime("2026-11-06T00:49:00.000Z", now), "2h ago");
+	});
+	it("a genuinely future time still clamps to just now", () => {
+		assert.equal(kbRelativeTime("2026-11-06 04:00", Date.parse("2026-11-06T03:00:00Z")), "just now");
+	});
+});

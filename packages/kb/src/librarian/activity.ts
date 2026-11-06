@@ -12,6 +12,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
+import { parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 import type { KbEvent } from "../shared/index.js";
 import { oneLine } from "./redact.js";
 
@@ -109,8 +110,8 @@ export interface ActivityQuery {
  * (ids are time-ordered); unparseable timestamps fall back to string order. The window, the cursor and the sort all use it.
  */
 const newer = (a: { at: string; id?: string }, b: { at: string; id?: string }): number => {
-  const ta = Date.parse(a.at);
-  const tb = Date.parse(b.at);
+  const ta = parseLedgerTime(a.at);
+  const tb = parseLedgerTime(b.at);
   if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return tb - ta;
   if (!(Number.isFinite(ta) && Number.isFinite(tb)) && a.at !== b.at) return b.at.localeCompare(a.at);
   return (b.id ?? "").localeCompare(a.id ?? "");
@@ -328,7 +329,7 @@ export function pageActivity(index: ActivityIndex, q: ActivityQuery = {}, entrie
   };
   const sinceOk = (at: string): boolean => {
     if (q.sinceMs === undefined) return true;
-    const t = Date.parse(at);
+    const t = parseLedgerTime(at);
     return Number.isFinite(t) && t >= q.sinceMs;
   };
   const counts = Object.fromEntries(ACTIVITY_OUTCOMES.map((o) => [o, 0])) as Record<ActivityOutcome, number>;

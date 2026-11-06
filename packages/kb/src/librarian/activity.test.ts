@@ -441,3 +441,14 @@ describe("backfill-shaped ledger", () => {
     expect(p.attention).toMatchObject([{ wolf: "hal2", reject: 1 }]);
   });
 });
+
+describe("mixed ledger time forms (run under TZ=America/Los_Angeles)", () => {
+  it("orders and windows a zone-less UTC `at` against full ISO ones", () => {
+    const legacy = dec(0, { at: "2026-11-01 00:05", denTopicId: "legacy", hash: "L" });
+    const iso = dec(0, { at: "2026-11-01T00:10:00.000Z", denTopicId: "iso", hash: "I" });
+    const f = foldKbActivity([iso, legacy]);
+    expect(f.decisions.items.map((d) => d.denTopicId)).toEqual(["iso", "legacy"]);
+    const w = foldKbActivity([iso, legacy], { sinceMs: Date.parse("2026-11-01T00:07:00Z") });
+    expect(w.decisions.items.map((d) => d.denTopicId)).toEqual(["iso"]);
+  });
+});

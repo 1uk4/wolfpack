@@ -25,6 +25,8 @@ Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {}
 
 const { AppRouterContext: await_ctx } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
+const { KeyboardShortcuts } = await import("../components/keyboard-shortcuts.tsx");
+const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { AttachedThreadProvider, AttachBarWorkButton, attachToWorkItem, useAttachedThread } = await import("../components/attached-thread.tsx");
 const { ChatBar, submitToThread } = await import("../components/chat-bar.tsx");
@@ -35,6 +37,7 @@ let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
 let archived = false;
 let created = false;
+let hold: Promise<void> | null = null;
 const handlers = new Map<string, (d: string) => void>();
 const fakeSource = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
 const emit = (n: string, d: object) => act(async () => void handlers.get(n)?.(JSON.stringify(d)));
@@ -48,6 +51,14 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return new Response(JSON.stringify({ id: "w/created", title: "Created" }), { status: 200 });
 	}
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
+	if (url === "/api/wolves/w/threads" && hold) {
+		// A list fetched BEFORE the attach (stale snapshot), delivered after it.
+		const wait = hold;
+		hold = null;
+		const snapshot = [th("w/home", { kind: "home" }), th("w/a"), th("w/b")];
+		await wait;
+		return Response.json({ threads: snapshot });
+	}
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b"), ...(created ? [th("w/created")] : [])] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
@@ -98,6 +109,8 @@ afterEach(async () => {
 	status = "idle";
 	archived = false;
 	created = false;
+	hold = null;
+	handlers.clear();
 });
 after(() => void (globalThis.fetch = realFetch));
 
@@ -243,6 +256,88 @@ describe("ChatBar behaviours", () => {
 		await emit("needs-you-changed", { wolf: "w", threadId: "w/a", status: "idle" });
 		await wait();
 		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
+	});
+});
+
+describe("refresh ordering", () => {
+	it("a refresh that started before an attach does not overwrite the fresher list", async () => {
+		let release!: () => void;
+		hold = new Promise<void>((r) => (release = r));
+		await mount("/work/x", A, <AttachBarWorkButton wolf="w" workItemId="work-w-3" />);
+		await click(q('[data-testid="attach-bar-work"]'));
+		await wait();
+		release(); // the stale snapshot (no w/created) lands now
+		await wait();
+		await click(q('[data-testid="chat-bar-chip"]'));
+		const ids = [...document.querySelectorAll('[data-testid="switcher-entry"]')].map((e) => e.getAttribute("data-thread"));
+		assert.ok(ids.includes("w/created"), `list kept the fresher thread: ${ids}`);
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/created");
+	});
+});
+
+describe("real keydown through KeyboardShortcuts", () => {
+	const keydown = (init: object, target?: HTMLElement) =>
+		act(async () => {
+			const ev = Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), init);
+			(target ?? window).dispatchEvent(ev);
+			return ev;
+		});
+	async function mountWithKeys(start: string) {
+		mem.set(ATTACHED_KEY, JSON.stringify(A));
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<FakeNav start={start}>
+					<SettingsDialogProvider>
+						<ServerEventsProvider connect={fakeSource}>
+							<AttachedThreadProvider>
+								<ChatBar />
+								<input data-testid="other" />
+								<KeyboardShortcuts />
+							</AttachedThreadProvider>
+						</ServerEventsProvider>
+					</SettingsDialogProvider>
+				</FakeNav>,
+			);
+		});
+		await wait();
+	}
+	it("Cmd+J un-minimizes and focuses; Cmd+Shift+J opens the switcher; a bare j in another input is ignored", async () => {
+		await mountWithKeys("/kb");
+		await click(q('[data-testid="chat-bar-minimize"]'));
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
+		const bare = Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "j" });
+		await act(async () => void q('[data-testid="other"]')!.dispatchEvent(bare));
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized", "bare j types, nothing happens");
+		const ev = await keydown({ key: "j", metaKey: true });
+		assert.equal(ev.defaultPrevented, true, "the bar claimed Cmd+J");
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
+		await keydown({ key: "j", metaKey: true, shiftKey: true });
+		await wait();
+		assert.ok(q('[data-testid="chat-bar-switcher"]'));
+	});
+	it("Cmd+J is left to the browser with nothing attached", async () => {
+		await mountWithKeys("/kb");
+		mem.clear();
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<FakeNav start="/kb">
+					<SettingsDialogProvider>
+						<KeyboardShortcuts />
+					</SettingsDialogProvider>
+				</FakeNav>,
+			);
+		});
+		const ev = await keydown({ key: "j", metaKey: true });
+		assert.equal(ev.defaultPrevented, false);
 	});
 });
 

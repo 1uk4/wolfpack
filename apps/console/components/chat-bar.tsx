@@ -22,7 +22,8 @@ import { kbdEventForAction, type AttachedRef, type SwitcherGroup } from "@/src/c
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar-io";
 
-const BarComposer = dynamic(() => import("@/components/chat-bar-composer"), { ssr: false });
+const loadComposer = () => import("@/components/chat-bar-composer");
+const BarComposer = dynamic(loadComposer, { ssr: false });
 
 /** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
 const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings)(\/|$)|^\/wolf\/[^/]+$/;
@@ -111,12 +112,33 @@ export function ChatBar() {
 			ro.disconnect();
 			root.style.removeProperty("--chat-bar-reserve");
 		};
-	}, [full, scrolls]);
+	}, [full, scrolls, attached?.wolf, attached?.threadId]);
 
+	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
+	const refocus = useRef(false);
 	const closeSwitcher = useCallback(() => {
 		setSwitcher(false);
+		refocus.current = true;
 		chipRef.current?.focus();
 	}, []);
+	useEffect(() => {
+		if (!refocus.current) return;
+		refocus.current = false;
+		chipRef.current?.focus();
+	}, [attached?.wolf, attached?.threadId]);
+
+	// A hidden bar closes its switcher (it must not reappear on return); and the input chunk preloads when idle,
+	// so a cold Cmd+J finds the textarea.
+	const shown = !!attached && wide && !own;
+	useEffect(() => {
+		if (!shown) setSwitcher(false);
+	}, [shown]);
+	useEffect(() => {
+		if (!attached || !wide) return;
+		const idle = (window as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+		if (idle) idle(() => void loadComposer());
+		else setTimeout(() => void loadComposer(), 200);
+	}, [!!attached, wide]);
 
 	if (!api || !attached || !wide || own) return null;
 	return <Bar key={`${attached.wolf}/${attached.threadId}`} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} />;

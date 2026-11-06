@@ -120,6 +120,9 @@ export function AttachedThreadProvider({
 	/** Bumped by every deliberate attach: a list fetch that started before it must not re-settle the target. */
 	const gen = useRef(0);
 	const inFlight = useRef(new Set<string>());
+	/** Fetch sequence numbers: a list fetched before a wolf's fresher per-wolf refresh must not overwrite it. */
+	const seq = useRef(0);
+	const wolfSeq = useRef<Record<string, number>>({});
 
 	const setAttached = useCallback((ref: AttachedRef | null, n: string | null) => {
 		attachedRef.current = ref;
@@ -152,6 +155,7 @@ export function AttachedThreadProvider({
 
 	const refresh = useCallback(() => {
 		const g = gen.current;
+		const started = ++seq.current;
 		void (async () => {
 			const r = await getJson<{ wolves?: WolfLite[] }>("/api/wolves");
 			const ws = Array.isArray(r?.wolves) ? r.wolves : undefined;
@@ -163,6 +167,9 @@ export function AttachedThreadProvider({
 					next[w.name] = Array.isArray(t?.threads) ? t.threads : undefined;
 				}),
 			);
+			// Per wolf, keep a list that a later fetch (an attach's refreshWolf) already committed.
+			for (const w of Object.keys(next)) if ((wolfSeq.current[w] ?? 0) > started && threadsRef.current[w]) next[w] = threadsRef.current[w];
+			for (const w of ws) if (w.status !== "offline") wolfSeq.current[w.name] = Math.max(wolfSeq.current[w.name] ?? 0, started);
 			commit(ws, next);
 			if (g === gen.current) settle(ws, next);
 		})();
@@ -174,8 +181,11 @@ export function AttachedThreadProvider({
 	/** Refetch one wolf's list, then re-settle the target (a live archive or delete falls back to home). */
 	const refreshWolf = useCallback((wolf: string) => {
 		const g = gen.current;
+		const started = ++seq.current;
 		void getJson<{ threads?: BarThread[] }>(`/api/wolves/${encodeURIComponent(wolf)}/threads`).then((t) => {
 			if (!Array.isArray(t?.threads)) return;
+			if ((wolfSeq.current[wolf] ?? 0) > started) return; // a newer fetch of this wolf already landed
+			wolfSeq.current[wolf] = started;
 			const next = { ...threadsRef.current, [wolf]: t.threads };
 			commit(wolvesRef.current, next);
 			if (g === gen.current) settle(wolvesRef.current, next);

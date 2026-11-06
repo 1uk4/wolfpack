@@ -26,6 +26,7 @@ import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { claudeBridgeLookupModels, NO_TOOL_SEARCH } from "./claude-bridge.js";
 import { guardProviderStreams } from "./guard.js";
+import { withMaxTurnsAsTurnEnd } from "./max-turns.js";
 import type { ProviderFactory } from "./types.js";
 
 export const CLAUDE_STATELESS_ID = "claude-stateless";
@@ -107,7 +108,7 @@ export const claudeStatelessFactory: ProviderFactory = (ctx) => {
     debug: true,
     debugLogPath,
     // Always wrapped, whoever builds the registry (wolfd passes no seams; the pi entry injects the host query).
-    queryFn: withFreshSystemPrompt((seams.queryFn ?? lazySdkQuery()) as (args: any) => any) as never,
+    queryFn: withMaxTurnsAsTurnEnd(withFreshSystemPrompt((seams.queryFn ?? lazySdkQuery()) as (args: any) => any)) as never,
   });
   guardProviderStreams(handle.provider as never, { provider: CLAUDE_STATELESS_ID });
   return { provider: handle.provider as never, forget: (id) => void handle.forget(id), dispose: () => void handle.dispose() };

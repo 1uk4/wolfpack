@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "agents"],
+  "files": ["dist", "agents", "standards"],
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",

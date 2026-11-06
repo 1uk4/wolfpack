@@ -15,6 +15,9 @@
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
+  "wolfpack": {
+    "assets": ["../../packages/agents/standards"]
+  },
   "pi": {
     "extensions": ["./index.ts"],
     "agents": ["../../packages/agents/agents/*.md"],

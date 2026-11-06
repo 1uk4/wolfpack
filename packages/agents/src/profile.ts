@@ -19,6 +19,8 @@ export interface AgentDefaults {
    * the PI_SUBAGENT_ALLOWED env var.
    */
   subagentAgents?: string[];
+  /** Shipped standards (`standards/<name>.md`) the loader appends to the body, e.g. `testing`. */
+  standards?: string[];
   autoExit?: boolean;
   interactive?: boolean;
   /** Run in a multiplexer pane (true) or as a background process (false/absent). On wolfd: open the child panel in the console. */
@@ -91,6 +93,7 @@ export function parseAgentDefinition(content: string, fallbackName: string): Age
           : undefined,
     skills: getFrontmatterValue(frontmatter, "skill") ?? getFrontmatterValue(frontmatter, "skills"),
     subagentAgents: parseCommaList(getFrontmatterValue(frontmatter, "subagent_agents")),
+    standards: parseCommaList(getFrontmatterValue(frontmatter, "standards")),
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
     interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
     pane: parseOptionalBoolean(getFrontmatterValue(frontmatter, "pane")),

@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildCommands, consoleTestCommand, detectPm, toolCommand, type Cmd } from "../pm.js";
 import { prPostMerge, type PostMergeOptions } from "../pr-post-merge.js";
 import { parseTotals, prPrepare, PrRefusal, type CmdResult, type PrDeps, type PrPrepareOptions } from "../pr-prepare.js";
 
@@ -48,12 +49,13 @@ function realDeps(root: string): PrDeps {
         loadWorkspaces(r: string): unknown;
       };
       const a = aff.computeAffected(full ? null : aff.changedFiles(base, "HEAD", root), aff.loadWorkspaces(root));
-      const steps: { name: string; cmd: string; args: string[] }[] = [];
-      if (a.tsProjects.length) steps.push({ name: "build+typecheck", cmd: "npx", args: ["tsc", "--build", ...a.tsProjects] });
+      const pm = detectPm(root);
+      const steps: ({ name: string } & Cmd)[] = [];
+      if (a.tsProjects.length) steps.push({ name: "build+typecheck", ...toolCommand(pm, "tsc", ["--build", ...a.tsProjects]) });
       const paths = [...a.vitestPaths, ...(a.extensionsTests ? ["extensions/"] : []), ...(a.scriptsTests ? ["scripts/"] : [])];
-      if (a.all) steps.push({ name: "vitest (all)", cmd: "npx", args: ["vitest", "run"] });
-      else if (paths.length) steps.push({ name: "vitest (affected)", cmd: "npx", args: ["vitest", "run", ...paths] });
-      if (a.consoleTests) steps.push({ name: "console tests", cmd: "npm", args: ["test", "-w", "@wolfpack/console"] });
+      if (a.all) steps.push({ name: "vitest (all)", ...toolCommand(pm, "vitest", ["run"]) });
+      else if (paths.length) steps.push({ name: "vitest (affected)", ...toolCommand(pm, "vitest", ["run", ...paths]) });
+      if (a.consoleTests) steps.push({ name: "console tests", ...consoleTestCommand(pm) });
       const lines: string[] = [];
       for (const s of steps) {
         const r = sh(s.cmd, s.args, root, undefined, STEP_TIMEOUT_MS);
@@ -86,8 +88,15 @@ export async function postMergeCmd(opts: PostMergeOptions & { cwd?: string }): P
   try {
     const r = await prPostMerge(opts, {
       git: (args, at) => sh("git", args, at ?? cwd),
-      // The same command as scripts/runtime-update.mjs. The root "build" script is plain tsc; turbo is what the runtime uses.
-      build: (at) => sh("npx", ["turbo", "run", "build"], at, undefined, STEP_TIMEOUT_MS),
+      // The same command as scripts/runtime-update.mjs. The root "build" script is plain tsc; turbo is what the runtime uses (a pnpm checkout installs first; an npm one is unchanged).
+      build: (at) => {
+        let last: CmdResult = { code: 0, out: "", err: "" };
+        for (const c of buildCommands(detectPm(at))) {
+          last = sh(c.cmd, c.args, at, undefined, STEP_TIMEOUT_MS);
+          if (last.code !== 0) break;
+        }
+        return last;
+      },
       realpath: (p) => {
         try {
           return realpathSync(p);

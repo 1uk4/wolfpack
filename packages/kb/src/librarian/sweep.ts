@@ -978,9 +978,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             replayFailed = true; // the intent stays; the next tick replays it
           }
           // Only the intent's own events leave `batch` (events pushed before the intent existed, e.g. section_created, stay for PERSIST
-          // unless the intent has them: recorded, or kept for a later replay once the commit landed). Nothing else is dropped.
+          // unless the intent has them: recorded, or kept for a later replay). Nothing else is dropped.
           if (own) {
-            const drop = new Set<KbEvent>(recorded || (replayFailed && own.committed) ? own.events : own.pend);
+            // A failed replay keeps the intent with ALL its events (pre-intent ones included), so none of them may stay in `batch` too.
+            const drop = new Set<KbEvent>(recorded || replayFailed ? own.events : own.pend);
             for (let i = batch.length - 1; i >= 0; i--) if (drop.has(batch[i])) batch.splice(i, 1);
           }
           const alreadySeen = recorded || seenHashes(readLedger(roots)).has(o.contentHash); // the append went through and something later threw

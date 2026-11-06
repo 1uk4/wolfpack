@@ -254,4 +254,33 @@ describe("sweep commit intent", () => {
     expect(count(roots, "contribution")).toBe(1);
     expect(entries(roots)).toHaveLength(1);
   });
+
+  it("the overflow commit lands but the item throws before the committed flag, and the replay append fails: no duplicate section_created after the next tick", async () => {
+    const roots = setup();
+    const embedder = { embed: async (t: string) => (String(t).includes("Second topic") ? [0, 1, 0] : [1, 0, 0]) };
+    let commits = 0;
+    let appends = 0;
+    const w: SweepWriter = {
+      ...defaultSweepWriter,
+      commitEntry: async (r, e) => {
+        await defaultSweepWriter.commitEntry(r, e);
+        if (++commits === 2) throw new Error("died right after the overflow commit"); // file on disk, committed flag not set
+      },
+      appendLedger: (r, e) => {
+        if (++appends === 2) throw new Error("replay append failed"); // the catch's replay
+        return defaultSweepWriter.appendLedger(r, e);
+      },
+    };
+    await sweep({ engine: mkEngine(true), roots, writer: w, getEmbedder: () => embedder, loadEntryVectors: async () => [] } as any);
+    expect(entries(roots)).toHaveLength(2);
+    expect(existsSync(intentFile(roots))).toBe(true); // kept
+    expect(count(roots, "section_created")).toBe(1); // the main section's only; the overflow's rides in the intent, not in the batch
+    await sweep({ engine: mkEngine(true), roots, getEmbedder: () => embedder, loadEntryVectors: async () => [] } as any);
+    expect(existsSync(intentFile(roots))).toBe(false);
+    expect(entries(roots)).toHaveLength(2);
+    expect(count(roots, "section_created")).toBe(2); // once each, no duplicate
+    expect(count(roots, "contribution")).toBe(2);
+    expect(count(roots, "entry_placed")).toBe(2);
+    expect(inboxMd(roots)).toEqual([]);
+  });
 });

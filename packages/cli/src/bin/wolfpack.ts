@@ -18,6 +18,7 @@ import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
 import { postMergeCmd, prCmd } from "../commands/pr.js";
+import { testCmd } from "../commands/test.js";
 import { parsePostMergeArgs } from "../pr-post-merge.js";
 import { parsePrArgs } from "../pr-prepare.js";
 import { deployCmd } from "../commands/deploy.js";
@@ -54,6 +55,7 @@ ${c.bold("COMMANDS")}
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
   deploy <wolf> --release <tag>   Host downloads + verifies a release, switches, health-checks, rolls back (--host, --dry-run, --component hubd|workerd)
   release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
+  test [run|related] [paths…]     Run vitest with a result cache; agents queue for a slot (-t <name>, --no-cache)
   pr prepare                      Open/update the release PR wolf/<wolf> -> stable; the owner merges (--full, --dry-run)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
@@ -426,6 +428,13 @@ async function main(): Promise<void> {
         }
         if (sub !== "prepare") throw new Error("Usage: wolfpack pr prepare [--full] [--dry-run] [--base stable] | wolfpack pr post-merge [--dry-run] [--apply]");
         await prCmd(parsePrArgs(process.argv.slice(2)));
+        break;
+      }
+
+      case "test": {
+        // Allow-list parsing of the raw argv, like pr: unknown flags are refused.
+        const code = await testCmd(process.argv.slice(2));
+        if (code !== 0) process.exit(code);
         break;
       }
 

@@ -131,6 +131,9 @@ const err1 = (e: unknown) => (e instanceof Error ? e.message : String(e)).split(
  * `pending` counts, per entry id, the commitKb commits that already logged an entry_written: appendLedger drops one sweep-made
  * entry_written per pending commit (and only those), so each commit is logged exactly once. A commit that changed nothing, and a
  * patchEntry (the sweep adds no entry_written for it), never add to it.
+ * The map lives and dies with the writer, which runTick builds fresh for every tick: it is NOT persisted. After a restart it is empty, so
+ * an intent replayed at the next tick's start (kb/librarian/intent.ts) cannot rely on it; the intent compares the ledger's entry_written
+ * count with the count it recorded (`written`) to tell whether commitKb already logged one for its commit.
  */
 export function createHubSweepWriter(d: Pick<CuratorDeps, "commit" | "exclusive"> & { closing?: () => boolean }, hooks: { afterEntryRead?: (id: string) => void } = {}): SweepWriter & { pending: Map<string, number> } {
   const pending = new Map<string, number>();

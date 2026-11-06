@@ -60,15 +60,19 @@ describe("claude-stateless images reach the SDK as image blocks, not [image]", (
     expect(hasImageBlock(sessionText)).toBe(true);
   });
 
-  // KNOWN UPSTREAM GAP (pi-claude-bridge-stateless @45eb3f33, dist/stateless/plan.js textOf): the current user message becomes
-  // the string prompt and its images are flattened to "[image]". Fix in the bridge (send a streaming-input prompt with an
-  // image block); then drop `.fails` so this test guards the fix.
-  it.fails("an image in the current (last) user message reaches the query prompt as an image block", async () => {
+  it("an image in the current (last) user message reaches the query prompt as an image block", async () => {
     const { queries } = await round([{ role: "user", content: [{ type: "text", text: "look" }, IMG], timestamp: 1 }]);
     expect(queries).toHaveLength(1);
     const prompt = queries[0].prompt;
     const seen = typeof prompt === "string" ? prompt : JSON.stringify(await (async () => { const out: unknown[] = []; for await (const m of prompt) out.push(m); return out; })());
     expect(seen).not.toContain("[image]");
     expect(hasImageBlock(seen)).toBe(true);
+  });
+
+  it("a text-only current message still reaches the query as a plain string prompt", async () => {
+    const { queries } = await round([{ role: "user", content: [{ type: "text", text: "just words" }], timestamp: 1 }]);
+    expect(queries).toHaveLength(1);
+    expect(typeof queries[0].prompt).toBe("string");
+    expect(queries[0].prompt).toContain("just words");
   });
 });

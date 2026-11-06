@@ -17,6 +17,8 @@ import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
+import { prCmd } from "../commands/pr.js";
+import { parsePrArgs } from "../pr-prepare.js";
 import { deployCmd } from "../commands/deploy.js";
 import { workDoctor } from "../commands/work-doctor.js";
 import { workBackfillFeatureStages } from "../commands/work-backfill.js";
@@ -51,6 +53,7 @@ ${c.bold("COMMANDS")}
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
   deploy <wolf> --release <tag>   Host downloads + verifies a release, switches, health-checks, rolls back (--host, --dry-run, --component hubd|workerd)
   release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
+  pr prepare                      Open/update the release PR wolf/<wolf> -> stable; the owner merges (--full, --dry-run)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -411,6 +414,13 @@ async function main(): Promise<void> {
           dryRun: a.includes("--dry-run"),
           yes: a.includes("--yes") || a.includes("-y"),
         });
+        break;
+      }
+
+      case "pr": {
+        // The global flag layer above ignores or swallows flags, so parsePrArgs reads the raw argv and rejects anything unknown.
+        if (sub !== "prepare") throw new Error("Usage: wolfpack pr prepare [--full] [--dry-run] [--base stable]");
+        await prCmd(parsePrArgs(process.argv.slice(2)));
         break;
       }
 

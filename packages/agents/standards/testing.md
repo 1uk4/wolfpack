@@ -83,7 +83,7 @@ Leanness comes from these rules (seams, one test per behaviour, no duplicates, r
 |---|---|---|
 | Task branch | `npx vitest related --run <changed files>` plus typecheck | the worker |
 | Merge into `wolf/1uk4` | full default suite of every affected package; red blocks the merge (planned) | the auto-merge |
-| PR into `stable` | everything, including the `live` and `eval` gates (planned) | CI |
+| PR into `stable` | what `wolfpack pr prepare` runs (build, typecheck and the affected packages' tests; everything with `--full`) plus CI (the `ci` check), including the `live` and `eval` gates (planned) | the agent (prepare) and CI |
 
 ## How to verify your work
 1. On a task branch, run `npx vitest related --run <changed files>` from the repo root

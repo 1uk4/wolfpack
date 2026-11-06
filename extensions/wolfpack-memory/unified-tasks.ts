@@ -313,7 +313,7 @@ export default function createTasksExtension(
       question: shipLabel(title, id),
       confirmLabel: "Ship",
       rejectLabel: "Not yet",
-      brief: briefHeader(`Ship "${title}"?`, [`Work item ${id}: ${title}`, "Marks it done and merges its branch; this cannot be undone from the card."]),
+      brief: briefHeader(`Ship "${title}"?`, [`Work item ${id}: ${title}`, "Marks it done; this can't be undone from the card."]),
     });
   /** Several ids: ONE card with a multi field, one option per task (value = id), all ticked, at least one. */
   const SHIPS_FIELD = "ships";

@@ -404,7 +404,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
             `Release ${toEmit} contribution(s) to "${plan.domain}"?`,
             [
               `${items.length} contribution(s) in the run, ${toEmit} new or changed, ${unchanged} unchanged (skipped).`,
-              `Goes to ${describeTarget(target, ctx.wolfName)}, then Dewey's sweep.`,
+              `Goes to ${describeTarget(target, ctx.wolfName)}, the hub curator files it into the KB.`,
               "A shared, one-way handoff: it cannot be recalled.",
               ...(already ? [already] : []),
             ],

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain .mjs script
-import { classify, runUpdate } from "./runtime-update.mjs";
+import { buildCommands, classify, runUpdate } from "./runtime-update.mjs";
 
 let tmp: string;
 let main: string, intWt: string, rtWt: string, origin: string;
@@ -162,6 +162,51 @@ describe("runtime-update", () => {
 		const { r, logs } = await run([]);
 		expect(r.classification.lines).toEqual(["already up to date"]);
 		expect(logs.join()).toContain("already up to date");
+	});
+});
+
+describe("runtime-update: pnpm checkouts and npm checkouts", () => {
+	const dry = (pnpmFound: boolean) => {
+		const logs: string[] = [];
+		return runUpdate({ argv: ["--dry-run"], env: { WOLVES_DIR: path.join(tmp, "wolves") }, cwd: intWt, pnpmFound, steps: steps(), log: (m: string) => logs.push(m), warn: () => {} }).then(() => logs.join("\n"));
+	};
+	const stableGainsPnpmLock = () => {
+		commit(rtWt, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+		g(rtWt, "push", "-q", "origin", "stable");
+	};
+
+	it("buildCommands: pnpm = frozen install + the shared-cache turbo wrapper; npm = the old npx turbo", () => {
+		expect(buildCommands("pnpm")).toEqual([
+			{ cmd: "pnpm", args: ["install", "--frozen-lockfile", "--prefer-offline"] },
+			{ cmd: "node", args: ["scripts/turbo.mjs", "run", "build"] },
+		]);
+		expect(buildCommands("npm")).toEqual([{ cmd: "npx", args: ["turbo", "run", "build"] }]);
+	});
+
+	it("a target with pnpm-lock.yaml and pnpm on the PATH installs and builds with pnpm", async () => {
+		stableGainsPnpmLock();
+		const text = await dry(true);
+		expect(text).toContain("pnpm install --frozen-lockfile --prefer-offline");
+		expect(text).toContain("node scripts/turbo.mjs run build");
+		expect(text).not.toContain("npx turbo");
+	});
+
+	it("a target without pnpm-lock.yaml keeps the npm path unchanged", async () => {
+		const text = await dry(true);
+		expect(text).toContain("would run: npx turbo run build");
+		expect(text).not.toContain("pnpm install");
+	});
+
+	it("pnpm-lock.yaml but no pnpm on the PATH falls back to npm and says why", async () => {
+		stableGainsPnpmLock();
+		const text = await dry(false);
+		expect(text).toContain("would run: npx turbo run build");
+		expect(text).toContain("pnpm is not installed");
+	});
+
+	it("tells the pnpm checkout to restart with pnpm", () => {
+		expect(classify(["packages/harness/src/a.ts"], [], "pnpm").lines[0]).toBe("restart the stack: pnpm stack restart");
+		expect(classify(["packages/harness/src/a.ts"]).lines[0]).toBe("restart the stack: npm run stack -- restart");
 	});
 });
 

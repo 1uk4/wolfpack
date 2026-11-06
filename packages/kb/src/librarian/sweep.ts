@@ -18,6 +18,8 @@ import { atomicWrite } from "@wolfpack/engine";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
+import { writeIntent, clearIntent, replayIntent, intentDigest } from "./intent.js";
+import { renderEntry } from "./commit.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox, countPending, DEFAULT_LANE } from "./intake.js";
 import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
@@ -370,6 +372,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // One contribution per run, oldest first. The timer fires every minute, so the
   // next one is picked up within a minute. An empty inbox returns here: no
   // embedder, no ledger read, no LLM call, no writes, no log line.
+  // A commit intent left by a crash between "entry live" and "ledger appended" is finished (or dropped) first.
+  await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify });
   const pending = drainInbox(roots, { lane }).sort((a, b) =>
     (a.submitted || "").localeCompare(b.submitted || "")
   );
@@ -849,17 +853,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       if (overflow) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} covers two subjects: "${overflow.title}" is split out`);
       if (historyRestored?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → restored ${historyRestored.length} History line(s) the model dropped from ${entry.id}`);
 
-      // ── COMMIT (entry is live NOW) ──────────────────────────────────────
-      // A decision the contribution agrees with is left exactly as it is.
-      if (!unchanged) await w.commitEntry(roots, entry);
-      else if (existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry)) {
-        // The text is left as it is; only the code-set source properties move.
-        await w.patchEntry(roots, domain, targetId, patchSourceProperties(existingMarkdown, entry));
-      }
-      committed = true;
-      if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
-
-      batch.push(ev.contribution({
+      const pend: KbEvent[] = [];
+      pend.push(ev.contribution({
         from: c.from,
         denTopicId: c.denTopicId,
         hash: c.contentHash,
@@ -872,24 +867,41 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         entryId: entry.id,
         routing: routingSummary(routing, entry.id),
       };
-      batch.push(ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...decision }));
+      pend.push(ev.decision({ from: c.from, denTopicId: c.denTopicId, hash: c.contentHash, ...decision }));
       if (!unchanged) {
-        batch.push(ev.entryWritten(entry.id, entry.id, action));
-        batch.push(ev.entryPlaced({
+        pend.push(ev.entryWritten(entry.id, entry.id, action));
+        pend.push(ev.entryPlaced({
           entryId: entry.id,
           sectionId,
           basis: placement.basis,
           fit: placement.fit,
         }));
       }
+      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+      // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
+      const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
+      const expectText = !unchanged ? renderEntry(entry) : patched;
+      writeIntent(roots, { hash: c.contentHash, entryId: entry.id, domain, events: [...batch, ...pend], ...(expectText !== undefined ? { expect: intentDigest(expectText) } : {}) });
+
+      // ── COMMIT (entry is live NOW) ──────────────────────────────────────
+      // A decision the contribution agrees with is left exactly as it is.
+      if (!unchanged) await w.commitEntry(roots, entry);
+      else if (existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry)) {
+        // The text is left as it is; only the code-set source properties move.
+        await w.patchEntry(roots, domain, targetId, patchSourceProperties(existingMarkdown, entry));
+      }
+      committed = true;
+      if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
+
+      batch.push(...pend);
       // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
       // by alias and update in place. Re-fold so later items in THIS batch see it.
-      batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
       reg = foldRegistry([...log, ...batch]);
 
       // The entry is live: record it in the ledger BEFORE anything else, so a
       // crash can't leave a live entry with no ledger record.
       await w.appendLedger(roots, batch);
+      clearIntent(roots);
       decided = true;
       if (exclude === undefined) committedDecision = decision; // the main call; an overflow passes `exclude`
       log.push(...batch);
@@ -943,7 +955,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         } catch (err) {
           // The main entry is live and the contribution counts as seen: the
           // second subject must not be lost, so it is queued as its own item.
-          requeueOverflow(roots, o, lane);
+          // The overflow entry may be live with its events unrecorded: finish the intent; only a still-unrecorded overflow is requeued.
+          let recorded = false;
+          try {
+            recorded = (await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify })) === "recorded";
+          } catch {
+            /* the intent stays; the next tick replays it */
+          }
+          batch.length = 0; // nothing of the failed append leaks into PERSIST
+          if (!recorded) requeueOverflow(roots, o, lane);
           routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: "queued", error: cleanError(err) };
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" queued for the next tick: ${cleanError(err)}`);
         }

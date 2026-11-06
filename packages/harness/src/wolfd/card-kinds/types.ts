@@ -1,5 +1,4 @@
-import type { CardFieldAnswer } from "@wolfpack/protocol";
-import type { AnyField } from "@wolfpack/protocol";
+import type { AnyField, CardFieldAnswer } from "@wolfpack/protocol";
 
 /** An answer as the registry sees it (kind-specific props read by the kind itself). */
 export type AnyAnswer = CardFieldAnswer | { value: unknown; [k: string]: unknown };

@@ -1,4 +1,20 @@
 import { z } from "zod";
+import {
+  answerSchemaOf,
+  cardKind,
+  ConfirmFieldSchema,
+  fieldSchemaOf,
+  FreeTextFieldSchema,
+  MultiFieldSchema,
+  SingleFieldSchema,
+  type AnyField,
+  type CardOption,
+  type ConfirmFieldAnswer,
+  type FieldShowIf,
+  type MultiFieldAnswer,
+  type TextFieldAnswer,
+} from "./card-kinds/index.js";
+export * from "./card-kinds/index.js";
 
 /** Single integer protocol version. Additive changes do not bump it; see README. */
 export const PROTOCOL_VERSION = 1 as const;
@@ -85,31 +101,15 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
  *
  * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
  * `default` only pre-selects in the UI, it is never auto-submitted (cards wait indefinitely; there is no timeout).
- */
-import {
-  answerSchemaOf,
-  cardKind,
-  ConfirmFieldSchema,
-  fieldSchemaOf,
-  FreeTextFieldSchema,
-  MultiFieldSchema,
-  SingleFieldSchema,
-  type AnyField,
-  type CardOption,
-  type ConfirmFieldAnswer,
-  type FieldShowIf,
-  type MultiFieldAnswer,
-  type TextFieldAnswer,
-} from "./card-kinds/index.js";
-export * from "./card-kinds/index.js";
-
-/**
- * The card fields. Each kind is a module in `card-kinds/` (field schema + answer schema, one registry); the field
- * union dispatches through that registry at parse time, so a kind added with `registerCardKind` parses everywhere.
- * The static type below covers the built-in kinds; a registered kind's fields are typed by its own module.
+ *
+ * Each kind is a module in `card-kinds/` (field schema + answer schema, one registry); the field union dispatches
+ * through that registry at parse time, so a kind added with `registerCardKind` parses everywhere.
+ * The static types below cover the four built-in kinds only: a registered kind parses and validates at runtime but is
+ * not part of these unions.
  */
 export type CardField = z.infer<typeof FreeTextFieldSchema> | z.infer<typeof SingleFieldSchema> | z.infer<typeof MultiFieldSchema> | z.infer<typeof ConfirmFieldSchema>;
 export const CardFieldSchema = fieldSchemaOf() as unknown as z.ZodType<CardField>;
+/** Kind names of the built-in fields only (see CardField). */
 export type CardFieldKind = CardField["kind"];
 
 export const CardStepSchema = z.object({
@@ -149,7 +149,7 @@ export const CardSchema = z
     /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
     tool: z.string(),
     title: z.string().optional(),
-    /** One field at least; a brief card may have none (it is then acknowledged with OK) but never more than 3. */
+    /** A card needs at least one field, except a brief card, which may have none (the owner then acknowledges with OK); a brief holds at most 3. */
     fields: z.array(CardFieldSchema),
     /** Brief header (the `brief` tool). Absent on cards from other tools. */
     brief: CardBriefSchema.optional(),

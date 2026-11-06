@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { CardSchema, registerCardKind, unregisterCardKind, type Card } from "@wolfpack/protocol";
+import { CardAnswersSchema, CardSchema, registerCardKind, unregisterCardKind, type Card } from "@wolfpack/protocol";
 import { z } from "zod";
 import { fieldKind, registerFieldKind, unregisterFieldKind } from "./card-kinds/index.js";
 import { answerText, validateAnswers } from "./cards.js";
@@ -17,20 +17,23 @@ describe("field-kind registry", () => {
     registerCardKind({
       kind: "slider",
       fieldSchema: z.object({ id: z.string(), kind: z.literal("slider"), label: z.string(), lo: z.number(), hi: z.number(), optional: z.boolean().optional() }),
-      answerSchema: z.object({ value: z.number() }),
+      answerSchema: z.object({ value: z.string(), unit: z.string() }),
     });
     registerFieldKind({
       kind: "slider",
-      validate: (f, a) => (typeof a.value !== "number" || a.value < (f.lo as number) || a.value > (f.hi as number) ? "out of range" : undefined),
+      validate: (f, a) => (Number(a.value) < (f.lo as number) || Number(a.value) > (f.hi as number) ? "out of range" : undefined),
       isEmpty: () => false,
-      answerText: (_f, a) => `${a.value as number} on the slider`,
+      answerText: (_f, a) => `${a.value as string} ${(a as unknown as { unit: string }).unit} on the slider`,
     });
     // registered: a malformed field now fails its own schema
     expect(CardSchema.safeParse({ ...sliderCard, fields: [{ id: "n", kind: "slider", label: "x" }] }).success).toBe(false);
     const card = CardSchema.parse(sliderCard) as Card;
-    expect(validateAnswers(card, { n: { value: 4 } as never })).toBeUndefined();
-    expect(validateAnswers(card, { n: { value: 40 } as never })).toBe("out of range");
-    expect(answerText([{ callId: "c1", card, answers: { n: { value: 4 } as never } }])).toContain("- How many?: 4 on the slider");
+    // a string `value` plus an extra prop: free-text would strip `unit`, the slider schema keeps it
+    const parsed = CardAnswersSchema.parse({ n: { value: "4", unit: "cm" } });
+    expect(parsed.n).toEqual({ value: "4", unit: "cm" });
+    expect(validateAnswers(card, parsed)).toBeUndefined();
+    expect(validateAnswers(card, { n: { value: "40", unit: "cm" } as never })).toBe("out of range");
+    expect(answerText([{ callId: "c1", card, answers: parsed }])).toContain("- How many?: 4 cm on the slider");
   });
 
   it("an unknown kind is handled like free text", () => {

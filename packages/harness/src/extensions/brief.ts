@@ -10,44 +10,51 @@ import { BRIEF_LIMITS, CardSchema, type Card, type CardOption } from "@wolfpack/
 import { defineExtension, defineTool, Type, type Extension } from "../extension-api.js";
 
 const Choice = Type.Object({
-  label: Type.String({ description: "What the owner sees." }),
-  value: Type.Optional(Type.String({ description: "What comes back to you; defaults to the label." })),
-  note: Type.Optional(Type.String({ description: "One line of explanation." })),
+  label: Type.String({ description: "Text on the option." }),
+  value: Type.Optional(Type.String({ description: "What you get back if it is picked; the label stands in when omitted." })),
+  note: Type.Optional(Type.String({ description: "A short line of explanation under the label." })),
 });
 
-const Condition = Type.Object({
-  field: Type.String({ description: "Id of an earlier question." }),
-  equals: Type.Optional(Type.Union([Type.String(), Type.Boolean()])),
-  oneOf: Type.Optional(Type.Array(Type.String())),
-});
+const Condition = Type.Object(
+  {
+    field: Type.String({ description: "Id of the question this depends on; it must come earlier in the list." }),
+    equals: Type.Optional(Type.Union([Type.String(), Type.Boolean()], { description: "The answer that makes this question appear (true/false for a confirm)." })),
+    oneOf: Type.Optional(Type.Array(Type.String(), { description: "Alternatively, any of these choice values makes it appear." })),
+  },
+  { description: "Make this question conditional on an earlier answer. Give equals or oneOf, not both." },
+);
 
 const Question = Type.Object({
-  id: Type.Optional(Type.String({ description: "Short id keying the answer. Defaults to q1, q2, ..." })),
-  ask: Type.String({ description: "The question." }),
-  note: Type.Optional(Type.String({ description: "Optional line under the question." })),
+  id: Type.Optional(Type.String({ description: "Your own handle for this question; unnamed ones are numbered by position." })),
+  ask: Type.String({ description: "The question text." }),
+  note: Type.Optional(Type.String({ description: "A short line shown under the question." })),
   kind: Type.Optional(
     Type.Union([Type.Literal("single"), Type.Literal("multi"), Type.Literal("confirm"), Type.Literal("free")], {
-      description: "single: pick one of `choices`. multi: pick several. confirm: yes/no. free: typed answer. Default: single when `choices` is given, else free.",
+      description: "single = pick one choice, multi = pick several, confirm = yes or no, free = typed reply. Without a kind, a question with choices is single and one without is free.",
     }),
   ),
-  choices: Type.Optional(Type.Array(Choice, { description: "For single and multi." })),
-  allowOther: Type.Optional(Type.Boolean({ description: "Offer a typed entry beside the choices. single: default true. multi: default false." })),
-  min: Type.Optional(Type.Integer({ description: "multi: fewest picks." })),
-  max: Type.Optional(Type.Integer({ description: "multi: most picks." })),
-  yesLabel: Type.Optional(Type.String({ description: "confirm: label of the yes button." })),
-  noLabel: Type.Optional(Type.String({ description: "confirm: label of the no button." })),
-  optional: Type.Optional(Type.Boolean({ description: "The owner may leave it blank." })),
+  choices: Type.Optional(Type.Array(Choice, { description: "The options for single and multi (required there, not allowed for confirm or free)." })),
+  allowOther: Type.Optional(Type.Boolean({ description: "Let the owner type their own answer too. On by default for single, off for multi." })),
+  min: Type.Optional(Type.Integer({ description: "multi only: the smallest number of picks." })),
+  max: Type.Optional(Type.Integer({ description: "multi only: the largest number of picks." })),
+  yesLabel: Type.Optional(Type.String({ description: "confirm only: text of the yes button." })),
+  noLabel: Type.Optional(Type.String({ description: "confirm only: text of the no button." })),
+  optional: Type.Optional(Type.Boolean({ description: "The owner may leave this one unanswered." })),
   showIf: Type.Optional(Condition),
 });
 
 const Params = Type.Object({
-  headline: Type.String({ description: `One line saying what this is about, at most ${BRIEF_LIMITS.headline} characters.` }),
+  headline: Type.String({ description: `What this is about, in one line of at most ${BRIEF_LIMITS.headline} characters.` }),
   context: Type.Optional(
-    Type.Array(Type.String(), { description: `Up to ${BRIEF_LIMITS.contextBullets} short bullets (about ${BRIEF_LIMITS.bulletSoftChars} characters each) the owner needs to answer.` }),
+    Type.Array(Type.String(), { description: `At most ${BRIEF_LIMITS.contextBullets} bullets with the facts the owner needs; aim for ${BRIEF_LIMITS.bulletSoftChars} characters or fewer each.` }),
   ),
-  questions: Type.Optional(Type.Array(Question, { description: `0 to ${BRIEF_LIMITS.questions} questions. With none, the owner just acknowledges.` })),
-  steps: Type.Optional(Type.Array(Type.Object({ title: Type.Optional(Type.String()), questions: Type.Array(Type.String()) }), { description: "Optional wizard pages: question ids per step, every question once, in order." })),
-  more: Type.Optional(Type.String({ description: 'Where the detail is in the thread (shown as "Open thread for more"). Put long detail in your thread message, not the bullets.' })),
+  questions: Type.Optional(Type.Array(Question, { description: `Zero to ${BRIEF_LIMITS.questions} questions. With zero, the owner only acknowledges.` })),
+  steps: Type.Optional(
+    Type.Array(Type.Object({ title: Type.Optional(Type.String()), questions: Type.Array(Type.String()) }), {
+      description: "Spread the questions over several pages. Each page lists the ids it holds; together the pages cover every question exactly once and keep the original order.",
+    }),
+  ),
+  more: Type.Optional(Type.String({ description: 'A hint about where the full detail sits in your thread; the card links to it as "Open thread for more". Long detail belongs in your thread message, not in the bullets.' })),
 });
 
 export interface BriefQuestion {
@@ -77,6 +84,10 @@ const TRIM_HINT = "Trim it, or move the detail into your thread message and poin
 const cleanId = (id: string): string => id.trim().replace(/[^A-Za-z0-9_-]+/g, "-");
 const idOf = (q: BriefQuestion, i: number): string => (q.id ? cleanId(q.id) : "") || `q${i + 1}`;
 
+const usableChoices = (q: BriefQuestion): number => (q.choices ?? []).filter((c) => c.label?.trim()).length;
+/** The kind a question resolves to: the stated one, else single when it has choices and free when it has none. */
+const kindOf = (q: BriefQuestion): NonNullable<BriefQuestion["kind"]> => q.kind ?? (usableChoices(q) > 0 ? "single" : "free");
+
 function fieldOf(q: BriefQuestion, id: string): Card["fields"][number] {
   const note = q.note?.trim();
   const showIf = q.showIf ? { field: cleanId(q.showIf.field), ...(q.showIf.oneOf ? { oneOf: q.showIf.oneOf } : { equals: q.showIf.equals as string | boolean }) } : undefined;
@@ -84,11 +95,11 @@ function fieldOf(q: BriefQuestion, id: string): Card["fields"][number] {
   const options: CardOption[] = (q.choices ?? [])
     .filter((c) => c.label?.trim())
     .map((c) => ({ label: c.label.trim(), value: c.value?.trim() || c.label.trim(), ...(c.note?.trim() ? { description: c.note.trim() } : {}) }));
-  const kind = q.kind ?? (options.length > 0 ? "single" : "free");
+  const kind = kindOf(q);
   if (kind === "confirm") {
     return { ...base, kind: "confirm", ...(q.yesLabel?.trim() ? { confirmLabel: q.yesLabel.trim() } : {}), ...(q.noLabel?.trim() ? { rejectLabel: q.noLabel.trim() } : {}) };
   }
-  if (kind === "free" || options.length === 0) return { ...base, kind: "free-text" };
+  if (kind === "free") return { ...base, kind: "free-text" };
   if (kind === "multi") return { ...base, kind: "multi", options, allowOther: q.allowOther ?? false, ...(q.min !== undefined ? { min: q.min } : {}), ...(q.max !== undefined ? { max: q.max } : {}) };
   return { ...base, kind: "single", options, ...(q.allowOther === false ? { allowOther: false } : {}) };
 }
@@ -121,6 +132,12 @@ export function briefProblem(args: BriefArgs): string | undefined {
   const ids = questions.map(idOf);
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
   if (dup) return `brief: duplicate question id "${dup}"; ids must be unique.`;
+  for (const [i, q] of questions.entries()) {
+    const kind = kindOf(q);
+    const n = usableChoices(q);
+    if ((kind === "single" || kind === "multi") && n === 0) return `brief: questions[${i}] is kind "${kind}" but has no choices. Add \`choices\`, or use kind "free" for a typed reply.`;
+    if ((kind === "confirm" || kind === "free") && (q.choices?.length ?? 0) > 0) return `brief: questions[${i}] is kind "${kind}", which takes no \`choices\`. Drop them, or use kind "single" or "multi".`;
+  }
   const badMulti = questions.findIndex((q) => (q.min !== undefined || q.max !== undefined) && q.kind !== "multi");
   if (badMulti >= 0) return `brief: questions[${badMulti}] sets min/max, which only apply to kind "multi".`;
   const parsed = CardSchema.safeParse(briefCard(args));
@@ -134,7 +151,7 @@ export function briefResult(args: BriefArgs, tool = "brief") {
   if (problem) return { content: [{ type: "text" as const, text: problem }], isError: true as const };
   const n = args.questions?.length ?? 0;
   return {
-    content: [{ type: "text" as const, text: `Brief shown to the owner (${n === 0 ? "no questions; they acknowledge" : `${n} question${n > 1 ? "s" : ""}`}). Your turn ends here; their reply arrives with your next turn.` }],
+    content: [{ type: "text" as const, text: `Brief delivered (${n === 0 ? "nothing to answer, just an OK" : `${n} question${n > 1 ? "s" : ""} for the owner`}). This turn is over; the owner's response will open your next one.` }],
     card: briefCard(args, tool),
   };
 }
@@ -147,7 +164,7 @@ export function createBriefExtension(): Extension {
       defineTool({
         name: "brief",
         description:
-          `End your turn with a short brief for the owner when they must decide, answer or review a result. Shows a card: a headline (max ${BRIEF_LIMITS.headline} chars), up to ${BRIEF_LIMITS.contextBullets} context bullets, and 0 to ${BRIEF_LIMITS.questions} questions (single, multi, confirm, free). With no questions the owner acknowledges with OK. Their reply arrives at the start of your next turn. Keep detail in your thread message and point at it with \`more\`.`,
+          `Finish your turn by handing the owner a short brief when they have to decide, answer or review something. It appears as a card: a headline (${BRIEF_LIMITS.headline} characters at most), up to ${BRIEF_LIMITS.contextBullets} context bullets, and zero to ${BRIEF_LIMITS.questions} questions of kind single, multi, confirm or free. Without questions the owner just presses OK. Keep the card terse: put the long detail in your thread message and refer to it through \`more\`.`,
         parameters: Params,
         raisesCard: true,
         async execute(args) {

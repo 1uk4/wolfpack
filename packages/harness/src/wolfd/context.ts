@@ -51,10 +51,10 @@ export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show th
 - No objects for trivial answers or one-step tasks.`;
 
 /** The "Ending a turn" section: when to end with `brief` instead of plain chat. */
-export const BRIEF_GUIDANCE = `End a turn with the brief tool whenever the owner has to decide something, answer something or review a result. It shows them a card: a headline (80 characters at most), up to 5 short context bullets, and 0 to 3 questions (single, multi, confirm or free). With no questions they just acknowledge with OK.
-- Put the detail in your thread message and point at it with \`more\`; the card stays short.
-- Plain chat stays for back-and-forth: thinking aloud, progress, small clarifications that need no decision.
-- A brief ends your turn; their reply arrives with your next turn. Do not call other tools after it. ask_user_question still works but is a deprecated alias of brief.`;
+export const BRIEF_GUIDANCE = `Whenever the owner has to make a decision, supply an answer or look over a finished result, close your turn with the brief tool rather than a plain message. The owner gets a card with a headline (up to 80 characters), at most 5 brief context bullets and 0 to 3 questions (single, multi, confirm or free). A brief with no questions is simply acknowledged with OK.
+- Keep the card terse. The full explanation goes in your thread message; reference it with \`more\`.
+- Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications that need no decision.
+- A brief closes the turn, so make no further tool calls after it; the owner's response opens your next turn. ask_user_question still works but is a deprecated alias of brief.`
 
 export interface FoundFile {
   path: string;

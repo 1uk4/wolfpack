@@ -57,7 +57,7 @@ export interface AnyAnswer {
 /**
  * One answer kind of an interaction card. To add a kind: write a module like `confirm.ts`, then list it in
  * `BUILTIN_KINDS` (index.ts) or call `registerCardKind` at startup. The wolfd side (validate / isEmpty / answerText)
- * lives in `packages/harness/src/wolfd/card-kinds.ts` keyed by `kind`; the console renderer in
+ * lives in `packages/harness/src/wolfd/card-kinds/` (one module per kind, keyed by `kind`); the console renderer in
  * `apps/console/components/card-fields/`.
  */
 export interface CardKind {

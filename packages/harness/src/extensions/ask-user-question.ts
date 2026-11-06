@@ -201,7 +201,7 @@ export function askCard(args: AskArgs): Card {
 }
 
 function toBriefQuestion(q: AskQuestion, id?: string): BriefQuestion {
-  const choices = (q.options ?? []).map((o) => ({ label: o.label, ...(o.value ? { value: o.value } : {}), ...(o.description ? { note: o.description } : {}) }));
+  const choices = (q.options ?? []).filter((o) => o.label?.trim()).map((o) => ({ label: o.label, ...(o.value ? { value: o.value } : {}), ...(o.description ? { note: o.description } : {}) }));
   const kind = q.kind === "confirm" ? "confirm" : choices.length === 0 ? "free" : q.multiSelect ? "multi" : "single";
   return {
     ...(id ? { id } : {}),
@@ -209,6 +209,7 @@ function toBriefQuestion(q: AskQuestion, id?: string): BriefQuestion {
     ...(q.details ? { note: q.details } : {}),
     kind,
     ...(kind === "single" || kind === "multi" ? { choices } : {}),
+    // legacy: a single always offered "Other" (brief's single default matches); a multi got allowOther true
     ...(kind === "multi" ? { allowOther: true, ...(q.minSelect !== undefined ? { min: q.minSelect } : {}), ...(q.maxSelect !== undefined ? { max: q.maxSelect } : {}) } : {}),
     ...(kind === "confirm" ? { ...(q.confirmLabel ? { yesLabel: q.confirmLabel } : {}), ...(q.rejectLabel ? { noLabel: q.rejectLabel } : {}) } : {}),
     ...(q.optional ? { optional: true } : {}),
@@ -216,27 +217,43 @@ function toBriefQuestion(q: AskQuestion, id?: string): BriefQuestion {
   };
 }
 
+/** Whether every id the call names survives sanitizing unchanged (the alias must not rewrite answer keys). */
+function idsUnchanged(args: AskArgs): boolean {
+  const ids = [
+    ...(args.questions ?? []).flatMap((q) => [q.id, q.showIf?.field]),
+    ...(args.steps ?? []).flatMap((s) => s.questions),
+  ].filter((x): x is string => x !== undefined);
+  return ids.every((id) => id === sanitizeId(id));
+}
+
 /**
- * The `brief` call an ask_user_question call stands for: question → headline, details → one context bullet, the
- * questions map through. Undefined when the call does not fit brief's limits (a long question, more than 3
- * questions); the alias then keeps the legacy card so existing callers never break.
+ * The `brief` call an ask_user_question call stands for. The headline is `title` when given, else a neutral
+ * "A question for you" / "Questions for you": the question text stays the field label, so it is shown once and the
+ * answer the model reads back ("- <question>: <answer>") is unchanged (sibling cards need it to tell them apart).
+ * `details` stays under its question (the field description), as before. Single question: the field keeps the legacy id
+ * ("answer", or "confirm" for yes/no). Batch: questions map through with their own ids and `steps` as given. There is no legacy `default`
+ * parameter; `single` keeps allowOther on (both defaults agree), `multi` sets it true.
+ * Undefined (the alias then keeps the legacy card, so callers never break) when the call does not fit brief's limits
+ * or an id would change when sanitized.
  */
 export function askAsBrief(args: AskArgs): BriefArgs | undefined {
-  if (askProblem(args)) return undefined;
+  if (askProblem(args) || !idsUnchanged(args)) return undefined;
   const batch = args.questions ?? [];
-  const mapped: BriefArgs =
-    batch.length > 0
-      ? {
-          headline: args.title?.trim() || "Questions for you",
-          questions: batch.map((q, i) => toBriefQuestion(q, fieldId(q, i))),
-          ...(args.steps ? { steps: args.steps } : {}),
-        }
-      : {
-          headline: args.question!.trim(),
-          ...(args.details?.trim() ? { context: [args.details.trim()] } : {}),
-          // legacy single-question field ids: "confirm" for yes/no, "answer" otherwise
-          questions: [toBriefQuestion(args as AskQuestion, (args as AskQuestion).kind === "confirm" ? "confirm" : "answer")],
-        };
+  const title = args.title?.trim();
+  let mapped: BriefArgs;
+  if (batch.length > 0) {
+    mapped = {
+      headline: title || "Questions for you",
+      questions: batch.map((q, i) => toBriefQuestion(q, fieldId(q, i))),
+      ...(args.steps ? { steps: args.steps } : {}),
+    };
+  } else {
+    const q = args as AskQuestion;
+    mapped = {
+      headline: title || "A question for you",
+      questions: [toBriefQuestion(q, q.kind === "confirm" ? "confirm" : "answer")],
+    };
+  }
   return briefProblem(mapped) ? undefined : mapped;
 }
 

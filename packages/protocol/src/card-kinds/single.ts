@@ -14,7 +14,7 @@ type Single = z.infer<typeof SingleFieldSchema>;
 export const singleKind: CardKind = {
   kind: "single",
   fieldSchema: SingleFieldSchema,
-  // single answers share the text answer shape ({value, other?}); registered once by free-text, so reuse it here.
+  // A single answer has the same shape as a free-text one ({value, other?}); it is declared again here so each kind module stands alone.
   answerSchema: z.object({ value: z.string(), other: z.boolean().optional() }),
   checkField(f) {
     const s = f as unknown as Single;

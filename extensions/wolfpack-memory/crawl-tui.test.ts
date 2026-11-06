@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createCrawlCore } from "./crawl-core.js";
-import { APPROVE, EDIT, parseScope, runCrawlInterview, type Ask } from "./crawl-tui.js";
+import { APPROVE, EDIT, parseScope, runCrawlInterview, withPause, type Ask } from "./crawl-tui.js";
 
 function source(): string {
   const src = mkdtempSync(join(tmpdir(), "crawl-tui-src-"));
@@ -33,7 +33,10 @@ function harness(answers: Record<string, string | null>) {
 
 describe("parseScope", () => {
   it("reads include and exclude globs; the whole-tree choice and junk are no scope", () => {
-    expect(parseScope("include: **/*.md, *.txt; exclude: notes/**")).toEqual({ include: ["**/*.md", "*.txt"], exclude: ["notes/**"] });
+    expect(parseScope("include: **/*.md; *.txt; exclude: notes/**")).toEqual({ include: ["**/*.md", "*.txt"], exclude: ["notes/**"] });
+    // commas belong to the glob (brace sets), only `;` separates
+    expect(parseScope("include: **/*.{md,txt}")).toEqual({ include: ["**/*.{md,txt}"] });
+    expect(parseScope("exclude: a/**; {b,c}/**")).toEqual({ exclude: ["a/**", "{b,c}/**"] });
     expect(parseScope("")).toEqual({});
     expect(parseScope(null)).toEqual({});
     expect(parseScope("everything please")).toEqual({});
@@ -93,6 +96,38 @@ describe("pi /wolf:crawl interview", () => {
   it("a typed path that does not exist is refused the same way", async () => {
     const t = harness({ "Which directory": "/typed/nowhere" });
     expect((await t.run([])).status).toBe("bad-path");
+  });
+
+  it("a typed depth that is not a number is reported, not silently dropped", async () => {
+    const t = harness({ Scope: "", "look good": EDIT, "Folder depth": "deep" });
+    const r = await t.run([source(), "wolfpack", "by-folder"]);
+    expect(r.status).toBe("drafted");
+    expect(t.notes.some((n) => n.level === "warning" && n.m.includes('"deep"'))).toBe(true);
+  });
+
+  it("a wizard that throws still releases the observation pause, and the error propagates", async () => {
+    const t = harness({});
+    const released: boolean[] = [];
+    const boom = withPause(
+      () => runCrawlInterview({ ctx: { ui: { notify() {} } }, args: [source(), "wolfpack", "by-folder", "1"], cwd: "/cwd", domains: null, defaultDomain: "wolfpack", core: t.core, ask: async () => { throw new Error("tui died"); } }),
+      (keep) => released.push(keep),
+    );
+    await expect(boom).rejects.toThrow("tui died");
+    expect(released).toEqual([false]);
+  });
+
+  it("the pause is kept only for a drafted result", async () => {
+    const keeps = async (answers: Record<string, string | null>, args: string[]) => {
+      const t = harness(answers);
+      const released: boolean[] = [];
+      await withPause(() => t.run(args), (k) => released.push(k));
+      return released;
+    };
+    const full = [source(), "wolfpack", "by-folder", "1"];
+    expect(await keeps({ Scope: "", "look good": EDIT }, full)).toEqual([true]); // drafted
+    expect(await keeps({ Scope: "", "look good": APPROVE }, [source(), "wolfpack", "by-folder", "1"])).toEqual([false]); // ready
+    expect(await keeps({}, ["/no/such/dir"])).toEqual([false]); // bad path
+    expect(await keeps({ "Target KB domain": null }, [source()])).toEqual([false]); // cancelled
   });
 
   it("Esc at any question cancels without writing a plan", async () => {

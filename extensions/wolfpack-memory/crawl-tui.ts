@@ -30,17 +30,39 @@ export type InterviewResult =
   | { status: "drafted"; planPath: string; batches: number }
   | { status: "ready"; planPath: string; batches: number };
 
-/** "include: a, b; exclude: c" → globs. Anything without either key counts as no scope; "Whole tree" is no scope. */
+/**
+ * Scope text → globs. Globs are separated by `;` (never `,`, so `{a,b}` survives). `include:` and `exclude:` start a
+ * list; bare globs after one join it, e.g. `include: docs/a.md; docs/b.md; exclude: notes`. No key, or "Whole tree" (empty), is no scope.
+ */
 export function parseScope(text: string | null): { include?: string[]; exclude?: string[] } {
-  if (!text) return {};
-  const pick = (key: string): string[] | undefined => {
-    const m = new RegExp(`${key}\\s*:\\s*([^;]+)`, "i").exec(text);
-    const globs = m?.[1]?.split(",").map((g) => g.trim()).filter(Boolean);
-    return globs && globs.length > 0 ? globs : undefined;
-  };
-  const include = pick("include");
-  const exclude = pick("exclude");
-  return { ...(include ? { include } : {}), ...(exclude ? { exclude } : {}) };
+  const lists: Record<"include" | "exclude", string[]> = { include: [], exclude: [] };
+  let current: "include" | "exclude" | undefined;
+  for (const token of (text ?? "").split(";").map((t) => t.trim())) {
+    const m = /^(include|exclude)\s*:\s*(.*)$/i.exec(token);
+    if (m) {
+      current = m[1].toLowerCase() as "include" | "exclude";
+      if (m[2]) lists[current].push(m[2]);
+    } else if (current && token) {
+      lists[current].push(token);
+    }
+  }
+  return { ...(lists.include.length ? { include: lists.include } : {}), ...(lists.exclude.length ? { exclude: lists.exclude } : {}) };
+}
+
+/**
+ * Run the interview while observation is paused. `release(keep)` is called exactly once when it ends: keep the pause
+ * only for a returned `drafted` result (the user refines the draft with the crawl_* tools, and /wolf:crawl-cancel or
+ * running the plan ends it). Any other result, and a throw, release it; the throw still propagates.
+ */
+export async function withPause(run: () => Promise<InterviewResult>, release: (keepPause: boolean) => void): Promise<InterviewResult> {
+  let keep = false;
+  try {
+    const result = await run();
+    keep = result.status === "drafted";
+    return result;
+  } finally {
+    release(keep);
+  }
 }
 
 export const APPROVE = "approve";
@@ -87,16 +109,25 @@ export async function runCrawlInterview(d: InterviewDeps): Promise<InterviewResu
   }
   const scopeText = await q(
     "🐺 Scope",
-    'Crawl the whole tree, or choose Other and type globs, e.g. "include: **/*.md; exclude: drafts/**".',
+    'Crawl the whole tree, or choose Other and type globs separated by ";", e.g. "include: **/*.md; *.txt; exclude: drafts/**".',
     [{ label: "Whole tree (Recommended)", value: "" }],
     true,
   );
   if (scopeText === null) return cancelled();
   const scope = parseScope(scopeText);
 
+  let depthNumber: number | undefined;
+  if (depth) {
+    depthNumber = Number(depth);
+    if (!Number.isInteger(depthNumber) || depthNumber < 1) {
+      notify(`🐺 folder depth "${depth}" is not a whole number of 1 or more; using the default depth.`, "warning");
+      depthNumber = undefined;
+    }
+  }
+
   let drafted: ReturnType<Core["draft"]>;
   try {
-    drafted = d.core.draft({ path, domain, strategy, ...(depth && Number.isFinite(Number(depth)) ? { depth: Number(depth) } : {}), ...scope });
+    drafted = d.core.draft({ path, domain, strategy, ...(depthNumber !== undefined ? { depth: depthNumber } : {}), ...scope });
   } catch (e) {
     const message = String((e as Error)?.message ?? e);
     notify(`🐺 crawl plan failed: ${message}`, "error");

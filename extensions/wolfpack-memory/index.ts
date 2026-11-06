@@ -85,8 +85,8 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
 import { createCrawlCore, crawlPlanTools } from "./crawl-core.ts";
 import { canInterview as crawlCanInterview } from "./crawl-interview.ts";
-import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
-import { runCrawlInterview } from "./crawl-tui.js";
+import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.js";
+import { runCrawlInterview, withPause } from "./crawl-tui.js";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -2136,10 +2136,15 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
 
       // Questionnaire, preview and approval through the wizard (crawl-tui.ts): no model turn.
-      const outcome = await runCrawlInterview({ ctx, args: parts, cwd: process.cwd(), domains: declaredDomains(), defaultDomain, core: crawl });
-      if (outcome.status === "drafted") crawlPlanMode = true; // refine with the crawl_* tools
-      else crawlPlanMode = false; // finished, cancelled or failed: observation resumes
-      refreshStatus(ctx);
+      // The pause stays only for a returned `drafted` (the user refines it with the crawl_* tools; /wolf:crawl-cancel
+      // or running the plan ends it). Anything else, including a throw from the wizard or the core, releases it.
+      await withPause(
+        () => runCrawlInterview({ ctx, args: parts, cwd: process.cwd(), domains: declaredDomains(), defaultDomain, core: crawl }),
+        (keepPause) => {
+          crawlPlanMode = keepPause;
+          refreshStatus(ctx);
+        }
+      );
     },
   });
 

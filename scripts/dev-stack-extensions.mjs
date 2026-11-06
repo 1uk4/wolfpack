@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Keep the sandbox dens' installed extension bundles current for `npm run dev:stack`.
+ * Keep the sandbox dens' installed extension bundles current for `pnpm dev:stack`.
  * wolfd loads `<den>/extensions/<dir>/index.js`, which nothing else rebuilds, so it silently goes stale.
  *
  *   node scripts/dev-stack-extensions.mjs <wolves-dir>        (formerly run from dev-stack.sh; uses THIS checkout's CLI, not PATH)

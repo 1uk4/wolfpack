@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Live stack manager: `npm run stack -- <cmd>`.
+ * Live stack manager: `pnpm stack <cmd>` (`npm run stack -- <cmd>` on an npm checkout).
  * Runs the HEADLESS live stack (workerd, which supervises one wolfd per wolf in ~/wolves/local) as a per-user launchd
  * agent: starts at login, restarts after a crash, keeps the Mac awake (caffeinate), logs to a file.
  *
@@ -25,7 +25,7 @@ export const COMMANDS = ["start", "stop", "restart", "status", "logs", "uninstal
 
 export function parseArgs(argv) {
 	const [cmd, ...rest] = argv;
-	if (!cmd || !COMMANDS.includes(cmd)) throw new Error(`usage: npm run stack -- <${COMMANDS.join("|")}> [-f] [-n N]${cmd ? ` (unknown command "${cmd}")` : ""}`);
+	if (!cmd || !COMMANDS.includes(cmd)) throw new Error(`usage: pnpm stack <${COMMANDS.join("|")}> [-f] [-n N]${cmd ? ` (unknown command "${cmd}")` : ""}`);
 	const flags = { follow: false, lines: 50 };
 	for (let i = 0; i < rest.length; i++) {
 		const a = rest[i];
@@ -165,7 +165,7 @@ const which = (bin) => { const r = sh("/usr/bin/which", [bin]); return r.status 
 function writePlist(cfg) {
 	const [maj, min] = process.versions.node.split(".").map(Number);
 	if (maj < 22 || (maj === 22 && min < 9)) throw new Error(`node ${process.versions.node}: the service needs node >= 22.9 (--env-file-if-exists)`);
-	if (!fs.existsSync(cfg.workerdJs)) throw new Error(`${cfg.workerdJs} not found; build the runtime checkout first (${cfg.runtime}: npm install && npx turbo run build)`);
+	if (!fs.existsSync(cfg.workerdJs)) throw new Error(`${cfg.workerdJs} not found; build the runtime checkout first (${cfg.runtime}: pnpm install --frozen-lockfile && node scripts/turbo.mjs run build)`);
 	const extra = ["git", "claude"].map(which).filter(Boolean).map((p) => path.dirname(p));
 	fs.mkdirSync(cfg.plistDir, { recursive: true });
 	fs.mkdirSync(path.dirname(cfg.log), { recursive: true });
@@ -210,13 +210,13 @@ sleep 3; echo "after:"; launchctl print "$t" | grep -E "^[[:space:]]*(state|pid)
 	const helperLog = path.join(path.dirname(cfg.log), "restart.log");
 	fs.mkdirSync(path.dirname(helperLog), { recursive: true });
 	spawn("/bin/sh", ["-c", script, "sh", helperLog, cfg.target, String(svc.pid)], { detached: true, stdio: "ignore" }).unref();
-	say(`restart requested (SIGTERM; kills all in-flight turns, including this one). Helper output: ${helperLog}. Check: npm run stack -- status`);
+	say(`restart requested (SIGTERM; kills all in-flight turns, including this one). Helper output: ${helperLog}. Check: pnpm stack status`);
 }
 
 function status(cfg) {
 	const svc = printService(cfg);
 	say(`label:     ${cfg.label}${fs.existsSync(cfg.plist) ? "" : "  (plist not installed)"}`);
-	say(svc ? `service:   loaded, ${svc.state}${svc.pid ? `, pid ${svc.pid}` : ""}${svc.lastExit ? `, last exit ${svc.lastExit}` : ""}` : "service:   not loaded (npm run stack -- start)");
+	say(svc ? `service:   loaded, ${svc.state}${svc.pid ? `, pid ${svc.pid}` : ""}${svc.lastExit ? `, last exit ${svc.lastExit}` : ""}` : "service:   not loaded (pnpm stack start)");
 	const rows = psRows();
 	const me = svc?.pid && rows.find((r) => r.pid === svc.pid);
 	if (me) say(`uptime:    ${me.etime}`);

@@ -23,4 +23,9 @@ describe("card brief header", () => {
     expect(parse({ tool: "brief", fields: four, brief: { headline: "h" } }).success).toBe(false);
     expect(parse({ tool: "ask_user_question", fields: [] }).success).toBe(false);
   });
+  it("rejects an unknown-kind field whose showIf is malformed", () => {
+    const first = { id: "a", kind: "slider", label: "A" };
+    const bad = { id: "b", kind: "slider", label: "B", showIf: { field: "a" } }; // neither equals nor oneOf
+    expect(parse({ tool: "brief", fields: [first, bad], brief: { headline: "h" } }).success).toBe(false);
+  });
 });

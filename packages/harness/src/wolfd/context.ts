@@ -54,7 +54,7 @@ export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show th
 export const BRIEF_GUIDANCE = `Whenever the owner has to make a decision, supply an answer or look over a finished result, close your turn with the brief tool rather than a plain message. The owner gets a card with a headline (up to 80 characters), at most 5 brief context bullets and 0 to 3 questions (single, multi, confirm or free). A brief with no questions is simply acknowledged with OK.
 - Keep the card terse. The full explanation goes in your thread message; reference it with \`more\`.
 - Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications that need no decision.
-- A brief closes the turn, so make no further tool calls after it; the owner's response opens your next turn. ask_user_question still works but is a deprecated alias of brief.`
+- A brief closes the turn, so make no further tool calls after it; the owner's response opens your next turn. ask_user_question still works but is a deprecated alias of brief.`;
 
 export interface FoundFile {
   path: string;

@@ -18,10 +18,10 @@ const Choice = Type.Object({
 const Condition = Type.Object(
   {
     field: Type.String({ description: "Id of the question this depends on; it must come earlier in the list." }),
-    equals: Type.Optional(Type.Union([Type.String(), Type.Boolean()], { description: "The answer that makes this question appear (true/false for a confirm)." })),
-    oneOf: Type.Optional(Type.Array(Type.String(), { description: "Alternatively, any of these choice values makes it appear." })),
+    equals: Type.Optional(Type.Union([Type.String(), Type.Boolean()], { description: "The earlier answer that brings this question up." })),
+    oneOf: Type.Optional(Type.Array(Type.String(), { description: "Or: it appears when the earlier answer is any of these choice values." })),
   },
-  { description: "Make this question conditional on an earlier answer. Give equals or oneOf, not both." },
+  { description: "Show this question only after a particular earlier answer. Set equals or oneOf; never both." },
 );
 
 const Question = Type.Object({
@@ -128,10 +128,10 @@ export function briefProblem(args: BriefArgs): string | undefined {
   const questions = args.questions ?? [];
   if (questions.length > BRIEF_LIMITS.questions) return `brief: ${questions.length} questions; the limit is ${BRIEF_LIMITS.questions}. Ask the most important ones, or ${TRIM_HINT.toLowerCase()}`;
   const blank = questions.findIndex((q) => !q.ask?.trim());
-  if (blank >= 0) return `brief: questions[${blank}] has no \`ask\` text.`;
+  if (blank >= 0) return `brief: questions[${blank}] is missing its \`ask\` text; every question needs one.`;
   const ids = questions.map(idOf);
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
-  if (dup) return `brief: duplicate question id "${dup}"; ids must be unique.`;
+  if (dup) return `brief: two questions share the id "${dup}"; give each a different id.`;
   for (const [i, q] of questions.entries()) {
     const kind = kindOf(q);
     const n = usableChoices(q);
@@ -139,7 +139,7 @@ export function briefProblem(args: BriefArgs): string | undefined {
     if ((kind === "confirm" || kind === "free") && (q.choices?.length ?? 0) > 0) return `brief: questions[${i}] is kind "${kind}", which takes no \`choices\`. Drop them, or use kind "single" or "multi".`;
   }
   const badMulti = questions.findIndex((q) => (q.min !== undefined || q.max !== undefined) && q.kind !== "multi");
-  if (badMulti >= 0) return `brief: questions[${badMulti}] sets min/max, which only apply to kind "multi".`;
+  if (badMulti >= 0) return `brief: questions[${badMulti}] sets min or max, but pick limits exist only on multi questions; remove them or change its kind to multi.`;
   const parsed = CardSchema.safeParse(briefCard(args));
   if (!parsed.success) return `brief: ${parsed.error.issues[0]?.message ?? "the call does not make a valid card"}.`;
   return undefined;

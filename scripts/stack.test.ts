@@ -89,6 +89,16 @@ describe("dev-stack", () => {
 		expect(e.WOLFPACK_Y).toBeUndefined();
 		for (const p of [e.HOME, e.WORKERD_CONFIG_DIR]) expect(p.startsWith(cfg.wolves + path.sep)).toBe(true);
 	});
+	it("keeps pnpm's store and corepack's cache at the real home, so the sandbox HOME does not duplicate them", () => {
+		const cfg = dev.resolveConfig({ DEV_WOLVES_DIR: path.join(tmp, "w") }, tmp);
+		const e = dev.childEnv(cfg, {});
+		for (const p of [e.PNPM_CONFIG_STORE_DIR, e.COREPACK_HOME]) {
+			expect(p.startsWith(tmp + path.sep)).toBe(true);
+			expect(p.startsWith(cfg.sandboxHome + path.sep)).toBe(false);
+		}
+		const explicit = dev.childEnv(cfg, { PNPM_CONFIG_STORE_DIR: "/my/store", COREPACK_HOME: "/my/corepack" });
+		expect(explicit).toMatchObject({ PNPM_CONFIG_STORE_DIR: "/my/store", COREPACK_HOME: "/my/corepack" });
+	});
 	it("parses --app", () => {
 		expect(dev.parseArgs([])).toEqual({ app: "console" });
 		expect(dev.parseArgs(["--app", "none"])).toEqual({ app: "none" });

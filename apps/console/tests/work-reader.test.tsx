@@ -7,7 +7,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -88,9 +88,10 @@ describe("phones", () => {
 		const view = renderToStaticMarkup(<WorkItemView id="f1" state={{ kind: "loading" }} onClose={() => {}} />);
 		assert.ok(view.includes('data-testid="work-reader-close"') && view.includes("max-md:size-11"));
 	});
-	it("the KB entry reader is full screen too", () => {
-		const html = renderToStaticMarkup(<EntryReaderView id="x" state={{ kind: "loading" }} overlay={{ onClose: () => {} }} />);
-		assert.ok(html.includes("max-md:inset-0") && html.includes("max-md:w-full") && html.includes("max-md:size-11"));
+	it("the KB entry is a full page, not an overlay, with an Open in graph link to the focused node", () => {
+		const html = renderToStaticMarkup(<EntryReaderView id="w/x" state={{ kind: "loading" }} />);
+		assert.ok(html.includes("h-dvh") && !html.includes("dialog") && !html.includes("entry-reader-close"));
+		assert.ok(html.includes('href="/?focus=ent%3Aw%2Fx"') && html.includes("entry-open-in-graph"));
 	});
 	it("the Work list is a full-height page with no column mode", () => {
 		const list = src("../components/work-view.tsx");
@@ -251,8 +252,9 @@ describe("deep links", () => {
 		const html = renderToStaticMarkup(<WorkItemView id="f1" state={{ kind: "loading" }} />);
 		assert.ok(html.includes('data-testid="work-item-page"') && html.includes("h-dvh") && !html.includes("work-reader-close"));
 	});
-	it("/kb/entry/<id> still renders over the graph; / and /work both mount the reader host", () => {
-		assert.match(src("../app/(home)/kb/entry/[id]/page.tsx"), /EntryReaderOverlay/);
+	it("/kb/entry/<id> is a standalone page outside the (home) graph layout; / and /work both mount the reader host", () => {
+		assert.match(src("../app/kb/entry/[id]/page.tsx"), /EntryReaderPage/);
+		assert.ok(!existsSync(new URL("../app/(home)/kb/entry", import.meta.url)));
 		assert.match(src("../app/(home)/page.tsx"), /WorkReaderHost/);
 		assert.match(src("../app/work/page.tsx"), /WorkReaderHost/);
 	});

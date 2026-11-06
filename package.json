@@ -12,7 +12,7 @@
     "typecheck:extensions": "tsc -p tsconfig.extensions.json",
     "test": "vitest",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
-    "install:cli": "npm run build && cd packages/cli && npm link",
+    "install:cli": "pnpm run build && cd packages/cli && pnpm link --global",
     "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js packages/agent/dist/bin/wolfpack-work-server.js packages/harness/dist/bin/harness.js packages/workerd/dist/bin/workerd.js",
     "dev": "turbo run dev --filter=@wolfpack/console",
     "verify": "turbo run build typecheck lint test",

@@ -13,10 +13,10 @@
 	},
 	"homepage": "https://github.com/1uk4/wolfpack",
 	"scripts": {
-		"dev": "concurrently -k -n console,electron \"npm run dev -w @wolfpack/console -- -p 3210\" \"until curl -sf -o /dev/null http://localhost:3210; do sleep 1; done; WOLFPACK_DEV_URL=http://localhost:3210 electron .\"",
+		"dev": "concurrently -k -n console,electron \"pnpm --filter @wolfpack/console run dev -p 3210\" \"until curl -sf -o /dev/null http://localhost:3210; do sleep 1; done; WOLFPACK_DEV_URL=http://localhost:3210 electron .\"",
 		"electron:dev": "WOLFPACK_DEV_URL=${WOLFPACK_DEV_URL:-http://localhost:3000} electron .",
-		"build:server": "npm run build -w @wolfpack/console && node scripts/build-server.mjs && node scripts/smoke-server.mjs",
-		"dist": "npm run build:server && electron-builder --mac --arm64 --publish never -c.mac.identity=null"
+		"build:server": "pnpm --filter @wolfpack/console run build && node scripts/build-server.mjs && node scripts/smoke-server.mjs",
+		"dist": "pnpm run build:server && electron-builder --mac --arm64 --publish never -c.mac.identity=null"
 	},
 	"dependencies": {
 		"electron-updater": "^6.8.11"

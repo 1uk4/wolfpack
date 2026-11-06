@@ -237,7 +237,9 @@ export async function kbBackfill(opts: BackfillOptions): Promise<BackfillReport>
       }
       const at = toIsoUtc(a.at, tz);
       if (!at) { skip(key, "aliased event has no parseable time"); continue; }
-      const w = (writesOfCanon.get(a.canonicalId) ?? []).find((x) => x.at === a.at) ?? [...(writesOfCanon.get(a.canonicalId) ?? [])].reverse().find((x) => x.at <= a.at);
+      // Compare as instants (both sides through toIsoUtc): a raw string compare mis-orders "YYYY-MM-DD HH:MM" against ISO ("T" sorts after " ").
+      const writes = writesOfCanon.get(a.canonicalId) ?? [];
+      const w = writes.find((x) => toIsoUtc(x.at, tz) === at) ?? [...writes].reverse().find((x) => { const xt = toIsoUtc(x.at, tz); return xt !== undefined && xt <= at; });
       const entryId = w?.entryId ?? a.canonicalId;
       items.push({
         key, at, submitted: toIsoUtc(p.submitted, tz) ?? at, from: p.from || wolf, denTopicId: p.den_topic_id || a.denTopicId || f.replace(/-[0-9a-f]{10}\.md$/, ""),

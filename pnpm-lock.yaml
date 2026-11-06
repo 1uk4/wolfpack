@@ -326,6 +326,18 @@ importers:
       '@tailwindcss/postcss':
         specifier: ^4.3.3
         version: 4.3.3
+      '@types/d3-force':
+        specifier: ^3.0.10
+        version: 3.0.10
+      '@types/d3-selection':
+        specifier: ^3.0.12
+        version: 3.0.12
+      '@types/d3-shape':
+        specifier: ^3.2.0
+        version: 3.2.0
+      '@types/d3-zoom':
+        specifier: ^3.0.9
+        version: 3.0.9
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.2

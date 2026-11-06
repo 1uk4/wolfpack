@@ -1,6 +1,7 @@
 import { fauxToolCall } from "./scripted-model.js";
 
-/** The retired ask_user_question's argument shape, kept so card tests script a `brief` call in a few words. */
+/** Test helper, used beside test-wolf.ts (the build compiles it like it does that file; nothing imports it at runtime).
+ * The retired ask_user_question's argument shape, kept so card tests script a `brief` call in a few words. */
 export interface AskArgs {
   question: string;
   details?: string;

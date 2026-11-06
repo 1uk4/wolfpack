@@ -2,7 +2,7 @@
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NotFoundError } from "@wolfpack/client";
-import { askCall } from "./ask-call.js";
+import { askCall } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf, type TestWolfOptions } from "./test-wolf.js";
 import { answerText, stripSupersededNotes, supersededNotes } from "./cards.js";

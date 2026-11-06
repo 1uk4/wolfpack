@@ -314,7 +314,8 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
 
   it("an invalid brief call (no headline, a blank entry, duplicate ids) is an error result and raises no card", async () => {
     const seen: string[] = [];
-    const bad = [
+    // Malformed on purpose, but plain JSON: the scripted call takes the tool arguments as JSON.
+    const bad: Parameters<typeof fauxToolCall>[1][] = [
       { questions: [{ ask: "A" }] },
       { headline: "h", questions: [{ ask: "A" }, { ask: " " }] },
       { headline: "h", questions: [{ id: "x", ask: "A" }, { id: "x", ask: "B" }] },

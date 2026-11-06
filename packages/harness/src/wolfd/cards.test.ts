@@ -7,7 +7,7 @@ import type { Card } from "@wolfpack/protocol";
 import { Type } from "../extension-api.js";
 import { adaptToDurable } from "../adapters/durable.js";
 import { cardResult, createCardGuardExtension } from "../engine/cards.js";
-import { askCall } from "./ask-call.js";
+import { askCall } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import type { ExtensionRuntime } from "./run.js";
 import { WolfServer } from "./server.js";

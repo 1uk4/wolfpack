@@ -38,7 +38,7 @@ export interface PendingToolCall {
 	input: unknown;
 }
 
-/** Tools that render in the question dock and gate the composer. */
+/** Question tools that gate the composer. ask_user_question is the retired tool: kept for old-transcript compat. */
 export const QUESTION_TOOLS = ["quiz", "ask_user_question", "explain"] as const;
 
 /** The tool→kind map (the dock's own fold, named once — the dismissal

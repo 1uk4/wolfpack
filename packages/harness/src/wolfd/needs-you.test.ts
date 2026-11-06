@@ -1,7 +1,7 @@
 /** Needs-you events over /v1: card events on the thread stream, status + card changes on the wolf activity stream. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WolfEvent } from "@wolfpack/protocol";
-import { askCall } from "./ask-call.js";
+import { askCall } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 

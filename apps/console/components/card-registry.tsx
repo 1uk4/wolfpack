@@ -149,8 +149,9 @@ export function lookupInteractionCard(tool: string): InteractionCardEntry | unde
 }
 
 /**
- * Pending/streaming questions live in the dock, not the transcript;
- * answered ones render as graded records.
+ * Settled quiz / explain / ask_user_question tool calls (older transcripts) render as graded records. A pending or
+ * streaming one renders nothing: wolf threads raise questions as protocol cards (AskCard), and no tool in a live
+ * thread produces a pending quiz or explain call.
  */
 function QuestionCard({ part }: ArtifactPartProps) {
 	if (part.state !== "output-available") return null;

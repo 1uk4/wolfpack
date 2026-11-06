@@ -86,6 +86,7 @@ import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
 import { createCrawlCore, crawlPlanTools } from "./crawl-core.ts";
 import { canInterview as crawlCanInterview } from "./crawl-interview.ts";
 import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
+import { runCrawlInterview } from "./crawl-tui.js";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -2134,58 +2135,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // Questionnaire: the wizard asks for whatever the command line left out, then the plan is drafted
-      // from the answers (no model turn; refine it afterwards with the crawl_* tools).
-      const cancel = () => {
-        crawlPlanMode = false;
-        refreshStatus(ctx);
-        ctx.ui.notify("🐺 crawl questionnaire cancelled.", "info");
-      };
-      const declared = declaredDomains();
-      const answers = [...parts];
-      if (!answers[0]) {
-        const cwd = process.cwd();
-        const dir = await wizardSingleChoice(
-          ctx,
-          "🐺 Which directory should I crawl?",
-          "Pick the current directory, or choose Other to type a path.",
-          [{ label: `${cwd} (current directory)`, value: cwd }],
-          true
-        );
-        if (dir === null) return cancel();
-        answers[0] = dir;
-      }
-      if (!answers[1]) {
-        const domainChoices = declared && declared.size > 0 ? [...declared] : [defaultDomain];
-        const domain = await wizardSingleChoice(
-          ctx,
-          "🐺 Target KB domain",
-          undefined,
-          domainChoices.map((d) => ({ label: d, value: d }))
-        );
-        if (domain === null) return cancel();
-        answers[1] = domain;
-      }
-      if (!answers[2]) {
-        const strategy = await wizardSingleChoice(ctx, "🐺 Grouping strategy", undefined, [
-          { label: "by-folder (Recommended)", value: "by-folder" },
-          { label: "by-pattern", value: "by-pattern" },
-        ]);
-        if (strategy === null) return cancel();
-        answers[2] = strategy;
-      }
-      if (answers[2] === "by-folder" && !answers[3]) {
-        const depth = await wizardSingleChoice(
-          ctx,
-          "🐺 Folder depth",
-          "How many path segments to group on. Choose Other for a custom number.",
-          [1, 2, 3].map((n) => ({ label: String(n), value: String(n) })),
-          true
-        );
-        if (depth === null) return cancel();
-        answers[3] = depth;
-      }
-      draftCrawlPlan(ctx, answers);
+      // Questionnaire, preview and approval through the wizard (crawl-tui.ts): no model turn.
+      const outcome = await runCrawlInterview({ ctx, args: parts, cwd: process.cwd(), domains: declaredDomains(), defaultDomain, core: crawl });
+      if (outcome.status === "drafted") crawlPlanMode = true; // refine with the crawl_* tools
+      else crawlPlanMode = false; // finished, cancelled or failed: observation resumes
+      refreshStatus(ctx);
     },
   });
 

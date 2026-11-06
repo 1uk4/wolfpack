@@ -1,6 +1,6 @@
 /** GET /v1/threads/:id paging on a real wolfd: default unchanged, newest page, older pages, bad limit. */
 import { afterEach, describe, expect, it } from "vitest";
-import { askCall } from "./ask-call.js";
+import { askCall } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 

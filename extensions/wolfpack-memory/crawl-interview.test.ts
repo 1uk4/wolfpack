@@ -79,4 +79,21 @@ describe("crawl directive", () => {
     expect(none).not.toContain("workspace is");
     expect(none).not.toContain("undefined");
   });
+
+  it("every field name the directive tells the model to use exists in the real brief schema", async () => {
+    const { createBriefExtension } = await import("../../packages/harness/src/extensions/brief.js");
+    const params = createBriefExtension().tools![0].parameters as { properties: Record<string, { items?: { properties: Record<string, unknown> } }> };
+    const question = params.properties.questions.items!.properties;
+    const d = buildCrawlDirective({ ...base, src: "/src" });
+    // the names as the directive spells them: `ask`, choices, kind "confirm" with yesLabel / noLabel, showIf, headline
+    for (const name of ["ask", "choices", "kind", "yesLabel", "noLabel", "showIf", "id"]) {
+      expect(Object.keys(question), `brief question has ${name}`).toContain(name);
+    }
+    expect(Object.keys(params.properties)).toContain("headline");
+    for (const spelled of ["`ask`", "`headline`", 'kind "confirm"', "yesLabel", "noLabel", "showIf: { field: \"strategy\", equals: \"by-folder\" }"]) {
+      expect(d, spelled).toContain(spelled);
+    }
+    // names of the retired ask_user_question shape must be gone
+    for (const old of ["confirmLabel", "rejectLabel", "multiSelect", "`questions` list", "details"]) expect(d).not.toContain(old);
+  });
 });

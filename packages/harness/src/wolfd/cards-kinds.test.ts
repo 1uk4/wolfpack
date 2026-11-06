@@ -4,7 +4,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { CardSchema } from "@wolfpack/protocol";
 import { cardResult, confirmCard } from "../engine/cards.js";
-import { askCall } from "./ask-call.js";
+import { askCall } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { adaptToDurable } from "../adapters/durable.js";
 import { Type } from "../extension-api.js";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduce, renderWizard, wizardSingleChoice, type WizardState } from "./crawl-wizard.ts";
+import { reduce, renderWizard, wizardSingleChoice, type WizardState } from "./crawl-wizard.js";
 
 const OPTIONS = [
   { label: "One", value: "1", description: "first" },

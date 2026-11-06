@@ -46,9 +46,15 @@ export interface ProjectContextInput {
 export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show the user live structured objects; prose stays the primary channel.
 - show_graph: a plan with dependencies or branching (3+ steps with ordering); revise statuses as work progresses.
 - show_checklist: a linear to-do you tick off in place. Don't emit both a graph and a checklist for the same plan.
-- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the user an open question, use ask_user_question instead.
+- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the user an open question, use the brief tool instead.
 - Revise an object by reusing its objectId and resending it in full.
 - No objects for trivial answers or one-step tasks.`;
+
+/** The "Ending a turn" section: when to end with `brief` instead of plain chat. */
+export const BRIEF_GUIDANCE = `End a turn with the brief tool whenever the owner has to decide something, answer something or review a result. It shows them a card: a headline (80 characters at most), up to 5 short context bullets, and 0 to 3 questions (single, multi, confirm or free). With no questions they just acknowledge with OK.
+- Put the detail in your thread message and point at it with \`more\`; the card stays short.
+- Plain chat stays for back-and-forth: thinking aloud, progress, small clarifications that need no decision.
+- A brief ends your turn; their reply arrives with your next turn. Do not call other tools after it. ask_user_question still works but is a deprecated alias of brief.`;
 
 export interface FoundFile {
   path: string;
@@ -173,5 +179,6 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
   }
   const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
   if (so !== false && so.trim()) parts.push(`# Structured output\n\n${so.trim()}`);
+  parts.push(`# Ending a turn\n\n${BRIEF_GUIDANCE}`);
   return { identity, agents, claude, skills, instructions: parts.join("\n\n") };
 }

@@ -7,6 +7,7 @@
  */
 import { showIfProblem, type Card, type CardOption } from "@wolfpack/protocol";
 import { confirmCard } from "../engine/cards.js";
+import { briefProblem, briefResult, type BriefArgs, type BriefQuestion } from "./brief.js";
 import { defineExtension, defineTool, Type, type Extension } from "../extension-api.js";
 
 const OptionSchema = Type.Object({
@@ -199,6 +200,45 @@ export function askCard(args: AskArgs): Card {
   return { tool: "ask_user_question", ...title, fields: [questionField(q, "answer")] };
 }
 
+function toBriefQuestion(q: AskQuestion, id?: string): BriefQuestion {
+  const choices = (q.options ?? []).map((o) => ({ label: o.label, ...(o.value ? { value: o.value } : {}), ...(o.description ? { note: o.description } : {}) }));
+  const kind = q.kind === "confirm" ? "confirm" : choices.length === 0 ? "free" : q.multiSelect ? "multi" : "single";
+  return {
+    ...(id ? { id } : {}),
+    ask: q.question,
+    ...(q.details ? { note: q.details } : {}),
+    kind,
+    ...(kind === "single" || kind === "multi" ? { choices } : {}),
+    ...(kind === "multi" ? { allowOther: true, ...(q.minSelect !== undefined ? { min: q.minSelect } : {}), ...(q.maxSelect !== undefined ? { max: q.maxSelect } : {}) } : {}),
+    ...(kind === "confirm" ? { ...(q.confirmLabel ? { yesLabel: q.confirmLabel } : {}), ...(q.rejectLabel ? { noLabel: q.rejectLabel } : {}) } : {}),
+    ...(q.optional ? { optional: true } : {}),
+    ...(q.showIf ? { showIf: q.showIf } : {}),
+  };
+}
+
+/**
+ * The `brief` call an ask_user_question call stands for: question → headline, details → one context bullet, the
+ * questions map through. Undefined when the call does not fit brief's limits (a long question, more than 3
+ * questions); the alias then keeps the legacy card so existing callers never break.
+ */
+export function askAsBrief(args: AskArgs): BriefArgs | undefined {
+  if (askProblem(args)) return undefined;
+  const batch = args.questions ?? [];
+  const mapped: BriefArgs =
+    batch.length > 0
+      ? {
+          headline: args.title?.trim() || "Questions for you",
+          questions: batch.map((q, i) => toBriefQuestion(q, fieldId(q, i))),
+          ...(args.steps ? { steps: args.steps } : {}),
+        }
+      : {
+          headline: args.question!.trim(),
+          ...(args.details?.trim() ? { context: [args.details.trim()] } : {}),
+          questions: [toBriefQuestion(args as AskQuestion, "answer")],
+        };
+  return briefProblem(mapped) ? undefined : mapped;
+}
+
 export function createAskUserQuestionExtension(): Extension {
   return defineExtension({
     name: "ask-user-question",
@@ -207,12 +247,14 @@ export function createAskUserQuestionExtension(): Extension {
       defineTool({
         name: "ask_user_question",
         description:
-          "Ask the user a single question. Your turn ends and the question is shown to them as a card; their answer arrives at the start of your next turn. Use when requirements are ambiguous, a preference or decision is theirs to make, or you need confirmation before proceeding. Ask one question per call, or batch related questions into one card with `questions` (they are answered together). Set multiSelect to allow several choices (optionally minSelect / maxSelect to bound how many), or kind \"confirm\" for yes/no.",
+          "Deprecated alias of `brief` (prefer `brief`). Ask the user a single question. Your turn ends and the question is shown to them as a card; their answer arrives at the start of your next turn. Use when requirements are ambiguous, a preference or decision is theirs to make, or you need confirmation before proceeding. Ask one question per call, or batch related questions into one card with `questions` (they are answered together). Set multiSelect to allow several choices (optionally minSelect / maxSelect to bound how many), or kind \"confirm\" for yes/no.",
         parameters: Params,
         raisesCard: true,
         async execute(args) {
           const a = args as AskArgs;
           const problem = askProblem(a);
+          const asBrief = problem ? undefined : askAsBrief(a);
+          if (asBrief) return briefResult(asBrief, "ask_user_question");
           if (problem) return { content: [{ type: "text", text: problem }], isError: true };
           const asked = a.questions?.length ? a.questions.map((q) => q.question) : [];
           const sent = asked.length > 0 ? asked.map((q) => `\n- ${q}`).join("") : ` ${a.question}`;

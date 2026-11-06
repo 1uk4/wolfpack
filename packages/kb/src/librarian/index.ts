@@ -11,6 +11,7 @@ export { renderEntry, markProcessed } from "./commit.js";
 export { renderDomainDigest } from "./domains.js";
 export { syncDelivered } from "./groups.js";
 export { writeSections, readSections } from "./sections.js";
+export { entryDomain, survivorOf, resolveAliasedEntry } from "./alias.js";
 export { acquireLease, freshLease, freshLeaseIn, readLease, wolfLeaseDirs, leaseFile, LEASE_FILE, LEASE_STALE_MS, type Lease, type LeaseHandle, type LeaseOwner } from "./curator-lease.js";
 export {
   workIdOfTopic,

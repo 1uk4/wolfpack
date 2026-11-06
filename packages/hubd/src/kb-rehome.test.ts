@@ -204,6 +204,58 @@ describe("kb-rehome", () => {
     expect(log.some((e) => e.t === "entry_placed" && (e as { entryId: string }).entryId === C)).toBe(false);
   });
 
+  it("a re-run with only an already-gone --remove-section re-renders that domain (domain from the id)", async () => {
+    const f = fixture();
+    await kbRehome({ dataDir: f.dataDir, moves: [{ entryId: A, sectionId: GOOD }], removeSections: [JUNK], apply: true });
+    const dom = join(f.roots.kbBase, "domains", "wolfpack");
+    rmSync(join(dom, "INDEX.md"));
+    rmSync(join(dom, "_digest.json"));
+    const r = await kbRehome({ dataDir: f.dataDir, moves: [], removeSections: [JUNK], apply: true });
+    expect(r.alreadyGone).toEqual([JUNK]);
+    expect(r.domains).toEqual(["wolfpack"]);
+    expect(existsSync(join(dom, "INDEX.md"))).toBe(true);
+    expect(existsSync(join(dom, "_digest.json"))).toBe(true);
+  });
+
+  it("a moves-only run emits sections_replaced so the fold agrees with _sections.json", async () => {
+    const f = fixture();
+    await kbRehome({ dataDir: f.dataDir, moves: [{ entryId: A, sectionId: GOOD }], apply: true });
+    const log = readLedger(f.roots);
+    expect(log.filter((e) => e.t === "sections_replaced").map((e) => (e as { domain: string }).domain)).toEqual(["wolfpack"]);
+    const fold = foldSections(log).filter((s) => String(s.domain) === "wolfpack");
+    const snap = readSections(f.roots).filter((s) => String(s.domain) === "wolfpack");
+    expect(fold.map((s) => [String(s.id), s.memberCount]).sort()).toEqual(snap.map((s) => [String(s.id), s.memberCount]).sort());
+    expect(snap.find((s) => String(s.id) === JUNK)?.memberCount).toBe(0);
+    expect(snap.find((s) => String(s.id) === GOOD)?.memberCount).toBe(2);
+  });
+
+  it("the recount excludes grouped entries (the curator's rule) and the dry run prints before -> after and the ledger-only marker", async () => {
+    const f = fixture();
+    writeFileSync(f.ep("wolfpack", B), `---\nid: ${B}\ntitle: T ${B}\ndomain: wolfpack\nsection: ${GOOD}\ngroup: grp-aaaaaaa\n---\nx\n`);
+    const dry = await kbRehome({ dataDir: f.dataDir, moves: [{ entryId: A, sectionId: GOOD }] });
+    const good = dry.counts.find((c) => c.id === GOOD)!;
+    expect(good.after).toBe(1);
+    const lines = formatRehomeReport(dry).join("\n");
+    expect(lines).toContain(`memberCount ${GOOD} [wolfpack]: 1 -> 1`);
+    expect(lines).toContain(`memberCount ${JUNK} [wolfpack]: 1 -> 0`);
+    expect(lines).not.toContain("snapjack"); // untouched domain is not listed
+    // already in the target but never placed in the ledger: marked
+    writeFileSync(f.ep("wolfpack", A), entry(A, "wolfpack", GOOD));
+    const dry2 = await kbRehome({ dataDir: f.dataDir, moves: [{ entryId: A, sectionId: GOOD }] });
+    expect(formatRehomeReport(dry2).join("\n")).toContain("already in sec-wolfpack-good (ledger entry_placed)");
+  });
+
+  it("sectionOf/setSection handle a bare `section:` and quoted values", () => {
+    const bare = `---\nid: x\ndomain: wolfpack\nsection:\ntitle: t\n---\nb\n`;
+    expect(sectionOf(bare)).toBe("");
+    const out = setSection(bare, GOOD);
+    expect(out).toBe(`---\nid: x\ndomain: wolfpack\nsection: ${GOOD}\ntitle: t\n---\nb\n`);
+    expect((out.match(/^section:/gm) ?? []).length).toBe(1);
+    expect(sectionOf(`---\nsection: "${JUNK}"\n---\n`)).toBe(JUNK);
+    expect(sectionOf(`---\nsection: '${JUNK}'\n---\n`)).toBe(JUNK);
+    expect(setSection(`---\nsection: "${JUNK}"\n---\n`, GOOD)).toBe(`---\nsection: ${GOOD}\n---\n`);
+  });
+
   it("CLI parsing and run", async () => {
     expect(() => parseArgs(["kb-rehome", "--data-dir", "/x"])).toThrow(/needs at least one/);
     expect(() => parseArgs(["kb-rehome", "--data-dir", "/x", "--move", "bad"])).toThrow(/entryId/);

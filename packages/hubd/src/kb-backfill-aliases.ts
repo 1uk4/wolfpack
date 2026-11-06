@@ -21,6 +21,8 @@
  *  - `entry_retired` is also skipped when the hub ledger already holds a NON-`bf-` entry_retired for that entry (survivorOf takes the LAST
  *    retire in file order, so a copied Dewey retire would override the curator's survivor).
  *  - Duplicate source events (same derived `bf-` id) are collapsed before appending.
+ * ORDER: run this BEFORE `hubd kb-rehome`. rehome's commitKb writes non-`bf-` entry_written events, which the entry_retired skip rule
+ * above treats as curator rewrites, so a backfill run after a rehome would skip retires for the rehomed entries.
  * Report: counts per type, skipped keys, and alias targets with no entry file in the hub KB and no `entry_retired` survivor (still emitted).
  */
 import { createHash } from "node:crypto";
@@ -29,7 +31,7 @@ import { appendLedger, entryDomain, readLedger, resolveAliasedEntry } from "@wol
 import { KbEventSchema, ledgerFile, type KbEvent } from "@wolfpack/kb/shared";
 import { toIsoUtc, DEFAULT_BACKFILL_TZ } from "./kb-backfill.js";
 import { hubRoots } from "./layout.js";
-import { acquireKbWriterLock } from "./kb-commits.js";
+import { acquireKbWriterLock, recoverKbCommit } from "./kb-commits.js";
 
 export interface AliasBackfillOptions {
   deweyLedger: string;
@@ -131,6 +133,7 @@ export async function kbBackfillAliases(opts: AliasBackfillOptions): Promise<Ali
   else {
     const lock = acquireKbWriterLock(opts.dataDir); // throws while a live hubd holds it
     try {
+      recoverKbCommit(roots, opts.dataDir); // like createKbWriter: roll back an interrupted commit before appending
       run();
     } finally {
       lock.release();

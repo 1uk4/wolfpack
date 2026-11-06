@@ -4,7 +4,7 @@
  * (the extension's `intervalMs` seam); the logs "Threshold reached" / "Timer-triggered" tell the two paths apart.
  * work-wolfpack-2oIgO5b
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRegistry, Harness } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/index.js";
@@ -16,6 +16,7 @@ import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { attachConversationReader } from "../../packages/harness/src/engine/conversation-reader.js";
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
 import { createScriptedModel, fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
+import { effectiveConsolidationInterval, parseConsolidationInterval } from "@wolfpack/engine";
 import createMemoryExtension from "./unified.js";
 
 const dirs: string[] = [];
@@ -63,9 +64,12 @@ async function withWolf(consolidation: Record<string, unknown>, during: (w: { de
   await root.submit({ type: "input", content: "USER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
   await root.waitForIdle(ctx);
   await sleep(400);
-  await during({ den, logs: () => lines, session: join(den, ".memory/sessions/durable/caching.md") });
-  detach();
-  await harness.close(ctx);
+  try {
+    await during({ den, logs: () => lines, session: join(den, ".memory/sessions/durable/caching.md") });
+  } finally {
+    detach();
+    await harness.close(ctx);
+  }
   if (afterClose) await afterClose({ den, logs: () => lines });
 }
 
@@ -76,6 +80,9 @@ const TIMER = /Timer-triggered/;
 describe("memory.consolidation.trigger", () => {
   it("manual: neither the threshold nor the timer consolidates", async () => {
     await withWolf({ trigger: "manual", threshold: 1, poolTarget: 0, interval: "4h" }, async ({ den, logs, session }) => {
+      // the observer ran (it pooled the exchange), so the zero counts below are not vacuous
+      const pool = join(den, ".memory", "pool", "observations.jsonl");
+      expect(existsSync(pool) && readFileSync(pool, "utf8").trim().length > 0).toBe(true);
       seedPool(den);
       await sleep(300);
       expect(count(logs(), THRESHOLD)).toBe(0);
@@ -137,4 +144,19 @@ describe("memory.consolidation.trigger", () => {
     expect(() => createMemoryExtension({ live: true, engine: stubEngine(), consolidation: { trigger: "timer", interval: "soon" } } as never, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} })).not.toThrow();
     expect(warn.mock.calls.some((c) => /invalid memory.consolidation.interval "soon": using 4h/.test(String(c[0])))).toBe(true);
   });
+});
+
+describe("consolidation interval normaliser", () => {
+  it("accepts valid durations", () => {
+    expect(parseConsolidationInterval("30s")).toBe(30_000);
+    expect(parseConsolidationInterval("15m")).toBe(900_000);
+    expect(parseConsolidationInterval("4h")).toBe(14_400_000);
+    expect(parseConsolidationInterval("1d")).toBe(86_400_000);
+    expect(effectiveConsolidationInterval("2h")).toBe("2h");
+  });
+  it.each(["0s", "0h", "30d", "soon", ""])("rejects %j and falls back to 4h", (v) => {
+    expect(parseConsolidationInterval(v)).toBeUndefined();
+    expect(effectiveConsolidationInterval(v)).toBe("4h");
+  });
+  it("undefined is 4h", () => expect(effectiveConsolidationInterval(undefined)).toBe("4h"));
 });

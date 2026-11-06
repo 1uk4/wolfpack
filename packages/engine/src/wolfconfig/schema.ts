@@ -42,6 +42,24 @@ export type PromptSection = string | false;
 
 export const DEFAULT_TOOLS = ["coding"] as const;
 
+/** Default consolidation timer period. */
+export const DEFAULT_CONSOLIDATION_INTERVAL = "4h";
+/** setInterval overflows (fires every 1ms) above this. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** "30s" | "15m" | "4h" | "1d" -> ms; undefined when malformed, zero or beyond setInterval's 2^31-1 ms limit. */
+export function parseConsolidationInterval(interval: string): number | undefined {
+  const m = /^(\d+)(s|m|h|d)$/.exec(interval);
+  if (!m) return undefined;
+  const ms = Number(m[1]) * { s: 1000, m: 60_000, h: 3600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+  return ms > 0 && ms <= MAX_TIMER_MS ? ms : undefined;
+}
+
+/** The interval actually used: the given text when valid, else 4h. Shared by the memory extension and the memory panel. */
+export function effectiveConsolidationInterval(interval: string | undefined): string {
+  return interval !== undefined && parseConsolidationInterval(interval) !== undefined ? interval : DEFAULT_CONSOLIDATION_INTERVAL;
+}
+
 /** Pi's consolidation defaults (extensions/wolfpack-memory/index.ts), plus the existing trigger and interval. */
 export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" } as const;
 

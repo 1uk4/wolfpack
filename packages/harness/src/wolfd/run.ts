@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { effectiveConsolidationInterval, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   objectsExtension,
   openWolfEngine,
@@ -310,7 +310,7 @@ async function startConfigured(
       memoryConfig: {
         sandbox: !!config.sandbox,
         disabled: config.extensionConfig.memory?.enabled === false,
-        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger, interval: config.memory.consolidation.interval },
+        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger, interval: effectiveConsolidationInterval(config.memory.consolidation.interval) },
       },
       work: { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN },
       onError: (e) => log(`server error: ${String(e)}`),

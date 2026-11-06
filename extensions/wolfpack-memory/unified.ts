@@ -38,7 +38,7 @@ import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
-import { assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
+import { parseConsolidationInterval, effectiveConsolidationInterval, assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -125,13 +125,6 @@ const COMMIT_WAITS_MS = [10, 20, 40, 80, 160, 160, 160, 160, 160];
 /** Pi's defaults (extensions/wolfpack-memory/index.ts CONSOLIDATE_AT / POOL_TARGET). */
 export const DEFAULT_CONSOLIDATE_AT = 20000;
 export const DEFAULT_POOL_TARGET = 10000;
-
-/** "30s" | "15m" | "4h" | "1d" -> ms; anything else falls back to 4h. */
-function parseInterval(interval: string): number {
-  const m = interval.match(/^(\d+)(s|m|h|d)$/);
-  if (!m) return 4 * 3600_000;
-  return Number(m[1]) * { s: 1000, m: 60_000, h: 3600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
-}
 
 // ─── Watermarks ────────────────────────────────────────────────────────────
 
@@ -357,8 +350,11 @@ export default function createMemoryExtension(
   const consolidationTrigger = consolidation?.trigger ?? "hybrid";
   // A bad interval string warns once and falls back to 4h; it never stops the wolf starting.
   const intervalText = consolidation?.interval ?? "4h";
-  if (!/^\d+(s|m|h|d)$/.test(intervalText)) console.warn(`[memory] invalid memory.consolidation.interval "${intervalText}": using 4h`);
-  const timerMs = config.intervalMs ?? parseInterval(intervalText);
+  const parsedMs = parseConsolidationInterval(intervalText);
+  if (parsedMs === undefined && (consolidationTrigger === "timer" || consolidationTrigger === "hybrid")) {
+    console.warn(`[memory] invalid memory.consolidation.interval "${intervalText}": using ${effectiveConsolidationInterval(undefined)}`);
+  }
+  const timerMs = config.intervalMs ?? parsedMs ?? parseConsolidationInterval(effectiveConsolidationInterval(undefined))!;
 
   // Which tier each memory step uses (fixed map, STEP_TIERS in @wolfpack/engine; wolf.yaml `tiers:` overrides apply):
   //   fast : classify (observer), contradict, classifyToSection, matchSubject, confirmSubject, sectionSummary, labelSection, splitSection

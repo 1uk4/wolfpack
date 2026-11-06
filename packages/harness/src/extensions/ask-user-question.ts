@@ -234,7 +234,8 @@ export function askAsBrief(args: AskArgs): BriefArgs | undefined {
       : {
           headline: args.question!.trim(),
           ...(args.details?.trim() ? { context: [args.details.trim()] } : {}),
-          questions: [toBriefQuestion(args as AskQuestion, "answer")],
+          // legacy single-question field ids: "confirm" for yes/no, "answer" otherwise
+          questions: [toBriefQuestion(args as AskQuestion, (args as AskQuestion).kind === "confirm" ? "confirm" : "answer")],
         };
   return briefProblem(mapped) ? undefined : mapped;
 }

@@ -1,0 +1,20 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+linkWorkspacePackages: true
+packageImportMethod: clone-or-copy
+# Mirror of "overrides" in package.json (npm reads that one, pnpm 12 ignores package.json's "pnpm" field).
+# scripts/pnpm-config.test.ts keeps the two in step.
+overrides:
+  katex: 0.18.2
+# pnpm 12 fails the install on any unlisted install script, so every package that has one is decided here.
+# true: pi-claude-bridge-stateless is a git dependency whose prepare script builds it; esbuild's postinstall
+#   checks (and may swap in) its native binary, as under npm.
+# false: nothing needs these (binaries ship as optional dependencies; electron-winstaller only matters for Windows packaging).
+allowBuilds:
+  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/b2a40263e4c33d10ddf07d2fb9d8a3c96ae99b8c: true
+  esbuild: true
+  "@google/genai": false
+  electron-winstaller: false
+  protobufjs: false
+  unrs-resolver: false

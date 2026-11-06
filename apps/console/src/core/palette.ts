@@ -9,6 +9,7 @@ import { fuzzyScore } from "./fuzzy.ts";
 import { isSettled, type SubagentState } from "./subagents.ts";
 import { KB_ACTIVITY_HREF } from "./kb.ts";
 import type { KbGraphNode } from "./kb.ts";
+import { threadColor } from "./thread-color.ts";
 import { threadHref, threadLabel } from "./thread-adapter.ts";
 
 export type PaletteKind = "command" | "wolf" | "thread" | "entry" | "work";
@@ -29,6 +30,8 @@ export interface PaletteItem {
 	href?: string;
 	/** Action to run instead of navigating. */
 	command?: PaletteCommandId;
+	/** Thread items: the thread's color (hex), drawn as a dot. */
+	color?: string;
 }
 
 /** Display order of the groups. */
@@ -84,7 +87,7 @@ export function wolfItems(wolves: readonly { name: string }[]): PaletteItem[] {
 	return wolves.map((w) => ({ id: `wolf:${w.name}`, kind: "wolf", label: w.name, href: `/wolf/${encodeURIComponent(w.name)}` }));
 }
 
-export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string; state?: SubagentState }[]): PaletteItem[] {
+export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string; state?: SubagentState; parentThreadId?: string; settings?: { color?: string } }[]): PaletteItem[] {
 	// Settled subagent threads are hidden here too; only active ones are visible anywhere.
 	return threads.filter((t) => !isSettled(t)).map((t) => ({
 		id: `thread:${wolf}:${t.id}`,
@@ -92,6 +95,7 @@ export function threadItems(wolf: string, threads: readonly { id: string; title:
 		label: threadLabel(wolf, t) || "Untitled",
 		hint: wolf,
 		href: threadHref(wolf, t.id),
+		color: threadColor(t, threads).hex,
 	}));
 }
 

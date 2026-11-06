@@ -364,8 +364,24 @@ export type ThreadWorkspace = z.infer<typeof ThreadWorkspaceSchema>;
 export const ThreadTierSchema = z.enum(["main", "smart", "fast"]);
 export type ThreadTier = z.infer<typeof ThreadTierSchema>;
 export const THREAD_TIERS = ThreadTierSchema.options;
+/** The fixed thread palette (readable on the dark theme). Keys are what settings store; hex is for display. */
+export const THREAD_COLORS = {
+  red: "#f07178",
+  orange: "#f5a15a",
+  yellow: "#e6cd69",
+  green: "#8bd17c",
+  teal: "#5fd4c4",
+  blue: "#6cb2f2",
+  purple: "#b69cf5",
+  pink: "#f28cc4",
+} as const;
+export const THREAD_COLOR_KEYS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"] as const;
+export const ThreadColorSchema = z.enum(THREAD_COLOR_KEYS);
+export type ThreadColor = z.infer<typeof ThreadColorSchema>;
 /** Per-thread composer settings. Persisted by the wolf; the defaults are `main` and auto-ship off. */
 export const ThreadSettingsSchema = z.object({
+  /** Owner's colour override (a palette key). Absent = automatic (derived from the thread id). */
+  color: ThreadColorSchema.optional(),
   tier: ThreadTierSchema,
   /** true: task_done ships in this thread without raising a ship card. false: it asks (one multi-select card). */
   autoShip: z.boolean(),
@@ -401,7 +417,11 @@ export type CompactBody = z.infer<typeof CompactBodySchema>;
 export const CompactAckSchema = z.object({ accepted: z.literal(true) });
 export type CompactAck = z.infer<typeof CompactAckSchema>;
 
-export const ThreadSettingsPatchSchema = ThreadSettingsSchema.partial().refine((p) => p.tier !== undefined || p.autoShip !== undefined, { message: "tier or autoShip is required" });
+/** `color: null` resets to automatic. */
+export const ThreadSettingsPatchSchema = ThreadSettingsSchema.omit({ color: true })
+  .partial()
+  .extend({ color: ThreadColorSchema.nullable().optional() })
+  .refine((p) => p.tier !== undefined || p.autoShip !== undefined || p.color !== undefined, { message: "tier, autoShip or color is required" });
 export type ThreadSettingsPatch = z.infer<typeof ThreadSettingsPatchSchema>;
 // ---- /composer controls ---------------------------------------------------------------------------------------------
 

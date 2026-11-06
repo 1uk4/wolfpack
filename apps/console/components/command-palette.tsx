@@ -46,7 +46,7 @@ async function loadThreadItems(wolves: Wolves): Promise<PaletteItem[]> {
 		wolves.map(async (wolf) => {
 			try {
 				const res = await fetch(`/api/wolves/${encodeURIComponent(wolf.name)}/threads`, { cache: "no-store" });
-				const d = (await res.json()) as { threads: { id: string; title: string; kind?: string; state?: "queued" | "running" | "waiting" | "done" | "failed" | "stopped" }[] };
+				const d = (await res.json()) as { threads: { id: string; title: string; kind?: string; state?: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; parentThreadId?: string; settings?: { color?: string } }[] };
 				return threadItems(wolf.name, d.threads);
 			} catch {
 				return [];
@@ -243,7 +243,10 @@ export function CommandPalette() {
 								onSelect={() => void run(item)}
 								className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-sm text-card-foreground data-[selected=true]:bg-accent data-[disabled=true]:opacity-50"
 							>
-								<span className="truncate">{item.label}</span>
+								<span className="flex min-w-0 items-center gap-2">
+									{item.color && <span data-testid="thread-color-dot" aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />}
+									<span className="truncate">{item.label}</span>
+								</span>
 								{item.hint && <span className="shrink-0 text-xs text-muted-foreground">{item.hint}</span>}
 							</Command.Item>
 						))}

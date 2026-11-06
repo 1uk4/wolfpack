@@ -51,6 +51,8 @@ import {
 	type ThreadCards,
 	type ToolItem,
 	ATTACHMENTS_PART,
+	threadColor,
+	threadTint,
 } from "@/src/core";
 import type { CardAnswers } from "@wolfpack/client";
 
@@ -204,6 +206,9 @@ function ThreadChatInner({
 		transport,
 	});
 	const threadSettings = useThreadSettings(wolf, slug);
+	// A faint tint of the thread's color (its override, else the one its id gives) behind the conversation.
+	const tintHex = threadColor({ id: threadId, settings: threadSettings.settings }).hex;
+	const tint = threadTint(tintHex);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
@@ -544,7 +549,7 @@ function ThreadChatInner({
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
-				<div className="relative flex min-h-0 flex-1">
+				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex} style={{ backgroundColor: tint }}>
 					<PanelFloatingHandle />
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
@@ -687,7 +692,7 @@ function ThreadChatInner({
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
 							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
-							<div className="bg-background pb-4">
+							<div className="bg-background pb-4" style={{ background: `linear-gradient(${tint}, ${tint}), var(--background)` }}>
 								<div className={DOCK}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									{closedReason !== undefined ? (
@@ -713,7 +718,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : undefined}
+											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : undefined}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

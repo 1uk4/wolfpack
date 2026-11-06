@@ -277,7 +277,11 @@ export class StubServer {
         const body = ThreadSettingsPatchSchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {tier?: main|smart|fast, autoShip?: boolean} with at least one");
         if (t.summary.kind === "subagent") throw new HttpError("invalid_request", "a subagent thread's model comes from its profile");
-        t.summary.settings = { ...DEFAULT_THREAD_SETTINGS, ...t.summary.settings, ...body.data };
+        const { color, ...rest } = body.data;
+        const merged = { ...DEFAULT_THREAD_SETTINGS, ...t.summary.settings, ...rest };
+        if (color === null) delete merged.color;
+        else if (color !== undefined) merged.color = color;
+        t.summary.settings = merged;
         return this.json(res, 200, { ...t.summary.settings, models: STUB_TIER_MODELS });
       }
       case "getThreadContext": {

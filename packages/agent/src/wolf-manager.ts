@@ -175,7 +175,7 @@ export class WolfManager {
     await this.writeEnv(home, id, req);
 
     // 6. Launcher + systemd unit.
-    await this.writeLauncher(home, id);
+    await this.writeLauncher(home, id, req.runtime === "wolfd" ? "wolfd" : "pi");
     await this.installService(config);
 
     // 7. Ownership (everything the wolf owns).
@@ -227,6 +227,14 @@ cd "${home}"
 # Add agent/node_modules for external deps (grammy)
 export NODE_PATH="${home}/agent/node_modules"
 exec node "${home}/agent/harness.cjs"
+`;
+    } else if (runtime === "wolfd") {
+      // The release tarball's own launch.sh loads <home>/.env, enforces the billing guards and execs wolfd.
+      script = `#!/usr/bin/env bash
+# wolf-${id} launcher — wolfd release
+set -eu
+export WOLF_HOME="${home}"
+exec "${home}/release/launch.sh"
 `;
     } else {
       script = `#!/usr/bin/env bash
@@ -441,6 +449,54 @@ WantedBy=multi-user.target
     await exec("chown", ["-R", `${user}:${user}`, denDir]);
     if (modelsB64) await exec("chown", [`${user}:${user}`, path.join(home, "models.json")]);
 
+    await this.restart(id);
+    return merged;
+  }
+
+  /**
+   * Install a wolfd release tarball (built by scripts/build-wolfd-release.sh) and restart the wolf.
+   * Unpacks to <home>/release (the previous one is kept as release.prev), writes wolf.yaml (wolfd's own schema, verbatim)
+   * and models.json next to it, merges env into .env, and points agent/launch.sh at release/launch.sh. No npm, no build.
+   */
+  async updateWolfdRelease(
+    id: string,
+    tarballB64: string,
+    wolfYamlB64: string,
+    modelsB64?: string,
+    env?: Record<string, string>,
+  ): Promise<WolfConfig> {
+    const config = this.wolvesIndex.get(id);
+    if (!config) throw new Error(`Wolf not found: ${id}`);
+    const home = wolfHome(id);
+    const user = wolfUser(id);
+    await fs.mkdir(path.join(home, "agent"), { recursive: true });
+    const next = path.join(home, "release.new");
+    const tmpTar = path.join(home, ".release.tar.gz");
+    await fs.rm(next, { recursive: true, force: true });
+    await fs.mkdir(next, { recursive: true });
+    await fs.writeFile(tmpTar, Buffer.from(tarballB64, "base64"));
+    try {
+      await exec("tar", ["-xzf", tmpTar, "-C", next]);
+    } finally {
+      await fs.rm(tmpTar, { force: true });
+    }
+    await fs.access(path.join(next, "launch.sh")).catch(() => { throw new Error("release tarball has no launch.sh"); });
+    const cur = path.join(home, "release");
+    const prev = path.join(home, "release.prev");
+    if (await fs.access(cur).then(() => true, () => false)) {
+      await fs.rm(prev, { recursive: true, force: true });
+      await fs.rename(cur, prev);
+    }
+    await fs.rename(next, cur);
+
+    await fs.writeFile(path.join(home, "wolf.yaml"), Buffer.from(wolfYamlB64, "base64"));
+    if (modelsB64) await fs.writeFile(path.join(home, "models.json"), Buffer.from(modelsB64, "base64"));
+    const merged: WolfConfig = { ...config, runtime: "wolfd" };
+    this.wolvesIndex.set(id, merged);
+    await this.ensureEnvVars(home, id, config.name, syncedEnv(env));
+    await this.writeLauncher(home, id, "wolfd");
+    await this.saveIndex();
+    await exec("chown", ["-R", `${user}:${user}`, home]);
     await this.restart(id);
     return merged;
   }

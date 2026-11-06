@@ -1,0 +1,15 @@
+# Shared tracer BASE image: everything slow and repo-independent (apt, claude CLI, users, Playwright + chromium).
+# Built once by run-tracer.sh as wolfpack-tracer-base:<first 12 hex of sha256 of THIS file>; editing this file (e.g. bumping the digest) makes a new tag.
+# Upstream is pinned by digest. Apt signature checks are never weakened (no [trusted=yes], no allow-insecure); the runner's base preflight asserts that.
+FROM node:22-bookworm@sha256:18a6d90fd60542269850c80ca03b29b1d9b14d6b221ac7ee8e35b0d33ef904bd
+RUN apt-get update && apt-get install -y --no-install-recommends git curl procps ca-certificates util-linux && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --shell /bin/bash hubd && useradd --create-home --shell /bin/bash wolf-hal2 && useradd --create-home --shell /bin/bash console
+
+# claude CLI, pinned (bump deliberately). `claude --version` is the build-time check.
+ARG CLAUDE_CODE_VERSION=2.1.316
+RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && claude --version | grep -F "${CLAUDE_CODE_VERSION}"
+
+# headless chromium for --console (playwright-core, version pinned); console-proof.mjs itself is added per run.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN mkdir -p /opt/proof && cd /opt/proof && npm init -y >/dev/null && npm i --no-audit --no-fund playwright-core@1.52.0 \
+ && npx playwright-core install --with-deps chromium && rm -rf /var/lib/apt/lists/* && chmod -R a+rX /opt/pw-browsers /opt/proof

@@ -2,7 +2,7 @@
  * Console relay: the hub tunnels a console's wolf-scoped /v1 request to the host that owns the wolf, over that host's link, and streams
  * the answer back. One socket carries many requests (ids `h-<n>`): `req` out; `res` (head), `chunk`* (base64 body) and `end`, or `rerr`, back.
  *
- * - Routing: wolf id -> registry host -> live link. A wolf that is unknown/retired is 404; a host that is not `online` (asleep, offline, or
+ * - Routing: wolf NAME (the :name path segment; ids stay internal) -> registry host -> live link. A wolf that is unknown/retired is 404; a host that is not `online` (asleep, offline, or
  *   no wolf host) fails AT ONCE with 503 and a message + `details.presence` naming the state. Nothing is queued.
  * - Cancel: the HTTP client going away sends `cancel` to the worker. A dropped/replaced link fails every in-flight request of that link
  *   (503 before the head; the response is destroyed after it, so a stream ends like a lost connection).

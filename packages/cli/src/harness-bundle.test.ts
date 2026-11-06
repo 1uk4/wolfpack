@@ -37,7 +37,7 @@ describe("the real harness bundle", () => {
 });
 
 describe("the real harness bundle on subscription", () => {
-  it("starts with the main agent on the claude-bridge provider (SDK resolved from the host, bridge stubbed import)", async () => {
+  it("starts with the main agent on the claude-stateless provider (SDK resolved from the host, provider SDK import stubbed)", async () => {
     const table = resolveModelTable({
       pack: { main: { model: "claude-sonnet-5-5" }, smart: { model: "claude-sonnet-5-5" }, fast: { model: "claude-haiku-5-5" }, transport: { local: "subscription", vps: "subscription" } },
       location: "vps",
@@ -45,8 +45,8 @@ describe("the real harness bundle on subscription", () => {
     const built = await buildHarnessBundle({ name: "smokey", role: "tester", extensions: [], models: table }, "abc123");
     try {
       const r = await smokeStartBundle(built, { expectBridge: true });
-      expect(r.output).toContain("Main agent via claude-bridge");
-      expect(r.output).toContain("provider=claude-bridge");
+      expect(r.output).toContain("Main agent via claude-stateless");
+      expect(r.output).toContain("provider=claude-stateless");
       expect(r.ok).toBe(true);
     } finally {
       fs.rmSync(built.tmpDir, { recursive: true, force: true });

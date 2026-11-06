@@ -27,9 +27,8 @@
  */
 
 import type { DepRouteSelection } from "../src/core/dep-draw-list.ts";
-import { featureTaskModel, reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
+import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
 import { startCursor, type RouteCursor } from "../src/core/work-route.ts";
-import { TaskGraphOverlay } from "./task-graph.tsx";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -37,7 +36,6 @@ import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
 	GRAPH_CAMERA_KEY,
 	describeNode,
-	workRouteView,
 	parseCamera,
 	resolvePositions,
 	sanitizePositions,
@@ -50,8 +48,15 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
-import { WorkButton, useWorkView } from "./work-view-entry.tsx";
+import { useWorkReader } from "./work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
+
+/** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
+ *  route, camera and pane are untouched. Anything else (KB entries, the factory...) selects into the side pane. */
+export function nodeClickAction(nodeId: string): { kind: "open-work"; id: string } | { kind: "select" } {
+	const raw = rawWorkId(nodeId);
+	return raw ? { kind: "open-work", id: raw } : { kind: "select" };
+}
 
 /** The default node look when a node carries no colour of its own. */
 const NODE_COLOR_TOKEN = "--primary";
@@ -92,16 +97,6 @@ export interface GraphViewController {
 interface Selection {
 	id: string;
 }
-
-/** A feature's task-graph overlay, built from the payload (double-click on a feature). */
-export function FeatureTaskOverlay({ graph, featureId, onClose, onSelectNode }: { graph: KbGraph; featureId: string; onClose: () => void; onSelectNode: (nodeId: string) => void }) {
-	const model = useMemo(() => featureTaskModel(graph, featureId), [graph, featureId]);
-	if (!model) return null;
-	return <TaskGraphOverlay model={model} onClose={onClose} onSelect={(taskId) => onSelectNode(`work:${taskId}`)} />;
-}
-
-/** Whether double-clicking this node opens a task-graph overlay. */
-export const opensTaskOverlay = (graph: KbGraph, nodeId: string): boolean => featureTaskModel(graph, nodeId) !== null;
 
 // ---- Chrome ---------------------------------------------------------------
 
@@ -157,7 +152,6 @@ export function GraphChromeRow({
 				</div>
 			)}
 			<div className="graph-chrome-fade-in flex shrink-0 items-center gap-2">
-				<WorkButton />
 				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} />
 			</div>
 		</>
@@ -190,10 +184,12 @@ export function GraphView({
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
-	const [overlayId, setOverlayId] = useState<string | null>(null);
 	const graphRef = useRef(graph);
 	graphRef.current = graph;
 	const router = useRouter();
+	const reader = useWorkReader();
+	const openWorkRef = useRef(reader.open);
+	openWorkRef.current = reader.open;
 
 	// Search: the query text; ⌘F (shortcut wave C) focuses it — the find
 	// event is surface-scoped, dispatched as lh:kbd-find (only this page
@@ -281,16 +277,11 @@ export function GraphView({
 			canvas,
 			{
 				onSelect: (nodeId) => {
-					// A collapsed feature on the selected route expands in place
-					// instead of re-targeting the route.
-					const raw = rawWorkId(nodeId);
-					if (raw && collapsedRef.current.has(raw)) setExpanded((prev) => ({ id: selectedIdRef.current, set: new Set([...(prev.id === selectedIdRef.current ? prev.set : []), raw]) }));
+					const act = nodeClickAction(nodeId);
+					if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
 					else setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
-				onNodeDoubleClick: (nodeId) => {
-					if (opensTaskOverlay(graphRef.current, nodeId)) setOverlayId(nodeId);
-				},
 				// (Debounced) remember where the camera stands.
 				onCameraMove: persistCamera,
 				// Live physics settled: remember the new rest state. The store
@@ -359,14 +350,7 @@ export function GraphView({
 	// the card's cursor on it. The cursor restarts at the first unfinished
 	// step whenever the route is recomputed; clearing the selection clears both.
 	const selectedId = selected?.id ?? null;
-	// Features the user expanded on this selection (reset on a new selection).
-	const [expanded, setExpanded] = useState<{ id: string | null; set: ReadonlySet<string> }>({ id: null, set: new Set() });
-	const expandedSet = expanded.id === selectedId ? expanded.set : undefined;
-	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId, { expanded: expandedSet }) : null), [graph, selectedId, expandedSet]);
-	const collapsedRef = useRef<ReadonlySet<string>>(new Set());
-	collapsedRef.current = new Set(Object.keys(selectedRoute?.collapsed ?? {}));
-	const selectedIdRef = useRef<string | null>(null);
-	selectedIdRef.current = selectedId;
+	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId) : null), [graph, selectedId]);
 	// Keyed by the selected id: a refetch recomputes the route but the cursor
 	// stays on its node (reconcileCursor); a new selection starts fresh.
 	const [cursorState, setCursorState] = useState<{ id: string; cursor: RouteCursor } | null>(null);
@@ -492,42 +476,6 @@ export function GraphView({
 		return () => cancelAnimationFrame(raf);
 	}, [focusId, isEmpty, storedLoaded, canvasData, hiddenBySearch]);
 
-	// ---- The Work view's split --------------------------------------------
-	// The table (a left column over this page) selects THROUGH the graph's own selection: a request becomes
-	// setSelected, so the route, the physics and the pane follow exactly as for a click on the map. The route the
-	// table lights is published back from this same computation.
-	const work = useWorkView();
-	const workSel = work.selection;
-	const handledSeq = useRef<number | null>(null);
-	useEffect(() => {
-		if (!workSel) {
-			// The Work list closed: a later pick of the same row is a new request. The graph keeps its own selection.
-			handledSeq.current = null;
-			return;
-		}
-		if (handledSeq.current === workSel.seq || isEmpty || !storedLoaded) return;
-		const gid = `work:${workSel.id}`;
-		if (!graph.nodes.some((n) => n.id === gid)) return;
-		handledSeq.current = workSel.seq;
-		setSelected({ id: gid });
-		// The column narrows the canvas first; pan once the renderer has re-fitted.
-		requestAnimationFrame(() => requestAnimationFrame(() => rendererRef.current?.focusOn([gid], 3)));
-	}, [workSel, graph, isEmpty, storedLoaded]);
-	const publishRoute = work.publishRoute;
-	useEffect(() => {
-		const raw = selectedId ? rawWorkId(selectedId) : null;
-		publishRoute(raw ? workRouteView(selectedRoute, raw, cursor?.node ?? null) : null);
-	}, [publishRoute, selectedId, selectedRoute, cursor?.node]);
-	useEffect(() => () => publishRoute(null), [publishRoute]);
-	// The column covers the page's left edge: inset the graph past it so the canvas (and its fit) is the visible part.
-	const rootRef = useRef<HTMLDivElement | null>(null);
-	const [inset, setInset] = useState(0);
-	const splitWidth = work.isOpen && !work.expanded ? work.colWidth : 0;
-	useEffect(() => {
-		const left = rootRef.current?.getBoundingClientRect().left ?? 0;
-		setInset(Math.max(0, splitWidth - left));
-	}, [splitWidth]);
-
 	// The pane's details follow the route cursor's node (when a route is selected).
 	const card = useMemo(
 		() => (selected ? (describeNode(graph, cursorNodeId ?? selected.id) ?? describeNode(graph, selected.id)) : null),
@@ -546,14 +494,9 @@ export function GraphView({
 	}, [graph, selectedRoute, cursor, selectedId]);
 	shownNodeRef.current = card?.id ?? null;
 	const paneOpen = !!(selected && card && !isEmpty);
-	const publishPane = work.publishPane;
-	useEffect(() => {
-		publishPane(paneOpen);
-		return () => publishPane(false);
-	}, [publishPane, paneOpen]);
 
 	return (
-		<div ref={rootRef} className="flex h-full w-full" style={inset > 0 ? { paddingLeft: inset } : undefined}>
+		<div className="flex h-full w-full">
 			<div className="relative h-full min-w-0 flex-1">
 				{isEmpty ? (
 					<div className="flex h-full w-full items-center justify-center px-4">
@@ -595,17 +538,6 @@ export function GraphView({
 					</div>
 				</div>
 
-				{overlayId && (
-					<FeatureTaskOverlay
-						graph={graph}
-						featureId={overlayId}
-						onClose={() => setOverlayId(null)}
-						onSelectNode={(id) => {
-							setOverlayId(null);
-							focusNodeRef.current(id);
-						}}
-					/>
-				)}
 			</div>
 			{selected && card && !isEmpty && (
 				<GraphPane

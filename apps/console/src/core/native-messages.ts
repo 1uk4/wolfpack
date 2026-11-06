@@ -94,7 +94,19 @@ export function asAgentMessages(messages: readonly LhMessage[]): AgentMessage[] 
 
 /** The app-wide message id shape (same as the UIMessage-era mint). */
 export function newMessageId(): string {
-	return `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
+	return `msg_${Date.now().toString(36)}_${randomHex8()}`;
+}
+
+/** 8 random hex chars. Not `crypto.randomUUID()`: browsers expose it only in
+ *  secure contexts (https/localhost), so on a plain-http tailnet address it is
+ *  undefined and every send threw before reaching the server. */
+export function randomHex8(): string {
+	const c = (globalThis as { crypto?: Crypto }).crypto;
+	if (c && typeof c.getRandomValues === "function") {
+		const b = c.getRandomValues(new Uint8Array(4));
+		return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+	}
+	return Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, "0");
 }
 
 // ─── constructors (the input-event → native append mapping lives in

@@ -27,7 +27,6 @@ Object.assign(globalThis, {
 const { reconcileCursor, routeForNode, toRouteSelection, workNodesFromGraph, featureTaskModel } = await import("../src/core/dep-route-adapter.ts");
 const { startCursor, cursorNext } = await import("../src/core/work-route.ts");
 const { RouteNav } = await import("../components/graph-route-nav.tsx");
-const { FeatureTaskOverlay, opensTaskOverlay } = await import("../components/graph-view.tsx");
 import type { KbGraph } from "../src/core/kb.ts";
 import type { RouteCursor } from "../src/core/work-route.ts";
 
@@ -189,22 +188,11 @@ describe("RouteNav", () => {
 	});
 });
 
-describe("feature task-graph overlay", () => {
-	it("double-click opens for features only", () => {
-		assert.ok(opensTaskOverlay(graph, "work:F"));
-		assert.ok(!opensTaskOverlay(graph, "work:b"));
-		assert.ok(!opensTaskOverlay(graph, "fac:d"));
-	});
-
+describe("feature task graph model", () => {
 	it("builds the feature's exact task graph from the payload", () => {
 		const m = featureTaskModel(graph, "work:F")!;
 		assert.deepEqual(m.nodes.map((x) => x.id).sort(), ["a", "b", "c", "e"]);
 		assert.equal(m.edges.length, 4);
 		assert.equal(m.featureTitle, "Feat");
-	});
-
-	it("renders the overlay shell", () => {
-		const host = mount(<FeatureTaskOverlay graph={graph} featureId="work:F" onClose={() => {}} onSelectNode={() => {}} />);
-		assert.ok(document.querySelector('[data-testid="task-graph-overlay"]') || host.querySelector('[data-testid="task-graph-overlay"]'));
 	});
 });

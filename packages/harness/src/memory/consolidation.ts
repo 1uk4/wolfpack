@@ -41,6 +41,8 @@ import {
   type ConsolidateResult,
   reconcileDen,
   promoteTopics,
+  subscribedDomain,
+  envDomains,
   consolidateWorkRecords,
   HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
@@ -536,9 +538,12 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   // The LLM's domain is only a hint, and Dewey quarantines undeclared domains
   // as unclassified. Observers on single-domain wolves get no domain list and
   // invent tags ("fitness", "telegram"), so only a subscribed domain survives;
-  // anything else falls back to the wolf's default domain.
-  const allowedDomains = new Set(config.domains?.length ? config.domains : [defaultDomain]);
-  const domainOf = (d: string | undefined) => (d && allowedDomains.has(d) ? d : defaultDomain);
+  // anything else falls back to the wolf's default domain, or, when the default is
+  // itself not subscribed (e.g. "wolfpack" on a personal-only wolf), to its first
+  // subscribed domain: the emit guard refuses any other hint, so the topic would
+  // otherwise be skipped forever.
+  const allowedList = config.domains?.length ? config.domains : [defaultDomain];
+  const domainOf = (d: string | undefined) => subscribedDomain(d, defaultDomain, allowedList);
 
   for (const action of result.actions) {
     if (action.action === "skip" || !action.result) {
@@ -596,6 +601,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       roots: kbRoots,
       wolf: wolfName,
       defaultDomain,
+      allowedDomains: config.domains,
       onProgress,
       onEmit: (c) => emittedTopics.add(c.denTopicId),
       onHold: (t, reason) =>
@@ -714,6 +720,10 @@ export interface PromoteSessionConfig {
   engine: Engine;
   kbRoots?: KbRoots;
   defaultDomain?: string;
+  /** The wolf's subscribed domains. A topic tagged outside them is emitted under a subscribed one. Omitted: `WOLF_DOMAINS` (set by the harness from wolf.yaml), else `defaultDomain`. */
+  domains?: readonly string[];
+  /** The wolf's own env (the extension's `context.env`), read for `WOLF_DOMAINS` when `domains` is omitted. Default: process.env. */
+  env?: NodeJS.ProcessEnv;
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the KB inbox (metadata only). */
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
@@ -734,6 +744,7 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     sessionId: loc.sessionId,
     kbRoots: config.kbRoots,
     defaultDomain: config.defaultDomain,
+    allowedDomains: config.domains?.length ? config.domains : envDomains(config.env),
     skipClaims: false,
     onProgress: config.onProgress,
     onEmit: config.onEmit,

@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "tsc --build",
+    "typecheck:extensions": "tsc -p tsconfig.extensions.json",
     "test": "vitest",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
     "install:cli": "npm run build && cd packages/cli && npm link",

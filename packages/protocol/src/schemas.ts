@@ -50,6 +50,13 @@ export const ErrorEnvelopeSchema = z.object({
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
+/**
+ * `details.reason` on a 400 `invalid_request` from POST /v1/contributions when the hub refused the contribution because it may hold a secret.
+ * The crawl client treats ONLY this 400 as a per-entry refusal (the other entries still go); any other 400 aborts the release. Pinned here so
+ * the hub (writer) and the client (reader) cannot drift apart.
+ */
+export const SECRET_REFUSAL_REASON = "secret_detected";
+
 /** Stable HTTP status per error code. Clients map errors from `code`, never from status. */
 export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   busy: 409,
@@ -860,6 +867,165 @@ const hubBase = z.object({ id: EventIdSchema, at: IsoSchema });
 /** `domain`: the item's domain when the hub could fold it (absent for a deleted item). */
 export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string(), domain: z.string().optional() });
 export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
+/** The hub curator's sweep (KB curation in hubd): started once real work begins, one item per contribution, finished always follows a started (also on a throw: `error`). */
+export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
+/**
+ * The curator's decision for one contribution (the same summary the KB ledger `decision` event carries; optional: older hubs omit it).
+ * Must stay in step with DecisionSummarySchema in packages/kb/src/shared/schemas/events.ts (hubd's decision-drift test checks it).
+ * `unchanged` (a merge the contribution agreed with) is reported as sweep_item outcome `merge`; `unclassified` has no sweep_item.
+ * On a post-commit failure (receipt or move threw, then the item was parked) sweep_item.outcome is `parked` but `decision` carries the
+ * committed outcome (create / merge / unchanged), matching the ledger.
+ */
+export const HubSweepDecisionSchema = z.object({
+  /** `unchanged`: a merge the contribution agreed with; `unclassified`: no declared domain. */
+  outcome: z.enum(["create", "merge", "unchanged", "reject", "parked", "unclassified"]),
+  entryId: z.string().optional(),
+  reason: z.string().optional(),
+  routing: z
+    .object({
+      route: z.enum(["alias", "anchor", "similarity", "new"]),
+      candidates: z.array(z.object({ id: z.string(), score: z.number() })),
+      band: z.string().optional(),
+      subject: z.object({ match: z.string(), valid: z.boolean(), reason: z.string().optional() }).optional(),
+      confirm: z.object({ candidate: z.string(), score: z.number(), merge: z.boolean(), valid: z.boolean(), reason: z.string().optional() }).optional(),
+      target: z.string().optional(),
+      warning: z.string().optional(),
+    })
+    .optional(),
+});
+export type HubSweepDecision = z.infer<typeof HubSweepDecisionSchema>;
+export const HubSweepItemEventSchema = hubBase.extend({
+  type: z.literal("sweep_item"),
+  from: z.string(),
+  denTopicId: z.string(),
+  outcome: z.enum(["create", "merge", "reject", "parked"]),
+  entryId: z.string().optional(),
+  decision: HubSweepDecisionSchema.optional(),
+});
+/**
+ * The item the curator is working on changed: it started, or its route became known (the sweep's sweep-current.json was rewritten).
+ * Emitted by hubd while a sweep runs, not by the sweep itself; the item's end is the sweep_item. Older hubs never send it.
+ */
+export const HubSweepProgressEventSchema = hubBase.extend({
+  type: z.literal("sweep_progress"),
+  from: z.string(),
+  denTopicId: z.string(),
+  /** Epoch ms the item started. */
+  startedAt: z.number(),
+  route: z.string().optional(),
+});
+export const HubSweepFinishedEventSchema = hubBase.extend({
+  type: z.literal("sweep_finished"),
+  processed: z.number().int().nonnegative(),
+  created: z.number().int().nonnegative(),
+  merged: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  parked: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  durationMs: z.number().nonnegative(),
+  error: z.string().optional(),
+});
+/**
+ * `GET /v1/kb/activity` (hub): the hub curator's own ledger and receipts, no relay to a wolf.
+ * Query: `since` = "7d" | "30d" | "all" | ISO timestamp (default "30d"), `before` = opaque cursor from `decisions.nextCursor`,
+ * `limit` 1..200 (default 50, decisions page size), `domain` (restrict `changes` and growth to one domain).
+ */
+export const KbDecisionOutcomeSchema = HubSweepDecisionSchema.shape.outcome;
+export type KbDecisionOutcome = z.infer<typeof KbDecisionOutcomeSchema>;
+/** The latest ledger `decision` per (from, denTopicId, hash). `id`: the ledger event id. `superseded`: earlier decisions it replaced (e.g. parked, then merge). */
+export const KbDecisionSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  from: z.string(),
+  denTopicId: z.string(),
+  hash: z.string(),
+  outcome: KbDecisionOutcomeSchema,
+  entryId: z.string().optional(),
+  reason: z.string().optional(),
+  routing: HubSweepDecisionSchema.shape.routing,
+  superseded: z.number().int().nonnegative().optional(),
+  /** The entry's domain, else the contribution's hinted domain when it is a real domain. Absent when neither is known. */
+  domain: z.string().optional(),
+  /** Title of the resulting entry, when there is one. */
+  title: z.string().optional(),
+});
+export type KbDecision = z.infer<typeof KbDecisionSchema>;
+/** entry_written carries action create|merge|supersede; entry_retired maps to `retire`. Domain is resolved by the hub (entry_placed sectionId / entry file), not carried by the events. */
+export const KbActivityChangeSchema = z.object({
+  at: z.string(),
+  entryId: z.string(),
+  title: z.string().optional(),
+  action: z.enum(["create", "merge", "supersede", "retire"]),
+  from: z.string().optional(),
+  denTopicId: z.string().optional(),
+});
+export type KbActivityChange = z.infer<typeof KbActivityChangeSchema>;
+export const KbActivityResponseSchema = z.object({
+  generatedAt: z.string(),
+  /** No absolute host paths. `hasDecisions`: the ledger holds any `decision` event (older ledgers have none). */
+  source: z.object({ lane: z.enum(["hub", "custom"]), hasDecisions: z.boolean(), curator: z.enum(["on", "off", "unknown"]) }),
+  incoming: z.object({
+    total: z.number().int().nonnegative(),
+    wolves: z.array(
+      z.object({
+        wolf: z.string(),
+        pending: z.number().int().nonnegative(),
+        oldestAgeMs: z.number().nonnegative().optional(),
+        bad: z.number().int().nonnegative().optional(),
+        /** At most 20 per wolf. */
+        items: z.array(z.object({ denTopicId: z.string(), hash: z.string().optional(), ageMs: z.number().nonnegative(), domain: z.string().optional() })),
+      }),
+    ),
+    /** Quarantined (`_bad/`) contributions with their reason, newest first, capped. */
+    bad: z
+      .array(z.object({ id: z.string().optional(), wolf: z.string(), denTopicId: z.string().optional(), domainHint: z.string().optional(), reason: z.string(), at: z.string() }))
+      .optional(),
+  }),
+  /** One summary per domain under the KB (every domain, even with no activity). `contributors`: wolves with decisions in range. */
+  domains: z
+    .array(
+      z.object({
+        domain: z.string(),
+        entries: z.number().int().nonnegative(),
+        waiting: z.number().int().nonnegative(),
+        lastChangeAt: z.string().optional(),
+        /** Wolves with create / merge / unchanged decisions in range (a rejected contribution does not make a contributor). */
+        contributors: z.array(z.object({ wolf: z.string(), count: z.number().int().nonnegative() })),
+        /** All decisions in range for the domain, and the newest few (so a block never depends on the overall page). */
+        decided: z.number().int().nonnegative().optional(),
+        recent: z.array(KbDecisionSchema).optional(),
+      }),
+    )
+    .optional(),
+  /** Per wolf, over the whole range: contributions that were rejected / parked / unclassified, with the latest few (see `incoming.bad` for quarantined). */
+  attention: z
+    .array(z.object({ wolf: z.string(), reject: z.number().int().nonnegative(), parked: z.number().int().nonnegative(), unclassified: z.number().int().nonnegative(), bad: z.number().int().nonnegative(), items: z.array(KbDecisionSchema) }))
+    .optional(),
+  decisions: z.object({
+    items: z.array(KbDecisionSchema),
+    nextCursor: z.string().optional(),
+    total: z.number().int().nonnegative(),
+    counts: z.object({
+      create: z.number().int().nonnegative(),
+      merge: z.number().int().nonnegative(),
+      unchanged: z.number().int().nonnegative(),
+      reject: z.number().int().nonnegative(),
+      parked: z.number().int().nonnegative(),
+      unclassified: z.number().int().nonnegative(),
+    }),
+  }),
+  /** Latest 10 per domain, newest first. */
+  changes: z.object({ domains: z.array(z.object({ domain: z.string(), items: z.array(KbActivityChangeSchema) })) }),
+  sweep: z
+    .object({
+      running: z.boolean(),
+      /** The contribution being worked on (from the sweep's sweep-current.json); absent when idle or on an older hub. */
+      current: z.object({ from: z.string(), denTopicId: z.string(), startedAt: z.number(), route: z.string().optional() }).optional(),
+      last: z.object({ finishedAt: z.string(), processed: z.number().int().nonnegative(), error: z.string().optional() }).optional(),
+    })
+    .optional(),
+});
+export type KbActivityResponse = z.infer<typeof KbActivityResponseSchema>;
 export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf.presence"), wolf: z.string(), state: z.enum(["online", "offline"]), host: z.string().optional() });
 /**
  * The cursor cannot be replayed (too old, another hub boot, ahead of the hub) or the hub missed a ledger append: refetch.
@@ -867,7 +1033,7 @@ export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf
  * it as Last-Event-ID resumes with exactly the events after it.
  */
 export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync"), id: z.number().int().nonnegative() });
-export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
+export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepProgressEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
 export type HubEvent = z.infer<typeof HubEventSchema>;
 const HUB_EVENT_TYPES: ReadonlySet<string> = new Set(HubEventSchema.options.map((o) => o.shape.type.value));
 export type ParsedHubEvent = { kind: "event"; event: HubEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };
@@ -1077,6 +1243,8 @@ export const MemoryPoolStatusSchema = z.object({
   /** Pool tokens a consolidation leaves behind. */
   poolTarget: z.number().int().nonnegative(),
   trigger: z.enum(["threshold", "timer", "hybrid", "manual"]),
+  /** Timer cadence ("4h"); applies to the timer and hybrid triggers. Absent from older wolfds. */
+  interval: z.string().optional(),
 });
 export type MemoryPoolStatus = z.infer<typeof MemoryPoolStatusSchema>;
 
@@ -1503,76 +1671,3 @@ export type CreateThreadRequest = z.infer<typeof CreateThreadRequestSchema>;
 /** Response of create thread. */
 export const CreateThreadResponseSchema = ThreadSummarySchema;
 
-// ------------------------------------------------------- KB pipeline
-
-/** An outcome as receipts spell it after normalising (`created`/`updated`/`rejected` -> create/merge/reject). */
-export const PipelineOutcomeSchema = z.enum(["create", "merge", "reject", "parked", "unclassified"]);
-export type PipelineOutcome = z.infer<typeof PipelineOutcomeSchema>;
-
-/** One wolf's inbox lane. */
-export const PipelineLaneSchema = z.object({
-  wolf: z.string(),
-  /** Contributions waiting (top-level .md files; `_processed` and `_bad` are not counted). */
-  pending: z.number().int().nonnegative(),
-  /** Age of the longest-waiting one, ms. Absent when the lane is empty. */
-  oldestAgeMs: z.number().int().nonnegative().optional(),
-});
-export const PipelineReceiptSchema = z.object({
-  wolf: z.string(),
-  denTopicId: z.string(),
-  outcome: PipelineOutcomeSchema,
-  /** The resulting entry (create / merge). */
-  entryId: z.string().optional(),
-  /** Receipt time (ISO). */
-  processed: z.string(),
-  /** One line of the receipt body (reason for reject / parked / unclassified), capped. */
-  detail: z.string().optional(),
-});
-export const PipelineParkedSchema = z.object({
-  wolf: z.string(),
-  file: z.string(),
-  denTopicId: z.string().optional(),
-  /** Why it was parked (from its receipt), when known. */
-  reason: z.string().optional(),
-});
-/** The last finished sweep (persisted to `<den>/kb/sweep-last.json`). */
-export const PipelineLastSweepSchema = z.object({
-  startedAt: z.string(),
-  finishedAt: z.string(),
-  processed: z.number().int().nonnegative(),
-  created: z.number().int().nonnegative(),
-  merged: z.number().int().nonnegative(),
-  rejected: z.number().int().nonnegative(),
-  parked: z.number().int().nonnegative(),
-  remaining: z.number().int().nonnegative(),
-  durationMs: z.number().int().nonnegative(),
-  error: z.string().optional(),
-});
-export type PipelineLastSweep = z.infer<typeof PipelineLastSweepSchema>;
-export const PipelineCurrentSchema = z.object({
-  from: z.string(),
-  denTopicId: z.string(),
-  startedAt: z.string(),
-  route: z.string().optional(),
-});
-
-/** `GET /v1/wolves/:name/kb/pipeline` (librarian only; 409 `kb_unavailable` otherwise). */
-export const KbPipelineResponseSchema = z.object({
-  lanes: z.array(PipelineLaneSchema),
-  /** Newest first, at most 50. */
-  receipts: z.array(PipelineReceiptSchema),
-  /** At most 100; `parkedTotal` counts them all. */
-  parked: z.array(PipelineParkedSchema),
-  /** All parked items (absent from servers that predate it). */
-  parkedTotal: z.number().int().nonnegative().optional(),
-  sweep: z.object({
-    /** The item being processed right now (absent when idle). */
-    current: PipelineCurrentSchema.optional(),
-    last: PipelineLastSweepSchema.optional(),
-  }),
-});
-export type KbPipelineResponse = z.infer<typeof KbPipelineResponseSchema>;
-export type PipelineLane = z.infer<typeof PipelineLaneSchema>;
-export type PipelineReceipt = z.infer<typeof PipelineReceiptSchema>;
-export type PipelineParked = z.infer<typeof PipelineParkedSchema>;
-export type PipelineCurrent = z.infer<typeof PipelineCurrentSchema>;

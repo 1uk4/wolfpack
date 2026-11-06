@@ -16,7 +16,7 @@ export interface MemoryReadConfig {
   sandbox: boolean;
   /** `memory.enabled: false`: the extension is gated off by the owner. */
   disabled?: boolean;
-  consolidation: { threshold: number; poolTarget: number; trigger: "threshold" | "timer" | "hybrid" | "manual" };
+  consolidation: { threshold: number; poolTarget: number; trigger: "threshold" | "timer" | "hybrid" | "manual"; interval?: string };
 }
 
 /** Cheap sanity check on a topic id; acceptance is an exact match against the topics listed on disk. */
@@ -71,7 +71,7 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
   return {
     state,
     reason,
-    pool: { count: stats.count, tokens: stats.tokens, consolidateAtTokens: c.threshold, poolTarget: c.poolTarget, trigger: c.trigger },
+    pool: { count: stats.count, tokens: stats.tokens, consolidateAtTokens: c.threshold, poolTarget: c.poolTarget, trigger: c.trigger, ...(c.interval ? { interval: c.interval } : {}) },
     sessionTopics: readTopics(sessionTopicsRoot(i.den)).map((t) => ref(t, t.domain)).sort(byUpdated),
     denTopics: readDenTopics(i.den).map((t) => ref(t)).sort(byUpdated),
     lastPromote,

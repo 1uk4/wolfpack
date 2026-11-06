@@ -19,6 +19,8 @@ import {
   type RouteName,
   type KbCommitRequest,
   type KbCommitResponse,
+  DeviceList,
+  MintPairingCodeResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -39,7 +41,8 @@ import {
   type GraduationObservations,
   type GraduationStatus,
   type WorkListResponse,
-  type KbPipelineResponse,
+  type KbActivityResponse,
+  type KbActivityQuery,
   type PendingCard,
   type PromoteResponse,
   type MemoryEvent,
@@ -415,6 +418,24 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
   }
 
+  /** Hub only: the paired console/browser devices (label, lastUsedAt, `self`; never a secret). */
+  async listDevices(): Promise<DeviceList> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "listDevices needs a hub client", false);
+    return (await this.json("hubListDevices", {}, ROUTES.hubListDevices.response.schema)) as DeviceList;
+  }
+
+  /** Hub only: revoke a device (may be this one); `cascade` also revokes the devices it added. 409 `conflict` when it would remove the last console token. */
+  async revokeDevice(id: string, opts: { cascade?: boolean } = {}): Promise<{ revoked: string; self: boolean; cascaded: string[] }> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "revokeDevice needs a hub client", false);
+    return (await this.json("hubRevokeDevice", { id }, ROUTES.hubRevokeDevice.response.schema, undefined, undefined, opts.cascade ? "?cascade=1" : "")) as { revoked: string; self: boolean; cascaded: string[] };
+  }
+
+  /** Hub only: mint a single-use browser pairing code for a new device. */
+  async mintPairingCode(label?: string): Promise<MintPairingCodeResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "mintPairingCode needs a hub client", false);
+    return (await this.json("hubMintPairingCode", {}, ROUTES.hubMintPairingCode.response.schema, label ? { label } : {})) as MintPairingCodeResponse;
+  }
+
   /** `wolf`: which wolf a worker token acts for (sent as the `{wolf}` body); omit for operator tokens. */
   async claimWork(workId: string, wolf?: string): Promise<WorkItemResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "claimWork needs a hub client", false);
@@ -448,17 +469,41 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("graduationObservations", { name: wolf, id: workId }, ROUTES.graduationObservations.response.schema, undefined, wolf)) as GraduationObservations;
   }
 
-  /** Dewey's pipeline (lanes, receipts, parked, sweep). The wolf must be the librarian: others reject with a kb_unavailable error. */
-  async getKbPipeline(wolf: string): Promise<KbPipelineResponse> {
-    return (await this.json("kbPipeline", { name: wolf }, ROUTES.kbPipeline.response.schema, undefined, wolf)) as KbPipelineResponse;
-  }
-
   async getKbGraph(wolf: string, opts: { domain?: string; archivedWork?: boolean; denTopics?: boolean } = {}): Promise<KbGraph> {
     const q = new URLSearchParams();
     if (opts.domain) q.set("domain", opts.domain);
     for (const k of ["archivedWork", "denTopics"] as const) if (opts[k] !== undefined) q.set(k, String(opts[k]));
     const query = q.size ? `?${q}` : "";
     return (await this.json("getKbGraph", { name: wolf }, ROUTES.getKbGraph.response.schema, undefined, wolf, query)) as KbGraph;
+  }
+
+  /** True in relay mode: the KB graph is served by the hub from its own KB copy (see getHubKbGraph). */
+  get kbFromHub(): boolean {
+    return this.hub?.relay === true;
+  }
+
+  /** The KB graph from the HUB's read-only KB copy, limited to the domains this token may read (GET /v1/kb/graph). */
+  async getHubKbGraph(opts: { domain?: string; archivedWork?: boolean } = {}): Promise<KbGraph> {
+    const q = new URLSearchParams();
+    if (opts.domain) q.set("domain", opts.domain);
+    if (opts.archivedWork !== undefined) q.set("archivedWork", String(opts.archivedWork));
+    return (await this.json("hubKbGraph", {}, ROUTES.hubKbGraph.response.schema, undefined, undefined, q.size ? `?${q}` : "")) as KbGraph;
+  }
+
+  /** The hub curator's KB activity from the hub's own ledger (GET /v1/kb/activity). Hub clients only. */
+  async getKbActivity(query: KbActivityQuery = {}): Promise<KbActivityResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "getKbActivity needs a hub client", false);
+    const q = new URLSearchParams();
+    if (query.since) q.set("since", query.since);
+    if (query.before) q.set("before", query.before);
+    if (query.limit !== undefined) q.set("limit", String(query.limit));
+    if (query.domain) q.set("domain", query.domain);
+    return (await this.json("hubKbActivity", {}, ROUTES.hubKbActivity.response.schema, undefined, undefined, q.size ? `?${q}` : "")) as KbActivityResponse;
+  }
+
+  /** One KB entry from the HUB's read-only KB copy (GET /v1/kb/entries/:id), scoped to the token's readable domains. */
+  async getHubKbEntry(id: string): Promise<KbEntryDetail> {
+    return (await this.json("hubKbEntry", { id }, ROUTES.hubKbEntry.response.schema)) as KbEntryDetail;
   }
 
   async getKbEntry(wolf: string, id: string): Promise<KbEntryDetail> {

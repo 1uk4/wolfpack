@@ -24,6 +24,8 @@ export interface KbDenTopic {
 export interface BuildKbGraphOptions {
   /** Only this domain. Unknown or unsafe: throws `UnknownDomainError`. */
   domain?: string;
+  /** Restrict the graph to these domains (a reader's grants): others are neither built nor listed in `domains`. Unset: all. */
+  onlyDomains?: readonly string[];
   /** Include work items whose stage is `archived`. Default false. */
   archivedWork?: boolean;
   /** Add den-topic nodes (needs `den`). Default false. */
@@ -78,8 +80,9 @@ export function listDomainDirs(kbBase: string): string[] {
 
 export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphOptions = {}): KbGraph {
   const registry = readDomainRegistry(roots.kbBase);
-  const present = listDomainDirs(roots.kbBase);
-  const domains: KbGraphDomain[] = [...new Set([...present, ...Object.keys(registry).filter((n) => isSafeSegment(n))])].sort().map((name) => ({
+  const allow = opts.onlyDomains ? new Set(opts.onlyDomains) : undefined;
+  const present = listDomainDirs(roots.kbBase).filter((n) => !allow || allow.has(n));
+  const domains: KbGraphDomain[] = [...new Set([...present, ...Object.keys(registry).filter((n) => isSafeSegment(n) && (!allow || allow.has(n)))])].sort().map((name) => ({
     name,
     label: registry[name]?.label ?? name.charAt(0).toUpperCase() + name.slice(1),
     ...(registry[name]?.color && COLOR.test(registry[name].color!) ? { color: registry[name].color } : {}),

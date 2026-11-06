@@ -8,6 +8,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./attachments": "./dist/attachments.js",
+    "./ledger-time": "./dist/ledger-time.js",
     "./objects": "./dist/objects.js",
     "./stub": "./dist/stub/index.js",
     "./contract": "./dist/contract/index.js"

@@ -39,12 +39,12 @@ import {
   GraduationStatusSchema,
   GraduationPreviewSchema,
   GraduationResultSchema,
-  KbPipelineResponseSchema,
+  KbActivityResponseSchema,
 } from "./schemas.js";
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
-import { PairRequestSchema, PairResponseSchema } from "./pairing.js";
+import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
@@ -86,6 +86,21 @@ export const SubmitContributionResponseSchema = z.object({
   wolf: z.string(),
   /** true: the same contribution (topic + content hash) was already stored; nothing was written. */
   duplicate: z.boolean(),
+});
+
+export const ContributionReceiptsResponseSchema = z.object({ curated: z.array(z.string()) });
+export const ContributionCheckBodySchema = z.object({
+  items: z.array(z.object({ denTopicId: z.string().min(1).max(200), contentHash: z.string().max(200).optional() })).max(2000),
+});
+export const ContributionCheckResponseSchema = z.object({ unchanged: z.array(z.string()) });
+export const KbMatchBodySchema = z.object({
+  candidates: z.array(z.object({ title: z.string(), body: z.string(), domain: z.string().optional() })).min(1).max(50),
+});
+const KbMatchSchema = z.object({ domain: z.string(), id: z.string(), title: z.string(), score: z.number(), bodySimilarity: z.number() });
+export const KbMatchResponseSchema = z.object({
+  method: z.enum(["embeddings", "text"]),
+  fallback: z.string().optional(),
+  results: z.array(z.object({ title: z.string(), label: z.enum(["new", "update", "duplicate"]), matches: z.array(KbMatchSchema) })),
 });
 
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
@@ -328,6 +343,22 @@ export const ROUTES = {
    */
   submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
   /**
+   * Which den topic ids the curator has curated (files in `contributions/<wolf>/_processed/`) for the calling wolf. Query `wolf` names the wolf:
+   * a worker token defaults to its host's only active wolf (several = 400) and may name only an active wolf of its host (403 otherwise); an operator token must name it (400).
+   */
+  hubContributionReceipts: { scope: "hub", method: "GET", path: "/v1/contributions/receipts", response: { kind: "json", schema: ContributionReceiptsResponseSchema }, status: [200], error: err },
+  /**
+   * Which `{denTopicId, contentHash}` items the hub already holds for the wolf (pending or curated) with exactly that hash: `{unchanged: denTopicId[]}`.
+   * An item without contentHash is never unchanged. Max 2000 items. Same wolf resolution as receipts (query `wolf`). 400 `invalid_request` for a bad body.
+   */
+  hubContributionCheck: { scope: "hub", method: "POST", path: "/v1/contributions/check", body: ContributionCheckBodySchema, response: { kind: "json", schema: ContributionCheckResponseSchema }, status: [200], error: err },
+  /**
+   * Match candidate entries against the hub KB for the release review. Body `{candidates: [{title, body, domain?}]}` (1..50). Per candidate: `label`
+   * new | update | duplicate and up to 5 `matches` (domain, id, title, score 0-1, bodySimilarity 0-1). `method` says "embeddings" (Ollama) or "text"
+   * (fallback, with `fallback` giving the reason; also "text" when the KB scope is empty). Operator/console/browser identities see every domain; worker tokens only see/match domains their host's wolves subscribe to. The candidate limit (1..50) is this schema's. 400 `invalid_request`; 403 for an unsubscribed `domain`.
+   */
+  hubKbMatch: { scope: "hub", method: "POST", path: "/v1/kb/match", body: KbMatchBodySchema, response: { kind: "json", schema: KbMatchResponseSchema }, status: [200], error: err },
+  /**
    * Hub work WRITES (hubd is the only ledger writer). Every one requires a bearer token; the actor is the token's identity.
    * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),
    * 409 `not_ready` (stage not advanceable), 403 `forbidden` (`body` / `assignee` PATCH by a non-operator).
@@ -381,7 +412,25 @@ export const ROUTES = {
    * Answers `{status:"ok", domain, epoch, since, revision, truncated, files:[{path,contentHash,encoding:"utf8",content}], deletes:[{path}]}` (coalesced per path; `truncated` = ask again with since=revision), or `{status:"reset", reason}` with reason `below_floor` (the log no longer reaches `since`), `epoch_mismatch` or `ahead_of_hub`: fall back to the manifest diff.
    * Worker tokens may read only domains their host's wolves subscribe to (403 otherwise). 404 on a subscribed domain means "not scanned yet, retry shortly" (the hub creates a domain's revision log on its first scan or commit), NOT "deleted".
    */
+  /**
+   * KB activity from the hub curator's own ledger and receipts (no wolf relay): incoming contributions per wolf, the decision feed
+   * (latest decision per contribution), recent entry changes per domain. Query `since` ("7d" | "30d" | "all" | ISO; default "30d"),
+   * `before` (cursor), `limit` (1..200, default 50), `domain`. Console/browser tokens only.
+   */
+  hubKbActivity: { scope: "hub", method: "GET", path: "/v1/kb/activity", response: { kind: "json", schema: KbActivityResponseSchema }, status: [200], error: err },
   hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
+  /**
+   * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker
+   * token: the domains its host's wolves subscribe to). Query `domain` (one domain; 403 when the token may not read it, 404 when unknown),
+   * `archivedWork` (true/false). Never writes. Same shape as a wolf's kb/graph.
+   */
+  hubKbGraph: { scope: "hub", method: "GET", path: "/v1/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
+  /**
+   * One KB entry (body, wikilinks, backlinks; same shape as a wolf's kb/entries/:id) from the hub's read-only KB copy. Scoped like the graph:
+   * console/browser tokens read every domain, a worker token only its host's subscribed domains (backlinks too). An entry in a domain the
+   * token may not read answers 404, exactly like a missing one. A malformed id is 400.
+   */
+  hubKbEntry: { scope: "hub", method: "GET", path: "/v1/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
   /** KB sync: the hub's path -> contentHash manifest of one domain, with epoch, revision and the retention floor. Same domain filtering as changes. */
   hubKbManifest: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/manifest", response: { kind: "json", schema: KbManifestResponseSchema }, status: [200], error: err },
   /** KB sync: send the worker's path -> hash manifest; get the differing files (up to maxBytes), the paths to delete, and `pending` paths that did not fit. */
@@ -394,6 +443,16 @@ export const ROUTES = {
    */
   hubPair: { scope: "hub", public: true, method: "POST", path: "/v1/pair", body: PairRequestSchema, response: { kind: "json", schema: PairResponseSchema }, status: [200], error: err },
   /** The hub's browser pairing page (static HTML + JS, public like hubPair): code + label form that POSTs hubPair with kind browser. `?code=` prefills. */
+  /**
+   * Device management. Callers: console/browser tokens (a worker token gets 403). `hubListDevices`: console/browser devices with
+   * label, createdAt, lastUsedAt (about 5s stale) and `self`; never a token or hash. `hubRevokeDevice`: revokes one device (404 for an
+   * unknown id or a worker token); a device MAY revoke itself (sign out; its own next request is 401). `?cascade=1` also revokes the devices it added (transitively). Refused with 409 `busy` when it would leave no console-kind token. `hubMintPairingCode`: a
+   * single-use 10-minute code for a new BROWSER device (the same thing `hubd pair --kind browser --label` mints); at most 10 mints+revokes a minute per token (409 busy, retryable).
+   * Revokes and mints are audit-logged (token id, never a secret).
+   */
+  hubListDevices: { scope: "hub", method: "GET", path: "/v1/tokens", response: { kind: "json", schema: DeviceListSchema }, status: [200], error: err },
+  hubRevokeDevice: { scope: "hub", method: "DELETE", path: "/v1/tokens/:id", response: { kind: "json", schema: RevokeDeviceResponseSchema }, status: [200], error: err },
+  hubMintPairingCode: { scope: "hub", method: "POST", path: "/v1/tokens/pairing-codes", body: MintPairingCodeRequestSchema, response: { kind: "json", schema: MintPairingCodeResponseSchema }, status: [200], error: err },
   hubPairPage: { scope: "hub", public: true, method: "GET", path: "/pair", response: { kind: "bytes" }, status: [200], error: err },
   /**
    * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
@@ -429,11 +488,6 @@ export const ROUTES = {
    * tasks), split per work item. Only this wolf's pool is read: a work item has a single assignee.
    */
   graduationObservations: { method: "GET", path: "/v1/wolves/:name/work/:id/graduate/observations", response: { kind: "json", schema: GraduationObservationsSchema }, status: [200], error: err },
-  /**
-   * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
-   * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).
-   */
-  kbPipeline: { method: "GET", path: "/v1/wolves/:name/kb/pipeline", response: { kind: "json", schema: KbPipelineResponseSchema }, status: [200], error: err },
   /**
    * The KB graph, served by any wolf with KB roots (read-only; 409 `kb_unavailable` without them). Query: `domain` (one domain; unknown = 404 `not_found`),
    * and the layer flags `archivedWork`, `denTopics` (`true`|`false`, default false; anything else is 400 `invalid_request`).

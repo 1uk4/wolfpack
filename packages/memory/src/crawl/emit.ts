@@ -68,6 +68,8 @@ export interface EmitContribution {
   currency: string;
   /** "emit" = new/changed (would be written); "skip" = unchanged (dedup). */
   status: "emit" | "skip";
+  /** Content hash of the contribution (present when status is "emit"); the hub contribution check compares it. */
+  contentHash?: string;
 }
 
 export interface EmitCrawlResult {
@@ -79,6 +81,8 @@ export interface EmitCrawlResult {
   contributions: EmitContribution[];
   /** The contributions actually written (status "emit"), in order: what a hub release posts. */
   delta: Contribution[];
+  /** Hub releases only: contributions the hub refused (400, e.g. a possible secret). NOT counted in `emitted`, NOT marked sent; they stay refused until the entry is edited or left out of the release. */
+  rejected?: { denTopicId: string; message: string }[];
 }
 
 export function emitCrawl(
@@ -167,6 +171,7 @@ export function emitCrawl(
       sourceUpdated: temporal.sourceUpdated,
       currency,
       status: result ? "emit" : "skip",
+      contentHash: result?.contentHash,
     });
     if (body.length > CRAWL.bodyTargetChars) {
       sink.log(
@@ -217,6 +222,7 @@ export function emitCrawl(
         sourceUpdated: jr.to,
         currency: "archived",
         status: result ? "emit" : "skip",
+        contentHash: result?.contentHash,
       });
       if (result) {
         delta.push(result);

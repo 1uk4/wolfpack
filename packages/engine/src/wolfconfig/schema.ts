@@ -42,6 +42,26 @@ export type PromptSection = string | false;
 
 export const DEFAULT_TOOLS = ["coding"] as const;
 
+/** Default consolidation timer period. */
+export const DEFAULT_CONSOLIDATION_INTERVAL = "4h";
+/** The default period in ms. */
+export const DEFAULT_CONSOLIDATION_INTERVAL_MS = 4 * 3600_000;
+/** setInterval overflows (fires every 1ms) above this. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** "30s" | "15m" | "4h" | "1d" -> ms; undefined when malformed, zero or beyond setInterval's 2^31-1 ms limit. */
+export function parseConsolidationInterval(interval: string): number | undefined {
+  const m = /^(\d+)(s|m|h|d)$/.exec(interval);
+  if (!m) return undefined;
+  const ms = Number(m[1]) * { s: 1000, m: 60_000, h: 3600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+  return ms > 0 && ms <= MAX_TIMER_MS ? ms : undefined;
+}
+
+/** The interval actually used: the given text when valid, else 4h. Shared by the memory extension and the memory panel. */
+export function effectiveConsolidationInterval(interval: string | undefined): string {
+  return interval !== undefined && parseConsolidationInterval(interval) !== undefined ? interval : DEFAULT_CONSOLIDATION_INTERVAL;
+}
+
 /** Pi's consolidation defaults (extensions/wolfpack-memory/index.ts), plus the existing trigger and interval. */
 export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" } as const;
 
@@ -93,6 +113,7 @@ export const WolfFileSchema = z.object({
     .object({
       live: z.boolean().optional(),
       librarian: z.boolean().optional(),
+      hubKb: z.boolean().optional(),
       defaultDomain: z.string().min(1).optional(),
       sweepInterval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30s", "1m", "1h"').optional(),
       consolidation: z
@@ -173,6 +194,8 @@ export interface WolfConfig {
     live: boolean;
     /** Librarian mode (mutates KB_BASE); in a sandbox only on a KB copy (`<root>/kb-base`), otherwise refused. */
     librarian: boolean;
+    /** Declaration for the hub/workerd only: this wolf runs in hub-KB mode (its .env has WOLFPACK_HUB_KB=1), so workerd reports it kbReadable. wolfd ignores it and keeps reading its own env. */
+    hubKb?: boolean;
     /** Librarian sweep interval (e.g. "1m"); default 1m. */
     sweepInterval?: string;
     /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */

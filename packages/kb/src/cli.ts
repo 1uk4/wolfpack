@@ -47,6 +47,7 @@ import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { rmSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { loadModelTable, type Engine } from "@wolfpack/engine";
+import { parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 import type { KbRoots } from "./shared/index.js";
 import {
   vectorsDir,
@@ -267,8 +268,11 @@ async function cmdStatus(): Promise<void> {
 
   const events = readLedger(roots);
   let lastAt = "";
+  let lastMs = -Infinity;
   for (const e of events as Array<Record<string, unknown>>) {
-    if (typeof e.at === "string" && e.at > lastAt) lastAt = e.at;
+    if (typeof e.at !== "string") continue;
+    const t = parseLedgerTime(e.at);
+    if (Number.isFinite(t) && t > lastMs) { lastMs = t; lastAt = e.at; }
   }
   const written = ledgeredByDomain(events as Array<Record<string, unknown>>);
 

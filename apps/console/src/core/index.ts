@@ -15,6 +15,7 @@
 export * from "./contracts.ts";
 export * from "./ports.ts";
 export * from "./render-settings.ts";
+export * from "./mobile-layout.ts";
 
 export * from "./question-core.ts";
 // The event bus (push architecture, 2026-10-02): vocabulary + emit/subscribe
@@ -74,7 +75,7 @@ export * from "./graph-activity.ts";
 export * from "./kb-graph-model.ts";
 export * from "./graph-persistence.ts";
 export * from "./graph-pane.ts";
-export * from "./pipeline-model.ts";
+export * from "./kb-activity-model.ts";
 export * from "./entry-view.ts";
 export * from "./work-view.ts";
 export * from "./item-document.ts";

@@ -1,0 +1,55 @@
+# Release: push a tag <component>/vX.Y.Z (component = wolfd | workerd | hubd | console) -> build ONLY that component
+# for linux-x64 on a native x64 runner, guard against secrets, smoke (wolfd), publish a GitHub Release.
+# No secrets besides the built-in GITHUB_TOKEN (contents: write). Components: scripts/release-components.json.
+name: release
+on:
+  push:
+    tags: ['*/v[0-9]*.[0-9]*.[0-9]*']
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04   # native x64
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # release notes need the history and the previous tags
+          persist-credentials: false   # nothing in this job pushes; gh uses GH_TOKEN, not the checkout credential
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false   # release builds never restore a shared cache (setup-node v6 would enable npm caching automatically)
+      - name: parse tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^([a-z0-9]+)/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then echo "::error::tag '$TAG' is not <component>/vX.Y.Z"; exit 1; fi
+          COMP="${BASH_REMATCH[1]}"; VER="${BASH_REMATCH[2]}"
+          node -e 'const c=require("./scripts/release-components.json");if(!c[process.argv[1]]||process.argv[1][0]=="_"){console.error("::error::unknown component "+process.argv[1]);process.exit(1)}' "$COMP"
+          ASSET=$(node -p 'require("./scripts/release-components.json")[process.argv[1]].asset.replace("{version}",process.argv[2])' "$COMP" "$VER")
+          SMOKE=$(node -p 'require("./scripts/release-components.json")[process.argv[1]].smoke' "$COMP")
+          { echo "tag=$TAG"; echo "component=$COMP"; echo "version=$VER"; echo "asset=$ASSET"; echo "smoke=$SMOKE"; } >> "$GITHUB_OUTPUT"
+      - run: npm ci --no-audit --no-fund
+        if: steps.tag.outputs.component != 'wolfd'   # wolfd is built inside Docker (infra/release/Dockerfile)
+      - name: build + stamp + guard + sha256 (${{ steps.tag.outputs.component }} only)
+        run: scripts/release-build.sh "${{ steps.tag.outputs.component }}" "${{ steps.tag.outputs.version }}" "$RUNNER_TEMP/rel"
+      - name: smoke the wolfd tarball
+        if: steps.tag.outputs.smoke == 'true'
+        run: scripts/smoke-wolfd-release.sh "$RUNNER_TEMP/rel/${{ steps.tag.outputs.asset }}"
+      - name: verify sha256 file
+        run: cd "$RUNNER_TEMP/rel" && sha256sum -c "${{ steps.tag.outputs.asset }}.sha256"
+      - name: release notes
+        run: scripts/release-notes.sh "${{ steps.tag.outputs.component }}" "${{ steps.tag.outputs.tag }}" > "$RUNNER_TEMP/notes.md"
+      - name: publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            "$RUNNER_TEMP/rel/${{ steps.tag.outputs.asset }}" \
+            "$RUNNER_TEMP/rel/${{ steps.tag.outputs.asset }}.sha256" \
+            --title "${{ steps.tag.outputs.tag }}" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

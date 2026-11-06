@@ -25,6 +25,7 @@
  * precedent, components/session.ts).
  */
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { clearHubToken, PAIR_PATH } from "@/src/core/hub-auth";
 import { SERVER_EVENT_TYPES, type ServerEventType, type ServerEvents } from "@/src/core";
 
 /** The minimal source surface the provider consumes — EventSource behind
@@ -106,19 +107,31 @@ export function createNotifyHub() {
 
 /** Wire one source into a hub — the provider's ENTIRE effect body, factored
  *  out so the wiring is testable without React. Returns the disconnect. */
-export function wireSource(source: NotifySource, hub: ReturnType<typeof createNotifyHub>): () => void {
+export function wireSource(source: NotifySource, hub: ReturnType<typeof createNotifyHub>, onAuthLost?: () => void): () => void {
 	for (const name of SERVER_EVENT_TYPES) source.onEvent(name, (raw) => hub.dispatch(name, raw));
 	source.onOpen(() => hub.fireOpen());
+	// The server's terminal frame (its device token was rejected: revoked). EventSource would reconnect after the close on its own, forever:
+	// stop it for good here, then leave (the provider signs the browser out).
+	source.onEvent("auth-lost", () => {
+		source.close();
+		onAuthLost?.();
+	});
 	return () => source.close();
 }
 
 // ── the React glue ──────────────────────────────────────────────────────────
 
+/** The device token was revoked: forget it and go to /pair (the same exit the fetch wrapper takes on a hub 401). */
+function signOut(): void {
+	clearHubToken(window.localStorage);
+	if (!window.location.pathname.startsWith(PAIR_PATH)) window.location.assign(PAIR_PATH);
+}
+
 const EventsContext = createContext<ReturnType<typeof createNotifyHub> | null>(null);
 
 export function ServerEventsProvider({ children, connect }: { children: ReactNode; connect?: () => NotifySource }) {
 	const hub = useMemo(() => createNotifyHub(), []);
-	useEffect(() => wireSource((connect ?? openEventsChannel)(), hub), [hub, connect]);
+	useEffect(() => wireSource((connect ?? openEventsChannel)(), hub, signOut), [hub, connect]);
 	return <EventsContext.Provider value={hub}>{children}</EventsContext.Provider>;
 }
 

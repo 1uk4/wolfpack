@@ -2,22 +2,11 @@
  * THE WORK VIEW'S SELECTION MODEL (pure): what the split-view table needs of the graph's selected route. The graph owns
  * the selection (route, physics, pane); it publishes a `WorkRouteView` distilled from the very same `computeWorkRoute`
  * result, and the table lights its rows from it: step numbers (parallel steps share one), the cursor row, collapsed
- * done features as one row with "+N". Also the left column's remembered, pane-clamped width.
+ * done features as one row with "+N".
  */
 
-import { clampPaneWidth } from "./graph-pane.ts";
 import type { WorkRoute } from "./work-route.ts";
 import type { TableRow } from "./work-table.ts";
-
-export const WORK_COL_WIDTH_KEY = "wolfpack:work-view-col-width";
-export const WORK_COL_DEFAULT_WIDTH = 520;
-
-/** The stored column width (a string off localStorage) → a usable width; absent/corrupt → the default. Clamped like the pane. */
-export function parseWorkColWidth(raw: string | null | undefined, viewport?: number): number {
-	if (raw == null || raw.trim() === "") return clampPaneWidth(WORK_COL_DEFAULT_WIDTH, viewport);
-	const n = Number(raw);
-	return Number.isFinite(n) ? clampPaneWidth(n, viewport) : clampPaneWidth(WORK_COL_DEFAULT_WIDTH, viewport);
-}
 
 export interface WorkRouteView {
 	/** The raw work id the graph has selected. */

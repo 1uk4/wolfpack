@@ -31,7 +31,12 @@ describe("pairing page", () => {
     expect(r.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(r.headers.get("x-frame-options")).toBe("DENY");
     const html = await r.text();
-    expect(html).toContain("/v1/pair");
+    expect(html).toContain('location.pathname.replace(/\\/pair\\/?$/,"/v1/pair")'); // derived from the page path: works behind a stripped /hub prefix, with or without a trailing slash
+    expect(html).not.toContain('fetch("/v1/pair"');
+    expect(r.headers.get("referrer-policy")).toBe("no-referrer");
+    // the derivation itself
+    const derive = (p: string) => p.replace(/\/pair\/?$/, "/v1/pair");
+    expect([derive("/pair"), derive("/hub/pair"), derive("/hub/pair/")]).toEqual(["/v1/pair", "/hub/v1/pair", "/hub/v1/pair"]);
     expect(html).toContain('"consoleUrl":null');
     expect(html).not.toMatch(/https?:\/\/[^"' ]*cdn/i);
   });
@@ -82,5 +87,51 @@ describe("hubd pair --kind browser QR", () => {
     expect(await run(["pair", "--kind", "browser", "--data-dir", dir], { HUBD_PUBLIC_URL: "http://h:1" })).toContain("http://h:1/pair?code=");
     expect(await run(["pair", "--kind", "browser", "--data-dir", dir])).toContain("no QR code");
     expect(await run(["pair", "--kind", "console", "--url", "http://h:1", "--data-dir", dir])).not.toContain("/pair?code=");
+  });
+});
+
+describe("pairing label and expiry", () => {
+  it("--label is recorded on the token (wins over the browser's); the default browser label is dated; codes are single-use and expire", async () => {
+    let t = Date.now();
+    hub = await createHubServer({ dataDir: dir, port: 0, now: () => t });
+    const store = createTokenStore(dir, () => t);
+    const exchange = (code: string) => fetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label: "page-label", kind: "browser" }) });
+    const { code } = store.mintPairingCode({ kind: "browser", label: "Luka's phone" });
+    expect((await exchange(code)).status).toBe(200);
+    expect(createTokenStore(dir).list().map((x) => [x.kind, x.label])).toEqual([["browser", "Luka's phone"]]);
+    expect((await exchange(code)).status).toBe(401);
+    const { code: c2 } = store.mintPairingCode({ kind: "browser" });
+    t += 11 * 60_000;
+    expect((await exchange(c2)).status).toBe(401);
+    expect(parseArgs(["pair", "--kind", "browser", "--label", "iPad", "--data-dir", dir]).label).toBe("iPad");
+    const out: string[] = [];
+    await main(["pair", "--kind", "browser", "--data-dir", dir], {} as NodeJS.ProcessEnv, (m) => out.push(m));
+    const c3 = /pairing code: (\S+)/.exec(out.join("\n"))![1]!;
+    t = Date.now();
+    expect((await exchange(c3).catch(() => undefined))?.status).toBeDefined();
+  });
+});
+
+describe("pairing concurrency and logging", () => {
+  it("two parallel exchanges of one code give exactly one 200; the log carries the stored label, never the token", async () => {
+    hub = await createHubServer({ dataDir: dir, port: 0 });
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.join(" "));
+    try {
+      const { code } = createTokenStore(dir).mintPairingCode({ kind: "browser", label: "Stored label" });
+      const post = () => fetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label: "Client label", kind: "browser" }) });
+      const rs = await Promise.all([post(), post()]);
+      const ok = rs.filter((r) => r.status === 200);
+      expect(ok).toHaveLength(1);
+      expect(rs.filter((r) => r.status !== 200).every((r) => [401, 409].includes(r.status))).toBe(true);
+      const { token } = (await ok[0]!.json()) as { token: string };
+      const line = logs.find((l) => l.includes("paired token"))!;
+      expect(line).toContain('label="Stored label"');
+      expect(line).not.toContain("Client label");
+      expect(logs.join("\n")).not.toContain(token);
+    } finally {
+      console.log = orig;
+    }
   });
 });

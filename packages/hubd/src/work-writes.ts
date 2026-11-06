@@ -9,8 +9,9 @@
  * - The write queue serialises every mutation in this process (hubd also holds the work-writer lock across processes).
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, closeSync, cpSync, writeFileSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { dirname, join, relative, isAbsolute } from "node:path";
 import {
   appendWorkLedger,
   withLedgerAttribution,
@@ -311,9 +312,11 @@ export interface ApplyHooks {
  * A batch of only content ops (`body` / `section`) is one atomic .md write with no ledger involved; mixing is refused.
  * Cost: a batch copies the ledger and the item's domain `work/` dir under the write queue.
  * NOTE: `body` / `section` append no ledger event, so they bump no `updated` and fire no work.changed (known gap, follow-up).
+ * WRITES: probe file in the item's work dir; ledger append (one event per op, batch appended once); re-render of the touched items' .md files (body/section ops: the .md only).
  */
 export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}): Item {
   assertNotMixed(ops);
+  probeItemDomains(roots, [id]);
   if (ops.length <= 1) return applyOpsUnchecked(roots, id, ops);
   const cur0 = loadWorkState(roots).get(id as never);
   if (!cur0) throw new Error(`work item ${id} not found`);
@@ -446,6 +449,23 @@ function commitFolded(roots: KbRoots, item: Item): void {
   commitWorkItem(roots, item, resolved.body);
 }
 
+/**
+ * Claim and unclaim are LEDGER-FIRST: the ledger event is the truth and the .md is a derived view ("the next write to that item
+ * repairs it"). A filesystem failure while re-rendering it (EROFS on a read-only store, ENOSPC...) is therefore logged, not fatal:
+ * claims must keep working, and releasing a disconnected wolf's claims must succeed, on a read-only store. No probe for these ops.
+ */
+const loggedStaleMd = new Set<string>(); // once per item per process: a read-only store would otherwise log on every claim
+function commitFoldedBestEffort(roots: KbRoots, item: Item): void {
+  try {
+    commitFolded(roots, item);
+  } catch (e) {
+    if (typeof (e as NodeJS.ErrnoException)?.code !== "string") throw e; // only filesystem errors are tolerated
+    if (loggedStaleMd.has(item.id as string)) return;
+    loggedStaleMd.add(item.id as string);
+    console.error(`hubd: ${item.id}: ledger updated but the .md could not be re-rendered (${(e as NodeJS.ErrnoException).code}); it is repaired by the next write to the item`);
+  }
+}
+
 const CLAIMABLE_STAGES: readonly string[] = ["approved", "in_build"];
 
 /**
@@ -455,6 +475,7 @@ const CLAIMABLE_STAGES: readonly string[] = ["approved", "in_build"];
  * Appends work.assigned + work.bound (+ work.staged approved -> in_build) in ONE ledger append.
  * LEGACY: a work.bound already in an old ledger with no matching work.unbound reads as held (last writer wins); an operator clears it
  * with unclaim.
+ * WRITES: one ledger append (work.assigned/bound/staged); then best-effort re-render of <domain>/work/<id>.md. No probe.
  */
 export function claimItem(roots: KbRoots, id: string, wolf: WolfId): Item {
   const items = loadWorkState(roots);
@@ -482,11 +503,14 @@ export function claimItem(roots: KbRoots, id: string, wolf: WolfId): Item {
   if (events.length === 0) return item;
   appendWorkLedger(roots, events);
   const updated = loadWorkState(roots).get(item.id)!;
-  commitFolded(roots, updated);
+  commitFoldedBestEffort(roots, updated);
   return updated;
 }
 
-/** Unclaim: the holder or an operator appends work.unbound (anyone else gets 403 `forbidden`); the stage and assignee stay. Inside the write queue. */
+/**
+ * Unclaim: the holder or an operator appends work.unbound (anyone else gets 403 `forbidden`); the stage and assignee stay. Inside the write queue.
+ * WRITES: one ledger append (work.unbound); then best-effort re-render of <domain>/work/<id>.md. No probe.
+ */
 export function unclaimItem(roots: KbRoots, id: string, actor: Actor): Item {
   const item = loadWorkState(roots).get(id as WorkId);
   if (!item) throw new HubError("not_found", `work item ${id} not found`);
@@ -494,20 +518,33 @@ export function unclaimItem(roots: KbRoots, id: string, actor: Actor): Item {
   if (actor.kind !== "operator" && actor.id !== item.boundBy) throw new HubError("forbidden", `only the holder or the owner can release: ${id} is held by ${item.boundBy}`, { holder: item.boundBy });
   appendWorkLedger(roots, [{ type: "work.unbound", id: item.id, at: now(), wolf: item.boundBy }]);
   const updated = loadWorkState(roots).get(item.id)!;
-  commitFolded(roots, updated);
+  commitFoldedBestEffort(roots, updated);
   return updated;
 }
 
+/**
+ * WRITES: probe file in <domain>/work; ledger append (work.created [+ standing]); <domain>/work/<id>.md (+ parent's .md via feature stage sync).
+ */
 export function createItem(roots: KbRoots, req: CreateWorkRequest) {
+  probeWorkStore(roots, req.domain);
   // The schema validates `kind` as an enum; `stage` is a free string here and is validated by the ledger event schema.
   const r = createWork(roots, req as CreateWorkInput);
   return { id: r.id as string, item: r.item };
 }
+
+/**
+ * WRITES: probe file in each affected domain's work dir; ledger append (work.deleted per item of the subtree); unlinks each item's .md.
+ */
 export function deleteItem(roots: KbRoots, id: string): string[] {
+  probeItemDomains(roots, [id], true);
   return deleteWork(roots, id).items.map((i) => i.id as string);
 }
-/** Graduation = the agent route's behaviour: mark the item graduated on the ledger. There is no LLM/distill step in that route. */
+/**
+ * Graduation = the agent route's behaviour: mark the item graduated on the ledger. There is no LLM/distill step in that route.
+ * WRITES: probe file; ledger append (work.graduated); re-render of <domain>/work/<id>.md.
+ */
 export function graduateItem(roots: KbRoots, id: string) {
+  probeItemDomains(roots, [id]);
   return graduateWork(roots, id).item;
 }
 
@@ -530,9 +567,158 @@ export const GUARD_MESSAGES: readonly { name: string; re: RegExp; code: ErrorCod
   { name: "never ships", re: /^[\s\S]+ is a holding container and never ships$/, code: "not_ready" },
 ];
 
-/** Map a work-ops failure to a protocol error via GUARD_MESSAGES. Everything else is `engine_error` (generic message, detail logged). */
-export function mapWorkError(e: unknown): HubError {
+/** Typed codes the work proxy puts in its `{error, code}` body for a failed WRITE (reads never get them). */
+export const WORK_STORE_READ_ONLY = "work_store_read_only";
+export const WORK_STORE_PERMISSION_DENIED = "work_store_permission_denied";
+
+/**
+ * THE errno table for write paths (applied by `mapWorkError(e, {write: true})` only; a failed read is never mapped here):
+ *   EROFS            -> `work_store_read_only`: the store is deliberately read-only (sfo-01 ProtectSystem=strict). Retrying is pointless.
+ *   EACCES / EPERM   -> `work_store_permission_denied`: looks like a permission fault, NOT a setting; the owner should check it.
+ *   ENOSPC/EDQUOT/EIO and the rest -> generic `engine_error` (detail logged server-side).
+ * Both typed errors are `engine_error` in the protocol enum (so the envelope status of /v1/work stays ERROR_HTTP_STATUS.engine_error)
+ * with the typed code in `details.code`; `memory_unavailable` (409 everywhere else) is deliberately NOT reused.
+ */
+const PERMISSION = "this looks like a permission fault on the hub that the owner should check";
+const ERRNO_TABLE: Record<string, { code: string; probe: string; post: string } | undefined> = {
+  EROFS: {
+    code: WORK_STORE_READ_ONLY,
+    probe: "work store is read-only: this hub cannot write work items (writes are turned off; nothing was changed)",
+    post: "work store became read-only during the write: the hub ledger may hold a partial change; the owner should run `hubd work-orphans` (hubd stopped) to check",
+  },
+  EACCES: {
+    code: WORK_STORE_PERMISSION_DENIED,
+    probe: `work store write was refused with a permission error (nothing was changed); ${PERMISSION}`,
+    post: `work store write was refused with a permission error during the write: the hub ledger may hold a partial change; ${PERMISSION}, then run \`hubd work-orphans\` (hubd stopped)`,
+  },
+  EPERM: {
+    code: WORK_STORE_PERMISSION_DENIED,
+    probe: `work store write was refused with a permission error (nothing was changed); ${PERMISSION}`,
+    post: `work store write was refused with a permission error during the write: the hub ledger may hold a partial change; ${PERMISSION}, then run \`hubd work-orphans\` (hubd stopped)`,
+  },
+};
+/** An error thrown by the PRE-FLIGHT probe: nothing was appended, so its message may say "nothing was changed". */
+class ProbeError extends Error {
+  readonly probe = true;
+  constructor(readonly underlying: unknown) {
+    super(underlying instanceof Error ? underlying.message : String(underlying));
+    const c = (underlying as NodeJS.ErrnoException | undefined)?.code;
+    if (typeof c === "string") (this as unknown as NodeJS.ErrnoException).code = c;
+  }
+}
+
+/**
+ * PRE-FLIGHT WRITE PROBE. A work write appends its ledger event first and writes the item .md after (kb work-ops), so a store that
+ * cannot be written would leave a ledger-only item. Before any op that appends and writes a .md, create and remove a temp file in
+ * the target domains/<d>/work dir; if that fails nothing has been appended and the errno is mapped (above). The ledger is never
+ * truncated or rewritten. A failure AFTER a passing probe (ENOSPC mid-op...) can still leave an orphan; `hubd work-orphans` covers it.
+ * Tests: hubd.readonly.test.ts "probe: ...".
+ */
+export type WorkStoreProbe = (dir: string, stopAt: string) => void;
+/** A valid domain name is one path segment: no separators, dots-only or traversal can ever reach the join. */
+const DOMAIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const validDomain = (d: string): boolean => DOMAIN_NAME.test(d) && !d.includes("..");
+const isDir = (p: string): boolean => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+const defaultProbe: WorkStoreProbe = (dir, stopAt) => {
+  // The dir may not exist yet (first item of a domain): probe the nearest existing ancestor (mkdir -p needs it writable), but
+  // never climb to the hub's own KB root or out of it.
+  let d = dir;
+  while (!isDir(d)) {
+    const up = dirname(d);
+    const rel = relative(stopAt, up);
+    if (up === d || up === stopAt || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      throw Object.assign(new Error(`work store directory ${relative(stopAt, dir) || dir} has no existing parent below the KB root`), { code: "ENOENT" });
+    }
+    d = up;
+  }
+  const f = join(d, `.probe-${randomBytes(8).toString("hex")}`);
+  writeFileSync(f, "", { flag: "wx" });
+  unlinkSync(f);
+};
+let probeImpl: WorkStoreProbe = defaultProbe;
+/** TEST SEAM: replace the probe (e.g. to throw an EROFS error). Returns a restore function. */
+export function setWorkStoreProbe(p: WorkStoreProbe): () => void {
+  const prev = probeImpl;
+  probeImpl = p;
+  return () => void (probeImpl = prev);
+}
+/** Probe `domains/<domain>/work` for writability. A domain name must be one plain segment (letters, digits, `.`, `_`, `-`; no leading dot, no `..`): invalid_request for a request, engine_error when it comes from ledger state. */
+export function probeWorkStore(roots: KbRoots, domain: string, source: "request" | "ledger" = "request"): void {
+  // A bad name in a REQUEST is the caller's mistake (400); a bad name already in the ledger is the hub's own state problem (engine_error).
+  if (!validDomain(domain)) throw new HubError(source === "ledger" ? "engine_error" : "invalid_request", source === "ledger" ? "internal hub error" : "invalid domain name");
+  try {
+    probeImpl(workDir(roots, domain), roots.kbBase);
+  } catch (e) {
+    throw new ProbeError(e);
+  }
+}
+/** Startup sweep: remove stale `.probe-*` files (a crash between create and unlink) from every domains/<d>/work dir. Best effort; returns the count. */
+export function sweepProbeFiles(roots: KbRoots): number {
+  let n = 0;
+  const base = join(roots.kbBase, "domains");
+  let domains: string[] = [];
+  try {
+    domains = readdirSync(base);
+  } catch {
+    return 0;
+  }
+  for (const d of domains) {
+    const dir = join(base, d, "work");
+    try {
+      if (lstatSync(join(base, d)).isSymbolicLink() || lstatSync(dir).isSymbolicLink()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!/^\.probe-[0-9a-f]+$/.test(f)) continue;
+        try {
+          unlinkSync(join(dir, f));
+          n++;
+        } catch {
+          /* read-only store: leave it */
+        }
+      }
+    } catch {
+      /* no work dir */
+    }
+  }
+  return n;
+}
+/** Probe the domain of each item (and, with `descendants`, of everything under it); an unknown id is left to the op's own not-found. */
+function probeItemDomains(roots: KbRoots, ids: string[], descendants = false): void {
+  const items = loadWorkState(roots);
+  const childrenOf = new Map<string, string[]>(); // built ONCE: no nested scans
+  if (descendants) for (const c of items.values()) if (c.partOf) childrenOf.set(c.partOf as string, [...(childrenOf.get(c.partOf as string) ?? []), c.id as string]);
+  const domains = new Set<string>();
+  const seen = new Set<string>();
+  const walk = (id: string) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const it = items.get(id as WorkId);
+    if (!it) return;
+    domains.add(it.domain as string);
+    for (const c of childrenOf.get(id) ?? []) walk(c);
+  };
+  ids.forEach(walk);
+  for (const d of domains) probeWorkStore(roots, d, "ledger");
+}
+
+/**
+ * Map a work-ops failure to a protocol error via GUARD_MESSAGES. Everything else is `engine_error` (generic message, detail logged).
+ * With `write: true` an EROFS / EACCES / EPERM errno is mapped through ERRNO_TABLE first; reads (`write` unset) never are.
+ */
+export function mapWorkError(e: unknown, opts: { write?: boolean } = {}): HubError {
   if (e instanceof HubError) return e;
+  const errno = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+  const typed = opts.write && typeof errno === "string" ? ERRNO_TABLE[errno] : undefined;
+  if (typed) {
+    const atProbe = (e as { probe?: boolean }).probe === true;
+    console.error(`hubd: work store write failed${atProbe ? " (pre-flight probe)" : " AFTER the ledger append"}:`, e);
+    return new HubError("engine_error", atProbe ? typed.probe : typed.post, { code: typed.code });
+  }
   const m = e instanceof Error && typeof (e as NodeJS.ErrnoException).code !== "string" ? e.message : undefined;
   const hit = m === undefined ? undefined : GUARD_MESSAGES.find((g) => g.re.test(m));
   if (hit) return new HubError(hit.code, m!);
@@ -645,7 +831,7 @@ export function createWorkWriter(opts: WorkWriterOptions) {
       try {
         result = withLedgerAttribution(opts.stamp?.(actor), fn);
       } catch (e) {
-        failure = mapWorkError(e);
+        failure = mapWorkError(e, { write: true });
       }
       // The hook diff must never mask the write's own result or error. It also runs when the op threw after appending.
       // INVARIANT: hubd is the SOLE writer of the ledger (writer lock + this queue), so every byte appended between `before` and

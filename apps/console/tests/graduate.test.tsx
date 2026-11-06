@@ -36,10 +36,10 @@ Object.assign(globalThis, {
 	},
 });
 
-const { WorkViewProvider } = await import("../components/work-view.tsx");
-const { WorkButton } = await import("../components/work-view-entry.tsx");
+const { WorkList } = await import("../components/work-view.tsx");
+const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { GraphPane, clearPaneCache } = await import("../components/graph-pane.tsx");
-const { GraduateStartDialog } = await import("../components/graduate-dialog.tsx");
+const { GraduateStartDialog, GraduateToasts } = await import("../components/graduate-dialog.tsx");
 const { graduateStore } = await import("../components/graduate-store.ts");
 const { featureGraduateState, graduationWolf } = await import("../src/core/graduate.ts");
 const { buildWorkTable } = await import("../src/core/work-table.ts");
@@ -232,11 +232,11 @@ const mountEl = async (el: React.ReactElement) => {
 };
 const openList = async (graduate: GraduateClient, work = fakeWork()) => {
 	await mountEl(
-		<WorkViewProvider client={work} graduate={graduate}>
-			<WorkButton />
-		</WorkViewProvider>,
+		<FakeNav start="/work">
+			<WorkList client={work} graduate={graduate} />
+			<GraduateToasts />
+		</FakeNav>,
 	);
-	await click(q("work-open")!);
 	await settle();
 	await click(q("work-toggle-no-initiative")!); // open the Inbox group
 	return work;
@@ -245,32 +245,27 @@ const openList = async (graduate: GraduateClient, work = fakeWork()) => {
 // ---- Work list ------------------------------------------------------------------------
 
 describe("Work list: the Graduate button", () => {
-	it("is enabled on a ready feature and disabled, with the reason, on one with open tasks", async () => {
+	it("a ready feature has the button; a feature that is not ready has none, and its stage cell says why", async () => {
 		await openList(fakeGraduate());
 		const ready = q("work-graduate-ready") as HTMLButtonElement;
 		assert.ok(ready);
 		assert.equal(ready.disabled, false);
-		const busy = q("work-graduate-busy") as HTMLButtonElement;
-		assert.equal(busy.disabled, true);
-		assert.equal(busy.getAttribute("data-reason"), "2 tasks open");
-		assert.match(busy.getAttribute("title") ?? "", /2 tasks open/);
+		assert.equal(q("work-graduate-busy"), null, "no button (and no reserved width) on a feature with open tasks");
+		assert.match(q("work-stage-busy")!.getAttribute("title") ?? "", /not ready to graduate: 2 tasks open/);
 	});
 	it("tasks and groups carry no button", async () => {
 		await openList(fakeGraduate());
-		assert.deepEqual(qa('[data-testid^="work-graduate-"]').map((b) => b.getAttribute("data-testid")).sort(), ["work-graduate-busy", "work-graduate-off", "work-graduate-ready"]);
-	});
-	it("clicking a disabled button opens nothing", async () => {
-		const g = fakeGraduate();
-		await openList(g);
-		await click(q("work-graduate-busy")!);
-		assert.equal(q("graduate-dialog"), null);
-		assert.equal(g.starts.length, 0);
+		assert.deepEqual(qa('[data-testid^="work-graduate-"]').map((b) => b.getAttribute("data-testid")).sort(), ["work-graduate-off", "work-graduate-ready"]);
 	});
 	it("the click opens the confirmation step and does not also select the row", async () => {
 		await openList(fakeGraduate());
+		const expanded = () => q("work-row-ready")!.getAttribute("aria-expanded");
+		const before = expanded();
 		await click(q("work-graduate-ready")!);
 		assert.ok(q("graduate-dialog"));
+		assert.equal(expanded(), before, "the click did not toggle the row");
 		assert.equal(q("work-view")!.getAttribute("data-split"), null);
+		assert.equal(q("work-reader"), null);
 	});
 });
 
@@ -388,7 +383,7 @@ describe("graduate flow from the Work list", () => {
 		await click(q("graduate-done-dismiss")!);
 		assert.equal(q("graduate-done"), null);
 	});
-	it("the state survives closing and reopening the Work view", async () => {
+	it("the state survives leaving the Work page and coming back", async () => {
 		const g = fakeGraduate({ runningPolls: 1000 });
 		const work = fakeWork();
 		await openList(g, work);
@@ -396,13 +391,12 @@ describe("graduate flow from the Work list", () => {
 		await settle();
 		await click(q("graduate-go")!);
 		await settle();
-		await click(q("work-close")!);
+		await act(async () => root!.unmount()); // navigate away from /work
+		document.body.innerHTML = "";
 		assert.equal(q("work-view"), null);
 		g.runningPolls = 0; // the wolf finishes while the view is closed
 		await until("the job to finish", () => graduateStore.get("ready")?.phase === "ready");
-		await click(q("work-open")!);
-		await settle();
-		await click(q("work-toggle-no-initiative")!);
+		await openList(g, work); // back on /work
 		assert.equal(phase("work-graduate-ready"), "ready", "reopened: Review, no new preview");
 		assert.equal(g.starts.filter((s) => s.kind === "preview").length, 1);
 	});

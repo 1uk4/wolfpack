@@ -5,7 +5,7 @@
  * an elbow into an arrow at the start of its row. A row with several prerequisites has several trunks whose branches
  * meet at the same arrow (diamonds). Trunks take lanes by greedy interval allocation: a lane is free again once the
  * trunk in it has ended (a trunk may start on the row where the previous one ends), so a chain needs one lane.
- * Rows have a fixed height, so a row's y is its index in the group's visible rows.
+ * A row is WORK_ROW_H high, plus NOTE_H when it has a link line, so a row's y is the sum of the heights above it.
  */
 
 import { DEP_COLORS, ROUTE_DONE_COLOR } from "./dep-palette.ts";
@@ -13,10 +13,25 @@ import type { WorkRouteView } from "./work-select.ts";
 import type { TableRow } from "./work-table.ts";
 
 export const WORK_ROW_H = 32;
-export const LANE_W = 7;
-export const GUTTER_PAD = 5;
+export const LANE_W = 5;
+export const GUTTER_PAD = 3;
 /** Space right of the last lane for the elbow's arrow. */
-export const ARROW_W = 8;
+export const ARROW_W = 6;
+/** Height of a row's own link line (its "↖ dependency" notes), added under rows that have notes. */
+export const NOTE_H = 18;
+
+/** A row's height: the main line, plus the link line when it has dependency notes. */
+export const rowHeight = (r: Pick<TableRow, "notes">): number => WORK_ROW_H + (r.notes.length > 0 ? NOTE_H : 0);
+
+/** The top y of each row (cumulative row heights). */
+export function rowTops(rows: readonly Pick<TableRow, "notes">[]): number[] {
+	let y = 0;
+	return rows.map((r) => {
+		const t = y;
+		y += rowHeight(r);
+		return t;
+	});
+}
 
 export interface ConnectorEdge {
 	/** The prerequisite and the dependent (work ids). */
@@ -32,7 +47,7 @@ export interface ConnectorEdge {
 }
 
 export interface GroupConnectors {
-	/** The group's visible rows in draw order (the group row is index 0); y = index × WORK_ROW_H. */
+	/** The group's visible rows in draw order (the group row is index 0); y = rowTops(rows)[index]. */
 	rows: TableRow[];
 	lanes: number;
 	/** Gutter width in px; 0 when there is nothing to draw. */
@@ -129,11 +144,11 @@ export function laneState(e: Pick<ConnectorEdge, "from" | "to" | "done">, view: 
 export const LANE_COLOR: Record<LaneState, string> = { lit: DEP_COLORS.route, done: ROUTE_DONE_COLOR, plain: DEP_COLORS.faintDep };
 
 /** SVG geometry of one edge: the trunk segment, the elbow into the arrow, the arrowhead. */
-export function lanePath(e: ConnectorEdge, lanes: number): { d: string; head: string } {
+export function lanePath(e: ConnectorEdge, lanes: number, tops?: readonly number[]): { d: string; head: string } {
 	const x = GUTTER_PAD + e.lane * LANE_W + LANE_W / 2;
 	const ax = GUTTER_PAD + lanes * LANE_W + ARROW_W - 1;
-	const y1 = e.fromRow * WORK_ROW_H + WORK_ROW_H / 2 + 6;
-	const y2 = e.toRow * WORK_ROW_H + WORK_ROW_H / 2;
+	const y1 = (tops ? tops[e.fromRow]! : e.fromRow * WORK_ROW_H) + WORK_ROW_H / 2 + 6;
+	const y2 = (tops ? tops[e.toRow]! : e.toRow * WORK_ROW_H) + WORK_ROW_H / 2;
 	const r = 3;
 	return {
 		d: `M${x} ${y1}V${y2 - r}Q${x} ${y2} ${x + r} ${y2}H${ax - 4}`,

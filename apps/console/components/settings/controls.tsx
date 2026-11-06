@@ -113,7 +113,7 @@ export function Toggle({
 			data-testid={`toggle-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
 			onClick={() => onChange(!checked)}
 			className={cn(
-				"relative h-4.5 w-8 shrink-0 rounded-full border border-border transition-colors",
+				"relative inline-block h-4.5 w-8 shrink-0 appearance-none rounded-full border border-border p-0 transition-colors",
 				// Owner (2026-09-20): on is a gray track with a WHITE disc (a full-white
 				// track was too loud); off stays the muted track.
 				checked ? "bg-muted-foreground" : "bg-muted",

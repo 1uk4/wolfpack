@@ -27,9 +27,10 @@ const registry: Record<string, AdapterFactory> = {
     }),
 
   // Route through the local `claude` binary (Claude Agent SDK) — uses the
-  // user's Claude subscription (MAX/Pro) instead of an API key. "claude-bridge"
-  // is an alias matching the pi provider name.
+  // user's Claude subscription (MAX/Pro) instead of an API key. "claude-stateless"
+  // is the pi provider name; "claude-bridge" is the legacy (retired) alias.
   "claude-agent-sdk": claudeAgentSdkFactory,
+  "claude-stateless": claudeAgentSdkFactory,
   "claude-bridge": claudeAgentSdkFactory,
 
   // ── Add new providers here ──────────────────────────────────────────────

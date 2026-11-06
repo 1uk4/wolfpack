@@ -1,16 +1,14 @@
 /**
- * The Work view overlay (node test runner, linkedom, an injected fake client): opens from the graph header's button
- * and the sidebar's nav entry, the remembered domain, expand/collapse, the gutter lanes, header sorting,
- * the search that auto-expands, the graduated toggle, refresh on focus, and the select no-op seam.
+ * The Work view overlay (node test runner, linkedom, an injected fake client): is the /work page, opens items in the reader through ?item=, the remembered domain, expand/collapse, the gutter lanes, header sorting,
+ * the search that auto-expands, the graduated toggle, refresh on focus.
  */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
 import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<!doctype html><html><body></body></html>");
@@ -34,11 +32,12 @@ Object.assign(globalThis, {
 	},
 });
 
-const { WorkViewProvider, WORK_DOMAIN_KEY } = await import("../components/work-view.tsx");
-const { WorkButton, WorkNavEntry } = await import("../components/work-view-entry.tsx");
-const { GraphChromeRow } = await import("../components/graph-view.tsx");
+const { WorkList, WORK_DOMAIN_KEY } = await import("../components/work-view.tsx");
+const { WorkReaderHost } = await import("../components/work-reader.tsx");
+const { FakeNav, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
 import type { WorkClient } from "../components/work-client.ts";
 import type { WorkListItem } from "../src/core/kb.ts";
+import { NOTE_H, WORK_ROW_H } from "../src/core/work-connectors.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "wolfpack", dependsOn: [], ...over });
 const ITEMS: WorkListItem[] = [
@@ -68,10 +67,10 @@ const fake = (over: Partial<WorkClient> = {}): Fake => {
 };
 
 let root: Root | null = null;
-// The table tests read the full-screen layout (all columns); the column is the default, so start expanded.
 beforeEach(() => {
 	store.clear();
-	store.set("wolfpack:work-view-expanded", "1");
+	// the reader's WorkItemPage fetches; nothing is online in these tests
+	(globalThis as Record<string, unknown>).fetch = async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => "" });
 });
 afterEach(() => {
 	act(() => root?.unmount());
@@ -79,16 +78,16 @@ afterEach(() => {
 	document.body.innerHTML = "";
 });
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 10)); });
-const mount = async (client: WorkClient, selected?: string[]) => {
+const mount = async (client: WorkClient, start = "/work") => {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	await act(async () => {
 		root!.render(
-			<WorkViewProvider client={client} onSelect={selected ? (id) => void selected.push(id) : undefined}>
-				<WorkButton />
-				<WorkNavEntry />
-			</WorkViewProvider>,
+			<FakeNav start={start}>
+				<WorkList client={client} />
+				<WorkReaderHost />
+			</FakeNav>,
 		);
 	});
 };
@@ -102,42 +101,130 @@ const change = (el: HTMLElement, props: object) =>
 	});
 const open = async (client: WorkClient = fake()) => {
 	await mount(client);
-	await click(q("work-open")!);
 	await settle();
 };
 const rows = () => qa('[data-testid^="work-row-"]').map((r) => r.getAttribute("data-testid")!.slice("work-row-".length));
 
-describe("entry points", () => {
-	it("the graph header's Work button opens the overlay; the close button closes it", async () => {
-		await mount(fake());
-		assert.equal(q("work-view"), null);
-		await click(q("work-open")!);
+describe("the Work page", () => {
+	it("renders the list on its own: no graph, no overlay shell, no layout toggle or resize handle", async () => {
+		await open();
 		assert.ok(q("work-view"));
-		assert.equal(q("work-view")!.getAttribute("role"), "dialog");
-		await click(q("work-close")!);
-		assert.equal(q("work-view"), null);
+		assert.equal(q("graph-placeholder"), null);
+		assert.equal(q("work-layout-toggle"), null);
+		assert.equal(q("work-resize"), null);
+		assert.equal(q("work-close"), null);
+		assert.equal(q("work-reader"), null);
 	});
-	it("the sidebar's Work entry opens the same overlay; Esc closes it", async () => {
-		await mount(fake());
-		await click(q("nav-work")!);
-		assert.equal(qa('[data-testid="work-view"]').length, 1);
+	it("app/work/page.tsx mounts the list without GraphHome; / keeps the graph", () => {
+		const page = readFileSync(new URL("../app/work/page.tsx", import.meta.url), "utf8");
+		assert.ok(!page.includes("GraphHome"));
+		assert.match(page, /<WorkList \/>/);
+		assert.ok(!existsSync(new URL("../app/work/layout.tsx", import.meta.url)));
+		assert.match(readFileSync(new URL("../app/(home)/layout.tsx", import.meta.url), "utf8"), /<GraphHome \/>/);
+	});
+	it("the root layout has no Work provider any more", () => {
+		assert.ok(!readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8").includes("WorkViewProvider"));
+	});
+	it("the phone layout hides the wide columns", () => {
+		const src = readFileSync(new URL("../components/work-view.tsx", import.meta.url), "utf8");
+		assert.match(src, /progress: "[^"]*max-md:hidden"/);
+		assert.match(src, /h-dvh/);
+	});
+});
+
+describe("opening an item", () => {
+	it("a row click pushes ?item=<id> and shows the reader; the list stays mounted", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
+		assert.equal(q("work-reader"), null);
+		await click(q("work-open-f1")!);
+		assert.equal(currentUrl(), "/work?item=f1");
+		assert.equal(q("work-reader")!.getAttribute("data-work"), "f1");
+		assert.ok(q("work-row-f1"), "the list is still there under the reader");
+	});
+	it("tapping a row with children toggles it (like the chevron); Open opens the reader and does not toggle", async () => {
+		await open();
+		const row = q("work-row-i1")!;
+		assert.equal(row.getAttribute("aria-expanded"), "false");
+		await click(row);
+		assert.equal(row.getAttribute("aria-expanded"), "true");
+		assert.ok(q("work-row-f1"));
+		assert.equal(q("work-reader"), null, "a tap on a row with children does not open the reader");
+		await click(row);
+		assert.equal(row.getAttribute("aria-expanded"), "false");
+		await click(row);
+		await click(q("work-open-i1")!);
+		assert.equal(q("work-reader")!.getAttribute("data-work"), "i1");
+		assert.equal(q("work-row-i1")!.getAttribute("aria-expanded"), "true", "Open left the row as it was");
+		assert.equal(q("work-open-i1")!.getAttribute("aria-label"), "Open Phase 1");
+	});
+	it("Enter and Space on a focused row toggle it", async () => {
+		await open();
+		const row = q("work-row-i1")!;
+		const key = (k: string) => act(async () => { row.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: k })); });
+		await key("Enter");
+		assert.equal(row.getAttribute("aria-expanded"), "true");
+		await key(" ");
+		assert.equal(row.getAttribute("aria-expanded"), "false");
+	});
+	it("the expander does not open the reader", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
+		assert.equal(q("work-reader"), null);
+		assert.equal(currentUrl(), "/work");
+	});
+	it("closing (X, Esc or Back) restores the list exactly: expanded rows, search, domain, sort", async () => {
+		const c = fake();
+		await open(c);
+		await change(q("work-domain")!, { value: "snapjack" });
+		await settle();
+		await click(q("work-toggle-i1")!);
+		await click(q("work-toggle-f1")!);
+		const before = rows();
+		const esc = () => act(async () => {
+			const ev = new dom.window.Event("keydown", { bubbles: true, cancelable: true });
+			Object.defineProperty(ev, "key", { value: "Escape" });
+			window.dispatchEvent(ev);
+		});
+		for (const how of ["x", "esc", "back"] as const) {
+			await click(q("work-row-t2")!);
+			assert.ok(q("work-reader"), how);
+			if (how === "x") await click(q("work-reader-close")!);
+			else if (how === "esc") await esc();
+			else await act(async () => historyBack());
+			assert.equal(q("work-reader"), null, how);
+			assert.equal(currentUrl(), "/work", how);
+			assert.deepEqual(rows(), before, how);
+			assert.equal((q("work-domain") as HTMLSelectElement).value, "snapjack", how);
+		}
+	});
+	it("Forward re-opens the reader; /work?item=<id> opened directly shows it, and closing a deep link replaces the URL", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
+		await click(q("work-open-f1")!);
+		await act(async () => historyBack());
+		assert.equal(q("work-reader"), null);
+		await act(async () => historyForward());
+		assert.equal(q("work-reader")!.getAttribute("data-work"), "f1");
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount(fake(), "/work?item=zz");
+		await settle();
+		assert.equal(q("work-reader")!.getAttribute("data-work"), "zz");
+		await click(q("work-reader-close")!);
+		assert.equal(currentUrl(), "/work");
+		assert.equal(q("work-reader"), null);
+	});
+	it("Esc with the reader closed does nothing to the list", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
 		await act(async () => {
 			const ev = new dom.window.Event("keydown", { bubbles: true, cancelable: true });
 			Object.defineProperty(ev, "key", { value: "Escape" });
-			document.dispatchEvent(ev);
+			window.dispatchEvent(ev);
 		});
-		assert.equal(q("work-view"), null);
-	});
-	it("the graph chrome row and the sidebar render the entries", () => {
-		const html = renderToStaticMarkup(
-			<GraphChromeRow isEmpty noMatch={false} query="" onQuery={() => {}} searchInputRef={{ current: null }} settings={{} as never} changeSettings={() => {}} />,
-		);
-		assert.ok(html.includes('data-testid="work-open"'));
-		assert.match(readFileSync(new URL("../components/sidebar.tsx", import.meta.url), "utf8"), /<WorkNavEntry \/>/);
-	});
-	it("the provider wraps the app shell, so the one overlay renders after the page (drag-region mask law)", () => {
-		const layout = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
-		assert.match(layout, /<WorkViewProvider>\s*<AppShell>/);
+		assert.ok(q("work-view"));
+		assert.deepEqual(rows(), ["i1", "f1", "f2", "no-initiative"]);
 	});
 });
 
@@ -236,6 +323,19 @@ describe("gutter lanes", () => {
 		assert.equal(q("work-note-f4-f2")!.textContent, "↖ Graduate");
 		assert.deepEqual(laneIds(), []);
 	});
+	it("link notes sit on the row's own line, inside the row, and the row is taller by exactly that line", async () => {
+		const c = fake();
+		c.items = [...ITEMS, item("f4", "feature", { dependsOn: ["f2", "f1"], title: "Later" })];
+		await open(c);
+		await click(q("work-toggle-no-initiative")!);
+		const row = q("work-row-f4")!;
+		const links = q("work-links-f4")!;
+		assert.ok(row.contains(links));
+		assert.equal(links.querySelectorAll('[data-testid^="work-note-f4-"]').length, 2);
+		assert.equal(row.style.height, `${WORK_ROW_H + NOTE_H}px`);
+		assert.equal(q("work-links-f3"), null, "a row without notes has no link line");
+		assert.equal(q("work-row-f3")!.style.height, `${WORK_ROW_H}px`);
+	});
 });
 
 describe("sorting", () => {
@@ -317,15 +417,5 @@ describe("graduated toggle, refresh and select", () => {
 		await act(async () => { window.dispatchEvent(new dom.window.Event("focus")); });
 		await settle();
 		assert.ok(rows().includes("i1"));
-	});
-	it("clicking a row calls onSelect(id) (a no-op seam for the split view); the expander does not", async () => {
-		const picked: string[] = [];
-		await mount(fake(), picked);
-		await click(q("work-open")!);
-		await settle();
-		await click(q("work-toggle-i1")!);
-		assert.deepEqual(picked, []);
-		await click(q("work-row-f1")!);
-		assert.deepEqual(picked, ["f1"]);
 	});
 });

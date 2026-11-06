@@ -9,6 +9,8 @@ export { nearestEntries, type NearestEntry } from "./nearest.js";
 export { assessTopic, isTrivialChange, normalizeBody, LOG_SCORE_THRESHOLD, type TopicQuality } from "./topicQuality.js";
 export {
   resolveWorkItem,
+  parseWorkFile,
+  setWorkLedgerCache,
   listWorkItems,
   commitWorkItem,
   deleteWorkItemFile,

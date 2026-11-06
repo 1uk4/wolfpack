@@ -262,8 +262,13 @@ export class Supervisor implements WolfRegistry {
     }
     if (this.stopping) return;
     if (existsSync(sock)) {
-      rmSync(sock, { force: true });
-      this.line(c, `supervisor: removed stale socket ${sock}`);
+      try {
+        rmSync(sock, { force: true });
+        this.line(c, `supervisor: removed stale socket ${sock}`);
+      } catch (e) {
+        // A socket in a dir workerd may not write (a per-wolf runtime dir owned by another user): the wolfd that owns it replaces it itself.
+        this.line(c, `supervisor: stale socket ${sock} left in place: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     this.launch(c, ["--socket", sock]);
   }

@@ -9,7 +9,7 @@
  * transitions and structured state. The .md files are the materialized
  * view — always re-derivable from the log via foldWork().
  */
-import { existsSync, readFileSync, readdirSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, appendFileSync, unlinkSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { atomicWrite, parseFrontmatter } from "@wolfpack/engine";
 import { type KbRoots, workDir, workLedgerFile, assertNotHubMirror } from "../shared/index.js";
@@ -77,6 +77,11 @@ function parseWorkFrontmatter(raw: string, filePath: string): ResolvedWorkItem |
 function asStringArray(v: unknown): string[] {
   if (Array.isArray(v)) return v.map(String);
   return [];
+}
+
+/** Parse a work file's text (no disk access): the item and body, or null when it is not a work file. Used by the hub import. */
+export function parseWorkFile(raw: string, filePath = ""): ResolvedWorkItem | null {
+  return parseWorkFrontmatter(raw, filePath);
 }
 
 // ── read ────────────────────────────────────────────────────────────────────
@@ -185,9 +190,40 @@ export function deleteWorkItemFile(roots: KbRoots, item: WorkItem): void {
 
 // ── event ledger (source of truth) ──────────────────────────────────────────
 
+/**
+ * Parsed-ledger cache, keyed by file path and validated by the ledger's (mtime, size, ino): an append changes size+mtime, an atomic
+ * rewrite (tmp + rename, e.g. `hubd work-import`) changes the inode, so every write invalidates it. The events are shared between
+ * callers (treated read-only: foldWork builds fresh items); the returned ARRAY is a copy.
+ */
+const ledgerCache = new Map<string, { sig: string; events: WorkEvent[] }>();
+let ledgerCacheOn = true;
+/** Test/benchmark seam: turn the cache off or on (and clear it). */
+export function setWorkLedgerCache(on: boolean): void {
+  ledgerCacheOn = on;
+  ledgerCache.clear();
+}
+
 export function readWorkLedger(roots: KbRoots): WorkEvent[] {
   const file = workLedgerFile(roots);
-  if (!existsSync(file)) return [];
+  let sig: string | undefined;
+  try {
+    const st = statSync(file);
+    sig = `${st.mtimeMs}:${st.size}:${st.ino}`;
+  } catch {
+    ledgerCache.delete(file);
+    return [];
+  }
+  const hit = ledgerCacheOn ? ledgerCache.get(file) : undefined;
+  if (hit && hit.sig === sig) return hit.events.slice();
+  const events = parseLedgerFile(file);
+  if (ledgerCacheOn) {
+    if (ledgerCache.size > 64) ledgerCache.clear();
+    ledgerCache.set(file, { sig, events });
+  }
+  return events.slice();
+}
+
+function parseLedgerFile(file: string): WorkEvent[] {
   const out: WorkEvent[] = [];
   for (const line of readFileSync(file, "utf-8").split("\n")) {
     if (!line.trim()) continue;

@@ -1,20 +1,20 @@
 "use client";
 
-/** A KB entry page body (/kb/entry/[id]): breadcrumb, frontmatter facts, body with live wikilinks, related + backlinks. */
+/** A KB entry PAGE (/kb/entry/[id]): breadcrumb, frontmatter facts, body with live wikilinks, related + backlinks. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRightIcon, XIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useWorkView } from "@/components/work-view-entry";
+import { ChevronRightIcon } from "lucide-react";
+import { isDictationActive } from "@/components/dictation";
+import { hasInAppHistory } from "@/components/nav-tracker";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
-import { useLibrarian } from "@/components/use-librarian";
 import {
 	entryBreadcrumb,
 	entryFacts,
 	entryHref,
+	focusHref,
 	entryRelated,
 	groupBacklinks,
 	rewriteWikilinks,
@@ -35,78 +35,73 @@ export function entryReaderState(res: KbResult<KbEntryDetail>): EntryReaderState
 	return { kind: "error", message: res.message };
 }
 
-export interface ReaderOverlayProps {
-	onClose: () => void;
-	/** Left offset (px): the Work column's width when it is split beside the reader. */
-	left: number;
-}
-
-export function EntryReader({ id, overlay }: { id: string; overlay?: ReaderOverlayProps }) {
-	const { kbSource, loading } = useLibrarian();
-	const librarian = kbSource?.name ?? null;
+export function EntryReader({ id }: { id: string }) {
 	const [fetched, setFetched] = useState<{ id: string; state: EntryReaderState } | null>(null);
 
 	useEffect(() => {
-		if (!librarian) return;
 		let cancelled = false;
-		void fetchKbEntry(librarian, id).then((res) => {
+		void fetchKbEntry(id).then((res) => {
 			if (!cancelled) setFetched({ id, state: entryReaderState(res) });
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [librarian, id]);
+	}, [id]);
 
-	let state: EntryReaderState;
-	if (loading) state = { kind: "loading" };
-	else if (!librarian) state = { kind: "unavailable" };
-	else state = fetched?.id === id ? fetched.state : { kind: "loading" };
-	return <EntryReaderView id={id} state={state} overlay={overlay} />;
+	const state: EntryReaderState = fetched?.id === id ? fetched.state : { kind: "loading" };
+	return <EntryReaderView id={id} state={state} />;
 }
 
 /**
- * The reader as an OVERLAY (the /kb/entry/[id] route): drawn over the graph, which stays mounted behind it, and to the
- * right of the Work column when the Work list is split. Esc / X remove only the reader (back to "/"); the Work list's
- * own state is untouched. Esc is claimed in the capture phase so the Work overlay's document listener does not also act.
+ * The entry as a standalone PAGE (/kb/entry/[id]); the graph is not mounted behind it. Esc returns to the page it
+ * was opened from when that was in-app (graph, /kb-activity), else to "/". The browser Back button does the same natively.
  */
-export function EntryReaderOverlay({ id }: { id: string }) {
+/** Whether this keydown is an Esc that should leave the entry page (pure; the listener calls it). */
+export function shouldGoBackOnEscape(
+	e: Pick<KeyboardEvent, "key" | "defaultPrevented" | "metaKey" | "ctrlKey" | "altKey" | "isComposing" | "target">,
+	doc: Pick<Document, "querySelector">,
+	dictationActive: boolean,
+): boolean {
+	if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return false;
+	if (e.metaKey || e.ctrlKey || e.altKey) return false;
+	// Dictation owns this Esc (it cancels the capture); never also navigate.
+	if (dictationActive) return false;
+	const t = e.target as Element | null;
+	if (t && typeof t.closest === "function" && (t.closest("[contenteditable]") || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return false;
+	// A dialog or popover above the page owns this Esc.
+	if (doc.querySelector('[role="dialog"],[role="alertdialog"],[aria-modal="true"]')) return false;
+	return true;
+}
+
+export function EntryReaderPage({ id }: { id: string }) {
 	const router = useRouter();
-	const work = useWorkView();
-	const close = useCallback(() => router.push("/"), [router]);
+	const back = useCallback(() => {
+		if (hasInAppHistory()) router.back();
+		else router.push("/");
+	}, [router]);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape") return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
+			if (shouldGoBackOnEscape(e, document, isDictationActive())) {
+				e.preventDefault();
+				back();
+			}
 		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [close]);
-	const left = work.isOpen && !work.expanded ? work.colWidth : 0;
-	return <EntryReader id={id} overlay={{ onClose: close, left }} />;
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [back]);
+	return <EntryReader id={id} />;
 }
 
 /** Presentational half (SSR-testable). */
-export function EntryReaderView({ id, state, overlay }: { id: string; state: EntryReaderState; overlay?: ReaderOverlayProps }) {
+export function EntryReaderView({ id, state }: { id: string; state: EntryReaderState }) {
 	const entry = state.kind === "ready" ? state.entry : null;
 	return (
-		<div
-			className={overlay ? "fixed inset-y-0 right-0 z-[60] flex flex-col bg-background" : "flex h-dvh flex-col"}
-			style={overlay ? { left: overlay.left } : undefined}
-			role={overlay ? "dialog" : undefined}
-			aria-label={overlay ? "Entry reader" : undefined}
-			data-testid="entry-reader"
-			data-entry={id}
-			data-state={state.kind}
-		>
+		<div className="flex h-dvh flex-col" data-testid="entry-reader" data-entry={id} data-state={state.kind}>
 			<TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{entry?.title ?? id}</h1>
-				{overlay && (
-					<Button size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid="entry-reader-close" onClick={overlay.onClose}>
-						<XIcon />
-					</Button>
-				)}
+				<Link href={focusHref(`ent:${id}`)} className="ml-auto flex shrink-0 items-center text-xs text-muted-foreground underline underline-offset-2 max-md:min-h-11 max-md:min-w-11 max-md:justify-center" data-testid="entry-open-in-graph">
+					Open in graph
+				</Link>
 			</TopBar>
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-3xl px-6 py-8">

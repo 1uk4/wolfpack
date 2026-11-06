@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { computeWorkRoute } from "../src/core/work-route.ts";
-import { ancestorKeys, parseWorkColWidth, rowRouteState, workRouteView } from "../src/core/work-select.ts";
+import { ancestorKeys, rowRouteState, workRouteView } from "../src/core/work-select.ts";
 import { buildWorkTable } from "../src/core/work-table.ts";
 
 const nodes = [
@@ -49,10 +49,3 @@ describe("ancestorKeys", () => {
 	});
 });
 
-describe("parseWorkColWidth", () => {
-	it("defaults when absent or corrupt, clamps like the pane", () => {
-		assert.ok(parseWorkColWidth(null) === 520 && parseWorkColWidth("zz") === 520);
-		assert.ok(parseWorkColWidth("50") === 280 && parseWorkColWidth("5000") === 720);
-		assert.ok(parseWorkColWidth("600", 800) === 560);
-	});
-});

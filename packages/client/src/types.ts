@@ -2,7 +2,8 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbPipelineResponse, GraduationJob, GraduationObservations, GraduationStatus } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
+export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -44,7 +45,15 @@ export type ThreadEventType = ThreadEvent["type"];
 export type { ThreadContext, CreateThreadBody, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, ThreadTier } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, HubEvent, HubEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
-export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, WorkItemResponse, GraduationPreview, GraduationContribution, GraduationResult, GraduationJob, GraduationJobKind, GraduationStatus, GraduationObservations, WorkListResponse, WorkListItem, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, WorkItemResponse, GraduationPreview, GraduationContribution, GraduationResult, GraduationJob, GraduationJobKind, GraduationStatus, GraduationObservations, WorkListResponse, WorkListItem, SweepOutcome } from "@wolfpack/protocol";
+/** Query of the hub KB activity route: `since` 7d|30d|all|ISO (default 30d), `before` cursor, `limit` 1..200 (default 50), `domain`. */
+export interface KbActivityQuery {
+  since?: string;
+  before?: string;
+  limit?: number;
+  domain?: string;
+}
+export type { KbActivityResponse, KbActivityChange, KbDecision, KbDecisionOutcome, HubSweepDecision } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
@@ -177,6 +186,10 @@ export interface ConsoleClient {
   claimWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
   /** Hub only: release a claim (the holder or the operator). Leaves the stage alone. Rejects `conflict` for anyone else. */
   releaseWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
+  /** Hub only: paired devices / revoke one / mint a pairing code for a new one (device management routes). Optional like watchMemory. */
+  listDevices?(): Promise<DeviceList>;
+  revokeDevice?(id: string, opts?: { cascade?: boolean }): Promise<{ revoked: string; self: boolean; cascaded: string[] }>;
+  mintPairingCode?(label?: string): Promise<MintPairingCodeResponse>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
   /**
@@ -190,10 +203,16 @@ export interface ConsoleClient {
   graduationStatus?(wolf: string, workId: string): Promise<GraduationStatus>;
   /** The pending observations in the wolf's pool a graduation of the item would fold, per work item. */
   graduationObservations?(wolf: string, workId: string): Promise<GraduationObservations>;
-  /** Dewey's pipeline view. Librarian only: other wolves reject (kb_unavailable). */
-  getKbPipeline?(wolf: string): Promise<KbPipelineResponse>;
   /** The KB graph (librarian wolf only; rejects ProtocolError `kb_unavailable` elsewhere, NotFoundError for an unknown domain). Layers default off. */
   getKbGraph?(wolf: string, opts?: { domain?: string; archivedWork?: boolean; denTopics?: boolean }): Promise<KbGraph>;
+  /** True when the KB graph comes from the hub's own KB copy (relay mode): then use getHubKbGraph, no KB wolf needed. */
+  readonly kbFromHub?: boolean;
+  /** The KB graph from the hub's read-only KB copy, limited to the domains the token may read. */
+  getHubKbGraph?(opts?: { domain?: string; archivedWork?: boolean }): Promise<KbGraph>;
+  /** The hub curator's activity (GET /v1/kb/activity): incoming, decisions, recent changes. Hub clients only. */
+  getKbActivity?(query?: KbActivityQuery): Promise<KbActivityResponse>;
+  /** One KB entry from the hub's read-only KB copy, scoped to the token's readable domains. */
+  getHubKbEntry?(id: string): Promise<KbEntryDetail>;
   /** One KB entry with its body, wikilinks and backlinks (librarian only). Rejects NotFoundError for an unknown entry. */
   getKbEntry?(wolf: string, id: string): Promise<KbEntryDetail>;
 }

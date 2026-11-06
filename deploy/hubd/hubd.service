@@ -1,6 +1,6 @@
 # hubd on sfo-01. Installed by deploy/hubd/setup.sh (it substitutes @NODE@; the bind comes from /etc/wolfpack/hubd.env).
-# Runs as the dedicated user "hubd", never as a wolf user. No ACLs: hubd uses the "other" permissions of Dewey's 755/777 dirs,
-# and the sandbox below is what makes the KB read-only (the dirs are world-writable).
+# Runs as the dedicated user "hubd", never as a wolf user. Everything hubd owns (ledger, KB, curator lanes and receipts) lives under
+# /var/lib/hubd; no wolf's home is bound (Dewey and his paths are retired, 2026-11-06).
 [Unit]
 Description=Wolfpack hub (hubd)
 Documentation=file:///opt/wolfpack-hubd/current/RUNBOOK.md
@@ -25,24 +25,19 @@ ExecStart=@NODE@ /opt/wolfpack-hubd/current/hubd.mjs serve --data-dir ${HUBD_DAT
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
-# 0022, not 0077: contribution files must be readable by Dewey (writeFileSync uses the umask, 0666 & ~0022 = 644). The data dir is 0700,
-# so the 644 files inside it are not reachable by others; tokens.json is written 0600 explicitly.
+# 0022, not 0077: files are written 644. The data dir is 0700, so the files inside it are not reachable by others; tokens.json is
+# written 0600 explicitly.
 UMask=0022
 
 # State: /var/lib/hubd (ledger, registry, tokens, hub-owned kb/base, kb-rev).
 StateDirectory=hubd
 StateDirectoryMode=0700
 
-# Hardening. Home is hidden except the three Dewey paths below.
+# Hardening. Home is hidden; the only writable path is the state dir.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=tmpfs
-# No "-" prefix on purpose: a missing path must fail the start, not silently run without the KB.
-# domains/ is read-only here (it is mode 777, so the sandbox is the only thing keeping hubd from writing the KB).
-BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains
-# inbox/ and receipts/ are writable (contribution intake; per-wolf lane dirs are pre-created by setup.sh).
-BindPaths=/home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
-ReadWritePaths=/var/lib/hubd /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
+ReadWritePaths=/var/lib/hubd
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

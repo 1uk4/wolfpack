@@ -3,19 +3,22 @@
 /**
  * Console sign-in: the hub's /pair page sends the browser here as `/pair#token=...` after a successful pairing. We store the token in
  * localStorage, strip the fragment from the address bar and go home. Opened without a token (first visit, or after a 401) it points
- * the user at the hub's pairing page (NEXT_PUBLIC_WOLFPACK_HUB_URL).
+ * the user at the hub's pairing page (the URL comes from /api/hub-url, set at runtime by HUBD_PUBLIC_URL).
  */
 import { useEffect, useState } from "react";
 import { saveHubToken, tokenFromHash } from "@/src/core/hub-auth";
 
-const HUB_URL = process.env.NEXT_PUBLIC_WOLFPACK_HUB_URL?.replace(/\/+$/, "");
-
 export default function PairPage() {
 	const [stored, setStored] = useState<boolean | undefined>();
+	const [HUB_URL, setHubUrl] = useState<string | undefined>();
 	useEffect(() => {
 		const token = tokenFromHash(window.location.hash);
 		history.replaceState(null, "", window.location.pathname);
-		if (!token) return setStored(false);
+		if (!token) {
+			setStored(false);
+			void fetch("/api/hub-url").then((r) => r.json()).then((j: { url?: string | null }) => setHubUrl(j.url || undefined)).catch(() => {});
+			return;
+		}
 		saveHubToken(window.localStorage, token);
 		setStored(true);
 		window.location.replace("/");

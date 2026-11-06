@@ -14,6 +14,8 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 | HTTP | `127.0.0.1:7142` (cannot be disabled; never 3141 agent, 3150 hubd, 7141 Mac workerd) |
 | feed | off: Hal writes contributions straight into Dewey's inbox |
 
+**Hub KB readability (console graph in relay mode):** a supervised wolf that runs in hub-KB mode (`WOLFPACK_HUB_KB=1` in its own 600 `.env`) declares it to the hub in its readable `wolf.yaml` with `memory:\n  hubKb: true`; workerd then reports it `kbReadable` in its hello. workerd never opens a wolf's `.env`; wolfd ignores the key. Restart workerd after adding it.
+
 Hal's `.env` (`KB_BASE=/var/wolfpack/kb/base`) is **not** changed. Pointing `KB_BASE` at `/var/lib/workerd-kb` is a later, owner-approved step: see "Hal reads the hub mirror" below. No KB copy is ever deleted by anything here.
 
 The unit starts only when `/var/lib/workerd/hub.json` exists. `setup.sh` fails the preflight (`WOULD FAIL` in dry-run) if the env would not be link-only, announces nothing, has the feed on, a non-loopback bind, a bad port (3141, 3150, 7141, out of range) or any foreign listener on the port, or if the unit's `ExecStart` lacks `--link-only` or mentions `wolfd`. The unit repeats the guards in `ExecStartPre`.

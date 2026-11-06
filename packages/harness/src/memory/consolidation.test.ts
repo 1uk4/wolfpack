@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
-import { consolidatePool, drainWorkObservations, durableSessionTopics } from "./consolidation.js";
+import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
 let root: string;
@@ -102,6 +102,24 @@ describe("consolidatePool reconcile (pi-durable promote)", () => {
     const hints = readdirSync(inbox).map((f) => /domain_hint: (\S+)/.exec(readFileSync(join(inbox, f), "utf8"))?.[1]);
     expect(hints).toEqual(["personal", "personal"]);
     expect(readFileSync(join(den, "memory", "topics", "lift.md"), "utf8")).toContain("domain: personal");
+  });
+
+  it("a personal-only wolf whose default is wolfpack: a wolfpack hint is emitted under personal, not skipped", async () => {
+    pool(6);
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { prompt: string }) =>
+        step === "distill"
+          ? schema.parse({ contributions: [{ slug: "main", title: /^TOPIC TITLE: (.*)$/m.exec(opts.prompt)?.[1] ?? "Topic", summary: "s", body: "## Details\nbody" }] })
+          : schema.parse({ actions: [
+          { sessionTopicId: "hint", action: "create", reasoning: "r", result: { id: "hint", title: "Hint", summary: "s", body: "b1", domain: "wolfpack" } },
+        ] }),
+    } as unknown as Engine;
+
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, kbRoots: roots, defaultDomain: "wolfpack", domains: ["personal"], engine });
+
+    const inbox = join(roots.opsRoot, "inbox", WOLF);
+    const hints = readdirSync(inbox).map((f) => /domain_hint: (\S+)/.exec(readFileSync(join(inbox, f), "utf8"))?.[1]);
+    expect(hints).toEqual(["personal"]);
   });
 });
 
@@ -437,5 +455,42 @@ describe("drainWorkObservations (graduation)", () => {
     expect(a.observationsProcessed + b.folded).toBeGreaterThanOrEqual(4);
     expect(m.writes.length).toBeGreaterThanOrEqual(2);
     expect(poolLines().filter((c: string) => c !== "observation 0")).toEqual([]);
+  });
+});
+
+describe("promoteSessionTopics domain hint (work-wolfpack-0BdguCL)", () => {
+  it("emits a subscribed domain_hint for a session topic tagged with a topic word", async () => {
+    const loc = durableSessionTopics(den);
+    const dir = join(loc.memoryRoot, loc.sessionId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "gym.md"), "---\nid: gym\ntitle: Gym\nsummary: s\nupdated: 2026-10-20 10:00\ndomain: fitness\n---\n\ngym body about lifting\n");
+    const clean = { slug: "main", title: "Gym log", summary: "Lifting.", body: "## Design\nSquats." };
+    const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+    await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "wolfpack", domains: ["personal"] });
+    const inbox = join(roots.opsRoot, "inbox", WOLF);
+    const files = readdirSync(inbox);
+    expect(files.length).toBe(1);
+    expect(readFileSync(join(inbox, files[0]), "utf8")).toContain("domain_hint: personal");
+  });
+
+  it("an old extension that passes no domains still gets a subscribed hint (WOLF_DOMAINS, else the default)", async () => {
+    for (const [env, want] of [["personal", "personal"], ["", "wolfpack"]] as const) {
+      const wolf = `w-${want}`;
+      const loc = durableSessionTopics(den);
+      const dir = join(loc.memoryRoot, loc.sessionId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `t-${want}.md`), `---\nid: t-${want}\ntitle: T\nsummary: s\nupdated: 2026-10-20 10:00\ndomain: vehicles\n---\n\nbody ${want} about cars\n`);
+      const clean = { slug: "main", title: `Cars ${want}`, summary: "Cars.", body: "## Design\nOil." };
+      const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+      const prev = process.env.WOLF_DOMAINS;
+      process.env.WOLF_DOMAINS = env;
+      try {
+        await promoteSessionTopics({ wolfDen: den, wolfName: wolf, engine, kbRoots: roots, defaultDomain: "wolfpack" });
+      } finally {
+        if (prev === undefined) delete process.env.WOLF_DOMAINS; else process.env.WOLF_DOMAINS = prev;
+      }
+      const inbox = join(roots.opsRoot, "inbox", wolf);
+      expect(readFileSync(join(inbox, readdirSync(inbox)[0]), "utf8")).toContain(`domain_hint: ${want}`);
+    }
   });
 });

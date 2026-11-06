@@ -16,6 +16,8 @@ import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
+import { releaseCmd } from "../commands/release.js";
+import { deployCmd } from "../commands/deploy.js";
 import { workDoctor } from "../commands/work-doctor.js";
 import { workBackfillFeatureStages } from "../commands/work-backfill.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
@@ -47,6 +49,8 @@ ${c.bold("COMMANDS")}
   usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|use|day)
   work backfill-feature-stages    Move features whose tasks all shipped to shipped (--dry-run, --domain d)
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
+  deploy <wolf> --release <tag>   Host downloads + verifies a release, switches, health-checks, rolls back (--host, --dry-run, --component hubd|workerd)
+  release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -68,6 +72,8 @@ ${c.bold("WORKFLOW COMMANDS")}
   launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf> [--host <h>]        Deploy wolf to host (bundle)
   sync --all                      Sync every wolf on every host
+  deploy <wolf> --release wolfd/vX.Y.Z [--host h] [--dry-run]   host pulls + verifies a GitHub release, health-checks, rolls back
+  sync <wolf> --release <tgz>     runtime wolfd: deploy this wolfd release tarball (or $WOLFD_RELEASE)
   sync <wolf> --reset-kb-base     Also rewrite a local wolf's KB_BASE from config (default keeps its .env value)
   list [--json]                   Show all wolves grouped by host
   status <wolf> [--host <h>]      Wolf health and service state
@@ -149,6 +155,8 @@ function parseArgs(argv: string[]) {
       flags.all = true;
     } else if (arg === "--reset-kb-base") {
       flags["reset-kb-base"] = true;
+    } else if (arg === "--release" && argv[i + 1]) {
+      flags.release = argv[++i];
     } else if (arg === "--check") {
       flags.check = true;
     } else if (arg === "-f" || arg === "--follow") {
@@ -346,6 +354,7 @@ async function main(): Promise<void> {
           host: flags.host as string | undefined,
           all: flags.all as boolean | undefined,
           resetKbBase: flags["reset-kb-base"] as boolean | undefined,
+          release: flags.release as string | undefined,
         });
         break;
 
@@ -373,6 +382,37 @@ async function main(): Promise<void> {
         if (sub !== "doctor") throw new Error("Usage: wolfpack work doctor [--domain d] [--json] | work backfill-feature-stages [--dry-run]");
         await workDoctor({ domain: flags.domain as string | undefined, json: flags.json as boolean | undefined });
         break;
+
+      case "deploy": {
+        const a = process.argv.slice(3);
+        const opt = (n: string) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : undefined; };
+        const vals = new Set(["--release", "--component", "--host", "--health-timeout", "--unit"].map((n) => a.indexOf(n) + 1).filter((i) => i > 0));
+        const ht = opt("--health-timeout");
+        const code = await deployCmd({
+          wolf: a.find((x, i) => !x.startsWith("-") && !vals.has(i)),
+          component: opt("--component"),
+          release: opt("--release") ?? "",
+          host: opt("--host"),
+          dryRun: a.includes("--dry-run"),
+          unit: opt("--unit"),
+          healthTimeout: ht === undefined ? undefined : Number(ht),
+        });
+        if (code !== 0) process.exit(code);
+        break;
+      }
+
+      case "release": {
+        const a = process.argv.slice(3);
+        const vi = a.indexOf("--version");
+        await releaseCmd({
+          only: a.filter((x, i) => !x.startsWith("-") && a[i - 1] !== "--version"),
+          bump: a.includes("--major") ? "major" : a.includes("--minor") ? "minor" : "patch",
+          version: vi >= 0 ? a[vi + 1] : undefined,
+          dryRun: a.includes("--dry-run"),
+          yes: a.includes("--yes") || a.includes("-y"),
+        });
+        break;
+      }
 
       case "config":
         await wolfConfig(positional[1], {

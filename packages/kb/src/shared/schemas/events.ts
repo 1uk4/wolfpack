@@ -20,6 +20,37 @@ export type RouteKind = z.infer<typeof RouteKindSchema>;
 export const EntryActionSchema = z.enum(["create", "merge", "supersede"]);
 export type EntryAction = z.infer<typeof EntryActionSchema>;
 
+/** How the sweep routed a contribution: the RoutingRecord fields a receipt carries (sweep.ts), minus the overflow detail. */
+export const DecisionRoutingSchema = z.object({
+  route: z.enum(["alias", "anchor", "similarity", "new"]),
+  /** Top-3 similarity candidates, best first. */
+  candidates: z.array(z.object({ id: z.string(), score: z.number() })),
+  band: z.string().optional(),
+  subject: z.object({ match: z.string(), valid: z.boolean(), reason: z.string().optional() }).optional(),
+  confirm: z
+    .object({ candidate: z.string(), score: z.number(), merge: z.boolean(), valid: z.boolean(), reason: z.string().optional() })
+    .optional(),
+  /** The entry written. */
+  target: z.string().optional(),
+  warning: z.string().optional(),
+});
+export type DecisionRouting = z.infer<typeof DecisionRoutingSchema>;
+
+/** What the curator decided for one contribution. `unchanged`: a merge the contribution agreed with (no entry text written). */
+export const DecisionOutcomeSchema = z.enum(["create", "merge", "unchanged", "reject", "parked", "unclassified"]);
+export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
+
+/** The decision summary shared by the ledger `decision` event and the sweep_item event. */
+export const DecisionSummarySchema = z.object({
+  outcome: DecisionOutcomeSchema,
+  /** The resulting entry (create / merge / unchanged). */
+  entryId: z.string().optional(),
+  /** Why (reject / parked / unclassified). */
+  reason: z.string().optional(),
+  routing: DecisionRoutingSchema.optional(),
+});
+export type DecisionSummary = z.infer<typeof DecisionSummarySchema>;
+
 const base = { id: z.string(), at: z.string() };
 
 export const KbEventSchema = z.discriminatedUnion("t", [
@@ -31,6 +62,29 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     hash: z.string(),
     prevHash: z.string().nullable(),
     domainHint: z.string(),
+  }),
+  /**
+   * The curator's decision for one contribution (create, merge, unchanged, reject, parked, unclassified). Older ledgers have none;
+   * older readers skip it, and no fold or `seenHashes` counts it (only `contribution` marks a hash seen).
+   *
+   * Reading rules for consumers:
+   *  - A hash can legitimately get several decisions over time: parked now, then create/merge after an unpark. Take the LATEST
+   *    decision per (from, denTopicId, hash).
+   *  - create / merge / unchanged are appended in the same batch as the item's `contribution` event. reject, unclassified and
+   *    parked are appended on their own, AFTER the receipt / `_processed` move / park (so a crash in between leaves no decision:
+   *    best-effort, and a failing append never fails the item).
+   *  - An item that already has its create/merge decision and is parked afterwards (receipt or move threw) gets no second one.
+   *  - The duplicate path (the hash was already seen and the file is simply retired) emits NO decision: the hash already has one.
+   *  - A split-out second subject is a contribution of its own (denTopicId `<topic>~split-...`) with its own decision.
+   *  - Infrastructure errors and retryable skips are not outcomes and write nothing.
+   */
+  z.object({
+    ...base,
+    t: z.literal("decision"),
+    from: z.string(),
+    denTopicId: z.string(),
+    hash: z.string(),
+    ...DecisionSummarySchema.shape,
   }),
   z.object({
     ...base,

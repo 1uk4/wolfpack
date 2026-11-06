@@ -8,7 +8,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { MockConsoleClient, FIXTURE_THREAD } from "@wolfpack/client";
 import { createThreadApi, resumeCursor } from "../src/server/thread-api.ts";
-import { getConsoleClient, setConsoleClient } from "../src/server/console-client.ts";
+import { createConsoleClient, getConsoleClient, setConsoleClient } from "../src/server/console-client.ts";
+import { HUB_AUTH_HEADER } from "../src/core/hub-auth.ts";
 
 const ref = { wolf: "1uk4", slug: "home" };
 
@@ -202,5 +203,26 @@ describe("thread API: snapshot frames", () => {
 		const wire = events.flatMap((e) => adapter.apply(e));
 		const end = wire.find((w) => w.type === "message_end") as unknown as { message: { content: Array<{ text: string }> } };
 		assert.equal(end.message.content[0]?.text, "HEAD-the full text");
+	});
+});
+
+describe("hub-auth failures (relay mode, unpaired or revoked browser)", () => {
+	// The relay client throws HubAuthError when the request has no (valid) bearer: a plain route and the SSE route must answer 401 + the marker,
+	// and the SSE route must do it BEFORE a stream opens (it resolves the thread first, which fails first).
+	const unpaired = () => createConsoleClient({ WOLFPACK_HUB_URL: "http://127.0.0.1:1" }, async () => null);
+	const api = () => createThreadApi(unpaired);
+	const assert401 = (res: Response) => {
+		assert.equal(res.status, 401);
+		assert.equal(res.headers.get(HUB_AUTH_HEADER), "required");
+		assert.equal(res.headers.get("content-type")?.startsWith("application/json"), true);
+	};
+	it("a plain route (wolves, threads)", async () => {
+		assert401(await api().wolves());
+		assert401(await api().threads("1uk4"));
+	});
+	it("the stream route answers 401 as a normal response, not an opened event stream", async () => {
+		const res = await api().stream(ref, new Request("http://x/api/wolves/1uk4/threads/home/stream"));
+		assert401(res);
+		assert.notEqual(res.headers.get("content-type"), "text/event-stream");
 	});
 });

@@ -3,10 +3,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+const engineMock = vi.hoisted(() => ({ loadQuery: vi.fn() }));
+vi.mock("@wolfpack/engine", async (orig) => ({ ...(await orig<object>()), loadQuery: engineMock.loadQuery }));
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
 import { NEEDS_SUBSCRIPTION_TOKEN, PROVIDER_FACTORIES } from "./index.js";
-import { claudeStatelessFactory, claudeStatelessPaths } from "./claude-stateless.js";
+import { buildSubscriptionModels, claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, withFreshSystemPrompt } from "./claude-stateless.js";
 
 const fakeStateless = () => {
   const provider = createProvider({ id: "claude-stateless", auth: { check: async () => "t" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
@@ -65,6 +68,15 @@ describe("claude-stateless factory", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("context windows: the 5.5 family is 1M (named 1M); 4.6 models and unlisted ids are 200K", () => {
+    const base = { name: "n", reasoning: true, input: ["text"], maxTokens: 1000 };
+    const built = buildSubscriptionModels(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"].map((id) => ({ ...base, id })));
+    const win = Object.fromEntries(built.map((m) => [m.id, m.contextWindow]));
+    expect(win).toEqual({ "claude-opus-5-5": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-haiku-5-5": 1_000_000, "claude-opus-4-6": 200_000, "claude-sonnet-4-6": 200_000, "claude-haiku-4-5": 200_000 });
+    expect(built.find((m) => m.id === "claude-haiku-5-5")!.name).toBe("n 1M");
+    expect(built.map((m) => m.id).slice(0, 2)).toEqual(["claude-opus-5-5", "claude-opus-4-6"]); // opus first, newest first
+  });
+
   it("pins the assumption: nothing on the stateless entry path reaches the bridge's skills rendering (formatSkillsForPrompt)", () => {
     const dist = join(dirname(createRequire(import.meta.url).resolve("pi-claude-bridge-stateless/stateless")), "..");
     const files = [...readdirSync(join(dist, "stateless")).map((f) => join(dist, "stateless", f)), ...["convert.js", "mcp-server.js", "usage.js"].map((f) => join(dist, f))].filter((f) => f.endsWith(".js"));
@@ -72,21 +84,103 @@ describe("claude-stateless factory", () => {
     expect(callers).toEqual([]);
   });
 
-  it("mixed config: main on claude-bridge, other tiers on claude-stateless, both resolve", () => {
-    expect(providersInUse(mixed)).toEqual(["claude-bridge", "claude-stateless"]);
-    const bridge = createProvider({ id: "claude-bridge", auth: { check: async () => "t" } as any, models: [], api: { stream: () => { throw new Error("x"); }, streamSimple: () => { throw new Error("x"); } } } as any);
-    const bridgeProvider = Object.assign(bridge, { shutdown: vi.fn(), release: vi.fn(() => 0), liveQueries: 0 });
+  it("a legacy claude-bridge table is served by claude-stateless only", () => {
+    expect(providersInUse(mixed)).toEqual(["claude-stateless"]);
     const home = mkdtempSync(join(tmpdir(), "stateless-home-"));
     const fake = fakeStateless();
-    const m = buildWolfModels(mixed, { cwd: "/w", env: { WOLF_DEN: join(home, "den") }, seams: { "claude-bridge": { createProvider: () => bridgeProvider }, "claude-stateless": { createProvider: () => fake, models: [] } } });
-    expect(m.models!.getProvider("claude-bridge")).toBe(bridgeProvider);
+    const m = buildWolfModels(mixed, { cwd: "/w", env: { WOLF_DEN: join(home, "den") }, seams: { "claude-stateless": { createProvider: () => fake, models: [] } } });
+    expect(m.models!.getProvider("claude-bridge")).toBeUndefined();
     expect(m.models!.getProvider("claude-stateless")).toBeDefined();
     m.forget("s1");
-    expect(bridgeProvider.release).toHaveBeenCalledWith("s1");
     expect(fake.forget).toHaveBeenCalledWith("s1");
     m.dispose();
-    expect(bridgeProvider.shutdown).toHaveBeenCalledOnce();
     expect(fake.dispose).toHaveBeenCalledOnce();
     rmSync(home, { recursive: true, force: true });
+  });
+});
+
+describe("withFreshSystemPrompt", () => {
+  const run = (options: object) => {
+    const seen: any[] = [];
+    const out = withFreshSystemPrompt((a) => { seen.push(a); return "it"; })({ prompt: "hi", options });
+    return { seen, out };
+  };
+  it("turns a bare string (even empty) into a custom prompt with snapshot:false and keeps other options", () => {
+    const { seen, out } = run({ systemPrompt: "persona", resume: "s1", cwd: "/x" });
+    expect(out).toBe("it");
+    expect(seen[0]).toEqual({ prompt: "hi", options: { systemPrompt: { type: "custom", prompt: "persona", snapshot: false }, resume: "s1", cwd: "/x" } });
+    expect(run({ systemPrompt: "" }).seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "", snapshot: false });
+  });
+  it("converts string[] and adds snapshot:false to objects lacking it; keeps an explicit snapshot", () => {
+    expect(run({ systemPrompt: ["a", "b"] }).seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: ["a", "b"], snapshot: false });
+    expect(run({ systemPrompt: { type: "preset", preset: "claude_code", append: "x" } }).seen[0].options.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: "x", snapshot: false });
+    const kept = { type: "custom", prompt: "p", snapshot: true };
+    const a = { prompt: "p", options: { systemPrompt: kept } };
+    const seen: any[] = [];
+    withFreshSystemPrompt((x) => { seen.push(x); })(a);
+    expect(seen[0]).toBe(a);
+  });
+  it("passes a missing systemPrompt through untouched", () => {
+    const a = { prompt: "p", options: {} };
+    const seen: any[] = [];
+    withFreshSystemPrompt((x) => { seen.push(x); })(a);
+    expect(seen[0]).toBe(a);
+  });
+});
+
+describe("claudeStatelessFactory query wrapping", () => {
+  const build = (seams: object) => {
+    const root = mkdtempSync(join(tmpdir(), "stateless-home-"));
+    const create = vi.fn(() => fakeStateless() as never);
+    claudeStatelessFactory({ cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "claude-stateless": { createProvider: create, models: [], ...seams } } });
+    return { root, queryFn: (create.mock.calls as any[])[0][0].queryFn as (a: any) => any };
+  };
+  it("wraps an injected queryFn", () => {
+    const seen: any[] = [];
+    const { root, queryFn } = build({ queryFn: (a: any) => { seen.push(a); return {}; } });
+    try {
+      queryFn({ prompt: "p", options: { systemPrompt: "persona" } });
+      expect(seen[0].options.systemPrompt).toEqual({ type: "custom", prompt: "persona", snapshot: false });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  const stream = (items: unknown[], close = vi.fn()) => Object.assign((async function* () { yield* items; })(), { close });
+  it("with no queryFn seam (wolfd, subagents) the factory's own queryFn loads the host query and rewrites the prompt", async () => {
+    const seen: any[] = [];
+    engineMock.loadQuery.mockResolvedValueOnce((a: any) => { seen.push(a); return stream([1, 2]); });
+    const { root, queryFn } = build({});
+    try {
+      const got: unknown[] = [];
+      for await (const m of queryFn({ prompt: "p", options: { systemPrompt: "persona", resume: "s" } })) got.push(m);
+      expect(got).toEqual([1, 2]);
+      expect(seen[0]).toEqual({ prompt: "p", options: { systemPrompt: { type: "custom", prompt: "persona", snapshot: false }, resume: "s" } });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("a rejected load reaches the iterator and is not an unhandled rejection when close() comes first", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const failing = lazySdkQuery(async () => { throw new Error("no sdk"); });
+      const closedFirst = failing({ prompt: "p", options: {} }) as any;
+      closedFirst.close();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+      await expect((async () => { for await (const _ of closedFirst) { /* none */ } })()).rejects.toThrow("no sdk");
+      const iterated = failing({ prompt: "p", options: {} });
+      await expect((async () => { for await (const _ of iterated) { /* none */ } })()).rejects.toThrow("no sdk");
+    } finally { process.off("unhandledRejection", unhandled); }
+  });
+  it("close() before the load resolves closes the real query once it exists; close() after closes it directly", async () => {
+    let resolveLoad!: (q: (a: any) => any) => void;
+    const close1 = vi.fn();
+    const early = lazySdkQuery(() => new Promise((r) => { resolveLoad = r; }))({ prompt: "p", options: {} }) as any;
+    early.close();
+    resolveLoad(() => stream([], close1));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(close1).toHaveBeenCalledOnce();
+    const close2 = vi.fn();
+    const late = lazySdkQuery(async () => () => stream([7], close2))({ prompt: "p", options: {} }) as any;
+    for await (const _ of late) { /* drain */ }
+    late.close();
+    expect(close2).toHaveBeenCalledOnce();
   });
 });

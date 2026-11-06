@@ -35,7 +35,6 @@ import {
   type ConsolidateResponse,
   type ErrorCode,
   type GraduationResult,
-  type KbPipelineResponse,
   type LastPromote,
   type PromoteResponse,
   type WolfEvent,
@@ -831,15 +830,6 @@ export class WolfServer {
           throw new HttpError(f.code, f.message);
         }
       }
-      case "kbPipeline": {
-        this.checkWolf(params.name);
-        if (!this.opts.librarian) throw new HttpError("kb_unavailable", `wolf ${this.name} is not the librarian`);
-        const roots = this.requireKb();
-        // Loaded on first use: only the librarian ever gets here, and the pipeline reader pulls in the librarian package.
-        const { readPipeline } = await import("@wolfpack/kb/librarian");
-        const body: KbPipelineResponse = readPipeline(roots);
-        return this.json(res, 200, body);
-      }
       case "getKbGraph": {
         this.checkWolf(params.name);
         const roots = this.requireKb();
@@ -907,7 +897,7 @@ export class WolfServer {
       den: this.opts.den,
       extensionInstalled: this.opts.memoryExtension,
       running: this.opts.den ? memoryActionsFor(this.opts.den) !== undefined : false,
-      config: this.opts.memoryConfig ?? { sandbox: false, consolidation: { threshold: 20000, poolTarget: 10000, trigger: "hybrid" as const } },
+      config: this.opts.memoryConfig ?? { sandbox: false, consolidation: { threshold: 20000, poolTarget: 10000, trigger: "hybrid" as const, interval: "4h" } },
     };
   }
 

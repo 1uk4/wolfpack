@@ -160,7 +160,7 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: 
 	if (!ctx) return null;
 	const amber = pastStartAt(ctx);
 	return (
-		<div ref={rootRef} className="relative ml-auto shrink-0" data-testid="context-chip">
+		<div ref={rootRef} className="relative ml-auto shrink-0 max-md:min-w-0 max-md:shrink" data-testid="context-chip">
 			<button
 				type="button"
 				data-testid="context-chip-button"
@@ -170,9 +170,9 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: 
 				aria-haspopup="dialog"
 				title="Thread context"
 				onClick={() => setOpen((v) => !v)}
-				className={`flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-xs hover:bg-accent ${amber ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
+				className={`flex max-md:max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-xs hover:bg-accent ${amber ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
 			>
-				<span data-testid="context-label">{contextLabel(ctx)}</span>
+				<span data-testid="context-label" className="max-md:truncate">{contextLabel(ctx)}</span>
 				{compacting && (
 					<span data-testid="context-summarising" className="flex items-center gap-1">
 						{"· summarising…"}

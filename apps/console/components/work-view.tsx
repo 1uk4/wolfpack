@@ -10,32 +10,30 @@
  *
  * Data: the injected `WorkClient` (default: console → wolfd → the Work API), fetched when the view opens, on window
  * focus and on a light poll while open. The domain is remembered in localStorage and starts on wolfpack.
- * `WorkViewProvider` mounts the one overlay; the graph header's Work button and the sidebar's Work entry both open it.
+ * It is its own page (/work, app/work/page.tsx), full-bleed, with no graph behind it. A row click opens the item in the
+ * reader panel (work-reader.tsx) through `?item=<id>`; the list underneath stays mounted, so closing the reader
+ * returns to it with its scroll, filters and domain intact.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, Maximize2Icon, Minimize2Icon, SearchIcon } from "lucide-react";
-import { OverlayShell } from "@/components/overlay-shell";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/top-bar";
-import { WorkViewContext, useWorkView, type WorkSelection } from "./work-view-entry";
+import { useWorkReader } from "./work-reader";
 import {
 	DEFAULT_WORK_SORT,
-	WORK_COL_WIDTH_KEY,
-	ancestorKeys,
 	LANE_COLOR,
+	NOTE_H,
+	NO_GRADUATE,
 	WORK_ROW_H,
 	buildWorkTable,
-	clampPaneWidth,
 	groupConnectors,
 	laneKey,
 	lanePath,
 	laneState,
 	nextWorkSort,
-	parseWorkColWidth,
-	rowRouteState,
+	rowHeight,
+	rowTops,
 	type Chip,
-	type WorkRouteView,
 	type TableRow,
 	type WorkListItem,
 	type WorkSort,
@@ -43,12 +41,11 @@ import {
 } from "@/src/core";
 import { createWorkClient, type WorkClient, type WorkDomain } from "./work-client";
 import { createGraduateClient, type GraduateClient } from "./graduate-client";
-import { GraduateControl, GraduateToasts } from "./graduate-dialog";
+import { GraduateControl } from "./graduate-dialog";
 import { useGraduated } from "./graduation-signal";
 
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
 export const DEFAULT_WORK_DOMAIN = "wolfpack";
-export const WORK_EXPANDED_KEY = "wolfpack:work-view-expanded";
 export const WORK_POLL_MS = 30_000;
 
 function readDomain(): string {
@@ -57,77 +54,6 @@ function readDomain(): string {
 	} catch {
 		return DEFAULT_WORK_DOMAIN;
 	}
-}
-
-export function WorkViewProvider({ children, client, graduate, onSelect }: { children: ReactNode; client?: WorkClient; graduate?: GraduateClient; onSelect?: (id: string) => void }) {
-	const [isOpen, setOpen] = useState(false);
-	const [selection, setSelection] = useState<WorkSelection | null>(null);
-	const [routeView, setRouteView] = useState<WorkRouteView | null>(null);
-	const [colWidth, setColWidthState] = useState(() => {
-		try {
-			return parseWorkColWidth(localStorage.getItem(WORK_COL_WIDTH_KEY), window.innerWidth);
-		} catch {
-			return parseWorkColWidth(null);
-		}
-	});
-	const [expanded, setExpandedState] = useState(() => {
-		try {
-			return localStorage.getItem(WORK_EXPANDED_KEY) === "1";
-		} catch {
-			return false;
-		}
-	});
-	const [graphPaneOpen, setPaneOpen] = useState(false);
-	const setExpanded = useCallback((next: boolean) => {
-		setExpandedState(next);
-		try {
-			localStorage.setItem(WORK_EXPANDED_KEY, next ? "1" : "0");
-		} catch {
-			// storage blocked: the layout just isn't remembered
-		}
-	}, []);
-	const open = useCallback(() => setOpen(true), []);
-	const close = useCallback(() => {
-		setOpen(false);
-		setSelection(null);
-	}, []);
-	const onSelectRef = useRef(onSelect);
-	onSelectRef.current = onSelect;
-	const select = useCallback((id: string) => {
-		// Picking a row from the full-screen table shows it on the graph: back to the column (a persisted choice).
-		setExpanded(false);
-		setSelection((cur) => ({ id, seq: (cur?.seq ?? 0) + 1 }));
-		onSelectRef.current?.(id);
-	}, [setExpanded]);
-	const clearSelection = useCallback(() => setSelection(null), []);
-	// The graph republishes on every render of its selection; keep the old object when nothing changed.
-	const publishRoute = useCallback(
-		(view: WorkRouteView | null) => setRouteView((cur) => (JSON.stringify(cur) === JSON.stringify(view) ? cur : view)),
-		[],
-	);
-	const setColWidth = useCallback((w: number, persist = false) => {
-		const next = clampPaneWidth(w, typeof window === "undefined" ? undefined : window.innerWidth);
-		setColWidthState(next);
-		if (persist) {
-			try {
-				localStorage.setItem(WORK_COL_WIDTH_KEY, String(next));
-			} catch {
-				// storage blocked: the width just isn't remembered
-			}
-		}
-	}, []);
-	const api = useMemo(
-		() => ({ open, close, isOpen, selection: isOpen ? selection : null, select, clearSelection, expanded, setExpanded, graphPaneOpen, publishPane: setPaneOpen, routeView, publishRoute, colWidth, setColWidth }),
-		[open, close, isOpen, selection, select, clearSelection, expanded, setExpanded, graphPaneOpen, routeView, publishRoute, colWidth, setColWidth],
-	);
-	// The overlay is the LAST child: the TopBar's drag region must not be punched through by later no-drag elements.
-	return (
-		<WorkViewContext.Provider value={api}>
-			{children}
-			<GraduateToasts />
-			{isOpen && <WorkOverlay client={client} graduate={graduate} onClose={close} />}
-		</WorkViewContext.Provider>
-	);
 }
 
 // ---- Data ------------------------------------------------------------------
@@ -180,122 +106,142 @@ function ChipView({ chip, testid }: { chip: Chip; testid: string }) {
 	);
 }
 
-/** The row's title chip, with a "↖ title" note per dependency outside its parent. */
+/** The row's title chip (truncates before the stage column). */
 function RowTitle({ row }: { row: TableRow }) {
 	return (
-		<span className="flex min-w-0 items-center gap-2 text-[13px] leading-tight">
-			<span className="min-w-0 truncate">
-				<ChipView chip={row.self!} testid={`work-chip-${row.id}`} />
-			</span>
-			{row.notes.map((n) => (
-				<span key={n.id} data-testid={`work-note-${row.id}-${n.id}`} title={`Depends on ${n.title}`} className="max-w-48 shrink-0 truncate text-[11px] text-muted-foreground">
-					↖ {n.title}
-				</span>
-			))}
+		<span className="block min-w-0 truncate text-[13px] leading-tight">
+			<ChipView chip={row.self!} testid={`work-chip-${row.id}`} />
 		</span>
 	);
 }
 
+/** The row's own link line: a "↖ title" per dependency outside its parent; wraps nowhere, truncates when long. */
+function RowLinks({ row }: { row: TableRow }) {
+	return (
+		<div data-testid={`work-links-${row.key}`} style={{ height: NOTE_H }} className="flex min-w-0 items-center gap-x-2 overflow-hidden text-[11px] text-muted-foreground">
+			{row.notes.map((n) => (
+				<span key={n.id} data-testid={`work-note-${row.id}-${n.id}`} title={`Depends on ${n.title}`} className="min-w-0 max-w-48 shrink truncate">
+					↖ {n.title}
+				</span>
+			))}
+		</div>
+	);
+}
+
 const COLS = {
-	stage: "w-48 shrink-0",
-	progress: "w-28 shrink-0",
-	assignee: "w-24 shrink-0",
-	created: "w-24 shrink-0",
+	stage: "w-20 shrink-0 md:w-48",
+	progress: "w-28 shrink-0 max-md:hidden",
+	assignee: "w-24 shrink-0 max-md:hidden",
+	created: "w-24 shrink-0 max-md:hidden",
 };
-const INDENT_PX = [12, 40, 72] as const;
+const INDENT_PX = [8, 20, 32] as const;
 
 interface RowCtx {
 	expanded: ReadonlySet<string>;
 	onToggle: (key: string) => void;
 	onSelect: (id: string) => void;
-	/** The graph's selected route (split view), null in the full-screen table. */
-	view: WorkRouteView | null;
-	/** The split's narrow column: only Name and Stage (plus the step number). */
-	compact: boolean;
+	/** The item the reader shows (its row is marked). */
+	openId: string | null;
 	/** The group's gutter width (px), added to the indent of the rows below the group row. */
 	gutter: number;
 	/** The graduation seam: each feature row's control reads and drives its job through it. */
 	graduate: GraduateClient;
 }
 
-/** A row shows its children when it has some, is not a collapsed-route stand-in, and is open (by hand or by search). */
-function isOpenRow(row: TableRow, ctx: Pick<RowCtx, "expanded" | "view">): boolean {
-	const stood = row.id && ctx.view ? ctx.view.collapsed[row.id] : undefined;
-	return row.children.length > 0 && stood === undefined && (row.autoExpand || ctx.expanded.has(row.key));
+/** A row shows its children when it has some and is open (by hand or by search). */
+function isOpenRow(row: TableRow, ctx: Pick<RowCtx, "expanded">): boolean {
+	return row.children.length > 0 && (row.autoExpand || ctx.expanded.has(row.key));
 }
 
 function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
-	const { onToggle, onSelect, view, compact } = ctx;
-	const rr = rowRouteState(view, row.id);
-	// A collapsed done feature is one row standing in for N route tasks ("+N"); expanding it on the map opens it here too.
-	const stood = row.id && view ? view.collapsed[row.id] : undefined;
-	const hasKids = row.children.length > 0 && stood === undefined;
+	const { onToggle, onSelect } = ctx;
+	const hasKids = row.children.length > 0;
 	const open = isOpenRow(row, ctx);
-	const lit = rr.mode === "on";
+	// A tap on a row with children expands/collapses it (the chevron's job); a row without children opens the reader.
+	const activate = (): void => {
+		if (hasKids) onToggle(row.key);
+		else if (row.id) onSelect(row.id);
+	};
 	return (
 		<>
 			<div
 				data-testid={`work-row-${row.key}`}
 				data-kind={row.kind}
 				data-graduated={row.graduated || undefined}
-				data-route={rr.mode === "none" ? undefined : rr.mode}
-				data-step={rr.mode !== "none" && rr.step !== null ? rr.step : undefined}
-				data-selected={rr.selected || undefined}
-				data-cursor={view && rr.cursor ? true : undefined}
-				onClick={row.id ? () => onSelect(row.id) : undefined}
-				style={{ height: WORK_ROW_H, paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
-				className={`flex items-center gap-1 pr-3 ${row.graduated ? "opacity-50" : ""} ${rr.mode === "off" ? "opacity-35" : ""} ${lit ? "bg-emerald-500/10" : ""} ${view && rr.cursor ? "bg-accent ring-1 ring-inset ring-ring/60" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
+				data-selected={ctx.openId === row.id || undefined}
+				onClick={hasKids || row.id ? activate : undefined}
+				onKeyDown={(e) => {
+					if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+					e.preventDefault();
+					activate();
+				}}
+				tabIndex={hasKids || row.id ? 0 : undefined}
+				aria-expanded={hasKids ? open : undefined}
+				style={{ height: rowHeight(row), paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
+				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
-				{hasKids ? (
-					<button
-						type="button"
-						data-testid={`work-toggle-${row.key}`}
-						aria-expanded={open}
-						aria-label={`${open ? "Collapse" : "Expand"} ${row.title}`}
-						onClick={(e) => {
-							e.stopPropagation();
-							onToggle(row.key);
-						}}
-						className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
-					>
-						{open ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
-					</button>
-				) : (
-					<span className="size-3.5 shrink-0" />
-				)}
-				{view && (
-					<span
-						data-testid={`work-step-${row.key}`}
-						aria-label={rr.mode !== "none" && rr.step !== null ? `Step ${rr.step}${rr.parallel ? " (parallel)" : ""}` : undefined}
-						className={`w-5 shrink-0 text-center text-[11px] font-medium tabular-nums ${rr.mode === "on" ? "text-emerald-400" : "text-transparent"}`}
-					>
-						{rr.mode !== "none" && rr.step !== null ? rr.step : ""}
-					</span>
-				)}
-				<span className="min-w-0 flex-1">
-					{row.kind === "initiative" ? (
-						<span className={`truncate text-sm font-medium ${row.id ? "" : "text-muted-foreground"}`}>{row.title}</span>
+				<div style={{ height: WORK_ROW_H }} className="flex shrink-0 items-center gap-1">
+					{hasKids ? (
+						<button
+							type="button"
+							data-testid={`work-toggle-${row.key}`}
+							aria-expanded={open}
+							aria-label={`${open ? "Collapse" : "Expand"} ${row.title}`}
+							onClick={(e) => {
+								e.stopPropagation();
+								onToggle(row.key);
+							}}
+							className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+						>
+							{open ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+						</button>
 					) : (
-						<RowTitle row={row} />
+						<span className="size-3.5 shrink-0" />
 					)}
-				</span>
-				<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
-				{stood !== undefined && (
-					<span data-testid={`work-collapsed-${row.key}`} title={`${stood} shipped tasks, collapsed on the route`} className="shrink-0 rounded border border-border/70 px-1 text-[11px] tabular-nums text-muted-foreground">
-						+{stood}
+					<span className="min-w-0 flex-1">
+						{row.kind === "initiative" ? (
+							<span className={`block truncate text-sm font-medium ${row.id ? "" : "text-muted-foreground"}`}>{row.title}</span>
+						) : (
+							<RowTitle row={row} />
+						)}
 					</span>
-				)}
-				<span data-testid={`work-stage-${row.key}`} className={`${compact ? "w-32 shrink-0" : COLS.stage} truncate text-xs text-muted-foreground`}>
-					{row.stageLabel}
-				</span>
-				{!compact && (
-					<>
-						<span data-testid={`work-progress-${row.key}`} className={`${COLS.progress} text-xs tabular-nums text-muted-foreground`}>
-							{row.progress?.label ?? ""}
-						</span>
-						<span className={`${COLS.assignee} truncate text-xs text-muted-foreground`}>{row.assignee}</span>
-						<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
-					</>
+					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
+					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
+					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					</span>
+					{row.id && (
+						<button
+							type="button"
+							data-testid={`work-open-${row.key}`}
+							aria-label={`Open ${row.title}`}
+							title="Open"
+							onClick={(e) => {
+								e.stopPropagation();
+								onSelect(row.id);
+							}}
+							className="flex size-6 shrink-0 items-center justify-center gap-1 rounded-md border border-border/70 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:w-auto md:px-1.5"
+						>
+							<PanelRightOpenIcon className="size-3.5" />
+							<span className="max-md:hidden">Open</span>
+						</button>
+					)}
+					<span
+						data-testid={`work-stage-${row.key}`}
+						title={row.graduate.show && !row.graduate.ready ? `${row.stageLabel} (not ready to graduate: ${row.graduate.reason})` : row.stageLabel}
+						className={`${COLS.stage} truncate text-xs text-muted-foreground`}
+					>
+						{row.stageLabel}
+					</span>
+					<span data-testid={`work-progress-${row.key}`} className={`${COLS.progress} text-xs tabular-nums text-muted-foreground`}>
+						{row.progress?.label ?? ""}
+					</span>
+					<span className={`${COLS.assignee} truncate text-xs text-muted-foreground`}>{row.assignee}</span>
+					<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
+				</div>
+				{row.notes.length > 0 && (
+					<div className="min-w-0 pl-[1.125rem]">
+						<RowLinks row={row} />
+					</div>
 				)}
 			</div>
 			{open && row.children.map((c) => <RowView key={c.key} row={c} ctx={ctx} />)}
@@ -306,7 +252,8 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 /** One group: its rows plus the gutter SVG with the group's dependency lanes (none while the group is collapsed). */
 function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 	const gc = groupConnectors(group, (r) => isOpenRow(r, ctx));
-	const states = gc.edges.map((e) => laneState(e, ctx.view));
+	const tops = rowTops(gc.rows);
+	const states = gc.edges.map((e) => laneState(e, null));
 	// Muted lanes first, lit ones last, so a lit lane is never painted over by a shared trunk.
 	const order = gc.edges.map((_, i) => i).sort((a, b) => ["done", "plain", "lit"].indexOf(states[a]!) - ["done", "plain", "lit"].indexOf(states[b]!));
 	return (
@@ -316,14 +263,14 @@ function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 					data-testid={`work-lanes-${group.key}`}
 					data-lanes={gc.lanes}
 					width={gc.width}
-					height={gc.rows.length * WORK_ROW_H}
+					height={tops[tops.length - 1]! + rowHeight(gc.rows[gc.rows.length - 1]!)}
 					aria-hidden="true"
 					className="pointer-events-none absolute left-0 top-0"
 				>
 					{order.map((i) => {
 						const e = gc.edges[i]!;
 						const st = states[i]!;
-						const p = lanePath(e, gc.lanes);
+						const p = lanePath(e, gc.lanes, tops);
 						const color = LANE_COLOR[st];
 						return (
 							<g key={laneKey(e)} data-testid={`work-lane-${e.from}-${e.to}`} data-lane={e.lane} data-lane-state={st} stroke={color} fill="none" strokeWidth={st === "done" ? 1 : 1.5}>
@@ -347,11 +294,8 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 	{ col: "created", label: "Created", cls: `${COLS.created} justify-end` },
 ];
 
-export function WorkOverlay({ client: injected, graduate: injectedGraduate, onClose }: { client?: WorkClient; graduate?: GraduateClient; onClose: () => void }) {
-	const { select, routeView, colWidth, setColWidth, expanded: full, setExpanded: setFull, graphPaneOpen } = useWorkView();
-	// A column over the graph unless expanded. In the column the graph's selection is what's lit: the table mirrors the route the graph computed.
-	const split = !full;
-	const view = split ? routeView : null;
+export function WorkList({ client: injected, graduate: injectedGraduate }: { client?: WorkClient; graduate?: GraduateClient }) {
+	const { open: openItem, itemId } = useWorkReader();
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
 	const [domains, setDomains] = useState<WorkDomain[]>([]);
@@ -391,64 +335,22 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 
 	const items = load.state === "ready" ? load.items : null;
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const tableRef = useRef(table);
-	tableRef.current = table;
-	// Open the groups holding lit rows, once per route (a manual collapse stays collapsed until the route changes).
-	const routeKey = view ? JSON.stringify(Object.keys(view.steps).sort()) + view.selected : "";
-	useEffect(() => {
-		if (!view || !tableRef.current) return;
-		const ids = new Set([...Object.keys(view.steps), view.selected]);
-		const keys = ancestorKeys(tableRef.current.groups, ids);
-		setExpanded((prev) => (keys.every((k) => prev.has(k)) ? prev : new Set([...prev, ...keys])));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [routeKey, items === null]);
-	// The pane's cursor row stays in sight as ←/→ walk the route.
-	const cursorId = view ? (view.cursor ?? view.selected) : null;
-	useEffect(() => {
-		if (!cursorId) return;
-		const el = document.querySelector(`[data-testid="work-row-${cursorId}"]`) as (HTMLElement & { scrollIntoView?: (o?: object) => void }) | null;
-		el?.scrollIntoView?.({ block: "nearest" });
-	}, [cursorId]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: select, view, compact: split, gutter: 0, graduate: graduateClient };
-	const startResize = (e: React.PointerEvent) => {
-		e.preventDefault();
-		const startX = e.clientX;
-		const startW = colWidth;
-		let latest = startW;
-		const move = (ev: Event) => {
-			latest = clampPaneWidth(startW + ((ev as PointerEvent).clientX - startX), window.innerWidth);
-			setColWidth(latest);
-		};
-		const up = () => {
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", up);
-			window.removeEventListener("pointercancel", up);
-			setColWidth(latest, true);
-		};
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", up);
-		window.addEventListener("pointercancel", up);
-	};
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 
+	// A direct child of AppShell's <main>: on phones globals.css sizes `main > .h-dvh` to main, under the shell's safe-area inset.
 	return (
-		<OverlayShell label="Work" testId="work-view" closeTestId="work-close" onClose={onClose} yieldEsc={graphPaneOpen} bleed column={split ? colWidth : undefined}>
-			{(close) => (
-				<div data-split={split || undefined} className="flex h-full min-h-0 flex-1 flex-col">
-					{split && (
-						<div
-							role="separator"
-							aria-orientation="vertical"
-							aria-label="Resize Work column"
-							data-testid="work-resize"
-							onPointerDown={startResize}
-							className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none transition-colors hover:bg-ring/40"
-						/>
-					)}
+		<div data-testid="work-view" className="flex h-dvh min-h-0 flex-col bg-background">
+			<div className="flex h-full min-h-0 flex-1 flex-col">
 					<TopBar>
-						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-							{table ? `${table.count} ${table.count === 1 ? "item" : "items"}` : ""}
+						<span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+							{table ? (
+								<>
+									{table.count}
+									<span className="max-md:hidden"> {table.count === 1 ? "item" : "items"}</span>
+								</>
+							) : null}
 						</span>
 						<select
 							data-testid="work-domain"
@@ -467,7 +369,7 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 							<input type="checkbox" data-testid="work-show-graduated" checked={showGraduated} onChange={(e) => setShowGraduated(e.target.checked)} className="size-3.5 accent-primary" />
 							Graduated
 						</label>
-						<div className="relative shrink-0">
+						<div className="relative min-w-0 flex-1 md:flex-none">
 							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 							<input
 								data-testid="work-search"
@@ -476,32 +378,20 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 								placeholder="Search work…"
 								aria-label="Search work"
 								spellCheck={false}
-								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring ${split ? "w-32" : "w-56"}`}
+								className={`h-8 rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring w-full min-w-0 md:w-56`}
 							/>
 						</div>
-						<Button
-							size="icon-xs"
-							variant="ghost"
-							className="ml-auto shrink-0"
-							data-testid="work-layout-toggle"
-							aria-label={split ? "Expand Work list to full screen" : "Collapse Work list to a column"}
-							aria-pressed={full}
-							onClick={() => setFull(split)}
-						>
-							{split ? <Maximize2Icon /> : <Minimize2Icon />}
-						</Button>
-						{close}
 					</TopBar>
 					<div className="min-h-0 flex-1 overflow-y-auto">
 						<div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background/80 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
-							{(split ? HEADERS.filter((h) => h.col === "name" || h.col === "stage") : HEADERS).map((h) => (
+							{HEADERS.map((h) => (
 								<button
 									key={h.col}
 									type="button"
 									data-testid={`work-sort-${h.col}`}
 									aria-sort={sort.col === h.col ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
 									onClick={() => setSort((cur) => nextWorkSort(cur, h.col))}
-									className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${split ? (h.col === "name" ? "flex-1 pl-[2.625rem]" : "w-32 shrink-0") : h.cls}`}
+									className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${h.cls}`}
 								>
 									{h.label} {chevron(h.col)}
 								</button>
@@ -527,7 +417,6 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 						))}
 					</div>
 				</div>
-			)}
-		</OverlayShell>
+		</div>
 	);
 }

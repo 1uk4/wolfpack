@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
-import { bearerOf, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
+import { bearerOf, buildHubCookie, clearHubCookies, cookieAuthAllowed, cookieTokenOf, HUB_COOKIE, HUB_COOKIE_HOST, syncHubCookie, withCookieBearer, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
 import { createMemoryApi } from "../src/server/memory-api.ts";
 import { createConsoleClient, makeRequestToken, nextRequestToken } from "../src/server/console-client.ts";
 
@@ -100,12 +100,12 @@ describe("server: forwarded token", () => {
 			hub.close();
 		}
 	});
-	it("with no request scope at all, the env token is used", async () => {
+	it("with no request scope at all there is NO env fallback: 401, nothing reaches the hub", async () => {
 		const { hub, seen, url } = await startHub();
 		try {
 			const c = createConsoleClient({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "env" }, async () => undefined);
-			await c.listWork!("w", { domain: "d" });
-			assert.deepEqual(seen, ["Bearer env"]);
+			await assert.rejects(c.listWork!("w", { domain: "d" }), (e: Error & { hubAuth?: boolean }) => e.hubAuth === true);
+			assert.deepEqual(seen, []);
 		} finally {
 			hub.close();
 		}
@@ -161,5 +161,99 @@ describe("request token fails closed", () => {
 	});
 	it("real next/headers outside a request is undefined", async () => {
 		assert.equal(await nextRequestToken(), undefined);
+	});
+});
+
+// ---- cookie mirror: read-only navigations only (see the COOKIE MIRROR note in src/core/hub-auth.ts) ----
+const CK = `${HUB_COOKIE}=tok-123`;
+/** What the server sees for a request: the proxy's header rewrite, then makeRequestToken (bearer only). */
+const serverToken = async (method: string, h: Record<string, string>, https = false) => {
+	const headers = new Headers(h);
+	return makeRequestToken(async () => withCookieBearer(method, headers, https) ?? headers)();
+};
+
+describe("cookie auth is read-only", () => {
+	it("a POST (or any non-GET/HEAD) with only the cookie is unauthenticated (-> 401)", async () => {
+		for (const m of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(await serverToken(m, { cookie: CK }), null, m);
+	});
+	it("a POST with the bearer works, and the cookie is ignored there", async () => {
+		assert.equal(await serverToken("POST", { authorization: "Bearer abc", cookie: CK }), "abc");
+	});
+	it("a GET/HEAD with only the cookie works", async () => {
+		assert.equal(await serverToken("GET", { cookie: CK }), "tok-123");
+		assert.equal(await serverToken("HEAD", { cookie: CK }), "tok-123");
+	});
+	it("a cross-site GET with only the cookie is unauthenticated, unless it is a top-level navigation", async () => {
+		assert.equal(await serverToken("GET", { cookie: CK, "sec-fetch-site": "cross-site" }), null);
+		assert.equal(await serverToken("GET", { cookie: CK, "sec-fetch-site": "same-site" }), null);
+		assert.equal(await serverToken("GET", { cookie: CK, "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors" }), null);
+		assert.equal(await serverToken("GET", { cookie: CK, "sec-fetch-site": "same-origin" }), "tok-123");
+		assert.equal(await serverToken("GET", { cookie: CK, "sec-fetch-site": "none" }), "tok-123");
+		assert.equal(await serverToken("GET", { cookie: CK, "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" }), "tok-123");
+		assert.equal(cookieAuthAllowed("GET", new Headers({ "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" })), false);
+	});
+	it("a bad or malformed bearer does not fall back to the cookie", async () => {
+		assert.equal(await serverToken("GET", { authorization: "Bearer", cookie: CK }), null);
+		assert.equal(await serverToken("GET", { authorization: "Basic abc", cookie: CK }), null);
+		assert.equal(await serverToken("GET", { authorization: "Bearer wrong", cookie: CK }), "wrong");
+	});
+	it("https reads only the __Host- cookie; http only the plain one", async () => {
+		assert.equal(await serverToken("GET", { cookie: CK }, true), null);
+		assert.equal(await serverToken("GET", { cookie: `${HUB_COOKIE_HOST}=tok-9` }, true), "tok-9");
+		assert.equal(await serverToken("GET", { cookie: `${HUB_COOKIE_HOST}=tok-9` }, false), null);
+	});
+	it("a duplicated cookie is rejected, never first-wins", () => {
+		assert.equal(cookieTokenOf(`${HUB_COOKIE}=a1; x=1; ${HUB_COOKIE}=b2`, false), undefined);
+		assert.equal(cookieTokenOf(`${HUB_COOKIE}=a1`, false), "a1");
+	});
+	it("an invalid cookie value is no token (401), never a throw", () => {
+		for (const v of ["%E0%A4%A", "a b", "%20", "", "x".repeat(600), "a%00b", "<script>"]) assert.equal(cookieTokenOf(`${HUB_COOKIE}=${v}`, false), undefined, v);
+	});
+});
+
+describe("cookie attributes", () => {
+	it("http: plain name, no Secure; https: __Host- name, Secure, Path=/, no Domain; SameSite=Lax and 30-day Max-Age", () => {
+		const http = buildHubCookie("tok-1", false);
+		assert.match(http, /^wolfpack_hub_token=tok-1; Path=\/; SameSite=Lax; Max-Age=2592000$/);
+		const https = buildHubCookie("tok-1", true);
+		assert.match(https, /^__Host-wolfpack_hub_token=tok-1; Path=\/; SameSite=Lax; Max-Age=2592000; Secure$/);
+		assert.doesNotMatch(https, /Domain/i);
+	});
+	it("clear is Max-Age=0 (on https also the legacy plain name)", () => {
+		assert.deepEqual(clearHubCookies(false).map((c) => /Max-Age=0/.test(c)), [true]);
+		const c = clearHubCookies(true);
+		assert.equal(c.length, 2);
+		assert.ok(c.every((x) => /Max-Age=0/.test(x)));
+		assert.ok(c[0]!.startsWith("__Host-") && c[0]!.includes("Secure"));
+	});
+	it("encoding round-trips through the Cookie header", () => {
+		for (const t of ["abc", "a.b-c_d~e+f/g=", "tok-0123456789abcdef"]) {
+			const set = buildHubCookie(t, false).split(";")[0]!;
+			assert.equal(cookieTokenOf(`z=1; ${set}`, false), t);
+		}
+	});
+	it("syncHubCookie writes through document.cookie: re-mirrors a stored token, clears when none", () => {
+		const g = globalThis as unknown as { document?: { cookie: string }; location?: { protocol: string } };
+		const writes: string[] = [];
+		g.document = { set cookie(v: string) { writes.push(v); } } as unknown as { cookie: string };
+		try {
+			g.location = { protocol: "https:" };
+			const st = mem();
+			saveHubToken(st, "tok-7");
+			syncHubCookie(st);
+			assert.equal(writes.length, 2);
+			assert.ok(writes.every((w) => w.startsWith("__Host-wolfpack_hub_token=tok-7") && w.endsWith("; Secure")));
+			writes.length = 0;
+			clearHubToken(st);
+			assert.ok(writes.every((w) => /Max-Age=0/.test(w)) && writes.length === 2);
+			writes.length = 0;
+			g.location = { protocol: "http:" };
+			syncHubCookie(st); // nothing stored -> clear
+			assert.equal(writes.length, 1);
+			assert.match(writes[0]!, /^wolfpack_hub_token=; .*Max-Age=0$/);
+		} finally {
+			delete g.document;
+			delete g.location;
+		}
 	});
 });

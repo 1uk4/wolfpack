@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 /** A shell prefix that names `dir` without the bash guard seeing the whole path (the guard is best-effort: it reads command text). */
-const viaVar = (dir: string) => `M=${dir.slice(0, 6)}; M="$M${dir.slice(6)}"`;
+const viaVar = (dir: string) => `M=${dir.slice(0, 6)}; M="\${M}${dir.slice(6)}"`  // (${M}: on Linux the rest starts with a word char, so a bare $M would read as another variable);
 
 const textOf = (c: unknown): string => (typeof c === "string" ? c : (c as Array<{ type: string; text?: string }>).map((b) => (b.type === "text" ? (b.text ?? "") : "")).join(""));
 

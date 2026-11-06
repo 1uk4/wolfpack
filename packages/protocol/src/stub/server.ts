@@ -350,9 +350,6 @@ export class StubServer {
         if (m.name === "confirmGraduation" && !GraduationConfirmBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {token}");
         // The stub has no Work API: it cannot graduate anything.
         throw new HttpError("memory_unavailable", "no Work API configured on this wolf");
-      case "kbPipeline":
-        this.wolf(params.name);
-        throw new HttpError("kb_unavailable", "this wolf is not the librarian");
       case "getKbGraph":
       case "getKbEntry":
         this.wolf(params.name);

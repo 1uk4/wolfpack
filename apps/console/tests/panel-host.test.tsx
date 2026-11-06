@@ -32,7 +32,7 @@ let boundMode = false;
 const workRecord = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "", record: "", dependsOn: [], children: [] };
 const boundStatus = { state: "on", bound: { workId: "work-1", title: "Item" }, pool: { count: 1, tokens: 10, consolidateAtTokens: 100, poolTarget: 50, trigger: "tokens" } };
 
-const { PanelHostProvider, RightPanelHost, usePanelHost, usePanelState, PANELS } = await import("../components/panel-host.tsx");
+const { PanelFloatingHandle, PanelHostProvider, RightPanelHost, usePanelHost, usePanelState, PANELS } = await import("../components/panel-host.tsx");
 const { MemoryPanel } = await import("../components/memory-panel.tsx");
 const { parseSelections, resolveSelected, withSelection, RIGHT_PANEL_KEY } = await import("../src/core/index.ts");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
@@ -81,6 +81,10 @@ async function mount(panels: readonly PanelDef[], threadId = "t1", actionsOnly =
 			<MemoryEventsProvider connect={quietSource}>
 				<PanelHostProvider wolf="w" threadId={threadId} panels={panels}>
 					{actionsOnly ? <ActionsOnly /> : <Probe />}
+					<div data-testid="chat-area" className="relative">
+						<PanelFloatingHandle />
+						<div data-testid="scroller" />
+					</div>
 					<RightPanelHost />
 				</PanelHostProvider>
 			</MemoryEventsProvider>,
@@ -129,6 +133,20 @@ describe("panel host", () => {
 		// the deselected panel stays mounted, hidden
 		assert.equal(q('[data-testid="body-memory"]')!.parentElement!.hasAttribute("hidden"), true);
 		assert.equal(q('[data-testid="panel-tab-a"]')!.getAttribute("aria-selected"), "true");
+	});
+
+	it("the closed-panel handle floats in the chat area (not the scroller) and reopens the panel", async () => {
+		await mount([note("memory")]);
+		assert.equal(q('[data-testid="panel-handle"]'), null, "open: no handle");
+		await click(q('[aria-label="Collapse side panel"]')!);
+		const h = q('[data-testid="panel-handle"]')!;
+		assert.equal(h.parentElement, q('[data-testid="chat-area"]'));
+		assert.ok(!q('[data-testid="scroller"]')!.contains(h));
+		assert.ok(/\babsolute\b/.test(h.className) && /\btop-2\b/.test(h.className) && /\bright-2\b/.test(h.className) && /\bsize-11\b/.test(h.className));
+		assert.equal(q('[data-testid="panel-host"]')!.className, "hidden");
+		await click(h);
+		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-open"), "true");
+		assert.equal(q('[data-testid="panel-handle"]'), null);
 	});
 
 	it("openPanel selects the panel with its props and opens a collapsed host", async () => {

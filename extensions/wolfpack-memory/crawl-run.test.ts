@@ -79,7 +79,10 @@ function setup(opts: { cards?: boolean; opsRoot?: string | null; env?: Record<st
       };
     },
   };
-  const env: NodeJS.ProcessEnv = { WOLFPACK_CRAWL_HOME: crawlHome, KB_BASE: "", KB_OPS: ops ?? "", ...opts.env };
+  // a declared-domain source: with a release target and no readable domains the service fails closed
+  const kbBase = tmp("kbbase");
+  writeFileSync(join(kbBase, "domains.yaml"), "domains:\n  wolfpack: {}\n");
+  const env: NodeJS.ProcessEnv = { WOLFPACK_CRAWL_HOME: crawlHome, KB_BASE: kbBase, KB_OPS: ops ?? "", ...opts.env };
   const ext = createCrawlExtension({ runner }, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env, ...(opts.cards === false ? {} : { capabilities: { askCards: true } }) } as never);
   const cardLog: FakeCard[] = [];
   const conv = fakeConversation(cardLog);
@@ -119,8 +122,13 @@ beforeEach(() => {
   // a developer's KB env must not leak in
   vi.stubEnv("KB_BASE", "");
   vi.stubEnv("KB_OPS", "");
+  // a hub target must never reach the network: the registry lists the test domain; the receipts / check routes do not exist yet (404)
+  vi.stubGlobal("fetch", async (u: string) => (new URL(u).pathname.endsWith("/v1/registry/domains") ? Response.json({ domains: [{ name: "wolfpack" }] }) : Response.json({}, { status: 404 })));
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 describe("crawl_run wizard card", () => {
   it("no outstanding run: one concurrency question (a plain card, no steps), skipped when given", async () => {
@@ -279,7 +287,7 @@ describe("crawl_release", () => {
     const t2 = setup({ opsRoot: null });
     const p2 = await t2.plan();
     const d2 = complete(t2.crawlHome, p2, "run-y");
-    expect((await t2.call("crawl_release", { runDir: d2 })).content[0].text).toContain("not configured");
+    expect((await t2.call("crawl_release", { runDir: d2 })).content[0].text).toContain("No release target is configured");
     expect(t.calls.emit.every((e) => e.dryRun)).toBe(true);
   });
 
@@ -347,6 +355,43 @@ describe("crawl_release", () => {
     const after = await t.call("crawl_release", { runDir: dir });
     expect(after.card).toBeDefined();
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(1);
+  });
+
+  it("hub target: the card says the hub check is unavailable (hubState unknown), never shows credentials/token, and a yes releases once through the hub path", async () => {
+    const t = setup({ opsRoot: null, env: { WOLFPACK_HUB_URL: "https://user:secret@hub.example", WOLFPACK_HUB_TOKEN: "tok-secret-1" } });
+    const dir = complete(t.crawlHome, await t.plan(), "run-h");
+    const first = await t.call("crawl_release", { runDir: dir });
+    const desc = first.card!.fields[0].description as string;
+    expect(desc).toContain('hub https://hub.example as wolf "w"');
+    expect(desc).toContain("Hub check unavailable");
+    expect(JSON.stringify(first)).not.toMatch(/secret|tok-secret|user:/);
+    const f = t.cardLog.filter((c) => c.tool === "crawl_release").at(-1)!;
+    f.status = "answered";
+    f.answers = { confirm: { value: true } };
+    const done = await t.call("crawl_release", { runDir: dir });
+    expect(done.content[0].text).toContain("Released crawl run-h");
+    expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(1);
+  });
+
+  it("refuses to preview or release a run that is running, interrupted, failed or cancelled (and the picker leaves it out)", async () => {
+    const t = setup();
+    const planPath = await t.plan();
+    const good = complete(t.crawlHome, planPath, "run-ok");
+    const bad = complete(t.crawlHome, planPath, "run-bad");
+    const rec = (state: string, pid = 424242) => JSON.stringify({ version: 1, state, pid, host: "elsewhere", boot: "x", runDir: bad, planFile: planPath, source: "s", domain: "wolfpack", startedAt: 1, concurrency: 5, resumed: false, progress: { total: 0, rows: [], journey: "pending", startedAt: 1 } });
+    for (const [state, text] of [["running", /interrupted/], ["failed", /failed/], ["cancelled", /cancelled/], ["gate-failed", /gate/]] as const) {
+      writeFileSync(join(bad, "run.json"), rec(state));
+      const r = await t.call("crawl_release", { runDir: bad });
+      expect(r.isError, state).toBe(true);
+      expect(r.card).toBeUndefined();
+      expect(r.content[0].text.toLowerCase()).toMatch(text);
+    }
+    // the picker offers only the releasable crawl: with one left it goes straight to the preview of that one
+    const picked = await t.call("crawl_release");
+    expect(picked.card?.fields[0].label).toContain("run-ok");
+    expect(picked.card?.fields[0].label).not.toContain("run-bad");
+    expect(good).toBeTruthy();
+    expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
   });
 
   it("without cards, or in a task-owned conversation, it NEVER emits: preview only, confirm is ignored", async () => {
@@ -422,6 +467,6 @@ describe("teardown and start races", () => {
     const t = setup();
     const planPath = await t.plan();
     await t.call("crawl_run", { planPath, concurrency: 5 });
-    expect(t.calls.run[0].opts.kbBase).toBe("");
+    expect(t.calls.run[0].opts.kbBase).not.toBe("/daemon/kb"); // the wolf's own env, never the daemon's
   });
 });

@@ -54,7 +54,7 @@ describe("sweep onEvent", () => {
     await run();
     expect(events).toEqual([
       { type: "started", pending: 2 },
-      { type: "item", from: "w1", denTopicId: "alpha", outcome: "create", entryId: expect.stringMatching(/^kb-wp-/) },
+      { type: "item", from: "w1", denTopicId: "alpha", outcome: "create", entryId: expect.stringMatching(/^kb-wp-/), decision: expect.objectContaining({ outcome: "create" }) },
     ]);
   });
 
@@ -67,7 +67,7 @@ describe("sweep onEvent", () => {
     await run({ [created.entryId!]: 0.9 });
     expect(events).toEqual([
       { type: "started", pending: 1 },
-      { type: "item", from: "w1", denTopicId: "alpha", outcome: "merge", entryId: created.entryId },
+      { type: "item", from: "w1", denTopicId: "alpha", outcome: "merge", entryId: created.entryId, decision: expect.objectContaining({ outcome: "merge", entryId: created.entryId }) },
     ]);
   });
 
@@ -77,7 +77,7 @@ describe("sweep onEvent", () => {
     await run({ "kb-wp-AAAAAAA": 0.97 });
     expect(events).toEqual([
       { type: "started", pending: 1 },
-      { type: "item", from: "w1", denTopicId: "old", outcome: "reject" },
+      { type: "item", from: "w1", denTopicId: "old", outcome: "reject", decision: expect.objectContaining({ outcome: "reject" }) },
     ]);
   });
 
@@ -86,7 +86,7 @@ describe("sweep onEvent", () => {
     await run();
     expect(events).toEqual([
       { type: "started", pending: 1 },
-      { type: "item", from: "w1", denTopicId: "nodomain", outcome: "parked" },
+      { type: "item", from: "w1", denTopicId: "nodomain", outcome: "parked", decision: expect.objectContaining({ outcome: "parked", reason: "unclassified: no domain" }) },
     ]);
   });
 

@@ -14,10 +14,13 @@ import type { AddressInfo } from "node:net";
 import {
   CreateWorkRequestSchema,
   PairRequestSchema,
+  MintPairingCodeRequestSchema,
   PatchWorkBatchSchema,
   PatchWorkOpSchema,
   KbCommitRequestSchema,
   KbManifestDiffRequestSchema,
+  ContributionCheckBodySchema,
+  KbMatchBodySchema,
   KB_COMMIT_BODY_LIMIT,
   type KbCommitRequest,
   type KbCommitResponse,
@@ -29,11 +32,14 @@ import {
   type ErrorCode,
   type ErrorEnvelope,
 } from "@wolfpack/protocol";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
+import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
+import { createCurator, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
+import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
   applyOps,
@@ -48,6 +54,7 @@ import {
   parseWolfId,
   stageRoot,
   sweepStageDirs,
+  sweepProbeFiles,
   type WorkAppendedListener,
 } from "./work-writes.js";
 import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
@@ -55,12 +62,14 @@ import { createEventBus } from "./events.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
+import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
 import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
 import { createRelay, type Relay } from "./relay.js";
-import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
+import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
+import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
 type RegRoute = { c: Collection; op: "list" | "get" | "create" | "update" | "delete" | "retire" };
@@ -124,6 +133,14 @@ export interface HubOptions {
   inboxRoot?: string;
   /** Librarian receipts root the hub watches (`<root>/<wolf>/*.md`). Default `<dataDir>/kb/ops/receipts`. Set by the `hubd` CLI from env HUBD_RECEIPTS_ROOT (no flag). */
   receiptsRoot?: string;
+  /**
+   * The hub curator (KB sweep in hubd, see curator.ts). Off unless `enabled`; the hubd CLI sets it from env HUBD_CURATOR,
+   * HUBD_CURATOR_POLL_MS, HUBD_CURATOR_MODELS. Refuses to start while a wolf-side sweep holds the lease or when inboxRoot is not
+   * the hub's own contributions lane.
+   */
+  curator?: CuratorOptions;
+  /** Embedding service for POST /v1/kb/match (default from env HUBD_OLLAMA_URL / HUBD_OLLAMA_MODEL; no URL = text matching only). */
+  ollama?: OllamaConfig;
   /** Receipts lane poll, ms (default 3000; 0 = off). */
   receiptPollMs?: number;
   /** Resend an unacknowledged receipt after this long, ms (default 10000). */
@@ -147,6 +164,8 @@ export interface HubServer {
    * Same validation, atomicity and kb.changed emission as POST /v1/kb/commits. A `wolf` actor rejects `forbidden`.
    */
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
+  /** Run one curator tick now (undefined when the curator is off or a tick is already running). */
+  runCuratorOnce(): Promise<CuratorRun | undefined>;
   /**
    * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated.
    */
@@ -171,6 +190,7 @@ const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const PAIR_FAILS_PER_MIN = 10;
+const DEVICE_MUTATIONS_PER_MIN = 10;
 const PAIR_LIMITER_MAX_KEYS = 10_000;
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
@@ -267,6 +287,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
+  // The write probe never climbs above <kb>/domains, so a fresh hub needs it to exist. Best effort (a read-only store already has it).
+  try { mkdirSync(`${roots.kbBase}/domains`, { recursive: true }); } catch { /* read-only: nothing to create */ }
+  { const n = sweepProbeFiles(roots); if (n > 0) console.error(`hubd: removed ${n} stale .probe-* file(s) from the work dirs`); } // stale .probe-* files of a crashed write probe
   sweepStageDirs(stageRoot(roots)); // scratch dirs orphaned by a crashed hubd (hub-owned <dataDir>/tmp, own prefix, dead pid)
   const revisions = createKbRevisions({
     dataDir: opts.dataDir,
@@ -279,6 +302,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     onRevision: (d, rev, epoch) => linkRef?.pushKbChanged(d, rev, epoch),
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
+  let curator: Curator | undefined;
+  let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({
     roots,
@@ -346,6 +371,15 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let link!: Link;
   let linkContrib!: LinkContributions;
   const inboxRoot = opts.inboxRoot ?? contributionsRoot(opts.dataDir);
+  /** A wolf's subscribed domains from the registry (undefined when unknown), for the contribution domain_hint check. */
+  const domainsOf = (wolf: string): string[] | undefined => {
+    try {
+      const w = registry.get("wolves", wolf) as { domains?: string[] };
+      return Array.isArray(w.domains) ? w.domains : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const receiptsRoot = opts.receiptsRoot ?? join(roots.opsRoot, "receipts");
   let relay!: Relay;
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
@@ -448,6 +482,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       }
     };
     linkContrib = createLinkContributions({
+      domainsOf,
       dataDir: opts.dataDir,
       inboxRoot,
       receiptsRoot,
@@ -517,6 +552,31 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return w;
     }
 
+    /** The wolf a receipts/check request is about: query `wolf`, else (worker token) the host's only active wolf; an operator must name it. */
+    function receiptWolf(req: IncomingMessage, url: URL): string {
+      const named = url.searchParams.get("wolf") ?? undefined;
+      const actor = writeActor(req);
+      if (TOKEN_INFO.get(actor)?.hostId) return wolfActorFor(actor, named).id; // worker: only an active wolf of its host
+      if (actor.kind === "wolf") {
+        if (named !== undefined && named !== actor.id) throw new HubError("forbidden", "a wolf may only read its own contributions");
+        return actor.id;
+      }
+      if (named === undefined) throw new HubError("invalid_request", "name the wolf (query wolf=<name>)");
+      if (!isSafeSegment(named) || !/^[a-z0-9][a-z0-9._-]*$/.test(named)) throw new HubError("invalid_request", "bad wolf name");
+      return named;
+    }
+
+    /** The KB domains `id` may read: undefined = all (console/operator/browser identities); a worker token: the domains its host's active wolves subscribe to. */
+    function readableDomains(id: AuthIdentity): Set<string> | undefined {
+      if (id.kind !== "worker") return undefined;
+      const out = new Set<string>();
+      for (const w of registry.list("wolves") as { host?: string; domains?: string[]; status?: string }[]) {
+        if (id.hostId !== undefined && w.host === id.hostId && w.status !== "retired") for (const d of w.domains ?? []) out.add(d);
+      }
+      return out;
+    }
+    const kbMatchCache = createEmbeddingCache();
+
     /** KB sync reads: a worker token sees only the domains its host's wolves subscribe to; console/browser tokens see all. */
     function requireKbDomain(id: AuthIdentity | undefined, domain: string): void {
       if (!id || id.kind !== "worker") return;
@@ -525,9 +585,61 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!allowed) throw new HubError("forbidden", `this worker is not subscribed to KB domain ${domain.slice(0, 60)}`);
     }
 
+    /** Domains this caller may read: every domain of the hub's KB copy for console/browser/owner tokens; a worker token only its host's subscribed ones. */
+    function readableKbDomains(id: AuthIdentity | undefined): string[] {
+      const all = listDomainDirs(roots.kbBase);
+      if (!id || id.kind !== "worker") return all;
+      return all.filter((d) => { try { requireKbDomain(id, d); return true; } catch { return false; } });
+    }
+    const kbGraphCache = new Map<string, string>();
+    /** The graph of the hub's read-only KB copy for `domains`, cached on the per-domain revisions (a changed domain rebuilds). */
+    function kbGraphBody(domains: string[], domain: string | undefined, archivedWork: boolean): string {
+      const rev = domains.map((d) => { try { const h = revisions.head(d); return `${d}:${h.epoch}:${h.revision}`; } catch { return d; } }).join(",");
+      const key = JSON.stringify([domains, domain ?? null, archivedWork, rev]);
+      const hit = kbGraphCache.get(key);
+      if (hit !== undefined) return hit;
+      const body = JSON.stringify(buildKbGraph(roots, { onlyDomains: domains, ...(domain ? { domain } : {}), archivedWork }));
+      if (kbGraphCache.size >= 16) kbGraphCache.delete(kbGraphCache.keys().next().value as string);
+      kbGraphCache.set(key, body);
+      return body;
+    }
+
+    /** Device management is an ALLOWLIST: console and browser tokens only (a worker token, or any future kind, gets 403). Returns the verified identity. */
+    function deviceCaller(identity: AuthIdentity | undefined): AuthIdentity & { tokenId: string } {
+      if (!identity || (identity.kind !== "console" && identity.kind !== "browser")) throw new HubError("forbidden", "only a console or browser token can manage devices");
+      if (!identity.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a 500, never a silent fallback
+      return { ...identity, tokenId: identity.tokenId };
+    }
+    /** A label for a log line: bounded, JSON-escaped (no control characters or line breaks reach the log). */
+    const auditLabel = (l: string) => JSON.stringify(l.slice(0, 40));
+    /** Mints and revokes: at most DEVICE_MUTATIONS_PER_MIN a minute per calling token (409 busy, retryable). */
+    const deviceMutations = new Map<string, number[]>();
+    function deviceMutationLimit(tokenId: string, t: number): void {
+      const cur = (deviceMutations.get(tokenId) ?? []).filter((x) => t - x < 60_000);
+      if (cur.length >= DEVICE_MUTATIONS_PER_MIN) {
+        deviceMutations.set(tokenId, cur);
+        throw new HubError("busy", "too many device changes; retry in a minute");
+      }
+      cur.push(t);
+      deviceMutations.set(tokenId, cur);
+      if (deviceMutations.size > 1000) deviceMutations.delete(deviceMutations.keys().next().value as string);
+    }
+
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
+      // Hub-proxied Work API for VPS wolves (work-proxy.ts): the wolf's own hub token arrives as X-API-Key (what the Work clients send).
+      // Mapped to a bearer for THIS prefix only; everything else still needs Authorization: Bearer.
+      if (isWorkProxyPath(url.pathname)) {
+        const key = req.headers["x-api-key"];
+        if (typeof key === "string" && key.trim() && typeof req.headers.authorization !== "string") req.headers.authorization = `Bearer ${key.trim()}`;
+        const id = authenticate(req);
+        if (!id) throw new HubError("unauthorized", "missing or invalid token");
+        return handleWorkProxy(
+          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n) },
+          req, res, url, id, writeActor(req),
+        );
+      }
       const m = matchRoute(req.method ?? "GET", url.pathname);
       const isPublic = typeof m === "object" && m.route.public === true;
       let tokenId: string | undefined;
@@ -564,6 +676,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubPair": {
           const addr = req.socket.remoteAddress ?? "?"; // the socket peer; X-Forwarded-For is deliberately NOT trusted
           const t = (opts.now ?? Date.now)();
+          // NOTE: the failure bucket is keyed on the socket peer. Behind a local reverse proxy (tailscale serve) every request is 127.0.0.1, so the bucket is GLOBAL (see RUNBOOK 5b).
           if (pairFailureCount(addr, t) >= PAIR_FAILS_PER_MIN) {
             res.setHeader("Retry-After", "60");
             return send(res, 429, { code: "busy", message: "too many failed pairing attempts; retry in a minute", retryable: true } satisfies ErrorEnvelope);
@@ -571,20 +684,53 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const body = parseBody(PairRequestSchema, await readBody(req));
           try {
             const out = tokens.redeem(body.code, body.label, body.kind, body.hostId);
-            console.log(`hubd: paired token ${out.tokenId} kind=${out.kind} label=${JSON.stringify(body.label)}${out.hostId ? ` hostId=${out.hostId}` : ""}`);
+            console.log(`hubd: paired token ${out.tokenId} kind=${out.kind} label=${JSON.stringify(out.label)}${out.hostId ? ` hostId=${out.hostId}` : ""}`);
             return send(res, 200, { token: out.token, tokenId: out.tokenId, ...(out.hostId ? { hostId: out.hostId } : {}) });
           } catch (e) {
             if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);
             throw e;
           }
         }
+        case "hubListDevices": {
+          const caller = deviceCaller(identity);
+          const all = tokens.list();
+          const labelOf = new Map(all.map((t) => [t.id, t.label]));
+          const devices = all.filter((t) => t.kind !== "worker").map((t) => ({ id: t.id, label: t.label, kind: t.kind as "console" | "browser", createdAt: t.createdAt, lastUsedAt: t.lastUsedAt, self: t.id === caller.tokenId, addedBy: (t.mintedBy && labelOf.get(t.mintedBy)) || null, addedById: t.mintedBy ?? null }));
+          return send(res, 200, { devices });
+        }
+        case "hubRevokeDevice": {
+          const caller = deviceCaller(identity);
+          deviceMutationLimit(caller.tokenId, (opts.now ?? Date.now)());
+          const cascade = url.searchParams.get("cascade") === "1";
+          const target = tokens.list().find((t) => t.id === params.id && t.kind !== "worker");
+          if (!target) throw new HubError("not_found", "no such device");
+          const gone = tokens.revokeDevice(target.id, cascade); // 409 conflict when it would remove the last console token
+          const ids = gone.map((t) => t.id);
+          console.log(`hubd: token ${caller.tokenId} revoked ${ids.length} device(s) ${ids.join(",")} label=${auditLabel(target.label)}${cascade ? " (cascade)" : ""}${ids.includes(caller.tokenId) ? " (incl. itself)" : ""}`);
+          return send(res, 200, { revoked: target.id, self: ids.includes(caller.tokenId), cascaded: ids.filter((i) => i !== target.id) });
+        }
+        case "hubMintPairingCode": {
+          // CSRF: a cross-site page cannot call this. It needs `Authorization: Bearer` (never a cookie, see authenticate) and the body must be JSON
+          // (readBody), so a plain cross-origin form/fetch cannot attach the credential; the console also requires its own bearer on /api/devices/pairing-code.
+          const caller = deviceCaller(identity);
+          deviceMutationLimit(caller.tokenId, (opts.now ?? Date.now)());
+          const body = parseBody(MintPairingCodeRequestSchema, await readBody(req));
+          const out = tokens.mintPairingCode({ kind: "browser", mintedBy: caller.tokenId, ...(body.label ? { label: body.label } : {}) });
+          console.log(`hubd: token ${caller.tokenId} minted a browser pairing code label=${auditLabel(body.label ?? "")} expires ${out.expiresAt}`);
+          return send(res, 200, out);
+        }
         case "listWolves":
           // The pack's wolf list from the registry: online when the owning host's link is online (asleep/offline hosts show offline; the relay names the state).
           // A worker token sees only its own host's wolves (it must not enumerate other hosts).
-          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
+          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => {
+            const online = !!w.host && link.presence(w.host) === "online";
+            const f = online ? registry.kbFlags(w.name) : { librarian: false, kbReadable: false }; // flags only from a live link: an offline host claims nothing
+            return { id: w.name, name: w.name, host: w.host ?? "", status: online ? "online" : "offline", librarian: f.librarian, kbReadable: f.kbReadable };
+          }) });
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");
+          if (!DOMAIN_RE.test(domain)) throw new HubError("invalid_request", "domain must be lower-case letters, digits and hyphens");
           const flag = url.searchParams.get("graduated");
           if (flag !== null && flag !== "true" && flag !== "false") throw new HubError("invalid_request", "graduated must be true or false");
           return send(res, 200, listWorkItems(roots, domain, flag === "true"));
@@ -600,12 +746,30 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           try {
             const submitted = await readJsonObject(req, res);
             const named = typeof submitted.json.from === "string" ? submitted.json.from : undefined;
-            const stored = storeContribution(opts.dataDir, wolfActorFor(tokenActor, named), submitted, inboxRoot);
+            const stored = storeContribution(opts.dataDir, wolfActorFor(tokenActor, named), submitted, inboxRoot, (() => {
+              const a = wolfActorFor(tokenActor, named);
+              return a.kind === "wolf" ? domainsOf(a.id) : undefined; // an operator may submit for any lane
+            })());
             return send(res, stored.duplicate ? 200 : 201, stored);
           } catch (e) {
-            if (e instanceof ContributionError) throw new HubError(e.code, e.message);
+            if (e instanceof ContributionError) throw new HubError(e.code, e.message, e.details);
             throw e;
           }
+        }
+        case "hubContributionReceipts": {
+          const wolf = receiptWolf(req, url);
+          return send(res, 200, { curated: curatedTopics(opts.dataDir, wolf, inboxRoot) });
+        }
+        case "hubContributionCheck": {
+          const wolf = receiptWolf(req, url);
+          const body = parseBody(ContributionCheckBodySchema, await readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 200, { unchanged: unchangedItems(opts.dataDir, wolf, body.items, inboxRoot) });
+        }
+        case "hubKbMatch": {
+          const body = parseBody(KbMatchBodySchema, await readJson(req, { maxBytes: KB_COMMIT_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          if (!identity) throw new HubError("unauthorized", "missing or invalid bearer token"); // dispatch already guarantees this; never fall through to "every domain"
+          for (const c of body.candidates) if (c.domain) requireKbDomain(identity, c.domain);
+          return send(res, 200, await matchKb(roots, body.candidates, opts.ollama ?? ollamaFromEnv(), readableDomains(identity), kbMatchCache));
         }
         case "hubCreateWork": {
           const actor = writeActor(req);
@@ -665,6 +829,38 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const mb = q.get("maxBytes");
           if (mb !== null && !/^[1-9]\d{0,12}$/.test(mb)) throw new HubError("invalid_request", "maxBytes must be a positive integer");
           return send(res, 200, revisions.changesSince(params.domain, sinceRaw === null ? 0 : Number(sinceRaw), q.get("epoch") ?? undefined, mb === null ? undefined : Math.min(Number(mb), KB_COMMIT_BODY_LIMIT)));
+        }
+        case "hubKbGraph": {
+          const q = url.searchParams;
+          const domain = q.get("domain") ?? undefined;
+          const aw = q.get("archivedWork");
+          if (aw !== null && aw !== "true" && aw !== "false" && aw !== "1" && aw !== "0") throw new HubError("invalid_request", "archivedWork must be true or false");
+          const readable = readableKbDomains(identity);
+          if (domain !== undefined) {
+            requireKbDomain(identity, domain); // first: a worker cannot probe which domains exist
+            if (!listDomainDirs(roots.kbBase).includes(domain)) throw new HubError("not_found", `domain ${domain.slice(0, 60)}`);
+          }
+          try {
+            const body = kbGraphBody(readable, domain, aw === "true" || aw === "1");
+            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+            return void res.end(body);
+          } catch (e) {
+            if (e instanceof UnknownDomainError) throw new HubError("not_found", `domain ${e.domain.slice(0, 60)}`);
+            throw e;
+          }
+        }
+        case "hubKbActivity": {
+          // Named case: answered from the hub's own ledger and never relays. Not for workers. `domain` drops decisions with no entryId (see kb-activity.ts).
+          if (identity && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot read KB activity");
+          const q = url.searchParams;
+          return send(res, 200, kbActivity!.read({ since: q.get("since"), before: q.get("before"), limit: q.get("limit"), domain: q.get("domain") }));
+        }
+        case "hubKbEntry": {
+          if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(params.id)) throw new HubError("invalid_request", "malformed entry id");
+          // Only the readable domains are even read, so a forbidden entry is indistinguishable from a missing one (and backlinks never cross the grant).
+          const entry = readKbEntry(roots, params.id, { onlyDomains: readableKbDomains(identity) });
+          if (!entry) throw new HubError("not_found", "no such entry");
+          return send(res, 200, entry);
         }
         case "hubKbManifest": {
           requireKbDomain(identity, params.domain);
@@ -733,6 +929,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     });
     if (opts.socketPath === undefined) port = (server.address() as AddressInfo).port;
     revisions.start();
+    // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
+    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator } });
+    curator.start();
+    kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator, now: opts.now });
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
@@ -740,6 +940,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     if (opts.socketPath !== undefined) removeSocket(opts.socketPath, socketId);
     stopWatcher();
     revisions.stop();
+    void curator?.close();
     kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
     writerLock.release();
     throw e;
@@ -756,6 +957,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     onRevoke: (l) => onRevokeFn(l),
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     commitKb: (actor, req) => kbWriter!.commit(actor, req),
+    runCuratorOnce: async () => curator?.runOnce(),
     scanKb: async (o) => void (await kbWriter!.exclusive(() => revisions.scan(o))),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
@@ -763,7 +965,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         revisions.stop(); // before the KB writer closes
-        const drained = Promise.all([writer.close(), kbWriter!.close()]).then(() => undefined);
+        // The curator drains first (bounded): a tick in flight commits through the KB writer, which must still be open.
+        const drained = (curator?.close() ?? Promise.resolve()).then(() => Promise.all([writer.close(), kbWriter!.close()])).then(() => undefined);
         stopWatcher();
         tokensFlush();
         bus.closeAll();

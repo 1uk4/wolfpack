@@ -8,6 +8,7 @@ import { Outbox, writeReceiptFile } from "./outbox.js";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, isAbsolute, sep } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
+import { toLinkWolf } from "./link-wolf.js";
 import type { LinkWelcome, LinkWolf } from "@wolfpack/protocol";
 import { WorkerRelay } from "./relay.js";
 import { KbSync, type KbSyncOptions } from "./kb-sync.js";
@@ -167,7 +168,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     supervisor.addWolf = refuse;
   }
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
-  const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
+  const linkWolf = (c: Parameters<typeof toLinkWolf>[0]): LinkWolf => toLinkWolf(c, opts.env ?? process.env); // link-only announces below claim nothing
   const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));
   let link: HubLink | undefined;
   let kbSync: KbSync | undefined;

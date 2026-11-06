@@ -2,7 +2,7 @@
  * progress — what the sweep is working on right now, for `wolfpack-kb status`.
  * A den-local file written when an item starts and removed when it ends.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { KbRoots } from "../shared/index.js";
 
@@ -18,8 +18,32 @@ export interface CurrentItem {
 const currentFile = (roots: KbRoots) => join(roots.denLocal, "sweep-current.json");
 
 export function writeCurrent(roots: KbRoots, item: CurrentItem): void {
-  mkdirSync(dirname(currentFile(roots)), { recursive: true });
-  writeFileSync(currentFile(roots), JSON.stringify(item));
+  // The progress file is advisory: a failure here (disk full, permissions) is logged and never fails the item being swept.
+  try {
+    const file = currentFile(roots);
+    mkdirSync(dirname(file), { recursive: true });
+    // Temp file + rename: a reader (the hub's activity route, a file watcher) sees the old or the new file, never half of one.
+    const tmp = `${file}.${process.pid}.tmp`;
+    // unlink + "wx" (O_EXCL): a leftover file or a planted symlink at the temp path is removed or refused, never written through.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* none */
+    }
+    try {
+      writeFileSync(tmp, JSON.stringify(item), { flag: "wx" });
+      renameSync(tmp, file);
+    } catch (e) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* gone */
+      }
+      throw e;
+    }
+  } catch (e) {
+    console.warn(`sweep: could not write the progress file: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 export function clearCurrent(roots: KbRoots): void {

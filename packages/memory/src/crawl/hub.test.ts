@@ -2,9 +2,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitCrawl } from "./emit.js";
-import { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl } from "./hub.js";
+import { HubHttpError, HubRejectedError, persistDedup, emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl, scrubSecrets } from "./hub.js";
 import { planCrawl, readPlan } from "./plan.js";
 
 const dirs: string[] = [];
@@ -67,24 +67,130 @@ describe("emitCrawlToHub", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("a rejected post throws and leaves the dedup state as it was, so a retry re-sends", async () => {
+  it.each([401, 500])("a %i aborts the release (not a per-entry refusal) and records nothing as sent", async (status) => {
     const runDir = runDirFixture();
     const denLocal = join(tmp("den"), "kb");
     const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
-    const failing = (async () => new Response(JSON.stringify({ code: "invalid_request", message: "nope" }), { status: 400 })) as unknown as typeof fetch;
-    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: failing }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots })).rejects.toThrow(/400.*nope/);
+    const bad = (async () => new Response(JSON.stringify({ message: "x" }), { status })) as unknown as typeof fetch;
+    const e = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: bad }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots }).catch((x) => x);
+    expect(e).toBeInstanceOf(HubHttpError);
+    expect(e).not.toBeInstanceOf(HubRejectedError);
+    expect(e.status).toBe(status);
     expect(existsSync(join(denLocal, "emitted.json"))).toBe(false);
+  });
+
+  it("only 400 + secret_detected is a HubRejectedError (a subclass of HubHttpError); other 400s are plain HubHttpError", async () => {
+    const mk = (details: object) => (async () => new Response(JSON.stringify({ message: "m", details }), { status: 400 })) as unknown as typeof fetch;
+    const secret = await postContribution({ baseUrl: "http://h", fetch: mk({ reason: "secret_detected" }) }, "w", { denTopicId: "t1" }).catch((x) => x);
+    expect(secret).toBeInstanceOf(HubRejectedError);
+    expect(secret).toBeInstanceOf(HubHttpError);
+    expect(secret).toMatchObject({ status: 400, denTopicId: "t1", details: { reason: "secret_detected" } });
+    const other = await postContribution({ baseUrl: "http://h", fetch: mk({ reason: "bad_domain" }) }, "w", {}).catch((x) => x);
+    expect(other).toBeInstanceOf(HubHttpError);
+    expect(other).not.toBeInstanceOf(HubRejectedError);
+  });
+
+  it("a hub refusal (400) is reported per entry, never marked sent, and a retry re-sends it; other failures (403) still abort", async () => {
+    const runDir = runDirFixture();
+    const denLocal = join(tmp("den"), "kb");
+    const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refusing = (async () => new Response(JSON.stringify({ code: "invalid_request", message: "nope", details: { reason: "secret_detected" } }), { status: 400 })) as unknown as typeof fetch;
+    const first = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: refusing }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
+    expect(first.emitted).toBe(0);
+    expect(first.rejected).toHaveLength(1);
+    expect(first.rejected![0]!.message).toMatch(/400.*nope/);
+    expect(err).toHaveBeenCalled(); // loud
+    expect(existsSync(join(denLocal, "emitted.json"))).toBe(false);
+    const forbidden = (async () => new Response(JSON.stringify({ code: "forbidden", message: "no" }), { status: 403 })) as unknown as typeof fetch;
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: forbidden }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots })).rejects.toThrow(/403/);
     let n = 0;
     const ok = (async () => (n++, new Response(JSON.stringify({ id: "x", duplicate: false }), { status: 201 }))) as unknown as typeof fetch;
     const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: ok }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
-    expect([r.emitted, n]).toEqual([1, 1]);
+    expect([r.emitted, n, r.rejected]).toEqual([1, 1, undefined]);
+    err.mockRestore();
+  });
+
+  it("with three entries and the hub refusing the middle one, the others are posted and marked sent; the refused one is not", async () => {
+    const runDir = runDirFixture(3);
+    const denLocal = join(tmp("den"), "kb");
+    const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let call = 0;
+    const f = (async () => (++call === 2 ? new Response(JSON.stringify({ message: "possible secret", details: { reason: "secret_detected" } }), { status: 400 }) : Response.json({ id: `x${call}.md`, wolf: "w", duplicate: false }, { status: 201 }))) as unknown as typeof fetch;
+    const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
+    expect([r.emitted, r.rejected!.length, Object.keys(JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8"))).length]).toEqual([2, 1, 2]);
+    expect(Object.keys(JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8")))).not.toContain(r.rejected![0]!.denTopicId);
+    err.mockRestore();
+  });
+});
+
+describe("emitCrawlToHub: refusals vs aborts", () => {
+  const ok = (n: number) => Response.json({ id: `x${n}.md`, wolf: "w", duplicate: false }, { status: 201 });
+  const secret = () => new Response(JSON.stringify({ code: "invalid_request", message: "possible secret", details: { reason: "secret_detected" } }), { status: 400 });
+  const recorded = (denLocal: string) => Object.keys(JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8")));
+
+  it("one secret refusal among several posts: rejected[] filled, emitted.json records the others and leaves out the refused id", async () => {
+    const runDir = runDirFixture(3);
+    const denLocal = join(tmp("den"), "kb");
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let call = 0;
+    const f = (async () => (++call === 2 ? secret() : ok(call))) as unknown as typeof fetch;
+    const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } });
+    expect(r.rejected).toHaveLength(1);
+    expect(r.emitted).toBe(2);
+    const ids = recorded(denLocal);
+    expect(ids).toHaveLength(2);
+    expect(ids).not.toContain(r.rejected![0]!.denTopicId);
+    const logged = JSON.stringify(err.mock.calls);
+    expect(logged).not.toContain(r.rejected![0]!.denTopicId); // the log carries a ref, not the id
+    err.mockRestore();
+  });
+
+  it("a 5xx aborts the release but the entries posted before it are recorded", async () => {
+    const runDir = runDirFixture(3);
+    const denLocal = join(tmp("den"), "kb");
+    let call = 0;
+    const f = (async () => (++call === 3 ? new Response("{}", { status: 503 }) : ok(call))) as unknown as typeof fetch;
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } })).rejects.toThrow(/503/);
+    expect(recorded(denLocal)).toHaveLength(2);
+  });
+
+  it("a dedup write failure on the SUCCESS path is a warning on the result; while unwinding from a 5xx it does not mask the post error", async () => {
+    const mk = (fail: boolean) => {
+      const runDir = runDirFixture(2);
+      const denLocal = join(tmp("den"), "kb");
+      mkdirSync(denLocal, { recursive: true });
+      mkdirSync(join(denLocal, "emitted.json")); // a directory in the way: the dedup merge cannot write
+      let call = 0;
+      const f = (async () => {
+        const n = ++call;
+        return fail && n === 2 ? new Response("{}", { status: 503 }) : ok(n);
+      }) as unknown as typeof fetch;
+      return emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } });
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = await mk(false);
+    expect(r.emitted).toBe(2);
+    expect(r.warnings?.join(" ")).toMatch(/could not record the 2 sent entries/);
+    await expect(mk(true)).rejects.toThrow(/503/);
+    warn.mockRestore();
+  });
+
+  it("a 400 WITHOUT the secret marker is systemic: it aborts like a 5xx (earlier sends still recorded)", async () => {
+    const runDir = runDirFixture(3);
+    const denLocal = join(tmp("den"), "kb");
+    let call = 0;
+    const f = (async () => (++call === 2 ? new Response(JSON.stringify({ code: "invalid_request", message: "malformed contribution" }), { status: 400 }) : ok(call))) as unknown as typeof fetch;
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: f }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } })).rejects.toThrow(/400.*malformed/);
+    expect(recorded(denLocal)).toHaveLength(1);
   });
 });
 
 describe("emitCrawlToHub failure handling", () => {
   const created = (n: number) => Response.json({ id: `x${n}.md`, wolf: "w", duplicate: false }, { status: 201 });
 
-  it("a partial POST failure (1 posted, then an error) throws; the retry lands the rest and the hub's duplicate answer is fine", async () => {
+  it("a partial POST failure (1 posted, then an error) throws, records the one sent; the retry sends only the rest", async () => {
     const runDir = runDirFixture(3);
     const denLocal = join(tmp("den"), "kb");
     const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
@@ -100,11 +206,48 @@ describe("emitCrawlToHub failure handling", () => {
     const opts = { wolf: "w", sinkBase: tmp("s"), quiet: true, roots };
     await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: flaky }, opts)).rejects.toThrow(/409.*try later/);
     expect(stored.size).toBe(1);
-    expect(existsSync(join(denLocal, "emitted.json"))).toBe(false); // restored: nothing counts as sent
+    expect(Object.keys(JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8")))).toHaveLength(1); // the one the hub took is recorded
     const retry = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: flaky }, opts);
-    expect(retry.emitted).toBe(3);
+    expect(retry.emitted).toBe(2);
     expect(stored.size).toBe(3);
-    expect(call).toBe(5); // 2 + 3 (the first one answered duplicate)
+    expect(call).toBe(4); // 2 + the 2 not yet recorded
+  });
+
+  it("a crash between building the delta and the posts (the very first post blows up) leaves the wolf's dedup exactly as it was, with no staging leftovers", async () => {
+    const runDir = runDirFixture(2);
+    const denLocal = join(tmp("den"), "kb");
+    mkdirSync(denLocal, { recursive: true });
+    writeFileSync(join(denLocal, "emitted.json"), '{"keep":"me"}');
+    const crash = (async () => {
+      throw "process died";
+    }) as unknown as typeof fetch;
+    const before = readdirSync(tmpdir()).filter((n) => n.startsWith("crawl-hub-") && !n.startsWith("crawl-hub-src") && !n.startsWith("crawl-hub-run") && !n.startsWith("crawl-hub-sink") && !n.startsWith("crawl-hub-den") && !n.startsWith("crawl-hub-ops") && !n.startsWith("crawl-hub-s-"));
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: crash }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } })).rejects.toBeTruthy();
+    expect(readFileSync(join(denLocal, "emitted.json"), "utf-8")).toBe('{"keep":"me"}');
+    expect(existsSync(join(denLocal, "emitted-bodies"))).toBe(false);
+    const after = readdirSync(tmpdir()).filter((n) => n.startsWith("crawl-hub-") && !n.startsWith("crawl-hub-src") && !n.startsWith("crawl-hub-run") && !n.startsWith("crawl-hub-sink") && !n.startsWith("crawl-hub-den") && !n.startsWith("crawl-hub-ops") && !n.startsWith("crawl-hub-s-"));
+    expect(after).toEqual(before);
+  });
+
+  it("a success merges into the dedup as it is NOW: a concurrent release's entries written during the posts survive, and only the sent ids are added", async () => {
+    const runDir = runDirFixture(2);
+    const denLocal = join(tmp("den"), "kb");
+    mkdirSync(denLocal, { recursive: true });
+    writeFileSync(join(denLocal, "emitted.json"), '{"a":"1"}');
+    let first = true;
+    const racing = (async (_u: string, init: RequestInit) => {
+      if (first) {
+        first = false;
+        writeFileSync(join(denLocal, "emitted.json"), '{"a":"1","other-release":"2"}'); // someone else released meanwhile
+      }
+      const b = JSON.parse(String(init.body)) as { denTopicId: string };
+      return Response.json({ id: `${b.denTopicId}.md`, wolf: "w", duplicate: false }, { status: 201 });
+    }) as unknown as typeof fetch;
+    const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: racing }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } });
+    const map = JSON.parse(readFileSync(join(denLocal, "emitted.json"), "utf-8")) as Record<string, string>;
+    expect(map.a).toBe("1");
+    expect(map["other-release"]).toBe("2");
+    expect(Object.keys(map).length).toBe(2 + r.emitted);
   });
 
   it("emitCrawl throwing leaves a previous emitted.json as it was and surfaces the error", async () => {
@@ -152,5 +295,39 @@ describe("emitCrawl (no hub): the inbox path is unchanged", () => {
     expect(r.dest).toBe(`${opsRoot}/inbox/w`);
     expect(readdirSync(join(opsRoot, "inbox", "w"))).toHaveLength(1);
     expect(r.delta).toHaveLength(1);
+  });
+});
+
+describe("scrubSecrets", () => {
+  it("removes userinfo, Bearer tokens, sk- keys, token query values and exact secrets", () => {
+    const t = scrubSecrets("GET https://u:p@h/x?token=abc&k=1 Bearer abc.def-1 sk-ant-abcdef12 and mytoken123", ["mytoken123"]);
+    expect(t).not.toMatch(/u:p|abc|sk-ant|mytoken123/);
+    expect(t).toContain("k=1");
+  });
+});
+
+describe("persistDedup", () => {
+  it("a den topic id safeSegment rejects is skipped with a warning; the dedup write and the other bodies still land", () => {
+    const staged = tmp("staged");
+    const real = tmp("real");
+    mkdirSync(join(staged, "emitted-bodies"), { recursive: true });
+    writeFileSync(join(staged, "emitted.json"), JSON.stringify({ good: "h1", "../evil": "h2" }));
+    writeFileSync(join(staged, "emitted-bodies", "good.md"), "body");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => persistDedup(staged, real, ["../evil", "good"])).not.toThrow();
+    warn.mockRestore();
+    expect(JSON.parse(readFileSync(join(real, "emitted.json"), "utf-8")).good).toBe("h1");
+    expect(readFileSync(join(real, "emitted-bodies", "good.md"), "utf-8")).toBe("body");
+    expect(existsSync(join(real, "..", "evil.md"))).toBe(false);
+  });
+});
+
+describe("postContribution error", () => {
+  it("carries the HTTP status and details", async () => {
+    const f = (async () => new Response(JSON.stringify({ message: "bad", details: { reason: "x" } }), { status: 400 })) as unknown as typeof fetch;
+    const { postContribution, HubHttpError } = await import("./hub.js");
+    const e = await postContribution({ baseUrl: "http://h", fetch: f }, "w", {}).catch((x) => x);
+    expect(e).toBeInstanceOf(HubHttpError);
+    expect(e).toMatchObject({ status: 400, details: { reason: "x" } });
   });
 });

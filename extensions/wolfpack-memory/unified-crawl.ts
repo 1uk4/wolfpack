@@ -17,7 +17,8 @@ import { resolveDefaultDomain } from "@wolfpack/engine";
 import { createCrawlCore, crawlPlanTools, type DraftOptions } from "./crawl-core.js";
 import { buildCrawlDirective, canInterview } from "./crawl-interview.js";
 import { crawlMode } from "./crawl-mode.js";
-import { createCrawlRunTools, type CrawlRunner } from "./unified-crawl-run.js";
+import { createCrawlService, type CrawlRunner } from "@wolfpack/memory";
+import { createCrawlRunTools, createDefaultRunner } from "./unified-crawl-run.js";
 
 export interface CrawlConfig {
   defaultDomain?: string;
@@ -34,7 +35,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
   const defaultDomain = resolveDefaultDomain(config.defaultDomain, context.domains);
   const crawlHome = env.WOLFPACK_CRAWL_HOME || join(context.wolfDen, "crawls");
 
-  const declaredDomains = (): Set<string> | null => {
+  // Local KB mirror first; without one the service falls back to the hub registry (service.refreshDomains).
+  const localDomains = (): Set<string> | null => {
     if (!env.KB_BASE || !env.KB_OPS) return null;
     try {
       return readDeclaredDomains({ kbBase: env.KB_BASE, opsRoot: env.KB_OPS, denLocal: env.KB_DEN_LOCAL ?? join(context.wolfDen, "kb") });
@@ -42,6 +44,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
       return null;
     }
   };
+  const service = createCrawlService({ crawlHome, env, runner: createDefaultRunner(context, env, config.runner), localDomains });
+  const declaredDomains = () => service.declaredDomains();
   const core = createCrawlCore({ crawlHome, defaultDomain, declaredDomains });
   const docs = crawlPlanTools(Type as never, { scope: true });
   // The afterResponse hook already began planning when it saw the call; this repeats it for direct callers (tests, hosts
@@ -52,22 +56,29 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
     mkdirSync(crawlHome, { recursive: true });
     return core.draft(o);
   };
+  /** Fail closed: with no KB mirror and an unreadable hub registry the domain cannot be checked, so planning stops rather than skipping the check. */
+  const domainsRefusal = (): ToolResult | undefined => {
+    try {
+      service.requireDomains();
+      return undefined;
+    } catch (e) {
+      return fail(e);
+    }
+  };
 
   const run = createCrawlRunTools({
     core,
-    context,
+    service,
     env,
     crawlHome,
     askCards,
-    declaredDomains,
-    runner: config.runner,
     // Whatever planning window is open ends when a run starts: a run must never leave observation paused.
     onRunStart: (ctx) => crawlMode.end(ctx.wolfDen, ctx.conversationId),
   });
 
   return defineExtension({
     name: "wolfpack-crawl",
-    runtimes: ["pi-durable"],
+    runtimes: ["pi-durable"], // the wolfd bundle (durable.ts); the pi TUI has its own /wolf:crawl commands
     tools: [
       defineTool({
         name: "crawl_start",
@@ -82,6 +93,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
           draft: Type.Optional(Type.Boolean({ description: "Skip the questionnaire and draft the plan deterministically (needs path)" })),
         }),
         async execute(args: { path?: string; domain?: string; strategy?: string; depth?: number; draft?: boolean }, ctx: ToolContext) {
+          await service.refreshDomains();
           const interview = canInterview({ draftOnly: args.draft === true, hasUI: false, idle: true, askCards });
           begin(ctx); // the interview and any plan tool calls must never reach the den
           if (!interview) {
@@ -112,6 +124,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         name: "crawl_plan",
         ...docs.plan,
         async execute(args: DraftOptions, ctx: ToolContext) {
+          await service.refreshDomains();
+          { const refused = domainsRefusal(); if (refused) return refused; }
           if (!core.isDir(args.path)) return fail(`source is not a directory: ${args.path}`);
           begin(ctx);
           try {
@@ -141,6 +155,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         name: "crawl_validate",
         ...docs.validate,
         async execute(args: { planPath?: string }) {
+          await service.refreshDomains();
+          { const refused = domainsRefusal(); if (refused) return refused; }
           try {
             const r = core.validate(args.planPath);
             return text(r.ok ? "GATE PASSES — plan is ready to run." : `GATE FAILS:\n  ${r.failures.join("\n  ")}`, { details: r });
@@ -154,6 +170,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         name: "crawl_finalize",
         ...docs.finalize,
         async execute(args: { planPath?: string }, ctx: ToolContext) {
+          await service.refreshDomains();
+          { const refused = domainsRefusal(); if (refused) return refused; }
           try {
             const r = core.finalize(args.planPath);
             if (!r.ok) return text(`CANNOT FINALIZE — fix these first:\n  ${r.failures.join("\n  ")}`, { details: r });

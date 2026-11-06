@@ -5,18 +5,15 @@
  */
 export { sweep, type SweepContext, type SweepResult, type SweepEvent } from "./sweep.js";
 export { readLastSweep, writeLastSweep, lastSweepFile, type LastSweep } from "../shared/last-sweep.js";
-export {
-  readPipeline,
-  normalizeOutcome,
-  RECEIPT_CAP,
-  PARKED_CAP,
-  type Pipeline,
-  type PipelineLane,
-  type PipelineReceipt,
-  type PipelineParked,
-  type PipelineOutcome,
-} from "./pipeline.js";
 export { runSweepTick, type SweepTickOptions, type SweepTickResult } from "./tick.js";
+export { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
+export { renderEntry, markProcessed } from "./commit.js";
+export { renderDomainDigest } from "./domains.js";
+export { syncDelivered } from "./groups.js";
+export { writeSections, readSections, foldSections } from "./sections.js";
+export { groupOf } from "./anchors.js";
+export { entryDomain, survivorOf, resolveAliasedEntry } from "./alias.js";
+export { acquireLease, freshLease, freshLeaseIn, readLease, wolfLeaseDirs, leaseFile, LEASE_FILE, LEASE_STALE_MS, type Lease, type LeaseHandle, type LeaseOwner } from "./curator-lease.js";
 export {
   workIdOfTopic,
   parseKbNotes,
@@ -39,6 +36,7 @@ export { drainInbox, countPending, parseContribution, DEFAULT_LANE, type LaneOpt
 export {
   createEmbedder,
   resolveEmbedConfig,
+  isNomicModel,
   embedInput,
   buildEntryVectors,
   currentEntryHashes,
@@ -99,3 +97,33 @@ export {
   checkInvariants,
   shouldRecalculate,
 } from "./section-tree.js";
+
+export {
+  buildActivityIndex,
+  pageActivity,
+  foldKbActivity,
+  readIncoming,
+  readSweepCurrent,
+  type SweepCurrent,
+  scanEntryInfo,
+  scanEntryDomains,
+  readEntryTitle,
+  fsEntryResolver,
+  listDomains,
+  type BadContribution,
+  type DomainActivity,
+  INCOMING_STAT_CAP,
+  type EntryResolver,
+  UNPLACED,
+  CHANGES_PER_DOMAIN,
+  INCOMING_ITEMS_PER_WOLF,
+  type ActivityIndex,
+  type ActivityPage,
+  type ActivityQuery,
+  type ActivityDecision,
+  type ActivityChange,
+  type ActivityOutcome,
+  type EntryInfo,
+  type IncomingWolf,
+} from "./activity.js";
+export { oneLine } from "./redact.js";

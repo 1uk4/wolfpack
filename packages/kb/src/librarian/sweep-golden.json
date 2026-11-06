@@ -1,0 +1,94 @@
+{
+ "results": [
+  {
+   "processed": 1,
+   "created": 1,
+   "merged": 0,
+   "rejected": 0,
+   "errors": 0,
+   "remaining": 2
+  },
+  {
+   "processed": 1,
+   "created": 1,
+   "merged": 0,
+   "rejected": 0,
+   "errors": 0,
+   "remaining": 1
+  },
+  {
+   "processed": 1,
+   "created": 1,
+   "merged": 0,
+   "rejected": 0,
+   "errors": 0,
+   "remaining": 0
+  },
+  {
+   "processed": 0,
+   "created": 0,
+   "merged": 0,
+   "rejected": 0,
+   "errors": 0,
+   "remaining": 0
+  }
+ ],
+ "tree": [
+  [
+   "base/domains/sj/_digest.json",
+   "{\n  \"domain\": \"sj\",\n  \"generated\": \"TS\",\n  \"vocabulary\": {\n    \"kinds\": [\n      \"architecture\",\n      \"reference\",\n      \"overview\",\n      \"api\",\n      \"changelog\",\n      \"decision\",\n      \"process\",\n      \"fact\",\n      \"policy\",\n      \"product\",\n      \"incident\"\n    ],\n    \"facetKeys\": [\n      \"subsystem\",\n      \"surface\",\n      \"layer\",\n      \"lifecycle\"\n    ],\n    \"relationKinds\": [\n      \"see_also\",\n      \"refines\",\n      \"part_of\",\n      \"depends_on\",\n      \"supersedes\",\n      \"contradicts\",\n      \"references\",\n      \"graduated_from\",\n      \"blocks\"\n    ]\n  },\n  \"sections\": [\n    {\n      \"sectionId\": \"SEC\",\n      \"title\": \"About alpha\",\n      \"summary\": \"About alpha\",\n      \"currency\": \"live\",\n      \"entryIds\": [\n        \"ID\",\n        \"ID\",\n        \"ID\"\n      ],\n      \"children\": []\n    }\n  ],\n  \"gaps\": []\n}"
+  ],
+  [
+   "base/domains/sj/_registry.md",
+   "\n\n\n\n\n\n\n\n\n  - w1:alpha (TS)\n  - w1:beta (TS)\n  - w2:gamma (TS)\n# sj — topic registry\n## ID _(forming)_\n## ID _(forming)_\n## ID _(forming)_\n- aliases:\n- aliases:\n- aliases:\n- domain: —\n- domain: —\n- domain: —\n- entries: ID\n- entries: ID\n- entries: ID\n- subscribers: w1\n- subscribers: w1\n- subscribers: w2\n_Updated: TS_"
+  ],
+  [
+   "base/domains/sj/entries/ID.md",
+   "---\nid: ID\ntitle: \"Topic\"\ndomain: sj\nsection: SEC\nplacement:\n  basis: crystallized\n  fit: 0.000\nkind: fact\nmaturity: stub\nauthority: curated\nconfidence: high\ncurrency: live\nfacets:\n  subsystem: core\n  surface: api\n  layer: service\n  lifecycle: stable\ncreated: DATE\nupdated: DATE\ncontentHash: sha256:HEX\n---\n\n# Topic\n\ns\n\n## Detail\n\nd\n"
+  ],
+  [
+   "base/domains/sj/entries/ID.md",
+   "---\nid: ID\ntitle: \"Topic\"\ndomain: sj\nsection: SEC\nplacement:\n  basis: routed\n  fit: 1.000\nkind: fact\nmaturity: stub\nauthority: curated\nconfidence: high\ncurrency: live\nfacets:\n  subsystem: core\n  surface: api\n  layer: service\n  lifecycle: stable\ncreated: DATE\nupdated: DATE\ncontentHash: sha256:HEX\n---\n\n# Topic\n\ns\n\n## Detail\n\nd\n"
+  ],
+  [
+   "base/domains/sj/entries/ID.md",
+   "---\nid: ID\ntitle: \"Topic\"\ndomain: sj\nsection: SEC\nplacement:\n  basis: routed\n  fit: 1.000\nkind: fact\nmaturity: stub\nauthority: curated\nconfidence: high\ncurrency: live\nfacets:\n  subsystem: core\n  surface: api\n  layer: service\n  lifecycle: stable\ncreated: DATE\nupdated: DATE\ncontentHash: sha256:HEX\n---\n\n# Topic\n\ns\n\n## Detail\n\nd\n"
+  ],
+  [
+   "base/domains/sj/INDEX.md",
+   "# sj — knowledge index\n\n3 entries.\n\n- [[ID|Topic]] — s\n- [[ID|Topic]] — s\n- [[ID|Topic]] — s\n"
+  ],
+  [
+   "den/ledger/events.jsonl",
+   "{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"section_created\",\"sectionId\":\"SEC\",\"domain\":\"sj\",\"parent\":null,\"label\":\"about-alpha\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"contribution\",\"from\":\"w1\",\"denTopicId\":\"alpha\",\"hash\":\"sha256:HEX\",\"prevHash\":null,\"domainHint\":\"sj\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"decision\",\"from\":\"w1\",\"denTopicId\":\"alpha\",\"hash\":\"sha256:HEX\",\"outcome\":\"create\",\"entryId\":\"ID\",\"routing\":{\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"entry_written\",\"entryId\":\"ID\",\"canonicalId\":\"ID\",\"action\":\"create\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"entry_placed\",\"entryId\":\"ID\",\"sectionId\":\"SEC\",\"basis\":\"crystallized\",\"fit\":0}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"aliased\",\"wolf\":\"w1\",\"denTopicId\":\"alpha\",\"canonicalId\":\"ID\",\"hash\":\"sha256:HEX\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"contribution\",\"from\":\"w1\",\"denTopicId\":\"beta\",\"hash\":\"sha256:HEX\",\"prevHash\":null,\"domainHint\":\"sj\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"decision\",\"from\":\"w1\",\"denTopicId\":\"beta\",\"hash\":\"sha256:HEX\",\"outcome\":\"create\",\"entryId\":\"ID\",\"routing\":{\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"entry_written\",\"entryId\":\"ID\",\"canonicalId\":\"ID\",\"action\":\"create\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"entry_placed\",\"entryId\":\"ID\",\"sectionId\":\"SEC\",\"basis\":\"routed\",\"fit\":1}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"aliased\",\"wolf\":\"w1\",\"denTopicId\":\"beta\",\"canonicalId\":\"ID\",\"hash\":\"sha256:HEX\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"contribution\",\"from\":\"w2\",\"denTopicId\":\"gamma\",\"hash\":\"sha256:HEX\",\"prevHash\":null,\"domainHint\":\"sj\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"decision\",\"from\":\"w2\",\"denTopicId\":\"gamma\",\"hash\":\"sha256:HEX\",\"outcome\":\"create\",\"entryId\":\"ID\",\"routing\":{\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"entry_written\",\"entryId\":\"ID\",\"canonicalId\":\"ID\",\"action\":\"create\"}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"entry_placed\",\"entryId\":\"ID\",\"sectionId\":\"SEC\",\"basis\":\"routed\",\"fit\":1}\n{\"id\":\"EV\",\"at\":\"TS\",\"t\":\"aliased\",\"wolf\":\"w2\",\"denTopicId\":\"gamma\",\"canonicalId\":\"ID\",\"hash\":\"sha256:HEX\"}\n"
+  ],
+  [
+   "den/sections/_sections.json",
+   "[\n  {\n    \"id\": \"SEC\",\n    \"domain\": \"sj\",\n    \"parent\": null,\n    \"depth\": 0,\n    \"label\": \"about-alpha\",\n    \"title\": \"About alpha\",\n    \"centroid\": [\n      1,\n      0,\n      0\n    ],\n    \"memberCount\": 0,\n    \"childIds\": [],\n    \"summary\": \"About alpha\",\n    \"summaryHash\": \"\",\n    \"dirty\": true,\n    \"memberCountAtLastLabel\": 0,\n    \"created\": \"DATE\",\n    \"updated\": \"DATE\"\n  }\n]"
+  ],
+  [
+   "ops/inbox/w1/_processed/alpha-sha256:776.md",
+   "---\nfrom: w1\nden_topic_id: alpha\ncontent_hash: sha256:HEX\nprev_hash: null\ndomain_hint: sj\nsummary: \"About alpha\"\nsubmitted: TS\n---\n\n# Alpha\n\nfirst body\n"
+  ],
+  [
+   "ops/inbox/w1/_processed/beta-sha256:5bd.md",
+   "---\nfrom: w1\nden_topic_id: beta\ncontent_hash: sha256:HEX\nprev_hash: null\ndomain_hint: sj\nsummary: \"About beta\"\nsubmitted: TS\n---\n\n# Beta\n\nsecond body\n"
+  ],
+  [
+   "ops/inbox/w2/_processed/gamma-sha256:aae.md",
+   "---\nfrom: w2\nden_topic_id: gamma\ncontent_hash: sha256:HEX\nprev_hash: null\ndomain_hint: sj\nsummary: \"About gamma\"\nsubmitted: TS\n---\n\n# Gamma\n\nthird body\n"
+  ],
+  [
+   "ops/receipts/w1/alpha-HASH.md",
+   "---\nfrom: w1\nden_topic_id: alpha\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}\n---\n\nID\n"
+  ],
+  [
+   "ops/receipts/w1/beta-HASH.md",
+   "---\nfrom: w1\nden_topic_id: beta\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}\n---\n\nID\n"
+  ],
+  [
+   "ops/receipts/w2/gamma-HASH.md",
+   "---\nfrom: w2\nden_topic_id: gamma\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}\n---\n\nID\n"
+  ]
+ ]
+}

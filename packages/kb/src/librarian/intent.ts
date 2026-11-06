@@ -23,10 +23,15 @@ export interface CommitIntent {
   events: KbEvent[];
   /** sha256 of the entry file text the commit writes; replay requires the live file to match it (a merge whose write never landed leaves the OLD file). Absent when the commit writes nothing. */
   expect?: string;
+  /** entry_written events for entryId in the ledger when the intent was written. A larger count at replay means the commit path itself logged one (the hub's commitKb); the intent's own entry_written is then dropped so it is not counted twice. */
+  written?: number;
 }
+
+const writtenCount = (log: KbEvent[], entryId: string): number => log.filter((e) => e.t === "entry_written" && (e as { entryId?: string }).entryId === entryId).length;
 
 export const intentDigest = (text: string): string => createHash("sha256").update(text).digest("hex");
 
+export { writtenCount as intentWrittenCount };
 export const intentFile = (roots: KbRoots): string => join(roots.opsRoot, "pending-commit.json");
 
 /** Atomic write (temp file + rename). */
@@ -54,7 +59,7 @@ export async function replayIntent(
   try {
     const raw = JSON.parse(readFileSync(file, "utf-8"));
     if (!raw || typeof raw.hash !== "string" || typeof raw.entryId !== "string" || typeof raw.domain !== "string" || !Array.isArray(raw.events)) throw new Error("bad shape");
-    intent = { hash: raw.hash, entryId: raw.entryId, domain: raw.domain, events: raw.events, ...(typeof raw.expect === "string" ? { expect: raw.expect } : {}) };
+    intent = { hash: raw.hash, entryId: raw.entryId, domain: raw.domain, events: raw.events, ...(typeof raw.expect === "string" ? { expect: raw.expect } : {}), ...(typeof raw.written === "number" ? { written: raw.written } : {}) };
   } catch (err) {
     const aside = `${file}.corrupt-${Date.now()}`;
     try {
@@ -66,14 +71,20 @@ export async function replayIntent(
     (opts.notify ?? ((m) => console.warn(m)))(msg);
     return "discarded";
   }
-  const seen = seenHashes(readLedger(roots)).has(intent.hash);
+  const ledger = readLedger(roots);
+  const seen = seenHashes(ledger).has(intent.hash);
   const entryPath = join(entriesDir(roots, intent.domain), `${intent.entryId}.md`);
   const live = existsSync(entryPath) && (intent.expect === undefined || intentDigest(readFileSync(entryPath, "utf-8")) === intent.expect);
   if (seen || !live) {
     clearIntent(roots);
     return "discarded";
   }
-  await (opts.append ?? ((e) => appendLedger(roots, e)))(intent.events);
+  let events = intent.events;
+  if (intent.written !== undefined && writtenCount(ledger, intent.entryId) > intent.written) {
+    const i = events.findIndex((e) => e.t === "entry_written" && (e as { entryId?: string }).entryId === intent.entryId);
+    if (i >= 0) events = events.filter((_, j) => j !== i);
+  }
+  await (opts.append ?? ((e) => appendLedger(roots, e)))(events);
   clearIntent(roots);
   return "recorded";
 }

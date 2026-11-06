@@ -18,7 +18,7 @@ import { atomicWrite } from "@wolfpack/engine";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
-import { writeIntent, clearIntent, replayIntent, intentDigest } from "./intent.js";
+import { writeIntent, clearIntent, replayIntent, intentDigest, intentWrittenCount } from "./intent.js";
 import { renderEntry } from "./commit.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox, countPending, DEFAULT_LANE } from "./intake.js";
@@ -881,7 +881,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
       const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
       const expectText = !unchanged ? renderEntry(entry) : patched;
-      writeIntent(roots, { hash: c.contentHash, entryId: entry.id, domain, events: [...batch, ...pend], ...(expectText !== undefined ? { expect: intentDigest(expectText) } : {}) });
+      writeIntent(roots, { hash: c.contentHash, entryId: entry.id, domain, events: [...batch, ...pend], written: intentWrittenCount(log, entry.id), ...(expectText !== undefined ? { expect: intentDigest(expectText) } : {}) });
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
       // A decision the contribution agrees with is left exactly as it is.

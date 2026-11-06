@@ -487,7 +487,7 @@ describe("hub curator: entry_written dedupe is per commit", () => {
   });
 });
 
-describe("hub curator: KNOWN WINDOW (documented, not a guarantee)", () => {
+describe("hub curator: commit intent closes the commit→append window", () => {
   it("appendLedger failing after commitEntry leaves a live entry with the contribution unseen; the outcome of the next tick is pinned here", async () => {
     let failed = false;
     const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, appendLedger: async (...a: unknown[]) => { if (!failed) { failed = true; throw new Error("ledger down"); } return w.appendLedger(...a); } }) }) });
@@ -506,7 +506,26 @@ describe("hub curator: KNOWN WINDOW (documented, not a guarantee)", () => {
     expect(ledgerCount(hub, "entry_written")).toBe(1);
     expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(0);
     expect(existsSync(join(dir, "kb", "ops", "receipts", "alpha"))).toBe(false);
-    // NOT COVERED (this is the window): a CRASH between commitEntry and that ledger write leaves the contribution unseen, and the
-    // next tick routes it again (possibly creating a second entry). It cannot be closed from curator.ts; see RUNBOOK section 8.
+  }, 30_000);
+
+  it("a restart between commitEntry and appendLedger: the intent is replayed, no second entry, one entry_written, the item is retired", async () => {
+    const { hub, dir } = await start({ curator: curatorOpts({ wrapWriter: (w: any) => ({ ...w, appendLedger: async () => { throw new Error("process died"); } }) }) });
+    drop(dir, 1);
+    const first = await hub.runCuratorOnce();
+    expect(first!.error).toBeDefined();
+    expect(entryFiles(dir)).toHaveLength(1);
+    expect(ledgerCount(hub, "contribution")).toBe(0); // unseen: exactly the window
+    expect(existsSync(join(dir, "kb", "ops", "pending-commit.json"))).toBe(true);
+    await hub.close();
+    servers.pop();
+    const { hub: hub2 } = await start({ curator: curatorOpts() }, dir); // restart on the same data dir
+    await hub2.runCuratorOnce();
+    await hub2.runCuratorOnce();
+    expect(entryFiles(dir)).toHaveLength(1);
+    expect(ledgerCount(hub2, "contribution")).toBe(1);
+    expect(ledgerCount(hub2, "entry_written")).toBe(1); // commitKb's, not doubled by the replay
+    expect(ledgerCount(hub2, "decision")).toBe(1);
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(0);
+    expect(existsSync(join(dir, "kb", "ops", "pending-commit.json"))).toBe(false);
   }, 30_000);
 });

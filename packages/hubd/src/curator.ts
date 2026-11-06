@@ -10,10 +10,10 @@
  *   events    sweep_started / sweep_progress / sweep_item / sweep_finished on the hub event bus; started and finished are always paired.
  *   lease     `<inboxRoot>/.sweep-lease` (kb/librarian/curator-lease.ts): the hub holds it while the curator is on; a fresh wolf
  *             lease refuses start and skips a tick; wolf-side sweeps skip while the hub lease is fresh.
- *   KNOWN WINDOW (not closed here, same as the wolf-side sweep): sweep.ts commits the entry (commitKb logs its entry_written) and
- *             only THEN appends the ledger batch that marks the contribution hash as seen. A crash or a failing append between
- *             the two leaves a live entry with the contribution still unseen, so the next tick routes it again and can create a
- *             second entry. Wiring cannot close it (entries carry no contribution hash to check); see the ticket follow-up.
+ *   crash window  sweep.ts writes `<kb/ops>/pending-commit.json` (kb/librarian/intent.ts: hash, entry, the exact events) BEFORE it commits an
+ *             entry and clears it after the ledger append. A crash or restart in between leaves the file; the next tick replays it
+ *             under the sweep lease before it drains the lane (append the events only if the hash is unseen and the entry file is
+ *             live as written; the entry_written commitKb already logged is not doubled). The file is in kb/ops, outside export.
  *   not covered  reorg / rebuild / retire / split-fat and tryRecoverAndRender are not under the sweep lease and write the KB
  *             directly, bypassing commitKb: do not run them against a live hub KB.
  *   flag      off unless `enabled`. No decision logic lives here: sweep.ts decides, this file only writes and reports.

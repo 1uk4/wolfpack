@@ -11,11 +11,9 @@ ver() { head -n1 "$1/current/VERSION" | cut -d+ -f1; }
 for f in /srv/rel/*.tar.gz; do b=$(basename "$f"); c=${b%%-v*}; v=${b#*-v}; v=${v%%-linux*}; mkdir -p /srv/www/$c/v$v; cp "$f" "$f.sha256" /srv/www/$c/v$v/; done
 ( cd /srv/www && node -e 'const h=require("http"),fs=require("fs");h.createServer((q,r)=>{try{r.end(fs.readFileSync("/srv/www"+q.url))}catch{r.statusCode=404;r.end()}}).listen(8099,"127.0.0.1")' >/dev/null 2>&1 </dev/null & ); sleep 1
 ex() { mkdir -p /tmp/x-$1-$2 && tar --warning=no-unknown-keyword -xzf /srv/www/$1/v$2/$1-v$2-linux-x64.tar.gz -C /tmp/x-$1-$2; }
-# ---- host prerequisites like sfo-01: Dewey's user/dirs, Hal's unit
+# ---- host prerequisites like sfo-01: Hal's unit (hubd setup needs no wolf dirs any more; the Dewey stand-in user/unit stay for the survival checks)
 ln -sf /usr/local/bin/node /usr/bin/node   # sfo-01 has node in /usr/bin (workerd-wolves.service ExecStart)
 useradd -m wolf-W1hOrJ; useradd -m wolf-ETAy7b
-install -d -o wolf-W1hOrJ -m 755 /home/wolf-W1hOrJ/knowledge/base/domains /home/wolf-W1hOrJ/librarian
-install -d -o wolf-W1hOrJ -m 777 /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
 printf '[Service]\nExecStart=/bin/sleep infinity\n' > /etc/systemd/system/wolf-ETAy7b.service; systemctl daemon-reload
 
 echo "--- refuses when nothing is installed (first install is setup.sh setup)"

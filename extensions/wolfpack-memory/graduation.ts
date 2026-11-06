@@ -12,6 +12,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import {
   confirmGraduation,
   drainScope,
+  loadGraduationScope,
   previewGraduation,
   readinessOf,
   unbindOnGraduation,
@@ -53,7 +54,7 @@ export function createGraduation(deps: GraduationDeps) {
 
   /** Refuse an item that is not ready with the reason, before any model work. */
   async function assertReady(id: string): Promise<void> {
-    const all = (await client.query({})) ?? [];
+    const all = await loadGraduationScope(client, id);
     const item = all.find((i) => i.id === id);
     const r = readinessOf(item, all);
     if (!r.ready) throw new GraduationError("not_ready", `${item?.title ?? id} is not ready to graduate: ${r.reason}`);
@@ -182,7 +183,7 @@ export function createGraduation(deps: GraduationDeps) {
   /** Pending observations of this wolf's pool that a graduation of the item folds: tagged with the item or a descendant. */
   async function observations(id: string): Promise<GraduationObservationCount> {
     try {
-      const all = (await client.query({})) ?? [];
+      const all = await loadGraduationScope(client, id);
       const item = all.find((i) => i.id === id);
       if (!item) throw new GraduationError("not_ready", `${id} was not found`);
       const scope = new Set(drainScope(item, all));

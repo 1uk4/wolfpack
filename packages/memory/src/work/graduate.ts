@@ -261,6 +261,19 @@ export interface GraduationClient {
   note(id: string, text: string): Promise<WorkItem>;
 }
 
+/**
+ * The items graduation reasons over: the item's whole domain (its children, parent, initiative and siblings all live
+ * there), not every item of every domain. The item is fetched first for its domain; when that fails the full listing
+ * is the fallback, so a missing id still reports "not ready".
+ */
+export async function loadGraduationScope(client: GraduationClient, id: string): Promise<WorkItem[]> {
+  let domain: string | undefined;
+  try {
+    domain = (await client.getWithBody(id)).item.domain as string | undefined;
+  } catch { /* fall through to the full listing */ }
+  return (await client.query(domain ? { domain } : {})) ?? [];
+}
+
 export interface PreviewContribution {
   /** Den topic id it is emitted under. */
   id: string;
@@ -403,7 +416,7 @@ export async function previewGraduation(opts: {
   onProgress?: (msg: string) => void;
 }): Promise<GraduationPreview> {
   const { client, id } = opts;
-  const all = (await client.query({})) ?? [];
+  const all = await loadGraduationScope(client, id);
   const item = all.find((i) => i.id === id);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
 
@@ -568,7 +581,7 @@ export async function confirmGraduation(opts: {
   const { client, roots, wolf } = opts;
   let preview = opts.preview;
   if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
-  const all = (await client.query({})) ?? [];
+  const all = await loadGraduationScope(client, preview.itemId);
   const item = all.find((i) => i.id === preview.itemId);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? preview.itemId} is no longer ready to graduate`);
 

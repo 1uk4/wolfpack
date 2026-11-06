@@ -93,6 +93,7 @@ export {
   renderGraduationPreview,
   confirmGraduation,
   drainScope,
+  loadGraduationScope,
   type DrainWork,
   type GraduationInput,
   type GraduationClient,

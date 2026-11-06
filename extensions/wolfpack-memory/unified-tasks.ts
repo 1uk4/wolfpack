@@ -18,7 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
-import { confirmCard } from "@wolfpack/harness/engine";
+import { briefHeader, confirmCard } from "@wolfpack/harness/engine";
 import type { Card } from "@wolfpack/protocol";
 import { drainWorkObservations } from "@wolfpack/harness/memory";
 import {
@@ -308,12 +308,23 @@ export default function createTasksExtension(
   /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
   const shipCard = (title: string, id: string) =>
-    confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" });
+    confirmCard({
+      tool: "task_done",
+      question: shipLabel(title, id),
+      confirmLabel: "Ship",
+      rejectLabel: "Not yet",
+      brief: briefHeader(`Ship "${title}"?`, [`Work item ${id}: ${title}`, "Marks it done and merges its branch; this cannot be undone from the card."]),
+    });
   /** Several ids: ONE card with a multi field, one option per task (value = id), all ticked, at least one. */
   const SHIPS_FIELD = "ships";
   const optionLabel = (title: string, id: string) => `${title} (${id})`;
   const shipsCard = (entries: { id: string; title: string }[]): Card => ({
     tool: "task_done",
+    brief: briefHeader(
+      `Ship ${entries.length} tasks?`,
+      [...entries.slice(0, 4).map((e) => `${e.id}: ${e.title}`), ...(entries.length > 4 ? [`…and ${entries.length - 4} more`] : [])],
+      entries.length > 4 ? "Every task is listed with a checkbox in the question below; untick any you want to hold back." : undefined,
+    ),
     fields: [
       {
         id: SHIPS_FIELD,

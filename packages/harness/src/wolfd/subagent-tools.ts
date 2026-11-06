@@ -5,7 +5,7 @@
  */
 import { GenerationTask, defineExtension as defineDurable, hook, type Extension } from "@earendil-works/pi-durable";
 import { adaptToDurable } from "../adapters/durable.js";
-import { confirmCard } from "../engine/cards.js";
+import { briefHeader, confirmCard } from "../engine/cards.js";
 import { Type, defineExtension, defineTool, type Tool, type ToolContext, type ToolResult } from "../extension-api.js";
 import type { SubagentManager, ToolOutcome } from "./subagents.js";
 import { SPAWN_TOOLS } from "./subagents.js";
@@ -99,7 +99,7 @@ async function abandonGate(bridge: SubagentBridge, tool: string, ctx: ToolContex
   }
   if (found?.status === "skipped" || found?.status === "answered") return text(`Not abandoned: the user said no. ${info.branch} stays. Do not ask again unless they bring it up.`);
   return text(`Asked the user to confirm abandoning ${info.branch}, which has ${n}. Your turn ends here. If they answer yes, call the same tool again to abandon it; if no, do not.`, {
-    card: confirmCard({ tool, question: label, title: "Abandon branch?", description: `Its worktree and branch are deleted and the unmerged work is lost.`, confirmLabel: "Abandon", rejectLabel: "Keep" }),
+    card: confirmCard({ tool, question: label, title: "Abandon branch?", description: `Its worktree and branch are deleted and the unmerged work is lost.`, confirmLabel: "Abandon", rejectLabel: "Keep", brief: briefHeader(`Abandon ${info.branch}?`, [`${info.branch} has ${n}.`, "Its worktree and branch are deleted and the unmerged work is lost."]) }),
   });
 }
 

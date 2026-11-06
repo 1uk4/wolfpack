@@ -284,6 +284,10 @@ describe("merge on ship", () => {
     const { p, answer } = await pendingConfirm(w, feature);
     expect(p.card.tool).toBe("subagent_stop");
     expect(p.card.fields[0]).toMatchObject({ kind: "confirm", label: `Abandon ${rec.workspace.branch} (1 unmerged commit)?` });
+    expect(p.card.brief!.headline).toBe(`Abandon ${rec.workspace.branch}?`);
+    expect(p.card.brief!.headline.length).toBeLessThanOrEqual(80);
+    expect(p.card.brief!.context![0]).toContain("1 unmerged commit");
+    expect(p.card.fields).toHaveLength(1);
     expect(existsSync(rec.workspace.path)).toBe(true);
     expect(regOf(w).children[0].state).toBe("done");
     await answer(false);

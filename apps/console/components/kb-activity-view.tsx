@@ -36,9 +36,10 @@ import {
 } from "@/src/core";
 import { fetchKbActivity } from "./kb-activity-client";
 import { useOptionalServerEvent, useOptionalServerResync } from "./server-events";
+import { ledgerTimeIso, parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 
 const absolute = (iso: string): string => {
-	const d = new Date(iso);
+	const d = new Date(ledgerTimeIso(iso));
 	return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 };
 
@@ -67,7 +68,7 @@ function Row({ row, now }: { row: FeedRow; now: number }) {
 			{row.superseded > 0 ? <span className="shrink-0 text-[11px] text-muted-foreground/50">replaced {row.superseded}</span> : null}
 			<span className="ml-auto flex shrink-0 gap-3 text-muted-foreground/60">
 				{row.wolf ? <span>{row.wolf}</span> : null}
-				<span title={absolute(row.at)}>{kbAge(Math.max(0, now - Date.parse(row.at)))}</span>
+				<span title={absolute(row.at)}>{kbAge(Math.max(0, now - parseLedgerTime(row.at)))}</span>
 			</span>
 		</li>
 	);
@@ -165,7 +166,7 @@ export function NeedsAttention({ data, now }: { data: KbActivityResponse; now: n
 									<li key={i.key} data-kind={i.kind}>
 										{i.outcome ? `${i.outcome} · ` : "bad · "}
 										<span className="text-foreground">{i.denTopicId ?? "(unknown topic)"}</span>
-										{i.domainHint ? ` · hint ${i.domainHint}` : ""} · {i.reason} · <span title={absolute(i.at)}>{kbAge(Math.max(0, now - Date.parse(i.at)))}</span>
+										{i.domainHint ? ` · hint ${i.domainHint}` : ""} · {i.reason} · <span title={absolute(i.at)}>{kbAge(Math.max(0, now - parseLedgerTime(i.at)))}</span>
 									</li>
 								))}
 								{g.items.length > KB_ACTIVITY_ATTENTION_ROWS ? <li className="text-muted-foreground/50">and {g.items.length - KB_ACTIVITY_ATTENTION_ROWS} more</li> : null}

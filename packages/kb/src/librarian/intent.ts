@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { atomicWrite } from "@wolfpack/engine";
 import { entriesDir, type KbEvent, type KbRoots } from "../shared/index.js";
+import { KbEventSchema } from "../shared/index.js";
 import { appendLedger, readLedger, seenHashes } from "./ledger.js";
 
 export interface CommitIntent {
@@ -23,15 +24,16 @@ export interface CommitIntent {
   events: KbEvent[];
   /** sha256 of the entry file text the commit writes; replay requires the live file to match it (a merge whose write never landed leaves the OLD file). Absent when the commit writes nothing. */
   expect?: string;
+  /** sha256 of the entry file BEFORE the commit; absent for a create (no file yet). Replay: file == prev (or missing) means the commit never landed. */
+  prev?: string;
   /** entry_written events for entryId in the ledger when the intent was written. A larger count at replay means the commit path itself logged one (the hub's commitKb); the intent's own entry_written is then dropped so it is not counted twice. */
   written?: number;
 }
 
-const writtenCount = (log: KbEvent[], entryId: string): number => log.filter((e) => e.t === "entry_written" && (e as { entryId?: string }).entryId === entryId).length;
+export const intentWrittenCount = (log: KbEvent[], entryId: string): number => log.filter((e) => e.t === "entry_written" && (e as { entryId?: string }).entryId === entryId).length;
 
 export const intentDigest = (text: string): string => createHash("sha256").update(text).digest("hex");
 
-export { writtenCount as intentWrittenCount };
 export const intentFile = (roots: KbRoots): string => join(roots.opsRoot, "pending-commit.json");
 
 /** Atomic write (temp file + rename). */
@@ -59,7 +61,8 @@ export async function replayIntent(
   try {
     const raw = JSON.parse(readFileSync(file, "utf-8"));
     if (!raw || typeof raw.hash !== "string" || typeof raw.entryId !== "string" || typeof raw.domain !== "string" || !Array.isArray(raw.events)) throw new Error("bad shape");
-    intent = { hash: raw.hash, entryId: raw.entryId, domain: raw.domain, events: raw.events, ...(typeof raw.expect === "string" ? { expect: raw.expect } : {}), ...(typeof raw.written === "number" ? { written: raw.written } : {}) };
+    const events = (raw.events as unknown[]).map((e) => KbEventSchema.parse(e)) as KbEvent[]; // an invalid event makes the whole intent corrupt
+    intent = { hash: raw.hash, entryId: raw.entryId, domain: raw.domain, events, ...(typeof raw.expect === "string" ? { expect: raw.expect } : {}), ...(typeof raw.prev === "string" ? { prev: raw.prev } : {}), ...(typeof raw.written === "number" ? { written: raw.written } : {}) };
   } catch (err) {
     const aside = `${file}.corrupt-${Date.now()}`;
     try {
@@ -73,14 +76,33 @@ export async function replayIntent(
   }
   const ledger = readLedger(roots);
   const seen = seenHashes(ledger).has(intent.hash);
+  const notify = opts.notify ?? ((m: string) => console.warn(m));
   const entryPath = join(entriesDir(roots, intent.domain), `${intent.entryId}.md`);
-  const live = existsSync(entryPath) && (intent.expect === undefined || intentDigest(readFileSync(entryPath, "utf-8")) === intent.expect);
-  if (seen || !live) {
+  const cur = existsSync(entryPath) ? intentDigest(readFileSync(entryPath, "utf-8")) : undefined;
+  let live: boolean;
+  let why = "";
+  if (seen) {
+    live = false;
+    why = "the contribution is already in the ledger";
+  } else if (cur === undefined) {
+    live = false;
+    why = `entry ${intent.entryId} does not exist (the commit never landed)`;
+  } else if (intent.expect === undefined || cur === intent.expect) {
+    live = true; // written as planned (or the commit writes nothing: the file only has to exist)
+  } else if (cur === intent.prev) {
+    live = false;
+    why = `entry ${intent.entryId} still has its pre-commit content (the commit never landed)`;
+  } else {
+    live = true; // neither the planned nor the old text: rewritten since the commit (a reorg, a Delivered sync). The commit landed.
+    notify(`sweep: commit intent for ${intent.entryId}: the entry was rewritten after the commit; recording the intent's events anyway`);
+  }
+  if (!live) {
     clearIntent(roots);
+    notify(`sweep: commit intent for ${intent.entryId} discarded: ${why}`);
     return "discarded";
   }
   let events = intent.events;
-  if (intent.written !== undefined && writtenCount(ledger, intent.entryId) > intent.written) {
+  if (intent.written !== undefined && intentWrittenCount(ledger, intent.entryId) > intent.written) {
     const i = events.findIndex((e) => e.t === "entry_written" && (e as { entryId?: string }).entryId === intent.entryId);
     if (i >= 0) events = events.filter((_, j) => j !== i);
   }

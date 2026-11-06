@@ -25,26 +25,26 @@ npm workspaces (`packages/*`, `apps/*`), orchestrated by turbo.
 ## Quickstart
 
 ```bash
-npm install
-npm run dev        # console at http://localhost:3000, backed by MockConsoleClient
-npm run verify     # turbo: build, typecheck, lint, test across all workspaces
+pnpm install
+pnpm dev        # console at http://localhost:3000, backed by MockConsoleClient
+pnpm verify     # turbo: build, typecheck, lint, test across all workspaces
 ```
 
 Desktop (run in your own terminal; starts the console on :3210, then opens Electron):
 
 ```bash
-npm run dev -w @wolfpack/desktop
+pnpm --filter @wolfpack/desktop dev
 ```
 
-`npm run dev` does not start Electron. Packages have no linter yet (`lint` is a no-op there). The console test script (`apps/console/scripts/test.sh`) excludes known-failing files; see the TODO in it.
+`pnpm dev` does not start Electron. Packages have no linter yet (`lint` is a no-op there). The console test script (`apps/console/scripts/test.sh`) excludes known-failing files; see the TODO in it.
 
 ## Live vs dev stack
 
 - **Live** (headless workerd + wolfd for `~/wolves/local`, port 7141, run from the runtime checkout `~/wolves/local/runtime/wolfpack`) is a launchd agent `com.wolfpack.stack`: starts at login, restarts on crash, `caffeinate -is`, node loads `~/.wolfpack/.env` (`$WOLFPACK_HOME`) at start (`--env-file-if-exists`; needs node >= 22.9), logs to `~/wolves/local/logs/stack.log`.
-  `npm run stack -- start|stop|restart|status|logs [-f] [-n N]|uninstall`. `restart` is SIGTERM + relaunch and kills every in-flight turn, including the caller's. `start` refuses if something else (e.g. a hand-started workerd) holds :7141: kill it first. After `npm run runtime:update` run `npm run stack -- restart`.
-- **Dev**: `npm run dev:stack [-- --app console|none]` runs workerd (:7151) and the console (:3220) from the *current* checkout against a sandbox folder (`DEV_WOLVES_DIR`, default `~/wolves/dev-sandbox`; ports `DEV_WORKERD_PORT`, `DEV_CONSOLE_PORT`) with `HOME=<sandbox>/.home` and no inherited `WOLF_*`/`WOLFPACK_*` vars (so git identity, `~/.npmrc` and the npm cache are not shared). First run scaffolds one minimal wolf and copies a `models.json` (no secrets); a model reply needs your Claude login or keys in `~/.wolfpack/.env`. It refuses any path touching `~/wolves/local` (symlink or case aliases too) and the live ports, and Ctrl-C stops every process.
+  `pnpm stack start|stop|restart|status|logs [-f] [-n N]|uninstall`. `restart` is SIGTERM + relaunch and kills every in-flight turn, including the caller's. `start` refuses if something else (e.g. a hand-started workerd) holds :7141: kill it first. After `npm run runtime:update` run `npm run stack -- restart`.
+- **Dev**: `pnpm dev:stack [--app console|none]` runs workerd (:7151) and the console (:3220) from the *current* checkout against a sandbox folder (`DEV_WOLVES_DIR`, default `~/wolves/dev-sandbox`; ports `DEV_WORKERD_PORT`, `DEV_CONSOLE_PORT`) with `HOME=<sandbox>/.home` and no inherited `WOLF_*`/`WOLFPACK_*` vars (so git identity, `~/.npmrc` and the npm cache are not shared). First run scaffolds one minimal wolf and copies a `models.json` (no secrets); a model reply needs your Claude login or keys in `~/.wolfpack/.env`. It refuses any path touching `~/wolves/local` (symlink or case aliases too) and the live ports, and Ctrl-C stops every process.
 
-Legacy CLI commands (`wolfpack add wolf`, `launch`, `sync`, ...) still work from `main`'s tooling: `npm run build && npm run install:cli`.
+Legacy CLI commands (`wolfpack add wolf`, `launch`, `sync`, ...) still work from `main`'s tooling: `pnpm run build && pnpm run install:cli`.
 
 ## Docs
 

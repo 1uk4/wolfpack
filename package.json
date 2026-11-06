@@ -27,10 +27,11 @@
     "playwright-core": "1.63.0",
     "turbo": "^2.11.10",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "yaml": "^2.6.0"
   },
   "overrides": {
     "katex": "0.18.2"
   },
-  "packageManager": "npm@10.9.9"
+  "packageManager": "pnpm@12.18.0"
 }

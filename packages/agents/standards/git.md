@@ -28,6 +28,7 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
 - Never rewrite history that is already merged.
 - Never force-push a shared branch (`wolf/1uk4`, `stable`).
 - Task branches merge into `wolf/1uk4` automatically on task_done. Agents never merge or push to `stable`; only the owner merges PRs into `stable`.
+- Release flow, release notes and the `fixes` branch: `docs/releases.md`.
 
 ## Before you report done
 1. `git log --oneline <base>..HEAD` shows 1-2 commits.

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRightIcon } from "lucide-react";
+import { isDictationActive } from "@/components/dictation";
 import { hasInAppHistory } from "@/components/nav-tracker";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb-client";
@@ -55,6 +56,23 @@ export function EntryReader({ id }: { id: string }) {
  * The entry as a standalone PAGE (/kb/entry/[id]); the graph is not mounted behind it. Esc returns to the page it
  * was opened from when that was in-app (graph, /kb-activity), else to "/". The browser Back button does the same natively.
  */
+/** Whether this keydown is an Esc that should leave the entry page (pure; the listener calls it). */
+export function shouldGoBackOnEscape(
+	e: Pick<KeyboardEvent, "key" | "defaultPrevented" | "metaKey" | "ctrlKey" | "altKey" | "isComposing" | "target">,
+	doc: Pick<Document, "querySelector">,
+	dictationActive: boolean,
+): boolean {
+	if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return false;
+	if (e.metaKey || e.ctrlKey || e.altKey) return false;
+	// Dictation owns this Esc (it cancels the capture); never also navigate.
+	if (dictationActive) return false;
+	const t = e.target as Element | null;
+	if (t && typeof t.closest === "function" && (t.closest("[contenteditable]") || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return false;
+	// A dialog or popover above the page owns this Esc.
+	if (doc.querySelector('[role="dialog"],[role="alertdialog"],[aria-modal="true"]')) return false;
+	return true;
+}
+
 export function EntryReaderPage({ id }: { id: string }) {
 	const router = useRouter();
 	const back = useCallback(() => {
@@ -63,10 +81,10 @@ export function EntryReaderPage({ id }: { id: string }) {
 	}, [router]);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			const t = e.target as HTMLElement | null;
-			if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-			back();
+			if (shouldGoBackOnEscape(e, document, isDictationActive())) {
+				e.preventDefault();
+				back();
+			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
@@ -81,7 +99,7 @@ export function EntryReaderView({ id, state }: { id: string; state: EntryReaderS
 		<div className="flex h-dvh flex-col" data-testid="entry-reader" data-entry={id} data-state={state.kind}>
 			<TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{entry?.title ?? id}</h1>
-				<Link href={focusHref(`ent:${id}`)} className="ml-auto shrink-0 text-xs text-muted-foreground underline underline-offset-2" data-testid="entry-open-in-graph">
+				<Link href={focusHref(`ent:${id}`)} className="ml-auto flex shrink-0 items-center text-xs text-muted-foreground underline underline-offset-2 max-md:min-h-11 max-md:min-w-11 max-md:justify-center" data-testid="entry-open-in-graph">
 					Open in graph
 				</Link>
 			</TopBar>

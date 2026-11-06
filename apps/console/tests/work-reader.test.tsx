@@ -31,7 +31,7 @@ const { nodeClickAction } = await import("../components/graph-view.tsx");
 const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
 const { WorkItemView } = await import("../components/work-item-page.tsx");
-const { EntryReaderView } = await import("../components/entry-reader.tsx");
+const { EntryReaderView, shouldGoBackOnEscape } = await import("../components/entry-reader.tsx");
 
 const src = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -90,8 +90,12 @@ describe("phones", () => {
 	});
 	it("the KB entry is a full page, not an overlay, with an Open in graph link to the focused node", () => {
 		const html = renderToStaticMarkup(<EntryReaderView id="w/x" state={{ kind: "loading" }} />);
-		assert.ok(html.includes("h-dvh") && !html.includes("dialog") && !html.includes("entry-reader-close"));
+		assert.ok(html.includes("h-dvh") && !html.includes('role="dialog"') && !html.includes("aria-modal") && !html.includes("entry-reader-close"));
 		assert.ok(html.includes('href="/?focus=ent%3Aw%2Fx"') && html.includes("entry-open-in-graph"));
+	});
+	it("Open in graph has a phone-size tap target", () => {
+		const html = renderToStaticMarkup(<EntryReaderView id="x" state={{ kind: "loading" }} />);
+		assert.ok(html.includes("max-md:min-h-11") && html.includes("max-md:min-w-11"));
 	});
 	it("the Work list is a full-height page with no column mode", () => {
 		const list = src("../components/work-view.tsx");
@@ -269,5 +273,32 @@ describe("NavTracker", () => {
 		assert.equal(hasInAppHistory(), false, "a deep link must not look like in-app history");
 		await act(async () => api.open("a")); // same pathname, only ?item= changes
 		assert.equal(hasInAppHistory(), false);
+	});
+});
+
+describe("entry page Esc", () => {
+	const none = { querySelector: () => null };
+	const ev = (o: Record<string, unknown> = {}) => ({ key: "Escape", defaultPrevented: false, metaKey: false, ctrlKey: false, altKey: false, isComposing: false, target: null, ...o }) as never;
+	const el = (tagName: string, editable = false) => ({ tagName, closest: (sel: string) => (editable && sel === "[contenteditable]" ? {} : null) });
+	it("plain Esc goes back", () => assert.equal(shouldGoBackOnEscape(ev(), none, false), true));
+	it("other keys, defaultPrevented, IME composition and modifiers are ignored", () => {
+		assert.equal(shouldGoBackOnEscape(ev({ key: "a" }), none, false), false);
+		assert.equal(shouldGoBackOnEscape(ev({ defaultPrevented: true }), none, false), false);
+		assert.equal(shouldGoBackOnEscape(ev({ isComposing: true }), none, false), false);
+		for (const m of ["metaKey", "ctrlKey", "altKey"]) assert.equal(shouldGoBackOnEscape(ev({ [m]: true }), none, false), false, m);
+	});
+	it("editable targets (input, textarea, contenteditable descendant) keep their Esc", () => {
+		assert.equal(shouldGoBackOnEscape(ev({ target: el("INPUT") }), none, false), false);
+		assert.equal(shouldGoBackOnEscape(ev({ target: el("TEXTAREA") }), none, false), false);
+		assert.equal(shouldGoBackOnEscape(ev({ target: el("SPAN", true) }), none, false), false);
+		assert.equal(shouldGoBackOnEscape(ev({ target: el("DIV") }), none, false), true);
+	});
+	it("an open dialog or active dictation owns the Esc", () => {
+		assert.equal(shouldGoBackOnEscape(ev(), { querySelector: () => ({}) }, false), false);
+		assert.equal(shouldGoBackOnEscape(ev(), none, true), false);
+	});
+	it("back vs home: hasInAppHistory is false on a deep link", () => {
+		assert.equal(hasInAppHistory(), false);
+		assert.match(src("../components/entry-reader.tsx"), /hasInAppHistory\(\)\) router\.back\(\);\s*else router\.push\("\/"\)/);
 	});
 });

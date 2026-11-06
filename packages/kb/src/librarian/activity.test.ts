@@ -452,3 +452,27 @@ describe("mixed ledger time forms (run under TZ=America/Los_Angeles)", () => {
     expect(w.decisions.items.map((d) => d.denTopicId)).toEqual(["iso"]);
   });
 });
+
+describe("short and ISO events on one day: order and cursor (run under TZ=America/Los_Angeles)", () => {
+  // ' ' sorts before 'T', so a string compare puts every short event of a day before every ISO one; the parsed compare must not.
+  const mk = () => [
+    dec(0, { at: "2026-11-01 10:00", denTopicId: "s10", hash: "s10" }),
+    dec(0, { at: "2026-11-01T09:00:00.000Z", denTopicId: "i09", hash: "i09" }),
+    dec(0, { at: "2026-11-01 08:00", denTopicId: "s08", hash: "s08" }),
+    dec(0, { at: "2026-11-01T11:00:00.000Z", denTopicId: "i11", hash: "i11" }),
+  ];
+  const res = { domain: () => undefined, title: () => undefined };
+
+  it("pages newest first by instant and resumes from the cursor without gaps or repeats", () => {
+    const idx = buildActivityIndex(mk());
+    const p1 = pageActivity(idx, { limit: 2 }, res);
+    expect(p1.decisions.items.map((d) => d.denTopicId)).toEqual(["i11", "s10"]);
+    expect(p1.decisions.nextCursor).toBeDefined();
+    const p2 = pageActivity(idx, { limit: 2, before: p1.decisions.nextCursor! }, res);
+    expect(p2.decisions.items.map((d) => d.denTopicId)).toEqual(["i09", "s08"]);
+    expect(p2.decisions.nextCursor).toBeUndefined();
+    // a cursor on the short form works the same (id "0" sorts below every event id, so the same-instant event is not older)
+    const p3 = pageActivity(idx, { limit: 5, before: "2026-11-01 10:00|0" }, res);
+    expect(p3.decisions.items.map((d) => d.denTopicId)).toEqual(["i09", "s08"]);
+  });
+});

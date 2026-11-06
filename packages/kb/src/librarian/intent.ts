@@ -13,8 +13,7 @@ import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { atomicWrite } from "@wolfpack/engine";
-import { entriesDir, type KbEvent, type KbRoots } from "../shared/index.js";
-import { KbEventSchema } from "../shared/index.js";
+import { entriesDir, KbEventSchema, type KbEvent, type KbRoots } from "../shared/index.js";
 import { appendLedger, readLedger, seenHashes } from "./ledger.js";
 
 export interface CommitIntent {

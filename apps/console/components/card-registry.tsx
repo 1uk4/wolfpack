@@ -162,6 +162,7 @@ for (const name of ["quiz", "ask_user_question", "explain"]) {
 }
 
 // Wolf-thread interaction cards (protocol cards): the ask card renders any free-text / single card.
+registerCard("card", "brief", { Renderer: AskCard });
 registerCard("card", "ask_user_question", { Renderer: AskCard });
 registerCard("card", "default", { Renderer: AskCard });
 

@@ -1,13 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
-import { InlineMarkdown, MessageResponse } from "@/components/ai-elements/message";
+import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { addCustomEntry, escapeRawHtml, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
+import { addCustomEntry, escapeRawHtml, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
+import { fieldRenderer } from "@/components/card-fields";
+import { CardTextInput, otherText, type FieldDictation } from "@/components/card-fields/shared";
+import { BriefHeader } from "@/components/brief-header";
+
+export { CardTextInput };
 
 /**
  * The inline interaction card of a wolf thread (the wolf asked a question): free-text, single-choice, multi-choice (checkboxes) and confirm (yes/no) fields.
@@ -145,7 +150,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 			}}
 		>
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{card.title ?? "Question"}
+				{card.brief ? "Brief" : (card.title ?? "Question")}
 				{closedKind && (
 					<span data-testid="card-closed-badge" data-closed={closedKind} className={cn("ml-2 rounded px-1.5 py-0.5 font-semibold", CLOSED_STYLE[closedKind].badge)}>
 						{CLOSED_STYLE[closedKind].label}
@@ -155,6 +160,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 				{!closed && heldSkip && <span data-testid="card-held-skip" className="ml-2 rounded bg-muted px-1.5 py-0.5">skip saved · waiting for the other questions</span>}
 				{!closed && !heldSkip && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
 			</div>
+			{card.brief && <BriefHeader brief={card.brief} className="mb-3" />}
 			{stepped && steps.length > 1 && (
 				<div className="mb-2 text-xs text-muted-foreground" data-testid="card-step-indicator" aria-live="polite">
 					Step {step + 1} of {steps.length}
@@ -207,7 +213,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 						</Button>
 					) : (
 						<Button type="button" size="sm" disabled={!pending || submitting || finishing} aria-disabled={!canSubmit || undefined} aria-describedby={hintId} onClick={submit} data-testid="card-submit">
-							{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
+							{submitting ? "Sending…" : heldAnswer ? "Update answer" : card.fields.length === 0 ? "OK" : "Submit"}
 						</Button>
 					)}
 				</div>
@@ -229,9 +235,6 @@ function shownIds(card: InteractionCardProps["card"], draft: CardDraft, stepIdx:
 	const steps = visibleSteps(card, draft);
 	return (steps[Math.min(stepIdx, steps.length - 1)]?.fields ?? []).map((f) => f.id);
 }
-
-/** Props spread onto a text input that is a dictation target. */
-type FieldDictation = { onFocus: () => void; onKeyDown: (e: React.KeyboardEvent) => void; mic: { targetKey: string; onClaim: () => void } };
 
 /** Esc in a card field cancels a live dictation (the hook listens for this event; the Esc is claimed). */
 function stopDictationOnEscape(e: React.KeyboardEvent) {
@@ -329,6 +332,7 @@ function FieldView({
 	missing?: boolean;
 }) {
 	const labelId = `card-field-${useId()}`;
+	const Renderer = fieldRenderer(field.kind);
 	return (
 		<div className={cn("mb-2 last:mb-0", missing && "border-l-2 border-amber-500/70 pl-2")} data-field={field.id} data-incomplete={missing || undefined}>
 			<div className="mb-2 flex flex-wrap items-baseline gap-x-2 font-medium" id={labelId}>
@@ -348,300 +352,21 @@ function FieldView({
 				<div className="text-sm italic text-muted-foreground" data-testid="card-skipped">
 					Skipped
 				</div>
-			) : field.kind === "confirm" ? (
-				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} onClear={onClear} labelledBy={labelId} />
-			) : field.kind === "multi" ? (
-				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} onAdd={onAddCustom} error={pendingError} dictation={dictation} />
-			) : field.kind === "free-text" ? (
-				readOnly ? (
-					<div className="lh-prose whitespace-pre-wrap" data-testid="card-answer-text">
-						“{typeof value?.value === "string" ? value.value : ""}”
-					</div>
-				) : (
-					<CardTextInput
-						multiline
-						testId="card-text"
-						className="min-h-20 w-full resize-y px-3 py-2"
-						value={typeof value?.value === "string" ? value.value : ""}
-						onChange={(text) => onChange({ value: text })}
-						placeholder="Your answer…"
-						{...dictation}
-					/>
-				)
 			) : (
-				<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelId}>
-					{field.options.map((o) => {
-						const other = value !== undefined && "other" in value && value.other === true;
-						const sel = !other && value?.value === o.value;
-						return (
-							<button
-								key={o.value}
-								type="button"
-								aria-pressed={sel}
-								disabled={readOnly}
-								data-testid="card-option"
-								data-value={o.value}
-								onClick={() => (sel && field.optional ? onClear() : onChange({ value: o.value }))}
-								className={cn(
-									OPTION_ROW,
-									sel ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
-									readOnly && !sel && "text-muted-foreground",
-								)}
-							>
-								<Indicator shape="radio" on={sel} />
-								<span className="flex min-w-0 flex-col items-start">
-									<InlineMarkdown>{o.label}</InlineMarkdown>
-									{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
-								</span>
-							</button>
-						);
-					})}
-					{field.allowOther !== false &&
-						(readOnly ? (
-							otherText(value) !== undefined && (
-								<div data-testid="answered-other" className="rounded-lg border border-primary bg-accent px-3 py-1.5">
-									“{otherText(value)}”
-								</div>
-							)
-						) : (
-							<CardTextInput
-								testId="card-other"
-								className={cn("px-3 py-1.5", isOther(value) && "border-primary bg-accent")}
-								placeholder="Other…"
-								value={otherText(value) ?? ""}
-								onChange={(text) => onChange({ value: text, other: true })}
-								{...dictation}
-							/>
-						))}
-				</div>
+				<Renderer
+					field={field}
+					value={value}
+					readOnly={readOnly}
+					onChange={onChange}
+					onClear={onClear}
+					labelledBy={labelId}
+					typed={typed}
+					onType={onType}
+					onAddCustom={onAddCustom}
+					error={pendingError}
+					dictation={dictation}
+				/>
 			)}
-		</div>
-	);
-}
-
-/** One option row: the whole button (indicator + label) is the click target. */
-// Confirm rows add "w-auto": cn() (tailwind-merge) lets the later w-auto replace this w-full.
-const OPTION_ROW = "flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
-
-/**
- * The 20px choice indicator of an option row: a rounded square with a check (multi) or a circle with a dot (single,
- * confirm). Unselected it is a 2px foreground-tinted outline (readable on light and dark), selected it fills with the
- * primary colour. Decorative: the row's aria-pressed carries the state.
- */
-function Indicator({ shape, on }: { shape: "check" | "radio"; on: boolean }) {
-	return (
-		<span
-			aria-hidden
-			data-testid="card-indicator"
-			data-on={on || undefined}
-			className={cn(
-				"mt-px flex size-5 shrink-0 items-center justify-center border-2 transition-colors",
-				shape === "check" ? "rounded-md" : "rounded-full",
-				on ? "border-primary bg-primary text-primary-foreground" : "border-foreground/50 bg-background",
-			)}
-		>
-			{on &&
-				(shape === "check" ? (
-					<svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-						<path d="M3.5 8.5l3 3 6-7" />
-					</svg>
-				) : (
-					<span className="size-2 rounded-full bg-current" />
-				))}
-		</span>
-	);
-}
-
-const otherText = (v: CardFieldAnswer | undefined): string | undefined => (v !== undefined && "other" in v && v.other === true ? String(v.value) : undefined);
-const isOther = (v: CardFieldAnswer | undefined): boolean => otherText(v) !== undefined;
-
-function MultiView({
-	field,
-	value,
-	readOnly,
-	onChange,
-	labelledBy,
-	typed,
-	onType,
-	onAdd,
-	error,
-	dictation,
-}: {
-	field: Extract<CardField, { kind: "multi" }>;
-	value: CardFieldAnswer | undefined;
-	readOnly: boolean;
-	onChange: (a: CardFieldAnswer) => void;
-	labelledBy: string;
-	typed: string;
-	onType: (text: string) => void;
-	onAdd?: () => void;
-	error?: string;
-	dictation: FieldDictation;
-}) {
-	const picked = Array.isArray(value?.value) ? value.value : [];
-	const custom = value && "other" in value && Array.isArray(value.other) ? value.other : [];
-	const atMax = field.max !== undefined && picked.length >= field.max;
-	const write = (next: string[], nextCustom: string[]) => onChange({ value: next, ...(nextCustom.length > 0 ? { other: nextCustom } : {}) });
-	const toggle = (v: string) => (picked.includes(v) ? write(picked.filter((p) => p !== v), custom.filter((c) => c !== v)) : write([...picked, v], custom));
-	const addCustom = () => onAdd?.();
-	const rows = [
-		...field.options.map((o) => ({ ...o, custom: false })),
-		...custom.filter((c) => picked.includes(c)).map((c) => ({ label: c, value: c, description: undefined, custom: true })),
-	];
-	const min = Math.max(field.min ?? 0, field.optional ? 0 : 1);
-	const hint = min > 0 || field.max !== undefined ? `Pick ${min > 0 && field.max !== undefined ? `${min}–${field.max}` : min > 0 ? `at least ${min}` : `up to ${field.max}`}` : null;
-	return (
-		<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelledBy} data-testid="card-multi">
-			{rows.map((o) => {
-				const sel = picked.includes(o.value);
-				return (
-					<button
-						key={o.value}
-						type="button"
-						aria-pressed={sel}
-						disabled={readOnly || (!sel && atMax)}
-						data-testid="card-option"
-						data-value={o.value}
-						data-custom={o.custom ? "true" : undefined}
-						onClick={() => toggle(o.value)}
-						className={cn(
-							OPTION_ROW,
-							sel ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
-							readOnly && !sel && "text-muted-foreground",
-							// at max: the unpicked rows stay visible but clearly unavailable
-							!readOnly && !sel && atMax && "cursor-not-allowed opacity-50",
-						)}
-					>
-						<Indicator shape="check" on={sel} />
-						<span className="flex min-w-0 flex-col items-start">
-							<InlineMarkdown>{o.label}</InlineMarkdown>
-							{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
-						</span>
-					</button>
-				);
-			})}
-			{field.allowOther === true && !readOnly && (
-				<div className="flex gap-2">
-					<CardTextInput testId="card-other" className="px-3 py-1.5" placeholder="Other…" value={typed} onChange={onType} onEnter={addCustom} {...dictation} />
-					<Button type="button" size="sm" variant="outline" data-testid="card-other-add" disabled={typed.trim() === "" || error !== undefined} onClick={addCustom}>
-						Add
-					</Button>
-				</div>
-			)}
-			{!readOnly && error && (
-				<div data-testid="card-other-error" className="text-xs text-destructive">
-					{error}
-				</div>
-			)}
-			{!readOnly && hint && (
-				<div data-testid="card-multi-hint" className={cn("text-xs text-muted-foreground", picked.length > 0 && !multiInBounds(field, picked.length) && "text-destructive")}>
-					{hint}
-				</div>
-			)}
-		</div>
-	);
-}
-
-function ConfirmView({
-	field,
-	value,
-	readOnly,
-	onChange,
-	onClear,
-	labelledBy,
-}: {
-	labelledBy: string;
-	field: Extract<CardField, { kind: "confirm" }>;
-	value: CardFieldAnswer | undefined;
-	readOnly: boolean;
-	onChange: (a: CardFieldAnswer) => void;
-	onClear: () => void;
-}) {
-	const picked = typeof value?.value === "boolean" ? value.value : undefined;
-	const note = value && "note" in value ? value.note : undefined;
-	const btn = (which: boolean, label: string, testid: string) => (
-		<button
-			type="button"
-			aria-pressed={picked === which}
-			disabled={readOnly}
-			data-testid={testid}
-			onClick={() => (picked === which && field.optional ? onClear() : onChange({ value: which, ...(note ? { note } : {}) }))}
-			className={cn(
-				OPTION_ROW,
-				"w-auto items-center pr-4",
-				picked === which ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
-				readOnly && picked !== which && "text-muted-foreground",
-			)}
-		>
-			<Indicator shape="radio" on={picked === which} />
-			{label}
-		</button>
-	);
-	return (
-		<div className="flex flex-wrap gap-2" role="group" aria-labelledby={labelledBy} data-testid="card-confirm-group">
-			{btn(true, field.confirmLabel ?? "Yes", "card-confirm")}
-			{btn(false, field.rejectLabel ?? "No", "card-reject")}
-		</div>
-	);
-}
-
-/**
- * The one text entry of the card (free text, single Other, multi Other). Dictation can wire in here once: it only needs
- * the value, the change callback, Enter, and the element ref.
- */
-export function CardTextInput({
-	value,
-	onChange,
-	onEnter,
-	inputRef,
-	multiline,
-	testId,
-	className,
-	onKeyDown,
-	mic,
-	...rest
-}: {
-	value: string;
-	onChange: (text: string) => void;
-	onEnter?: () => void;
-	inputRef?: Ref<HTMLInputElement & HTMLTextAreaElement>;
-	multiline?: boolean;
-	testId: string;
-	className?: string;
-	/** Inline dictation mic at the field's trailing edge (see InlineMic). */
-	mic?: { targetKey: string; onClaim: () => void };
-} & Omit<InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>, "value" | "onChange" | "className" | "ref">) {
-	// Extra props (placeholder, onFocus, data-*, …) are spread so callers such as dictation can attach to the field.
-	const common = {
-		...rest,
-		"data-testid": testId,
-		className: cn("rounded-lg border bg-background text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className),
-		value,
-		ref: inputRef,
-		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
-	};
-	const field = multiline ? (
-		// pr-10 on textareas (mic at right-4, clear of the scrollbar); pr-9 on inputs (mic at right-1.5, no scrollbar).
-		<textarea {...(common as object)} className={cn(common.className, mic && "pr-10")} onKeyDown={onKeyDown} />
-	) : (
-		<input
-			type="text"
-			{...(common as object)}
-			className={cn(common.className, mic && "w-full pr-9")}
-			onKeyDown={(e) => {
-				onKeyDown?.(e);
-				if (e.key === "Enter" && onEnter && !e.defaultPrevented) {
-					e.preventDefault();
-					onEnter();
-				}
-			}}
-		/>
-	);
-	if (!mic) return field;
-	return (
-		<div className={cn("relative", !multiline && "min-w-0 flex-1")}>
-			{field}
-			<InlineMic {...mic} className={cn("absolute", !multiline && "right-1.5", multiline ? "right-4 top-1.5" : "top-1/2 -translate-y-1/2")} />
 		</div>
 	);
 }

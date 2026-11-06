@@ -45,9 +45,15 @@ export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClo
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [onClose]);
+	// Take focus on open (the close button, else the panel) so Tab and Esc work in the reader at once.
+	useEffect(() => {
+		const own = panelRef.current;
+		(own?.querySelector<HTMLElement>('[data-testid="work-reader-close"]') ?? own)?.focus();
+	}, []); // once per open; switching items in place keeps focus where the user put it
 	return (
 		<div
 			ref={panelRef}
+			tabIndex={-1}
 			role="dialog"
 			aria-label="Work item reader"
 			data-testid="work-reader"

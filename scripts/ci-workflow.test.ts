@@ -39,6 +39,14 @@ describe("ci.yml uses pnpm", () => {
 		expect(pm).toMatch(/^pnpm@/);
 	});
 
+	it("the verify job runs the lockfile guard right after the install", () => {
+		const steps = ci.jobs.verify.steps!;
+		const install = steps.findIndex((s) => s.run && /pnpm install --frozen-lockfile/.test(s.run));
+		const guard = steps.findIndex((s) => s.run && /pnpm check:lockfiles/.test(s.run));
+		expect(guard).toBeGreaterThan(install);
+		expect(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts["check:lockfiles"]).toBe("node scripts/check-lockfiles.mjs .");
+	});
+
 	it("no turbo remote cache in CI", () => {
 		expect(raw).not.toMatch(/TURBO_(TOKEN|TEAM|REMOTE)|--remote-cache|remote-cache/i);
 	});

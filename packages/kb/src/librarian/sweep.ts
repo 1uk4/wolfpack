@@ -373,7 +373,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // next one is picked up within a minute. An empty inbox returns here: no
   // embedder, no ledger read, no LLM call, no writes, no log line.
   // A commit intent left by a crash between "entry live" and "ledger appended" is finished (or dropped) first.
-  await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify });
+  // If this replay's append throws, the intent is kept and the error propagates: the tick is BLOCKED (nothing is drained or routed)
+  // until the ledger append works again, because routing on with an unrecorded live entry is what makes a twin entry.
+  try {
+    await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify });
+  } catch (err) {
+    ctx.notify?.(`sweep: BLOCKED: could not replay the pending commit intent (pending-commit.json is kept; the next tick retries): ${cleanError(err)}`);
+    throw err;
+  }
   const pending = drainInbox(roots, { lane }).sort((a, b) =>
     (a.submitted || "").localeCompare(b.submitted || "")
   );
@@ -467,6 +474,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     // The decision already in the ledger for the item itself (not a split-out overflow): the live feed reports it, so it agrees
     // with the ledger even when a later failure parks the item.
     let committedDecision: DecisionSummary | undefined;
+    // The events the live commit intent owns (set when it is written, cleared with it). `pend` is the part pushed to `batch` after the commit.
+    let intentOwn: { events: KbEvent[]; pend: KbEvent[]; committed: boolean } | undefined;
     // Decision event for the paths that write no batch (reject, unclassified, parked). Best effort: the item is already
     // handled (moved / parked), so a failing append must not turn it into an item error.
     const recordDecision = async (d: DecisionSummary) => {
@@ -881,7 +890,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
       const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
       const expectText = !unchanged ? renderEntry(entry) : patched;
-      writeIntent(roots, { hash: c.contentHash, entryId: entry.id, domain, events: [...batch, ...pend], written: intentWrittenCount(log, entry.id), ...(expectText !== undefined ? { expect: intentDigest(expectText) } : {}) });
+      writeIntent(roots, { hash: c.contentHash, entryId: entry.id, domain, events: [...batch, ...pend], written: intentWrittenCount(log, entry.id), ...(existingMarkdown !== undefined ? { prev: intentDigest(existingMarkdown) } : {}), ...(expectText !== undefined ? { expect: intentDigest(expectText) } : {}) });
+      intentOwn = { events: [...batch, ...pend], pend, committed: false };
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
       // A decision the contribution agrees with is left exactly as it is.
@@ -893,6 +903,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       committed = true;
       if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
 
+      if (intentOwn) intentOwn.committed = true;
       batch.push(...pend);
       // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
       // by alias and update in place. Re-fold so later items in THIS batch see it.
@@ -902,6 +913,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // crash can't leave a live entry with no ledger record.
       await w.appendLedger(roots, batch);
       clearIntent(roots);
+      intentOwn = undefined;
       decided = true;
       if (exclude === undefined) committedDecision = decision; // the main call; an overflow passes `exclude`
       log.push(...batch);
@@ -956,16 +968,25 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           // The main entry is live and the contribution counts as seen: the
           // second subject must not be lost, so it is queued as its own item.
           // The overflow entry may be live with its events unrecorded: finish the intent; only a still-unrecorded overflow is requeued.
+          const own = intentOwn;
+          intentOwn = undefined;
           let recorded = false;
+          let replayFailed = false;
           try {
             recorded = (await replayIntent(roots, { append: (e) => w.appendLedger(roots, e), notify: ctx.notify })) === "recorded";
           } catch {
-            /* the intent stays; the next tick replays it */
+            replayFailed = true; // the intent stays; the next tick replays it
           }
-          batch.length = 0; // nothing of the failed append leaks into PERSIST
-          if (!recorded) requeueOverflow(roots, o, lane);
-          routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: "queued", error: cleanError(err) };
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" queued for the next tick: ${cleanError(err)}`);
+          // Only the intent's own events leave `batch` (events pushed before the intent existed, e.g. section_created, stay for PERSIST
+          // unless the intent has them: recorded, or kept for a later replay once the commit landed). Nothing else is dropped.
+          if (own) {
+            const drop = new Set<KbEvent>(recorded || (replayFailed && own.committed) ? own.events : own.pend);
+            for (let i = batch.length - 1; i >= 0; i--) if (drop.has(batch[i])) batch.splice(i, 1);
+          }
+          const alreadySeen = recorded || seenHashes(readLedger(roots)).has(o.contentHash); // the append went through and something later threw
+          if (!alreadySeen) requeueOverflow(roots, o, lane);
+          routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: alreadySeen ? "recorded" : "queued", error: cleanError(err) };
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" ${alreadySeen ? "already recorded" : "queued for the next tick"}: ${cleanError(err)}`);
         }
       }
 

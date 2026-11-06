@@ -18,6 +18,5 @@ export function useThreadColor(thread: ThreadColorSource, all: readonly ThreadCo
 			return k.color ? { ...rest, color: k.color } : rest;
 		};
 		return threadColor(lay(thread), threadColorIndex(all.map(lay)));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [tick, thread.id, thread.parentThreadId, thread.color, thread.settings, all]);
 }

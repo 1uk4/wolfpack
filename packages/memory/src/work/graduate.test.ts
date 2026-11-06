@@ -131,6 +131,22 @@ describe("graduation: preview then confirm", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  it("preview reads only the item, its descendants, its parent and sibling features, never a whole-domain listing", async () => {
+    const other = w("feature", "Unrelated", null, { stage: "in_build" });
+    const { client } = fakeClient([init, f, t1, t2, other], { [f.id]: PLAN + RECORD });
+    const asked: unknown[] = [];
+    // The real listing of a domain is ~1.6 MB and exceeds the Work client's limit: only partOf lookups are small.
+    client.query = async (q) => {
+      asked.push(q);
+      if (!q?.partOf) throw new Error("timed out: unfiltered listing");
+      return [init, f, t1, t2, other].filter((i) => i.partOf === q.partOf);
+    };
+    const { engine } = engineOf(answer(f.id));
+    const p = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22" });
+    expect(p.archive.map((a) => a.id)).toEqual([f.id, t1.id, t2.id]);
+    expect(asked).toEqual([{ partOf: f.id }, { partOf: init.id }]);
+  });
+
   it("preview distills locally and sends nothing; cancel (never confirming) changes nothing", async () => {
     const { client, calls } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
     const { engine, call } = engineOf(answer(f.id));

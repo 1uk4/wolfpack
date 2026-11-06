@@ -261,6 +261,51 @@ export interface GraduationClient {
   note(id: string, text: string): Promise<WorkItem>;
 }
 
+/**
+ * The items graduation reasons over, fetched with a few small calls instead of listing the whole domain (which is
+ * nearly the whole work store): the item, its descendants (`partOf` queries, only for kinds that can have children),
+ * its parent, and for a feature its parent's other children (the initiative's sibling features). When the item
+ * cannot be fetched the domain-less full listing is the fallback, so a missing id still reports "not ready".
+ */
+export async function loadGraduationScope(client: GraduationClient, id: string): Promise<WorkItem[]> {
+  let item: WorkItem;
+  try {
+    item = (await client.getWithBody(id)).item;
+    if (!item) throw new Error("not found");
+  } catch {
+    return (await client.query({})) ?? [];
+  }
+  const byId = new Map<string, WorkItem>([[item.id as string, item]]);
+  const add = (items: WorkItem[] | undefined) => {
+    for (const i of items ?? []) if (!byId.has(i.id as string)) byId.set(i.id as string, i);
+  };
+  const childrenOf = async (parent: string) => (await client.query({ partOf: parent })) ?? [];
+
+  // Descendants: only features, initiatives and containers hold children.
+  const holds = (i: WorkItem) => i.kind === "feature" || i.kind === "initiative" || !!i.container;
+  const queue: WorkItem[] = holds(item) ? [item] : [];
+  const walked = new Set<string>();
+  while (queue.length) {
+    const cur = queue.shift()!;
+    if (walked.has(cur.id as string)) continue;
+    walked.add(cur.id as string);
+    const kids = (await childrenOf(cur.id as string)).filter((k) => k.partOf === cur.id);
+    add(kids);
+    queue.push(...kids.filter(holds));
+  }
+
+  if (item.partOf) {
+    try {
+      const parent = (await client.getWithBody(item.partOf as string)).item;
+      if (parent) {
+        byId.set(parent.id as string, parent);
+        if (item.kind === "feature") add((await childrenOf(parent.id as string)).filter((k) => k.partOf === parent.id));
+      }
+    } catch { /* a vanished parent reads as no parent */ }
+  }
+  return [...byId.values()];
+}
+
 export interface PreviewContribution {
   /** Den topic id it is emitted under. */
   id: string;
@@ -401,9 +446,11 @@ export async function previewGraduation(opts: {
   /** Drain time limit (default DRAIN_TIMEOUT_MS); tests shorten it. */
   drainTimeoutMs?: number;
   onProgress?: (msg: string) => void;
+  /** The items already loaded with loadGraduationScope for this id (saves a second fetch). */
+  scope?: WorkItem[];
 }): Promise<GraduationPreview> {
   const { client, id } = opts;
-  const all = (await client.query({})) ?? [];
+  const all = opts.scope ?? await loadGraduationScope(client, id);
   const item = all.find((i) => i.id === id);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
 
@@ -568,7 +615,7 @@ export async function confirmGraduation(opts: {
   const { client, roots, wolf } = opts;
   let preview = opts.preview;
   if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
-  const all = (await client.query({})) ?? [];
+  const all = await loadGraduationScope(client, preview.itemId);
   const item = all.find((i) => i.id === preview.itemId);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? preview.itemId} is no longer ready to graduate`);
 

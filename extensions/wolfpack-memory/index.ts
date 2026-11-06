@@ -43,7 +43,7 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig, type WorkSystemHandle } from "./work-system.js";
-import { WorkClient } from "./work-client.js";
+import { WorkClient, GRADUATION_TIMEOUT_MS } from "./work-client.js";
 export { WorkStoreReadOnlyError, WorkStorePermissionError } from "./work-client.js";
 import { writeParentBody } from "./parent-embed.js";
 import {
@@ -1581,11 +1581,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
+        return previewGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-        const done = await confirmGraduation({ client: new WorkClient(), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
+        const done = await confirmGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
         unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;

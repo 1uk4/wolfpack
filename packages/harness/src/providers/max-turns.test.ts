@@ -13,6 +13,15 @@ describe("withMaxTurnsAsTurnEnd (work-wolfpack-beKfWkW)", () => {
     expect(r).toMatchObject({ type: "result", subtype: "success", is_error: false });
     expect(r.errors).toBeUndefined();
   });
+  it("logs one line with the sdkStopReason when it rewrites", async () => {
+    const log = vi.fn();
+    await collect(withMaxTurnsAsTurnEnd(fake([toolStart, { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "tool_use" } } }, maxTurns]), log)({}));
+    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls[0][0]).toContain("sdkStopReason=tool_use");
+    const quiet = vi.fn();
+    await collect(withMaxTurnsAsTurnEnd(fake([maxTurns]), quiet)({}));
+    expect(quiet).not.toHaveBeenCalled();
+  });
   it("also recognises stop_reason tool_use and assistant tool_use blocks", async () => {
     const a = await collect(withMaxTurnsAsTurnEnd(fake([{ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "tool_use" } } }, maxTurns]))({}));
     const b = await collect(withMaxTurnsAsTurnEnd(fake([{ type: "assistant", message: { content: [{ type: "tool_use" }] } }, maxTurns]))({}));

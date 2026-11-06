@@ -470,5 +470,29 @@ describe("kb-activity model", () => {
 			assert.deepEqual(rows.filter((r) => r.state === "decided").map((r) => r.denTopicId).sort(), ["par1", "rej1"]);
 			assert.equal(contributionList(d, NOW, 100).more, 0);
 		});
+		it("a resubmission with the same key shows as running after sweep_started, even without a progress frame", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW - 1000 } };
+			let st = initialActivityState(d);
+			st = applyHubEvent(st, frameAt({ type: "sweep_item", id: 3, from: "hal", denTopicId: "a", outcome: "parked" }), NOW);
+			st = applyHubEvent(st, frameAt({ type: "sweep_finished" }), NOW);
+			st = applyHubEvent(st, frameAt({ type: "sweep_started", pending: 1 }), NOW);
+			assert.equal(st.ended, undefined);
+			const again = base();
+			again.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW + 5000 } };
+			const rows = contributionRows(reconcileActivity(st, again).data, NOW + 6000);
+			assert.equal(rows.find((r) => r.denTopicId === "a")!.state, "running");
+		});
+		it("a reconnect (resync) during a running sweep: the refetch's sweep.current shows", () => {
+			const d = base();
+			d.sweep = { running: true, current: { from: "hal", denTopicId: "a", startedAt: NOW } };
+			let st = initialActivityState(d);
+			st = applyHubEvent(st, frameAt({ type: "sweep_item", id: 3, from: "hal", denTopicId: "a", outcome: "create", entryId: "kb-n" }), NOW);
+			st = applyHubEvent(st, frameAt({ type: "sweep_finished" }), NOW); // idle + ended set; the next sweep_started was missed during the disconnect
+			st = applyHubEvent(st, { type: "resync", id: 9 } as never, NOW);
+			assert.equal(st.idle, undefined);
+			assert.equal(st.ended, undefined);
+			assert.equal(reconcileActivity(st, structuredClone(d)).data.sweep?.current?.denTopicId, "a");
+		});
 	});
 });

@@ -64,8 +64,9 @@ export interface KbActivityState {
 	scope?: KbActivityScope;
 	/**
 	 * Items whose sweep_item was seen (key from + topic), and whether the sweep finished: a refetch issued BEFORE those events can land
-	 * after them carrying `sweep.current` again, so reconcileActivity drops a `current` that these say is over. Cleared by the next
-	 * sweep_started / sweep_progress for that item.
+	 * after them carrying `sweep.current` again, so reconcileActivity drops a `current` that these say is over. Both are cleared entirely
+	 * by the next sweep_started and by resync (a reconnect may have missed frames); sweep_progress also lifts `ended` for its item.
+	 * The cap of 20 is enough: a hub tick handles one item, so only the last few ended items can still have a refetch in flight.
 	 */
 	ended?: string[];
 	idle?: boolean;
@@ -96,6 +97,7 @@ export function sinceCutoff(since: string | undefined, now: number = Date.now())
 export function reconcileActivity(prev: KbActivityState | null, data: KbActivityResponse, scope?: KbActivityScope): KbActivityState {
 	let d = data;
 	const cur = data.sweep?.current;
+	// The response's own `running: true` does not override `idle` (it may predate the sweep_finished); sweep_started / resync clear it.
 	if (cur && prev && (prev.idle || prev.ended?.includes(itemKey(cur)))) d = { ...data, sweep: withoutCurrent(data.sweep!) }; // a stale response: that item already ended
 	const next = initialActivityState(d, scope);
 	if (!data.sweep && prev) next.sweeping = prev.sweeping;
@@ -448,9 +450,16 @@ function sameContribution(a: { from: string; denTopicId: string }, b: { from: st
 export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: number = Date.now()): KbActivityState {
 	switch (frame.type) {
 		case "sweep_started": {
-			if (!state.idle) return state.sweeping ? state : { ...state, sweeping: true };
-			const { idle: _i, ...rest } = state;
+			// A new sweep: nothing that ended before it can be stale any more (a resubmission of the same item may be in progress).
+			if (!state.idle && !state.ended) return state.sweeping ? state : { ...state, sweeping: true };
+			const { idle: _i, ended: _e, ...rest } = state;
 			return { ...rest, sweeping: true };
+		}
+		case "resync": {
+			// SSE reconnect: frames may have been missed, so earlier "ended / idle" knowledge is not trustworthy. The refetch decides.
+			if (!state.idle && !state.ended) return state;
+			const { idle: _i, ended: _e, ...rest } = state;
+			return rest;
 		}
 		case "sweep_progress": {
 			// the item in progress (or its route) changed: show it now, without a refetch

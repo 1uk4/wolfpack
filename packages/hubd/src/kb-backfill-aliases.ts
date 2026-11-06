@@ -16,16 +16,20 @@
  *    retired it; a copied retire would drop it again).
  *  - Copied events keep Dewey's relative order (alias vs retire matter for the fold) and keep his `at`.
  * Ids: `bf-` + sha256(kind, source event id (or its fields)), so re-runs append nothing. Everything runs under the KB writer lock.
+ * HUBD MUST BE STOPPED for a real run: it takes the KB writer lock (`run/kb-writer.lock`, the one hubd holds) and fails cleanly with a lock
+ * error while a live hubd has it. The dry run only reads and takes no lock.
+ *  - `entry_retired` is also skipped when the hub ledger already holds a NON-`bf-` entry_retired for that entry (survivorOf takes the LAST
+ *    retire in file order, so a copied Dewey retire would override the curator's survivor).
+ *  - Duplicate source events (same derived `bf-` id) are collapsed before appending.
  * Report: counts per type, skipped keys, and alias targets with no entry file in the hub KB and no `entry_retired` survivor (still emitted).
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendLedger, entryDomain, readLedger, survivorOf, withKbLock } from "@wolfpack/kb/librarian";
+import { appendLedger, entryDomain, readLedger, resolveAliasedEntry } from "@wolfpack/kb/librarian";
 import { KbEventSchema, ledgerFile, type KbEvent } from "@wolfpack/kb/shared";
 import { toIsoUtc, DEFAULT_BACKFILL_TZ } from "./kb-backfill.js";
 import { hubRoots } from "./layout.js";
-import { existsSync as exists } from "node:fs";
-import { join } from "node:path";
+import { acquireKbWriterLock } from "./kb-commits.js";
 
 export interface AliasBackfillOptions {
   deweyLedger: string;
@@ -70,12 +74,15 @@ export async function kbBackfillAliases(opts: AliasBackfillOptions): Promise<Ali
     const have = new Set(hub.map((e) => e.id));
     const curatorAlias = new Set<string>();
     const curatorWritten = new Set<string>();
+    const curatorRetired = new Set<string>();
     for (const e of hub) {
       if (e.id.startsWith("bf-")) continue;
       if (e.t === "aliased") curatorAlias.add(`${e.wolf}:${e.denTopicId}`);
       else if (e.t === "entry_written") curatorWritten.add(e.entryId);
+      else if (e.t === "entry_retired") curatorRetired.add(e.entryId);
     }
     const events: KbEvent[] = [];
+    const seenIds = new Set<string>();
     const skippedKeys = new Set<string>();
     for (const s of src) {
       const kind = s.t;
@@ -85,17 +92,18 @@ export async function kbBackfillAliases(opts: AliasBackfillOptions): Promise<Ali
       let ev: KbEvent;
       if (kind === "aliased") {
         const wolf = str(s, "wolf"), den = str(s, "denTopicId"), canonicalId = str(s, "canonicalId"), hash = str(s, "hash");
-        const cand = { id: id("aliased", srcKey), at: at ?? "", t: "aliased", wolf: wolf ?? "", denTopicId: den ?? "", canonicalId: canonicalId ?? "", hash: hash ?? "" };
         if (!at || !wolf || !den || !canonicalId || !hash) { rep.invalid++; continue; }
         if (curatorAlias.has(`${wolf}:${den}`)) { skippedKeys.add(`${wolf}:${den}`); continue; }
-        ev = cand as KbEvent;
+        ev = { id: id("aliased", srcKey), at, t: "aliased", wolf, denTopicId: den, canonicalId, hash };
       } else {
         const entryId = str(s, "entryId");
         if (!at || !entryId) { rep.invalid++; continue; }
-        if (curatorWritten.has(entryId)) { rep.skippedRetired.push(entryId); continue; }
+        if (curatorWritten.has(entryId) || curatorRetired.has(entryId)) { if (!rep.skippedRetired.includes(entryId)) rep.skippedRetired.push(entryId); continue; }
         ev = { id: id("entry_retired", srcKey), at, t: "entry_retired", entryId, ...(str(s, "reason") ? { reason: str(s, "reason")! } : {}) } as KbEvent;
       }
       if (!KbEventSchema.safeParse(ev).success) { rep.invalid++; continue; }
+      if (seenIds.has(ev.id)) continue; // duplicate source event
+      seenIds.add(ev.id);
       events.push(ev);
     }
     // Survivor lookup sees Dewey's retire events too (they are about to be in the ledger).
@@ -103,14 +111,7 @@ export async function kbBackfillAliases(opts: AliasBackfillOptions): Promise<Ali
     const unresolved = new Set<string>();
     for (const e of events) {
       if (e.t !== "aliased") continue;
-      const dom = entryDomain(e.canonicalId);
-      let cur = e.canonicalId, ok = false;
-      for (let hop = 0; hop < 5 && cur; hop++) {
-        const d = entryDomain(cur) ?? dom;
-        if (d && exists(join(roots.kbBase, "domains", d, "entries", `${cur}.md`))) { ok = true; break; }
-        cur = survivorOf(view, cur) ?? "";
-      }
-      if (!ok) unresolved.add(e.canonicalId);
+      if (!resolveAliasedEntry(roots, view, e.canonicalId, entryDomain(e.canonicalId) ?? "")) unresolved.add(e.canonicalId);
     }
     for (const e of events) {
       rep.perType[e.t] = (rep.perType[e.t] ?? 0) + 1;
@@ -127,14 +128,21 @@ export async function kbBackfillAliases(opts: AliasBackfillOptions): Promise<Ali
     rep.appended = fresh.length;
   };
   if (opts.dryRun) run();
-  else await withKbLock(roots, async () => run());
+  else {
+    const lock = acquireKbWriterLock(opts.dataDir); // throws while a live hubd holds it
+    try {
+      run();
+    } finally {
+      lock.release();
+    }
+  }
   return rep;
 }
 
 export function formatAliasBackfillReport(r: AliasBackfillReport): string[] {
   const p = (x: string): string => x.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
   return [
-    `kb-backfill --aliases${r.dryRun ? " (dry run, nothing written)" : ""}: aliased ${r.aliasedBuilt}, entry_retired ${r.retiredBuilt}; appended ${r.appended}, already present ${r.alreadyPresent}, invalid ${r.invalid}`,
+    `kb-backfill --aliases${r.dryRun ? " (dry run, nothing written)" : ""} [hubd must be stopped for a real run]: aliased ${r.aliasedBuilt}, entry_retired ${r.retiredBuilt}; appended ${r.appended}, already present ${r.alreadyPresent}, invalid ${r.invalid}`,
     `skipped alias keys (the hub curator already aliased them): ${r.skippedKeys.length}`,
     ...r.skippedKeys.slice(0, 20).map((k) => `  ${p(k)}`),
     `skipped entry_retired (curator rewrote the entry): ${r.skippedRetired.length}`,

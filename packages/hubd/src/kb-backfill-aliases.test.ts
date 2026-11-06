@@ -6,6 +6,7 @@ import { foldRegistry, readLedger } from "@wolfpack/kb/librarian";
 import { ledgerFile } from "@wolfpack/kb/shared";
 import { hubRoots } from "./layout.js";
 import { formatAliasBackfillReport, kbBackfillAliases } from "./kb-backfill-aliases.js";
+import { acquireKbWriterLock } from "./kb-commits.js";
 import { main, parseArgs } from "./cli.js";
 
 const tmp: string[] = [];
@@ -80,5 +81,48 @@ describe("kb-backfill --aliases", () => {
     const out: string[] = [];
     await main(["kb-backfill", "--aliases", "--dewey-ledger", f.deweyLedger, "--data-dir", f.dataDir, "--dry-run"], {}, (m) => out.push(m));
     expect(out.join("\n")).toContain("dry run");
+  });
+
+  it("skips a Dewey entry_retired when the hub ledger already has a curator retire for that entry", async () => {
+    const f = fixture();
+    appendFileSync(ledgerFile(f.roots), jl([{ id: "cur3", at: "2026-11-06T00:00:00.000Z", t: "entry_retired", entryId: "kb-wolfpack-RET", reason: "merged into kb-wolfpack-CUR" }]));
+    const r = await kbBackfillAliases(f);
+    expect(r.skippedRetired).toContain("kb-wolfpack-RET");
+    expect(readLedger(f.roots).filter((e) => e.t === "entry_retired" && e.entryId === "kb-wolfpack-RET").map((e) => e.id)).toEqual(["cur3"]);
+  });
+
+  it("collapses duplicate source events by their derived id", async () => {
+    const f = fixture();
+    const dup = { id: "dupe", at: "2026-10-05T10:00:00.000Z", t: "aliased", wolf: "w9", denTopicId: "t-dup", canonicalId: "kb-wolfpack-AAA", hash: "sha256:hd" };
+    appendFileSync(f.deweyLedger, jl([dup, dup]));
+    const r = await kbBackfillAliases(f);
+    expect(r.appended).toBe(5);
+    expect(readLedger(f.roots).filter((e) => e.t === "aliased" && e.denTopicId === "t-dup").length).toBe(1);
+  });
+
+  it("fails cleanly while a live hubd holds the KB writer lock (real run), and says hubd must be stopped", async () => {
+    const f = fixture();
+    const lock = acquireKbWriterLock(f.dataDir);
+    try {
+      await expect(kbBackfillAliases(f)).rejects.toThrow(/lock|writer/i);
+      expect(readLedger(f.roots).filter((e) => e.id.startsWith("bf-")).length).toBe(0);
+    } finally {
+      lock.release();
+    }
+    const r = await kbBackfillAliases(f);
+    expect(formatAliasBackfillReport(r)[0]).toContain("hubd must be stopped");
+  });
+
+  it("first run copies, the curator re-aliases the same key, a second run skips it and the curator alias stays latest", async () => {
+    const f = fixture();
+    await kbBackfillAliases(f);
+    appendFileSync(ledgerFile(f.roots), jl([{ id: "cur9", at: "2026-11-07T00:00:00.000Z", t: "aliased", wolf: "w2", denTopicId: "t-gone", canonicalId: "kb-wolfpack-AAA", hash: "sha256:cur" }]));
+    const r2 = await kbBackfillAliases(f);
+    expect(r2.skippedKeys).toContain("w2:t-gone");
+    expect(r2.appended).toBe(0);
+    const reg = foldRegistry(readLedger(f.roots));
+    const owner = [...reg.values()].find((t) => t.aliases.some((a) => a.wolf === "w2" && a.denTopicId === "t-gone"));
+    expect(owner?.canonicalId).toBe("kb-wolfpack-AAA");
+    expect(owner?.aliases.find((a) => a.denTopicId === "t-gone")?.lastHash).toBe("sha256:cur");
   });
 });

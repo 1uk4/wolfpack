@@ -2,14 +2,20 @@
 
 Applies to every test in this repo, and above all to tests written by agents.
 Goal: few tests, each of which fails when behaviour breaks and stays green when it doesn't.
+Leanness comes from these rules (seams, one test per behaviour, no duplicates, replace don't layer), not from a numeric budget.
 
 ## 1. Decide whether to test at all
 - Test a change only when there is an independent source of truth to check it
   against: a spec, a worked example, a known-good literal, a contract another
   component depends on.
-- Do NOT write tests for config, wiring, glue, type-only code, re-exports or
-  straight pass-through/delegation. A test there can only restate the code.
-  Cover it through the seam that uses it, or let the typecheck cover it.
+- No test needed (the planner writes "no test" plus the reason, the reviewer accepts it):
+  - config, wiring, glue, type-only code, re-exports, straight pass-through/delegation.
+    A test there can only restate the code. Cover it through the seam that uses it,
+    or let the typecheck cover it.
+  - prompt and agent-profile text (agent .md files, standards).
+  - UI styling and layout: verify by loading the page.
+  - docs.
+  - spikes and prototypes that are not merged to stable.
 - Deletion test: if deleting a module would make its complexity disappear, it is a
   pass-through and doesn't earn its own tests.
 
@@ -67,22 +73,22 @@ Goal: few tests, each of which fails when behaviour breaks and stays green when 
 ## 7. Determinism, live tests, flakes
 - Tests don't depend on real time, randomness, network or run order.
 - Live tests (real wolf, Claude, network) carry the `live` gate and never run in the
-  default suite. Slow evals carry the `eval` gate. Both run on the release PR.
+  default suite. Slow evals carry the `eval` gate. Both are meant to run only on the
+  PR into `stable` (planned).
 - A flaky test is a bug: fix it, or quarantine it with an owner and a date. Don't
   add retries to hide it.
 
-## Before you add a test
-- [ ] Is there an independent source of truth? (If not, don't add it.)
-- [ ] Which listed seam is it at?
-- [ ] The behaviour it protects, in one sentence.
-- [ ] grep done: no existing test covers it.
-- [ ] Expected value independent of the implementation.
-- [ ] Would it survive a refactor, a renamed file, a moved URL?
-- [ ] Seen red.
+## 8. Suite stages
+| Stage | What runs | Who runs it |
+|---|---|---|
+| Task branch | `npx vitest related --run <changed files>` plus typecheck | the worker |
+| Merge into `wolf/1uk4` | full default suite of every affected package; red blocks the merge (planned) | the auto-merge |
+| PR into `stable` | everything, including the `live` and `eval` gates (planned) | CI |
 
 ## How to verify your work
-1. While working, run single test files (`vitest related --run <files>`, or the
-   package's own command). Run the affected suites once at the end, plus typecheck.
+1. On a task branch, run `npx vitest related --run <changed files>` from the repo root
+   (or the package's own command) while working, and again with typecheck at the end.
+   The full suite of each affected package runs at merge into `wolf/1uk4` (see Suite stages).
 2. Red evidence: for each new test, show the failing run (test name and failure
    message) before the fix, then the green run. A test never seen red is a
    tautology candidate.
@@ -90,19 +96,5 @@ Goal: few tests, each of which fails when behaviour breaks and stays green when 
    load the page.
 4. The final report lists the commands run with pass/fail counts, the red evidence,
    and every test changed or removed with the reason.
-5. Say plainly what was NOT run (full suite, live, eval). CI runs those on the
-   release PR into stable.
-
-## Sources
-- Google Testing Blog: Change-Detector Tests Considered Harmful (2015);
-  Test Behavior, Not Implementation (2013); Don't Overuse Mocks (2013);
-  Flaky Tests at Google (2016).
-- Kent Beck, Test Desiderata.
-- Martin Fowler, The Practical Test Pyramid ("Avoid Test Duplication").
-- Kent C. Dodds, Write tests. Not too many. Mostly integration.
-- Anthropic, Claude Code best practices (failing test first; evidence over "all tests pass").
-- METR, Recent Frontier Models Are Reward Hacking (2025).
-- Informed by mattpocock/skills (tdd, codebase-design), MIT.
-
-House rules (ours, not cited): when not to test; seams listed in the plan and the
-reviewer seam check; red evidence; no "known failing"; no retries for flakes.
+5. Say plainly what was NOT run (full suite, live, eval); the later stages in
+   Suite stages run those.

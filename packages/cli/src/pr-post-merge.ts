@@ -12,7 +12,7 @@ import { hasRealChanges, PrRefusal, type CmdResult } from "./pr-prepare.js";
 export interface PostMergeDeps {
   /** Runs git in `cwd` (default: the current worktree); never throws, reports the exit code. */
   git(args: string[], cwd?: string): CmdResult;
-  /** `npx turbo run build` in a worktree (the command scripts/runtime-update.mjs uses). */
+  /** Install (pnpm checkouts) and `turbo run build` in a worktree: the commands scripts/runtime-update.mjs uses. */
   build(cwd: string): CmdResult;
   /** The real path of a directory (symlinks resolved); the path itself if it cannot be resolved. */
   realpath(p: string): string;
@@ -232,7 +232,7 @@ export async function prPostMerge(opts: PostMergeOptions, deps: PostMergeDeps): 
 
   // 3. Rebuild what moved, with the same command as scripts/runtime-update.mjs.
   if (!moved.length) log("nothing was fast-forwarded: no build");
-  else if (!apply) log(`would build (npx turbo run build) in: ${moved.join(", ")}`);
+  else if (!apply) log(`would build (turbo run build; pnpm install --frozen-lockfile first on a pnpm checkout) in: ${moved.join(", ")}`);
   else {
     for (const path of moved) {
       log(`building ${path}…`);

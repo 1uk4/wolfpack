@@ -163,7 +163,7 @@ describe("wolfpack pr post-merge: the plan (no --apply)", () => {
     expect(text).toContain("would archive feat/a at refs/archive/feat/a");
     expect(text).toContain("would remove the worktree " + FEAT);
     expect(text).toContain("would delete the branch feat/a");
-    expect(text).toContain("would build (npx turbo run build)");
+    expect(text).toContain("would build (turbo run build; pnpm install --frozen-lockfile first on a pnpm checkout)");
     expect(text).toContain("run again with --apply");
   });
 

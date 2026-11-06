@@ -897,7 +897,7 @@ export class WolfServer {
       den: this.opts.den,
       extensionInstalled: this.opts.memoryExtension,
       running: this.opts.den ? memoryActionsFor(this.opts.den) !== undefined : false,
-      config: this.opts.memoryConfig ?? { sandbox: false, consolidation: { threshold: 20000, poolTarget: 10000, trigger: "hybrid" as const } },
+      config: this.opts.memoryConfig ?? { sandbox: false, consolidation: { threshold: 20000, poolTarget: 10000, trigger: "hybrid" as const, interval: "4h" } },
     };
   }
 

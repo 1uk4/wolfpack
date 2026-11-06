@@ -310,7 +310,7 @@ async function startConfigured(
       memoryConfig: {
         sandbox: !!config.sandbox,
         disabled: config.extensionConfig.memory?.enabled === false,
-        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger },
+        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger, interval: config.memory.consolidation.interval },
       },
       work: { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN },
       onError: (e) => log(`server error: ${String(e)}`),

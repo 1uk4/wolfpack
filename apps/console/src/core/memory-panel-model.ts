@@ -90,6 +90,23 @@ export interface PoolSummary {
 	/** "22 observations" */
 	observationsText: string;
 	trigger: MemoryPoolStatus["trigger"];
+	/** The effective trigger: "hybrid: at 20,000 tokens or every 4h" / "manual: only on Promote". */
+	triggerText: string;
+}
+
+export function triggerText(pool: Pick<MemoryPoolStatus, "trigger" | "consolidateAtTokens" | "interval">): string {
+	const at = `at ${pool.consolidateAtTokens.toLocaleString("en-US")} tokens`;
+	const every = `every ${pool.interval ?? "4h"}`;
+	switch (pool.trigger) {
+		case "manual":
+			return "manual: only on Promote";
+		case "threshold":
+			return `threshold: ${at}`;
+		case "timer":
+			return `timer: ${every}`;
+		default:
+			return `hybrid: ${at} or ${every}`;
+	}
 }
 
 export function poolSummary(pool: MemoryPoolStatus | null): PoolSummary | null {
@@ -104,6 +121,7 @@ export function poolSummary(pool: MemoryPoolStatus | null): PoolSummary | null {
 		fill: ratio(pool.tokens),
 		targetMark: ratio(pool.poolTarget),
 		trigger: pool.trigger,
+		triggerText: triggerText(pool),
 		tokensText: `${pool.tokens.toLocaleString("en-US")} / ${at.toLocaleString("en-US")} tokens`,
 		observationsText: `${pool.count} ${pool.count === 1 ? "observation" : "observations"}`,
 	};

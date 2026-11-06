@@ -1243,6 +1243,8 @@ export const MemoryPoolStatusSchema = z.object({
   /** Pool tokens a consolidation leaves behind. */
   poolTarget: z.number().int().nonnegative(),
   trigger: z.enum(["threshold", "timer", "hybrid", "manual"]),
+  /** Timer cadence ("4h"); applies to the timer and hybrid triggers. Absent from older wolfds. */
+  interval: z.string().optional(),
 });
 export type MemoryPoolStatus = z.infer<typeof MemoryPoolStatusSchema>;
 

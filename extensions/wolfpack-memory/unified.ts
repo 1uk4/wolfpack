@@ -355,6 +355,10 @@ export default function createMemoryExtension(
   const consolidationThreshold = consolidation?.threshold ?? DEFAULT_CONSOLIDATE_AT;
   const poolTarget = consolidation?.poolTarget ?? DEFAULT_POOL_TARGET;
   const consolidationTrigger = consolidation?.trigger ?? "hybrid";
+  // A bad interval string warns once and falls back to 4h; it never stops the wolf starting.
+  const intervalText = consolidation?.interval ?? "4h";
+  if (!/^\d+(s|m|h|d)$/.test(intervalText)) console.warn(`[memory] invalid memory.consolidation.interval "${intervalText}": using 4h`);
+  const timerMs = config.intervalMs ?? parseInterval(intervalText);
 
   // Which tier each memory step uses (fixed map, STEP_TIERS in @wolfpack/engine; wolf.yaml `tiers:` overrides apply):
   //   fast : classify (observer), contradict, classifyToSection, matchSubject, confirmSubject, sectionSummary, labelSection, splitSection
@@ -536,7 +540,6 @@ export default function createMemoryExtension(
   /** Started on the first observation (durable has no extension start hook); cleared when the engine closes. */
   function startTimer(ctx: HookContext): void {
     if (timer || ctx.conversation?.hostConsolidationTimer || (consolidationTrigger !== "timer" && consolidationTrigger !== "hybrid")) return;
-    const ms = config.intervalMs ?? parseInterval(consolidation?.interval ?? "4h");
     timer = setInterval(() => {
       void (async () => {
         try {
@@ -553,7 +556,7 @@ export default function createMemoryExtension(
           console.error("[memory] timer error:", err instanceof Error ? err.message : err);
         }
       })();
-    }, ms);
+    }, timerMs);
     timer.unref?.();
     ctx.conversation?.onEngineClose?.(stopTimer);
   }

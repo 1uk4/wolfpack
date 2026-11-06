@@ -441,6 +441,7 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 							{view !== "feed" && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
 						</button>
 					</p>
+					<p className="text-xs text-muted-foreground" data-testid="memory-trigger">Consolidation {pool.triggerText}</p>
 					{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
 					{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}

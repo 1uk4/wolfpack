@@ -248,14 +248,57 @@ Env (`hubd.env.example`): `HUBD_CURATOR` (default 0), `HUBD_CURATOR_POLL_MS` (60
 - **Shutdown:** `close()` stops the timer and refuses writes that would OPEN a new item (a new entry commit, a patch, a quarantine, a reject receipt, a duplicate move) while an item that already committed is allowed to finish (its ledger append, Delivered sync, receipt and `_processed` move), so a routine restart never leaves a live entry whose contribution is unseen. It waits up to 15 s (under `TimeoutStopSec=20`), and keeps the lease until that tick has ended.
 - **Known window (same as the wolf-side sweep):** sweep.ts commits an entry (commitKb logs `entry_written`) and then appends the ledger batch that marks the contribution as seen. A failing append is retried in the same tick and heals; a hard crash between the two leaves the contribution unseen, and the next tick can route it again and create a second entry. The fix belongs in sweep.ts (a pre-create check) and is a follow-up; check for twin entries after any hubd crash during a tick.
 
-### Cutover (owner steps on sfo-01, in this order; none is done by this ticket)
-1. Stop Dewey's sweep so only the hub sweeps: stop the librarian wolf's sweep timer (or the whole wolf) and any `kb sweep` cron. Let it finish its tick first (`ls /home/wolf-W1hOrJ/librarian/inbox/*/` must be empty or you accept those items staying for Dewey).
-2. Make the KB the hub's: today `/var/lib/hubd/kb/base/domains` is a symlink to Dewey's tree and the unit binds it READ-ONLY. The curator needs a hub-owned, writable KB: either (a) move/copy the KB into `/var/lib/hubd/kb/base/domains` (rsync -a, then repoint Dewey's mirror consumers) or (b) change the unit's `BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains` to `BindPaths=` + add it to `ReadWritePaths=` and make the dirs writable by `hubd` (group, not 777). Pick with the owner; (a) is the end state.
-3. Unset `HUBD_INBOX_ROOT` and `HUBD_RECEIPTS_ROOT` in `/etc/wolfpack/hubd.env` and drop the two `BindPaths=`/`ReadWritePaths=` lane entries. Workers keep contributing over the link; files already in Dewey's inbox are NOT migrated (drain them first, step 1).
-4. Model access for user `hubd`: `HUBD_CURATOR_MODELS` pointing at a models.json whose transport works for `hubd` (the unit hides `/home`; an API transport needs `ANTHROPIC_API_KEY` in the env file, a bridge transport needs its credentials under hubd's home or `StateDirectory`), outbound HTTPS, and Ollama reachable at `HUBD_EMBED_URL`. Check `RestrictAddressFamilies`/`SystemCallFilter` still allow the engine (the bundle starts without them; an actual tick is untested on the host).
-5. Install the new bundle (`setup.sh install`), set `HUBD_CURATOR=1` (default poll 60 s; watch the first tick), `systemctl restart hubd`. Check `journalctl -u hubd` for `[curator]` lines and `ls <data-dir>/kb/ops/contributions/.sweep-lease`.
-6. Verify: push one contribution (a worker `contribute`), see `sweep_started` → `sweep_item` → `sweep_finished` and `kb.changed` on `/v1/events`, the entry under `kb/base/domains/<d>/entries/`, the receipt in the worker.
+### Cutover (owner steps on sfo-01, in this order; first run for real 2026-11-05/06, ticket work-wolfpack-cd7SyRt)
+`<dewey-wolf>` = Dewey's wolf user (sfo-01: `wolf-W1hOrJ`). Check each write before the next. Before anything: `cp -a /etc/wolfpack/hubd.env /etc/wolfpack/hubd.env.bak-<date>`, `cp -a /var/lib/hubd/ledger /var/lib/hubd/ledger.bak-<date>` (hubd stopped for the copy, or accept a tiny race), and note the current drop-ins in `/etc/systemd/system/hubd.service.d/`.
 
-**Roll back:** set `HUBD_CURATOR=0`, restart hubd (the lease file is removed on a clean stop; a stale one is ignored after 2 x the tick budget or when its pid is gone), restart Dewey's sweep. Entries the curator wrote stay.
+1. Stop Dewey's sweep so only the hub sweeps: stop the librarian wolf's sweep timer (or the whole wolf) and any `kb sweep` cron. Let it finish its tick first (`ls /home/<dewey-wolf>/librarian/inbox/*/` must be empty or you accept those items staying for Dewey). Re-run the final `hubd kb-backfill` (contributions/entries/decisions) before any curator write.
+2. **Make the KB the hub's, as a real directory (not a symlink into Dewey's home).** `/var/lib/hubd/kb/base/domains` is a symlink to Dewey's tree and the unit binds it read-only. With hubd stopped:
+   ```
+   cd /var/lib/hubd/kb/base
+   mv domains domains.dewey-link-<date>          # keep the symlink for rollback
+   mkdir domains
+   rsync -a /home/<dewey-wolf>/knowledge/base/domains/ domains/
+   chown -R hubd:hubd domains
+   for d in domains/*/ domains.dewey-link-<date>/*/; do echo "$d $(ls $d/entries | wc -l)"; done   # per-domain entry counts must match before/after
+   ```
+3. **Copy Dewey's section tree BEFORE enabling the curator.** Dewey's tree is `/home/<dewey-wolf>/den/kb/sections/_sections.json`; the curator reads `<dataDir>/sections/_sections.json`. If it is missing the curator starts with an empty tree, invents junk top-level sections named after entry summaries, and the domain `_digest.json` collapses.
+   ```
+   install -d -o hubd -g hubd /var/lib/hubd/sections
+   install -o hubd -g hubd -m 640 /home/<dewey-wolf>/den/kb/sections/_sections.json /var/lib/hubd/sections/_sections.json
+   ```
+   Recovery if missed: `hubd kb-rehome --data-dir /var/lib/hubd --move <entryId>=<sectionId> ... --remove-section <id> ... [--apply]` (dry run by default; hubd MUST be stopped: it needs the KB writer lock and the sweep lease). Do the alias backfill (step 4) before any rehome.
+4. **Copy Dewey's topic links (aliases) and retire records.** The earlier `hubd kb-backfill` writes only contribution / entry_written / decision events. Without Dewey's `aliased` and `entry_retired` events a re-promoted topic is routed by similarity and can duplicate, and `_registry.md` renders empty alias lists. With hubd stopped and `ledger/` backed up (above):
+   ```
+   cp /home/<dewey-wolf>/den/kb/ledger/events.jsonl /root/dewey-events.<date>.jsonl
+   hubd kb-backfill --aliases --dewey-ledger /root/dewey-events.<date>.jsonl --data-dir /var/lib/hubd --dry-run
+   hubd kb-backfill --aliases --dewey-ledger /root/dewey-events.<date>.jsonl --data-dir /var/lib/hubd
+   ```
+   It skips keys the hub curator already aliased and retires for entries the curator rewrote; idempotent. It must run BEFORE any kb-rehome (rehome's writes count as curator writes for the skip rule). The dry run will list alias targets with no file and no survivor (entries the owner retired): harmless. Other files in Dewey's `den/kb` (`sweep-attempts.json`, `split-cache.json`, `emitted*`, `work-links.jsonl`, vectors) need no copying.
+5. **Unit: remove ALL `/home` binds at once.** Removing only some of `BindReadOnlyPaths=` / `BindPaths=` / `ReadWritePaths=` into Dewey's home makes hubd fail with `226/NAMESPACE` ("Failed to set up mount namespacing: .../librarian/inbox: No such file or directory"). Use a drop-in (sfo-01: `/etc/systemd/system/hubd.service.d/curator-local.conf`):
+   ```
+   [Service]
+   BindReadOnlyPaths=
+   BindPaths=
+   ReadWritePaths=
+   ReadWritePaths=/var/lib/hubd
+   ```
+   Disable the old work-writes drop-in by renaming it (e.g. `mv work-writes.conf work-writes.conf.off-<date>`; not `.conf~`). Then `systemctl daemon-reload` (do not restart yet).
+6. **Model access for user `hubd`, tested in the sandbox first.** Put a copy of Dewey's models.json at e.g. `/etc/wolfpack/curator-models.json` (`root:hubd`, 640). The Claude Agent SDK comes from the host's global install (`/usr/lib/node_modules/@anthropic-ai/claude-agent-sdk`); the sandbox must resolve it. Test with a transient unit carrying the same properties before touching the live hub (hubd stopped or on other paths; use the unit's `User=`, `EnvironmentFile=`, `ProtectHome`/`ProtectSystem` and `ReadWritePaths=/var/lib/hubd` as in `systemctl cat hubd`):
+   ```
+   systemd-run --wait --pipe -p User=hubd -p EnvironmentFile=/etc/wolfpack/hubd.env -p ProtectSystem=strict -p ProtectHome=yes -p ReadWritePaths=/var/lib/hubd \
+     /bin/sh -c '<check>'
+   ```
+   `<check>` covers: (a) `node -e "require.resolve(\"@anthropic-ai/claude-agent-sdk\")"` resolves (set `NODE_PATH=/usr/lib/node_modules` if needed); (b) Ollama embeddings: POST to `$HUBD_EMBED_URL` with `$HUBD_EMBED_MODEL` (`nomic-embed-text`) returns a 768-dim vector; (c) a one-shot haiku call through the SDK with `CLAUDE_CODE_OAUTH_TOKEN` succeeds; (d) `/var/lib/hubd/kb` and `sections` are writable. Check `RestrictAddressFamilies`/`SystemCallFilter` still allow the engine.
+7. **Env** in `/etc/wolfpack/hubd.env` (backup taken above; names only here): set `HUBD_CURATOR=1`, `HUBD_CURATOR_POLL_MS`, `HUBD_CURATOR_MODELS` (the path from step 6), `HUBD_EMBED_URL`, `HUBD_EMBED_MODEL`, `CLAUDE_CODE_OAUTH_TOKEN` (the subscription token; never echo it). REMOVE `HUBD_INBOX_ROOT` and `HUBD_RECEIPTS_ROOT` (startup refuses otherwise). Workers keep contributing over the link; files already in Dewey's inbox are NOT migrated (drain them first, step 1).
+8. Install the new bundle if not yet (`setup.sh install`), `systemctl restart hubd`. Check `systemctl status hubd`, `journalctl -u hubd -f` for `[curator]` lines, and `ls /var/lib/hubd/kb/ops/contributions/.sweep-lease`. **The first tick can take ~4 min** (cold vector cache); do not restart during it.
+9. Verify: push one test contribution (a worker `contribute`); see `sweep_started` -> `sweep_item` -> `sweep_finished` and `kb.changed` on `/v1/events`, the entry under `kb/base/domains/<d>/entries/`, the receipt in the worker, and the item (incoming, in progress, then decided) on `/v1/kb/activity` and the console's /kb-activity page, without any backfill. Re-compare per-domain entry counts and check `<domain>/_digest.json` still has the real section tree (no junk top-level sections) and `_registry.md` shows alias lists.
+
+**Roll back:** (all with hubd stopped where noted)
+1. `systemctl stop hubd`.
+2. Env: restore `/etc/wolfpack/hubd.env` from the backup (this also drops `HUBD_CURATOR=1` and restores the two lane vars).
+3. Unit: remove `curator-local.conf`, rename the old work-writes drop-in back, `systemctl daemon-reload`.
+4. KB: `cd /var/lib/hubd/kb/base; mv domains domains.hub-<date>; mv domains.dewey-link-<date> domains` (entries the curator wrote live only in `domains.hub-<date>`; copy back what you need).
+5. Ledger: restore the backed-up `ledger/` dir (`mv ledger ledger.bad; cp -a ledger.bak-<date> ledger`). `sections/` may stay.
+6. `systemctl start hubd`; re-enable and start the Dewey wolf unit / sweep timer. If you only need to pause the curator without the full revert: set `HUBD_CURATOR=0`, restart hubd (the lease is removed on a clean stop; a stale one is ignored after 2 x the tick budget or when its pid is gone), restart Dewey's sweep; entries the curator wrote stay.
 
 `setup.sh --dry-run setup --curator` prints the env and unit changes above as `DRY-RUN:` lines. Without `--dry-run` it refuses: the cutover is an owner step.

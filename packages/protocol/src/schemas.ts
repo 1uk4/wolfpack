@@ -902,6 +902,18 @@ export const HubSweepItemEventSchema = hubBase.extend({
   entryId: z.string().optional(),
   decision: HubSweepDecisionSchema.optional(),
 });
+/**
+ * The item the curator is working on changed: it started, or its route became known (the sweep's sweep-current.json was rewritten).
+ * Emitted by hubd while a sweep runs, not by the sweep itself; the item's end is the sweep_item. Older hubs never send it.
+ */
+export const HubSweepProgressEventSchema = hubBase.extend({
+  type: z.literal("sweep_progress"),
+  from: z.string(),
+  denTopicId: z.string(),
+  /** Epoch ms the item started. */
+  startedAt: z.number(),
+  route: z.string().optional(),
+});
 export const HubSweepFinishedEventSchema = hubBase.extend({
   type: z.literal("sweep_finished"),
   processed: z.number().int().nonnegative(),
@@ -1021,7 +1033,7 @@ export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf
  * it as Last-Event-ID resumes with exactly the events after it.
  */
 export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync"), id: z.number().int().nonnegative() });
-export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
+export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepProgressEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
 export type HubEvent = z.infer<typeof HubEventSchema>;
 const HUB_EVENT_TYPES: ReadonlySet<string> = new Set(HubEventSchema.options.map((o) => o.shape.type.value));
 export type ParsedHubEvent = { kind: "event"; event: HubEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };

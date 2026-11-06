@@ -7,7 +7,7 @@
  *             `commitKb` (actor system: validation, the writer queue, the journal, entry_written, kb.changed); the other KB
  *             files (ledger events, _sections.json, entry versions, Delivered-list rewrites) are written inside `kb.exclusive`,
  *             the same writer queue. The queue is held only around each write, never during an engine or embedding call.
- *   events    sweep_started / sweep_item / sweep_finished on the hub event bus; started and finished are always paired.
+ *   events    sweep_started / sweep_progress / sweep_item / sweep_finished on the hub event bus; started and finished are always paired.
  *   lease     `<inboxRoot>/.sweep-lease` (kb/librarian/curator-lease.ts): the hub holds it while the curator is on; a fresh wolf
  *             lease refuses start and skips a tick; wolf-side sweeps skip while the hub lease is fresh.
  *   KNOWN WINDOW (not closed here, same as the wolf-side sweep): sweep.ts commits the entry (commitKb logs its entry_written) and
@@ -47,6 +47,7 @@ import {
 import { contentHash, entriesDir, type KbEvent, type KbRoots } from "@wolfpack/kb/shared";
 import type { Actor, KbChange, KbCommitRequest, KbCommitResponse } from "@wolfpack/protocol";
 import type { HubEventDraft } from "./events.js";
+import { watchSweepProgress } from "./sweep-progress.js";
 import { CONTRIBUTIONS_LANE } from "./layout.js";
 
 export const SYSTEM_ACTOR: Actor = { id: "system", kind: "system" };
@@ -284,6 +285,7 @@ export function createCurator(deps: CuratorDeps): Curator {
     let started = false;
     let finished = false;
     let pending = 0;
+    let stopProgress: (() => void) | undefined;
     const emit = (d: HubEventDraft) => {
       if (d.type === "sweep_started") running = true;
       else if (d.type === "sweep_finished") {
@@ -299,6 +301,8 @@ export function createCurator(deps: CuratorDeps): Curator {
     const finish = (error?: string) => {
       if (!started || finished) return;
       finished = true;
+      stopProgress?.();
+      stopProgress = undefined;
       emit({ type: "sweep_finished", ...tally, durationMs: Date.now() - t0, ...(error ? { error } : {}) });
     };
     const onEvent = (e: SweepEvent) => {
@@ -308,6 +312,10 @@ export function createCurator(deps: CuratorDeps): Curator {
         started = true;
         pending = e.pending;
         emit({ type: "sweep_started", pending: e.pending });
+        // sweep_progress: the sweep rewrites sweep-current.json when an item starts and when its route is known; observe it from here.
+        stopProgress = watchSweepProgress(deps.roots.denLocal, (c) => {
+          if (!finished) emit({ type: "sweep_progress", from: c.from, denTopicId: c.denTopicId, startedAt: c.startedAt, ...(c.route ? { route: c.route } : {}) });
+        }, t0 - 1000);
       } else {
         if (!started) return;
         tally.processed++;
@@ -345,6 +353,9 @@ export function createCurator(deps: CuratorDeps): Curator {
       tally.remaining = Math.max(0, pending - tally.processed);
       finish(msg);
       return { outcome: "ran", ...tally, error: msg };
+    } finally {
+      stopProgress?.(); // also a tick that ended without a sweep_finished
+      stopProgress = undefined;
     }
   };
 

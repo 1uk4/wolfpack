@@ -162,3 +162,14 @@ describe("headerSize", () => {
     expect(headerSize(Buffer.from([0xff, 0xd8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "image/jpeg")).toBeUndefined();
   });
 });
+
+describe("coding bash env", () => {
+  it("marks the shell as an agent's (WOLFPACK_AGENT_RUN=1) in the execution env, never in process.env", async () => {
+    const { prepareCodingBash } = await import("./tools.js");
+    const execution = { command: "echo hi", cwd: "/tmp", env: { KEEP: "1" } as Record<string, string>, inheritEnv: true };
+    const before = process.env.WOLFPACK_AGENT_RUN;
+    prepareCodingBash(execution);
+    expect(execution.env).toEqual({ KEEP: "1", WOLFPACK_AGENT_RUN: "1" });
+    expect(process.env.WOLFPACK_AGENT_RUN).toBe(before);
+  });
+});

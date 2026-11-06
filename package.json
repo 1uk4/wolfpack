@@ -18,9 +18,13 @@
     "verify": "turbo run build typecheck lint test",
     "runtime:update": "node scripts/runtime-update.mjs",
     "dev:stack": "node scripts/dev-stack.mjs",
-    "stack": "node scripts/stack.mjs"
+    "stack": "node scripts/stack.mjs",
+    "check:deps": "node scripts/check-deps.mjs ."
   },
   "devDependencies": {
+    "@wolfpack/harness": "*",
+    "esbuild": "^0.28.0",
+    "playwright-core": "1.63.0",
     "turbo": "^2.11.10",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

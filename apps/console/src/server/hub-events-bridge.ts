@@ -13,7 +13,7 @@
 import type { ConsoleClient, HubEvent } from "@wolfpack/client";
 import { abortableSleep } from "./needs-you-api.ts";
 
-export const FORWARDED_HUB_EVENTS: ReadonlySet<string> = new Set(["sweep_started", "sweep_item", "sweep_finished", "kb.changed", "resync"]);
+export const FORWARDED_HUB_EVENTS: ReadonlySet<string> = new Set(["sweep_started", "sweep_progress", "sweep_item", "sweep_finished", "kb.changed", "resync"]);
 const TERMINAL_CODES: ReadonlySet<string> = new Set(["unauthorized", "version_mismatch", "invalid_request", "not_found"]);
 
 export interface HubBridgeOptions {

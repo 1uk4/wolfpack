@@ -11,7 +11,7 @@ const clientOf = (watch: (o: { signal?: AbortSignal }) => AsyncGenerator<unknown
 describe("hub events bridge", () => {
 	it("forwards only the KB-relevant hub frames", async () => {
 		const got: string[] = [];
-		const frames = [{ type: "work.changed" }, { type: "sweep_started" }, { type: "sweep_item" }, { type: "wolf.presence" }, { type: "kb.changed" }, { type: "sweep_finished" }, { type: "resync" }];
+		const frames = [{ type: "work.changed" }, { type: "sweep_started" }, { type: "sweep_item" }, { type: "sweep_progress" }, { type: "wolf.presence" }, { type: "kb.changed" }, { type: "sweep_finished" }, { type: "resync" }];
 		let bridge!: ReturnType<typeof createHubEventsBridge>;
 		bridge = createHubEventsBridge((f) => got.push(f.type));
 		bridge.ensure(
@@ -21,7 +21,7 @@ describe("hub events bridge", () => {
 			}),
 		);
 		await sleep(20);
-		assert.deepEqual(got, ["sweep_started", "sweep_item", "kb.changed", "sweep_finished", "resync"]);
+		assert.deepEqual(got, ["sweep_started", "sweep_item", "sweep_progress", "kb.changed", "sweep_finished", "resync"]);
 	});
 	it("a hub 401 is terminal and reported once", async () => {
 		let lost = 0;

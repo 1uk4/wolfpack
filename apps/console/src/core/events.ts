@@ -68,7 +68,7 @@ export interface ServerEvents {
 		chatId?: undefined;
 	};
 	/** NEVER emit on the bus; per-connection only. (Listed here because the browser's SSE dispatch and useServerEvent are typed by this map.)
-	 *  A hub event the KB activity page follows (sweep_started / sweep_item / sweep_finished / kb.changed / resync). NOT on the bus: each SSE
+	 *  A hub event the KB activity page follows (sweep_started / sweep_progress / sweep_item / sweep_finished / kb.changed / resync). NOT on the bus: each SSE
 	 *  connection's own hub bridge writes it to that connection only (server/events-stream.ts), so one device's frames never reach another.
 	 *  It carries the frame: the page folds sweep_item in optimistically, then refetches. */
 	"hub-event": { frame: import("@wolfpack/client").HubEvent; chatId?: undefined };

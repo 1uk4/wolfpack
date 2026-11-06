@@ -3,7 +3,7 @@
 //   node scripts/affected.mjs <base> <head> [--github-output]    prints JSON on stdout
 // Rules:
 //  - changed files come from `git diff --name-only <base> <head>`; a missing/zero/unknown base marks EVERYTHING.
-//  - root config (package-lock.json, root package.json, root tsconfig*.json, vitest/turbo config, .github/workflows/**) marks everything.
+//  - root config (package-lock.json, pnpm-lock.yaml, pnpm-workspace.yaml, root package.json, root tsconfig*.json, vitest/turbo config, .github/workflows/**) marks everything.
 //  - a file under a workspace dir marks that workspace; docs (*.md, docs/**, LICENSE) mark nothing.
 //  - affected packages = changed + everything that depends on them (dependencies/devDependencies/peer/optional), transitively.
 import { execFileSync } from "node:child_process";
@@ -17,7 +17,7 @@ export const COMPONENTS = {
   hubd: "@wolfpack/hubd",
   console: "@wolfpack/console",
 };
-const ROOT_CONFIG = [/^package-lock\.json$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
+const ROOT_CONFIG = [/^package-lock\.json$/, /^pnpm-lock\.yaml$/, /^pnpm-workspace\.yaml$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
 const DOC = [/\.md$/i, /^docs\//, /^LICENSE/, /^ATTRIBUTION/];
 const ZERO = /^0+$/;
 

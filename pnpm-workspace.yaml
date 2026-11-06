@@ -3,6 +3,10 @@ packages:
   - "apps/*"
 linkWorkspacePackages: true
 packageImportMethod: clone-or-copy
+hoist: false
+publicHoistPattern:
+  - '@types/react'
+  - '@types/react-dom'
 # Mirror of "overrides" in package.json (npm reads that one, pnpm 12 ignores package.json's "pnpm" field).
 # scripts/pnpm-config.test.ts keeps the two in step.
 overrides:

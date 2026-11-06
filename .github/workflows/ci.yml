@@ -58,6 +58,9 @@ jobs:
           node-version: 22
           cache: pnpm   # caches the pnpm store (not node_modules), keyed on pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: lockfile guard (package-lock.json is current, both locks agree)
+        # npm still builds the release from package-lock.json; this fails a PR that changed a package.json without regenerating both locks.
+        run: pnpm check:lockfiles
       - name: test environment (git identity + pack models block; no secrets)
         # Some suites commit in temp repos and resolve models from ~/.wolfpack/config.yaml, which a dev box has and a runner does not.
         run: |

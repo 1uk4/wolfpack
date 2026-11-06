@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledAgentsDir, discoverAgents, isWriterProfile, loadAgent, parseAgentDefinition } from "./index.js";
 
 const roots: string[] = [];
@@ -111,5 +111,95 @@ describe("bundled visualizer", () => {
       expect(tools).toContain(t);
     }
     expect(def?.body).toMatch(/visual-tools/);
+  });
+});
+
+describe("standards", () => {
+  // A fixture standard: these tests check the loader, not the shipped text.
+  const MARK = "# Fixture testing standard";
+  const count = (body: string | undefined, text: string) => (body ?? "").split(text).length - 1;
+  const fixtureStandards = () => {
+    const dir = tmp();
+    put(dir, "testing.md", `${MARK}\nrules\n`);
+    put(dir, "extra.md", "# Extra standard\n");
+    return dir;
+  };
+
+  it("gives worker, planner and reviewer the standard exactly once, from any source, and not the scout", () => {
+    const standardsDir = fixtureStandards();
+    const agentDir = tmp();
+    const cwd = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    put(join(cwd, ".pi", "agents"), "planner.md", "---\nname: planner\nstandards: testing\n---\nmy planner");
+    const opts = { cwd, agentDir, standardsDir };
+    for (const name of ["worker", "planner", "reviewer"]) {
+      expect(count(loadAgent(name, opts)?.body, MARK), name).toBe(1);
+      expect(count(discoverAgents(opts).find((a) => a.name === name)?.body, MARK), name).toBe(1);
+    }
+    expect(loadAgent("worker", opts)?.body).toMatch(/^my worker/);
+    expect(loadAgent("scout", opts)?.body).not.toContain(MARK);
+  });
+
+  it("matches the always-on names case-insensitively, by frontmatter name and by the requested name", () => {
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: Worker\n---\nbody");
+    put(join(agentDir, "agents"), "planner.md", "---\nname: Helper\n---\nbody");
+    const opts = { cwd: tmp(), agentDir, standardsDir: fixtureStandards() };
+    expect(count(loadAgent("worker", opts)?.body, MARK)).toBe(1);
+    expect(count(loadAgent("planner", opts)?.body, MARK)).toBe(1);
+  });
+
+  it("gives any other profile only the standards its frontmatter names", () => {
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "x.md", "---\nname: x\nstandards: extra\n---\nbody");
+    const body = loadAgent("x", { cwd: tmp(), agentDir, standardsDir: fixtureStandards() })?.body;
+    expect(body).toContain("# Extra standard");
+    expect(body).not.toContain(MARK);
+  });
+
+  it("loads an agent without a standard it cannot read, and logs an error naming the file, once per process", () => {
+    const standardsDir = tmp();
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const opts = { cwd: tmp(), agentDir, standardsDir };
+      const def = loadAgent("worker", opts);
+      expect(def?.body).toBe("my worker");
+      // Owner-decided contract: the loud error names the file that could not be read.
+      expect(err).toHaveBeenCalledWith(expect.stringContaining(join(standardsDir, "testing.md")));
+      discoverAgents(opts);
+      loadAgent("worker", opts);
+      expect(err).toHaveBeenCalledTimes(1);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("throws for a shipped profile whose standard name is invalid", () => {
+    const pkg = tmp();
+    put(pkg, "b.md", "---\nname: b\nstandards: ../x\n---\nbody");
+    const opts = { cwd: tmp(), agentDir: tmp(), packageDirs: [pkg], standardsDir: fixtureStandards() };
+    expect(() => loadAgent("b", opts)).toThrow(/Invalid standard name "\.\.\/x"/);
+  });
+
+  it("skips a user profile with an invalid standard name: the roster keeps the rest, and loadAgent falls through to the next directory", () => {
+    const agentDir = tmp();
+    const cwd = tmp();
+    put(join(cwd, ".pi", "agents"), "x.md", "---\nname: x\nstandards: ../nope\n---\nproject copy");
+    put(join(agentDir, "agents"), "x.md", "---\nname: x\n---\nglobal copy");
+    put(join(cwd, ".pi", "agents"), "y.md", "---\nname: y\nstandards: ../nope\n---\nonly copy");
+    const opts = { cwd, agentDir, standardsDir: fixtureStandards() };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const roster = discoverAgents(opts);
+      expect(roster.find((a) => a.name === "x")?.body).toBe("global copy");
+      expect(roster.map((a) => a.name)).toContain("worker");
+      expect(roster.map((a) => a.name)).not.toContain("y");
+      expect(loadAgent("x", opts)?.body).toBe("global copy");
+      expect(loadAgent("y", opts)).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

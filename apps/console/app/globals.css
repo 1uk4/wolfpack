@@ -717,9 +717,9 @@ body {
 	}
 }
 
-/* The floating chat bar covers the page bottom: give scrolling pages room under it. */
+/* The floating chat bar covers the page bottom: the bar sets --chat-bar-reserve (its height) while it is open over a scrolling page. */
 @media (min-width: 768px) {
-	html[data-chat-bar="open"] main {
-		padding-bottom: 7rem;
+	main {
+		padding-bottom: var(--chat-bar-reserve, 0px);
 	}
 }

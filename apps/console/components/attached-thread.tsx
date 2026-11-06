@@ -48,6 +48,8 @@ export interface AttachedThreadApi {
 	working: boolean;
 	/** The bar just sent: show "working" until the wolf reports the turn's status. */
 	markSent: () => void;
+	/** A send failed: drop the optimistic "working". */
+	clearSent: () => void;
 	attach: (ref: { wolf: string; threadId: string; slug?: string }) => void;
 	/** Open (or create) the work item's feature thread on `wolf`, then attach. Resolves to an error message or null. */
 	attachWorkItem: (wolf: string, workItemId: string) => Promise<string | null>;
@@ -113,7 +115,11 @@ export function AttachedThreadProvider({
 	const [wolves, setWolves] = useState<readonly WolfLite[]>([]);
 	const [threads, setThreads] = useState<ThreadsByWolf>({});
 	const [sent, setSent] = useState(false);
-	const loaded = useRef(false);
+	const wolvesRef = useRef<readonly WolfLite[]>([]);
+	const threadsRef = useRef<ThreadsByWolf>({});
+	/** Bumped by every deliberate attach: a list fetch that started before it must not re-settle the target. */
+	const gen = useRef(0);
+	const inFlight = useRef(new Set<string>());
 
 	const setAttached = useCallback((ref: AttachedRef | null, n: string | null) => {
 		attachedRef.current = ref;
@@ -137,7 +143,15 @@ export function AttachedThreadProvider({
 		if (res.attached && (res.attached.threadId !== cur?.threadId || res.attached.wolf !== cur?.wolf)) setAttached(res.attached, res.note);
 	}, [setAttached]);
 
+	const commit = useCallback((ws: readonly WolfLite[], ts: ThreadsByWolf) => {
+		wolvesRef.current = ws;
+		threadsRef.current = ts;
+		setWolves(ws);
+		setThreads(ts);
+	}, []);
+
 	const refresh = useCallback(() => {
+		const g = gen.current;
 		void (async () => {
 			const r = await getJson<{ wolves?: WolfLite[] }>("/api/wolves");
 			const ws = Array.isArray(r?.wolves) ? r.wolves : undefined;
@@ -149,34 +163,40 @@ export function AttachedThreadProvider({
 					next[w.name] = Array.isArray(t?.threads) ? t.threads : undefined;
 				}),
 			);
-			loaded.current = true;
-			setWolves(ws);
-			setThreads(next);
-			settle(ws, next);
+			commit(ws, next);
+			if (g === gen.current) settle(ws, next);
 		})();
-	}, [settle]);
+	}, [settle, commit]);
 
 	useEffect(() => refresh(), [refresh]);
 	useOptionalServerResync(refresh);
 
+	/** Refetch one wolf's list, then re-settle the target (a live archive or delete falls back to home). */
 	const refreshWolf = useCallback((wolf: string) => {
+		const g = gen.current;
 		void getJson<{ threads?: BarThread[] }>(`/api/wolves/${encodeURIComponent(wolf)}/threads`).then((t) => {
 			if (!Array.isArray(t?.threads)) return;
-			setThreads((prev) => ({ ...prev, [wolf]: t.threads }));
+			const next = { ...threadsRef.current, [wolf]: t.threads };
+			commit(wolvesRef.current, next);
+			if (g === gen.current) settle(wolvesRef.current, next);
 		});
-	}, []);
+	}, [commit, settle]);
 
 	const patchStatus = useCallback((wolf: string, threadId: string, status: "idle" | "busy" | "needs-you") => {
-		setThreads((prev) => (prev[wolf] ? { ...prev, [wolf]: prev[wolf]!.map((t) => (t.id === threadId ? { ...t, status } : t)) } : prev));
-	}, []);
+		const prev = threadsRef.current;
+		if (!prev[wolf]) return;
+		commit(wolvesRef.current, { ...prev, [wolf]: prev[wolf]!.map((t) => (t.id === threadId ? { ...t, status } : t)) });
+	}, [commit]);
 
 	useOptionalServerEvent("needs-you-changed", (ev) => {
 		if (ev.threadId && ev.status) patchStatus(ev.wolf, ev.threadId, ev.status);
 		const a = attachedRef.current;
 		if (a && ev.wolf === a.wolf && (!ev.threadId || ev.threadId === a.threadId)) {
-			// The turn's end: fetch the thread's state (status, archived) rather than trust the frame alone.
-			if (ev.status !== "busy") setSent(false);
-			refreshWolf(ev.wolf);
+			// A busy frame is patched in place; the turn's end fetches the thread's state (status, archived).
+			if (ev.status !== "busy") {
+				setSent(false);
+				refreshWolf(ev.wolf);
+			}
 		}
 	});
 	useOptionalServerEvent("thread-updated", (ev) => {
@@ -184,18 +204,31 @@ export function AttachedThreadProvider({
 		const id = ev.thread.id;
 		if (ev.thread.status) patchStatus(ev.wolf, id, ev.thread.status);
 		if (a && ev.wolf === a.wolf && id === a.threadId) {
-			if (ev.thread.status && ev.thread.status !== "busy") setSent(false);
-			refreshWolf(ev.wolf);
+			if (ev.thread.status !== "busy") {
+				if (ev.thread.status) setSent(false);
+				refreshWolf(ev.wolf);
+			}
 		}
 	});
 
 	const attach = useCallback<AttachedThreadApi["attach"]>((ref) => {
+		gen.current++;
 		setSent(false);
 		setAttached({ wolf: ref.wolf, threadId: ref.threadId, slug: ref.slug ?? threadSlug(ref.wolf, ref.threadId) }, null);
 		refreshWolf(ref.wolf);
 	}, [setAttached, refreshWolf]);
 
-	const attachWorkItem = useCallback((wolf: string, id: string) => attachToWorkItem(wolf, id, openThread, attach), [openThread, attach]);
+	// One open per item at a time: a double click must not create the thread twice.
+	const attachWorkItem = useCallback(async (wolf: string, id: string) => {
+		const k = `${wolf}\n${id}`;
+		if (inFlight.current.has(k)) return null;
+		inFlight.current.add(k);
+		try {
+			return await attachToWorkItem(wolf, id, openThread, attach);
+		} finally {
+			inFlight.current.delete(k);
+		}
+	}, [openThread, attach]);
 
 	const setHomeWolf = useCallback((wolf: string | null) => {
 		homeWolfRef.current = wolf?.trim() || null;
@@ -211,18 +244,20 @@ export function AttachedThreadProvider({
 	const attachedThread = attached ? threads[attached.wolf]?.find((t) => t.id === attached.threadId) : undefined;
 	const working = attachedThread?.status === "busy" || sent;
 	const markSent = useCallback(() => setSent(true), []);
-	// An optimistic "sent" must not stick when no status frame ever arrives (e.g. an instant turn): the list refetch settles it.
+	const clearSent = useCallback(() => setSent(false), []);
+	// An optimistic "sent" must not stick when no status frame ever arrives (an instant turn, a lost frame, a row that never
+	// loaded): once the wolf does not report the thread busy, it lapses after 4s.
+	const rowStatus = attachedThread?.status;
 	useEffect(() => {
-		if (sent && attachedThread?.status === "idle") {
-			const t = setTimeout(() => setSent(false), 4000);
-			return () => clearTimeout(t);
-		}
-	}, [sent, attachedThread?.status]);
+		if (!sent || rowStatus === "busy") return;
+		const t = setTimeout(() => setSent(false), 4000);
+		return () => clearTimeout(t);
+	}, [sent, rowStatus]);
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, attach, attachWorkItem, refresh }),
-		[attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, attach, attachWorkItem, refresh],
+		() => ({ attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, attachWorkItem, refresh }),
+		[attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, attachWorkItem, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -248,14 +283,19 @@ export function AttachBarButton({ wolf, slug, threadId }: { wolf: string; slug: 
 /** "Attach bar here" on a work item: opens (creating when there is none) the item's thread on `wolf`, then attaches. */
 export function AttachBarWorkButton({ wolf, workItemId, label = "Attach bar here", onError }: { wolf: string; workItemId: string; label?: string; onError?: (m: string | null) => void }) {
 	const api = useAttachedThread();
+	const [busy, setBusy] = useState(false);
 	if (!api) return null;
 	return (
 		<button
 			type="button"
 			data-testid="attach-bar-work"
 			data-wolf={wolf}
-			onClick={() => void api.attachWorkItem(wolf, workItemId).then((m) => onError?.(m))}
-			className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent max-md:hidden"
+			disabled={busy}
+			onClick={() => {
+				setBusy(true);
+				void api.attachWorkItem(wolf, workItemId).then((m) => onError?.(m)).finally(() => setBusy(false));
+			}}
+			className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent disabled:opacity-50 max-md:hidden"
 		>
 			{label}
 		</button>

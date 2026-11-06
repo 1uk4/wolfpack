@@ -132,9 +132,9 @@ export function KeyboardShortcuts() {
 					break;
 				case "focus-chat-bar":
 				case "chat-bar-switcher":
-					// Browsers bind Mod+J (downloads): claim it before the bar answers.
-					e.preventDefault();
-					window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
+					// Browsers bind Mod+J (downloads). The bar claims the key (preventDefault on the event we hand it) only
+					// when it answers: hidden below md or with nothing attached, the browser keeps it.
+					window.dispatchEvent(new CustomEvent(kbdEventForAction(action), { detail: { event: e } }));
 					break;
 				case "find":
 					// The mounted surface owns Find (session text / graph nodes).

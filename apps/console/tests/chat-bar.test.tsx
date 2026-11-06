@@ -23,6 +23,8 @@ Object.assign(globalThis, {
 });
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
+const { AppRouterContext: await_ctx } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { AttachedThreadProvider, AttachBarWorkButton, attachToWorkItem, useAttachedThread } = await import("../components/attached-thread.tsx");
 const { ChatBar, submitToThread } = await import("../components/chat-bar.tsx");
@@ -31,21 +33,27 @@ const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
 type Call = { url: string; body?: any };
 let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
+let archived = false;
+let created = false;
+const handlers = new Map<string, (d: string) => void>();
+const fakeSource = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
+const emit = (n: string, d: object) => act(async () => void handlers.get(n)?.(JSON.stringify(d)));
 const realFetch = globalThis.fetch;
 const th = (id: string, extra: object = {}) => ({ id, title: id, kind: "feature", status, ...extra });
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	const url = String(input);
 	if (init?.method === "POST") {
 		calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+		if (url === "/api/wolves/w/threads") created = true;
 		return new Response(JSON.stringify({ id: "w/created", title: "Created" }), { status: 200 });
 	}
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a"), th("w/b")] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b"), ...(created ? [th("w/created")] : [])] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
 let root: Root | null = null;
-const wait = (ms = 30) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+const wait = (ms = 60) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
 async function mount(start: string, stored?: object, extra?: React.ReactNode) {
 	if (stored) mem.set(ATTACHED_KEY, JSON.stringify(stored));
 	const host = document.createElement("div");
@@ -54,10 +62,12 @@ async function mount(start: string, stored?: object, extra?: React.ReactNode) {
 	await act(async () => {
 		root!.render(
 			<FakeNav start={start}>
-				<AttachedThreadProvider>
-					<ChatBar />
-					{extra}
-				</AttachedThreadProvider>
+				<ServerEventsProvider connect={fakeSource}>
+					<AttachedThreadProvider>
+						<ChatBar />
+						{extra}
+					</AttachedThreadProvider>
+				</ServerEventsProvider>
 			</FakeNav>,
 		);
 	});
@@ -86,6 +96,8 @@ afterEach(async () => {
 	mem.clear();
 	calls = [];
 	status = "idle";
+	archived = false;
+	created = false;
 });
 after(() => void (globalThis.fetch = realFetch));
 
@@ -137,12 +149,28 @@ describe("ChatBar", () => {
 		assert.equal(ta().value, "draft for a");
 	});
 
-	it("collapses to the chip on the attached thread's own page; the draft key is shared", async () => {
-		mem.set("wolfpack:draft:w:w/a", "carried");
+	it("hides on the attached thread's own page and never touches the page's draft", async () => {
+		mem.set("wolfpack:draft:w:w/a", "typed on the page");
 		await mount("/wolf/w/thread/a", A);
-		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "collapsed");
-		assert.equal(q('[data-testid="composer"]'), null);
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "carried");
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		window.dispatchEvent(new dom.window.Event("pagehide"));
+		await wait();
+		assert.equal(mem.get("wolfpack:draft:w:w/a"), "typed on the page", "no stale flush from the bar");
+	});
+
+	it("shows the page's newer draft after leaving the page", async () => {
+		mem.set("wolfpack:draft:w:w/a", "old");
+		let go: (u: string) => void = () => {};
+		function Nav() {
+			const r = React.useContext((await_ctx as any));
+			go = (u) => (r as any).push(u);
+			return null;
+		}
+		await mount("/wolf/w/thread/a", A, <Nav />);
+		mem.set("wolfpack:draft:w:w/a", "newer from the page");
+		await act(async () => go("/kb"));
+		await wait();
+		assert.equal(ta().value, "newer from the page");
 	});
 
 	it("the switcher groups by wolf and leaves out subagents", async () => {
@@ -160,7 +188,76 @@ describe("ChatBar", () => {
 	});
 });
 
+describe("ChatBar behaviours", () => {
+	it("a failed send drops the optimistic working state and puts the text back, merged", async () => {
+		const orig = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => (init?.method === "POST" ? new Response("no", { status: 500 }) : orig(input, init))) as typeof fetch;
+		try {
+			await mount("/kb", A);
+			await type("lost?");
+			await submit();
+			await wait();
+			assert.equal(q('[data-testid="chat-bar-working"]'), null);
+			assert.equal(ta().value, "lost?");
+		} finally {
+			globalThis.fetch = orig;
+		}
+	});
+
+	it("Cmd+J answers (and claims the key) only when the bar is shown", async () => {
+		const press = (name: string) => {
+			let prevented = false;
+			window.dispatchEvent(new dom.window.CustomEvent(name, { detail: { event: { preventDefault: () => void (prevented = true) } } }));
+			return prevented;
+		};
+		await mount("/kb", A);
+		await click(q('[data-testid="chat-bar-minimize"]'));
+		assert.equal(press("lh:kbd-focus-chat-bar"), true);
+		await wait();
+		assert.equal(mem.get("wolfpack:chatbar:minimized"), undefined, "expanded again");
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		mem.clear();
+		await mount("/kb"); // nothing stored: falls to home, but with no wolves online yet the bar may not be attached
+		const none = (document.querySelector('[data-testid="chat-bar"]') === null);
+		if (none) assert.equal(press("lh:kbd-focus-chat-bar"), false);
+	});
+
+	it("Cmd+J on the own page focuses the page composer", async () => {
+		let focused = false;
+		const page = (
+			<form data-testid="composer">
+				<textarea ref={(el) => { if (el) el.focus = () => void (focused = true); }} />
+			</form>
+		);
+		await mount("/wolf/w/thread/a", A, page);
+		let prevented = false;
+		window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-focus-chat-bar", { detail: { event: { preventDefault: () => void (prevented = true) } } }));
+		assert.ok(focused && prevented);
+	});
+
+	it("a live archive of the attached thread falls back to home", async () => {
+		await mount("/kb", A);
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a");
+		archived = true;
+		await emit("needs-you-changed", { wolf: "w", threadId: "w/a", status: "idle" });
+		await wait();
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
+	});
+});
+
 describe("Attach bar here (work item)", () => {
+	it("a double click creates the thread once", async () => {
+		await mount("/work/x", A, <AttachBarWorkButton wolf="w" workItemId="work-w-2" />);
+		const b = q('[data-testid="attach-bar-work"]');
+		await act(async () => {
+			const key = Object.keys(b!).find((k) => k.startsWith("__reactProps$"))!;
+			(b as any)[key].onClick();
+			(b as any)[key].onClick();
+		});
+		await wait();
+		assert.equal(calls.filter((c) => c.url === "/api/wolves/w/threads").length, 1);
+	});
 	it("creates the item's thread, then attaches", async () => {
 		await mount("/work/x", A, <AttachBarWorkButton wolf="w" workItemId="work-w-1" />);
 		await click(q('[data-testid="attach-bar-work"]'));

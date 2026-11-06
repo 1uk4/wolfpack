@@ -80,11 +80,11 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // load before extensions: it sets WOLFPACK_MODELS_FILE for the memory worker.
   const table = loadWolfModels(config);
   // On subscription, engine steps (memory, consolidation, KB sweep) run on the
-  // Max plan through the Agent SDK; the main agent uses the pi-claude-bridge
+  // Max plan through the Agent SDK; the main agent uses the claude-stateless
   // provider on the same plan (selectMainModel).
   if (providersInUse(table).some((id) => NEEDS_SUBSCRIPTION_TOKEN.has(id)) && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     throw new Error(
-      `${config.name} uses the claude-bridge provider but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
+      `${config.name} uses the claude-stateless provider but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
     );
   }
   const main = table.tiers.main;

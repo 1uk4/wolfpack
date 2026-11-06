@@ -535,7 +535,7 @@ export async function installDevExtensions(
 }
 
 /**
- * pi-claude-bridge imports the Agent SDK statically (only as the default `queryFn`). The SDK is ESM and is not
+ * pi-claude-bridge-stateless imports the Agent SDK statically (only as the default `queryFn`). The SDK is ESM and is not
  * resolvable from harness.cjs on a VPS (global install, no node_modules above the bundle), so a plain external
  * require would throw when the bridge initialises. The harness always injects the query function it resolved
  * itself (engine loadQuery: harness tree, NODE_PATH, global install), so the bridge's own import is stubbed.
@@ -545,20 +545,20 @@ export function stubBridgeSdkPlugin(): esbuild.Plugin {
     name: "stub-bridge-agent-sdk",
     setup(build) {
       build.onResolve({ filter: /^@anthropic-ai\/claude-agent-sdk$/ }, (args) =>
-        /[\\/]pi-claude-bridge(?:-stateless)?[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
+        /[\\/]pi-claude-bridge-stateless[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-sdk-stub" }, () => ({
-        contents: 'export function query() { throw new Error("claude-bridge: the Agent SDK query function must be injected (queryFn)"); }',
+        contents: 'export function query() { throw new Error("claude-stateless: the Agent SDK query function must be injected (queryFn)"); }',
         loader: "js",
       }));
       // The stateless bridge's skills.ts imports pi-coding-agent for formatSkillsForPrompt, which the stateless provider
       // never calls. Bundled, pi-coding-agent's config.js runs fileURLToPath(import.meta.url) at load, which is undefined
       // in CJS and crashes the harness. Stub it for the bridge only.
       build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, (args) =>
-        /[\\/]pi-claude-bridge(?:-stateless)?[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
+        /[\\/]pi-claude-bridge-stateless[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-pca-stub" }, () => ({
-        contents: 'export function formatSkillsForPrompt() { throw new Error("claude-bridge: pi-coding-agent is not available in the harness bundle"); }',
+        contents: 'export function formatSkillsForPrompt() { throw new Error("claude-stateless: pi-coding-agent is not available in the harness bundle"); }',
         loader: "js",
       }));
     },

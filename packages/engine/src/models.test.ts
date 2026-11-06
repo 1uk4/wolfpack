@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveModel, DEFAULT_MAX_TOKENS, type EngineConfig } from "./config.js";
 import {
   tierPiProvider,
@@ -88,11 +88,11 @@ describe("resolveModelTable — transport and provider forms", () => {
     expect(t).toMatchObject({ transport: "subscription", transportSource: "wolf" });
   });
 
-  it("subscription → claude-agent-sdk engine, claude-bridge pi model, same ID", () => {
+  it("subscription → claude-agent-sdk engine, claude-stateless pi model, same ID", () => {
     expect(local().tiers.smart).toMatchObject({
       model: "claude-sonnet-5-5",
       provider: "claude-agent-sdk",
-      piModel: "claude-bridge/claude-sonnet-5-5",
+      piModel: "claude-stateless/claude-sonnet-5-5",
     });
   });
 
@@ -114,12 +114,12 @@ describe("resolveModelTable — transport and provider forms", () => {
 describe("resolveModelTable — thinking", () => {
   it("is unset by default", () => {
     expect(local().tiers.main.thinking).toBeUndefined();
-    expect(piModelArg(local().tiers.main)).toBe("claude-bridge/claude-opus-5-5");
+    expect(piModelArg(local().tiers.main)).toBe("claude-stateless/claude-opus-5-5");
   });
 
   it("is appended to the pi model arg when set", () => {
     const t = local({ models: { main: { thinking: "xhigh" } } });
-    expect(piModelArg(t.tiers.main)).toBe("claude-bridge/claude-opus-5-5:xhigh");
+    expect(piModelArg(t.tiers.main)).toBe("claude-stateless/claude-opus-5-5:xhigh");
   });
 
   it("an unknown level warns and is ignored (falling back to the pack's level)", () => {
@@ -303,7 +303,7 @@ describe("per-tier providers and engine-step tiers", () => {
       expect(() => resolveModelTable({ pack: pack({ [tier]: { model: "x", provider: "openrouter" } }), location: "local" })).toThrow(/models\.(smart|fast)\.provider "openrouter" has no engine adapter/);
     }
   });
-  it("claude-stateless on an engine-step tier maps to the claude-agent-sdk adapter, like claude-bridge", () => {
+  it("claude-stateless on an engine-step tier maps to the claude-agent-sdk adapter", () => {
     const t = resolveModelTable({ pack: pack({ smart: { model: "claude-sonnet-5-5", provider: "claude-stateless" } }), location: "local" });
     expect(t.tiers.smart).toMatchObject({ provider: "claude-agent-sdk", piProvider: "claude-stateless", piModel: "claude-stateless/claude-sonnet-5-5" });
   });
@@ -313,6 +313,30 @@ describe("per-tier providers and engine-step tiers", () => {
   });
   it("tierPiProvider prefers the tier's piModel prefix over the transport default", () => {
     expect(tierPiProvider({ transport: "subscription" }, { piModel: "anthropic/m" })).toBe("anthropic");
-    expect(tierPiProvider({ transport: "api" }, { piModel: "claude-bridge/m" })).toBe("claude-bridge");
+    expect(tierPiProvider({ transport: "api" }, { piModel: "claude-stateless/m" })).toBe("claude-stateless");
+  });
+  it("legacy claude-bridge is aliased to claude-stateless (tier lookup, config provider, models.json on load)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(tierPiProvider({ transport: "api" }, { piModel: "claude-bridge/m" })).toBe("claude-stateless");
+      expect(tierPiProvider({ transport: "api" }, { piModel: "x/m", piProvider: "claude-bridge" })).toBe("claude-stateless");
+      const t = resolveModelTable({ pack: pack({ main: { model: "claude-opus-5-5", provider: "claude-bridge" } }), location: "local" });
+      expect(t.tiers.main).toMatchObject({ provider: "claude-agent-sdk", piProvider: "claude-stateless", piModel: "claude-stateless/claude-opus-5-5" });
+
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-models-"));
+      try {
+        const file = path.join(dir, "models.json");
+        const old = resolveModelTable({ pack: pack({}), location: "local" });
+        for (const tier of Object.values(old.tiers)) Object.assign(tier, { piProvider: "claude-bridge", piModel: `claude-bridge/${tier.model}` });
+        fs.writeFileSync(file, JSON.stringify(old));
+        const loaded = readModelTable(file);
+        for (const tier of Object.values(loaded.tiers)) {
+          expect(tier.piProvider).toBe("claude-stateless");
+          expect(tier.piModel).toBe(`claude-stateless/${tier.model}`);
+          expect(tier.provider).toBe("claude-agent-sdk");
+        }
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes("claude-bridge")).length).toBeLessThanOrEqual(1); // one-time notice per process
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    } finally { warn.mockRestore(); }
   });
 });

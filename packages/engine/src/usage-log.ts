@@ -33,7 +33,7 @@ export interface UsageEvent {
   session?: string;
   /** What made the call: `main`, `subagent`, or `step:<engine step>`. */
   use: string;
-  /** Provider id as recorded (`anthropic`, `claude-bridge`, `claude-agent-sdk`, `openrouter`, …). */
+  /** Provider id as recorded (`anthropic`, `claude-stateless`, `claude-agent-sdk`, `openrouter`, …). */
   provider: string;
   billing: UsageBilling;
   model: string;
@@ -51,7 +51,8 @@ export function billingFor(provider: string): UsageBilling {
   switch (provider) {
     case "anthropic":
       return "api";
-    case "claude-bridge":
+    case "claude-bridge": // retired provider id, still in old usage logs
+    case "claude-stateless":
     case "claude-agent-sdk":
       return "subscription";
     default:

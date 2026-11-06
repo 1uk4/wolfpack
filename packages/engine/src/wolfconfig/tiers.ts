@@ -17,7 +17,7 @@ export interface ResolvedWolfModel {
   modelId: string;
   thinking?: ThinkingLevel;
   transport: "api" | "subscription";
-  /** pi provider id of the tier (e.g. "anthropic", "claude-bridge"). */
+  /** pi provider id of the tier (e.g. "anthropic", "claude-stateless"). */
   provider: string;
   piModel: string;
   /** True when wolf.yaml `tiers:` overrode the models file's model. */
@@ -26,7 +26,7 @@ export interface ResolvedWolfModel {
 
 /**
  * Resolve a tier for a wolf: models file (path or parsed table) + the wolf's
- * `tiers:` overrides. Both transports resolve (subscription → the claude-bridge
+ * `tiers:` overrides. Both transports resolve (subscription → the claude-stateless
  * provider); a tier missing from the table falls back to `main`.
  */
 export function resolveWolfModel(

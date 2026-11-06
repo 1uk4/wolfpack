@@ -33,7 +33,7 @@ export interface EngineConfig {
   /** Provider name — determines which adapter is used */
   provider: string;
   /** API key for the provider. Not required by subscription-backed providers
-   *  (e.g. claude-agent-sdk / claude-bridge), which authenticate via OAuth. */
+   *  (e.g. claude-agent-sdk / claude-stateless), which authenticate via OAuth. */
   apiKey?: string;
   /** Base URL override (for proxies, local models, etc.) */
   baseUrl?: string;

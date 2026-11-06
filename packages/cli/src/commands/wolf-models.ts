@@ -326,7 +326,7 @@ export function parseBridgeModels(output: string): string[] {
   const ids: string[] = [];
   for (const line of output.split("\n")) {
     const [provider, model] = line.trim().split(/\s+/);
-    if (provider === "claude-bridge" && model) ids.push(model);
+    if ((provider === "claude-bridge" || provider === "claude-stateless") && model) ids.push(model);
   }
   return ids;
 }
@@ -358,7 +358,7 @@ async function fetchBridgeModels(): Promise<string[]> {
     env: agentDir ? { ...process.env, PI_CODING_AGENT_DIR: agentDir } : process.env,
   });
   const ids = parseBridgeModels(stdout);
-  if (ids.length === 0) throw new Error("`pi --list-models` listed no claude-bridge models");
+  if (ids.length === 0) throw new Error("`pi --list-models` listed no claude subscription models");
   return ids;
 }
 

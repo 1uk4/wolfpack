@@ -75,20 +75,16 @@ describe("claude-stateless factory", () => {
     expect(callers).toEqual([]);
   });
 
-  it("mixed config: main on claude-bridge, other tiers on claude-stateless, both resolve", () => {
-    expect(providersInUse(mixed)).toEqual(["claude-bridge", "claude-stateless"]);
-    const bridge = createProvider({ id: "claude-bridge", auth: { check: async () => "t" } as any, models: [], api: { stream: () => { throw new Error("x"); }, streamSimple: () => { throw new Error("x"); } } } as any);
-    const bridgeProvider = Object.assign(bridge, { shutdown: vi.fn(), release: vi.fn(() => 0), liveQueries: 0 });
+  it("a legacy claude-bridge table is served by claude-stateless only", () => {
+    expect(providersInUse(mixed)).toEqual(["claude-stateless"]);
     const home = mkdtempSync(join(tmpdir(), "stateless-home-"));
     const fake = fakeStateless();
-    const m = buildWolfModels(mixed, { cwd: "/w", env: { WOLF_DEN: join(home, "den") }, seams: { "claude-bridge": { createProvider: () => bridgeProvider }, "claude-stateless": { createProvider: () => fake, models: [] } } });
-    expect(m.models!.getProvider("claude-bridge")).toBe(bridgeProvider);
+    const m = buildWolfModels(mixed, { cwd: "/w", env: { WOLF_DEN: join(home, "den") }, seams: { "claude-stateless": { createProvider: () => fake, models: [] } } });
+    expect(m.models!.getProvider("claude-bridge")).toBeUndefined();
     expect(m.models!.getProvider("claude-stateless")).toBeDefined();
     m.forget("s1");
-    expect(bridgeProvider.release).toHaveBeenCalledWith("s1");
     expect(fake.forget).toHaveBeenCalledWith("s1");
     m.dispose();
-    expect(bridgeProvider.shutdown).toHaveBeenCalledOnce();
     expect(fake.dispose).toHaveBeenCalledOnce();
     rmSync(home, { recursive: true, force: true });
   });

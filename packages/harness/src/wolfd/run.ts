@@ -2,7 +2,7 @@
  * startWolf: boot ONE wolf process serving /v1 on 127.0.0.1.
  *
  * Sequence: load wolf.yaml -> sandbox redirect -> resolve the main-tier model (WOLFPACK_MODELS_FILE / models.json beside the wolf /
- * pack config; subscription transport builds the claude-bridge provider) -> wolf.yaml `extensions` via the harness loader
+ * pack config; subscription transport builds the claude-stateless provider) -> wolf.yaml `extensions` via the harness loader
  * (same as createWolfHarness, on the redirected den/env) -> open the engine store at `<den>/session.sqlite` (backup on) ->
  * root conversation (= the home thread; feature threads are further ownerless conversations) -> bring its agent state in line with config + project context ->
  * attach the server's watcher -> engine.resume() -> listen.

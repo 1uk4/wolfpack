@@ -117,16 +117,32 @@ export const STARTER_PACK_MODELS = {
 
 /** Engine provider and pi provider per transport. The model ID is identical. */
 const TRANSPORT_PROVIDERS: Record<Transport, { engine: string; pi: string }> = {
-  subscription: { engine: "claude-agent-sdk", pi: "claude-bridge" },
+  subscription: { engine: "claude-agent-sdk", pi: "claude-stateless" },
   api: { engine: "anthropic", pi: "anthropic" },
 };
 
 /** Engine provider for a pi provider id; ids not listed here are used as-is. */
-const ENGINE_PROVIDER_FOR_PI: Record<string, string> = { "claude-bridge": "claude-agent-sdk", "claude-stateless": "claude-agent-sdk" };
+const ENGINE_PROVIDER_FOR_PI: Record<string, string> = { "claude-stateless": "claude-agent-sdk" };
+
+/** The retired durable-core bridge. Old models.json files and wolf.yaml `provider:` values still say it. */
+const LEGACY_BRIDGE = "claude-bridge";
+const STATELESS = "claude-stateless";
+let legacyAliasLogged = false;
+function logLegacyAlias(): void {
+  if (legacyAliasLogged) return;
+  legacyAliasLogged = true;
+  console.warn(`[models] provider "${LEGACY_BRIDGE}" is retired; using "${STATELESS}" (regenerate models.json with \`wolfpack sync\` to drop this notice)`);
+}
+/** A pi provider id with the retired `claude-bridge` mapped to `claude-stateless`. */
+export function canonicalPiProvider(id: string): string {
+  if (id !== LEGACY_BRIDGE) return id;
+  logLegacyAlias();
+  return STATELESS;
+}
 
 /**
  * Engine providers that have an adapter (adapters/index.ts). Engine steps (memory, consolidation, KB sweep,
- * librarian) read `tiers.smart` / `tiers.fast`, so those tiers stay on anthropic or claude-bridge for now; only
+ * librarian) read `tiers.smart` / `tiers.fast`, so those tiers stay on anthropic or the Agent SDK providers; only
  * `main` (the pi-durable conversation path) may name any other pi provider.
  */
 const ENGINE_ADAPTER_PROVIDERS: readonly string[] = ["anthropic", "claude-agent-sdk"];
@@ -134,7 +150,7 @@ const ENGINE_STEP_TIERS: readonly Tier[] = [...new Set(Object.values(STEP_TIERS)
 
 export interface TierSetting {
   model?: string;
-  /** pi provider id for this tier (e.g. "claude-bridge", "anthropic", "openrouter"). Wins over the transport default. */
+  /** pi provider id for this tier (e.g. "claude-stateless", "anthropic", "openrouter"). Wins over the transport default. */
   provider?: string;
   thinking?: string;
 }
@@ -177,9 +193,9 @@ export interface ResolvedTier {
  */
 export function tierPiProvider(table: Pick<ModelTable, "transport">, tier: Pick<ResolvedTier, "piModel" | "piProvider">): string {
   // The piModel prefix / piProvider wins over `transport`: a per-tier provider may differ from the transport default.
-  if (tier.piProvider) return tier.piProvider;
+  if (tier.piProvider) return canonicalPiProvider(tier.piProvider);
   const slash = tier.piModel?.indexOf("/") ?? -1;
-  if (slash > 0) return tier.piModel.slice(0, slash);
+  if (slash > 0) return canonicalPiProvider(tier.piModel.slice(0, slash));
   return TRANSPORT_PROVIDERS[table.transport]?.pi ?? "anthropic";
 }
 
@@ -261,7 +277,8 @@ export function resolveModelTable(input: ResolveInput): ModelTable {
     }
 
     // Provider: wolf tier > pack tier > the transport's default (legacy configs).
-    const piProvider = nonEmpty(wolfTier?.provider) ?? nonEmpty(packTier?.provider) ?? providers.pi;
+    const configured = nonEmpty(wolfTier?.provider) ?? nonEmpty(packTier?.provider);
+    const piProvider = configured ? canonicalPiProvider(configured) : providers.pi;
     const engineProvider = ENGINE_PROVIDER_FOR_PI[piProvider] ?? piProvider;
     if (ENGINE_STEP_TIERS.includes(tier) && !ENGINE_ADAPTER_PROVIDERS.includes(engineProvider)) {
       throw new ModelConfigError(
@@ -460,6 +477,16 @@ export function readModelTable(file: string): ModelTable {
   // a fixed use → tier map, so fill the gap rather than fail until the next sync.
   for (const step of ENGINE_STEPS) {
     if (!table.steps[step]) table.steps[step] = { tier: STEP_TIERS[step] };
+  }
+  // A table written while `claude-bridge` existed: alias it to claude-stateless (same model ids).
+  for (const t of Object.values(table.tiers)) {
+    if (!t) continue;
+    if (t.piProvider === LEGACY_BRIDGE) t.piProvider = canonicalPiProvider(t.piProvider);
+    if (typeof t.piModel === "string" && t.piModel.startsWith(`${LEGACY_BRIDGE}/`)) {
+      logLegacyAlias();
+      t.piModel = `${STATELESS}/${t.piModel.slice(LEGACY_BRIDGE.length + 1)}`;
+    }
+    if (t.provider === LEGACY_BRIDGE) t.provider = "claude-agent-sdk";
   }
   return table;
 }

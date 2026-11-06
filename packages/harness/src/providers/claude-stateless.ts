@@ -1,7 +1,7 @@
 /**
  * The ONLY other file in the harness that knows about the stateless pi-claude-bridge (a grep test enforces it).
- * Same Max-subscription transport as claude-bridge, but each model round is one short-lived Agent SDK query over a
- * resumable session file (no parked child). Provider id `claude-stateless`; it sits next to `claude-bridge`.
+ * Max-subscription transport (the default, replacing the retired pi-claude-bridge durable-core provider): each model round is one short-lived Agent SDK query over a
+ * resumable session file (no parked child). Provider id `claude-stateless`.
  *
  * ROLLOUT NOTE: the dependency `pi-claude-bridge-stateless` in packages/harness/package.json is a LOCAL git ref
  * (git+file:///…/workspaces/pi-claude-bridge#stateless-core, pinned by commit in the lockfile; npm builds dist via the
@@ -24,12 +24,47 @@ import { loadQuery } from "@wolfpack/engine";
 import { createStatelessProvider } from "pi-claude-bridge-stateless/stateless";
 import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { claudeBridgeLookupModels, NO_TOOL_SEARCH } from "./claude-bridge.js";
+import { getModels } from "@earendil-works/pi-ai/compat";
 import { guardProviderStreams } from "./guard.js";
 import { withMaxTurnsAsTurnEnd } from "./max-turns.js";
 import type { ProviderFactory } from "./types.js";
 
 export const CLAUDE_STATELESS_ID = "claude-stateless";
+
+/**
+ * ENABLE_TOOL_SEARCH=false: the provider runs claude with `tools: []`, which removes ToolSearch, yet Claude Code still
+ * defers MCP tool schemas behind it. The model would see task_bind etc. by name only. Inline every schema.
+ */
+export const NO_TOOL_SEARCH = { ENABLE_TOOL_SEARCH: "false" } as const;
+
+/** Legacy provider id of the retired durable-core bridge: stored conversation refs and old models.json files still say it. */
+export const LEGACY_CLAUDE_BRIDGE_ID = "claude-bridge";
+
+// Model table policy, carried over from the retired pi-claude-bridge buildModels/applyLongContext (same ids, same windows).
+const FAMILY_ORDER = ["fable", "opus", "sonnet", "haiku"];
+const rank = (id: string) => { const [, family, major, minor] = id.split("-"); return { family, t: [Number(major) || 0, Number(minor) || 0] as const }; };
+/** Ids Claude Code serves at 1M through the SDK; every other model is 200K. */
+const ONE_M = new Set(["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+
+/** pi-ai's anthropic catalog projected for the subscription: no dated aliases, newest first, zero cost, 1M only where measured. */
+export const buildSubscriptionModels = (catalog: readonly any[]) =>
+  catalog
+    .filter((m) => typeof m.id === "string" && !/-20\d{6}$/.test(m.id))
+    .sort((a, b) => {
+      const fa = FAMILY_ORDER.indexOf(rank(a.id).family!), fb = FAMILY_ORDER.indexOf(rank(b.id).family!);
+      const ta = fa === -1 ? FAMILY_ORDER.length : fa, tb = fb === -1 ? FAMILY_ORDER.length : fb;
+      if (ta !== tb) return ta - tb;
+      const ra = rank(a.id).t, rb = rank(b.id).t;
+      return ra[0] !== rb[0] ? rb[0] - ra[0] : ra[1] !== rb[1] ? rb[1] - ra[1] : a.id.localeCompare(b.id);
+    })
+    .map(({ id, name, reasoning, input, maxTokens, thinkingLevelMap }) => {
+      const oneM = ONE_M.has(id);
+      return {
+        id, name: oneM && !/\b1M\b/i.test(name) ? `${name} 1M` : name, reasoning, input,
+        contextWindow: oneM ? 1_000_000 : 200_000, maxTokens, thinkingLevelMap,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+    });
 
 export interface ClaudeStatelessSeams {
   createProvider?: typeof createStatelessProvider;
@@ -83,9 +118,12 @@ export const claudeStatelessSdkSeams = (queryFn: unknown): ClaudeStatelessSeams 
   queryFn: queryFn as ClaudeStatelessSeams["queryFn"],
 });
 
-/** claude-bridge's model table re-tagged for this provider (same ids, limits and zero costs). */
-export const claudeStatelessModels = (ctx: { cwd: string; env: NodeJS.ProcessEnv }) =>
-  claudeBridgeLookupModels(ctx).map((m: any) => ({ ...m, api: CLAUDE_STATELESS_ID, provider: CLAUDE_STATELESS_ID, baseUrl: CLAUDE_STATELESS_ID }));
+/** The subscription model table tagged for a provider id (no network, no process). */
+export const claudeStatelessModels = (_ctx?: { cwd: string; env: NodeJS.ProcessEnv }, id: string = CLAUDE_STATELESS_ID) =>
+  buildSubscriptionModels(getModels("anthropic") as any[]).map((m) => ({ ...m, api: id, provider: id, baseUrl: id }));
+
+/** Lookup list for stored `claude-bridge/<model>` refs (conversations written before the bridge was retired). */
+export const legacyBridgeLookupModels = (ctx?: { cwd: string; env: NodeJS.ProcessEnv }) => claudeStatelessModels(ctx, LEGACY_CLAUDE_BRIDGE_ID);
 
 export const claudeStatelessPaths = (ctx: { cwd: string; env: NodeJS.ProcessEnv }) => {
   const den = ctx.env.WOLF_DEN;

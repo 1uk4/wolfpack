@@ -129,7 +129,7 @@ describe("startWolf", () => {
     expect(detail2.id).toBe("bootwolf/home");
   });
 
-  it("boots a subscription-transport table onto the claude-bridge provider (no model call)", async () => {
+  it("boots a subscription-transport table (legacy claude-bridge piModel) onto claude-stateless (no model call)", async () => {
     const tier = { model: "claude-haiku-5-5", modelSource: "default", provider: "claude-agent-sdk", piModel: "claude-bridge/claude-haiku-5-5" };
     writeFileSync(
       join(root, "models.json"),
@@ -139,7 +139,7 @@ describe("startWolf", () => {
     const detail: any = await (await fetch(`${w.url}${buildPath("getThread", { id: "bootwolf/home" })}`)).json();
     expect(detail.id).toBe("bootwolf/home");
     const watch = await w.conversation.watch();
-    expect(watch.snapshot.agent.model).toMatchObject({ provider: "claude-bridge", modelId: "claude-haiku-5-5" });
+    expect(watch.snapshot.agent.model).toMatchObject({ provider: "claude-stateless", modelId: "claude-haiku-5-5" });
     await watch.stop();
   });
 

@@ -53,7 +53,6 @@
     "@wolfpack/protocol": "*",
     "@wolfpack/workspaces": "*",
     "grammy": "^1.21.0",
-    "pi-claude-bridge": "github:1uk4/pi-claude-bridge#durable-core",
     "pi-claude-bridge-stateless": "git+https://github.com/1uk4/pi-claude-bridge.git#45eb3f33075056c2f9cb9e8d950ce6498512deb8",
     "yaml": "^2.6.0"
   },

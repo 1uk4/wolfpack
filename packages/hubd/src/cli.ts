@@ -7,6 +7,7 @@ import { cleanOrphans, overLimit } from "./work-orphans.js";
 import { formatReport, importWork } from "./work-import.js";
 import { formatBackfillReport, kbBackfill } from "./kb-backfill.js";
 import { formatAliasBackfillReport, kbBackfillAliases } from "./kb-backfill-aliases.js";
+import { formatRehomeReport, kbRehome } from "./kb-rehome.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
@@ -15,7 +16,7 @@ import { assertSocketPath, parseSocketMode } from "./socket.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
-  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans" | "work-import" | "kb-backfill";
+  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans" | "work-import" | "kb-backfill" | "kb-rehome";
   fromDomains?: string;
   fromLedger?: string;
   /** kb-backfill */
@@ -24,6 +25,9 @@ export interface CliArgs {
   deweyLedger?: string;
   /** kb-backfill: copy only Dewey's aliased + entry_retired events (works on a ledger with curator events, no --force). */
   aliases?: boolean;
+  /** kb-rehome: entryId=sectionId pairs and section ids to remove. */
+  moves?: Array<{ entryId: string; sectionId: string }>;
+  removeSections?: string[];
   tz?: string;
   dryRun?: boolean;
   domainList?: string[];
@@ -87,6 +91,8 @@ const USAGE = `usage:
                                                               copy Dewey's aliased + entry_retired events (bf- ids, idempotent) so the curator routes known den topics by alias. Skips keys the hub curator already aliased. Safe on a ledger with curator events (no --force). Dry run lists skipped keys and unresolved targets.
   hubd kb-backfill --receipts <dir> --inbox <dir> --dewey-ledger <file> --data-dir <dir> [--tz <IANA, default UTC>] [--dry-run] [--force]
                                                               one-off, idempotent: append Dewey's past curation decisions (receipts + _processed, kb-repair via the Dewey ledger's aliased events) to the hub KB ledger so /kb-activity shows history. Run as the hubd user (file ownership); stop hubd or rely on the KB writer lock. Events carry ids starting "bf-".
+  hubd kb-rehome --data-dir <dir> --move <entryId>=<sectionId> ... [--remove-section <sectionId> ...] [--apply]
+                                                              move entries between sections and remove emptied sections, through the hub write path (commitKb, ledger entry_placed / sections_replaced, _sections.json, digest/INDEX/registry re-rendered). Dry run unless --apply. hubd must be STOPPED (writer lock) and the curator sweep lease free.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_POLL_MS (default 60000) / HUBD_CURATOR_MODELS (models.json path) / HUBD_EMBED_URL / HUBD_EMBED_MODEL
@@ -96,7 +102,7 @@ env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_PO
 
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest0] = argv;
-  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans" && command !== "work-import" && command !== "kb-backfill") throw new Error(USAGE);
+  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans" && command !== "work-import" && command !== "kb-backfill" && command !== "kb-rehome") throw new Error(USAGE);
   let rest = rest0;
   let sub: CliArgs["sub"];
   let tokenId: string | undefined;
@@ -132,6 +138,18 @@ export function parseArgs(argv: string[]): CliArgs {
       if (flag === "--tz") { out.tz = val0(); continue; }
       if (flag === "--force") { out.force = true; continue; }
       if (flag === "--aliases") { out.aliases = true; continue; }
+    }
+    if (command === "kb-rehome") {
+      if (flag === "--apply") { out.apply = true; continue; }
+      if (flag === "--move") {
+        const v = val0();
+        const i2 = v.indexOf("=");
+        if (i2 <= 0 || i2 === v.length - 1) throw new Error("--move needs <entryId>=<sectionId>");
+        (out.moves ??= []).push({ entryId: v.slice(0, i2), sectionId: v.slice(i2 + 1) });
+        continue;
+      }
+      if (flag === "--remove-section") { (out.removeSections ??= []).push(val0()); continue; }
+      if (flag !== "--data-dir") throw new Error(`kb-rehome does not take ${flag}\n${USAGE}`);
     }
     if (command === "work-orphans" && flag === "--apply") { out.apply = true; continue; }
     if (command === "work-orphans" && flag === "--force") { out.force = true; continue; }
@@ -187,8 +205,9 @@ export function parseArgs(argv: string[]): CliArgs {
     if (out.kind === "worker" && !out.hostId) throw new Error("pair --kind worker requires --host-id <id>");
     if (out.kind !== "worker" && out.hostId) throw new Error("--host-id is only for --kind worker");
   }
-  if ((command === "pair" || command === "tokens" || command === "work-orphans" || command === "work-import" || command === "kb-backfill") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
+  if ((command === "pair" || command === "tokens" || command === "work-orphans" || command === "work-import" || command === "kb-backfill" || command === "kb-rehome") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
   if (command === "work-import" && (!out.fromDomains || !out.fromLedger)) throw new Error("work-import requires --from-domains and --from-ledger");
+  if (command === "kb-rehome" && !out.moves?.length && !out.removeSections?.length) throw new Error("kb-rehome needs at least one --move or --remove-section");
   if (command === "kb-backfill" && !out.aliases && (!out.receipts || !out.inbox)) throw new Error("kb-backfill requires --receipts and --inbox");
   if (command === "kb-backfill" && out.aliases && !out.deweyLedger) throw new Error("kb-backfill --aliases requires --dewey-ledger");
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
@@ -232,6 +251,10 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   }
   if (args.command === "work-import") {
     for (const l of formatReport(importWork({ fromDomains: args.fromDomains!, fromLedger: args.fromLedger!, dataDir: args.dataDir!, dryRun: !!args.dryRun, ...(args.domainList ? { domains: args.domainList } : {}) }))) log(l);
+    return;
+  }
+  if (args.command === "kb-rehome") {
+    for (const l of formatRehomeReport(await kbRehome({ dataDir: args.dataDir!, moves: args.moves ?? [], removeSections: args.removeSections ?? [], apply: !!args.apply }))) log(l);
     return;
   }
   if (args.command === "kb-backfill") {

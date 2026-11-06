@@ -200,9 +200,10 @@ describe("tier coverage", () => {
   it("every agent file in the repo names a tier and sets no thinking", () => {
     const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const extDir = path.join(repo, "extensions");
-    const files = fs
-      .readdirSync(extDir)
-      .map((ext) => path.join(extDir, ext, "agents"))
+    const files = [
+      ...fs.readdirSync(extDir).map((ext) => path.join(extDir, ext, "agents")),
+      path.join(repo, "packages", "agents", "agents"),
+    ]
       .filter((dir) => fs.existsSync(dir))
       .flatMap((dir) => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => path.join(dir, f)));
     expect(files.length).toBeGreaterThan(0);

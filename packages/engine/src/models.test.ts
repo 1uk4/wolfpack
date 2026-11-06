@@ -339,4 +339,20 @@ describe("per-tier providers and engine-step tiers", () => {
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     } finally { warn.mockRestore(); }
   });
+  it("a models.json whose only legacy field is `provider: claude-bridge` is aliased and logs the sync/wolf.yaml notice", async () => {
+    vi.resetModules();
+    const fresh = await import("./models.js");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-models-"));
+    try {
+      const file = path.join(dir, "models.json");
+      const t = resolveModelTable({ pack: pack({}), location: "local" });
+      for (const tier of Object.values(t.tiers)) Object.assign(tier, { provider: "claude-bridge" });
+      fs.writeFileSync(file, JSON.stringify(t));
+      const loaded = fresh.readModelTable(file);
+      for (const tier of Object.values(loaded.tiers)) expect(tier.provider).toBe("claude-agent-sdk");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain("run `wolfpack sync` or edit wolf.yaml (provider: claude-stateless)");
+    } finally { warn.mockRestore(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
 });

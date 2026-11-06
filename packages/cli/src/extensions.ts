@@ -228,7 +228,8 @@ export function writePiSettings(wolfDir: string, keys: string[], main?: Resolved
 
   // Preserve machine-local `npm:` packages (e.g. npm:pi-claude-bridge, which
   // only exists on a Mac with a Claude Code subscription and cannot ship in the
-  // shared bundle). The bundle manages the extension *dirs*; it must not clobber
+  // shared bundle; pi subagent children use it as their subscription provider,
+  // wolfd itself runs claude-stateless in-process). The bundle manages the extension *dirs*; it must not clobber
   // locally-installed npm extensions a user added to this specific wolf.
   const existing = Array.isArray(settings.packages) ? (settings.packages as unknown[]) : [];
   const localNpm = existing.filter(

@@ -3,6 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { HttpConsoleClient } from "@wolfpack/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPath } from "@wolfpack/protocol";
 import { startWolf, type RunningWolf } from "./run.js";
@@ -141,6 +145,54 @@ describe("startWolf", () => {
     const watch = await w.conversation.watch();
     expect(watch.snapshot.agent.model).toMatchObject({ provider: "claude-stateless", modelId: "claude-haiku-5-5" });
     await watch.stop();
+  });
+
+  it("a stored claude-bridge root is reconciled to claude-stateless at boot and takes its turn there", async () => {
+    const tier = { model: "claude-haiku-5-5", modelSource: "default", provider: "claude-agent-sdk", piModel: "claude-stateless/claude-haiku-5-5" };
+    writeFileSync(
+      join(root, "models.json"),
+      JSON.stringify({ location: "local", transport: "subscription", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }),
+    );
+    const registry = (stateless: string[]) => {
+      const mk = (provider: string, texts: string[]) => {
+        const faux = fauxProvider({ provider, api: provider, models: [{ id: "claude-haiku-5-5" }], tokensPerSecond: undefined });
+        faux.setResponses(texts.map((t) => fauxAssistantMessage(t)));
+        return faux;
+      };
+      const st = mk("claude-stateless", stateless);
+      const legacy = mk("claude-bridge", []); // lookup-only stand-in: any use would exhaust its (empty) script
+      const models = createModels();
+      models.setProvider(st.provider);
+      models.setProvider(legacy.provider);
+      return { models, st, legacy };
+    };
+    // Boot once: creates the root on claude-stateless. Then rewrite the stored root as the retired provider left it.
+    const first = await startWolf({ configPath: join(root, "wolf.yaml"), env, home: root, models: registry([]).models });
+    const den = first.config.den;
+    await first.close();
+    const db = new DatabaseSync(join(den, "session.sqlite"));
+    db.exec("update document_revisions set content = replace(content, 'claude-stateless', 'claude-bridge')");
+    const stored = (db.prepare("select content as v from document_revisions").all() as Array<{ v: string }>).map((r) => r.v).join("");
+    db.close();
+    expect(stored).toContain('"claude-bridge"');
+    expect(stored).not.toContain('"claude-stateless"');
+
+    const reg = registry(["pong"]);
+    const w = await startWolf({ configPath: join(root, "wolf.yaml"), env, home: root, models: reg.models });
+    running.push(w);
+    const watch = await w.conversation.watch();
+    expect(watch.snapshot.agent.model).toMatchObject({ provider: "claude-stateless", modelId: "claude-haiku-5-5" });
+    await watch.stop();
+
+    const client = new HttpConsoleClient({ baseUrl: w.url });
+    await client.submit("bootwolf/home", "ping", { whenBusy: "reject" });
+    const events: any[] = [];
+    for await (const e of client.watch("bootwolf/home")) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
+    const detail = await client.getThread("bootwolf/home");
+    expect(detail.messages.map((m) => [m.role, m.text])).toEqual([["user", "ping"], ["assistant", "pong"]]);
+    expect(reg.st.state.callCount).toBe(1);
+    expect(reg.legacy.state.callCount).toBe(0);
   });
 
   it("rejects unknown transports with a clear error", async () => {

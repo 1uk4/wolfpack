@@ -211,7 +211,7 @@ function registerTierCommands(pi: ExtensionAPI): void {
         const slash = resolved.piModel.indexOf("/");
         const provider = resolved.piModel.slice(0, slash);
         const id = resolved.piModel.slice(slash + 1);
-        const model = ctx.modelRegistry.find(provider, id);
+        const model = ctx.modelRegistry.find(childPiModel(resolved.piModel).split("/")[0]!, id);
         if (!model) {
           ctx.ui.notify(
             `/${tier}: model ${resolved.piModel} is not registered (is the ${provider} provider loaded?)`,
@@ -269,14 +269,34 @@ function getToolExtensionPath(tool: string): string | undefined {
 }
 
 /**
+ * Subagents are `pi` CLI children, not wolfd in-process sessions. The model table (and so `piModel`) names the
+ * canonical `claude-stateless` provider, which only wolfd registers in-process; a pi child cannot load it. The only
+ * subscription provider a pi child can get is the machine-local `npm:pi-claude-bridge` package, which registers
+ * `claude-bridge` with the same model ids. So the child's `--model` is translated: `claude-stateless/<id>` and a legacy
+ * `claude-bridge/<id>` both become `claude-bridge/<id>` here, and that provider is re-enabled below.
+ */
+const CHILD_SUBSCRIPTION_PROVIDER = "claude-bridge";
+
+/** Rewrite a table/loadout `<provider>/<id>` to the provider id the pi child registers; other providers pass through. */
+function childPiModel(model: string): string {
+  const slash = model.indexOf("/");
+  if (slash <= 0) return model;
+  const provider = model.slice(0, slash);
+  if (provider === "claude-stateless" || provider === "claude-bridge") {
+    return `${CHILD_SUBSCRIPTION_PROVIDER}/${model.slice(slash + 1)}`;
+  }
+  return model;
+}
+
+/**
  * Model providers that come from an extension rather than pi itself, keyed by
- * the provider prefix of a model id (`claude-bridge/claude-sonnet-5-5`), mapped
+ * the provider prefix of the CHILD model id (`claude-bridge/claude-sonnet-5-5`, see childPiModel), mapped
  * to the npm package installed in the agent dir. `--no-extensions` drops them,
  * so a sandboxed subagent on such a model fails with "Model not found" unless
  * the provider extension is re-enabled. Its tools stay gated by `--tools`.
  */
 const PROVIDER_PACKAGES: Record<string, string> = {
-  "claude-bridge": "pi-claude-bridge",
+  [CHILD_SUBSCRIPTION_PROVIDER]: "pi-claude-bridge",
 };
 
 /**
@@ -298,12 +318,13 @@ function resolveSubagentModel(requested: string | undefined): {
     throw new Error(`subagent model must be a tier (${TIERS.join("|")}), got ${JSON.stringify(tier)}`);
   }
   const resolved = loadModelTable().table.tiers[tier];
-  return { tier, modelId: resolved.model, piModel: resolved.piModel, thinking: resolved.thinking ?? null };
+  return { tier, modelId: resolved.model, piModel: childPiModel(resolved.piModel), thinking: resolved.thinking ?? null };
 }
 
 /** Extension entry file(s) that register the provider of `model`, if any. */
 function getProviderExtensionPaths(model: string | null): string[] {
-  const provider = model?.includes("/") ? model.slice(0, model.indexOf("/")) : null;
+  const child = model ? childPiModel(model) : null;
+  const provider = child?.includes("/") ? child.slice(0, child.indexOf("/")) : null;
   const pkg = provider ? PROVIDER_PACKAGES[provider] : undefined;
   if (!pkg) return [];
   const pkgDir = join(getAgentConfigDir(), "npm", "node_modules", pkg);
@@ -863,7 +884,8 @@ function applySandboxToParts(
   opts: { artifactDir: string; name: string },
 ): void {
   if (loadout.model) {
-    const model = loadout.thinking ? `${loadout.model}:${loadout.thinking}` : loadout.model;
+    const base = childPiModel(loadout.model); // also covers loadouts saved before the rename
+    const model = loadout.thinking ? `${base}:${loadout.thinking}` : base;
     parts.push("--model", shellEscape(model));
   }
 
@@ -1197,6 +1219,9 @@ export const __test__ = {
   resolveEffectivePane,
   buildSubagentToolAllowlist,
   applySandboxToParts,
+  childPiModel,
+  getProviderExtensionPaths,
+  resolveSubagentModel,
   buildPiPromptArgs,
   formatWidgetRightLabel,
   observeRunningSubagent,

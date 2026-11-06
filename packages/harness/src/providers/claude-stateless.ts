@@ -3,9 +3,9 @@
  * Max-subscription transport (the default, replacing the retired pi-claude-bridge durable-core provider): each model round is one short-lived Agent SDK query over a
  * resumable session file (no parked child). Provider id `claude-stateless`.
  *
- * ROLLOUT NOTE: the dependency `pi-claude-bridge-stateless` in packages/harness/package.json is a LOCAL git ref
- * (git+file:///…/workspaces/pi-claude-bridge#stateless-core, pinned by commit in the lockfile; npm builds dist via the
- * fork's `prepare`). It works on this machine only: it MUST become a pushed `github:` ref before any VPS deploy.
+ * DEPENDENCY: `pi-claude-bridge-stateless` in packages/harness/package.json is a `git+https://github.com/1uk4/pi-claude-bridge.git#<commit>`
+ * ref (the pushed `stateless-core` branch, pinned by commit in the lockfile; npm builds dist via the fork's `prepare`). Bumping
+ * it means re-checking the seams below (lazySdkQuery) and the model policy.
  *
  * Paths: STATE DIR, not the den. The den is Syncthing-synced on VPS wolves (add-wolf.sh installs a `.stignore` there) and
  * holds the knowledge/backups, and session files are transcripts plus a debug log: keep them out. The state dir is
@@ -40,7 +40,9 @@ export const NO_TOOL_SEARCH = { ENABLE_TOOL_SEARCH: "false" } as const;
 /** Legacy provider id of the retired durable-core bridge: stored conversation refs and old models.json files still say it. */
 export const LEGACY_CLAUDE_BRIDGE_ID = "claude-bridge";
 
-// Model table policy, carried over from the retired pi-claude-bridge buildModels/applyLongContext (same ids, same windows).
+// Model table policy (ONE_M = the bridge's MEASURED_ONE_M, FAMILY_ORDER, rank): a COPY of pi-claude-bridge-stateless's models.ts
+// (the package exports only ./stateless, so it cannot be imported). KEEP IN SYNC with it when the bridge is bumped.
+// Dropped on purpose: the bridge's PLAN_GATED_ONE_M (claude-opus-4-6, claude-sonnet-4-6): they are 200K here, not 1M.
 const FAMILY_ORDER = ["fable", "opus", "sonnet", "haiku"];
 const rank = (id: string) => { const [, family, major, minor] = id.split("-"); return { family, t: [Number(major) || 0, Number(minor) || 0] as const }; };
 /** Ids Claude Code serves at 1M through the SDK; every other model is 200K. */

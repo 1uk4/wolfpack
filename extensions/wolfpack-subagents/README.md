@@ -105,7 +105,9 @@ the spawn. The tier resolves at spawn through the wolf's model table
 `<provider>/<id>`, with the tier's thinking level, if any, as the `:thinking`
 suffix. Agent files can't set thinking. When a sandboxed spawn passes
 `--no-extensions`, the extension that registers the resolved model's provider
-(e.g. `pi-claude-bridge`) is re-enabled.
+(e.g. `pi-claude-bridge`) is re-enabled. A pi child cannot load wolfd's in-process
+`claude-stateless`, so a `claude-stateless/<id>` (or legacy `claude-bridge/<id>`) model is passed to
+the child as `claude-bridge/<id>`, the provider that package registers.
 
 ## Tier commands
 

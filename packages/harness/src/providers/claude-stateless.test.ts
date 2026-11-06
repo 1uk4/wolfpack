@@ -9,7 +9,7 @@ vi.mock("@wolfpack/engine", async (orig) => ({ ...(await orig<object>()), loadQu
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
 import { NEEDS_SUBSCRIPTION_TOKEN, PROVIDER_FACTORIES } from "./index.js";
-import { claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, withFreshSystemPrompt } from "./claude-stateless.js";
+import { buildSubscriptionModels, claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, withFreshSystemPrompt } from "./claude-stateless.js";
 
 const fakeStateless = () => {
   const provider = createProvider({ id: "claude-stateless", auth: { check: async () => "t" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
@@ -66,6 +66,15 @@ describe("claude-stateless factory", () => {
       expect(models.some((m) => m.id === "claude-sonnet-5-5" && m.provider === "claude-stateless" && m.api === "claude-stateless")).toBe(true);
       h.dispose!();
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("context windows: the 5.5 family is 1M (named 1M); 4.6 models and unlisted ids are 200K", () => {
+    const base = { name: "n", reasoning: true, input: ["text"], maxTokens: 1000 };
+    const built = buildSubscriptionModels(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"].map((id) => ({ ...base, id })));
+    const win = Object.fromEntries(built.map((m) => [m.id, m.contextWindow]));
+    expect(win).toEqual({ "claude-opus-5-5": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-haiku-5-5": 1_000_000, "claude-opus-4-6": 200_000, "claude-sonnet-4-6": 200_000, "claude-haiku-4-5": 200_000 });
+    expect(built.find((m) => m.id === "claude-haiku-5-5")!.name).toBe("n 1M");
+    expect(built.map((m) => m.id).slice(0, 2)).toEqual(["claude-opus-5-5", "claude-opus-4-6"]); // opus first, newest first
   });
 
   it("pins the assumption: nothing on the stateless entry path reaches the bridge's skills rendering (formatSkillsForPrompt)", () => {

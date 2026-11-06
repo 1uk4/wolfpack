@@ -13,7 +13,7 @@
  * never starts a second turn. With a larger limit a tool_use of turn 1 must not excuse a max-turns error after turn 2.
  *
  * Bridge: `pi-claude-bridge-stateless/stateless` (dist/stateless/provider.js consume()), which is what claude-stateless
- * imports. It is NOT the `pi-claude-bridge` (durable-core) package. Verified by max-turns.bridge.test.ts: the rewritten
+ * imports. It is NOT the retired `pi-claude-bridge` (durable-core) package, which has no error_max_turns handling. Verified by max-turns.bridge.test.ts: the rewritten
  * `success` result ends an unmapped-tool round as done/stop (the call itself is lost; the log line says so).
  *
  * CHECK ON BRIDGE UPGRADE: the bridge only uses the async iterator and close() (like lazySdkQuery); interrupt(),

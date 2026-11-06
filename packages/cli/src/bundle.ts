@@ -539,13 +539,16 @@ export async function installDevExtensions(
  * resolvable from harness.cjs on a VPS (global install, no node_modules above the bundle), so a plain external
  * require would throw when the bridge initialises. The harness always injects the query function it resolved
  * itself (engine loadQuery: harness tree, NODE_PATH, global install), so the bridge's own import is stubbed.
+ * Both stubs apply to importers under pi-claude-bridge-stateless only (BRIDGE_IMPORTER).
  */
+const BRIDGE_IMPORTER = /[\\/]pi-claude-bridge-stateless[\\/]/;
+
 export function stubBridgeSdkPlugin(): esbuild.Plugin {
   return {
     name: "stub-bridge-agent-sdk",
     setup(build) {
       build.onResolve({ filter: /^@anthropic-ai\/claude-agent-sdk$/ }, (args) =>
-        /[\\/]pi-claude-bridge-stateless[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
+        BRIDGE_IMPORTER.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-sdk-stub" }, () => ({
         contents: 'export function query() { throw new Error("claude-stateless: the Agent SDK query function must be injected (queryFn)"); }',
@@ -555,7 +558,7 @@ export function stubBridgeSdkPlugin(): esbuild.Plugin {
       // never calls. Bundled, pi-coding-agent's config.js runs fileURLToPath(import.meta.url) at load, which is undefined
       // in CJS and crashes the harness. Stub it for the bridge only.
       build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, (args) =>
-        /[\\/]pi-claude-bridge-stateless[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
+        BRIDGE_IMPORTER.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-pca-stub" }, () => ({
         contents: 'export function formatSkillsForPrompt() { throw new Error("claude-stateless: pi-coding-agent is not available in the harness bundle"); }',

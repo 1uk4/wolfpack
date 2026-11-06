@@ -131,8 +131,15 @@ let legacyAliasLogged = false;
 function logLegacyAlias(): void {
   if (legacyAliasLogged) return;
   legacyAliasLogged = true;
-  console.warn(`[models] provider "${LEGACY_BRIDGE}" is retired; using "${STATELESS}" (regenerate models.json with \`wolfpack sync\` to drop this notice)`);
+  console.warn(`[models] provider "${LEGACY_BRIDGE}" is retired; using "${STATELESS}" (run \`wolfpack sync\` or edit wolf.yaml (provider: ${STATELESS}) to drop this notice)`);
 }
+/** Is this provider id (or the provider part of a `<provider>/<model>` ref) the retired bridge? Logs the notice once when it is. */
+const isLegacyBridge = (idOrRef: unknown): boolean => {
+  if (typeof idOrRef !== "string") return false;
+  const hit = idOrRef === LEGACY_BRIDGE || idOrRef.startsWith(`${LEGACY_BRIDGE}/`);
+  if (hit) logLegacyAlias();
+  return hit;
+};
 /** A pi provider id with the retired `claude-bridge` mapped to `claude-stateless`. */
 export function canonicalPiProvider(id: string): string {
   if (id !== LEGACY_BRIDGE) return id;
@@ -481,12 +488,9 @@ export function readModelTable(file: string): ModelTable {
   // A table written while `claude-bridge` existed: alias it to claude-stateless (same model ids).
   for (const t of Object.values(table.tiers)) {
     if (!t) continue;
-    if (t.piProvider === LEGACY_BRIDGE) t.piProvider = canonicalPiProvider(t.piProvider);
-    if (typeof t.piModel === "string" && t.piModel.startsWith(`${LEGACY_BRIDGE}/`)) {
-      logLegacyAlias();
-      t.piModel = `${STATELESS}/${t.piModel.slice(LEGACY_BRIDGE.length + 1)}`;
-    }
-    if (t.provider === LEGACY_BRIDGE) t.provider = "claude-agent-sdk";
+    if (isLegacyBridge(t.piProvider)) t.piProvider = STATELESS;
+    if (isLegacyBridge(t.piModel)) t.piModel = `${STATELESS}/${t.piModel.slice(LEGACY_BRIDGE.length + 1)}`;
+    if (isLegacyBridge(t.provider)) t.provider = ENGINE_PROVIDER_FOR_PI[STATELESS]!;
   }
   return table;
 }

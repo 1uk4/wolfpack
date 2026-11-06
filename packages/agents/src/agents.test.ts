@@ -117,27 +117,35 @@ describe("bundled visualizer", () => {
 describe("standards", () => {
   // A fixture standard: these tests check the loader, not the shipped text.
   const MARK = "# Fixture testing standard";
+  const GIT_MARK = "# Fixture git standard";
   const count = (body: string | undefined, text: string) => (body ?? "").split(text).length - 1;
   const fixtureStandards = () => {
     const dir = tmp();
     put(dir, "testing.md", `${MARK}\nrules\n`);
+    put(dir, "git.md", `${GIT_MARK}\nrules\n`);
     put(dir, "extra.md", "# Extra standard\n");
     return dir;
   };
 
-  it("gives worker, planner and reviewer the standard exactly once, from any source, and not the scout", () => {
+  it("gives worker, planner and reviewer the testing standard, and worker and reviewer the git standard, each exactly once, from any source, and not the scout or the planner's git", () => {
     const standardsDir = fixtureStandards();
     const agentDir = tmp();
     const cwd = tmp();
     put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
     put(join(cwd, ".pi", "agents"), "planner.md", "---\nname: planner\nstandards: testing\n---\nmy planner");
     const opts = { cwd, agentDir, standardsDir };
-    for (const name of ["worker", "planner", "reviewer"]) {
-      expect(count(loadAgent(name, opts)?.body, MARK), name).toBe(1);
-      expect(count(discoverAgents(opts).find((a) => a.name === name)?.body, MARK), name).toBe(1);
+    const expected = {
+      worker: { testing: 1, git: 1 },
+      reviewer: { testing: 1, git: 1 },
+      planner: { testing: 1, git: 0 },
+      scout: { testing: 0, git: 0 },
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      for (const body of [loadAgent(name, opts)?.body, discoverAgents(opts).find((a) => a.name === name)?.body]) {
+        expect({ name, testing: count(body, MARK), git: count(body, GIT_MARK) }).toEqual({ name, ...want });
+      }
     }
     expect(loadAgent("worker", opts)?.body).toMatch(/^my worker/);
-    expect(loadAgent("scout", opts)?.body).not.toContain(MARK);
   });
 
   it("matches the always-on names case-insensitively, by frontmatter name and by the requested name", () => {
@@ -167,10 +175,14 @@ describe("standards", () => {
       const def = loadAgent("worker", opts);
       expect(def?.body).toBe("my worker");
       // Owner-decided contract: the loud error names the file that could not be read.
-      expect(err).toHaveBeenCalledWith(expect.stringContaining(join(standardsDir, "testing.md")));
+      const logged = (file: string) => err.mock.calls.filter(([m]) => String(m).includes(join(standardsDir, file))).length;
+      expect(logged("testing.md")).toBe(1);
+      expect(logged("git.md")).toBe(1);
+      // A second load adds no further errors.
       discoverAgents(opts);
       loadAgent("worker", opts);
-      expect(err).toHaveBeenCalledTimes(1);
+      expect(logged("testing.md")).toBe(1);
+      expect(logged("git.md")).toBe(1);
     } finally {
       err.mockRestore();
     }

@@ -44,6 +44,8 @@ export const DEFAULT_TOOLS = ["coding"] as const;
 
 /** Default consolidation timer period. */
 export const DEFAULT_CONSOLIDATION_INTERVAL = "4h";
+/** The default period in ms. */
+export const DEFAULT_CONSOLIDATION_INTERVAL_MS = 4 * 3600_000;
 /** setInterval overflows (fires every 1ms) above this. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 

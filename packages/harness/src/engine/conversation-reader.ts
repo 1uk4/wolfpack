@@ -7,7 +7,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { CompactionEntry, type Conversation, type Harness } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
-import type { CardLookup, ConversationClass, ConversationMessage } from "../extension-api.js";
+import type { CardLookup, ConversationClass, ConversationMessage, EngineReadyInfo } from "../extension-api.js";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData } from "./cards.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -153,20 +153,30 @@ export function onEngineCloseFor(den: string, fn: () => void): void {
   pendingClosers.set(den, [...(pendingClosers.get(den) ?? []), fn]);
 }
 
-export interface EngineReadyInfo {
-  hostConsolidationTimer: boolean;
-  onEngineClose(fn: () => void): void;
-}
+export type { EngineReadyInfo };
 const pendingReady = new Map<string, Array<(info: EngineReadyInfo) => void>>();
 
 /**
  * Run `fn` once when the engine on this den is attached (immediately if it already is). The boot-time hook for
  * extensions under durable hosts, which have no `lifecycle.start`.
  */
-export function onEngineReadyFor(den: string, fn: (info: EngineReadyInfo) => void): void {
+export function onEngineReadyFor(den: string, fn: (info: EngineReadyInfo) => void): () => void {
   const reader = readers.get(den);
-  if (reader) return fn({ hostConsolidationTimer: reader.hostConsolidationTimer === true, onEngineClose: (f) => reader.onClose(f) });
+  if (reader) {
+    runReady(reader, fn);
+    return () => {};
+  }
   pendingReady.set(den, [...(pendingReady.get(den) ?? []), fn]);
+  // Cancel: drop this entry if the engine has not attached yet (no leak for an instance that is stopped first).
+  return () => {
+    const rest = (pendingReady.get(den) ?? []).filter((f) => f !== fn);
+    if (rest.length) pendingReady.set(den, rest);
+    else pendingReady.delete(den);
+  };
+}
+
+function runReady(reader: ConversationReader, fn: (info: EngineReadyInfo) => void): void {
+  try { fn({ hostConsolidationTimer: reader.hostConsolidationTimer === true, onEngineClose: (f) => reader.onClose(f) }); } catch (err) { console.error("[engine] onEngineReady failed:", err instanceof Error ? err.message : err); }
 }
 
 /** One engine per den: registering a second reader for the same den replaces the first (and warns). */
@@ -177,9 +187,7 @@ export function registerConversationReader(den: string, reader: ConversationRead
   pendingClosers.delete(den);
   const ready = pendingReady.get(den) ?? [];
   pendingReady.delete(den);
-  for (const fn of ready) {
-    try { fn({ hostConsolidationTimer: reader.hostConsolidationTimer === true, onEngineClose: (f) => reader.onClose(f) }); } catch (err) { console.error("[engine] onEngineReady failed:", err instanceof Error ? err.message : err); }
-  }
+  for (const fn of ready) runReady(reader, fn);
   return () => {
     if (readers.get(den) === reader) readers.delete(den);
   };

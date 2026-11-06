@@ -161,10 +161,9 @@ export function adaptToDurable(
   // pi-durable has no extension lifecycle of its own: run `lifecycle.stop` when the engine closes (queued if the engine
   // is not attached yet), so stop-time cleanup never depends on a conversation having run.
   const stop = ext.lifecycle?.stop;
-  if (stop) onEngineCloseFor(wolfDen, () => void Promise.resolve(stop()).catch(() => {}));
-
   const ready = ext.onEngineReady;
-  if (ready) onEngineReadyFor(wolfDen, (info) => ready.call(ext, info));
+  const cancelReady = ready ? onEngineReadyFor(wolfDen, (info) => ready.call(ext, info)) : undefined;
+  if (stop) onEngineCloseFor(wolfDen, () => { cancelReady?.(); void Promise.resolve(stop()).catch(() => {}); });
 
   return piDefineExtension({
     name: ext.name,

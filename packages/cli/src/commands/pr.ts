@@ -1,0 +1,78 @@
+/**
+ * wolfpack pr prepare [--full] [--dry-run] [--base stable]
+ * Opens (or updates) the release PR from the current wolf/<wolf> branch into stable. The owner merges it.
+ * This file only wires the real git, gh, build and work-API access into prPrepare (pr-prepare.ts).
+ */
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { parseTotals, prPrepare, PrRefusal, type CmdResult, type PrDeps, type PrPrepareOptions } from "../pr-prepare.js";
+
+export interface PrCmdOptions extends PrPrepareOptions {
+  cwd?: string;
+}
+
+/** Build and test steps may take a while on a full suite. */
+const STEP_TIMEOUT_MS = 20 * 60_000;
+
+function sh(cmd: string, args: string[], cwd: string, input?: string, timeout?: number): CmdResult {
+  const r = spawnSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 1 << 26, timeout });
+  const err = r.error ? `${r.stderr ?? ""}${r.error.message}` : (r.stderr ?? "");
+  return { code: r.status ?? 1, out: r.stdout ?? "", err };
+}
+
+function realDeps(root: string): PrDeps {
+  const endpoint = (process.env.WORK_ENDPOINT ?? "").replace(/\/$/, "");
+  const token = process.env.WORK_TOKEN ?? "";
+  return {
+    git: (args) => sh("git", args, root),
+    gh: (args, input) => sh("gh", args, root, input),
+    workConfigured: () => Boolean(endpoint && token),
+    async work(id) {
+      if (!endpoint || !token) throw new PrRefusal("Work API not configured (set WORK_ENDPOINT and WORK_TOKEN)");
+      // A network failure or a bad status throws a plain Error: prepare warns and files that commit under Other commits.
+      const res = await fetch(`${endpoint}/work/${encodeURIComponent(id)}`, { headers: { "x-api-key": token }, signal: AbortSignal.timeout(15_000) });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`GET /work/${id} returned ${res.status}`);
+      return (await res.json()) as { item: { id: string; kind: string; title: string; partOf?: string | null }; body: string | null };
+    },
+    async verify({ base, full }) {
+      // Same steps as CI: tsc --build and vitest over the affected packages, console tests if affected.
+      const aff = (await import(pathToFileURL(path.join(root, "scripts/affected.mjs")).href)) as {
+        computeAffected(c: string[] | null, ws: unknown): { all: boolean; tsProjects: string[]; vitestPaths: string[]; extensionsTests: boolean; scriptsTests: boolean; consoleTests: boolean };
+        changedFiles(b: string | null, h: string, cwd: string): string[] | null;
+        loadWorkspaces(r: string): unknown;
+      };
+      const a = aff.computeAffected(full ? null : aff.changedFiles(base, "HEAD", root), aff.loadWorkspaces(root));
+      const steps: { name: string; cmd: string; args: string[] }[] = [];
+      if (a.tsProjects.length) steps.push({ name: "build+typecheck", cmd: "npx", args: ["tsc", "--build", ...a.tsProjects] });
+      const paths = [...a.vitestPaths, ...(a.extensionsTests ? ["extensions/"] : []), ...(a.scriptsTests ? ["scripts/"] : [])];
+      if (a.all) steps.push({ name: "vitest (all)", cmd: "npx", args: ["vitest", "run"] });
+      else if (paths.length) steps.push({ name: "vitest (affected)", cmd: "npx", args: ["vitest", "run", ...paths] });
+      if (a.consoleTests) steps.push({ name: "console tests", cmd: "npm", args: ["test", "-w", "@wolfpack/console"] });
+      const lines: string[] = [];
+      for (const s of steps) {
+        const r = sh(s.cmd, s.args, root, undefined, STEP_TIMEOUT_MS);
+        if (r.code !== 0) return { ok: false, summary: `${s.name} FAILED\n${(r.out + r.err).trim().split("\n").slice(-15).join("\n")}` };
+        const totals = parseTotals(r.out);
+        lines.push(`${s.name}: ok${totals ? ` (${totals})` : ""}`);
+      }
+      return { ok: true, summary: lines.length ? lines.join("; ") : "no affected packages" };
+    },
+    now: () => new Date(),
+    log: (l) => console.log(l),
+  };
+}
+
+export async function prCmd(opts: PrCmdOptions): Promise<void> {
+  const root = sh("git", ["rev-parse", "--show-toplevel"], opts.cwd ?? process.cwd()).out.trim();
+  try {
+    await prPrepare(opts, realDeps(root));
+  } catch (err) {
+    if (err instanceof PrRefusal) {
+      console.error(`refused: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+}

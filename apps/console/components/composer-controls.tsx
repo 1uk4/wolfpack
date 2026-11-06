@@ -6,11 +6,11 @@ import { MenuShell } from "@/components/menu-shell";
 import { Toggle } from "@/components/settings/controls";
 import { changeSettings, DEFAULT_SETTINGS, fetchSettings, putSettings, TIERS, type SettingsPatch, type Tier, type ThreadSettingsState } from "@/components/composer-settings";
 import { ThreadColorPicker } from "@/components/thread-color-picker";
-import { autoThreadColor, THREAD_COLORS } from "@/src/core";
+import { autoThreadColor, beginColorChange, onThreadColor, settleColorChange, THREAD_COLORS } from "@/src/core";
 import { settingsUrl } from "@/components/thread-transport";
 
 /** The thread's settings from the wolf, with an optimistic `change` that rolls back (and reports) when the wolf refuses. */
-export function useThreadSettings(wolf: string, slug: string) {
+export function useThreadSettings(wolf: string, slug: string, threadId?: string) {
 	const [settings, setSettings] = useState<ThreadSettingsState>(DEFAULT_SETTINGS);
 	const [loaded, setLoaded] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -34,18 +34,34 @@ export function useThreadSettings(wolf: string, slug: string) {
 		};
 	}, [url]);
 
+	// A pick made elsewhere (the sidebar menu) shows here at once.
+	useEffect(() => {
+		if (!threadId) return;
+		return onThreadColor((id, color) => {
+			if (id !== threadId) return;
+			setSettings((s) => {
+				if ((s.color ?? null) === color) return s;
+				const { color: _old, ...rest } = s;
+				return color === null ? rest : { ...rest, color };
+			});
+		});
+	}, [threadId]);
+
 	const change = useCallback(
 		async (patch: SettingsPatch) => {
 			setError(null);
+			// A color pick is announced to the shared store (sidebar dot, floating bar) and settled with the outcome.
+			const seq = threadId && patch.color !== undefined ? beginColorChange(threadId, patch.color, ref.current.color ?? null) : undefined;
 			const r = await changeSettings({
 				current: ref.current,
 				patch,
 				put: (p) => putSettings(url, p),
 				set: (update) => setSettings((s) => update(s)),
 			});
+			if (threadId && seq !== undefined) settleColorChange(threadId, seq, r.ok);
 			if (!r.ok) setError(r.error);
 		},
-		[url],
+		[url, threadId],
 	);
 	return { settings, loaded, error, change };
 }

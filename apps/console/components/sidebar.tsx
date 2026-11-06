@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
@@ -23,7 +23,7 @@ import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVi
 import { ThreadColorPicker } from "@/components/thread-color-picker";
 import { settingsUrl } from "@/components/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { THREAD_COLORS, autoThreadColor, threadColor, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
+import { THREAD_COLORS, autoThreadColor, beginColorChange, onThreadColor, pendingColor, settleColorChange, threadColor, threadColorIndex, threadColorVersion, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -600,6 +600,26 @@ export function SessionsSidebar() {
 			.sort((a, b) => b.score - a.score)
 			.map((r) => r.c);
 	}, [chats, query]);
+	/* Thread colors: a pick anywhere (this menu, the thread settings menu) is announced on the shared store and patched into
+	   the rows; while a PUT is in flight its value wins over a poll that lands meanwhile. The parent lookup is built once per render. */
+	const colorTick = useSyncExternalStore((cb) => onThreadColor(() => cb()), threadColorVersion, threadColorVersion);
+	useEffect(
+		() =>
+			onThreadColor((id, color) =>
+				setChats((prev) => (prev ? prev.map((x) => (x.id !== id || (x.color ?? null) === color ? x : ((): SessionItem => { const { color: _o, ...rest } = x; return color ? { ...rest, color } : rest; })())) : prev)),
+			),
+		[],
+	);
+	const colorIndex = useMemo(() => {
+		void colorTick;
+		const rows = (chats ?? []).map((x): SessionItem => {
+			const p = pendingColor(x.id);
+			if (!p) return x;
+			const { color: _o, ...rest } = x;
+			return p.color ? { ...rest, color: p.color } : rest;
+		});
+		return threadColorIndex(rows);
+	}, [chats, colorTick]);
 	/* Live subagents nest under their parent thread (settled ones are hidden); they never sit at the top level.
 	   `shown` stays the flat walk order of the rows on screen. */
 	const [showArchived, setShowArchived] = useState(false);
@@ -629,7 +649,7 @@ export function SessionsSidebar() {
 									<SessionRow
 										key={c.id}
 										chat={c}
-										dotColor={c.href ? threadColor(c, chats ?? []).hex : undefined}
+										dotColor={c.href ? threadColor(colorIndex.get(c.id) ?? c, colorIndex).hex : undefined}
 										nested={nested}
 										indented={indented}
 										offline={offlineWolves.has(rowWolf(c))}
@@ -805,25 +825,32 @@ export function SessionsSidebar() {
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState<ChatListItem | null>(null);
 
-	const ctxThread = ctxChatId !== null ? chats?.find((c) => c.id === ctxChatId && c.href) : undefined;
-	/** Save the override through the thread settings route; patch the list at once (the poll is the backstop). */
+	/** Captured when the menu opens: a thread row gets the color menu, anything else the legacy session menu. */
+	const [ctxIsThread, setCtxIsThread] = useState(false);
+	const ctxThread = ctxChatId !== null && ctxIsThread ? chats?.find((c) => c.id === ctxChatId) : undefined;
+	// A thread row that vanished (poll) closes its menu; it never falls through to rename/delete.
+	useEffect(() => {
+		if (ctxChatId !== null && ctxIsThread && ctxThread === undefined) setCtxChatId(null);
+	}, [ctxChatId, ctxIsThread, ctxThread]);
+	/** Save the override through the thread settings route. The shared store announces it, holds it over polls, and only the latest call may roll back. */
 	const setThreadColorOf = async (c: SessionItem, color: string | null) => {
-		const prevColor = c.color;
-		const patchList = (v: string | undefined) => setChats((prev) => (prev ? prev.map((x) => (x.id === c.id ? ((): SessionItem => { const { color: _o, ...rest } = x; return v ? { ...rest, color: v } : rest; })() : x)) : prev));
-		patchList(color ?? undefined);
+		const seq = beginColorChange(c.id, color, c.color ?? null);
+		let ok = false;
 		try {
 			const wolf = rowWolf(c);
 			const res = await fetch(settingsUrl(wolf, threadSlug(wolf, c.id)), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ color }) });
 			if (!res.ok) throw new Error(`color ${res.status}`);
+			ok = true;
 		} catch (err) {
 			console.error("thread color failed:", err);
-			patchList(prevColor);
 		}
+		settleColorChange(c.id, seq, ok);
 	};
 
 	const openContext = (e: React.MouseEvent<HTMLButtonElement>, chat: ChatListItem) => {
 		e.preventDefault(); // suppress the native menu
 		ctxAnchorRef.current = e.currentTarget;
+		setCtxIsThread(Boolean((chat as SessionItem).href));
 		setCtxChatId(chat.id);
 	};
 
@@ -1148,7 +1175,7 @@ export function SessionsSidebar() {
 							<div className="px-2 py-1.5 text-muted-foreground">A subagent uses its parent's color.</div>
 						) : (
 							<ThreadColorPicker
-								value={ctxThread.color}
+								value={colorIndex.get(ctxThread.id)?.color ?? undefined}
 								autoHex={THREAD_COLORS[autoThreadColor(ctxThread.id)]}
 								onPick={(color) => {
 									setCtxChatId(null);
@@ -1158,7 +1185,7 @@ export function SessionsSidebar() {
 						)}
 					</MenuShell>
 				)}
-				{ctxChatId !== null && ctxThread === undefined && (
+				{ctxChatId !== null && !ctxIsThread && (
 					<MenuShell
 						anchorRef={ctxAnchorRef}
 						testid="session-context-menu"

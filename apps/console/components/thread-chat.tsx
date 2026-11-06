@@ -51,9 +51,11 @@ import {
 	type ThreadCards,
 	type ToolItem,
 	ATTACHMENTS_PART,
-	threadColor,
 	threadTint,
+	threadTintSolid,
+	type ThreadColorSource,
 } from "@/src/core";
+import { useThreadColor } from "@/components/use-thread-color";
 import type { CardAnswers } from "@wolfpack/client";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
@@ -160,6 +162,8 @@ function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; op
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.
  */
+const NO_COLOR_THREADS: readonly ThreadColorSource[] = [];
+
 function ThreadChatInner({
 	wolf,
 	slug,
@@ -173,6 +177,8 @@ function ThreadChatInner({
 	initialCards = NO_CARDS,
 	closedReason,
 	initialBound,
+	parentThreadId,
+	colorThreads = NO_COLOR_THREADS,
 }: {
 	wolf: string;
 	slug: string;
@@ -193,6 +199,10 @@ function ThreadChatInner({
 	closedReason?: string;
 	/** The work item the thread is bound to at load (`boundItem ?? boundWorkItem`): its progress panel replaces the floating checklist from the first paint. */
 	initialBound?: string;
+	/** A subagent thread: the thread that spawned it (it shows that thread's color). */
+	parentThreadId?: string;
+	/** The wolf's threads (id, parent, settings) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
+	colorThreads?: readonly ThreadColorSource[];
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -205,10 +215,12 @@ function ThreadChatInner({
 		initiallyInFlight,
 		transport,
 	});
-	const threadSettings = useThreadSettings(wolf, slug);
-	// A faint tint of the thread's color (its override, else the one its id gives) behind the conversation.
-	const tintHex = threadColor({ id: threadId, settings: threadSettings.settings }).hex;
+	const threadSettings = useThreadSettings(wolf, slug, threadId);
+	// A faint tint of the thread's color (its override, else the one its id gives; a subagent's = its parent's) behind the conversation.
+	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
+	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads).hex;
 	const tint = threadTint(tintHex);
+	const tintSolid = threadTintSolid(tintHex);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
@@ -691,8 +703,8 @@ function ThreadChatInner({
 							<div aria-hidden className="h-40" style={subagents.length ? { marginTop: Math.min(subagents.length, 4) * STRIP_ROW_PX + 8 } : undefined} />
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
-							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
-							<div className="bg-background pb-4" style={{ background: `linear-gradient(${tint}, ${tint}), var(--background)` }}>
+							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
+							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									{closedReason !== undefined ? (

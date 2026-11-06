@@ -87,6 +87,7 @@ export * from "./feature-progress.ts";
 export { coalescedRefresh } from "./coalesced-refresh.ts";
 export * from "./thread-lists.ts";
 export * from "./thread-color.ts";
+export * from "./thread-color-store.ts";
 export * from "./work-table.ts";
 export * from "./graduate.ts";
 export * from "./work-select.ts";

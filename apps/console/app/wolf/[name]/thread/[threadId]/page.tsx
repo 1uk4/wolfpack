@@ -17,7 +17,8 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 	const { name, threadId: slug } = await params;
 	const client = getConsoleClient();
 	try {
-		const id = resolveThreadId(name, slug, await client.listThreads(name));
+		const threads = await client.listThreads(name);
+		const id = resolveThreadId(name, slug, threads);
 		if (!id) notFound();
 		const thread = await client.getThread(id, { limit: THREAD_PAGE_SIZE });
 		return (
@@ -33,6 +34,8 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				initialHasMore={thread.hasMore}
 				initiallyInFlight={thread.busy}
 				initialCards={cardsOfThread(thread)}
+				parentThreadId={thread.parentThreadId}
+				colorThreads={threads.map((t) => ({ id: t.id, parentThreadId: t.parentThreadId, settings: t.settings }))}
 				initialBound={thread.boundItem ?? thread.boundWorkItem}
 				closedReason={thread.closed ? (thread.closedReason ?? "Feature graduated") : undefined}
 			/>

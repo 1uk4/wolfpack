@@ -67,7 +67,12 @@ export async function changeSettings(args: {
 		if (stored.models) set((s) => ({ ...s, models: stored.models }));
 		return { ok: true };
 	} catch (e) {
-		set((s) => apply(s, before));
+		// Roll back only what this change set and nobody changed since (a later color pick stays).
+		set((s) => {
+			const b: SettingsPatch = { ...before };
+			if (patch.color !== undefined && (s.color ?? null) !== patch.color) delete b.color;
+			return apply(s, b);
+		});
 		return { ok: false, error: e instanceof Error ? e.message : "could not save the setting" };
 	}
 }

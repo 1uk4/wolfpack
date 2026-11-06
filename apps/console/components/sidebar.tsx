@@ -14,7 +14,7 @@ import { BrailleSpinner } from "@/components/braille-spinner";
 import { ChatBar } from "@/components/chat-bar";
 import { WorkReaderHost } from "@/components/work-reader";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
-import { isPlainClick, useOpenWorkItem } from "@/components/work-reader-nav";
+import { shouldOpenInReader, useOpenWorkItem } from "@/components/work-reader-nav";
 import { WorkNavEntry } from "@/components/work-nav-link";
 import { CommandPalette } from "@/components/command-palette";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
@@ -419,7 +419,7 @@ export function SessionRow({
 					</span>
 				</button>
 				{chat.taskId && (
-					<Link href={workHref(chat.taskId)} onClick={(e) => { if (!isPlainClick(e)) return; e.preventDefault(); openWorkItem(chat.taskId!); }} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
+					<Link href={workHref(chat.taskId)} onClick={(e) => { if (!shouldOpenInReader(e, chat.taskId)) return; e.preventDefault(); openWorkItem(chat.taskId); }} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
 						task
 					</Link>
 				)}

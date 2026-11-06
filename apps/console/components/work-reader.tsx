@@ -46,9 +46,14 @@ export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClo
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [onClose]);
 	// Take focus on open (the close button, else the panel) so Tab and Esc work in the reader at once.
+	// On close, give focus back to whatever had it (like overlay-shell); a detached opener (palette, modal) is skipped.
 	useEffect(() => {
+		const opener = document.activeElement as HTMLElement | null;
 		const own = panelRef.current;
 		(own?.querySelector<HTMLElement>('[data-testid="work-reader-close"]') ?? own)?.focus();
+		return () => {
+			if (opener?.isConnected) opener.focus?.();
+		};
 	}, []); // once per open; switching items in place keeps focus where the user put it
 	return (
 		<div

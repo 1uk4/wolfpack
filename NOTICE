@@ -50,9 +50,7 @@ AGPL-3.0-only work, which MIT permits.
 
 NOT YET CLEARED (no licence upstream)
 
-extensions/ask-user-question is vendored from
-https://github.com/amosblomqvist/pi-config (extensions/ask-user-question.ts)
-and extensions/wolfpack-visual-tools is ported from
-https://github.com/amosblomqvist/learn (extensions/visual-tools). Neither
-upstream repository carries a licence file, so no licence has been granted.
-They are credited here pending the author's permission or a rewrite.
+extensions/wolfpack-visual-tools is ported from
+https://github.com/amosblomqvist/learn (extensions/visual-tools). The
+upstream repository carries no licence file, so no licence has been granted.
+It is credited here pending the author's permission or a rewrite.

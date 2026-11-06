@@ -131,15 +131,15 @@ function scripted(): FauxResponseStep {
     if (plainStop) return tool("subagent_stop", { name: plainStop[1] });
     const confirm = /answered your (subagent_merge|subagent_stop) question/.exec(lastText);
     if (confirm) return lastText.includes(": yes") ? tool(confirm[1], confirm[1] === "subagent_merge" ? { name: lastName, action: "abandon" } : { name: lastName, abandon: true }) : fauxAssistantMessage("kept");
-    if (lastText.includes("answered your ask_user_question question")) {
+    if (lastText.includes("answered your brief question")) {
       const action = lastText.includes("Resolve with a worker") ? "resolve" : lastText.includes("I'll do it") ? "manual" : "abandon";
       return tool("subagent_merge", { name: conflictName, action });
     }
     if (lastText.includes("Merge conflict merging")) {
       conflictName = /subagent_merge\(\{ name: "([^"]+)"/.exec(lastText)![1];
       const question = /(Merge conflict merging [^\n]*?)\. The merge stopped/m.exec(lastText)![1];
-      const options = JSON.parse(/options (\[.*\]). Then/.exec(lastText)![1]);
-      return tool("ask_user_question", { question, options });
+      const options = JSON.parse(/choices` are (\[.*\])\. Then/.exec(lastText)![1]);
+      return tool("brief", { headline: "Merge conflict", questions: [{ ask: question, kind: "single", choices: options }] });
     }
     return fauxAssistantMessage(`parent: ${lastText.slice(0, 40)}`);
   };
@@ -424,7 +424,7 @@ describe("conflict card", () => {
       expect(pending).toHaveLength(1);
     }, { timeout: 8000 });
     const p = pending![0];
-    expect(p.card.tool).toBe("ask_user_question");
+    expect(p.card.tool).toBe("brief");
     expect(p.card.fields[0]).toMatchObject({ kind: "single", label: title });
     expect((p.card.fields[0] as { options: Array<{ label: string }> }).options.map((o) => o.label)).toEqual(["Resolve with a worker", "I'll do it", "Abandon branch"]);
     // the merge stopped with both trees clean

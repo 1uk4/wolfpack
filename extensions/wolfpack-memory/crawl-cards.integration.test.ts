@@ -80,22 +80,23 @@ async function boot(script: Parameters<typeof createScriptedModel>[0]) {
   return { root, client, home, scripted, drain };
 }
 
-const COMMON = ["domain", "strategy", "depth", "scope"];
 const questionnaire = () =>
   toolUse(
-    fauxToolCall("ask_user_question", {
-      title: "Crawl plan",
-      // the stepped form the directive asks for: depth is only asked for by-folder
-      steps: [{ title: "Where", questions: ["domain"] }, { title: "Shape", questions: ["strategy", "depth", "scope"] }],
+    fauxToolCall("brief", {
+      headline: "Crawl plan: where",
+      questions: [{ id: "domain", ask: "Target KB domain", choices: [{ label: "wolfpack" }] }],
+    }),
+    fauxToolCall("brief", {
+      headline: "Crawl plan: shape",
       questions: [
-        { id: "domain", question: "Target KB domain", options: [{ label: "wolfpack" }] },
-        { id: "strategy", question: "Grouping strategy", options: [{ label: "by-folder (Recommended)", value: "by-folder" }, { label: "by-pattern", value: "by-pattern" }] },
-        { id: "depth", question: "Folder depth", options: [{ label: "1" }, { label: "2" }, { label: "3" }], showIf: { field: "strategy", equals: "by-folder" } },
-        { id: "scope", question: "Scope", options: [{ label: "Whole tree", value: "whole" }, { label: "Only some files", value: "some" }] },
+        { id: "strategy", ask: "Grouping strategy", choices: [{ label: "by-folder (Recommended)", value: "by-folder" }, { label: "by-pattern", value: "by-pattern" }] },
+        // depth is only asked for by-folder
+        { id: "depth", ask: "Folder depth", choices: [{ label: "1" }, { label: "2" }, { label: "3" }], showIf: { field: "strategy", equals: "by-folder" } },
+        { id: "scope", ask: "Scope", choices: [{ label: "Whole tree", value: "whole" }, { label: "Only some files", value: "some" }] },
       ],
     }),
   );
-const confirm = () => toolUse(fauxToolCall("ask_user_question", { kind: "confirm", question: "Does this plan look good?", confirmLabel: "Looks good — add to plan", rejectLabel: "Edit it" }));
+const confirm = () => toolUse(fauxToolCall("brief", { headline: "Crawl plan", questions: [{ id: "confirm", ask: "Does this plan look good?", kind: "confirm", yesLabel: "Looks good — add to plan", noLabel: "Edit it" }] }));
 /** The scripted model's crawl_plan call, derived from the submitted answers (as the directive tells a real model to). */
 function planCallFrom(submission: string, path: string) {
   const scope = answerTo(submission, "Scope") ?? "";
@@ -162,21 +163,21 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     await drain();
 
     // the interview is a card in the thread, not a deterministic draft; the dead-end command is not offered
-    expect(directive).toContain("ONE ask_user_question call whose `questions` list");
+    expect(directive).toContain("TWO brief calls");
     expect(directive).toContain(`\`${src}\``);
     expect(directive).not.toContain("/wolf:crawl-run");
     const d1 = await client.getThread(home);
     expect(d1.status).toBe("needs-you");
-    const [p1] = d1.pendingCards!;
-    expect(p1.card).toMatchObject({ tool: "ask_user_question", title: "Crawl plan" });
-    expect(p1.card.fields.map((f) => [f.id, f.kind])).toEqual(COMMON.map((id) => [id, "single"]));
+    const [where, shape] = d1.pendingCards!;
+    expect(where.card).toMatchObject({ tool: "brief", brief: { headline: "Crawl plan: where" } });
+    expect(where.card.fields.map((f) => [f.id, f.kind])).toEqual([["domain", "single"]]);
+    expect(shape.card.fields.map((f) => [f.id, f.kind])).toEqual(["strategy", "depth", "scope"].map((id) => [id, "single"]));
     expect(scripted.faux.state.callCount).toBe(2);
-    // one stepped card: depth depends on the strategy answer
-    expect(p1.card.steps).toEqual([{ title: "Where", fields: ["domain"] }, { title: "Shape", fields: ["strategy", "depth", "scope"] }]);
-    expect(p1.card.fields.find((f) => f.id === "depth")?.showIf).toEqual({ field: "strategy", equals: "by-folder" });
+    // depth depends on the strategy answer
+    expect(shape.card.fields.find((f) => f.id === "depth")?.showIf).toEqual({ field: "strategy", equals: "by-folder" });
 
-    await client.answerCard!(home, p1.callId, {
-      domain: { value: "wolfpack" },
+    await client.answerCard!(home, where.callId, { domain: { value: "wolfpack" } });
+    await client.answerCard!(home, shape.callId, {
       strategy: { value: "by-folder" },
       depth: { value: "2" },
       scope: { value: "include: **/*.md; exclude: notes/**", other: true },
@@ -206,7 +207,7 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     expect((await client.getThread(home)).status).toBe("idle");
   });
 
-  it("stepped crawl card: by-pattern skips the dependent depth field (not required, and dropped if sent)", async () => {
+  it("shape card: by-pattern skips the dependent depth field (not required, and dropped if sent)", async () => {
     const src = makeSource();
     let planArgs: unknown;
     const { client, home, drain } = await boot([
@@ -220,13 +221,14 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     ]);
     await client.submit(home, "plan a crawl", { whenBusy: "reject" });
     await drain();
-    const [p] = (await client.getThread(home)).pendingCards!;
-    const base = { domain: { value: "wolfpack" }, strategy: { value: "by-pattern" }, scope: { value: "whole" } };
+    const [where, shape] = (await client.getThread(home)).pendingCards!;
+    const base = { strategy: { value: "by-pattern" }, scope: { value: "whole" } };
+    await client.answerCard!(home, where.callId, { domain: { value: "wolfpack" } });
     // an older console that renders every field also sends depth: wolfd drops the hidden answer instead of rejecting
-    await client.answerCard!(home, p.callId, { ...base, depth: { value: "2" } });
+    await client.answerCard!(home, shape.callId, { ...base, depth: { value: "2" } });
     await drain();
     expect(planArgs).toEqual({ path: src, domain: "wolfpack", strategy: "by-pattern" });
-    expect((await client.getThread(home)).messages.flatMap((m) => m.tools ?? []).find((t) => t.name === "ask_user_question")?.answer).toEqual(base);
+    expect((await client.getThread(home)).messages.flatMap((m) => m.tools ?? []).find((t) => t.name === "brief" && t.answer && "strategy" in (t.answer as object))?.answer).toEqual(base);
   });
 
   it("a bad path is reported by crawl_plan and the model re-asks", async () => {
@@ -236,11 +238,11 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     let finalized = "";
     const { client, home, drain } = await boot([
       toolUse(fauxToolCall("crawl_start", {})),
-      toolUse(fauxToolCall("ask_user_question", { questions: [{ id: "source", question: "Which directory should I crawl?" }] })),
+      toolUse(fauxToolCall("brief", { headline: "Crawl source", questions: [{ id: "source", ask: "Which directory should I crawl?" }] })),
       (c) => toolUse(fauxToolCall("crawl_plan", { path: answerTo(lastUser(c as never), "Which directory should I crawl?") })),
       (c) => {
         badResult = lastToolResult(c as never);
-        return toolUse(fauxToolCall("ask_user_question", { questions: [{ id: "source", question: "That path does not exist. Which directory should I crawl?" }] }));
+        return toolUse(fauxToolCall("brief", { headline: "Crawl source", questions: [{ id: "source", ask: "That path does not exist. Which directory should I crawl?" }] }));
       },
       (c) => toolUse(fauxToolCall("crawl_plan", { path: answerTo(lastUser(c as never), "That path does not exist. Which directory should I crawl?") })),
       toolUse(fauxToolCall("crawl_finalize", {})),
@@ -277,7 +279,7 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
       },
       (c) => {
         expect(lastUser(c as never)).toContain("no (Edit it)");
-        return toolUse(fauxToolCall("ask_user_question", { question: "What should change?" }));
+        return toolUse(fauxToolCall("brief", { headline: "Crawl plan", questions: [{ id: "answer", ask: "What should change?" }] }));
       },
       (c) => toolUse(fauxToolCall("crawl_plan", { path: src, domain: "wolfpack", strategy: "by-folder", depth: 2, exclude: [lastUser(c as never).split(": ").pop()] })),
       (c) => {
@@ -310,24 +312,24 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     expect(final.batches.map((b) => b.topic).sort()).toEqual(["docs", "docs-guides"]);
   });
 
-  it("an invalid ask call (both forms, a blank entry, duplicate ids) is an error result and raises no card", async () => {
+  it("an invalid brief call (no headline, a blank entry, duplicate ids) is an error result and raises no card", async () => {
     const seen: string[] = [];
     const bad = [
-      { question: "Q", questions: [{ question: "A" }] },
-      { questions: [{ question: "A" }, { question: " " }] },
-      { questions: [{ id: "x", question: "A" }, { id: "x", question: "B" }] },
+      { questions: [{ ask: "A" }] },
+      { headline: "h", questions: [{ ask: "A" }, { ask: " " }] },
+      { headline: "h", questions: [{ id: "x", ask: "A" }, { id: "x", ask: "B" }] },
     ];
     const { client, home, drain } = await boot([
-      ...bad.flatMap((args) => [toolUse(fauxToolCall("ask_user_question", args)), ((c: unknown) => (seen.push(lastToolResult(c as never)), fauxAssistantMessage("fixing"))) as never]),
+      ...bad.flatMap((args) => [toolUse(fauxToolCall("brief", args)), ((c: unknown) => (seen.push(lastToolResult(c as never)), fauxAssistantMessage("fixing"))) as never]),
     ]);
     for (let i = 0; i < bad.length; i++) {
       await client.submit(home, `try ${i}`, { whenBusy: "reject" });
       await drain();
       expect((await client.getThread(home)).pendingCards ?? []).toHaveLength(0);
     }
-    expect(seen[0]).toMatch(/not both/);
-    expect(seen[1]).toMatch(/questions\[1\] has no question text/);
-    expect(seen[2]).toMatch(/duplicate question id \\?"x\\?"/);
+    expect(seen[0]).toMatch(/headline/);
+    expect(seen[1]).toMatch(/questions\[1\] is missing its `ask`/);
+    expect(seen[2]).toMatch(/share the id \\?"x\\?"/);
   });
 
   it("draft=true skips the interview and drafts deterministically even in wolfd", async () => {

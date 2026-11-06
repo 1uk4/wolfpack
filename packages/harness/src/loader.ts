@@ -17,7 +17,6 @@ const ALIASES: Record<string, string> = {
   subagents: "wolfpack-subagents",
   telegram: "wolfpack-telegram",
   tasks: "wolfpack-tasks",
-  ask: "ask-user-question",
   "visual-tools": "wolfpack-visual-tools",
   browser: "wolfpack-browser",
 };

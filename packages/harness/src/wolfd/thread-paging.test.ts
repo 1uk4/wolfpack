@@ -1,5 +1,6 @@
 /** GET /v1/threads/:id paging on a real wolfd: default unchanged, newest page, older pages, bad limit. */
 import { afterEach, describe, expect, it } from "vitest";
+import { askCall } from "./ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -46,7 +47,7 @@ describe("thread transcript paging", () => {
 
   it("a pending card's message is in the newest page and pendingCards is whole, however small the limit", async () => {
     tw = await startTestWolf({
-      script: [fauxAssistantMessage("earlier"), fauxAssistantMessage([fauxToolCall("ask_user_question", { question: "Which branch?" })], { stopReason: "toolUse" })],
+      script: [fauxAssistantMessage("earlier"), fauxAssistantMessage([askCall({ question: "Which branch?" })], { stopReason: "toolUse" })],
     });
     await tw.client.submit(tw.home, "first", { whenBusy: "reject" });
     for await (const _ of tw.client.watch(tw.home));

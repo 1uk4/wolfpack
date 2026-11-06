@@ -4,7 +4,7 @@
  * It raises one card (engine/cards.ts `cardResult` path, same plumbing as every card): a header (headline, a few
  * context bullets, an optional pointer to the thread) above 0 to 3 questions. With no questions the card offers an
  * "OK" acknowledge; a free-text reply always works. Written for this repo; it shares no code with the older
- * ask-user-question tool, which is now a thin alias (see ask-user-question.ts).
+ * ask-user-question tool, which it replaced.
  */
 import { BRIEF_LIMITS, CardSchema, type Card, type CardOption } from "@wolfpack/protocol";
 import { defineExtension, defineTool, Type, type Extension } from "../extension-api.js";
@@ -104,7 +104,7 @@ function fieldOf(q: BriefQuestion, id: string): Card["fields"][number] {
   return { ...base, kind: "single", options, ...(q.allowOther === false ? { allowOther: false } : {}) };
 }
 
-/** The card for a brief call; `tool` names the raising tool (`brief`, or `ask_user_question` for the alias). */
+/** The card for a brief call; `tool` names the raising tool (`brief` by default). */
 export function briefCard(args: BriefArgs, tool = "brief"): Card {
   const context = (args.context ?? []).map((b) => b.trim()).filter(Boolean);
   const more = args.more?.trim();
@@ -145,7 +145,7 @@ export function briefProblem(args: BriefArgs): string | undefined {
   return undefined;
 }
 
-/** The tool result of a brief call, shared with the ask_user_question alias. */
+/** The tool result of a brief call. */
 export function briefResult(args: BriefArgs, tool = "brief") {
   const problem = briefProblem(args);
   if (problem) return { content: [{ type: "text" as const, text: problem }], isError: true as const };

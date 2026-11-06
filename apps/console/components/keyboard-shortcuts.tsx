@@ -93,8 +93,8 @@ export function KeyboardShortcuts() {
 				// the fallback, bottom-up: dictation (a live capture, not a
 				// surface — it survives Esc that closes a plan or overlay),
 				// then abort the turn (a server-side turn has no client
-				// request to abort — the abort seam in Chat decides what's
-				// honestly stoppable, layered by escAbortTarget).
+				// request to abort — the thread decides what's
+				// honestly stoppable).
 				if (isDictationActive()) {
 					e.preventDefault();
 					window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));

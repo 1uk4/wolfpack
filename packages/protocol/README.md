@@ -149,7 +149,7 @@ A skipped optional field is submitted **empty**, by kind:
 wolfd accepts all of these for an optional visible field (a missing answer too, for any kind) and validates a non-empty
 answer normally. The model-facing answer text reads `- <label>: (skipped)` for a skipped optional field. A required
 field is unchanged (missing/blank single, multi below `min`, or missing confirm is still rejected). A field hidden by
-`showIf` is never required, optional or not. `ask_user_question` takes `optional` per question (and on a single `question`).
+`showIf` is never required, optional or not. `brief` takes `optional` per question.
 
 ## Skipping and superseding a card
 

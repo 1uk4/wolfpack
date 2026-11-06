@@ -16,7 +16,7 @@ export { CardTextInput };
 
 /**
  * The inline interaction card of a wolf thread (the wolf asked a question): free-text, single-choice, multi-choice (checkboxes) and confirm (yes/no) fields.
- * Visuals follow the legacy question dock (question-dock.tsx) and its answered record (answered-card.tsx): a bordered
+ * Visuals follow the answered record (answered-card.tsx): a bordered
  * card, "Question" kicker, markdown question, option rows with an Other entry. Pending it is a form; answered it is the
  * static record. Defaults only pre-select; nothing submits until the operator presses Submit.
  */

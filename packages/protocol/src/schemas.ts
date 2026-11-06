@@ -95,9 +95,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
 // ---------------------------------------------------------------- cards
 
 /**
- * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `ask_user_question` or a
- * tool such as `task_done`). A card holds one or more fields; the shape extends `ask_user_question`
- * (question / options / free text). Additive: no version bump.
+ * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `brief` or a
+ * tool such as `task_done`). A card holds one or more fields (question / options / free text). Additive: no version bump.
  *
  * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
  * `default` only pre-selects in the UI, it is never auto-submitted (cards wait indefinitely; there is no timeout).
@@ -119,7 +118,7 @@ export const CardStepSchema = z.object({
 });
 export type CardStep = z.infer<typeof CardStepSchema>;
 
-/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the ask_user_question builder. */
+/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the brief builder. */
 export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: readonly CardField[]): string | undefined {
   const s = f.showIf;
   if (!s) return undefined;
@@ -146,7 +145,7 @@ export type CardBrief = z.infer<typeof CardBriefSchema>;
 
 export const CardSchema = z
   .object({
-    /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
+    /** Tool that raised it, e.g. `brief`. Keys the console's card renderer. */
     tool: z.string(),
     title: z.string().optional(),
     /** A card needs at least one field, except a brief card, which may have none (the owner then acknowledges with OK); a brief holds at most 3. */

@@ -7,6 +7,7 @@ import type { Card } from "@wolfpack/protocol";
 import { Type } from "../extension-api.js";
 import { adaptToDurable } from "../adapters/durable.js";
 import { cardResult, createCardGuardExtension } from "../engine/cards.js";
+import { askCall } from "./ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import type { ExtensionRuntime } from "./run.js";
 import { WolfServer } from "./server.js";
@@ -23,7 +24,7 @@ const lastUserText = (context: { messages: { role: string; content: unknown }[] 
   return typeof u?.content === "string" ? u.content : JSON.stringify(u?.content);
 };
 
-// wolfd installs ask_user_question and the card guard itself (run.ts).
+// wolfd installs brief and the card guard itself (run.ts).
 const wolfWithAsk = (script: TestWolfOptions["script"], more: Extension[] = []) => startTestWolf({ script, hooks: { extensions: more } });
 const toolUse = (...calls: ReturnType<typeof fauxToolCall>[]) => fauxAssistantMessage(calls, { stopReason: "toolUse" });
 const drain = async (w: TestWolf) => {
@@ -34,7 +35,7 @@ describe("ask card (tool-raised, two-turn)", () => {
   it("free-text: tool raises a card -> turn ends complete -> needs-you -> answer starts the next turn -> idle", async () => {
     let seen = "";
     tw = await wolfWithAsk([
-      toolUse(fauxToolCall("ask_user_question", { question: "Which branch?", details: "for the release" })),
+      toolUse(askCall({ question: "Which branch?", details: "for the release" })),
       (context) => {
         seen = lastUserText(context as never);
         return fauxAssistantMessage("Shipping from main.");
@@ -52,11 +53,11 @@ describe("ask card (tool-raised, two-turn)", () => {
     expect(detail.status).toBe("needs-you");
     expect(detail.pendingCards).toHaveLength(1);
     const pending = detail.pendingCards![0];
-    expect(pending.card).toMatchObject({ tool: "ask_user_question", fields: [{ id: "answer", kind: "free-text", label: "Which branch?", description: "for the release" }] });
+    expect(pending.card).toMatchObject({ tool: "brief", fields: [{ id: "answer", kind: "free-text", label: "Which branch?", description: "for the release" }] });
     expect((await tw.client.listThreads("testwolf"))[0].status).toBe("needs-you");
     expect(await tw.client.listCards!("testwolf")).toEqual([pending]);
     const call = detail.messages.at(-1)!.tools![0];
-    expect(call).toMatchObject({ name: "ask_user_question", callId: pending.callId, card: pending.card });
+    expect(call).toMatchObject({ name: "brief", callId: pending.callId, card: pending.card });
     expect(call.answer).toBeUndefined();
 
     const ack = await tw.client.answerCard!(home, pending.callId, { answer: { value: "main" } });
@@ -79,7 +80,7 @@ describe("ask card (tool-raised, two-turn)", () => {
 
   it("single: validates answers against the options; an Other answer is accepted", async () => {
     tw = await wolfWithAsk([
-      toolUse(fauxToolCall("ask_user_question", { question: "Pick", options: [{ label: "A (Recommended)", value: "a" }, { label: "B" }] })),
+      toolUse(askCall({ question: "Pick", options: [{ label: "A (Recommended)", value: "a" }, { label: "B" }] })),
       fauxAssistantMessage("ok"),
     ]);
     await tw.submit("go");
@@ -107,7 +108,7 @@ describe("ask card (tool-raised, two-turn)", () => {
         defineTool({ name: "raise_strict", description: "raise", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return cardResult(strict); } }),
       ],
     });
-    tw = await wolfWithAsk([toolUse(fauxToolCall("raise_strict", {})), toolUse(fauxToolCall("ask_user_question", { question: "free?" }))], [raiser]);
+    tw = await wolfWithAsk([toolUse(fauxToolCall("raise_strict", {})), toolUse(askCall({ question: "free?" }))], [raiser]);
     await tw.submit("one");
     const [strictP] = (await tw.client.getThread(tw.home)).pendingCards!;
     await expect(tw.client.answerCard!(tw.home, strictP.callId, { x: { value: "mine", other: true } })).rejects.toMatchObject({ code: "invalid_request" });
@@ -148,7 +149,7 @@ describe("ask card (tool-raised, two-turn)", () => {
       name: "echo",
       tools: [defineTool({ name: "echo", description: "echo", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { echoed++; return { output: [{ type: "text" as const, text: "echoed" }] }; } })],
     });
-    tw = await wolfWithAsk([toolUse(fauxToolCall("ask_user_question", { question: "Q" }), fauxToolCall("echo", {})), fauxAssistantMessage("must not run")], [echo]);
+    tw = await wolfWithAsk([toolUse(askCall({ question: "Q" }), fauxToolCall("echo", {})), fauxAssistantMessage("must not run")], [echo]);
     const events = await tw.submit("go");
     expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
     expect(echoed).toBe(1);
@@ -161,14 +162,14 @@ describe("ask card (tool-raised, two-turn)", () => {
   describe("sibling cards of one turn", () => {
     const twoCards = () =>
       wolfWithAsk([
-        toolUse(fauxToolCall("ask_user_question", { question: "Q1" }), fauxToolCall("ask_user_question", { question: "Q2" })),
+        toolUse(askCall({ question: "Q1" }), askCall({ question: "Q2" })),
         fauxAssistantMessage("ok"),
       ]);
 
     it("no turn until the last is answered; the held answer is visible and changeable; the turn lists both in raise order", async () => {
       let seen = "";
       tw = await wolfWithAsk([
-        toolUse(fauxToolCall("ask_user_question", { question: "Q1" }), fauxToolCall("ask_user_question", { question: "Q2" })),
+        toolUse(askCall({ question: "Q1" }), askCall({ question: "Q2" })),
         (context) => {
           seen = lastUserText(context as never);
           return fauxAssistantMessage("ok");
@@ -219,7 +220,7 @@ describe("ask card (tool-raised, two-turn)", () => {
       name: "gate",
       tools: [defineTool({ name: "gate", description: "wait", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { await gate; return { output: [{ type: "text" as const, text: "open" }] }; } })],
     });
-    const asks = Array.from({ length: questions }, (_, i) => fauxToolCall("ask_user_question", { question: `Q${i}` }));
+    const asks = Array.from({ length: questions }, (_, i) => askCall({ question: `Q${i}` }));
     tw = await wolfWithAsk([toolUse(...asks, fauxToolCall("gate", {})), ...rest], [slow]);
     await tw.client.submit(tw.home, "go", { whenBusy: "reject" });
     const w = tw;
@@ -292,7 +293,7 @@ describe("ask card (tool-raised, two-turn)", () => {
   });
 
   it("a concurrent double answer for the same card starts exactly one turn", async () => {
-    tw = await wolfWithAsk([toolUse(fauxToolCall("ask_user_question", { question: "Q" })), fauxAssistantMessage("ok")]);
+    tw = await wolfWithAsk([toolUse(askCall({ question: "Q" })), fauxAssistantMessage("ok")]);
     await tw.submit("go");
     const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
     const results = await Promise.allSettled([
@@ -307,7 +308,7 @@ describe("ask card (tool-raised, two-turn)", () => {
   });
 
   it("a reconnecting wolfd re-derives pending cards from the durable transcript (CardTracker.reset)", async () => {
-    tw = await wolfWithAsk([toolUse(fauxToolCall("ask_user_question", { question: "Q1", options: [{ label: "x" }] })), fauxAssistantMessage("ok")]);
+    tw = await wolfWithAsk([toolUse(askCall({ question: "Q1", options: [{ label: "x" }] })), fauxAssistantMessage("ok")]);
     await tw.submit("go");
     const before = await tw.client.getThread(tw.home);
     expect(before.pendingCards).toHaveLength(1);

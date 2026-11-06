@@ -35,11 +35,11 @@ Pick domain by SUBJECT. A change to a tool or skill is a code change in the doma
 
 partOf MUST point at a feature in the SAME domain, or omit partOf to land in that domain's Inbox. The system rejects cross-domain parenting.
 
-Use \`ask_user_question\` when the right domain or feature is ambiguous.`;
+Use \`brief\` when the right domain or feature is ambiguous.`;
 
 const ROUTING = `## Routing
 
-First, use \`ask_user_question\` to find out what the user is creating. The four paths:
+First, use \`brief\` to find out what the user is creating. The four paths:
 
 - **Idea**: unformed; just capture title + 1-sentence description via \`task_create kind=idea\`. Done. Can be promoted to feature/initiative later.
 - **Initiative**: a large goal. Ask for the goal (one sentence) + why it matters, and whether it is **standing**: it never completes and keeps gaining features (Releases gets a new sprint every sprint; Admin keeps its category features open). \`task_create kind=initiative\`, with \`standing=true\` if so. Done. Features created under it later get the full pipeline each.

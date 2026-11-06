@@ -72,7 +72,8 @@ describe("feature threads on a real wolf", () => {
 
   it("a feature thread's cards are listed with their own thread id; answering one leaves home alone", async () => {
     const { fauxToolCall } = await import("./scripted-model.js");
-    tw = await startTestWolf({ script: [fauxAssistantMessage([fauxToolCall("ask_user_question", { question: "Which branch?" })], { stopReason: "toolUse" }), fauxAssistantMessage("done")] });
+    const { askCall } = await import("./ask-call.js");
+    tw = await startTestWolf({ script: [fauxAssistantMessage([askCall({ question: "Which branch?" })], { stopReason: "toolUse" }), fauxAssistantMessage("done")] });
     const feature = await tw.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-feat0001" });
     await tw.client.submit(feature.id, "go", { whenBusy: "reject" });
     await drain(tw, feature.id);

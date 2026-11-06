@@ -35,7 +35,7 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
     const lastText =
       typeof last.content === "string" ? last.content : (last.content as Array<{ type: string; text?: string }>).map((b) => (b.type === "text" ? (b.text ?? "") : "")).join("");
     calls.push({ child, request: JSON.stringify(ctx.messages), last: lastText });
-    const tool = (name: string, args: Record<string, string>) => fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
+    const tool = (name: string, args: Record<string, unknown>) => fauxAssistantMessage(fauxToolCall(name, args as never), { stopReason: "toolUse" });
     if (!child) {
       if (lastText.startsWith("The user answered")) await opts.answerGate;
       if (last.role === "toolResult") return fauxAssistantMessage(`ok:${last.toolName}`);
@@ -47,9 +47,9 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
       if (stop) return tool("subagent_stop", { name: stop[1] });
       if (lastText === "slowcard") {
         await opts.parentGate;
-        return tool("ask_user_question", { question: "Proceed?" });
+        return tool("brief", { headline: "Question", questions: [{ id: "answer", ask: "Proceed?" }] });
       }
-      if (lastText === "card") return tool("ask_user_question", { question: "Proceed?" });
+      if (lastText === "card") return tool("brief", { headline: "Question", questions: [{ id: "answer", ask: "Proceed?" }] });
       if (lastText === "list") return tool("subagents_list", {});
       if (lastText === "try-nested") return tool("subagent", { agent: "tester", task: "nested" });
       if (/Sub-agent "\w+" asks/.test(lastText)) return tool("subagent_message", { name: "tester", message: "use main" });
@@ -57,7 +57,7 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
       return fauxAssistantMessage(`parent: ${lastText.slice(0, 40)}`);
     }
     if (last.role === "toolResult") return fauxAssistantMessage(`child finished after ${last.toolName}`);
-    if (lastText.includes("ASK")) return tool("ask_user_question", { question: "Which branch?" });
+    if (lastText.includes("ASK")) return tool("brief", { headline: "Question", questions: [{ id: "answer", ask: "Which branch?" }] });
     if (lastText.includes("NEST")) return tool("subagent", { agent: "tester", task: "grandchild" });
     if (lastText.includes("SLOW")) {
       // Held until the gate opens or the request is cancelled (a stop, a shutdown).
@@ -203,7 +203,7 @@ describe("depth 1", () => {
     for (const t of spawnTools) expect(parentCall.request, `parent has ${t}`).toContain(t);
     for (const t of spawnTools) expect(childCall.request, `child has ${t}`).not.toContain(t);
     // what it does have: the profile's tools it can use, and the way to ask
-    expect(childCall.request).toContain("ask_user_question");
+    expect(childCall.request).toContain("brief");
     expect(childCall.request).toContain('"read"');
     expect(childCall.request).not.toContain('"bash"');
   });
@@ -337,7 +337,7 @@ describe("resume", () => {
 });
 
 describe("questions", () => {
-  it("a child's ask_user_question goes to the parent, the child waits, and the parent's answer resumes it", async () => {
+  it("a child's brief goes to the parent, the child waits, and the parent's answer resumes it", async () => {
     const agents = scriptedAgents();
     tw = await boot(agents);
     await say(tw, "spawn: pick the branch, ASK first");

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { CardSchema } from "@wolfpack/protocol";
-import { askAsBrief } from "./ask-user-question.js";
 import { briefCard, briefProblem, briefResult, createBriefExtension } from "./brief.js";
 
 describe("brief tool", () => {
@@ -54,23 +53,5 @@ describe("brief tool", () => {
     expect(briefProblem({ headline: "h", questions: [{ ask: "q", kind: "multi", choices: [{ label: " " }] }] })).toMatch(/no choices/);
     expect(briefProblem({ headline: "h", questions: [{ ask: "q", kind: "confirm", choices: [{ label: "A" }] }] })).toMatch(/takes no `choices`/);
     expect(briefProblem({ headline: "h", questions: [{ ask: "q", kind: "free", choices: [{ label: "A" }] }] })).toMatch(/takes no `choices`/);
-  });
-
-  it("ask_user_question maps onto brief: neutral headline (or title), question stays the field label, details under it, questions through", () => {
-    const single = askAsBrief({ question: "Which?", details: "because", options: [{ label: "A" }] });
-    expect(single).toMatchObject({ headline: "A question for you", questions: [{ id: "answer", kind: "single", ask: "Which?", note: "because" }] });
-    // the question is shown once (field label), and the answer text keeps it
-    expect(briefCard(single!).fields[0].label).toBe("Which?");
-    expect(briefCard(single!).fields[0].description).toBe("because");
-    // a title takes the headline
-    expect(askAsBrief({ title: "Deploy", question: "Which env?", options: [{ label: "A" }] })).toMatchObject({ headline: "Deploy", questions: [{ ask: "Which env?" }] });
-    // ids that sanitizing would rewrite: keep the legacy card instead of changing answer keys
-    expect(askAsBrief({ questions: [{ id: "my id", question: "q" }] })).toBeUndefined();
-    expect(askAsBrief({ questions: [{ id: "a", question: "q" }, { id: "b", question: "r", showIf: { field: "a b", equals: "x" } }] })).toBeUndefined();
-    const batch = askAsBrief({ title: "T", questions: [{ question: "q1", kind: "confirm" }, { question: "q2", options: [{ label: "A" }], multiSelect: true }] });
-    expect(batch?.headline).toBe("T");
-    expect(batch?.questions?.map((q) => q.kind)).toEqual(["confirm", "multi"]);
-    // does not fit brief's limits (4 questions): the alias keeps its legacy card
-    expect(askAsBrief({ questions: ["a", "b", "c", "d"].map((question) => ({ question })) })).toBeUndefined();
   });
 });

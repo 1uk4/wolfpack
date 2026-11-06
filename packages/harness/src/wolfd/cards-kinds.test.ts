@@ -4,6 +4,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { CardSchema } from "@wolfpack/protocol";
 import { cardResult, confirmCard } from "../engine/cards.js";
+import { askCall } from "./ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { adaptToDurable } from "../adapters/durable.js";
 import { Type } from "../extension-api.js";
@@ -238,19 +239,19 @@ describe("multi / confirm cards over /v1", () => {
     }
   });
 
-  it("ask_user_question raises multi (multiSelect) and confirm (kind) cards", async () => {
+  it("brief raises multi (multiSelect) and confirm (kind) cards", async () => {
     tw = await startTestWolf({
       script: [
         toolUse(
-          fauxToolCall("ask_user_question", { question: "Which?", options: [{ label: "X" }, { label: "Y" }], multiSelect: true }),
-          fauxToolCall("ask_user_question", { question: "Sure?", kind: "confirm", confirmLabel: "Do it" }),
-          fauxToolCall("ask_user_question", { question: "One?", options: [{ label: "P" }] }),
+          askCall({ question: "Which?", options: [{ label: "X" }, { label: "Y" }], multiSelect: true }),
+          askCall({ question: "Sure?", kind: "confirm", confirmLabel: "Do it" }),
+          askCall({ question: "One?", options: [{ label: "P" }] }),
         ),
       ],
     });
     await tw.submit("go");
     const fields = (await tw.client.getThread(tw.home)).pendingCards!.map((p) => p.card.fields[0]);
-    expect(fields[0]).toMatchObject({ kind: "multi", allowOther: true, options: [{ value: "X" }, { value: "Y" }] });
+    expect(fields[0]).toMatchObject({ kind: "multi", allowOther: false, options: [{ value: "X" }, { value: "Y" }] });
     expect(fields[1]).toMatchObject({ kind: "confirm", label: "Sure?", confirmLabel: "Do it" });
     expect(fields[2]).toMatchObject({ kind: "single" });
   });
@@ -298,7 +299,7 @@ describe("confirmCard through different raising paths (ticket 5 shape)", () => {
     tools: [defineTool({ name: "plain", description: "p", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return { output: [{ type: "text" as const, text: "p" }] }; } })],
   });
 
-  it("a raisesCard adapted tool (not ask_user_question) returning confirmCard: the guard ends a round with a sibling tool; the answer resumes", async () => {
+  it("a raisesCard adapted tool (not brief) returning confirmCard: the guard ends a round with a sibling tool; the answer resumes", async () => {
     let seen = "";
     const mk = (rt: ExtensionRuntime) =>
       adaptToDurable(

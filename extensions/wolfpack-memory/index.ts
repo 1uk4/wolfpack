@@ -84,7 +84,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
 import { createCrawlCore, crawlPlanTools } from "./crawl-core.ts";
-import { buildCrawlDirective, canInterview as crawlCanInterview } from "./crawl-interview.ts";
+import { canInterview as crawlCanInterview } from "./crawl-interview.ts";
 import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
@@ -2098,7 +2098,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       // A questionnaire can ask for the source directory itself, so a bare
       // `/wolf:crawl` is fine when we can interview. Only the deterministic
       // draft path (explicit --draft, or headless/busy) needs a path up front.
-      // pi has no card-raising ask_user_question (askCards: false): it needs an idle TUI. See crawl-interview.ts.
+      // pi has no card-raising tool (askCards: false): it needs an idle TUI, where the wizard asks. See crawl-interview.ts.
       const canInterview = crawlCanInterview({
         draftOnly,
         hasUI: !!ctx.hasUI,
@@ -2134,38 +2134,58 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // Questionnaire: hand the agent a directive so it interviews the user with
-      // the ask_user_question tool, then drafts the plan from their answers.
+      // Questionnaire: the wizard asks for whatever the command line left out, then the plan is drafted
+      // from the answers (no model turn; refine it afterwards with the crawl_* tools).
+      const cancel = () => {
+        crawlPlanMode = false;
+        refreshStatus(ctx);
+        ctx.ui.notify("🐺 crawl questionnaire cancelled.", "info");
+      };
       const declared = declaredDomains();
-      const hints: string[] = [];
-      if (parts[1]) hints.push(`domain=${parts[1]}`);
-      if (parts[2]) hints.push(`strategy=${parts[2]}`);
-      if (parts[3]) hints.push(`depth=${parts[3]}`);
-      const directive = buildCrawlDirective({
-        src,
-        cwd: process.cwd(),
-        domains: declared ? [...declared] : null,
-        defaultDomain,
-        hints,
-        cards: false,
-      });
-
-      if (ctx.hasUI)
-        ctx.ui.notify(
-          `🐺 crawl questionnaire starting${src ? ` for ${src}` : ""} — observation paused.${scribeNudge}`,
-          "info"
+      const answers = [...parts];
+      if (!answers[0]) {
+        const cwd = process.cwd();
+        const dir = await wizardSingleChoice(
+          ctx,
+          "🐺 Which directory should I crawl?",
+          "Pick the current directory, or choose Other to type a path.",
+          [{ label: `${cwd} (current directory)`, value: cwd }],
+          true
         );
-      try {
-        pi.sendUserMessage(directive);
-      } catch (e) {
-        // sendUserMessage throws if streaming / no agent: fall back to a draft.
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            `🐺 could not start questionnaire (${String(e)}); drafting a plan directly.`,
-            "warning"
-          );
-        draftCrawlPlan(ctx, parts);
+        if (dir === null) return cancel();
+        answers[0] = dir;
       }
+      if (!answers[1]) {
+        const domainChoices = declared && declared.size > 0 ? [...declared] : [defaultDomain];
+        const domain = await wizardSingleChoice(
+          ctx,
+          "🐺 Target KB domain",
+          undefined,
+          domainChoices.map((d) => ({ label: d, value: d }))
+        );
+        if (domain === null) return cancel();
+        answers[1] = domain;
+      }
+      if (!answers[2]) {
+        const strategy = await wizardSingleChoice(ctx, "🐺 Grouping strategy", undefined, [
+          { label: "by-folder (Recommended)", value: "by-folder" },
+          { label: "by-pattern", value: "by-pattern" },
+        ]);
+        if (strategy === null) return cancel();
+        answers[2] = strategy;
+      }
+      if (answers[2] === "by-folder" && !answers[3]) {
+        const depth = await wizardSingleChoice(
+          ctx,
+          "🐺 Folder depth",
+          "How many path segments to group on. Choose Other for a custom number.",
+          [1, 2, 3].map((n) => ({ label: String(n), value: String(n) })),
+          true
+        );
+        if (depth === null) return cancel();
+        answers[3] = depth;
+      }
+      draftCrawlPlan(ctx, answers);
     },
   });
 
@@ -2423,8 +2443,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // Interactive path: a short wizard (single-choice UI borrowed from the
-      // ask-user-question extension) configures the run, then we drive the live
+      // Interactive path: a short wizard (crawl-wizard.ts) configures the run, then we drive the live
       // monitor and offer reruns.
       let runPlanFile = planFile;
       let seedRunDir: string | undefined;

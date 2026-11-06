@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, renameSync, utimesSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -58,12 +58,16 @@ describe("watchSweepProgress", () => {
     await new Promise((r) => setTimeout(r, 150));
     expect(seen).toEqual([]);
   });
-  it("cleanStaleCurrentTmp removes a dead writer's temp file and keeps a live one's", () => {
+  it("cleanStaleCurrentTmp removes an old dead-pid temp file; keeps young, live-pid and unrelated files", () => {
     const { d } = mk();
-    writeFileSync(join(d, "sweep-current.json.999999999.tmp"), "x");
-    writeFileSync(join(d, `sweep-current.json.${process.pid}.tmp`), "x");
-    writeFileSync(join(d, "other.tmp"), "x");
+    const old = join(d, "sweep-current.json.999999999.tmp");
+    const young = join(d, "sweep-current.json.999999998.tmp");
+    const mine = join(d, `sweep-current.json.${process.pid}.tmp`);
+    for (const f of [old, young, mine, join(d, "other.tmp")]) writeFileSync(f, "x");
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(old, past, past);
+    utimesSync(mine, past, past);
     cleanStaleCurrentTmp(d);
-    expect(readdirSync(d).sort()).toEqual(["other.tmp", `sweep-current.json.${process.pid}.tmp`]);
+    expect(readdirSync(d).sort()).toEqual(["other.tmp", "sweep-current.json.999999998.tmp", `sweep-current.json.${process.pid}.tmp`].sort());
   });
 });

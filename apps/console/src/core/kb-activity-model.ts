@@ -450,6 +450,8 @@ function sameContribution(a: { from: string; denTopicId: string }, b: { from: st
 export function applyHubEvent(state: KbActivityState, frame: KbHubFrame, now: number = Date.now()): KbActivityState {
 	switch (frame.type) {
 		case "sweep_started": {
+			// Narrow window: a refetch issued before item X's sweep_item that lands after the next sweep_started can briefly bring X back as
+			// current (clearing `ended` here drops the guard). The next sweep_progress (the new item) or sweep_finished replaces/clears it.
 			// A new sweep: nothing that ended before it can be stale any more (a resubmission of the same item may be in progress).
 			if (!state.idle && !state.ended) return state.sweeping ? state : { ...state, sweeping: true };
 			const { idle: _i, ended: _e, ...rest } = state;

@@ -302,7 +302,11 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 		setState((s) => (s ? applyHubEvent(s, frame) : s));
 		if (needsRefetch(frame)) refetchSoon();
 	});
-	useOptionalServerResync(refetchSoon);
+	// A reconnect: any request already in flight predates the gap, so invalidate it now (not only when the debounced refetch starts).
+	useOptionalServerResync(() => {
+		seq.current++;
+		refetchSoon();
+	});
 
 	/** First click loads the domain's first page; further clicks continue from its cursor. */
 	const showAll = useCallback(

@@ -18,25 +18,31 @@ export interface CurrentItem {
 const currentFile = (roots: KbRoots) => join(roots.denLocal, "sweep-current.json");
 
 export function writeCurrent(roots: KbRoots, item: CurrentItem): void {
-  const file = currentFile(roots);
-  mkdirSync(dirname(file), { recursive: true });
-  // Temp file + rename: a reader (the hub's activity route, a file watcher) sees the old or the new file, never half of one.
-  const tmp = `${file}.${process.pid}.tmp`;
+  // The progress file is advisory: a failure here (disk full, permissions) is logged and never fails the item being swept.
   try {
-    unlinkSync(tmp); // best effort: a leftover of a crashed write; "wx" below then never follows a stale link or reuses a stale file
-  } catch {
-    /* none */
-  }
-  writeFileSync(tmp, JSON.stringify(item), { flag: "wx" });
-  try {
-    renameSync(tmp, file);
-  } catch (e) {
+    const file = currentFile(roots);
+    mkdirSync(dirname(file), { recursive: true });
+    // Temp file + rename: a reader (the hub's activity route, a file watcher) sees the old or the new file, never half of one.
+    const tmp = `${file}.${process.pid}.tmp`;
+    // unlink + "wx" (O_EXCL): a leftover file or a planted symlink at the temp path is removed or refused, never written through.
     try {
       unlinkSync(tmp);
     } catch {
-      /* gone */
+      /* none */
     }
-    throw e;
+    try {
+      writeFileSync(tmp, JSON.stringify(item), { flag: "wx" });
+      renameSync(tmp, file);
+    } catch (e) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* gone */
+      }
+      throw e;
+    }
+  } catch (e) {
+    console.warn(`sweep: could not write the progress file: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

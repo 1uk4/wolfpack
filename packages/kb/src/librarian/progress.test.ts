@@ -41,3 +41,12 @@ describe("readSweepCurrent keys", () => {
     expect(readSweepCurrent(d)).toBeUndefined();
   });
 });
+
+describe("writeCurrent failure", () => {
+  it("is swallowed (logged), so a progress-file problem never fails an item", () => {
+    const { d } = mk();
+    writeFileSync(join(d, "blocker"), "x");
+    // denLocal is a path under a regular file: mkdir fails
+    expect(() => writeCurrent({ kbBase: d, opsRoot: d, denLocal: join(d, "blocker", "den") } as KbRoots, { from: "w", denTopicId: "t", startedAt: 1 })).not.toThrow();
+  });
+});

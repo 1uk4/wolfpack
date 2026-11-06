@@ -1,4 +1,5 @@
 /** sweep.current in GET /v1/kb/activity: read from <denLocal>/sweep-current.json, fail-soft, no symlinks. */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +53,21 @@ describe("sweep.current", () => {
     const target = join(s.roots.denLocal, "elsewhere.json");
     writeFileSync(target, JSON.stringify({ from: "w", denTopicId: "t", startedAt: 5 }));
     symlinkSync(target, s.file);
+    expect(s.sweep()).toEqual({ running: true });
+  });
+  it("refuses a file over the 4096-byte head (it would be cut mid-JSON)", () => {
+    const s = setup();
+    writeFileSync(s.file, JSON.stringify({ from: "w", denTopicId: "t", startedAt: 5, route: "r".repeat(5000) }));
+    expect(s.sweep()).toEqual({ running: true });
+  });
+  it("refuses a directory in place of the file", () => {
+    const s = setup();
+    mkdirSync(s.file);
+    expect(s.sweep()).toEqual({ running: true });
+  });
+  it.skipIf(process.platform === "win32")("refuses a FIFO in place of the file (and does not block)", () => {
+    const s = setup();
+    execFileSync("mkfifo", [s.file]);
     expect(s.sweep()).toEqual({ running: true });
   });
 });

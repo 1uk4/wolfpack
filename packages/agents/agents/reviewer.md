@@ -28,6 +28,8 @@ Test review: follow the testing standard appended below. Report test findings in
 5. tests for items on the standard's "No test needed" list; accept a stated "No test: <item> - <reason>" from that list, flag a missing or unjustified one;
 6. a bug fix without a regression test, or a report without red evidence.
 
+Commit review: check the commit shape against the git standard's "Before you report done" list and report it under "Commit findings".
+
 ## Output contract
 
 ## Blocking
@@ -41,5 +43,8 @@ Test review: follow the testing standard appended below. Report test findings in
 
 ## Test findings
 - `file.test.ts:20` - finding, by number above (or "none")
+
+## Commit findings
+- `<sha>` - finding on commit shape or message (or "none")
 
 End with a one-line verdict.

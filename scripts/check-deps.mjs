@@ -110,8 +110,8 @@ function packageName(spec, aliases) {
  */
 export const ALLOW = {
   "apps/console": {
-    "electron-builder": "resolved from apps/desktop via createRequire in the mac-signing and desktop-platform tests",
-    "app-builder-lib": "resolved from apps/desktop via createRequire in the mac-signing and desktop-platform tests",
+    "electron-builder": "resolved from apps/desktop via createRequire in the mac-signing and desktop-platform tests; apps/desktop declares it",
+    "app-builder-lib": "resolved from apps/desktop via createRequire in the mac-signing and desktop-platform tests; apps/desktop declares it",
   },
 };
 

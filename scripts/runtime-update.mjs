@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 /**
- * npm run runtime:update [--dry-run]
+ * pnpm runtime:update [--dry-run]     (npm run runtime:update on a checkout that is still on npm)
  *
  * origin/stable -> runtime (stable worktree) -> build -> refresh den extensions. Fetches, fast-forwards only (refuses if the
  * runtime cannot fast-forward), never merges a branch, never rebases, never pushes. Merging into stable is the owner's job on
  * GitHub (`wolfpack pr prepare` opens the PR). A branch argument is refused. All branches are worktrees of one repo; located
  * with `git worktree list`. Env: RUNTIME_BRANCH (stable), WOLVES_DIR (~/wolves/local).
  * Build and extension refresh are injectable (`steps`) so tests can stub them.
+ * Package manager: when the commit being deployed has pnpm-lock.yaml AND pnpm is on the PATH, it installs with
+ * `pnpm install --frozen-lockfile --prefer-offline` and builds with `node scripts/turbo.mjs run build` (the shared turbo cache);
+ * otherwise the old npm path runs unchanged (`npx turbo run build`, no install). The runtime checkout moves npm -> pnpm
+ * when stable first carries pnpm-lock.yaml, so the choice is made on the target commit, not on the tree as it is now.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +27,34 @@ const tryGit = (cwd, ...args) => {
 		return { ok: false, out: `${e.stdout ?? ""}${e.stderr ?? ""}`.trim() };
 	}
 };
+
+/** Commands that install and build one checkout, per package manager. */
+export function buildCommands(pm) {
+	if (pm === "pnpm") {
+		return [
+			{ cmd: "pnpm", args: ["install", "--frozen-lockfile", "--prefer-offline"] },
+			{ cmd: "node", args: ["scripts/turbo.mjs", "run", "build"] },
+		];
+	}
+	return [{ cmd: "npx", args: ["turbo", "run", "build"] }];
+}
+
+/** Is pnpm usable from here? (A PATH lookup; corepack shims count when `corepack enable` was run.) */
+export const probePnpm = () => {
+	const r = spawnSync("pnpm", ["--version"], { stdio: "ignore", shell: process.platform === "win32" });
+	return !r.error && r.status === 0;
+};
+
+/**
+ * "pnpm" when the checkout has pnpm-lock.yaml (`ref`: look in that commit, else on disk) and pnpm is found; else "npm".
+ * `note` explains the one surprising case (lockfile but no pnpm).
+ */
+export function choosePm(wt, { ref, pnpmFound = probePnpm } = {}) {
+	const hasLock = ref ? tryGit(wt, "cat-file", "-e", `${ref}:pnpm-lock.yaml`).ok : fs.existsSync(path.join(wt, "pnpm-lock.yaml"));
+	if (!hasLock) return { pm: "npm" };
+	const found = typeof pnpmFound === "function" ? pnpmFound() : pnpmFound;
+	return found ? { pm: "pnpm" } : { pm: "npm", note: "pnpm-lock.yaml found but pnpm is not installed; falling back to npm (run `corepack enable` to get pnpm)" };
+}
 
 export class UpdateError extends Error {}
 
@@ -50,7 +82,7 @@ const isDoc = (f) => /^docs\//.test(f) || /\.mdx?$/.test(f);
 const isTest = (f) => /\.test\.[cm]?[tj]sx?$/.test(f) || /(^|\/)(__tests__|fixtures)\//.test(f);
 
 /** Classify changed paths. `refreshedExtensions`: names of rebuilt bundles. */
-export function classify(files, refreshedExtensions = []) {
+export function classify(files, refreshedExtensions = [], pm = "npm") {
 	const relevant = files.filter((f) => !isDoc(f) && !isTest(f));
 	const agent = relevant.some((f) => f.startsWith("packages/agent/"));
 	const console_ = relevant.filter((f) => f.startsWith("apps/console/"));
@@ -60,7 +92,7 @@ export function classify(files, refreshedExtensions = []) {
 	else if (console_.length) action = "reload";
 	else if (files.length) action = "none"; // docs/tests only
 	const lines = [];
-	if (action === "restart") lines.push("restart the stack: npm run stack -- restart");
+	if (action === "restart") lines.push(pm === "pnpm" ? "restart the stack: pnpm stack restart" : "restart the stack: npm run stack -- restart");
 	else if (action === "reload") lines.push("console only: reload the window (Cmd-R)");
 	else lines.push(files.length ? "docs/tests only: nothing to restart" : "already up to date");
 	if (agent) lines.push("sfo-01 runs packages/agent: redeploy needed");
@@ -125,14 +157,17 @@ export async function refreshDenExtensions({ repo, wolvesDir, dryRun, log, now =
 	return refreshed;
 }
 
-const defaultSteps = {
-	build: (wt) => execFileSync("npx", ["turbo", "run", "build"], { cwd: wt, stdio: "inherit" }),
+const defaultSteps = (pnpmFound) => ({
+	build: (wt) => {
+		const { pm } = choosePm(wt, { pnpmFound });
+		for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: "inherit", shell: process.platform === "win32" });
+	},
 	refreshExtensions: refreshDenExtensions,
-};
+});
 
 /** Returns {exitCode, classification, ...}; throws nothing for expected failures. */
-export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), steps = {}, log = console.log, warn = console.warn } = {}) {
-	const st = { ...defaultSteps, ...steps };
+export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), steps = {}, pnpmFound = probePnpm, log = console.log, warn = console.warn } = {}) {
+	const st = { ...defaultSteps(pnpmFound), ...steps };
 	const dryRun = argv.includes("--dry-run");
 	const branch = argv.find((a) => !a.startsWith("--"));
 	const runtime = env.RUNTIME_BRANCH || "stable";
@@ -147,7 +182,7 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	if (branch) {
 		return fail(
 			`this command no longer merges a branch (got "${branch}"): it only updates the ${runtime} runtime from origin/${runtime}. ` +
-				"Release work with `wolfpack pr prepare`; the owner merges the PR, then run `npm run runtime:update` (or `wolfpack pr post-merge --apply`).",
+				"Release work with `wolfpack pr prepare`; the owner merges the PR, then run `pnpm runtime:update` (`npm run runtime:update` on a checkout that is still on npm; or `wolfpack pr post-merge --apply`).",
 		);
 	}
 
@@ -178,14 +213,18 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	const files = git(rtWt, "diff", "--name-only", oldRuntime, target.out).split("\n").filter(Boolean);
 	if (dryRun) {
 		log(`${tag}would fast-forward ${runtime} to ${remoteRef} (${files.length} changed files)`);
-		log(`${tag}would run: npx turbo run build`);
+		const { pm, note } = choosePm(rtWt, { ref: target.out, pnpmFound });
+		if (note) log(`${tag}${note}`);
+		for (const { cmd, args } of buildCommands(pm)) log(`${tag}would run: ${cmd} ${args.join(" ")}`);
 	} else {
 		if (oldRuntime !== target.out) {
 			const ff = tryGit(rtWt, "merge", "--ff-only", remoteRef);
 			if (!ff.ok) return fail(`${runtime} cannot fast-forward to ${remoteRef}: ${ff.out}`);
 			log(`fast-forwarded ${runtime} (${files.length} changed files)`);
 		}
-		log("building…");
+		const chosen = choosePm(rtWt, { pnpmFound });
+		if (chosen.note) log(chosen.note);
+		log(`building with ${chosen.pm}…`);
 		try {
 			st.build(rtWt);
 		} catch (err) {
@@ -194,7 +233,7 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	}
 	log(`${tag}checking den extensions in ${wolvesDir}`);
 	const refreshed = await st.refreshExtensions({ repo: rtWt, wolvesDir, dryRun, log });
-	const cls = classify(files, refreshed.map((r) => r.wolf));
+	const cls = classify(files, refreshed.map((r) => r.wolf), choosePm(rtWt, { ref: dryRun ? target.out : undefined, pnpmFound }).pm);
 	log("");
 	for (const l of cls.lines) log(`=> ${l}`);
 	log(`\n${tag}summary: ${files.length} files changed, ${refreshed.length} den(s) refreshed, ${dryRun ? "nothing changed" : "nothing pushed"}`);

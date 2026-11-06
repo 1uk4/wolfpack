@@ -157,6 +157,8 @@ describe("kb-rehome", () => {
   it("section line helpers touch only the frontmatter and keep CRLF", () => {
     const crlf = `---\r\nid: x\r\ndomain: wolfpack\r\nsection: ${JUNK}\r\n---\r\nbody\r\nsection: ${JUNK}\r\n`;
     expect(sectionOf(crlf)).toBe(JUNK);
+    expect(sectionOf(`---\r\nsection: "${JUNK}"\r\n---\r\n`)).toBe(JUNK);
+    expect(sectionOf(`---\r\nsection:\r\n---\r\n`)).toBe("");
     const out = setSection(crlf, GOOD);
     expect(out).toBe(crlf.replace(`section: ${JUNK}\r\n---`, `section: ${GOOD}\r\n---`));
     const none = `---\r\nid: x\r\ndomain: wolfpack\r\n---\r\nsection: body\r\n`;
@@ -223,6 +225,8 @@ describe("kb-rehome", () => {
     const log = readLedger(f.roots);
     expect(log.filter((e) => e.t === "sections_replaced").map((e) => (e as { domain: string }).domain)).toEqual(["wolfpack"]);
     const fold = foldSections(log).filter((s) => String(s.domain) === "wolfpack");
+    expect(fold.every((s) => s.centroid.length === 2)).toBe(true); // centroids kept in the snapshot
+    expect(fold.some((s) => s.dirty)).toBe(false);
     const snap = readSections(f.roots).filter((s) => String(s.domain) === "wolfpack");
     expect(fold.map((s) => [String(s.id), s.memberCount]).sort()).toEqual(snap.map((s) => [String(s.id), s.memberCount]).sort());
     expect(snap.find((s) => String(s.id) === JUNK)?.memberCount).toBe(0);

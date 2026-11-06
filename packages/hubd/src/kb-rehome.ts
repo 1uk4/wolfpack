@@ -20,7 +20,7 @@
  *   4. INDEX.md + _digest.json of each touched domain and _registry.md, rendered as the curator does (commitKb).
  * Ledger fold: foldSections has no "section removed" event, only `sections_replaced` ("drop every section of the domain, take this
  * snapshot"), and its entry_placed handler only ever increments memberCount. So every touched domain gets a `sections_replaced` with
- * the domain's sections as written to _sections.json (no centroids, as rebuild does; a bootstrap recomputes them). That removes
+ * the domain's sections as written to _sections.json, WITH their centroids (so the fold never holds `centroid: []` for a touched domain) and without the transient `dirty` flag. That removes
  * dropped sections and resets the additive counts, so the fold and _sections.json agree after a moves-only run too.
  * memberCount rule = the curator's (rebuild.ts Tree.counts()/direct(): entries DIRECTLY in the section, NOT their subtree, and
  * excluding grouped entries, i.e. entries whose frontmatter has an anchor `group:`; retired entries have no file so they never
@@ -35,9 +35,8 @@
  * The dry run takes no lock, but still refuses a held lease.
  */
 import { readFileSync } from "node:fs";
-import { groupOf } from "@wolfpack/kb/librarian";
 import { join } from "node:path";
-import { acquireLease, foldRegistry, freshLeaseIn, readLedger, readSections, scanEntryDomains } from "@wolfpack/kb/librarian";
+import { acquireLease, foldRegistry, freshLeaseIn, groupOf, readLedger, readSections, scanEntryDomains } from "@wolfpack/kb/librarian";
 import { ev, type KbEvent } from "@wolfpack/kb/shared";
 import { createHubSweepWriter } from "./curator.js";
 import { createKbWriter } from "./kb-commits.js";
@@ -75,7 +74,7 @@ const unquote = (v: string): string => v.replace(/^(["'])(.*)\1$/, "$2");
 /** @internal exported for tests */
 export const sectionOf = (raw: string): string => {
   const fm = frontmatter(raw);
-  return fm ? unquote(/^section:[ \t]*(.*?)[ \t]*$/m.exec(fm.block)?.[1] ?? "") : "";
+  return fm ? unquote(/^section:[ \t]*([^\r\n]*?)[ \t\r]*$/m.exec(fm.block)?.[1] ?? "") : "";
 };
 /** @internal exported for tests. A bare `section:` is replaced, never duplicated. */
 export const setSection = (raw: string, id: string): string => {
@@ -203,7 +202,7 @@ export async function kbRehome(opts: RehomeOptions): Promise<RehomeReport> {
         return { ...x, childIds: kids, memberCount: count, ...(changed ? { dirty: true } : {}) };
       });
       for (const d of rep.domains) {
-        const snap = next.filter((x) => String(x.domain) === d).map(({ centroid: _c, ...rest }) => rest) as unknown as Array<Record<string, unknown>>;
+        const snap = next.filter((x) => String(x.domain) === d).map(({ dirty: _d, ...rest }) => rest) as unknown as Array<Record<string, unknown>>;
         events.push(ev.sectionsReplaced(d, snap));
       }
       await w.appendLedger(roots, events);

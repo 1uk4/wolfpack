@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
 import { cardResult } from "../engine/cards.js";
-import { conversationReaderFor, onEngineCloseFor } from "../engine/conversation-reader.js";
+import { conversationReaderFor, onEngineCloseFor, onEngineReadyFor } from "../engine/conversation-reader.js";
 import type {
   Extension,
   Tool,
@@ -162,6 +162,9 @@ export function adaptToDurable(
   // is not attached yet), so stop-time cleanup never depends on a conversation having run.
   const stop = ext.lifecycle?.stop;
   if (stop) onEngineCloseFor(wolfDen, () => void Promise.resolve(stop()).catch(() => {}));
+
+  const ready = ext.onEngineReady;
+  if (ready) onEngineReadyFor(wolfDen, (info) => ready.call(ext, info));
 
   return piDefineExtension({
     name: ext.name,

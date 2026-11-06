@@ -129,6 +129,7 @@ describe("memory.consolidation.trigger", () => {
         expect(count(logs(), TIMER)).toBeGreaterThan(0);
       },
       async ({ den, logs }) => {
+        await sleep(150); // let a tick already in flight at close finish logging
         seen = count(logs(), TIMER);
         seedPool(den);
         await sleep(300);
@@ -159,4 +160,89 @@ describe("consolidation interval normaliser", () => {
     expect(effectiveConsolidationInterval(v)).toBe("4h");
   });
   it("undefined is 4h", () => expect(effectiveConsolidationInterval(undefined)).toBe("4h"));
+});
+
+/** Boot only (no message). `seed` runs before boot. Counts engine consolidate calls and 50ms timers (the intervalMs seam). */
+async function bootOnly(consolidation: Record<string, unknown>, seed: ((den: string) => void) | undefined, during: (w: { den: string; consolidateCalls: () => number; timers: () => number; harnessRoot: () => Promise<void> }) => Promise<void>) {
+  const den = mkdtempSync(join(tmpdir(), "boot-"));
+  dirs.push(den);
+  if (seed) seed(den);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  let consolidates = 0;
+  const base = stubEngine();
+  const engine = { call: (step: string, schema: never, ...rest: never[]) => { if (step === "consolidate") consolidates++; return (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest); } } as unknown as Engine;
+  const realSetInterval = globalThis.setInterval;
+  let timers = 0;
+  vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: never, ms?: number, ...a: never[]) => {
+    if (ms === 50) timers++;
+    return (realSetInterval as (...x: unknown[]) => unknown)(fn, ms, ...a);
+  }) as never);
+  const sm = createScriptedModel([fauxAssistantMessage("REPLY we decided to cache the session lookups for five minutes because of the hot path.")]);
+  const registry = createRegistry();
+  registry.install(adaptToDurable(createMemoryExtension({ live: true, engine, consolidation, intervalMs: 50 } as never, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} }), { wolfDen: den, wolfName: "w" }));
+  const harness = await Harness.open(await openNodeSqliteStorage(join(den, "session.sqlite")), { models: sm.models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? den }) }, ctx);
+  const detach = attachConversationReader(harness, den);
+  try {
+    const harnessRoot = async () => {
+      const root = await harness.root(ctx, { agent: { model: { provider: sm.provider, modelId: sm.modelId } } });
+      harness.resume();
+      await root.submit({ type: "input", content: "USER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
+      await root.waitForIdle(ctx);
+      await sleep(300);
+    };
+    await during({ den, consolidateCalls: () => consolidates, timers: () => timers, harnessRoot });
+  } finally {
+    detach();
+    await harness.close(ctx);
+  }
+}
+
+describe("boot-time consolidation timer", () => {
+  it("non-empty pool, no messages: the timer fires and consolidates", async () => {
+    await bootOnly({ trigger: "timer", poolTarget: 0 }, seedPool, async ({ den, consolidateCalls, timers }) => {
+      await sleep(400);
+      expect(timers()).toBe(1);
+      expect(consolidateCalls()).toBeGreaterThan(0);
+      expect(existsSync(join(den, ".memory/sessions/durable/caching.md"))).toBe(true);
+    });
+  });
+
+  it("nothing new since the last save: later ticks do not consolidate again", async () => {
+    await bootOnly({ trigger: "timer", poolTarget: 0 }, seedPool, async ({ consolidateCalls }) => {
+      await sleep(400);
+      const n = consolidateCalls();
+      expect(n).toBeGreaterThan(0);
+      await sleep(300);
+      expect(consolidateCalls()).toBe(n);
+    });
+  });
+
+  it("empty pool: it ticks without consolidating, then consolidates once something arrives", async () => {
+    await bootOnly({ trigger: "hybrid", threshold: 1_000_000, poolTarget: 0 }, undefined, async ({ den, consolidateCalls, timers }) => {
+      await sleep(300);
+      expect(timers()).toBe(1);
+      expect(consolidateCalls()).toBe(0);
+      seedPool(den); // proves the timer is alive
+      await sleep(300);
+      expect(consolidateCalls()).toBeGreaterThan(0);
+    });
+  });
+
+  it("exactly one timer after the first observation", async () => {
+    await bootOnly({ trigger: "hybrid", threshold: 1_000_000, poolTarget: 0 }, undefined, async ({ timers, harnessRoot }) => {
+      expect(timers()).toBe(1);
+      await harnessRoot();
+      expect(timers()).toBe(1);
+    });
+  });
+
+  it.each(["manual", "threshold"])("%s: no timer at boot or after an observation", async (trigger) => {
+    await bootOnly({ trigger, threshold: 1_000_000, poolTarget: 0 }, seedPool, async ({ timers, consolidateCalls, harnessRoot }) => {
+      await sleep(200);
+      expect(timers()).toBe(0);
+      await harnessRoot();
+      expect(timers()).toBe(0);
+      expect(consolidateCalls()).toBe(0);
+    });
+  });
 });

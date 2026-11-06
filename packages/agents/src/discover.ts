@@ -35,9 +35,9 @@ const STANDARD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 // Profiles that always get these standards, whichever directory they come from, so an override cannot drop them by omitting the frontmatter line.
 const ALWAYS_STANDARDS = new Map<string, string[]>([
-  ["worker", ["testing"]],
+  ["worker", ["testing", "git"]],
   ["planner", ["testing"]],
-  ["reviewer", ["testing"]],
+  ["reviewer", ["testing", "git"]],
 ]);
 
 /**

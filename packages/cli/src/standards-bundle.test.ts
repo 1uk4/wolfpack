@@ -38,7 +38,7 @@ describe("den extension bundle", () => {
 });
 
 describe("extension build with shipped standards", () => {
-  // A small extension: one agent profile (worker, which always gets the testing standard) and optional assets.
+  // A small extension: one agent profile (worker, which always gets the testing and git standards) and optional assets.
   const fixture = (name: string, standardText?: string) => {
     const src = path.join(tmp, name, "src");
     fs.mkdirSync(path.join(src, "agents"), { recursive: true });
@@ -48,6 +48,7 @@ describe("extension build with shipped standards", () => {
     if (standardText !== undefined) {
       fs.mkdirSync(path.join(src, "standards"), { recursive: true });
       fs.writeFileSync(path.join(src, "standards", "testing.md"), standardText);
+      fs.writeFileSync(path.join(src, "standards", "git.md"), "# Git standard\n");
       pkg.wolfpack = { assets: ["./standards"] };
     }
     fs.writeFileSync(path.join(src, "package.json"), JSON.stringify(pkg));

@@ -17,7 +17,8 @@ import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
-import { prCmd } from "../commands/pr.js";
+import { postMergeCmd, prCmd } from "../commands/pr.js";
+import { parsePostMergeArgs } from "../pr-post-merge.js";
 import { parsePrArgs } from "../pr-prepare.js";
 import { deployCmd } from "../commands/deploy.js";
 import { workDoctor } from "../commands/work-doctor.js";
@@ -419,7 +420,11 @@ async function main(): Promise<void> {
 
       case "pr": {
         // The global flag layer above ignores or swallows flags, so parsePrArgs reads the raw argv and rejects anything unknown.
-        if (sub !== "prepare") throw new Error("Usage: wolfpack pr prepare [--full] [--dry-run] [--base stable]");
+        if (sub === "post-merge") {
+          await postMergeCmd(parsePostMergeArgs(process.argv.slice(2)));
+          break;
+        }
+        if (sub !== "prepare") throw new Error("Usage: wolfpack pr prepare [--full] [--dry-run] [--base stable] | wolfpack pr post-merge [--dry-run] [--apply]");
         await prCmd(parsePrArgs(process.argv.slice(2)));
         break;
       }

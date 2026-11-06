@@ -38,6 +38,36 @@ iid=$(systemctl show -p InvocationID --value hubd)
 run hubd 0.9.4 --settle 3; rc=$?
 [ $rc = 1 ] && [ "$(ver /opt/wolfpack-hubd)" = 0.9.2 ] && [ "$(systemctl show -p InvocationID --value hubd)" = "$iid" ] && ! grep -q "FAILED; rolling back\|rollback via" <<<"$out" && ok "hubd install fails before the flip (real smoke test) -> rc 1, 0.9.2 untouched and not restarted, NO rollback" || bad "hubd noflip rc=$rc ver=$(ver /opt/wolfpack-hubd) iid=$iid now=$(systemctl show -p InvocationID --value hubd)"
 
+echo "--- hubd: install migrates an old unit that binds /home paths (backup, drop-ins removed only when mask-only)"
+ex hubd 0.9.2
+seed_old_unit() { # seed_old_unit <curator-local.conf body>: the installed unit gets pre-2026-11-06 /home binds, plus the cutover drop-ins
+  mkdir -p /home/olddewey/knowledge/base/domains /home/olddewey/librarian/inbox /home/olddewey/librarian/receipts
+  sed -i -e '/^ReadWritePaths=/d' -e '/^BindReadOnlyPaths=/d' -e '/^BindPaths=/d' /etc/systemd/system/hubd.service
+  sed -i '/^ProtectHome=tmpfs/a BindReadOnlyPaths=/home/olddewey/knowledge/base/domains\nBindPaths=/home/olddewey/librarian/inbox /home/olddewey/librarian/receipts\nReadWritePaths=/var/lib/hubd /home/olddewey/librarian/inbox /home/olddewey/librarian/receipts' /etc/systemd/system/hubd.service
+  mkdir -p /etc/systemd/system/hubd.service.d
+  printf '%b' "$1" > /etc/systemd/system/hubd.service.d/curator-local.conf
+  : > /etc/systemd/system/hubd.service.d/work-writes.conf.disabled-20261105
+  rm -rf /opt/wolfpack-hubd/unit-backup-* /etc/systemd/system/hubd.service.bak-*
+  systemctl daemon-reload; systemctl restart hubd; wait_active hubd 20 || { journalctl -u hubd --no-pager | tail -8; bad "hubd did not start on the seeded old unit"; }
+}
+MASK='[Service]\nBindReadOnlyPaths=\nBindPaths=\nReadWritePaths=\nReadWritePaths=/var/lib/hubd\n'
+seed_old_unit "$MASK"
+[ "$(systemctl cat hubd | grep -c '/home' || true)" -gt 0 ] || bad "seed: old unit has no /home lines"
+bash /opt/deploy/hubd/setup.sh install --bundle /tmp/x-hubd-0.9.2/hubd >/tmp/hm.log 2>&1 || { tail -12 /tmp/hm.log; bad "hubd migration install"; }
+wait_active hubd 20 || { journalctl -u hubd --no-pager | tail -8; bad "hubd not active after migration"; }
+n=$(systemctl cat hubd | grep -c '/home' || true)
+[ "$n" = 0 ] && [ ! -e /etc/systemd/system/hubd.service.d/curator-local.conf ] && ! ls /etc/systemd/system/hubd.service.d/work-writes.conf* >/dev/null 2>&1 \
+  && ls /etc/systemd/system/hubd.service.bak-* >/dev/null 2>&1 && [ -f /opt/wolfpack-hubd/unit-backup-*/hubd.service.d/curator-local.conf ] && grep -q "backup:" /tmp/hm.log \
+  && ok "migration (mask-only drop-in): systemctl cat has 0 /home lines, drop-ins gone, backups exist and are printed, hubd active" || { cat /tmp/hm.log | tail -12; ls -la /etc/systemd/system/hubd.service.d /opt/wolfpack-hubd; bad "migration case n=$n"; }
+EXTRA='[Service]\nEnvironment=KEEP_ME=1\nBindReadOnlyPaths=\nBindPaths=\nReadWritePaths=\nReadWritePaths=/var/lib/hubd\n'
+seed_old_unit "$EXTRA"
+bash /opt/deploy/hubd/setup.sh install --bundle /tmp/x-hubd-0.9.2/hubd >/tmp/hm2.log 2>&1 || { tail -12 /tmp/hm2.log; bad "hubd migration install (extra)"; }
+wait_active hubd 20 || { journalctl -u hubd --no-pager | tail -8; bad "hubd not active after migration (extra)"; }
+n=$(systemctl cat hubd | grep -c '/home' || true)
+[ "$n" = 0 ] && grep -q '^Environment=KEEP_ME=1' /etc/systemd/system/hubd.service.d/curator-local.conf && ! ls /etc/systemd/system/hubd.service.d/work-writes.conf* >/dev/null 2>&1 && grep -q "NOT removing" /tmp/hm2.log \
+  && ok "migration (drop-in with an extra setting): unit has 0 /home lines, the drop-in is KEPT with a warning, obsolete work-writes drop-in gone, hubd active" || { tail -12 /tmp/hm2.log; bad "migration extra case n=$n"; }
+rm -f /etc/systemd/system/hubd.service.d/curator-local.conf; rmdir /etc/systemd/system/hubd.service.d 2>/dev/null; systemctl daemon-reload; systemctl restart hubd; wait_active hubd 20 || bad "hubd not active after cleanup"
+
 echo "--- --unit is rejected for hubd (workerd only)"
 run hubd 0.9.2 --unit link; rc=$?; [ $rc = 2 ] && ok "hubd --unit link -> rc 2" || bad "hubd --unit rc=$rc"
 

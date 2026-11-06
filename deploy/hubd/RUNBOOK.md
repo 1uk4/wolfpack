@@ -6,7 +6,7 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 | | |
 |---|---|
 | user / group | `hubd` / `hubd` (system, nologin). Never `wolf-W1hOrJ` (Dewey) |
-| bind | Tailscale IP `100.120.154.69` only, port **3150** (3141 = wolfpack-agent; port confirmed free) |
+| bind | Tailscale IP `100.120.154.69` only, port **3150** (3141 was the legacy wolfpack-agent, retired 2026-11-06; never use 3141) |
 | unit | `/etc/systemd/system/hubd.service`: `After=tailscaled`, `Restart=on-failure`, hardened (see file) |
 | env | `/etc/wolfpack/hubd.env`, root:root 600 |
 | code | `/opt/wolfpack-hubd/releases/<ts>-<sha>/hubd.mjs`, symlinks `current` and `previous` (node: `/usr/bin/node` v22) |
@@ -51,7 +51,7 @@ node /tmp/hubd-bundle/hubd.mjs | head -2               # expect "usage:"
 ```
 node --version; command -v node                       # /usr/bin/node, >= 22
 tailscale ip -4; systemctl is-active tailscaled
-ss -ltnp | grep -E ':(3141|3150)\b'                   # only 3141 (agent); 3150 free
+ss -ltnp | grep -E ':(3141|3150)\b'                   # 3141 must be empty (agent retired 2026-11-06); 3150 free before first start
 id hubd; ls -d /etc/wolfpack /opt/wolfpack-hubd /var/lib/hubd   # all absent on first run
 stat -c '%a %U %n' /home/wolf-W1hOrJ /home/wolf-W1hOrJ/librarian /home/wolf-W1hOrJ/knowledge/base/domains /home/wolf-W1hOrJ/librarian/{inbox,receipts}
 # real modes: -L follows the /var/wolfpack symlinks
@@ -80,7 +80,7 @@ systemctl start hubd
 `setup` dies (before installing anything) if node is not in /usr/bin|/usr/local/bin, port 3150 is held by anything but hubd, an existing env file has a bad port/host, `domains/` is not readable by hubd, or `inbox/`/`receipts/` (and lane dirs that exist) are not writable by hubd. It creates the hubd user first, then re-runs the access checks with `runuser -u hubd`. `install` smoke-tests the bundle, flips `current` atomically (rename), keeps 5 releases, restarts hubd only if already active.
 
 ## 4. Verify
-`WOLFPACK_KB_WRITER=1` (in `hubd.env`, from `hubd.env.example`) turns off the worker-mirror write guard (`@wolfpack/kb` mirror-guard): hubd and the sfo-01 `wolfpack-agent` write the KB tree on purpose. Set it in the agent's environment too (its systemd unit/env file on the host, e.g. `Environment=WOLFPACK_KB_WRITER=1`); never set it on Mac workers.
+`WOLFPACK_KB_WRITER=1` (in `hubd.env`, from `hubd.env.example`) turns off the worker-mirror write guard (`@wolfpack/kb` mirror-guard): hubd (and, until its retirement on 2026-11-06, the sfo-01 `wolfpack-agent`) writes the KB tree on purpose. Never set it on Mac workers.
 ```
 systemctl is-active hubd; journalctl -u hubd -n 30 --no-pager        # "hubd listening on http://100.120.154.69:3150"
 journalctl -k | grep -i seccomp                                      # nothing about hubd (a filtered call would show up here); also check journalctl -u hubd -p err
@@ -102,7 +102,7 @@ systemd-run --wait --pipe -p User=hubd -p NoNewPrivileges=yes -p ProtectSystem=s
   -p BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains -p BindPaths="/home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts" \
   -p ReadWritePaths="/var/lib/hubd /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts" \
   /bin/sh -c 'touch /home/wolf-W1hOrJ/knowledge/base/domains/.p 2>&1 | grep -q "Read-only" && echo kb-ro-in-sandbox ok; touch /home/wolf-W1hOrJ/librarian/inbox/1uk4/.p && rm /home/wolf-W1hOrJ/librarian/inbox/1uk4/.p && echo inbox-rw-in-sandbox ok; grep -E -A1 "^ *[|]-- 100[.]120[.]154[.]69$" /proc/net/fib_trie | grep -Fq "/32 host LOCAL" && echo addr-visible-in-sandbox ok'
-systemctl is-active wolf-W1hOrJ wolfpack-agent                       # unchanged
+systemctl is-active wolf-W1hOrJ                                     # unchanged (wolfpack-agent retired 2026-11-06; expect inactive/disabled)
 ```
 Contribution mode check (after the first contribution): `stat -c '%U %a' /home/wolf-W1hOrJ/librarian/inbox/1uk4/*` should be `hubd 644`; if it is not readable by Dewey, tell the owner (an explicit file mode would go into ticket 7).
 
@@ -161,7 +161,7 @@ systemctl start hubd
 - No ACLs were set, so nothing in Dewey's tree needs undoing. Pre-created lane dirs are empty and harmless.
 
 ## 7. Merge the legacy work store into hubd (`hubd work-import`, ticket work-wolfpack-MMeb8jJ)
-Until the old wolves are repointed to the hub, work is written in two places: hubd's store (`/var/lib/hubd/ledger/work-events.jsonl` + the work dirs behind the `kb/base/domains` symlink) and the legacy store (`/var/lib/workerd-kb/domains/<d>/work/*.md` + `/var/wolfpack/kb/work/ledger/work-events.jsonl`, written by wolfpack-agent). `work-import` merges legacy into hubd; the legacy paths are only read. What it does:
+Until the old wolves are repointed to the hub, work is written in two places: hubd's store (`/var/lib/hubd/ledger/work-events.jsonl` + the work dirs behind the `kb/base/domains` symlink) and the legacy store (`/var/lib/workerd-kb/domains/<d>/work/*.md` + `/var/wolfpack/kb/work/ledger/work-events.jsonl`, written by the legacy wolfpack-agent, retired 2026-11-06; the store is archived at `/root/archive-work-20261106`, so no new legacy writes). `work-import` merges legacy into hubd; the legacy paths are only read. What it does:
 - **Ledger:** legacy migration duplicates are collapsed first (exact copies; the same note text on the same item, first one kept; an event equal to the previous one of the item ignoring `at`; a `staged` to the stage the item already has; a stage change is never dropped; an item whose folded state would change is kept whole). The result is diffed against hubd's ledger (sha256 of the canonical event, as a multiset) and the missing events are merged in: each source keeps its own order, the heads are compared by `at`, hubd's 5+ events are never touched or reordered. Events with a non-date `at` are skipped and counted (they would make the fold throw).
 - **Files:** legacy-only `.md` are copied; for items in both, the file with the newer effective `updated` wins (tie: the one matching the merged ledger's stage, else hubd's is kept and listed as a conflict); hubd-only files are never deleted.
 - **Seed:** a file whose id the merged ledger never mentions gets synthetic events (`by: hubd-work-import-seed`) so hubd's ledger-only write path knows it. On the 2026-11-03 data this is 0 items (the legacy ledger already covers all 459 hubd-only files), the step is a safety net. A file whose id is in the ledger (even deleted) is never seeded.

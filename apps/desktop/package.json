@@ -25,6 +25,7 @@
 		"electron": "^45.0.0",
 		"electron-builder": "26.18.0",
 		"concurrently": "^10.0.5",
-		"@resvg/resvg-js": "^2.6.2"
+		"@resvg/resvg-js": "^2.6.2",
+		"app-builder-lib": "26.18.0"
 	}
 }

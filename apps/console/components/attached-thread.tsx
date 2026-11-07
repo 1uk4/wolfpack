@@ -283,7 +283,7 @@ export function AttachBarButton({ wolf, slug, threadId }: { wolf: string; slug: 
 			data-testid="attach-bar-here"
 			disabled={here}
 			onClick={() => api.attach({ wolf, threadId, slug })}
-			className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 max-md:hidden"
+			className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 max-md:relative max-md:before:absolute max-md:before:inset-x-0 max-md:before:-inset-y-2 max-md:before:content-['']"
 		>
 			{here ? "Bar attached" : "Attach bar here"}
 		</button>
@@ -305,7 +305,7 @@ export function AttachBarWorkButton({ wolf, workItemId, label = "Attach bar here
 				setBusy(true);
 				void api.attachWorkItem(wolf, workItemId).then((m) => onError?.(m)).finally(() => setBusy(false));
 			}}
-			className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent disabled:opacity-50 max-md:hidden"
+			className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent disabled:opacity-50 max-md:min-h-11 max-md:px-3"
 		>
 			{label}
 		</button>

@@ -9,10 +9,10 @@
  * On the attached thread's own page the bar is hidden (the page composer takes over; Cmd/Ctrl+J focuses it). Only the
  * chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
-import { ChevronDownIcon, MessageSquareIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useAttachedThread } from "@/components/attached-thread";
@@ -31,18 +31,39 @@ const BarCardSurface = dynamic(() => import("@/components/bar-card-surface").the
 /** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
 const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings)(\/|$)|^\/wolf\/[^/]+$/;
 
-/** The bar's md+ only for now (the phone layout is a later task). */
+/** md+ (768px): the floating pill. Below it the bar is a full-width dock at the bottom (phone layout). */
+const WIDE_QUERY = "(min-width: 768px)";
+const canMatch = () => typeof window !== "undefined" && typeof window.matchMedia === "function";
+function subscribeWide(cb: () => void): () => void {
+	if (!canMatch()) return () => {};
+	const mq = window.matchMedia(WIDE_QUERY);
+	mq.addEventListener?.("change", cb);
+	return () => mq.removeEventListener?.("change", cb);
+}
+/** Read synchronously (useSyncExternalStore), so a phone never paints the pill for a frame; the server snapshot is wide (desktop first). */
 function useWide(): boolean {
-	const [wide, setWide] = useState(true);
+	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
+}
+
+/** Phone only: a thread page has its own composer at the bottom, which a docked bar would cover, so the dock stays off those pages (desktop pill is unaffected). */
+const THREAD_PAGE = /^\/wolf\/[^/]+\/thread(\/|$)|^\/chat\/new(\/|$)/;
+
+/** Phone keyboard: how far the visual viewport's bottom sits above the layout viewport's bottom (iOS does not resize the layout, so a fixed dock would stay under the keyboard). 0 when the layout itself resizes (Android, interactive-widget=resizes-content). */
+function useKeyboardInset(enabled: boolean): number {
+	const [inset, setInset] = useState(0);
 	useEffect(() => {
-		if (typeof window.matchMedia !== "function") return;
-		const mq = window.matchMedia("(min-width: 768px)");
-		const on = () => setWide(mq.matches);
-		on();
-		mq.addEventListener?.("change", on);
-		return () => mq.removeEventListener?.("change", on);
-	}, []);
-	return wide;
+		const vv = window.visualViewport;
+		if (!enabled || !vv) return setInset(0);
+		const apply = () => setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
+		apply();
+		vv.addEventListener("resize", apply);
+		vv.addEventListener("scroll", apply);
+		return () => {
+			vv.removeEventListener("resize", apply);
+			vv.removeEventListener("scroll", apply);
+		};
+	}, [enabled]);
+	return inset;
 }
 
 export function ChatBar() {
@@ -55,7 +76,8 @@ export function ChatBar() {
 	const chipRef = useRef<HTMLButtonElement | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
 	const minimized = api?.minimized ?? false;
-	const full = !!attached && wide && !own && !minimized;
+	const dockless = !wide && !!pathname && THREAD_PAGE.test(pathname);
+	const full = !!attached && !own && !dockless && (!wide || !minimized);
 	const scrolls = !!pathname && SCROLLING.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
@@ -100,14 +122,18 @@ export function ChatBar() {
 	}, []);
 
 	// Scroll room: while the full bar floats over a scrolling page, main reserves its height (--chat-bar-reserve, globals.css).
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const root = document.documentElement;
-		if (!full || !scrolls || !wrapRef.current) {
+		if (!full || (wide && !scrolls) || !wrapRef.current) {
 			root.style.removeProperty("--chat-bar-reserve");
 			return;
 		}
 		const el = wrapRef.current;
-		const set = () => root.style.setProperty("--chat-bar-reserve", `${Math.ceil(el.getBoundingClientRect().height) + 32}px`);
+		// The dock sits flush at the bottom (no gap); the pill floats 12px up. The full-screen sheet covers the page, so its height is not reserved.
+		const set = () => {
+			if (el.dataset.state === "sheet") return;
+			root.style.setProperty("--chat-bar-reserve", `${Math.ceil(el.getBoundingClientRect().height) + (wide ? 32 : 0)}px`);
+		};
 		set();
 		const ro = new ResizeObserver(set);
 		ro.observe(el);
@@ -115,7 +141,7 @@ export function ChatBar() {
 			ro.disconnect();
 			root.style.removeProperty("--chat-bar-reserve");
 		};
-	}, [full, scrolls, attached?.wolf, attached?.threadId]);
+	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
 
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
@@ -132,23 +158,27 @@ export function ChatBar() {
 
 	// A hidden bar closes its switcher (it must not reappear on return); and the input chunk preloads when idle,
 	// so a cold Cmd+J finds the textarea.
-	const shown = !!attached && wide && !own;
+	const shown = !!attached && !own && !dockless;
 	useEffect(() => {
 		if (!shown) setSwitcher(false);
 	}, [shown]);
 	useEffect(() => {
-		if (!attached || !wide) return;
+		if (!attached) return;
 		const idle = (window as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
 		if (idle) idle(() => void loadComposer());
 		else setTimeout(() => void loadComposer(), 200);
-	}, [!!attached, wide]);
+	}, [!!attached]);
 
-	if (!api || !attached || !wide || own) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} />;
+	if (!api || !attached || own || dockless) return null;
+	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} />;
 }
 
-function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }: {
+/** A downward swipe of at least this many px on the sheet's handle closes it. */
+const SWIPE_CLOSE_PX = 60;
+
+function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }: {
 	target: AttachedRef;
+	phone: boolean;
 	wrapRef: React.RefObject<HTMLDivElement | null>;
 	chipRef: React.RefObject<HTMLButtonElement | null>;
 	switcher: boolean;
@@ -163,6 +193,72 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 	const raised = useRaisedAt(api.attached !== null);
 	const waiting = useMemo(() => oldestFirst(waitingElsewhere(api.threads, target), raised), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
+	// Phone only: the dock expands into a full-screen sheet. The composer stays at the same spot in the tree, so the draft survives both ways.
+	const [sheet, setSheet] = useState(false);
+	const inset = useKeyboardInset(phone);
+	const swipeFrom = useRef<{ x: number; y: number } | null>(null);
+	const opener = useRef<"strip" | "chevron">("chevron");
+	const wasSheet = useRef(false);
+	const openedForCard = useRef(false);
+	const pendingCount = cards.pending.length;
+	useEffect(() => {
+		// Answering the last card closes a sheet that was opened for it; a sheet opened to type stays.
+		if (sheet && openedForCard.current && pendingCount === 0) {
+			openedForCard.current = false;
+			// Not while the owner is typing: a focused input or a draft in it keeps the sheet.
+			const input = wrapRef.current?.querySelector("textarea");
+			if (input && (document.activeElement === input || input.value.trim() !== "")) return;
+			setSheet(false);
+		}
+	}, [sheet, pendingCount]);
+	const openSheet = (forCard: boolean) => {
+		openedForCard.current = forCard;
+		opener.current = forCard ? "strip" : "chevron";
+		setSheet(true);
+	};
+	// The sheet is a modal: focus goes in on open and back to what opened it on close; Esc closes it from anywhere; the page behind does not scroll.
+	useEffect(() => {
+		if (!sheet) {
+			if (wasSheet.current) {
+				wasSheet.current = false;
+				const back = document.querySelector<HTMLElement>(`[data-testid="${opener.current === "strip" ? "bar-strip" : "bar-sheet-open"}"]`) ?? document.querySelector<HTMLElement>('[data-testid="bar-sheet-open"]');
+				back?.focus();
+			}
+			return;
+		}
+		wasSheet.current = true;
+		document.querySelector<HTMLElement>('[data-testid="bar-sheet-close"]')?.focus();
+		const prevOverflow = document.body.style.overflow;
+		document.body.style.overflow = "hidden";
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			setSheet(false);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.body.style.overflow = prevOverflow;
+			document.removeEventListener("keydown", onKey);
+		};
+	}, [sheet]);
+	const trapTab = (e: React.KeyboardEvent) => {
+		if (!sheet || e.key !== "Tab") return;
+		const box = wrapRef.current;
+		if (!box) return;
+		const items = Array.from(box.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, input:not([type="hidden"]), a[href], [tabindex]:not([tabindex="-1"])')).filter((el) => !el.closest("[hidden]"));
+		if (items.length === 0) return;
+		const first = items[0]!;
+		const last = items[items.length - 1]!;
+		const at = document.activeElement;
+		if (e.shiftKey && (at === first || !box.contains(at))) {
+			e.preventDefault();
+			last.focus();
+		} else if (!e.shiftKey && (at === last || !box.contains(at))) {
+			e.preventDefault();
+			first.focus();
+		}
+	};
+	const hasSurface = pendingCount > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error;
 
 	const badge = waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
 	const chip = (
@@ -173,7 +269,7 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 			aria-haspopup="dialog"
 			aria-expanded={switcher}
 			onClick={() => (minimized ? setMinimized(false) : setSwitcher((s) => !s))}
-			className="flex max-w-56 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent"
+			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
 			<span data-testid="chat-bar-dot" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
@@ -182,6 +278,88 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 			{working && <BrailleSpinner />}
 		</button>
 	);
+
+	if (phone) {
+		const bottomPad = inset > 0 ? 0 : "env(safe-area-inset-bottom)";
+		const tap = "flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent";
+		return (
+			<div
+				ref={wrapRef}
+				data-testid="chat-bar"
+				data-layout="dock"
+				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
+				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
+				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? "top-0 z-[70]" : "z-30")}
+				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color }}
+				onKeyDown={trapTab}
+			>
+				{sheet && !minimized && (
+					<div
+						data-testid="bar-sheet-handle"
+						className="relative flex min-h-11 shrink-0 touch-none items-center justify-center"
+						onTouchStart={(e) => {
+							const t = e.touches[0];
+							swipeFrom.current = t ? { x: t.clientX, y: t.clientY } : null;
+						}}
+						onTouchCancel={() => void (swipeFrom.current = null)}
+						onTouchEnd={(e) => {
+							const from = swipeFrom.current;
+							swipeFrom.current = null;
+							const t = e.changedTouches[0];
+							if (!from || !t) return;
+							const dy = t.clientY - from.y;
+							if (dy >= SWIPE_CLOSE_PX && dy > Math.abs(t.clientX - from.x)) setSheet(false); // mostly-horizontal swipes are ignored
+						}}
+					>
+						<span aria-hidden className="h-1 w-10 rounded-full bg-muted-foreground/40" />
+						<button type="button" aria-label="Close full screen" data-testid="bar-sheet-close" onClick={() => setSheet(false)} className={cn(tap, "absolute right-1")}>
+							<ChevronDownIcon className="size-5" />
+						</button>
+					</div>
+				)}
+				{sheet && !minimized && (
+					<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
+						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p>}
+					</div>
+				)}
+				{!sheet && !minimized && hasSurface && (
+					<button
+						type="button"
+						data-testid="bar-strip"
+						onClick={() => openSheet(pendingCount > 0)}
+						className="flex min-h-11 w-full items-center justify-between gap-2 border-b px-3 text-left font-ui text-sm hover:bg-accent"
+					>
+						<span className="truncate">{pendingCount > 0 ? (pendingCount === 1 ? "1 card waiting" : `${pendingCount} cards waiting`) : cards.error ? "Could not send. Tap to see" : cards.superseded.length > 0 ? "Replied instead. Tap to see" : "New reply. Tap to read"}</span>
+						<ChevronUpIcon className="size-4 shrink-0 text-muted-foreground" />
+					</button>
+				)}
+				<div className="relative flex items-center gap-1 px-1.5">
+					{chip}
+					{badge}
+					{working && !minimized && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
+					{note && !working && !minimized && <span data-testid="chat-bar-note" className="truncate font-ui text-xs text-muted-foreground">{note}</span>}
+					{minimized ? (
+						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className={cn(tap, "ml-auto")}>
+							<MessageSquareIcon className="size-4" />
+						</button>
+					) : (
+						<div className="ml-auto flex items-center">
+							{!sheet && (
+								<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
+									<ChevronUpIcon className="size-5" />
+								</button>
+							)}
+							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
+								<ChevronDownIcon className="size-4" />
+							</button>
+						</div>
+					)}
+				</div>
+				{!minimized && <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} />}
+				{switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
+			</div>
+		);
+	}
 
 	if (minimized) {
 		return (
@@ -291,7 +469,7 @@ function NeedsYouBadge({ waiting, all }: { waiting: (BarThread & { wolf: string 
 }
 
 /** The thread switcher: home + needs-you + recent feature threads, grouped by wolf. A dialog: focus moves in, arrows walk the entries, Esc / outside click close and return focus to the chip. */
-export function Switcher({ groups, current, onClose }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void }) {
+export function Switcher({ groups, current, onClose, sheet = false }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void; sheet?: boolean }) {
 	const api = useAttachedThread();
 	const ref = useRef<HTMLDivElement | null>(null);
 	const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-testid="switcher-entry"]') ?? []);
@@ -322,8 +500,15 @@ export function Switcher({ groups, current, onClose }: { groups: SwitcherGroup[]
 		list[(i + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]!.focus();
 	};
 	return (
-		<div ref={ref} role="dialog" aria-label="Attach the bar to a thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" className="absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 overflow-y-auto rounded-xl border bg-popover p-1 shadow-lg outline-none">
-			<p className="px-2 py-1 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">Attach the bar to…</p>
+		<div ref={ref} role="dialog" aria-label="Attach the bar to a thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto bg-popover p-1 outline-none", sheet ? "fixed inset-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl border shadow-lg")}>
+			<div className="flex items-center justify-between">
+				<p className="px-2 py-1 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">Attach the bar to…</p>
+				{sheet && (
+					<button type="button" aria-label="Close" data-testid="switcher-close" onClick={onClose} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent">
+						<ChevronDownIcon className="size-5" />
+					</button>
+				)}
+			</div>
 			{groups.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No threads yet.</p>}
 			{groups.map((g) => (
 				<div key={g.wolf} role="group" aria-label={g.wolf} data-testid="switcher-group" data-wolf={g.wolf}>
@@ -340,7 +525,7 @@ export function Switcher({ groups, current, onClose }: { groups: SwitcherGroup[]
 								api?.attach({ wolf: e.wolf, threadId: e.threadId, slug: e.slug });
 								onClose();
 							}}
-							className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none", e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
+							className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent", sheet && "min-h-11", "focus-visible:bg-accent focus-visible:outline-none", e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
 						>
 							<span className="min-w-0 flex-1 truncate">{e.title}</span>
 							{e.status === "needs-you" && <span className="font-ui text-[10px] text-amber-400">needs you</span>}

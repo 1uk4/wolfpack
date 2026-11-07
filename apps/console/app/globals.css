@@ -718,8 +718,7 @@ body {
 }
 
 /* The floating chat bar covers the page bottom: the bar sets --chat-bar-reserve (its height) while it is open over a scrolling page. */
-@media (min-width: 768px) {
-	main {
-		padding-bottom: var(--chat-bar-reserve, 0px);
-	}
+/* Below md the dock (flush, full width) reserves its own height the same way. */
+main {
+	padding-bottom: var(--chat-bar-reserve, 0px);
 }

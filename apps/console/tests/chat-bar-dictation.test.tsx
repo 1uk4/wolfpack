@@ -727,10 +727,18 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 			await fire(q('[data-testid="attached-open"]')!, "click");
 			await wait();
 			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "sheet", "tap opens the bar's sheet");
+			assert.equal(q('[data-testid="chat-bar"]')!.style.maxHeight, "70dvh", "a bottom sheet capped at 70dvh, not full screen");
+			assert.ok(q('[data-testid="bar-sheet-handle"]'), "grab handle");
+			await fire(q('[data-testid="bar-sheet-backdrop"]')!, "click");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]'), null, "backdrop tap closes: back to the row only");
+			assert.equal(q('[data-testid="bar-sheet-backdrop"]'), null);
+			assert.ok(q('[data-testid="attached-row"]'));
+			await fire(q('[data-testid="attached-open"]')!, "click");
+			await wait();
 			await fire(q('[data-testid="bar-sheet-close"]')!, "click");
 			await wait();
-			assert.equal(q('[data-testid="chat-bar"]'), null, "closed: back to the row only");
-			assert.ok(q('[data-testid="attached-row"]'));
+			assert.equal(q('[data-testid="chat-bar"]'), null, "the close button still closes it");
 			await key(); // Cmd+D stops the run
 			await endRun(ws);
 			await wait(400);

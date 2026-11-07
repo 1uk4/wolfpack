@@ -418,15 +418,19 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	if (phone) {
 		const bottomPad = inset > 0 ? 0 : "env(safe-area-inset-bottom)";
 		const tap = "flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent";
+		const asSheet = sheet && !minimized;
 		return (
+			<>
+			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className="fixed inset-0 z-[69] bg-black/40" />}
 			<div
 				ref={wrapRef}
 				data-testid="chat-bar"
 				data-layout="dock"
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
-				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? "top-0 z-[70]" : "z-30")}
-				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color }}
+				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? "z-[70] rounded-t-2xl" : "z-30")}
+				// A bottom sheet: about two-thirds of the screen, anchored above the keyboard (bottom: inset), the page dimmed behind it.
+				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color, ...(sheet ? { height: "66dvh", maxHeight: "70dvh" } : {}) }}
 				onKeyDown={trapTab}
 			>
 				{sheet && !minimized && (
@@ -495,6 +499,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				{!minimized && <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
+			</>
 		);
 	}
 

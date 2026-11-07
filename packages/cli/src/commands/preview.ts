@@ -1,5 +1,5 @@
 /**
- * wolfpack preview [<ref> | <worktree dir> | status | restart | off [--console|--all] | slot get|list|release | token | dev] [--dry-run] [--yes]
+ * wolfpack preview [<ref> | <worktree dir> | status | restart | off [--console|--all] | slot get|list|release|pair [--print-url] | token | dev] [--dry-run] [--yes]
  * Wires scripts/runtime-preview.mjs (which holds the behaviour and its tests) into the CLI. The script is found relative to
  * this file (dist/commands -> repo root), so it runs from the checkout this CLI was built in.
  */

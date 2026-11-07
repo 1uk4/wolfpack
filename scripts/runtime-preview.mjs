@@ -30,7 +30,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 23;
+export const PREVIEW_VERSION = 24;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs", "runtime-preview-slots.mjs", "runtime-preview-slot-run.mjs"];
@@ -210,7 +210,8 @@ const defaultSteps = {
 	},
 	/** Open a url in the default browser. */
 	open: (url) => {
-		spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore" });
+		const r = spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore" });
+		return r.error ? 1 : (r.status ?? 1); // the exit status: 0 means the browser was asked to open it
 	},
 	/** `pnpm install --frozen-lockfile --prefer-offline` in a worktree, output to the log file. */
 	install: (wt, { logFile } = {}) => {
@@ -620,7 +621,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return null;
 	}
 
-	const SLOT_USAGE = "usage: wolfpack preview slot get <worktree> [--json] | list [--json] | release <worktree|port>. A slot stops after 20 min without a `get`: re-run `slot get` to keep it alive.";
+	const SLOT_USAGE = "usage: wolfpack preview slot get <worktree> [--json] | list [--json] | release <worktree|port> | pair <port> [--print-url]. A slot stops after 20 min without a `get`: re-run `slot get` to keep it alive.";
 	/** The two copy-paste setup steps shown when a slot has no hub token. */
 	const tokenSetup = () => [
 		`1. in the console: Settings → add device, copy the pairing code (or on the hub host: hubd pair --kind browser --label "preview ${os.hostname()}")`,
@@ -684,6 +685,52 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				log(`released slot ${await slots.release(key, alt)}`);
 				return { exitCode: 0 };
 			}
+			if (action === "pair") {
+				// Sign a browser in to a slot: the console keeps its hub token in the browser (localStorage, per origin), so the env token
+				// does not sign a page in. Mint a browser code with a token this Mac holds, redeem it, and open /pair#token=... on the slot.
+				const port = /^\d+$/.test(key) ? Number(key) : NaN;
+				if (port === 3230 || !(await slots.list()).some((x) => x.port === port)) return fail(`${key} is not a running slot (see \`wolfpack preview slot list\`); the 3230 preview is paired by \`wolfpack preview\` itself`);
+				const hub = resolveHub({ home, env });
+				if (!hub) return fail("this Mac is not paired with a hub (no ~/.wolfpack/workerd/hub.json), so there is nothing to sign a browser in with");
+				// Order: the hub-token file first, then WOLFPACK_HUB_TOKEN, so a wolf shell's worker token (which the hub refuses to mint with)
+				// is not the first thing sent. This differs on purpose from `slot get`, which gives a slot's server env WOLFPACK_HUB_TOKEN first.
+				const tokens = [];
+				try {
+					const t = fs.readFileSync(path.join(dir, "hub-token"), "utf8").trim();
+					if (t) tokens.push(t);
+				} catch {}
+				const fromEnv = env.WOLFPACK_HUB_TOKEN?.trim();
+				if (fromEnv && !tokens.includes(fromEnv)) tokens.push(fromEnv);
+				const label = `preview slot ${port} ${os.hostname()}`.slice(0, 64);
+				let paired;
+				let redeemFailed;
+				for (const token of tokens) {
+					const mint = await st.hubFetch(`${hub.url}/v1/tokens/pairing-codes`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ label }) });
+					const code = mint.status === 200 ? mint.json?.code : undefined;
+					if (!code) continue;
+					const r = await st.hubFetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label }) }); // no kind, as `token` does: a code from /v1/tokens/pairing-codes is a browser code and redeems as one
+					if (r.status === 200 && typeof r.json?.token === "string" && r.json.token) {
+						paired = r.json;
+						break;
+					}
+					redeemFailed = r.status;
+				}
+				if (!paired && redeemFailed !== undefined) return fail(`the hub answered ${redeemFailed} when redeeming the pairing code for the slot (the code is single-use; run \`slot pair ${port}\` again)`);
+				if (!paired) {
+					const setup = tokenSetup();
+					return fail(`no token on this Mac can mint a browser pairing code for the slot. One-time setup:\n  ${setup[0]}\n  ${setup[1]}`);
+				}
+				const target = `http://127.0.0.1:${port}/pair#token=${encodeURIComponent(paired.token)}`;
+				const done = `signed in your browser on :${port} (token id ${paired.tokenId ?? "unknown"})`;
+				if (argv.includes("--print-url")) {
+					warn(done.replace("signed in your browser", "token ready for a browser")); // stderr: stdout is only the URL
+					log(target);
+				} else {
+					if ((st.open(target) ?? 0) !== 0) return fail("could not open the browser (the open command failed); nothing was signed in. Use `slot pair --print-url` with a reader that never shows the URL"); // never quote the URL: it holds the token
+					log(done);
+				}
+				return { exitCode: 0 };
+			}
 			if (action === "get") {
 				const wt = slotWorktree(key);
 				if (!wt) return { exitCode: 1 };
@@ -695,7 +742,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				else log(r.url);
 				return { exitCode: 0 };
 			}
-			return fail(`unknown slot command ${action ?? ""}: use get, list or release`);
+			return fail(`unknown slot command ${action ?? ""}: use get, list, release or pair`);
 		} catch (err) {
 			return fail(err.message);
 		}

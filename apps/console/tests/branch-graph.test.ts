@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, agentName, filterRecent, featureOfItem, candidateWorkIds, buildCard, headerStatus, branchShortId, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit, type RunNode } from "../src/core/branch-graph.ts";
-import { parseLog, workspaceGraph } from "../src/server/branch-graph.ts";
+import { ageLabel, agentName, featureOfItem, candidateWorkIds, buildMoments, headerStatus, branchShortId, groupRuns, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
+import { parseLog, parsePrs, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
 
@@ -37,41 +37,113 @@ describe("groupRuns", () => {
 	});
 });
 
-const br = (name: string, ahead: number, behind = 0): OverviewBranch => ({ name, kind: "feature", ahead, behind, landed: ahead === 0, forkIndex: 0, gap: 0, splitAt: 1, lastAt: 1, dirty: false, shortId: null });
-const run = (workId: string | null, count: number): RunNode => ({ workId, count, sha: "x", subject: "s", shas: ["x"], time: 5, added: 0, removed: 0 });
-const ov = (over: Partial<GitOverview>): GitOverview => ({ main: { name: "wolf/w", kind: "wolf" }, history: [], branches: [], parent: null, ...over });
+const br = (name: string, ahead: number, behind = 0, splitAt: number | null = 1): OverviewBranch => ({ name, kind: "feature", ahead, behind, landed: ahead === 0, splitAt, lastAt: 1, dirty: false, shortId: null });
+const ov = (over: Partial<GitOverview>): GitOverview => ({ main: { name: "wolf/w", kind: "wolf" }, history: [], branches: [], siblings: [], home: "wolf/w", stable: "stable", parent: null, prs: [], tags: [], unreleased: null, unmerged: null, ...over });
 
-describe("buildCard", () => {
-	it("splits active from landed branches and keeps the 3 newest work-item runs with counts for the rest", () => {
-		// history is oldest → newest
-		const card = buildCard(ov({ history: [run("work-wolfpack-AAAAAAA", 4), run(null, 20), run("work-wolfpack-BBBBBBB", 5), run("work-wolfpack-CCCCCCC", 1), run(null, 2)], branches: [br("feat/a", 2), br("feat/b", 0), br("feat/c", 1)] }));
-		assert.deepEqual(card.active.map((b) => b.name), ["feat/a", "feat/c"]);
-		assert.deepEqual(card.landed.map((b) => b.name), ["feat/b"]);
-		assert.deepEqual(card.recent.map((r) => [r.workId, r.count]), [[null, 2], ["work-wolfpack-CCCCCCC", 1], ["work-wolfpack-BBBBBBB", 5]]);
-		assert.deepEqual(card.more, { items: 2, commits: 24 });
+const DAY = 86400;
+const NOW = 100 * DAY;
+
+describe("swimLanes", () => {
+	it("feature thread: subagents, this feature (bold), sibling features, home, stable; landed ones get no lane", () => {
+		const o = ov({
+			main: { name: "feat/Fea1111-x", kind: "feature" },
+			parent: { name: "wolf/w", ahead: 2, behind: 5, forkAt: NOW - 3 * DAY },
+			branches: [{ ...br("feat/Fea1111-x--a-1", 1, 0, NOW - DAY), kind: "subagent" }, { ...br("feat/Fea1111-x--b-2", 0), kind: "subagent" }],
+			siblings: [br("feat/Sib2222-y", 4, 9, NOW - 5 * DAY), br("feat/Old3333-z", 0)],
+		});
+		const lanes = swimLanes(o);
+		assert.deepEqual(lanes.map((l) => [l.name, l.role, l.bold, l.parent]), [
+			["feat/Fea1111-x--a-1", "child", false, "feat/Fea1111-x"],
+			["feat/Fea1111-x", "main", true, "wolf/w"],
+			["feat/Sib2222-y", "sibling", false, "wolf/w"],
+			["wolf/w", "home", false, null],
+			["stable", "stable", false, null],
+		]);
+		assert.equal(lanes[1]!.forkAt, NOW - 3 * DAY);
 	});
-	it("has no 'more' when the history fits in 3 runs", () => {
-		assert.deepEqual(buildCard(ov({ history: [run(null, 1)] })).more, { items: 0, commits: 0 });
+	it("home thread: active features, home (bold), stable", () => {
+		const lanes = swimLanes(ov({ branches: [br("feat/A", 2, 0, NOW - DAY), br("feat/B", 0)] }));
+		assert.deepEqual(lanes.map((l) => [l.name, l.role, l.bold, l.parent]), [["feat/A", "feature", false, "wolf/w"], ["wolf/w", "home", true, null], ["stable", "stable", false, null]]);
+	});
+	it("has no stable lane when the repo has none", () => {
+		assert.deepEqual(swimLanes(ov({ stable: null })).map((l) => l.name), ["wolf/w"]);
 	});
 });
 
-describe("filterRecent", () => {
-	const hist = [run("work-wolfpack-AAAAAAA", 1), run(null, 2), run("work-wolfpack-BBBBBBB", 3), run("work-wolfpack-CCCCCCC", 4)];
-	// A: a task under feature F1; B: a loose Inbox task; C: a task under another feature F2
-	const features = { "work-wolfpack-AAAAAAA": "work-wolfpack-F1F1F1F", "work-wolfpack-BBBBBBB": null, "work-wolfpack-CCCCCCC": "work-wolfpack-F2F2F2F" };
-	it("a feature thread keeps runs of its feature or its children; drops no-ID and other items", () => {
-		assert.deepEqual(filterRecent(hist, "F1F1F1F", features).map((r) => r.workId), ["work-wolfpack-AAAAAAA"]);
-		assert.deepEqual(filterRecent([run("work-wolfpack-F1F1F1F", 1)], "F1F1F1F", { "work-wolfpack-F1F1F1F": "work-wolfpack-F1F1F1F" }).length, 1);
+describe("buildMoments", () => {
+	it("lists splits, PRs and releases inside the window, oldest first, and leaves older ones out", () => {
+		const o = ov({
+			branches: [br("feat/A", 2, 0, NOW - 2 * DAY), br("feat/Old", 3, 0, NOW - 20 * DAY)],
+			prs: [{ n: 7, at: NOW - 3 * DAY, sha: "p7" }, { n: 3, at: NOW - 40 * DAY, sha: "p3" }],
+			tags: [{ name: "console/v0.1.14", at: NOW - DAY }, { name: "console/v0.1.0", at: NOW - 50 * DAY }],
+		});
+		const m = buildMoments(o, [], NOW, 7);
+		assert.deepEqual(m.map((x) => [x.kind, x.lane, x.label]), [["pr", "stable", "PR #7"], ["split", "feat/A", "split · feat/A"], ["release", "stable", "v0.1.14"]]);
+		assert.deepEqual(m.map((x) => x.at), [NOW - 3 * DAY, NOW - 2 * DAY, NOW - DAY]);
+		assert.equal(buildMoments(o, [], NOW, 30).filter((x) => x.kind === "split").length, 2);
 	});
-	it("home keeps loose work and runs without an ID; drops anything under a feature or unresolved", () => {
-		assert.deepEqual(filterRecent(hist, null, features).map((r) => r.workId), [null, "work-wolfpack-BBBBBBB"]);
-		assert.deepEqual(filterRecent([run("work-wolfpack-ZZZZZZZ", 1)], null, {}).length, 0);
+	it("merges landed rings in time order", () => {
+		const ring: Moment = { at: NOW - DAY * 1.5, kind: "landed", lane: "wolf/w", label: "Floating bar ✓", workId: "work-wolfpack-AAAAAAA" };
+		assert.deepEqual(buildMoments(ov({ tags: [{ name: "v1", at: NOW - DAY }] }), [ring], NOW, 7).map((x) => x.kind), ["landed", "release"]);
 	});
+	it("labels a release by its short version", () => {
+		assert.equal(tagLabel("console/v0.1.14"), "v0.1.14");
+		assert.equal(tagLabel("v2.0.0"), "v2.0.0");
+	});
+});
+
+describe("shipMoments", () => {
+	const item = (id: string, over: Partial<{ title: string; kind: string; stage: string; updated: string; partOf: string | null }> = {}) => ({ id, title: `T ${id}`, kind: "task", stage: "shipped", updated: "1970-04-10", partOf: null, ...over });
+	// day 99 (1970-04-10) is NOW - 1 day
+	it("a feature thread rings its child tasks at their ship date; no ship date or unfinished work is skipped", () => {
+		const ctx = { feature: "Fea1111", nowSec: NOW, activeShortIds: [] as string[] };
+		const subjects = [
+			item("work-wolfpack-T000001", { partOf: "work-wolfpack-Fea1111" }),
+			item("work-wolfpack-T000002", { partOf: "work-wolfpack-Fea1111", updated: "" }),
+			item("work-wolfpack-T000003", { partOf: "work-wolfpack-Fea1111", stage: "build" }),
+			item("work-wolfpack-T000004", { partOf: "work-wolfpack-Other11" }),
+		];
+		const m = shipMoments(subjects, ctx);
+		assert.deepEqual(m.map((x) => [x.kind, x.lane, x.workId, x.label]), [["landed", "main", "work-wolfpack-T000001", "T work-wolfpack-T000001 ✓"]]);
+		assert.ok(m[0]!.at <= NOW && m[0]!.at > NOW - 2 * DAY);
+	});
+	it("home rings shipped features that are not active lanes; once per feature", () => {
+		const ctx = { feature: null, nowSec: NOW, activeShortIds: ["Act1111"] };
+		const m = shipMoments([item("work-wolfpack-Fea2222", { kind: "feature" }), item("work-wolfpack-Fea2222", { kind: "feature" }), item("work-wolfpack-Act1111", { kind: "feature" }), item("work-wolfpack-Tsk3333", { kind: "task" })], ctx);
+		assert.deepEqual(m.map((x) => [x.lane, x.workId]), [["main", "work-wolfpack-Fea2222"]]);
+	});
+});
+
+describe("timeScale", () => {
+	it("orders moments left to right and caps quiet stretches so busy days get the width", () => {
+		const times = [NOW - 6 * DAY, NOW - 6 * DAY + 600, NOW - 6 * DAY + 1200, NOW - 2 * DAY];
+		const s = timeScale(times, NOW - 7 * DAY, NOW);
+		const xs = times.map(s.x);
+		assert.deepEqual([...xs].sort((a, b) => a - b), xs);
+		assert.ok(xs[1]! - xs[0]! >= 16, "close moments keep a minimum gap");
+		assert.ok(xs[3]! - xs[2]! <= 48, "a four-day quiet stretch is capped");
+		assert.ok(s.x(NOW) >= xs[3]! && s.x(NOW) <= s.width);
+		assert.equal(s.x(NOW - 7 * DAY), 0);
+	});
+	it("an empty window is just its start and end", () => {
+		const s = timeScale([], 0, DAY);
+		assert.ok(s.x(DAY) > s.x(0));
+	});
+});
+
+describe("featureOfItem", () => {
 	it("finds an item's feature: itself for a feature, its parent when that is a feature, none for loose work", () => {
 		assert.equal(featureOfItem({ id: "f", kind: "feature" }, null), "f");
 		assert.equal(featureOfItem({ id: "t", kind: "task" }, { id: "f", kind: "feature" }), "f");
 		assert.equal(featureOfItem({ id: "t", kind: "task" }, { id: "inbox", kind: "initiative", container: true }), null);
 		assert.equal(featureOfItem({ id: "t", kind: "task" }, null), null);
+	});
+});
+
+describe("parsePrs", () => {
+	it("reads PR numbers from first-parent merge commits on stable, ignoring other merges", () => {
+		const out = "a\0p1 p2\0Merge pull request #10 from 1uk4/wolf/1uk4\x00200\nb\0q1 q2\0Merge branch 'x'\x00150\nc\0r1 r2\0Merge pull request #7 from 1uk4/feat/y\x00100\n";
+		assert.deepEqual(parsePrs(out), [{ n: 7, at: 100, sha: "c" }, { n: 10, at: 200, sha: "a" }]);
 	});
 });
 
@@ -143,10 +215,9 @@ describe("workspaceGraph (real repo)", () => {
 		assert.deepEqual(o.branches.map((b) => b.name), ["feat/Done333-done", "feat/New2222-new", "feat/Old1111-old"]);
 		assert.deepEqual([o.history[0]!.added, o.history[0]!.removed], [0, 0]);
 		const by = Object.fromEntries(o.branches.map((b) => [b.name, b]));
-		assert.deepEqual([by["feat/Old1111-old"]!.ahead, by["feat/Old1111-old"]!.behind, by["feat/Old1111-old"]!.forkIndex], [2, 5, -1]);
-		assert.equal(by["feat/Old1111-old"]!.gap, 1); // 5 behind, 4 in the window
+		assert.deepEqual([by["feat/Old1111-old"]!.ahead, by["feat/Old1111-old"]!.behind], [2, 5]);
 		assert.equal(by["feat/Old1111-old"]!.shortId, "Old1111");
-		assert.deepEqual([by["feat/New2222-new"]!.ahead, by["feat/New2222-new"]!.behind, by["feat/New2222-new"]!.forkIndex, by["feat/New2222-new"]!.dirty], [1, 1, 0, true]);
+		assert.deepEqual([by["feat/New2222-new"]!.ahead, by["feat/New2222-new"]!.behind, by["feat/New2222-new"]!.dirty], [1, 1, true]);
 		assert.deepEqual([by["feat/Done333-done"]!.landed, by["feat/Done333-done"]!.dirty], [true, false]);
 		assert.equal(by["feat/Old1111-old"]!.landed, false);
 		assert.equal(by["feat/Done333-done"]!.ahead, 0);
@@ -169,9 +240,31 @@ describe("workspaceGraph (real repo)", () => {
 		commit(dir, "home moves again");
 		const o = await workspaceGraph({ toplevel: feat, branch: "feat/Fea1111-feat", base: "wolf/w" }, "w");
 		assert.deepEqual(o.main, { name: "feat/Fea1111-feat", kind: "feature" });
-		assert.deepEqual(o.parent, { name: "wolf/w", ahead: 1, behind: 2 });
+		assert.deepEqual([o.parent!.name, o.parent!.ahead, o.parent!.behind, typeof o.parent!.forkAt], ["wolf/w", 1, 2, "number"]);
+		assert.deepEqual(o.siblings.map((b) => [b.name, b.ahead]), [["feat/Oth2222-other", 0]]);
+		assert.equal(o.home, "wolf/w");
+		assert.equal(o.unmerged!.count, 1);
 		assert.deepEqual(o.branches.map((b) => [b.name, b.kind, b.ahead, b.behind]), [["feat/Fea1111-feat--a-1", "subagent", 1, 0]]);
-		assert.equal(o.branches[0]!.forkIndex, o.history.length - 1);
+		assert.equal(typeof o.branches[0]!.splitAt, "number");
+	});
+
+	it("stable: PR merges and release tags on it, and the home commits not yet released", async () => {
+		const { dir, g, commit } = repo();
+		commit(dir, "root");
+		g("branch", "stable");
+		commit(dir, "home 1");
+		g("checkout", "-q", "stable");
+		g("merge", "--no-ff", "-m", "Merge pull request #7 from 1uk4/wolf/w", "wolf/w");
+		g("tag", "-a", "console/v0.1.14", "-m", "release");
+		g("checkout", "-q", "wolf/w");
+		commit(dir, "home 2");
+		commit(dir, "home 3");
+		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
+		assert.equal(o.stable, "stable");
+		assert.deepEqual(o.prs.map((p) => p.n), [7]);
+		assert.deepEqual(o.tags.map((t) => t.name), ["console/v0.1.14"]);
+		assert.equal(o.unreleased!.count, 2);
+		assert.equal(typeof o.unreleased!.since, "number");
 	});
 
 	it("a branch with nothing ahead is landed", async () => {

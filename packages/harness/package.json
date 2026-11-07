@@ -63,6 +63,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@wolfpack/client": "*",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "zod": "^4.6.7"
   }
 }

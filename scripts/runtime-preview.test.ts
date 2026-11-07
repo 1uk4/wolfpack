@@ -44,6 +44,7 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean } = {}) =
 	const calls: string[] = [];
 	const gitCalls: string[][] = [];
 	const logs: string[] = [];
+	const builds: (string | undefined)[] = [];
 	const steps = {
 		git: (cwd: string, ...args: string[]) => {
 			gitCalls.push(args);
@@ -51,7 +52,8 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean } = {}) =
 			if (args[0] === "checkout") calls.push(`git ${args.join(" ")}`);
 			return g(cwd, ...args);
 		},
-		build: (wt: string) => {
+		build: (wt: string, o?: { logFile?: string }) => {
+			builds.push(o?.logFile);
 			calls.push(`build@${g(wt, "rev-parse", "HEAD")}`);
 			if (opts.buildFails && g(wt, "rev-parse", "HEAD") === featSha) throw new Error("boom");
 		},
@@ -59,7 +61,7 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean } = {}) =
 	};
 	const run = (argv: string[]) =>
 		runPreview({ argv, env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves") }, cwd: rtWt, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { calls, gitCalls, logs, run, steps };
+	return { calls, gitCalls, logs, run, steps, builds };
 };
 
 describe("runtime-preview", () => {
@@ -197,6 +199,23 @@ describe("runtime-preview", () => {
 		const r = await runPreview({ argv: ["feat/x"], env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves") }, cwd: main, steps: { ...h.steps }, log: () => {}, warn: () => {} });
 		expect(r.exitCode).toBe(0);
 		expect(readState()).toMatchObject({ previousBranch: "stable", runtimeDir: known });
+	});
+
+	it("on: build output goes to last-run.log, the terminal gets one progress line", async () => {
+		const h = harness();
+		await h.run(["feat/x"]);
+		expect(h.builds).toEqual([path.join(home, ".wolfpack", "preview", "last-run.log")]);
+		expect(h.logs.filter((l) => l.includes("building")).length).toBe(1);
+	});
+
+	it("status --json prints the state, the console url and the last log lines", async () => {
+		const h = harness();
+		await h.run(["feat/x"]);
+		fs.writeFileSync(path.join(home, ".wolfpack", "preview", "last-run.log"), "one\ntwo\n");
+		h.logs.length = 0;
+		await h.run(["status", "--json"]);
+		const out = JSON.parse(h.logs.join("\n"));
+		expect(out).toMatchObject({ state: { previewRef: "feat/x", phase: "switching" }, consoleUrl: null, log: ["one", "two"] });
 	});
 
 	it("status with no state says stable, no preview", async () => {

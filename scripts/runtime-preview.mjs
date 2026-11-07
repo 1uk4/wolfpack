@@ -28,16 +28,25 @@ const HELPER_SRC = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.m
 
 const defaultSteps = {
 	git: realGit,
-	build: (wt) => {
+	build: (wt, { logFile } = {}) => {
 		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
-		for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: "inherit", shell: process.platform === "win32" });
+		let fd;
+		if (logFile) {
+			fs.mkdirSync(path.dirname(logFile), { recursive: true });
+			fd = fs.openSync(logFile, "w");
+		}
+		try {
+			for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: fd === undefined ? "inherit" : ["ignore", fd, fd], shell: process.platform === "win32" });
+		} finally {
+			if (fd !== undefined) fs.closeSync(fd);
+		}
 	},
 	/** Copy the helper out of the runtime tree and run it detached, output to the last-run log. */
 	spawnHelper: ({ args, dir, logFile }) => {
 		fs.mkdirSync(dir, { recursive: true });
 		const copy = path.join(dir, "runtime-preview-switch.mjs");
 		fs.writeFileSync(copy, HELPER_SRC);
-		const fd = fs.openSync(logFile, "w");
+		const fd = fs.openSync(logFile, "a");
 		spawn(process.execPath, [copy, ...args], { detached: true, stdio: ["ignore", fd, fd] }).unref();
 	},
 };
@@ -85,13 +94,18 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	if (!sub) return fail("usage: wolfpack preview <ref> | status | off [--dry-run]");
 
 	if (sub === "status") {
+		const tail = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5) : [];
+		if (argv.includes("--json")) {
+			log(JSON.stringify({ state: state ?? null, consoleUrl: state?.previewConsoleUrl ?? null, log: tail }, null, 2));
+			return { exitCode: 0, state };
+		}
 		if (!state) {
 			log("stable, no preview");
 			return { exitCode: 0 };
 		}
 		log(`preview ${state.previewRef} @ ${state.previewSha}`);
 		log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
-		if (fs.existsSync(logFile)) for (const l of fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5)) log(`  ${l}`);
+		for (const l of tail) log(`  ${l}`);
 		return { exitCode: 0, state };
 	}
 
@@ -125,8 +139,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			}
 		}
 		writeState({ ...state, phase: "restoring" });
+		log(`building ${branch ?? state.previousRef} (output in ${logFile})`);
 		try {
-			st.build(rtWt);
+			st.build(rtWt, { logFile });
 		} catch (err) {
 			return fail(`build of ${branch ?? state.previousRef} failed: ${err.message}. The stack was not touched; state kept, run \`wolfpack preview off\` again.`);
 		}
@@ -177,14 +192,15 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		else fs.writeFileSync(stateFile, priorStateText);
 		return fail(`cannot check out ${sha}: ${co.out.split("\n")[0]}`);
 	}
+	log(`building ${ref} (output in ${logFile})`);
 	try {
-		st.build(rtWt);
+		st.build(rtWt, { logFile });
 	} catch (err) {
 		warn(`preview: build of ${ref} failed: ${err.message}. Restoring ${previousBranch ?? previousRef}; the stack was not stopped.`);
 		if (previousBranch) tryGit(rtWt, "checkout", previousBranch);
 		else tryGit(rtWt, "checkout", "--detach", previousRef);
 		try {
-			st.build(rtWt);
+			st.build(rtWt, { logFile });
 		} catch (err2) {
 			warn(`preview: rebuild of the previous ref failed too: ${err2.message}`);
 		}

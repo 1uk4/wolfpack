@@ -62,20 +62,23 @@ describe("desktop window chrome", () => {
 	}
 
 	it("preload exposes OS identity without exposing Node/Electron to the renderer", () => {
-		let bridge: Record<string, unknown> = {};
+		const exposed = new Map<string, Record<string, unknown>>();
 		const context = {
 			process: { platform: "win32" },
 			require: () => ({
 				contextBridge: {
 					exposeInMainWorld(name: string, api: Record<string, unknown>) {
-						assert.equal(name, "lh");
-						bridge = api;
+						exposed.set(name, api);
 					},
 				},
 				ipcRenderer: {},
 			}),
 		};
 		runInNewContext(readFileSync(new URL("../../desktop/electron/preload.cjs", import.meta.url), "utf8"), context);
+		// window.wolfpack is the bridge; window.lh is the legacy alias of the same object until the next desktop release.
+		assert.deepEqual([...exposed.keys()], ["wolfpack", "lh"]);
+		const bridge = exposed.get("wolfpack") as Record<string, unknown>;
+		assert.ok(exposed.get("lh") === bridge);
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
 			"expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform",

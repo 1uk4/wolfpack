@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1039,10 +1040,17 @@ describe("agent slots through `wolfpack preview slot`", () => {
 			const out: string[] = [];
 			const err: string[] = [];
 			const r = await runPreview({ argv: ["slot", "get", wt, "--json"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => out.push(m), warn: (m: string) => err.push(m) });
-			return { code: r.exitCode, text: [...out, ...err].join("\n"), err: err.join("\n") };
+			return { code: r.exitCode, text: [...out, ...err].join("\n"), err: err.join("\n"), out };
 		};
 		const none = await get("wt-a");
-		expect(none.err).toMatch(/WOLFPACK_HUB_TOKEN.*not set.*\.wolfpack\/preview\/hub-token/);
+		// Key parts only, not the whole wording: the token file, the hubd pair command for a console token, and the command to run here.
+		for (const text of [none.err, JSON.parse(none.out[0]).tokenSetup.join("\n")]) {
+			expect(text).toMatch(/hubd\.mjs pair --kind console --label "preview [^"]+" --data-dir \/var\/lib\/hubd/);
+			expect(text).toContain("wolfpack preview token");
+		}
+		expect(none.err).toMatch(/no hub token/);
+		expect(JSON.parse(none.out[0])).toMatchObject({ noToken: true });
+		expect(JSON.parse(none.out[0]).tokenSetup).toHaveLength(2);
 		fs.mkdirSync(path.dirname(tf), { recursive: true });
 		fs.writeFileSync(tf, "SECRET-VALUE\n", { mode: 0o644 });
 		fs.chmodSync(tf, 0o644);
@@ -1051,4 +1059,119 @@ describe("agent slots through `wolfpack preview slot`", () => {
 		expect(loose.err).toMatch(/hub-token.*group or other.*chmod 600/);
 		expect(loose.text).not.toContain("SECRET-VALUE");
 	});
+
+	it("get --json without a token is still pure JSON on stdout, and with one carries no tokenSetup", async () => {
+		fs.mkdirSync(path.join(home, ".wolfpack", "preview"), { recursive: true });
+		fs.writeFileSync(path.join(home, ".wolfpack", "preview", "hub-token"), "T\n", { mode: 0o600 });
+		const out: string[] = [];
+		await runPreview({ argv: ["slot", "get", "wt-a", "--json"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => out.push(m), warn: () => {} });
+		expect(Object.keys(JSON.parse(out[0]))).not.toContain("tokenSetup");
+	});
+});
+
+describe("wolfpack preview token", () => {
+	const tokenFile = () => path.join(home, ".wolfpack", "preview", "hub-token");
+	const withHub = () => {
+		fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+		fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: "http://100.64.0.9:3150", token: "WORKER-SECRET" }));
+	};
+	const redeem = async (o: { status?: number; json?: object; code?: string | null; argv?: string[] } = {}) => {
+		const calls: { url: string; method?: string; body?: Record<string, unknown> }[] = [];
+		const out: string[] = [];
+		const err: string[] = [];
+		const asked: boolean[] = [];
+		const r = await runPreview({
+			argv: ["token", ...(o.argv ?? [])],
+			env: { HOME: home },
+			cwd: main,
+			steps: {
+				readCode: async (opts: { fromStdin: boolean }) => (asked.push(opts.fromStdin), o.code === undefined ? "ONE-TIME-CODE" : o.code),
+				hubFetch: async (url: string, init: { method?: string; body?: string }) => (calls.push({ url, method: init.method, body: JSON.parse(init.body ?? "{}") }), { status: o.status ?? 200, json: o.json ?? { token: "NEW-HUB-TOKEN", tokenId: "tok_42" } }),
+			},
+			log: (m: string) => out.push(m),
+			warn: (m: string) => err.push(m),
+		});
+		return { code: r.exitCode, calls, out, err, asked };
+	};
+
+	it("redeems the code as a console pairing, saves the token owner-only, and prints the id but never the token", async () => {
+		withHub();
+		const r = await redeem({ argv: ["--code-stdin"] });
+		expect(r.code).toBe(0);
+		expect(r.calls).toEqual([{ url: "http://100.64.0.9:3150/v1/pair", method: "POST", body: { code: "ONE-TIME-CODE", kind: "console", label: `preview ${os.hostname()}` } }]);
+		expect(r.asked).toEqual([true]);
+		expect(fs.readFileSync(tokenFile(), "utf8")).toBe("NEW-HUB-TOKEN");
+		expect(fs.statSync(tokenFile()).mode & 0o777).toBe(0o600);
+		expect(r.out).toEqual(["saved hub token for preview slots (id tok_42)"]);
+		expect([...r.out, ...r.err].join("\n")).not.toContain("NEW-HUB-TOKEN");
+		expect(fs.readdirSync(path.dirname(tokenFile())).filter((f) => f.startsWith("hub-token"))).toEqual(["hub-token"]); // no temp file left
+	});
+
+	it("names the hub's status for a bad or expired code and leaves an existing token file untouched", async () => {
+		withHub();
+		fs.mkdirSync(path.dirname(tokenFile()), { recursive: true });
+		fs.writeFileSync(tokenFile(), "OLD-TOKEN", { mode: 0o600 });
+		const r = await redeem({ status: 403, json: { error: "bad code" } });
+		expect(r.code).toBe(1);
+		expect(r.err.join("\n")).toMatch(/hub answered 403.*bad or expired.*wolfpack preview token/s);
+		expect(fs.readFileSync(tokenFile(), "utf8")).toBe("OLD-TOKEN");
+	});
+
+	it("says there is no hub to pair with, before asking for a code", async () => {
+		const r = await redeem();
+		expect(r.code).toBe(1);
+		expect(r.err.join("\n")).toMatch(/not paired with a hub/);
+		expect(r.asked).toEqual([]);
+	});
+
+	it("refuses --code-stdin on a terminal instead of waiting for input that never comes", async () => {
+		withHub();
+		const out: string[] = [];
+		const err: string[] = [];
+		const asked: boolean[] = [];
+		const r = await runPreview({ argv: ["token", "--code-stdin"], env: { HOME: home }, cwd: main, steps: { stdinIsTTY: () => true, readCode: async () => (asked.push(true), "X") }, log: (m: string) => out.push(m), warn: (m: string) => err.push(m) });
+		expect(r.exitCode).toBe(1);
+		expect(err.join("\n")).toMatch(/--code-stdin.*pipe/);
+		expect(asked).toEqual([]);
+	});
+
+	it("when no code is given, points at the hub-host command, not at slot get", async () => {
+		withHub();
+		const r = await redeem({ code: null });
+		expect(r.code).toBe(1);
+		expect(r.err.join("\n")).toMatch(/no pairing code.*hub host/s);
+		expect(r.err.join("\n")).not.toMatch(/slot get/);
+		expect(r.calls).toEqual([]);
+	});
+
+	it("really reads the code from stdin and posts it to the hub over HTTP (the default steps)", async () => {
+		const bodies: string[] = [];
+		const srv = http.createServer((req, res) => {
+			let b = "";
+			req.on("data", (c) => (b += c));
+			req.on("end", () => {
+				bodies.push(`${req.method} ${req.url} ${b}`);
+				res.setHeader("Content-Type", "application/json");
+				res.end(JSON.stringify({ token: "E2E-TOKEN", tokenId: "tok_e2e" }));
+			});
+		});
+		await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+		try {
+			fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+			fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: `http://127.0.0.1:${(srv.address() as import("node:net").AddressInfo).port}`, token: "W" }));
+			const child = spawn(process.execPath, [path.resolve(__dirname, "runtime-preview.mjs"), "token", "--code-stdin"], { env: { ...process.env, HOME: home, WORKERD_CONFIG_DIR: path.join(home, ".wolfpack", "workerd") }, stdio: ["pipe", "pipe", "pipe"] });
+			let out = "";
+			let errText = "";
+			child.stdout.on("data", (c) => (out += c));
+			child.stderr.on("data", (c) => (errText += c));
+			child.stdin.end("PIPED-CODE\n");
+			const exit = await new Promise((r) => child.once("exit", r));
+			expect({ exit, errText }).toEqual({ exit: 0, errText: "" });
+			expect(out.trim()).toBe("saved hub token for preview slots (id tok_e2e)");
+			expect(JSON.parse(bodies[0].split(" ").slice(2).join(" "))).toMatchObject({ code: "PIPED-CODE", kind: "console" });
+			expect(fs.readFileSync(tokenFile(), "utf8")).toBe("E2E-TOKEN");
+		} finally {
+			srv.close();
+		}
+	}, 30000);
 });

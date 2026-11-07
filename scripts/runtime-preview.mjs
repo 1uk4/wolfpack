@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * wolfpack preview [<ref> | <worktree dir> [--build] | status | restart | off [--console|--all] | slot get|list|release | dev [dir]] [--dry-run] [--yes]
+ * wolfpack preview [<ref> | <worktree dir> [--build] | status | restart | off [--console|--all] | slot get|list|release | token | dev [dir]] [--dry-run] [--yes]
  * (no argument: a picker of the repo's worktrees; a worktree preview runs the wolves from it via the stack plist: see runtime-preview-worktree.mjs)
  *
  * Try a branch on the live Mac stack, and get back to stable, with one command each. The runtime is the stable worktree
@@ -30,7 +30,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 21;
+export const PREVIEW_VERSION = 22;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs", "runtime-preview-slots.mjs", "runtime-preview-slot-run.mjs"];
@@ -94,6 +94,49 @@ const defaultSteps = {
 		try {
 			process.kill(pid, signal);
 		} catch {}
+	},
+	/**
+	 * A pairing code from the person at the keyboard: stdin to its end with --code-stdin, else a hidden prompt (raw mode, nothing echoed).
+	 * → the trimmed code, or null when there is no terminal to ask on.
+	 */
+	stdinIsTTY: () => !!process.stdin.isTTY,
+	readCode: async ({ fromStdin }) => {
+		if (fromStdin) {
+			let text = "";
+			for await (const chunk of process.stdin) text += chunk;
+			return text.trim();
+		}
+		if (!process.stdin.isTTY) return null;
+		process.stderr.write("Pairing code from the hub host (typing is hidden): ");
+		return new Promise((resolve) => {
+			let code = "";
+			const finish = (value) => {
+				// always give the terminal back, whatever ended the prompt
+				try {
+					process.stdin.setRawMode(false);
+				} catch {}
+				process.stdin.pause();
+				process.stdin.off("data", onData);
+				process.stderr.write("\n");
+				resolve(value);
+			};
+			const onData = (chunk) => {
+				for (const ch of chunk) {
+					if (ch === "\r" || ch === "\n") return finish(code.trim());
+					if (ch === "\u0003") return finish(null); // Ctrl-C
+					if (ch === "\u007f" || ch === "\b") code = code.slice(0, -1);
+					else code += ch;
+				}
+			};
+			try {
+				process.stdin.setRawMode(true);
+				process.stdin.resume();
+				process.stdin.setEncoding("utf8");
+				process.stdin.on("data", onData);
+			} catch (err) {
+				finish(null);
+			}
+		});
 	},
 	/** A JSON request to the hub → {status, json}; {status: 0} when it cannot be reached. */
 	hubFetch: async (url, init) => {
@@ -578,6 +621,43 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	}
 
 	const SLOT_USAGE = "usage: wolfpack preview slot get <worktree> [--json] | list [--json] | release <worktree|port>. A slot stops after 20 min without a `get`: re-run `slot get` to keep it alive.";
+	/** The two copy-paste setup steps shown when a slot has no hub token. */
+	const tokenSetup = () => [
+		`1. on the hub host (sfo-01): umask 077; runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --label "preview ${os.hostname()}" --data-dir /var/lib/hubd`,
+		"2. here: wolfpack preview token   (paste the code it printed)",
+	];
+
+	if (sub === "token") {
+		// Redeem a single-use console pairing code and keep the token for the slots (~/.wolfpack/preview/hub-token). The token is never printed.
+		const hub = resolveHub({ home, env });
+		if (!hub) return fail("this Mac is not paired with a hub (no ~/.wolfpack/workerd/hub.json), so there is nothing to get a token from");
+		const fromStdin = argv.includes("--code-stdin");
+		if (fromStdin && st.stdinIsTTY()) return fail("--code-stdin reads the code from a pipe, but stdin is a terminal: pipe the code in, or run `wolfpack preview token` without the flag to be prompted (typing is hidden)");
+		const code = await st.readCode({ fromStdin });
+		if (!code) return fail("no pairing code given. Create one on the hub host with `hubd pair --kind console` (step 1 of the one-time setup), then paste it at the prompt");
+		const label = `preview ${os.hostname()}`.slice(0, 64);
+		const r = await st.hubFetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, kind: "console", label }) });
+		if (r.status === 0) return fail(`could not reach the hub at ${hub.url}; nothing was saved`);
+		if (r.status !== 200 || typeof r.json?.token !== "string" || !r.json.token) return fail(`the hub answered ${r.status} to the pairing code: it is bad or expired (a code is single-use and lasts 10 minutes${r.status === 429 ? "; too many tries, wait a minute" : ""}). Create a new one on the hub host, then run \`wolfpack preview token\` again. Nothing was saved.`);
+		const file = path.join(dir, "hub-token");
+		const tmp = `${file}.tmp-${process.pid}`;
+		const oldMask = process.umask(0o077);
+		try {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.rmSync(tmp, { force: true }); // a leftover from a crashed run with the same pid; `wx` below then refuses anything planted since
+			fs.writeFileSync(tmp, r.json.token, { mode: 0o600, flag: "wx" });
+			fs.chmodSync(tmp, 0o600);
+			fs.renameSync(tmp, file);
+		} catch (err) {
+			fs.rmSync(tmp, { force: true });
+			return fail(`could not save the token: ${err.message}`);
+		} finally {
+			process.umask(oldMask);
+		}
+		log(`saved hub token for preview slots${r.json.tokenId ? ` (id ${r.json.tokenId})` : ""}`);
+		return { exitCode: 0 };
+	}
+
 	if (sub === "slot") {
 		const [, action, key] = pos;
 		const slots = st.slots({ home, env });
@@ -607,9 +687,10 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				const wt = slotWorktree(key);
 				if (!wt) return { exitCode: 1 };
 				const r = await slots.get(wt);
-				if (r.noToken && !r.reused) warn("preview: WOLFPACK_HUB_TOKEN is not set and ~/.wolfpack/preview/hub-token does not exist, so the slot's pages will ask you to pair (/pair) first. Put a token there: printf %s <token> > ~/.wolfpack/preview/hub-token && chmod 600 ~/.wolfpack/preview/hub-token");
+				const setup = tokenSetup();
+				if (r.noToken && !r.reused) warn(`preview: slots have no hub token, so their pages ask to pair (/pair). One-time setup:\n  ${setup[0]}\n  ${setup[1]}`);
 				if (r.tokenFileLoose) warn(`preview: ${r.tokenFileLoose} can be read by group or other; run chmod 600 on it (the token is still used)`);
-				if (json) log(JSON.stringify({ url: r.url, port: r.port, pid: r.pid, worktree: wt, reused: r.reused }));
+				if (json) log(JSON.stringify({ url: r.url, port: r.port, pid: r.pid, worktree: wt, reused: r.reused, ...(r.noToken ? { noToken: true, tokenSetup: setup } : {}) }));
 				else log(r.url);
 				return { exitCode: 0 };
 			}

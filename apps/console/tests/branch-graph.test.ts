@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, agentName, featureOfItem, candidateWorkIds, buildMoments, createdAt, headerStatus, branchShortId, groupRuns, isVersionTag, landedMoments, landingsFrom, parseReflog, placeLabels, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Landing, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
+import { ageLabel, agentName, featureOfItem, candidateWorkIds, buildMoments, createdAt, headerStatus, branchShortId, groupRuns, isVersionTag, landedMoments, landingsFrom, mergeNear, middleClip, placeBandLabel, parseReflog, placeLabels, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Landing, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
 import { parseLog, parsePrs, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
@@ -155,14 +155,14 @@ describe("landingsFrom", () => {
 describe("landedMoments", () => {
 	const task = (id: string, title: string) => ({ id, title, kind: "task", stage: "shipped", partOf: "work-wolfpack-Fea1111" });
 	const landing = (over: Partial<Landing>): Landing => ({ at: 500, lane: "main", source: null, sha: "x", commits: 1, workIds: [], ...over });
-	it("a feature thread rings each landing at its exact time, labelled by the tasks (or the agent when no work item is named)", () => {
+	it("a feature thread rings each landing at its exact time, labelled by the tasks; with no work item title there is no label (never a hash, branch or agent)", () => {
 		const items = { "work-wolfpack-T000001": task("work-wolfpack-T000001", "Task one") };
 		const m = landedMoments(
 			[landing({ at: 500, workIds: ["work-wolfpack-T000001"], source: "feat/Fea1111-x--worker-ab12cd34" }), landing({ at: 600, source: "feat/Fea1111-x--helper-0a1b2c3d" })],
 			items,
 			{ feature: "Fea1111", activeShortIds: [] },
 		);
-		assert.deepEqual(m.map((x) => [x.at, x.kind, x.lane, x.label, x.workIds]), [[500, "landed", "main", "Task one ✓", ["work-wolfpack-T000001"]], [600, "landed", "main", "helper ✓", []]]);
+		assert.deepEqual(m.map((x) => [x.at, x.kind, x.lane, x.label, x.workIds]), [[500, "landed", "main", "Task one ✓", ["work-wolfpack-T000001"]], [600, "landed", "main", "", []]]);
 	});
 	it("home rings landed features that are not active lanes; the feature's own landing on home shows in its thread", () => {
 		const feat = (id: string, title: string) => ({ id, title, kind: "feature", stage: "shipped", partOf: null });
@@ -189,6 +189,60 @@ describe("placeLabels", () => {
 	it("drops the later label when two on the same side of a lane would overlap, keeps others", () => {
 		const keep = placeLabels([{ key: "stable-below", x: 90, w: 40 }, { key: "stable-below", x: 0, w: 40 }, { key: "stable-below", x: 30, w: 40 }, { key: "stable-above", x: 30, w: 40 }]);
 		assert.deepEqual(keep, [true, true, false, true]);
+	});
+});
+
+describe("mergeNear", () => {
+	const at = (t: number, kind: Moment["kind"], label: string, lane = "stable", detail?: string): Moment => ({ at: t, kind, lane, label, detail });
+	const xOf = (t: number) => t;
+	it("merges release flags closer than the gap into one flag labelled with the newest version and +N; the detail lists them all", () => {
+		const m = mergeNear([at(0, "release", "v0.1.1"), at(10, "release", "v0.1.2"), at(20, "release", "v0.1.3"), at(100, "release", "v0.1.4"), at(5, "pr", "PR #1")], "release", xOf, 40);
+		assert.deepEqual(m.filter((x) => x.kind === "release").map((x) => [x.at, x.label]), [[20, "v0.1.3 +2"], [100, "v0.1.4"]]);
+		assert.equal(m.find((x) => x.label === "v0.1.3 +2")!.detail, "v0.1.1, v0.1.2, v0.1.3");
+		assert.equal(m.filter((x) => x.kind === "pr").length, 1);
+	});
+	it("merges landed rings closer than the gap on one lane into one ring with the count in the tooltip; other lanes stay apart", () => {
+		const ring = (t: number, label: string, lane = "main", ids: string[] = []): Moment => ({ ...at(t, "landed", label, lane, `from x · 1 commit`), workIds: ids });
+		const m = mergeNear([ring(0, "A ✓", "main", ["a"]), ring(5, "", "main", ["b"]), ring(9, "C ✓", "main"), ring(8, "D ✓", "home"), ring(60, "E ✓")], "landed", xOf, 12);
+		assert.deepEqual(m.map((x) => [x.lane, x.at, x.label]), [["home", 8, "D ✓"], ["main", 9, "C ✓"], ["main", 60, "E ✓"]]);
+		assert.match(m[1]!.detail!, /3 landings/);
+		assert.deepEqual(m[1]!.workIds, ["a", "b"]);
+	});
+});
+
+describe("placeBandLabel", () => {
+	it("keeps the label at the band's left, else tries the right end, else drops it to the tooltip", () => {
+		const taken = [{ key: "r", x: 100, w: 40 }];
+		assert.equal(placeBandLabel({ key: "r", left: 0, right: 400, w: 50 }, taken), 0);
+		assert.equal(placeBandLabel({ key: "r", left: 90, right: 400, w: 120 }, taken), 280);
+		assert.equal(placeBandLabel({ key: "r", left: 90, right: 200, w: 120 }, [...taken, { key: "r", x: 180, w: 10 }]), null);
+		assert.equal(placeBandLabel({ key: "other", left: 90, right: 400, w: 120 }, taken), 90);
+	});
+});
+
+describe("middleClip", () => {
+	it("keeps short text, and clips the middle of long text with an ellipsis", () => {
+		assert.equal(middleClip("wolf/1uk4", 20), "wolf/1uk4");
+		assert.equal(middleClip("feat/n73bJGY-console-polish--thread-git-graph", 21), "feat/n73bJ…-git-graph");
+		assert.equal(middleClip("feat/n73bJGY-console-polish--thread-git-graph", 21).length, 21);
+	});
+});
+
+describe("timeScale fit", () => {
+	const times = [100 * DAY - 6 * DAY, 100 * DAY - 5 * DAY, 100 * DAY - 2 * DAY, 100 * DAY - DAY];
+	it("compresses to the target width, keeping moments ordered", () => {
+		const natural = timeScale(times, NOW - 7 * DAY, NOW);
+		assert.ok(natural.width > 150);
+		const fit = timeScale(times, NOW - 7 * DAY, NOW, { width: 150, grow: false });
+		assert.ok(fit.width <= 150 + 0.001);
+		const xs = times.map(fit.x);
+		assert.deepEqual([...xs].sort((a, b) => a - b), xs);
+		assert.ok(xs[0]! > 0);
+	});
+	it("a card does not stretch a short axis, but the large view grows it to exactly the width", () => {
+		const natural = timeScale(times, NOW - 7 * DAY, NOW);
+		assert.equal(timeScale(times, NOW - 7 * DAY, NOW, { width: 5000, grow: false }).width, natural.width);
+		assert.ok(Math.abs(timeScale(times, NOW - 7 * DAY, NOW, { width: 5000, grow: true }).width - 5000) < 0.001);
 	});
 });
 

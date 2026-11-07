@@ -6,7 +6,7 @@ import { CheckIcon, CopyIcon, GitBranchIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
-import { MomentList, Swimlanes, useRings } from "@/components/branch-graph";
+import { CARD_FIT_W, FitSwimlanes, MomentList, ScrollEnd, Swimlanes, useRings } from "@/components/branch-graph";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import { headerStatus, type GitOverview } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
@@ -214,18 +214,13 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 							<>
 								{graph?.main.name ? (
 									<section data-testid="git-tree-graph" className="py-1">
-										<div
-											role="button"
-											tabIndex={0}
-											aria-label="Open the large git view"
-											title="Open the large view"
-											data-testid="git-tree-open-large"
+										<ScrollEnd
+											watch={`${graph.main.name}-card`}
 											className="cursor-pointer overflow-x-auto rounded hover:bg-accent/30"
 											onClick={() => setFull(true)}
-											onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setFull(true)}
 										>
-											<Swimlanes overview={graph} rings={rings} days={7} nowSec={nowSec} />
-										</div>
+											<Swimlanes overview={graph} rings={rings} days={7} nowSec={nowSec} fitWidth={CARD_FIT_W} />
+										</ScrollEnd>
 									</section>
 								) : (
 									status.commits.length > 0 && (
@@ -287,9 +282,9 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 						)}
 					>
 						<div className="min-h-0 flex-1 space-y-4 overflow-auto" data-testid="git-large-body">
-							<div className="overflow-x-auto rounded-xl border p-3">
-								<Swimlanes overview={graph} rings={rings} days={30} nowSec={nowSec} />
-							</div>
+							<ScrollEnd watch={`${graph.main.name}-large`} className="overflow-x-auto rounded-xl border p-3">
+								<FitSwimlanes overview={graph} rings={rings} days={30} nowSec={nowSec} />
+							</ScrollEnd>
 							<MomentList overview={graph} rings={rings} days={30} nowSec={nowSec} />
 						</div>
 					</OverlayShell>,

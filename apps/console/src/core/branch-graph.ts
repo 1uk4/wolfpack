@@ -272,12 +272,18 @@ const PX_PER_HOUR = 2;
  * Squeeze quiet stretches: a piecewise-linear time axis through the moment times where each stretch between
  * neighbours is 2px/hour, at least MIN_GAP_PX and at most MAX_GAP_PX, so busy days get the width.
  */
-export function timeScale(times: number[], start: number, end: number): { x: (t: number) => number; width: number } {
+export function timeScale(times: number[], start: number, end: number, fit?: { width: number; grow: boolean }): { x: (t: number) => number; width: number } {
 	const anchors = [...new Set([start, ...times.filter((t) => t > start && t < end), end])].sort((a, b) => a - b);
 	const xs = [0];
 	for (let i = 1; i < anchors.length; i++) {
 		const px = ((anchors[i]! - anchors[i - 1]!) / 3600) * PX_PER_HOUR;
 		xs.push(xs[i - 1]! + Math.min(MAX_GAP_PX, Math.max(MIN_GAP_PX, px)));
+	}
+	// Fit a target width: shrink when too wide; grow only when asked (the large view).
+	const natural = xs[xs.length - 1]!;
+	if (fit && natural > 0 && (natural > fit.width || fit.grow)) {
+		const k = fit.width / natural;
+		for (let i = 0; i < xs.length; i++) xs[i] = xs[i]! * k;
 	}
 	const x = (t: number): number => {
 		if (t <= start) return 0;
@@ -288,6 +294,61 @@ export function timeScale(times: number[], start: number, end: number): { x: (t:
 		return x0 + ((t - a0) / (a1 - a0)) * (x1 - x0);
 	};
 	return { x, width: xs[xs.length - 1]! };
+}
+
+/**
+ * Merge moments of one `kind` that sit closer than `gap` px on the same lane into one marker at the newest time.
+ * Releases: labelled with the newest version and `+N`, the detail lists every version. Landed rings: the newest
+ * non-empty label, the detail says how many landings, work IDs are united. Other kinds pass through untouched.
+ */
+export function mergeNear(moments: Moment[], kind: MomentKind, xOf: (t: number) => number, gap: number): Moment[] {
+	const rest = moments.filter((m) => m.kind !== kind);
+	const groups: Moment[][] = [];
+	const lastOfLane = new Map<string, Moment[]>();
+	for (const m of moments.filter((x) => x.kind === kind).sort((a, b) => a.at - b.at)) {
+		const g = lastOfLane.get(m.lane);
+		if (g && xOf(m.at) - xOf(g[g.length - 1]!.at) < gap) g.push(m);
+		else {
+			const ng = [m];
+			groups.push(ng);
+			lastOfLane.set(m.lane, ng);
+		}
+	}
+	const merged = groups.map((g): Moment => {
+		const newest = g[g.length - 1]!;
+		if (g.length === 1) return newest;
+		if (kind === "release") return { ...newest, label: `${newest.label} +${g.length - 1}`, detail: g.map((m) => m.label).join(", ") };
+		const labelled = [...g].reverse().find((m) => m.label !== "");
+		const ids = [...new Set(g.flatMap((m) => m.workIds ?? []))];
+		return { ...newest, label: labelled?.label ?? "", workId: ids[0] ?? null, workIds: ids, detail: [`${g.length} landings`, ...g.map((m) => m.detail).filter(Boolean)].join(" · ") };
+	});
+	return [...rest, ...merged].sort((a, b) => a.at - b.at);
+}
+
+/** A label already placed (or to place) on one side of a lane: `key` names the region, `x` its left edge, `w` its width. */
+export interface PlacedLabel {
+	key: string;
+	x: number;
+	w: number;
+}
+
+/**
+ * Where a band's label goes: at the band's left edge if it clears the labels already placed in its region, else
+ * right-aligned at the band's end, else null (the tooltip only).
+ */
+export function placeBandLabel(band: { key: string; left: number; right: number; w: number }, taken: PlacedLabel[], gap = 4): number | null {
+	const free = (x: number) => !taken.some((t) => t.key === band.key && x < t.x + t.w + gap && t.x < x + band.w + gap);
+	if (free(band.left)) return band.left;
+	const right = band.right - band.w;
+	return right > band.left && free(right) ? right : null;
+}
+
+/** Clip long text in the middle: `feat/n73bJ…git-graph`. */
+export function middleClip(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const keep = max - 1;
+	const head = Math.ceil(keep / 2);
+	return `${text.slice(0, head)}…${text.slice(text.length - (keep - head))}`;
 }
 
 // ---- reflog: exact times for splits and landings -------------------------------------------------------------------
@@ -397,9 +458,9 @@ export function landedMoments(landings: Landing[], items: Record<string, ShipSub
 		else relevant = subs.filter((s) => s.kind === "feature" && !ctx.activeShortIds.includes(s.id.slice(-7)));
 		if (ctx.feature !== null && l.lane === "home" && relevant.length === 0) continue;
 		if (ctx.feature === null && l.workIds.length > 0 && relevant.length === 0) continue;
-		const who = l.source ? (l.source.includes("--") ? agentName(l.source) : /^[0-9a-f]{7,40}$/.test(l.source) ? l.source.slice(0, 7) : l.source) : "landed";
+		// Only a work item title labels a ring; with none it is a ring and a tooltip (never a hash, branch or agent).
 		const shown = ctx.feature !== null && l.lane === "home" ? relevant.filter((s) => s.id.endsWith(ctx.feature!)) : relevant;
-		const label = (shown.length > 0 ? `${shown[0]!.title}${shown.length > 1 ? ` +${shown.length - 1}` : ""}` : who) + " ✓";
+		const label = shown.length > 0 ? `${shown[0]!.title}${shown.length > 1 ? ` +${shown.length - 1}` : ""} ✓` : "";
 		out.push({
 			at: l.at,
 			kind: "landed",

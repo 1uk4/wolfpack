@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { WorkIdChip, lookupWorkItem } from "@/components/work-id-chip";
-import { agentName, branchShortId, buildMoments, candidateWorkIds, featureOfItem, landedMoments, placeLabels, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
+import { agentName, branchShortId, buildMoments, candidateWorkIds, featureOfItem, landedMoments, mergeNear, middleClip, placeBandLabel, placeLabels, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
 
 const LANE_H = 22;
-const LABEL_W = 150;
+/** Lane-label column widths: the card, and the large view. */
+export const CARD_LABEL_W = 150;
+export const LARGE_LABEL_W = 200;
+/** The card's whole SVG is fitted to about this width (the axis is compressed, never stretched). */
+export const CARD_FIT_W = 600;
+const CHAR_PX = 6.6;
+const FLAG_GAP = 40;
+const RING_GAP = 12;
 const TOP = 16;
 const BOTTOM = 18;
 const PAD_L = 8;
@@ -41,16 +48,51 @@ function useBranchTitle(shortId: string | null): string | undefined {
 	return title;
 }
 
-/** A lane's label: the agent name for a subagent, the work item title for a feature, else the branch name. */
-function LaneLabel({ lane, y }: { lane: SwimLane; y: number }) {
+/** A lane's label: the agent name for a subagent, the work item title for a feature, else the branch name. The full text is the tooltip. */
+function LaneLabel({ lane, y, labelW }: { lane: SwimLane; y: number; labelW: number }) {
 	const subagent = lane.role === "child";
 	const title = useBranchTitle(!subagent && (lane.role === "main" || lane.role === "sibling" || lane.role === "feature") ? branchShortId(lane.name) : null);
-	const text = subagent ? agentName(lane.name) : (title ?? lane.name);
+	const max = Math.max(8, Math.floor((labelW - PAD_L - 6) / CHAR_PX));
+	const text = subagent ? clip(agentName(lane.name), max) : title ? clip(title, max) : middleClip(lane.name, max);
 	return (
 		<text x={PAD_L} y={y + 4} fontSize={11} fill={COLORS[lane.role]} fontWeight={lane.bold ? 600 : 400}>
-			<title>{lane.name}</title>
-			{clip(text, 20)}
+			<title>{title ? `${title}\n${lane.name}` : lane.name}</title>
+			{text}
 		</text>
+	);
+}
+
+/** A scroll box that opens at its right end ("now") and returns there when `watch` changes. */
+export function ScrollEnd({ watch, className, children, onClick }: { watch: string; className?: string; children: ReactNode; onClick?: () => void }) {
+	const ref = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (el) el.scrollLeft = el.scrollWidth;
+	}, [watch]);
+	return (
+		<div ref={ref} className={className} onClick={onClick} data-testid="swimlane-scroll">
+			{children}
+		</div>
+	);
+}
+
+/** The large view's graph: its 30-day axis is fitted to the measured container width, so "now" sits at the right edge. */
+export function FitSwimlanes({ overview, rings, days, nowSec }: { overview: GitOverview; rings: Moment[]; days: number; nowSec: number }) {
+	const ref = useRef<HTMLDivElement>(null);
+	const [w, setW] = useState(0);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		setW(el.clientWidth);
+		if (typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => setW(el.clientWidth));
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	return (
+		<div ref={ref} className="w-full">
+			{w > 0 && <Swimlanes overview={overview} rings={rings} days={days} nowSec={nowSec} labelW={LARGE_LABEL_W} fitWidth={w} grow />}
+		</div>
 	);
 }
 
@@ -110,20 +152,22 @@ const dayLabel = (t: number, days: number): string => {
  * Time swimlanes of significant moments, left to right, "now" at the right edge. Fixed pixel sizes (11px text, 22px
  * lanes): the card never scales with its width. Quiet stretches are squeezed so busy days get the room.
  */
-export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOverview; rings: Moment[]; days: number; nowSec: number }) {
+export function Swimlanes({ overview, rings, days, nowSec, labelW = CARD_LABEL_W, fitWidth, grow = false }: { overview: GitOverview; rings: Moment[]; days: number; nowSec: number; labelW?: number; fitWidth?: number; grow?: boolean }) {
 	const lanes = swimLanes(overview);
 	const start = nowSec - days * DAY;
-	const moments = buildMoments(overview, rings, nowSec, days);
+	const raw = buildMoments(overview, rings, nowSec, days);
 	const sinceOf = (s: { count: number; since: number | null } | null) => (s && s.count > 0 && s.since !== null ? s.since : null);
 	const unreleasedSince = sinceOf(overview.unreleased);
 	const unmergedSince = overview.main.kind === "feature" ? sinceOf(overview.unmerged) : null;
-	const times = [...moments.map((m) => m.at), ...[unreleasedSince, unmergedSince].filter((t): t is number => t !== null && t > start)];
-	const scale = timeScale(times, start, nowSec);
-	const x0 = LABEL_W;
+	const times = [...raw.map((m) => m.at), ...[unreleasedSince, unmergedSince].filter((t): t is number => t !== null && t > start)];
+	const scale = timeScale(times, start, nowSec, fitWidth ? { width: Math.max(80, fitWidth - labelW - PAD_R), grow } : undefined);
+	const x0 = labelW;
 	const x = (t: number) => x0 + scale.x(t);
 	const x1 = x(nowSec);
 	const width = x1 + PAD_R;
 	const height = TOP + lanes.length * LANE_H + BOTTOM;
+	// Flags closer than ~40px become one flag (+N), rings closer than ~12px one ring (the count in its tooltip).
+	const moments = mergeNear(mergeNear(raw, "release", (t) => x(t), FLAG_GAP), "landed", (t) => x(t), RING_GAP);
 	const laneIndex = new Map(lanes.map((l, i) => [l.name, i]));
 	const y = (name: string) => TOP + (laneIndex.get(name) ?? 0) * LANE_H + LANE_H / 2;
 	const mainName = overview.main.name;
@@ -144,26 +188,34 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 			lastX = tx;
 		}
 	}
-	const band = (since: number, laneName: string, label: string, key: string) => {
-		const bx = x(Math.max(since, start));
-		return (
-			<g key={key} data-testid="swimlane-band">
-				<rect x={bx} y={y(laneName) - 5} width={Math.max(2, x1 - bx)} height={10} rx={5} fill="#ffffff" fillOpacity={0.12} />
-				<text x={bx} y={y(laneName) + 19} fontSize={10} fill="#9ca3af">{label}</text>
-			</g>
-		);
-	};
-	// Labels never draw over each other: the later of two overlapping labels on one side of a lane is dropped (the marker and its tooltip stay).
+	// Labels never draw over each other: within one band between lanes, the later of two overlapping labels is dropped
+	// (the marker and its tooltip stay). A region is the space below a lane, which is also the space above the next.
 	const CHAR_W = 6;
+	const regionOf = (name: string, side: "above" | "below") => `r${(laneIndex.get(name) ?? 0) + (side === "below" ? 0 : -1)}`;
 	const labelSpec = (m: Moment, i: number) => {
 		const mx = x(m.at);
 		const text = m.kind === "landed" ? clip(m.label, 24) : m.label;
 		const left = m.kind === "pr" ? mx + 6 : m.kind === "release" ? mx + 13 : mx - 16;
 		const side = m.kind === "pr" ? "below" : "above";
-		return { i, key: `${laneOf(m)}-${side}`, x: left, w: text.length * CHAR_W };
+		return { i, key: regionOf(laneOf(m), side), x: left, w: text.length * CHAR_W };
 	};
-	const labelled = moments.map(labelSpec).filter((_, k) => moments[k]!.kind !== "split");
-	const kept = new Set(placeLabels(labelled).flatMap((ok, k) => (ok ? [labelled[k]!.i] : [])));
+	const labelled = moments.map((m, i) => ({ m, i })).filter(({ m }) => m.kind !== "split" && m.label !== "").map(({ m, i }) => labelSpec(m, i));
+	const okLabels = placeLabels(labelled);
+	const kept = new Set(labelled.flatMap((l, k) => (okLabels[k] ? [l.i] : [])));
+	const taken = labelled.filter((_, k) => okLabels[k]);
+	const bandOf = (since: number, laneName: string, label: string, key: string) => {
+		const bx = x(Math.max(since, start));
+		const w = label.length * CHAR_W;
+		const lx = placeBandLabel({ key: regionOf(laneName, "below"), left: bx, right: x1, w }, taken);
+		return (
+			<g key={key} data-testid="swimlane-band">
+				<rect x={bx} y={y(laneName) - 5} width={Math.max(2, x1 - bx)} height={10} rx={5} fill="#ffffff" fillOpacity={0.12}>
+					<title>{label}</title>
+				</rect>
+				{lx !== null && <text x={lx} y={y(laneName) + 19} fontSize={10} fill="#9ca3af">{label}</text>}
+			</g>
+		);
+	};
 	return (
 		<svg data-testid="branch-graph" role="img" aria-label="Git swimlanes" width={width} height={height} className="font-mono" style={{ minWidth: width }}>
 			<line x1={x1} x2={x1} y1={TOP - 6} y2={height - BOTTOM + 4} stroke="#9ca3af" strokeOpacity={0.5} strokeDasharray="3 3" />
@@ -176,7 +228,7 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 				const fx = enters ? x0 : x(l.forkAt!);
 				return (
 					<g key={l.name} data-testid="branch-graph-lane" data-kind={l.role}>
-						<LaneLabel lane={l} y={ly} />
+						<LaneLabel lane={l} y={ly} labelW={labelW} />
 						{l.parent && !enters && (
 							<>
 								<circle cx={fx} cy={y(l.parent)} r={DOT} fill={color} />
@@ -188,8 +240,8 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 					</g>
 				);
 			})}
-			{unreleasedSince !== null && overview.unreleased && band(unreleasedSince, overview.home, `unreleased · ${overview.unreleased.count} commits`, "unreleased")}
-			{unmergedSince !== null && overview.unmerged && band(unmergedSince, mainName, `unmerged · ${overview.unmerged.count} commits`, "unmerged")}
+			{unreleasedSince !== null && overview.unreleased && bandOf(unreleasedSince, overview.home, `unreleased · ${overview.unreleased.count} commits`, "unreleased")}
+			{unmergedSince !== null && overview.unmerged && bandOf(unmergedSince, mainName, `unmerged · ${overview.unmerged.count} commits`, "unmerged")}
 			{moments.map((m, i) => {
 				const mx = x(m.at);
 				const my = y(laneOf(m));

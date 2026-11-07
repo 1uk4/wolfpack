@@ -185,6 +185,32 @@ describe("buildWorkTable: graduated toggle", () => {
 		assert.deepEqual(ids(old.children), ["oldt"]);
 		assert.equal(none.children.find((r) => r.id === "f3")!.graduated, false);
 	});
+	describe("children of a graduated parent", () => {
+		const fx = [
+			item("gi", "initiative", { graduated: "2026-11-07" }),
+			item("gf", "feature", { partOf: "gi", stage: "archived", graduated: "2026-11-07" }),
+			item("gt", "task", { partOf: "gf", stage: "shipped" }),
+			item("lf", "feature", { stage: "archived", graduated: "2026-11-07" }),
+			item("lt", "task", { partOf: "lf", stage: "shipped" }),
+			item("inbox", "feature", { container: true, title: "Inbox" }),
+			item("it", "task", { partOf: "inbox", stage: "shipped" }),
+		];
+		const all = (t: ReturnType<typeof buildWorkTable>): string[] => {
+			const walk = (rs: { id: string; children: any[] }[]): string[] => rs.flatMap((r) => [r.id, ...walk(r.children)]);
+			return walk(t.groups);
+		};
+		it("are hidden with it (transitively), while Inbox items stay", () => {
+			const t = buildWorkTable(fx);
+			assert.deepEqual(all(t).filter(Boolean), ["it"]);
+			assert.equal(t.count, 1);
+		});
+		it("nest under it when the toggle is on", () => {
+			const t = buildWorkTable(fx, { showGraduated: true });
+			const lf = t.groups.find((g) => g.key === NO_INITIATIVE_KEY)!.children.find((r) => r.id === "lf")!;
+			assert.deepEqual(ids(lf.children), ["lt"]);
+			assert.ok(!ids(t.groups.find((g) => g.key === NO_INITIATIVE_KEY)!.children).includes("lt"));
+		});
+	});
 	it("counts rows after the filters", () => {
 		assert.equal(buildWorkTable(items).count, 7);
 		assert.equal(buildWorkTable(items, { showGraduated: true }).count, 9);

@@ -135,8 +135,13 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 	const query = (opts.query ?? "").trim();
 	const searching = query !== "";
 
-	const live = items.filter((it) => !isInboxContainer(it) && (showGraduated || !isGraduated(it)));
 	const byId = new Map(items.map((it) => [it.id, it] as const));
+	// Hidden along with a graduated/archived ancestor (any depth); Inbox containers are not real parents.
+	const underGraduated = (it: WorkListItem): boolean => {
+		for (let p = it.partOf ? byId.get(it.partOf) : undefined, n = 0; p && !isInboxContainer(p) && n < 10; p = p.partOf ? byId.get(p.partOf) : undefined, n++) if (isGraduated(p)) return true;
+		return false;
+	};
+	const live = items.filter((it) => !isInboxContainer(it) && (showGraduated || (!isGraduated(it) && !underGraduated(it))));
 	const liveIds = new Set(live.map((it) => it.id));
 
 	// A prerequisite that is not done blocks; one missing from the payload (hidden, other domain) does not.

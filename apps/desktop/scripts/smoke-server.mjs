@@ -66,7 +66,7 @@ function probeEnv(env, home) {
 	const clean = Object.fromEntries(Object.entries(env).filter(([key]) =>
 		!/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key) &&
 		!/^(AWS_|GOOGLE_|GCLOUD_|CLOUDSDK_|AZURE_|ANTHROPIC_|OPENAI_|OPENROUTER_|GEMINI_)/.test(key) &&
-		!["NODE_OPTIONS", "NODE_PATH", "WOLFPACK_DEV_URL", "LH_DEV_URL", "ELECTRON_RUN_AS_NODE"].includes(key)));
+		!["NODE_OPTIONS", "NODE_PATH", "WOLFPACK_DEV_URL", "ELECTRON_RUN_AS_NODE"].includes(key)));
 	return {
 		...clean,
 		HOME: home, USERPROFILE: home,
@@ -95,7 +95,7 @@ function get(url) {
 async function main() {
 	const port = await freePort();
 	const url = `http://127.0.0.1:${port}`;
-	const home = fs.mkdtempSync(path.join(os.tmpdir(), "lh-smoke-"));
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "wp-smoke-"));
 	const dataDir = path.join(home, "data");
 	const authFile = path.join(home, "auth.json");
 	fs.writeFileSync(authFile, "{}\n", "utf-8");

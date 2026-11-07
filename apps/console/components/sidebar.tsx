@@ -65,26 +65,33 @@ const SIDEBAR_AUTOCLOSE = 928;
 // Module scope, guarded for SSR (the server has no navigator).
 const IS_ELECTRON = typeof navigator !== "undefined" && navigator.userAgent.includes("Electron");
 
+type DesktopBridgeApi = {
+	/** Read-only host OS; determines the native-control gutter. */
+	platform?: string;
+	expandWindow: () => void;
+	/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
+	onZoom?: (cb: (factor: number) => void) => () => void;
+	getZoom?: () => Promise<number>;
+	/** Auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes once a staged update exists. */
+	onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
+	installUpdate?: () => void;
+	/** Needs-you notification (ticket 4): main shows it only while the window is unfocused, once per `key`. */
+	notify?: (n: { key: string; title: string; body: string; href: string }) => void;
+	/** The OS notification was clicked: main focused the window; open this href. Returns unsubscribe. */
+	onNavigate?: (cb: (href: string) => void) => () => void;
+};
+
 declare global {
 	interface Window {
 		/** Preload bridge (electron/preload.cjs) — Electron only, absent in the browser. */
-		lh?: {
-			/** Read-only host OS; determines the native-control gutter. */
-			platform?: string;
-			expandWindow: () => void;
-			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
-			onZoom?: (cb: (factor: number) => void) => () => void;
-			getZoom?: () => Promise<number>;
-			/** Auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes once a staged update exists. */
-			onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
-			installUpdate?: () => void;
-			/** Needs-you notification (ticket 4): main shows it only while the window is unfocused, once per `key`. */
-			notify?: (n: { key: string; title: string; body: string; href: string }) => void;
-			/** The OS notification was clicked: main focused the window; open this href. Returns unsubscribe. */
-			onNavigate?: (cb: (href: string) => void) => () => void;
-		};
+		wolfpack?: DesktopBridgeApi;
+		lh?: DesktopBridgeApi; // legacy window.lh shim, remove after the next desktop release
 	}
 }
+
+/** The desktop preload bridge: `window.wolfpack`, or the old preload's `window.lh`. */
+export const desktopBridge = (): DesktopBridgeApi | undefined =>
+	typeof window === "undefined" ? undefined : (window.wolfpack ?? window.lh); // legacy window.lh shim, remove after the next desktop release
 
 const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean; closeList: () => void; registerToggle: () => () => void }>({
 	open: false,
@@ -119,7 +126,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		// and in the plain browser the class never appears.
 		if (IS_ELECTRON) {
 			document.documentElement.classList.add("lh-electron");
-			document.documentElement.dataset.lhPlatform = window.lh?.platform ?? "";
+			document.documentElement.dataset.lhPlatform = desktopBridge()?.platform ?? "";
 		}
 
 		// THE ZOOM TRUTH (owner round 7, 2026-10-05): ⌘±/⌘0 zoom the UI
@@ -129,8 +136,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		// race; every later change arrives as an lh:zoom push.
 		const setZoomVar = (factor: number) =>
 			document.documentElement.style.setProperty("--lh-zoom", String(factor));
-		const off = window.lh?.onZoom?.(setZoomVar);
-		void window.lh?.getZoom?.().then(setZoomVar);
+		const off = desktopBridge()?.onZoom?.(setZoomVar);
+		void desktopBridge()?.getZoom?.().then(setZoomVar);
 
 		// Default: open (first run introduces the sidebar). A phone starts on the list at "/".
 		const mq = typeof window.matchMedia === "function" ? window.matchMedia(MOBILE_QUERY) : null; // absent in the DOM test shims
@@ -180,7 +187,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		if (narrow && !open) {
 			localStorage.setItem(STORAGE_KEY, "0");
 			setOpen(true);
-			window.lh?.expandWindow();
+			desktopBridge()?.expandWindow();
 			return;
 		}
 		if (mobile) return setOpen((v) => !v); // a phone's list layer is transient: no persisted preference

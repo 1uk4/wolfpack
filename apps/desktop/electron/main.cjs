@@ -38,10 +38,6 @@ const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs")
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
-// legacy LH_ name fallback, remove after 2026-12-05.
-// MUST stay in sync with apps/console/env-compat.ts (same semantics).
-const readEnv = (name, legacy) => process.env[name] || process.env[legacy] || undefined;
-
 const PRODUCT_NAME = "Wolfpack Console";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
@@ -68,7 +64,7 @@ function serverEntry() {
 // its own userData so (a) the single-instance lock — checked below — doesn't
 // silently kill it, and (b) it never reads/writes the real app's
 // localStorage, auth.json, or logs. Must run before the lock check.
-if (readEnv("WOLFPACK_DEV_URL", "LH_DEV_URL")) {
+if (process.env.WOLFPACK_DEV_URL || undefined) {
 	app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 // One-time copy from the pre-rename userData folder (see userdata-migrate.cjs).
@@ -132,7 +128,7 @@ function log(line) {
 	// piped run) must not die on its next log line when the pipe breaks.
 	// The file below stays the durable channel.
 	try {
-		console.log(`[lh ${stamp}] ${line}`);
+		console.log(`[wolfpack ${stamp}] ${line}`);
 	} catch {
 		/* stdout gone — userData/logs/main.log still carries it */
 	}
@@ -228,13 +224,13 @@ function createWindow(url) {
 		title: PRODUCT_NAME,
 		// Merged chrome (owner, 2026-09-17): the system title bar is gone;
 		// the app's own 60px header bands ARE the title bar. The traffic
-		// lights float over the sidebar's LH wordmark band, vertically
+		// lights float over the sidebar's wordmark band, vertically
 		// Aligned to the PHASE PILL's drawn box, not the band's geometric
 		// center (owner ask, 2026-09-17): macOS centers each 12px circle at
 		// y+6.75, and the pill box center measures 29.25 in the running app
 		// (band 0–59.5, pill box 19–39.5) — y 22.5 lands the circles at
 		// 29.25, exactly on the pill. Wordmark gutter: components/sidebar.tsx.
-		// Dragging comes from the renderer's .lh-drag bands (app/globals.css).
+		// Dragging comes from the renderer's .wp-drag bands (app/globals.css).
 		...(process.platform === "darwin"
 			? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 22.5 } }
 			: {
@@ -266,7 +262,7 @@ function createWindow(url) {
 		// below it even a wrapped chrome row gets cramped and the chat header
 		// (lights gutter 92 + toggle + title) runs out of room. The sidebar
 		// auto-closes below 928 = 640 + 288 (sidebar) in the renderer
-		// (components/sidebar.tsx, SIDEBAR_AUTOCLOSE); its "lh:expand-window"
+		// (components/sidebar.tsx, SIDEBAR_AUTOCLOSE); its "wolfpack:expand-window"
 		// IPC widens the window back to that threshold.
 		minWidth: 640,
 		minHeight: 600,
@@ -293,7 +289,7 @@ function createWindow(url) {
 	});
 
 	win.webContents.on("will-navigate", (event, target) => {
-		if (remoteTarget && target.startsWith("lh-retry:")) return;
+		if (remoteTarget && target.startsWith("wolfpack-retry:")) return;
 		if (new URL(target).origin !== allowedOrigin()) {
 			event.preventDefault();
 			void shell.openExternal(target);
@@ -314,21 +310,21 @@ function createWindow(url) {
 			log(`remote unreachable (${code}): ${failedUrl}`);
 			void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorPageHtml(url))}`);
 		});
-		// The error page's Retry link (lh-retry://) is intercepted: reload the remote.
+		// The error page's Retry link (wolfpack-retry://) is intercepted: reload the remote.
 		win.webContents.on("will-navigate", (event, target) => {
-			if (target.startsWith("lh-retry:")) {
+			if (target.startsWith("wolfpack-retry:")) {
 				event.preventDefault();
 				void win.loadURL(url);
 			}
 		});
 	}
 	// Zoom truth reaches the renderer for EVERY load (reload, nav): the
-	// renderer's --lh-zoom must never go stale. The fallback catcher below
+	// renderer's --wp-zoom must never go stale. The fallback catcher below
 	// covers ⌘= / layout variants the menu's ⌘Plus may not claim — menu-
 	// claimed keys never reach before-input-event, so exactly one of the
 	// two applies any given zoom keypress.
 	win.webContents.on("did-finish-load", () => {
-		win.webContents.send("lh:zoom", win.webContents.getZoomFactor());
+		win.webContents.send("wolfpack:zoom", win.webContents.getZoomFactor());
 	});
 	win.webContents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown" || !(input.meta || input.control)) return;
@@ -349,8 +345,8 @@ function createWindow(url) {
  * hiddenInset) drift out of relation to the scaled chrome: the graph
  * button rides away from them zoomed in, content slides under them
  * zoomed out. Here zoom is explicit: a factor ladder, applied through
- * setZoomFactor, and broadcast to the renderer ("lh:zoom" — it publishes
- * --lh-zoom so gutter lengths can divide by it and stay PHYSICAL-
+ * setZoomFactor, and broadcast to the renderer ("wolfpack:zoom" — it publishes
+ * --wp-zoom so gutter lengths can divide by it and stay PHYSICAL-
  * constant). The traffic lights themselves stay at their construction
  * position ({x:16, y:22.5} — Electron 44 has NO runtime setter, only
  * the BrowserWindow option), which is HIG-correct anyway: native lights
@@ -383,7 +379,7 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
  *
  * Install path: the downloaded update applies on quit (autoInstallOnAppQuit
  * — Squirrel.Mac stages natively and swaps on relaunch). The renderer
- * banner asks for an immediate restart via "lh:update-install"; we kill
+ * banner asks for an immediate restart via "wolfpack:update-install"; we kill
  * the child server FIRST — deterministic ordering: the server lives
  * inside the .app bundle Squirrel is about to replace (extraResources),
  * and before-quit alone would race the swap. */
@@ -393,7 +389,7 @@ let autoUpdater = null; // electron-updater's, packaged builds only
 function broadcastUpdateStatus(status) {
 	for (const win of BrowserWindow.getAllWindows()) {
 		try {
-			win.webContents.send("lh:update-status", status);
+			win.webContents.send("wolfpack:update-status", status);
 		} catch {
 			/* window mid-teardown — the next push retries */
 		}
@@ -438,7 +434,7 @@ function setupAutoUpdater() {
 		log(`auto-update: electron-updater unavailable (${err?.message ?? err}) — updates disabled`);
 		return;
 	}
-	const feed = readEnv("WOLFPACK_UPDATE_FEED", "LH_UPDATE_FEED");
+	const feed = process.env.WOLFPACK_UPDATE_FEED || undefined;
 	if (feed) {
 		autoUpdater.setFeedURL({ provider: "generic", url: feed });
 		log(`auto-update: WOLFPACK_UPDATE_FEED override → ${feed}`);
@@ -472,7 +468,7 @@ function zoomStep(win, dir) {
 function applyZoom(win, factor) {
 	factor = Math.min(2, Math.max(0.75, factor)); // ladder clamps; ⌘0 = 1
 	win.webContents.setZoomFactor(factor);
-	win.webContents.send("lh:zoom", factor);
+	win.webContents.send("wolfpack:zoom", factor);
 }
 
 /** macOS needs an application menu with the Edit roles — without one,
@@ -513,7 +509,7 @@ function installMenu() {
 				{ type: "separator" },
 				// OWNED zoom (see applyZoom): the roles change zoomLevel
 				// silently; these broadcast the factor and re-seat the
-				// traffic lights. The renderer's --lh-zoom depends on
+				// traffic lights. The renderer's --wp-zoom depends on
 				// hearing every change.
 				{
 					label: "Actual Size",
@@ -557,7 +553,7 @@ async function main() {
 	// (guards, menu, single instance).
 	// Remote mode (WOLFPACK_CONSOLE_URL / console.json consoleUrl, see remote.cjs):
 	// no server spawn, no DATA_DIR/auth.json. WOLFPACK_DEV_URL takes precedence.
-	const devUrl = readEnv("WOLFPACK_DEV_URL", "LH_DEV_URL");
+	const devUrl = process.env.WOLFPACK_DEV_URL || undefined;
 	const target = devUrl ? { mode: "local" } : resolveConsoleTarget({ env: process.env, userDataDir: app.getPath("userData"), log });
 	remoteTarget = target.mode === "remote";
 	if (remoteTarget) remoteUrl = target.url;
@@ -581,10 +577,10 @@ async function main() {
 	// interval fire after it below. setupAutoUpdater's contract: failures
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
-	ipcMain.on("lh:update-install", () => installUpdateNow());
+	ipcMain.on("wolfpack:update-install", () => installUpdateNow());
 	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
 	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
-	ipcMain.on("lh:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));
+	ipcMain.on("wolfpack:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));
 
 	// Sidebar-at-narrow-window (owner, 2026-09-17): the renderer auto-closes
 	// the sidebar below SIDEBAR_AUTOCLOSE (928px); opening it again at that
@@ -592,9 +588,9 @@ async function main() {
 	// accommodate a narrow window + open sidebar. Top-left stays fixed, the
 	// window grows right. No-op when already wide.
 	// The renderer's first paint can race did-finish-load — it asks for
-	// the current factor itself (mirrors "lh:zoom" pushes).
-	ipcMain.handle("lh:zoom:get", (event) => BrowserWindow.fromWebContents(event.sender)?.webContents.getZoomFactor() ?? 1);
-	ipcMain.on("lh:expand-window", (event) => {
+	// the current factor itself (mirrors "wolfpack:zoom" pushes).
+	ipcMain.handle("wolfpack:zoom:get", (event) => BrowserWindow.fromWebContents(event.sender)?.webContents.getZoomFactor() ?? 1);
+	ipcMain.on("wolfpack:expand-window", (event) => {
 		const win = BrowserWindow.fromWebContents(event.sender);
 		if (!win) return;
 		const { x, y, width, height } = win.getBounds();

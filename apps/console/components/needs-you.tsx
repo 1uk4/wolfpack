@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BellIcon, BellOffIcon } from "lucide-react";
+import { desktopBridge } from "@/components/sidebar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { browserNotifyState, deliverNotification, setBrowserNotify, type BrowserNotifyState } from "@/components/needs-you-notify";
 import { INITIAL_NOTIFY_STATE, itemKey, mergeReport, planNotifications, type NeedsYouItem, type NotifyState } from "@/src/core";
@@ -124,7 +125,7 @@ export function NeedsYouNotifier(): null {
 	useServerResync(() => void load());
 
 	// Electron: a clicked OS notification focuses the window and asks us to open its thread.
-	useEffect(() => window.lh?.onNavigate?.((href) => router.push(href)), [router]);
+	useEffect(() => desktopBridge()?.onNavigate?.((href) => router.push(href)), [router]);
 
 	return null;
 }

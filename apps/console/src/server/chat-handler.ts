@@ -1,4 +1,3 @@
-import { readEnv } from "../../env-compat.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createAssistantAgent, type AgentBuildOptions, type AssistantAgent } from "../agent/assistant-agent.ts";
 import { piEngineForSpec } from "../agent/models.ts";
@@ -291,7 +290,7 @@ export async function handleChatInput(
 		// JSONL event stream with the record's turns; no-op unless
 		// WOLFPACK_PROVIDER_EVENTS=1.
 		providerEventNote(chatId, "turn", `run start (base: ${merged.length} messages)`);
-		const updateFlushEnv = readEnv("WOLFPACK_UPDATE_FLUSH_MS", "LH_UPDATE_FLUSH_MS");
+		const updateFlushEnv = process.env.WOLFPACK_UPDATE_FLUSH_MS || undefined;
 		const handle = runPiTurn({
 			agent: constructed,
 			// The coalescing window seam (COMPACTION LAW, 2026-10-09): tests

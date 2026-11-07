@@ -1,10 +1,11 @@
 import type { NeedsYouNotification } from "@/src/core";
+import { desktopBridge } from "@/components/sidebar";
 
 /**
  * Delivering a needs-you notification (the decision — which cards, when — is the pure planNotifications in the core).
  *
- * Electron: the renderer hands the notification to the main process (window.lh.notify), which shows the OS
- * notification only while the window is unfocused and focuses the window + sends the click's href back (window.lh.onNavigate).
+ * Electron: the renderer hands the notification to the main process (window.wolfpack.notify), which shows the OS
+ * notification only while the window is unfocused and focuses the window + sends the click's href back (window.wolfpack.onNavigate).
  * Plain browser: the Web Notifications API, behind an opt-in toggle (localStorage) AND the browser's granted permission;
  * without both, nothing fires. A click focuses the tab and navigates.
  */
@@ -14,7 +15,7 @@ export const NOTIFY_PREF_KEY = "lh:notify-needs-you";
 const webSupported = (): boolean => typeof window !== "undefined" && typeof Notification !== "undefined";
 
 /** True inside the Electron shell (its preload exposes `notify`). */
-export const isDesktopNotify = (): boolean => typeof window !== "undefined" && typeof window.lh?.notify === "function";
+export const isDesktopNotify = (): boolean => typeof window !== "undefined" && typeof desktopBridge()?.notify === "function";
 
 /** The toggle is only offered in a browser that can show notifications. */
 export const canToggleBrowserNotify = (): boolean => !isDesktopNotify() && webSupported();
@@ -61,7 +62,7 @@ export async function setBrowserNotify(on: boolean): Promise<boolean> {
 /** Show one notification. `navigate` opens the thread when a browser notification is clicked. */
 export function deliverNotification(n: NeedsYouNotification, navigate: (href: string) => void): void {
 	if (isDesktopNotify()) {
-		window.lh!.notify!({ key: n.key, title: n.title, body: n.body, href: n.href });
+		desktopBridge()!.notify!({ key: n.key, title: n.title, body: n.body, href: n.href });
 		return;
 	}
 	if (!browserNotifyEnabled()) return;

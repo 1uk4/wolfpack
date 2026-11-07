@@ -1,4 +1,3 @@
-import { readEnv } from "./env-compat.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,7 +14,7 @@ export const ROOT = path.dirname(fileURLToPath(import.meta.url));
  * byte-for-byte as before. Read-only assets (prompts) stay ROOT-anchored
  * on purpose: they ship inside the app bundle by design.
  */
-const DATA_DIR_ENV = readEnv("WOLFPACK_DATA_DIR", "LH_DATA_DIR");
+const DATA_DIR_ENV = process.env.WOLFPACK_DATA_DIR || undefined;
 const DATA_ROOT = DATA_DIR_ENV ? path.resolve(DATA_DIR_ENV) : path.join(ROOT, "data");
 
 export const PATHS = {
@@ -99,7 +98,7 @@ export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
  * re-read from disk on every API access. Secrets NEVER go in settings.json
  * — this file keeps that role, alongside .env.local.
  */
-const AUTH_FILE_ENV = readEnv("WOLFPACK_AUTH_FILE", "LH_AUTH_FILE");
+const AUTH_FILE_ENV = process.env.WOLFPACK_AUTH_FILE || undefined;
 export const AUTH_FILE = AUTH_FILE_ENV
 	? path.resolve(AUTH_FILE_ENV)
 	: DATA_DIR_ENV

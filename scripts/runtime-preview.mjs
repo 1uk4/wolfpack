@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 14;
+export const PREVIEW_VERSION = 15;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -74,6 +74,14 @@ const defaultSteps = {
 			return (await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(2000) })).ok;
 		} catch {
 			return false;
+		}
+	},
+	/** The HTTP status of a GET (0 when the connection fails), never throwing on a non-2xx. */
+	probe: async (url) => {
+		try {
+			return (await fetch(url, { signal: AbortSignal.timeout(4000) })).status;
+		} catch {
+			return 0;
 		}
 	},
 	fetchJson: async (url) => {
@@ -314,14 +322,21 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		let up = false;
 		for (let i = 0; i < 45 && !up; i++) {
 			try {
-				const w = (await st.fetchJson(`${url}/api/wolves`))?.wolves;
-				up = Array.isArray(w) && w.length > 0;
+				if (hub) {
+					// Hub relay mode: /api/wolves is 401 until the browser is paired, so "up" is "compiled and answering": 200 or 401.
+					// A 5xx (compile error, crash) or a refused connection (0) is not up.
+					const code = await st.probe(`${url}/api/wolves`);
+					up = code === 200 || code === 401;
+				} else {
+					const w = (await st.fetchJson(`${url}/api/wolves`))?.wolves;
+					up = Array.isArray(w) && w.length > 0;
+				}
 			} catch {}
 			if (!up) await st.sleep(2000);
 		}
 		if (!up) {
 			tearDown();
-			return fail(`${url}/api/wolves listed no wolf within 90 s; the dev console was stopped. See ${path.join(dir, "console.log")}`);
+			return fail(`${url}/api/wolves ${hub ? "did not answer" : "listed no wolf"} within 90 s; the dev console was stopped. See ${path.join(dir, "console.log")}`);
 		}
 		writeState({ ...(cur ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir } });
 		log(`live console from ${wtDir} on ${url}. The app's main window is untouched. \`wolfpack preview off\` when done.`);

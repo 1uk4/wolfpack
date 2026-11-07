@@ -80,6 +80,7 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves
 		pick: async () => "all",
 		sleep: async () => {},
 		portFree: async () => !opts.portBusy,
+		probe: async () => 401, // hub mode: compiled, not paired yet
 		fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: opts.noWolves ? [] : [{ id: "ddkyhT", name: "1uk4", host: "local", status: "busy", librarian: false, kbReadable: true }] } : { chats: [] }),
 	};
 	const run = (argv: string[]) =>

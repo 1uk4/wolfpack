@@ -80,7 +80,7 @@ type Item = { label: string; value: unknown };
 const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown; realHealth?: boolean } = {}) => {
 	const builds: { dir: string; logFile?: string }[] = [];
 	const menus: Item[][] = [];
-	const flags = { portBusy: false, consoleDown: false };
+	const flags = { portBusy: false, consoleDown: false, probeStatus: 401 as number, unpaired: false };
 	const lc: string[][] = [];
 	const helper: string[] = [];
 	const asked: string[] = [];
@@ -93,8 +93,10 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		cliLink: () => cliLink(),
 		cliFallbackDir: () => fallbackDir(),
 		portFree: async () => !flags.portBusy,
+		probe: async () => (flags.consoleDown ? 0 : flags.probeStatus),
 		fetchJson: async () => {
 			if (flags.consoleDown) throw new Error("connection refused");
+			if (flags.unpaired) throw new Error("answered 401"); // what the real step does for a non-2xx
 			return { wolves: [{ id: "x", name: "1uk4" }], chats: [] };
 		},
 		build: (dir: string, b?: { logFile?: string }) => (builds.push({ dir, logFile: b?.logFile }), markBuilt(dir)),
@@ -113,6 +115,11 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	const run = (argv: string[], cwd = main, extraEnv: Record<string, string> = {}) =>
 		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud(), ...extraEnv }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
 	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs };
+};
+
+const pairHub = () => {
+	fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+	fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: "http://100.64.0.9:3150", token: "WORKER-SECRET", hostId: "mac" }));
 };
 
 describe("console preview: pick a worktree, its live console opens in a browser tab, the wolves stay put", () => {
@@ -805,6 +812,29 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(watchWith(["Found 3 errors. Watching for file changes.", "Found 0 errors. Watching for file changes."])).toMatchObject({ lastRebuildOk: expect.any(String) });
 			expect(watchWith(["Found 0 errors. Watching for file changes.", "Found 2 errors. Watching for file changes."])).toBeUndefined();
 		});
+	});
+});
+
+describe("hub mode health", () => {
+	const ready = (h: ReturnType<typeof harness>) => h.run(["dev", wtA]);
+
+	it("in hub mode a console that compiles and answers /api/wolves 401 (not paired yet) is up and stays running", async () => {
+		pairHub();
+		const h = harness();
+		h.flags.unpaired = true;
+		const r = await ready(h);
+		expect(r.exitCode).toBe(0);
+		expect(readState().console).toMatchObject({ mode: "dev" });
+		expect(h.lc.filter((a) => a[0] === "bootout").length).toBe(2); // the start-up cleanups only, no teardown
+	});
+
+	it("in hub mode a 500 or a refusal is not up: the console is stopped and the run fails", async () => {
+		pairHub();
+		const h = harness();
+		h.flags.unpaired = true;
+		h.flags.probeStatus = 500;
+		expect((await ready(h)).exitCode).toBe(1);
+		expect(h.lc.filter((a) => a[0] === "bootout").length).toBe(3); // start-up cleanups plus the teardown
 	});
 });
 

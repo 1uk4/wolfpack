@@ -324,6 +324,49 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(h.lc).toEqual([]);
 		});
 	});
+	describe("off asks which part to undo", () => {
+		const appUrl = () => JSON.parse(fs.readFileSync(path.join(ud(), "LearnHarness", "console.json"), "utf8")).consoleUrl;
+
+		it("offers Live console only or Wolves too; Wolves too restores the plist and hands over to the helper", async () => {
+			const h = harness({ pick: () => "all" });
+			await h.run([wtA]);
+			h.helper.length = 0;
+			h.menus.length = 0;
+			expect((await h.run(["off"])).exitCode).toBe(0);
+			expect(h.menus[0].map((i) => i.label)).toEqual(["Live console only", "Wolves too"]);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(rt));
+			expect(h.helper).toEqual(["stable 1"]);
+		});
+
+		it("--console puts the app back on its own console and stops the live console but leaves the wolves on the worktree", async () => {
+			const h = harness();
+			await h.run([wtA]);
+			expect(appUrl()).toBe("http://127.0.0.1:3230");
+			h.helper.length = 0;
+			h.menus.length = 0;
+			h.lc.length = 0;
+			expect((await h.run(["off", "--console"])).exitCode).toBe(0);
+			expect(h.menus).toEqual([]); // the flag skips the question
+			expect(appUrl()).toBe("https://sfo-01.example");
+			expect(h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-console"))).toBe(true);
+			expect(h.helper).toEqual([]);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
+			expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA });
+			expect(readState().console).toBeUndefined();
+		});
+
+		it("without a terminal and without a flag prints the choices and exits 1, changing nothing", async () => {
+			const h = harness();
+			await h.run([wtA]);
+			h.helper.length = 0;
+			h.logs.length = 0;
+			expect((await h.run(["off"])).exitCode).toBe(1);
+			expect(h.logs.join("\n")).toMatch(/Live console only[\s\S]*Wolves too/);
+			expect(h.helper).toEqual([]);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
+		});
+	});
+
 	describe("watch script", () => {
 		/** Run runtime-preview-watch.mjs against a fake tsc that prints `lines`; returns the watch file's content or undefined. */
 		const watchWith = (lines: string[]) => {
@@ -343,3 +386,4 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(watchWith(["Found 0 errors. Watching for file changes.", "Found 2 errors. Watching for file changes."])).toBeUndefined();
 		});
 	});
+});

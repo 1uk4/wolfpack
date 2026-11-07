@@ -178,6 +178,33 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0, state };
 	}
 
+	// off while the wolves run a preview: undo the live console only, or the wolves too.
+	if (sub === "off" && state?.previewRef) {
+		let part = argv.includes("--console") ? "console" : argv.includes("--all") || argv.includes("--rollback") || dryRun ? "all" : undefined;
+		if (!part) {
+			part = await st.pick("Undo which part of the preview?", [
+				{ label: "Live console only", value: "console" },
+				{ label: "Wolves too", value: "all" },
+			]);
+			if (!part) {
+				log("Live console only: the app goes back to its own console, the wolves stay on the preview (--console)");
+				log("Wolves too: everything goes back to stable (--all)");
+				return fail("choose with `wolfpack preview off --console` or `wolfpack preview off --all`. Nothing was changed.");
+			}
+		}
+		if (part === "console") {
+			if (dryRun) {
+				log(`${tag}would stop com.wolfpack.preview-console and restore the app's console.json; the wolves stay on the preview`);
+				return { exitCode: 0 };
+			}
+			stopConsole({ home, uid, launchctl: st.launchctl });
+			restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
+			writeState({ ...state, console: undefined, apps: undefined, consolePort: undefined });
+			log("live console stopped and the app's console.json restored; the wolves stay on the preview. Quit and reopen Wolfpack Console. `wolfpack preview off --all` returns everything to stable.");
+			return { exitCode: 0 };
+		}
+	}
+
 	// off with only a dev console: nothing about the wolves is touched.
 	if (sub === "off" && state && !state.previewRef) {
 		if (dryRun) {

@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import { CONSOLE_LABEL, applyApps, planApps, recoverApps, restoreApps, startConsole, stopConsole } from "./runtime-preview-console.mjs";
+import { CONSOLE_LABEL, recoverApps, restoreApps, startConsole, stopConsole } from "./runtime-preview-console.mjs";
 
 const BOOTSTRAP_TRIES = 5;
 
@@ -165,18 +165,9 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 			teardownConsole();
 			fs.rmSync(stateFile, { force: true });
 		} else {
-			if (lc && !lc.keepConsole) {
-				const url = `http://127.0.0.1:${lc.port}`;
-				try {
-					const apps = planApps({ root: lc.userDataRoot, url, existing: readState().apps });
-					setPhase(okPhase, { apps, stackStartedAt: new Date().toISOString() }); // state first: if this throws, no console.json was touched
-					applyApps(apps, url);
-				} catch (err) {
-					stopConsole({ home: lc.home, uid, launchctl });
-					throw err;
-				}
-			} else setPhase(okPhase, { stackStartedAt: new Date().toISOString() });
-			if (lc) say(`quit and reopen Wolfpack Console: it now loads http://127.0.0.1:${lc.port}`);
+			// The app's main window stays on its own console; the Preview window picks the preview up from the state file.
+			setPhase(okPhase, { stackStartedAt: new Date().toISOString() });
+			if (lc) say(`the preview console is on http://127.0.0.1:${lc.port} (the app's Preview window opens it; the main window is untouched)`);
 		}
 		return 0;
 	}

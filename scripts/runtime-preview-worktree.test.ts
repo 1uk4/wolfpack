@@ -539,10 +539,10 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(h.helper).toEqual(["stable 1"]);
 		});
 
-		it("--console puts the app back on its own console and stops the live console but leaves the wolves on the worktree", async () => {
+		it("--console stops the live console but leaves the wolves on the worktree, and the app stays on its own console", async () => {
 			const h = harness();
 			await h.run([wtA]);
-			expect(appUrl()).toBe("http://127.0.0.1:3230");
+			expect(appUrl()).toBe("https://sfo-01.example"); // starting never points the app
 			h.helper.length = 0;
 			h.menus.length = 0;
 			h.lc.length = 0;

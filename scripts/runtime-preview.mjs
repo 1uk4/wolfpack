@@ -21,7 +21,7 @@ import os from "node:os";
 import readline from "node:readline";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { applyApps, planApps, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
 import { collectWorktrees, listWorktrees, pickerModel, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 6;
+export const PREVIEW_VERSION = 7;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -239,13 +239,13 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		if (part === "console") {
 			if (dryRun) {
-				log(`${tag}would stop com.wolfpack.preview-console and restore the app's console.json; the wolves stay on the preview`);
+				log(`${tag}would stop com.wolfpack.preview-console (and undo any old console.json pointing); the wolves stay on the preview`);
 				return { exitCode: 0 };
 			}
 			stopConsole({ home, uid, launchctl: st.launchctl });
 			restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
 			writeState({ ...state, console: undefined, apps: undefined, consolePort: undefined });
-			log("live console stopped and the app's console.json restored; the wolves stay on the preview. Quit and reopen Wolfpack Console. `wolfpack preview off --all` returns everything to stable.");
+			log("live console stopped (any old console.json pointing undone); the wolves stay on the preview. `wolfpack preview off --all` returns everything to stable.");
 			return { exitCode: 0 };
 		}
 	}
@@ -253,17 +253,17 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	// off with only a dev console: nothing about the wolves is touched.
 	if (sub === "off" && state && !state.previewRef) {
 		if (dryRun) {
-			log(`${tag}would stop com.wolfpack.preview-console, restore the app's console.json and clear ${stateFile}; the wolves are not touched`);
+			log(`${tag}would stop com.wolfpack.preview-console, undo any old console.json pointing and clear ${stateFile}; the wolves are not touched`);
 			return { exitCode: 0 };
 		}
 		stopConsole({ home, uid, launchctl: st.launchctl });
 		restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
 		fs.rmSync(stateFile, { force: true });
-		log("dev console stopped and the app's console.json restored. Quit and reopen Wolfpack Console.");
+		log("dev console stopped.");
 		return { exitCode: 0 };
 	}
 
-	/** Serve `next dev` from wtDir under the preview-console agent, wait for it to list a wolf, then point the app at it (state first). */
+	/** Serve `next dev` from wtDir under the preview-console agent, wait for it to list a wolf, then record it in the state (the app's Preview window reads that). */
 	const serveDev = async (wtDir, cur) => {
 		const consolePort = String(cur?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230);
 		const url = `http://127.0.0.1:${consolePort}`;
@@ -296,10 +296,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			tearDown();
 			return fail(`${url}/api/wolves listed no wolf within 90 s; the dev console was stopped. See ${path.join(dir, "console.log")}`);
 		}
-		const apps = planApps({ root: userDataRoot, url, existing: cur?.apps });
-		writeState({ ...(cur ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir }, apps }); // state first
-		applyApps(apps, url);
-		log(`live console from ${wtDir} on ${url}. Quit and reopen Wolfpack Console (or press ⌘R). \`wolfpack preview off\` when done.`);
+		writeState({ ...(cur ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir } });
+		log(`live console from ${wtDir} on ${url}, in the app's Preview window (Window → Open Preview) or the browser. The main window is untouched. \`wolfpack preview off\` when done.`);
 		return { exitCode: 0 };
 	};
 
@@ -324,7 +322,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		const url = `http://127.0.0.1:${consolePort}`;
 		if (dryRun) {
 			log(`${tag}would serve \`next dev\` from ${wtDir}/apps/console on ${url} (WOLFPACK_API_URL=http://127.0.0.1:${port}) under com.wolfpack.preview-console`);
-			log(`${tag}then point the app's console.json at it; the wolves are not touched`);
+			log(`${tag}then record it in the state for the app's Preview window; the wolves are not touched`);
 			return { exitCode: 0 };
 		}
 		return serveDev(wtDir, state);
@@ -634,7 +632,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	writeState({ ...readState(), phase: "switching" });
 	helper("running", false);
 	log(`previewing ${ref} (${sha.slice(0, 8)}): the stack is restarting, so the wolf session running this command will end.`);
-	log(`Then a local console on http://127.0.0.1:${readState().consolePort} is started and the desktop app is pointed at it: quit and reopen Wolfpack Console. If the deep health check fails, the switch rolls back by itself (phase rolled-back).`);
+	log(`Then a local console on http://127.0.0.1:${readState().consolePort} is started for the app's Preview window (the main window stays on its own console). If the deep health check fails, the switch rolls back by itself (phase rolled-back).`);
 	log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable. If that command is missing: node ~/.wolfpack/preview/bin/runtime-preview.mjs off");
 	return { exitCode: 0 };
 }

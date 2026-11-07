@@ -152,7 +152,15 @@ describe("runtime-preview-switch", () => {
 			local = { port: "3230", home: path.join(tmp, "home"), userDataRoot: ud, runtimeDir: path.join(tmp, "rt"), node: "/usr/bin/node" };
 		});
 
-		it("a good switch serves the preview console under launchd and points both app folders at it, keeping other keys", async () => {
+		/** An old preview pointed the app at the local console: console.json holds the preview url, with a backup of the original. */
+		const pointOld = (withRecord: boolean) => {
+			const file = path.join(ud, "LearnHarness", "console.json");
+			fs.copyFileSync(file, `${file}.preview-backup`);
+			fs.writeFileSync(file, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" }));
+			if (withRecord) fs.writeFileSync(stateFile, JSON.stringify({ ...state(), apps: [{ file, fileExisted: true, previous: "https://sfo-01.example" }] }));
+		};
+
+		it("a good switch serves the preview console under launchd and leaves the app's console.json alone", async () => {
 			const s = sw({ deep: okDeep(), local });
 			expect(await s.run()).toBe(0);
 			const plistPath = path.join(local.home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist");
@@ -161,27 +169,27 @@ describe("runtime-preview-switch", () => {
 			expect(text).toContain("apps/console/server.js");
 			expect(s.full).toContainEqual(["bootstrap", `gui/501`, plistPath]);
 			expect(fs.existsSync(path.join(tmp, "rt", "apps", "console", ".next", "standalone", "apps", "console", ".next", "static", "a.js"))).toBe(true);
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" });
-			expect(read("Wolfpack Console")).toEqual({ consoleUrl: "http://127.0.0.1:3230" });
+			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(fs.existsSync(path.join(ud, "Wolfpack Console", "console.json"))).toBe(false);
+			expect(s.logs.join("\n")).not.toContain("reopen");
 		});
 
-		it("off restores each console.json exactly, removes the key where there was none, and stops the console", async () => {
-			await sw({ deep: okDeep(), local }).run();
+		it("off stops the console and still undoes an old pointing recorded in the state", async () => {
+			pointOld(true);
 			const off = sw({ clear: true, local });
 			expect(await off.run()).toBe(0);
 			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
-			expect(fs.existsSync(path.join(ud, "Wolfpack Console", "console.json"))).toBe(false);
 			expect(off.full).toContainEqual(["bootout", "gui/501/com.wolfpack.preview-console"]);
 		});
 
-		it("with a dev console active (keepConsole) a ref switch neither starts, stops nor re-points the console", async () => {
+		it("with a dev console active (keepConsole) a ref switch neither starts nor stops the console", async () => {
 			const s = sw({ deep: okDeep(), local: { ...local, keepConsole: true } });
 			expect(await s.run()).toBe(0);
 			expect(s.full.some((a) => String(a[1] ?? "").includes("preview-console") || String(a[2] ?? "").includes("preview-console"))).toBe(false);
 			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
-		it("a failed deep check leaves console.json untouched and stops the console before rolling back", async () => {
+		it("a failed deep check stops the console before rolling back and leaves console.json untouched", async () => {
 			const s = sw({ deep: { ...okDeep(), fetchJson: async () => ({ wolves: [] }) }, local });
 			expect(await s.run()).toBe(1);
 			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
@@ -190,29 +198,10 @@ describe("runtime-preview-switch", () => {
 			expect(phase()).toBe("rolled-back");
 		});
 
-		it("off after a crash between pointing the files and writing state restores the original from the backup", async () => {
-			const file = path.join(ud, "LearnHarness", "console.json");
-			fs.copyFileSync(file, `${file}.preview-backup`);
-			fs.writeFileSync(file, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" })); // pointed, but state has no apps
+		it("off after an old crash between pointing the files and writing state restores the original from the backup", async () => {
+			pointOld(false);
 			expect(await sw({ clear: true, local }).run()).toBe(0);
 			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
-		});
-
-		it("a new on after that crash never records the preview url as the original", async () => {
-			const file = path.join(ud, "LearnHarness", "console.json");
-			fs.copyFileSync(file, `${file}.preview-backup`);
-			fs.writeFileSync(file, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" }));
-			expect(await sw({ deep: okDeep(), local }).run()).toBe(0);
-			expect(state().apps.find((a: { file: string }) => a.file === file).previous).toBe("https://sfo-01.example");
-			expect(await sw({ clear: true, local }).run()).toBe(0);
-			expect(read("LearnHarness").consoleUrl).toBe("https://sfo-01.example");
-		});
-
-		it("state gets apps before any console.json is touched, and a failed apps write fails loudly", async () => {
-			fs.chmodSync(stateFile, 0o444);
-			await expect(sw({ deep: okDeep(), local }).run()).rejects.toThrow();
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
-			expect(fs.existsSync(path.join(ud, "Wolfpack Console", "console.json"))).toBe(false);
 		});
 
 		it("a busy console port fails the preview with the reason, starts no console and rolls back", async () => {
@@ -223,8 +212,8 @@ describe("runtime-preview-switch", () => {
 			expect(read("LearnHarness").consoleUrl).toBe("https://sfo-01.example");
 		});
 
-		it("healthz never answering on off still stops the console and restores the apps", async () => {
-			await sw({ deep: okDeep(), local }).run();
+		it("healthz never answering on off still stops the console and restores an old pointing", async () => {
+			pointOld(true);
 			const off = sw({ clear: true, local, healthy: false });
 			expect(await off.run()).toBe(1);
 			expect(read("LearnHarness").consoleUrl).toBe("https://sfo-01.example");

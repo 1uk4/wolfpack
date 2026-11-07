@@ -325,7 +325,7 @@ describe("runtime-preview", () => {
 			expect(fs.existsSync(stateFile())).toBe(false);
 		});
 
-		it("serves next dev from the worktree under the preview-console agent, then points the app and records the original first", async () => {
+		it("serves next dev from the worktree under the preview-console agent and leaves the app on its own console", async () => {
 			const h = harness();
 			const d = devDir("wt");
 			expect((await h.run(["dev", d])).exitCode).toBe(0);
@@ -336,8 +336,10 @@ describe("runtime-preview", () => {
 			expect(t).toContain("<key>WOLFPACK_API_URL</key><string>http://127.0.0.1:7141</string>");
 			expect(t).toContain("<key>HOSTNAME</key><string>127.0.0.1</string>");
 			expect(t).toContain("<key>PORT</key><string>3230</string>");
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" });
-			expect(readState()).toMatchObject({ console: { mode: "dev", dir: fs.realpathSync(d) }, consolePort: 3230, apps: [{ previous: "https://sfo-01.example" }] });
+			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(readState()).toMatchObject({ console: { mode: "dev", dir: fs.realpathSync(d) }, consolePort: 3230 });
+			expect(readState().apps).toBeUndefined();
+			expect(h.logs.join("\n")).not.toContain("reopen");
 			// the wolves are never touched
 			expect(h.lc.every((a) => a.join(" ").includes("preview-console") || a[0] === "bootstrap" && String(a[2]).includes("preview-console"))).toBe(true);
 			expect(h.gitCalls.filter((a) => a[0] === "checkout")).toEqual([]);
@@ -360,16 +362,16 @@ describe("runtime-preview", () => {
 			expect(fs.existsSync(stateFile())).toBe(false);
 		});
 
-		it("dev in another dir while one is active re-points the agent and keeps apps with the original url", async () => {
+		it("dev in another dir while one is active re-points the agent", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
 			expect((await h.run(["dev", devDir("wt2")])).exitCode).toBe(0);
 			expect(plistText()).toContain(`<key>WorkingDirectory</key><string>${path.join(fs.realpathSync(tmp), "wt2", "apps", "console")}</string>`);
-			expect(readState()).toMatchObject({ console: { mode: "dev", dir: path.join(fs.realpathSync(tmp), "wt2") }, apps: [{ previous: "https://sfo-01.example" }] });
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" });
+			expect(readState()).toMatchObject({ console: { mode: "dev", dir: path.join(fs.realpathSync(tmp), "wt2") } });
+			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
-		it("dev run again in the same dir is a restart: agent reloaded, state and apps unchanged", async () => {
+		it("dev run again in the same dir is a restart: agent reloaded, state unchanged", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
 			const before = readState();
@@ -379,7 +381,7 @@ describe("runtime-preview", () => {
 			expect(readState()).toEqual(before);
 		});
 
-		it("on a new ref while another ref preview is active switches in place, keeping previousRef, previousBranch and apps", async () => {
+		it("on a new ref while another ref preview is active switches in place, keeping previousRef and previousBranch", async () => {
 			const h = harness();
 			const stableSha = g(rtWt, "rev-parse", "HEAD");
 			await h.run(["feat/x"]);
@@ -393,18 +395,20 @@ describe("runtime-preview", () => {
 			expect(h.calls.at(-1)).toBe("helper running 0");
 		});
 
-		it("on with a dev console active keeps the dev console and its apps, and takes the previous ref from HEAD", async () => {
+		it("on with a dev console active keeps the dev console, and takes the previous ref from HEAD", async () => {
 			const h = harness();
 			const stableSha = g(rtWt, "rev-parse", "HEAD");
 			await h.run(["dev", devDir("wt1")]);
-			const apps = readState().apps;
 			expect((await h.run(["feat/x"])).exitCode).toBe(0);
-			expect(readState()).toMatchObject({ previousRef: stableSha, previousBranch: "stable", previewRef: "feat/x", console: { mode: "dev" }, apps });
+			expect(readState()).toMatchObject({ previousRef: stableSha, previousBranch: "stable", previewRef: "feat/x", console: { mode: "dev" } });
 		});
 
-		it("off with only a dev console stops the agent, restores the app and clears the state, never touching the wolves", async () => {
+		it("off with only a dev console stops the agent, undoes an old pointing and clears the state, never touching the wolves", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
+			const cj = path.join(ud(), "LearnHarness", "console.json"); // an app pointed by an older preview
+			fs.writeFileSync(`${cj}.preview-backup`, JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
+			fs.writeFileSync(cj, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" }));
 			h.lc.length = 0;
 			h.gitCalls.length = 0;
 			expect((await h.run(["off"])).exitCode).toBe(0);

@@ -86,42 +86,6 @@ const readJson = (f) => {
 	}
 };
 
-/**
- * Decide what to record for each existing app folder, WITHOUT touching it: {file, fileExisted, previous}. The caller writes these
- * to the state file first, then calls applyApps. `existing` records are reused (a repeat run must not record our own url as the
- * original); if the file already holds `url` (a crash after pointing, before state was written) the original comes from the backup.
- */
-export function planApps({ root, url, existing }) {
-	if (existing) return existing;
-	const apps = [];
-	for (const d of APP_FOLDERS.map((f) => path.join(root, f))) {
-		if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) continue;
-		const file = path.join(d, "console.json");
-		const fileExisted = fs.existsSync(file);
-		let cfg = {};
-		if (fileExisted) {
-			cfg = readJson(file);
-			if (!cfg) continue; // unreadable: leave the owner's file alone
-		}
-		let previous = typeof cfg.consoleUrl === "string" ? cfg.consoleUrl : null;
-		if (previous === url) {
-			const b = readJson(`${file}${BACKUP}`);
-			previous = typeof b?.consoleUrl === "string" ? b.consoleUrl : null;
-		}
-		apps.push({ file, fileExisted, previous });
-	}
-	return apps;
-}
-
-/** Back up (once) and point each planned file at `url`, keeping every other key. */
-export function applyApps(apps, url) {
-	for (const { file } of apps) {
-		const cfg = readJson(file) ?? {};
-		if (fs.existsSync(file) && !fs.existsSync(`${file}${BACKUP}`)) fs.copyFileSync(file, `${file}${BACKUP}`);
-		fs.writeFileSync(file, `${JSON.stringify({ ...cfg, consoleUrl: url }, null, 2)}\n`);
-	}
-}
-
 /** Records for folders that still have a backup next to a console.json holding `url`: the state lost its apps (crash). */
 export function recoverApps({ root, url }) {
 	const apps = [];

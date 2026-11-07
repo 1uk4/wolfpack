@@ -37,6 +37,12 @@ text-only), browser_console, browser_network, browser_close. One page, calls ser
   closed. Redirects are never followed by the network stack: each hop's `Location` is vetted, then the 3xx is handed to
   the browser. Responses are capped by size (`maxResponseBytes`) and time (`timeoutMs`). Cookies are bridged through
   the browser context's jar.
+- `allowHosts` bypass: an event-stream request (`Accept: text/event-stream`, i.e. EventSource) to an allowlisted host is
+  served by Chromium's own network stack, because the Node fetcher cannot stream. Playwright hides redirect hops of such
+  a request from the guard, so a redirect from an allowlisted host to a private host is not vetted on that path; keep
+  `allowHosts` to hosts you trust. Chromium's local-network-access check is disabled
+  (`--disable-features=LocalNetworkAccessChecks`) so WebSockets to allowlisted loopback hosts open; every other private
+  host is still refused by the request/WebSocket policy above.
 - WebSockets go through `routeWebSocket` with the same policy (resolved before connecting; the browser then opens that
   socket itself, so a rebinding race remains for ws only). WebRTC is limited with
   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.

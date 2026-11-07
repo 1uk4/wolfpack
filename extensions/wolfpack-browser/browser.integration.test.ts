@@ -134,10 +134,6 @@ d("browser extension (live): resilience and fetch path", () => {
         res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" });
         return res.end(gzipSync("<title>gz</title><p>zipped</p>"));
       }
-      if (req.url === "/sse") {
-        res.writeHead(200, { "content-type": "text/event-stream" });
-        return res.write("data: x\n\n");
-      }
       if (req.url === "/setck") {
         res.writeHead(200, { "content-type": "text/html", "set-cookie": ["a=1; Path=/", "bad=1; Domain=evil.com", "lax=1; SameSite=Lax; Path=/"] });
         return res.end("<title>ck</title>");
@@ -186,15 +182,11 @@ d("browser extension (live): resilience and fetch path", () => {
     }
   }, 60000);
 
-  it("decodes a gzip body the server sent despite identity; refuses event streams", async () => {
+  it("loads a gzip page from an allowlisted host", async () => {
     const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 5000 });
     try {
       await s.run(() => s.goto(base + "/gz"));
       expect(await s.run(() => s.evaluate("document.body.textContent"))).toBe("zipped");
-      await s.run(() => s.goto(base + "/"));
-      const r = await s.run(() => s.evaluate("fetch('/sse').then(r => r.status).catch(e => 'failed')"));
-      expect(r).toBe("failed");
-      expect(s.blockedRequests().join("\n")).toMatch(/event-stream/);
     } finally {
       await s.close();
     }
@@ -208,6 +200,80 @@ d("browser extension (live): resilience and fetch path", () => {
       await s.run(() => s.goto(base + "/"));
       expect(seenCookies.at(-1)).toMatch(/a=1/);
       expect(seenCookies.at(-1)).not.toMatch(/bad=/);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+});
+
+d("browser extension (live): allowlisted hosts use the browser's own network", () => {
+  let srv: Server;
+  let port = 0;
+  let den = "";
+  const wss = new WebSocketServer({ noServer: true });
+  const sseHits: string[] = [];
+  beforeAll(async () => {
+    den = mkdtempSync(join(tmpdir(), "wolf-browser-den-"));
+    srv = createServer((req, res) => {
+      if (req.url === "/events") {
+        sseHits.push(String(req.headers.host));
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        return res.write("data: hello-sse\n\n");
+      }
+      if (req.url === "/hop") {
+        res.writeHead(302, { location: "http://169.254.169.254/" });
+        return res.end();
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<title>p</title>");
+    });
+    srv.on("upgrade", (req, sock, head) => wss.handleUpgrade(req, sock, head, (ws) => ws.on("message", (m) => ws.send("echo:" + m))));
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    port = (srv.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    wss.close();
+    srv.closeAllConnections();
+    await new Promise((r) => srv.close(r));
+    rmSync(den, { recursive: true, force: true });
+  });
+  const sse = (u: string) => `new Promise(r => { const e = new EventSource(${JSON.stringify(u)}); e.onmessage = (m) => { e.close(); r(m.data); }; e.onerror = () => { e.close(); r("error"); }; setTimeout(() => r("timeout"), 5000); })`;
+  const ws = (u: string) => `new Promise(r => { const w = new WebSocket(${JSON.stringify(u)}); w.onopen = () => w.send("hi"); w.onmessage = (m) => { w.close(); r(m.data); }; w.onclose = () => r("closed"); w.onerror = () => r("error"); setTimeout(() => r("timeout"), 5000); })`;
+
+  it("delivers server-sent events and echoes WebSocket messages on an allowlisted host", async () => {
+    const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 15000 });
+    try {
+      await s.run(() => s.goto(`http://127.0.0.1:${port}/`));
+      expect(await s.run(() => s.evaluate(sse("/events")))).toBe("hello-sse");
+      expect(await s.run(() => s.evaluate(ws(`ws://127.0.0.1:${port}/`)))).toBe("echo:hi");
+      expect(s.blockedRequests()).toEqual([]);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("keeps the full guard on a loopback host that is not allowlisted (http, SSE, WebSocket)", async () => {
+    // page host localhost is allowlisted; 127.0.0.1 is not
+    const s = new BrowserSession(den, { allowHosts: ["localhost"], timeoutMs: 15000 });
+    try {
+      await s.run(() => s.goto(`http://localhost:${port}/`));
+      sseHits.length = 0;
+      expect(await s.run(() => s.evaluate(`fetch("http://127.0.0.1:${port}/events").then(() => "ok").catch(() => "failed")`))).toBe("failed");
+      expect(await s.run(() => s.evaluate(sse(`http://127.0.0.1:${port}/events`)))).toBe("error");
+      expect(await s.run(() => s.evaluate(ws(`ws://127.0.0.1:${port}/`)))).not.toBe("echo:hi");
+      expect(sseHits).toEqual([]);
+      expect(s.blockedRequests().join("\n")).toMatch(/127\.0\.0\.1/);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("blocks a redirect from an allowlisted host to a non-allowlisted private host", async () => {
+    const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 15000 });
+    try {
+      await s.run(() => s.goto(`http://127.0.0.1:${port}/`));
+      expect(await s.run(() => s.evaluate(`fetch("/hop").then(() => "ok").catch(() => "failed")`))).toBe("failed");
+      expect(s.blockedRequests().join("\n")).toMatch(/169\.254\.169\.254/);
     } finally {
       await s.close();
     }

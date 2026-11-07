@@ -80,7 +80,8 @@ type Item = { label: string; value: unknown };
 const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown; realHealth?: boolean } = {}) => {
 	const builds: { dir: string; logFile?: string }[] = [];
 	const menus: Item[][] = [];
-	const flags = { portBusy: false, consoleDown: false, probeStatus: 401 as number, unpaired: false };
+	const flags = { portBusy: false, consoleDown: false, probeStatus: 401 as number, unpaired: false, mintStatus: 200 as number };
+	const hubCalls: { url: string; method: string; auth?: string; body?: Record<string, unknown> }[] = [];
 	const lc: string[][] = [];
 	const helper: string[] = [];
 	const asked: string[] = [];
@@ -94,6 +95,11 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		cliFallbackDir: () => fallbackDir(),
 		portFree: async () => !flags.portBusy,
 		probe: async () => (flags.consoleDown ? 0 : flags.probeStatus),
+		hubFetch: async (url: string, init: { method: string; headers?: Record<string, string>; body?: string }) => {
+			hubCalls.push({ url, method: init.method, auth: init.headers?.Authorization, body: init.body ? JSON.parse(init.body) : undefined });
+			if (url.endsWith("/v1/tokens/pairing-codes")) return flags.mintStatus === 200 ? { status: 200, json: { code: "ONE-TIME-CODE", expiresAt: "x" } } : { status: flags.mintStatus, json: { error: "forbidden" } };
+			return { status: 200, json: { token: "BROWSER-SECRET", tokenId: "tok1" } };
+		},
 		fetchJson: async () => {
 			if (flags.consoleDown) throw new Error("connection refused");
 			if (flags.unpaired) throw new Error("answered 401"); // what the real step does for a non-2xx
@@ -114,7 +120,7 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	if (o.confirm !== "none") steps.confirm = async (q: string) => (asked.push(q), o.confirm ?? true);
 	const run = (argv: string[], cwd = main, extraEnv: Record<string, string> = {}) =>
 		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud(), ...extraEnv }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs };
+	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs, hubCalls };
 };
 
 const pairHub = () => {
@@ -829,6 +835,56 @@ describe("worktrees are found from any directory", () => {
 		const p = harness({ pick: (items) => items.find((i) => String(i.label).includes("wt-a"))?.value });
 		expect((await p.run([], away, { WOLVES_DIR: wl })).exitCode).toBe(0);
 		expect(p.menus[0].some((i) => String(i.label).includes("wt-a"))).toBe(true);
+	});
+});
+
+describe("automatic browser sign-in in hub mode", () => {
+	const pairedMarker = () => path.join(home, ".wolfpack", "preview", "paired.json");
+	const consoleToken = { WOLFPACK_HUB_TOKEN: "CONSOLE-SECRET" };
+
+	it("mints a browser code with the Mac's console token, redeems it, opens /pair#token, remembers only the token id, and never prints a secret", async () => {
+		pairHub();
+		const h = harness();
+		h.flags.unpaired = true;
+		expect((await h.run(["dev", wtA], main, consoleToken)).exitCode).toBe(0);
+		const r = await h.run([wtA], main, consoleToken);
+		expect(r.exitCode).toBe(0);
+		expect(h.opened).toEqual(["http://127.0.0.1:3230/pair#token=BROWSER-SECRET"]);
+		expect(h.hubCalls.map((c) => `${c.method} ${c.url}`)).toEqual(["POST http://100.64.0.9:3150/v1/tokens/pairing-codes", "POST http://100.64.0.9:3150/v1/pair"]);
+		expect(h.hubCalls[0].auth).toBe("Bearer CONSOLE-SECRET");
+		expect(h.hubCalls[1].body).toMatchObject({ code: "ONE-TIME-CODE", kind: "browser" });
+		expect(String(h.hubCalls[1].body?.label)).toMatch(/^preview /);
+		const marker = fs.readFileSync(pairedMarker(), "utf8");
+		expect(JSON.parse(marker)).toMatchObject({ tokenId: "tok1" });
+		for (const secret of ["BROWSER-SECRET", "ONE-TIME-CODE", "CONSOLE-SECRET", "WORKER-SECRET"]) {
+			expect(marker + h.logs.join("\n")).not.toContain(secret);
+		}
+	});
+
+	it("a later run opens / only, and `preview pair` forces a fresh pairing", async () => {
+		pairHub();
+		const h = harness();
+		await h.run([wtA], main, consoleToken);
+		h.opened.length = 0;
+		h.hubCalls.length = 0;
+		await h.run([wtA], main, consoleToken);
+		expect(h.opened).toEqual(["http://127.0.0.1:3230/"]);
+		expect(h.hubCalls).toEqual([]);
+		expect((await h.run(["pair"], main, consoleToken)).exitCode).toBe(0);
+		expect(h.opened[1]).toBe("http://127.0.0.1:3230/pair#token=BROWSER-SECRET");
+		expect(h.hubCalls.length).toBe(2);
+	});
+
+	it("when the Mac's token cannot mint (a worker token gets 403) it opens /pair and prints the hubd command; nothing is remembered", async () => {
+		pairHub();
+		const h = harness();
+		h.flags.mintStatus = 403;
+		expect((await h.run([wtA])).exitCode).toBe(0);
+		expect(h.opened).toEqual(["http://127.0.0.1:3230/pair"]);
+		expect(h.hubCalls[0].auth).toBe("Bearer WORKER-SECRET");
+		expect(h.logs.join("\n")).toMatch(/hubd pair --kind browser/);
+		expect(fs.existsSync(pairedMarker())).toBe(false);
+		expect(h.logs.join("\n")).not.toContain("WORKER-SECRET");
 	});
 });
 

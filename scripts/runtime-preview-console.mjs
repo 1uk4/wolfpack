@@ -43,6 +43,22 @@ export function resolveHub({ home, env = {} }) {
 }
 
 /**
+ * The tokens this Mac can try to mint a browser pairing code with, best first: WOLFPACK_HUB_TOKEN (a console/browser token, which may
+ * mint) then the token in workerd's hub.json (a WORKER token, which the hub answers 403). Values stay inside the process: callers put
+ * them in an Authorization header and nowhere else.
+ */
+export function hubTokens({ home, env = {} }) {
+	const out = [];
+	if (env.WOLFPACK_HUB_TOKEN?.trim()) out.push(env.WOLFPACK_HUB_TOKEN.trim());
+	try {
+		const dir = env.WORKERD_CONFIG_DIR || path.join(home, ".wolfpack", "workerd");
+		const t = JSON.parse(fs.readFileSync(path.join(dir, "hub.json"), "utf8")).token;
+		if (typeof t === "string" && t) out.push(t);
+	} catch {}
+	return out;
+}
+
+/**
  * The real launchctl: output is shown, except that unloading an agent that is not loaded (`bootout` exit 3, "No such process")
  * is a normal case here and prints nothing. The exit status is returned either way. `spawn` and `write` are injectable for tests.
  */

@@ -173,11 +173,13 @@ wolfpack preview off             # stop the console
   `hubUrl` is read, never the token), the preview console runs in hub relay mode: `WOLFPACK_HUB_URL` and `HUBD_PUBLIC_URL` are the
   paired hub, `WOLFPACK_CONSOLE_PUBLIC_ORIGIN=http://127.0.0.1:3230`, and no `WOLFPACK_API_URL`. `status` prints `hub: <url>`. With no
   hub it keeps the local-only env (only this stack's wolves), says so, and `status` prints `hub: none (local wolves only)`.
-  **One-time pairing in the preview tab.** The tab is a new origin, so it has no hub token. The hub's `/pair` page redirects to the
-  *stable* console, so it cannot pair this tab. Copy the token across instead: in the stable console's browser tab run
-  `copy(localStorage.getItem("wolfpack.hub.token"))` in the devtools console, then open
-  `http://127.0.0.1:3230/pair#token=<paste>`. The token is stored for 127.0.0.1:3230 (the fragment is never sent to a server) and the
-  tab opens signed in. It survives restarts of the preview, since localStorage belongs to the browser.
+  **Signing in the preview tab.** The tab is a new origin, so it needs a hub token. After the console is up, `wolfpack preview` mints a
+  single-use *browser* pairing code with a token this Mac holds (`WOLFPACK_HUB_TOKEN`, a console or browser token), redeems it
+  (`POST /v1/pair`, label `preview <host>`) and opens `http://127.0.0.1:3230/pair#token=…`, which stores the token in the tab's
+  localStorage. The marker `~/.wolfpack/preview/paired.json` keeps only the paired token's *id*; later runs open `/`. Force a fresh
+  pairing with `wolfpack preview pair`. The token in workerd's `hub.json` is a **worker** token and the hub refuses it for minting
+  (403), so without `WOLFPACK_HUB_TOKEN` the tab opens `/pair` and the output prints the `hubd pair --kind browser` command to run on
+  the hub host. In hub mode "console up" means `/api/wolves` answers 200 or 401 (unpaired); a 5xx or a refusal stops it.
 - **Another worktree while one runs** switches the console in place and opens the URL again.
 - **`preview dev [dir]`** is the same console for the worktree containing cwd (or `dir`), without opening the browser.
 - **`off`** stops the console and clears the state. If the state shows the **wolves were moved** (now, or by an older run) it then

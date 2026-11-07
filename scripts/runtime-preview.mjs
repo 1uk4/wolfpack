@@ -21,7 +21,7 @@ import os from "node:os";
 import readline from "node:readline";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { runLaunchctl, resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { runLaunchctl, hubTokens, resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
 import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, resetCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 16;
+export const PREVIEW_VERSION = 17;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -74,6 +74,15 @@ const defaultSteps = {
 			return (await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(2000) })).ok;
 		} catch {
 			return false;
+		}
+	},
+	/** A JSON request to the hub → {status, json}; {status: 0} when it cannot be reached. */
+	hubFetch: async (url, init) => {
+		try {
+			const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
+			return { status: r.status, json: await r.json().catch(() => ({})) };
+		} catch {
+			return { status: 0, json: {} };
 		}
 	},
 	/** The HTTP status of a GET (0 when the connection fails), never throwing on a non-2xx. */
@@ -316,7 +325,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			return fail(`cannot start the dev console: ${err.message}`);
 		}
 		const hub = resolveHub({ home, env });
-		if (hub) log(`console in hub mode (${hub.url}): all wolves are listed. The first open asks you to pair this browser once.`);
+		if (hub) log(`console in hub mode (${hub.url}): all wolves are listed. The tab is paired automatically the first time.`);
 		else log("no hub configured: the console lists the local wolves only (pair this Mac with `workerd pair <hub url> <code>` to see all of them).");
 		log(`compiling the console from ${wtDir}/apps/console (the first request can take a minute)`);
 		let up = false;
@@ -341,6 +350,46 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		writeState({ ...(cur ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir } });
 		log(`live console from ${wtDir} on ${url}. The app's main window is untouched. \`wolfpack preview off\` when done.`);
 		return { exitCode: 0, url };
+	};
+
+	/**
+	 * Which URL to open in the browser. Not in hub mode: the console as is. In hub mode the tab needs a hub token: mint a single-use
+	 * browser code with a token this Mac holds, redeem it, and open /pair#token=... (the console's /pair page stores it). The marker
+	 * (~/.wolfpack/preview/paired.json) keeps the paired token's id, never the token, so later runs open / only. If no token here may
+	 * mint (workerd's is a worker token), open /pair and print the hubd command instead.
+	 */
+	const markerFile = path.join(dir, "paired.json");
+	const urlToOpen = async (base, force) => {
+		const hub = resolveHub({ home, env });
+		if (!hub) return base;
+		let marked;
+		try {
+			marked = JSON.parse(fs.readFileSync(markerFile, "utf8"));
+		} catch {}
+		if (!force && marked?.hub === hub.url) return `${base}/`;
+		const label = `preview ${os.hostname()}`.slice(0, 64);
+		for (const token of hubTokens({ home, env })) {
+			const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+			const mint = await st.hubFetch(`${hub.url}/v1/tokens/pairing-codes`, { method: "POST", headers: auth, body: JSON.stringify({ label }) });
+			const code = mint.status === 200 ? mint.json?.code : undefined;
+			if (!code) continue;
+			const paired = await st.hubFetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, kind: "browser", label }) });
+			if (paired.status !== 200 || !paired.json?.token) continue;
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(markerFile, JSON.stringify({ hub: hub.url, tokenId: paired.json.tokenId ?? null, at: new Date().toISOString() }) + "\n");
+			log("paired this browser with the hub (no code to type)");
+			return `${base}/pair#token=${encodeURIComponent(paired.json.token)}`;
+		}
+		warn(`preview: no token on this Mac can mint a browser pairing code (the workerd token is a worker token). Pair the tab by hand: on the hub host run \`hubd pair --kind browser --label "${label}"\` and open ${hub.publicUrl}/pair`);
+		return `${base}/pair`;
+	};
+	const openTab = async (base, force) => {
+		try {
+			st.open(await urlToOpen(base, force));
+		} catch (err) {
+			warn(`preview: could not open the browser (${err.message}); open ${base} yourself.`);
+		}
+		log(`opened ${base} in the browser`);
 	};
 
 	/** The default preview: serve the worktree's console as `next dev` and open it in the browser. No build, no wolf restart, no y/N. */
@@ -370,16 +419,15 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			return fail(`${err.message}. Nothing was changed.`);
 		}
 		const r = await serveDev(wtDir, state);
-		if (r.exitCode === 0) {
-			try {
-				st.open(r.url);
-			} catch (err) {
-				warn(`preview: could not open the browser (${err.message}); open ${r.url} yourself.`);
-			}
-			log(`opened ${r.url} in the browser`);
-		}
+		if (r.exitCode === 0) await openTab(r.url, false);
 		return r;
 	};
+
+	if (sub === "pair") {
+		if (!state?.console) return fail("no preview console is running; start one with `wolfpack preview` first. Nothing was changed.");
+		await openTab(`http://127.0.0.1:${state.consolePort ?? 3230}`, true);
+		return { exitCode: 0 };
+	}
 
 	if (sub === "dev") {
 		const given = pos[1];

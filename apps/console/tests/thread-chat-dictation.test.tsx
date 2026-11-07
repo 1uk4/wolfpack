@@ -115,13 +115,25 @@ class FakeNode {
 	disconnect() {}
 }
 class FakeCtx {
+	static last: FakeCtx | null = null;
 	state = "running";
+	/** Resolves the pending suspend() when set (lets a test hold it open). */
+	holdSuspend: Promise<void> | null = null;
+	constructor() {
+		FakeCtx.last = this;
+	}
 	destination = {};
 	audioWorklet = { addModule: async () => {} };
 	createMediaStreamSource() {
 		return new FakeNode();
 	}
-	async resume() {}
+	async resume() {
+		this.state = "running";
+	}
+	async suspend() {
+		await this.holdSuspend;
+		this.state = "suspended";
+	}
 }
 let tokenStatus = 200;
 Object.assign(globalThis, { WebSocket: FakeWS, AudioContext: FakeCtx, AudioWorkletNode: FakeNode });
@@ -284,6 +296,28 @@ describe("ThreadChat dictation", () => {
 		root = null;
 		assert.equal(ws.readyState, 3, "socket closed");
 		assert.equal(store.get(`wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`), "heard before leaving");
+	});
+
+	it("a finished run suspends the shared AudioContext (no idle audio output); a start right after a stop ends running, even if the suspend lands late", async () => {
+		await mount(new CardClient(null));
+		await dictate("one");
+		const ctx = FakeCtx.last!;
+		assert.equal(ctx.state, "suspended", "suspended after the run");
+		// Next run: its stop's suspend is slow, and a third run starts before it lands.
+		await dictate("two");
+		let release!: () => void;
+		ctx.holdSuspend = new Promise<void>((r) => (release = r));
+		await click(toggle());
+		await settle();
+		const ws = FakeWS.last!;
+		await act(async () => ws.open());
+		await click(toggle()); // Stop: suspend() now pending
+		await act(async () => ws.emit("close", { code: 1000 }));
+		await click(toggle()); // start again before the suspend resolves
+		await settle();
+		release();
+		await settle(60);
+		assert.equal(ctx.state, "running", "the new run is not left suspended");
 	});
 
 	it("finishing inserts the transcript into the composer; a second run appends to it", async () => {

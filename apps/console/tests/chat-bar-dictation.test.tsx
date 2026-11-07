@@ -76,7 +76,12 @@ class FakeCtx {
 	createMediaStreamSource() {
 		return new FakeNode();
 	}
-	async resume() {}
+	async resume() {
+		this.state = "running";
+	}
+	async suspend() {
+		this.state = "suspended";
+	}
 }
 Object.assign(globalThis, { WebSocket: FakeWS, AudioContext: FakeCtx, AudioWorkletNode: FakeNode });
 Object.defineProperty(globalThis, "navigator", {

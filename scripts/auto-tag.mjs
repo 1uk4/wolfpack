@@ -25,7 +25,8 @@ const items = planRelease(
   {
     tags: () => lines(git("tag", "--list")),
     headTags: () => lines(git("tag", "--points-at", head)),
-    affected: (base) => aff.computeAffected(aff.changedFiles(base, head, root), workspaces).components,
+    changedFiles: (base) => aff.changedFiles(base, head, root),
+    affected: (files) => aff.computeAffected(files, workspaces).components,
     commits: (base) => lines(git("log", "--no-merges", "--format=%h %s", base ? `${base}..${head}` : head)),
   },
 );

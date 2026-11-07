@@ -38,7 +38,8 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
   const head = git(root, "rev-parse", "HEAD");
   const deps: ReleaseDeps = {
     tags: () => git(root, "tag", "--list").split("\n").filter(Boolean),
-    affected: (base) => aff.computeAffected(aff.changedFiles(base, head, root), workspaces).components,
+    changedFiles: (base) => aff.changedFiles(base, head, root),
+    affected: (files) => aff.computeAffected(files, workspaces).components,
     headTags: () => git(root, "tag", "--points-at", head).split("\n").filter(Boolean),
     commits: (base) => git(root, "log", "--no-merges", "--format=%h %s", base ? `${base}..HEAD` : "HEAD").split("\n").filter(Boolean),
   };

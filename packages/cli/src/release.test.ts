@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+// @ts-expect-error plain .mjs, no types
+import { computeAffected } from "../../../scripts/affected.mjs";
 import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, pushTagsSeparately, type ReleaseDeps } from "./release.js";
 
 const COMPONENTS = ["wolfd", "workerd", "hubd"];
 function deps(tags: string[], affected: Record<string, string[]>): ReleaseDeps {
   return {
     tags: () => tags,
-    affected: (base) => affected[base ?? ""] ?? [],
+    changedFiles: (base) => [base ?? ""],
+    affected: (files) => affected[files?.[0] ?? ""] ?? [],
     commits: (base) => [`abc123 change since ${base ?? "start"}`],
   };
 }
@@ -78,6 +81,50 @@ describe("auto-tag on stable (patch plan)", () => {
     const tags = ["wolfd/v0.1.4", "wolfd/v0.1.5"];
     const d = { ...deps(tags, { "wolfd/v0.1.4": ["wolfd"], "wolfd/v0.1.5": ["wolfd"] }), headTags: () => ["wolfd/v0.1.5"] };
     expect(planRelease({ components: ["wolfd"] }, d)).toEqual([]);
+  });
+});
+
+describe("release filter: only files a component ships make a tag", () => {
+  const ws = (name: string, dir: string, deps: string[] = []) => ({ name, dir, deps, inTsRoot: true, hasTest: true, distImports: [] });
+  const workspaces = [
+    ws("@wolfpack/protocol", "packages/protocol"),
+    ws("@wolfpack/harness", "packages/harness", ["@wolfpack/protocol"]),
+    ws("@wolfpack/hubd", "packages/hubd"),
+    ws("@wolfpack/workerd", "packages/workerd"),
+    ws("@wolfpack/console", "packages/console"),
+    ws("@wolfpack/cli", "packages/cli", ["@wolfpack/harness"]),
+  ];
+  const all = ["wolfd", "workerd", "hubd", "console"];
+  const tagsFor = (changed: string[]) =>
+    planRelease(
+      { components: all },
+      {
+        tags: () => all.map((c) => `${c}/v0.1.0`),
+        changedFiles: () => changed,
+        affected: (files) => computeAffected(files, workspaces).components,
+        commits: () => [],
+      },
+    ).map((i) => i.component);
+
+  it("PR #15 (workflows, auto-tag, cli) tags nothing", () => {
+    expect(tagsFor([
+      ".github/workflows/release-stable.yml", ".github/workflows/release.yml", "packages/cli/src/commands/release.ts", "packages/cli/src/release.test.ts",
+      "packages/cli/src/release.ts", "packages/cli/src/pr-prepare.ts", "packages/cli/src/pr-prepare.test.ts", "scripts/auto-tag.mjs",
+    ])).toEqual([]);
+  });
+  it("test-only and CI-only changes tag nothing", () => {
+    expect(tagsFor(["packages/hubd/src/store.test.ts", "packages/hubd/tests/a.ts", "vitest.config.ts", "turbo.json", "scripts/affected.mjs", "docs/x.md"])).toEqual([]);
+  });
+  it("source of a workspace dep tags its dependents", () => {
+    expect(tagsFor(["packages/protocol/src/a.ts"])).toEqual(["wolfd"]);
+  });
+  it("a deploy/<component>/ file tags only that component", () => {
+    expect(tagsFor(["deploy/hubd/setup.sh"])).toEqual(["hubd"]);
+    expect(tagsFor(["deploy/console/RUNBOOK.md"])).toEqual(["console"]);
+    expect(tagsFor(["deploy/unknown/x"])).toEqual([]);
+  });
+  it("lockfile, root package.json or release-build.sh tag everything", () => {
+    for (const f of ["package-lock.json", "pnpm-lock.yaml", "package.json", "scripts/release-build.sh", "scripts/release-components.json", "infra/release/Dockerfile"]) expect(tagsFor([f]).sort()).toEqual([...all].sort());
   });
 });
 

@@ -33,7 +33,7 @@ describe("backupSessionStore", () => {
 
   it("is a no-op once a backup exists for the same engine version", () => {
     writeFileSync(store, "v1");
-    expect(backupSessionStore(store, { engineVersion: "1.4.0" })).toBeDefined();
+    expect(backupSessionStore(store, { engineVersion: "1.4.0" })!.files).toEqual(["session.sqlite"]);
     writeFileSync(store, "v2");
     expect(backupSessionStore(store, { engineVersion: "1.4.0" })).toBeUndefined();
     expect(readdirSync(join(dir, "backups"))).toHaveLength(1);

@@ -4,7 +4,8 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type Pm = "pnpm" | "npm";
 export interface Cmd {
@@ -25,6 +26,18 @@ export function detectPm(root: string, pnpmFound: () => boolean = pnpmInstalled)
 /** Run a locally installed tool (tsc, vitest). */
 export function toolCommand(pm: Pm, tool: string, args: string[]): Cmd {
   return pm === "pnpm" ? { cmd: "pnpm", args: ["exec", tool, ...args] } : { cmd: "npx", args: [tool, ...args] };
+}
+
+/** This CLI's own bin (dist/bin/wolfpack.js next to dist/pm.js). */
+export const OWN_BIN = join(dirname(fileURLToPath(import.meta.url)), "bin", "wolfpack.js");
+
+/**
+ * The vitest suite goes through the host's test runner (`wolfpack test`: one run at a time per host, capped, cached), the
+ * same for either package manager. No paths = the whole suite. It is started as `node <this CLI's bin> test …`, never as
+ * `wolfpack` from PATH: that may be another (older) install, or none.
+ */
+export function vitestCommand(paths: string[], bin: string = OWN_BIN): Cmd {
+  return { cmd: process.execPath, args: [bin, "test", "run", ...paths] };
 }
 
 export function consoleTestCommand(pm: Pm): Cmd {

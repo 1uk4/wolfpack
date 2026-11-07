@@ -23,7 +23,7 @@ Packages have no linter yet (`lint` is a no-op echo). The console lints with esl
 ## Package manager: pnpm for dev and CI, npm for the release
 
 - **Dev and CI use pnpm** (`packageManager` in `package.json` pins the version). One content-addressed store (`~/Library/pnpm/store` on the Mac) is linked into every worktree, so a second worktree installs in seconds and costs tens of MB. Get pnpm with `corepack enable` (plain `corepack enable` only shims pnpm and yarn, so npm keeps working; `corepack enable npm` makes npm refuse this repo, so don't, or set `COREPACK_ENABLE_STRICT=0`).
-- **The release images still install with npm** from `package-lock.json` until work-wolfpack-hFNgvt7 moves them. So both lockfiles are committed and must agree. After changing any `package.json` run `npm install --package-lock-only --ignore-scripts` **and** `pnpm install --lockfile-only`. `pnpm check:lockfiles` (and CI) fails when `package-lock.json` is not what npm would write, or when the two locks resolve different versions. The one name difference is expected: the git dependency is `pi-claude-bridge-stateless` in npm and `pi-claude-bridge` in pnpm.
+- **The release images install with npm** from `package-lock.json`; pnpm is for development and CI only (owner decision). So both lockfiles are committed and must agree. After changing any `package.json` run `npm install --package-lock-only --ignore-scripts` **and** `pnpm install --lockfile-only`. `pnpm check:lockfiles` (and CI) fails when `package-lock.json` is not what npm would write, or when the two locks resolve different versions. The one name difference is expected: the git dependency is `pi-claude-bridge-stateless` in npm and `pi-claude-bridge` in pnpm.
 - **Strict layout.** pnpm only lets a package import what it declares (`hoist: false`), so a missing dependency fails at install/build instead of working by accident. `pnpm check:deps` lists undeclared imports. `extensions/*` are not workspaces: the root `devDependencies` declare what they import.
 - **Turbo cache is shared.** Root scripts run turbo through `scripts/turbo.mjs`, which points every checkout at `~/.cache/wolfpack/turbo` (override with `TURBO_CACHE_DIR`; CI sets none). Use `pnpm turbo ...` or `node scripts/turbo.mjs ...`; a bare `turbo` or `npx turbo` uses the checkout's own cache.
 - **pnpm-only dev scripts:** `pnpm dev`, `pnpm verify`, `pnpm stack`, `pnpm dev:stack`, `pnpm runtime:update`, `pnpm check:deps`, `pnpm check:lockfiles`. `runtime:update` and `wolfpack pr` use pnpm only when the checkout being deployed has `pnpm-lock.yaml` and pnpm is installed; otherwise they run the old npm commands.
@@ -51,7 +51,7 @@ Set `WOLFPACK_HUB_URL` (and `WOLFPACK_HUB_TOKEN`, a console token from `hubd pai
 WOLFPACK_MODELS_FILE=/path/to/models.subscription.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
 ```
 
-Live proof (tagged, never in CI): `WOLFD_LIVE=1 pnpm --filter @wolfpack/harness test -- wolfd.subscription.live` runs a chat turn and a `read` tool turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
+Live proof (this Mac only, never in CI): `pnpm run test:live` runs one chat turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
 
 ## Test seams
 

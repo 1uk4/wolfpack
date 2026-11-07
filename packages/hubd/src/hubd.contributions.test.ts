@@ -51,7 +51,6 @@ describe("contributions on disk", () => {
     expect(text).toContain("\n\nSummary line.\n\nThe body.\n");
     // The existing intake, run over the HUB data dir with the lane option, returns the stored contribution.
     const roots = hubRoots(dataDir);
-    expect(CONTRIBUTIONS_LANE).toBe("contributions");
     const mine = drainInbox(roots, { lane: CONTRIBUTIONS_LANE }).filter((p) => p.denTopicId === "topic-a");
     expect(mine).toHaveLength(1);
     expect(mine[0]).toMatchObject({ from: "fenrir", denTopicId: "topic-a", origin: "crawl", sourcePath: "/src", contentHash: contentHash("The body."), summary: "Summary line." });

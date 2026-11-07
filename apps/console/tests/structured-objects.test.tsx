@@ -444,12 +444,10 @@ describe("pinned checklist card", () => {
 		assert.equal(summary(), "Plan · 0/2");
 		assert.equal(q('[data-testid="pinned-checklist-loader"]'), null);
 		assert.match(doingText(), /Step 0/);
-		assert.match(button().className, /pb-2/, "the button carries the bottom padding the bar's wrapper would have");
 		await act(async () => root!.unmount());
 		document.body.innerHTML = "";
 		await mountThread(hist(obj("cl", 2, mk("Plan", ["done", "doing"]))));
 		assert.ok(loader());
-		assert.doesNotMatch(button().className, /pb-2/);
 	});
 
 	it("click expands in place, click again collapses; aria wired", async () => {

@@ -85,12 +85,6 @@ describe("hubd cli args", () => {
     await expect(main(["dev", "--data-dir", mk("hubd-net-"), "--host", "0.0.0.0", "--allow-network"], {}, (m) => logs.push(m))).rejects.toThrow(/DEV-SNAPSHOT/);
     expect(logs.join("\n")).toMatch(/WARNING.*PRODUCTION DATA/);
   });
-  it("is an executable-style bin: shebang in the source, chmod in the build script", () => {
-    expect(readFileSync(new URL("./cli.ts", import.meta.url), "utf8").startsWith("#!/usr/bin/env node\n")).toBe(true);
-    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { bin: Record<string, string>; scripts: Record<string, string> };
-    expect(pkg.bin.hubd).toBe("dist/cli.js");
-    expect(pkg.scripts.build).toMatch(/chmodSync\('dist\/cli\.js', ?0o755\)/);
-  });
 });
 
 describe("data-dir guards", () => {

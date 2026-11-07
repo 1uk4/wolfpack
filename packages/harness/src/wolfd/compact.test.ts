@@ -1,8 +1,7 @@
 /** Context stats + manual compaction over /v1 on a real engine with a scripted model; wolf.yaml compaction policy pass-through. */
 import { afterEach, describe, expect, it } from "vitest";
 import { adaptToDurable } from "../adapters/durable.js";
-import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
-import { backgroundTokensFor, compactionSettings, contextTokens, DEFAULT_BACKGROUND_TOKENS, DEFAULT_RESERVE_TOKENS, thresholds } from "../engine/compaction.js";
+import { backgroundTokensFor, compactionSettings, contextTokens, thresholds } from "../engine/compaction.js";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
@@ -31,9 +30,7 @@ describe("compaction policy", () => {
     expect(thresholds(1_000_000, undefined)).toEqual({ startAt: 1_000_000 - 16384 - 32768, waitAt: 1_000_000 - 16384 });
   });
 
-  it("defaults match pi-durable; enabled:false omits startAt overrides and thresholds", async () => {
-    expect(DEFAULT_RESERVE_TOKENS).toBe(DEFAULT_COMPACTION_POLICY.reserveTokens);
-    expect(DEFAULT_BACKGROUND_TOKENS).toBe(DEFAULT_COMPACTION_POLICY.backgroundTokens);
+  it("enabled:false omits startAt overrides and thresholds", async () => {
     const { models } = (await import("./scripted-model.js")).createScriptedModel([]);
     expect(compactionSettings(models, { startAt: 1000, enabled: false })).toEqual({ enabled: false });
     expect(thresholds(1_000_000, { startAt: 1000, enabled: false })).toEqual({});

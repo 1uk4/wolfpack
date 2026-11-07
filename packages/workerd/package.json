@@ -15,7 +15,7 @@
     "build": "tsc --build && node -e \"import('node:fs').then(f=>{f.chmodSync('dist/bin/workerd.js',0o755);})\"",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/workerd\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/workerd/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/workerd/src"
   },
   "dependencies": {
     "@wolfpack/engine": "*",

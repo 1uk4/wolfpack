@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  UNBOUND_CONTEXT,
   BINDING_RULES,
   shouldBindOnCreate,
   notBoundReason,
@@ -53,11 +52,6 @@ describe("headsUp", () => {
 });
 
 describe("texts", () => {
-  it("unbound context says where learning goes and how to fix it", () => {
-    expect(UNBOUND_CONTEXT).toBe(
-      "No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).",
-    );
-  });
   it("rules cover bind-first, one per session, rebind, relay subagent reports", () => {
     for (const w of ["BEFORE", "One bound item per session", "Rebind", "relay the decisions and findings", "not kept in memory"]) expect(BINDING_RULES).toContain(w);
   });

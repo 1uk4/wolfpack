@@ -201,7 +201,8 @@ export async function runTests(o: RunOptions): Promise<number> {
     } catch {
       /* best effort */
     }
-    const args = [resolved.bin, ...o.args, `--maxWorkers=${o.settings.workersPerRun}`, ...(cache ? ["--reporter=default", "--reporter=json", `--outputFile.json=${reportFile}`] : [])];
+    // `--project default` keeps *.live.* and *.eval.* files out even when named by path (vitest.config.ts).
+    const args = [resolved.bin, ...o.args, "--project", "default", `--maxWorkers=${o.settings.workersPerRun}`, ...(cache ? ["--reporter=default", "--reporter=json", `--outputFile.json=${reportFile}`] : [])];
     const child = spawn(process.execPath, args, { cwd: o.root, env, stdio: o.stdio ?? "inherit", detached: true });
     if (ticket && child.pid) await queue?.setChild(ticket, { pgid: child.pid });
     const killGroup = (sig: NodeJS.Signals) => {

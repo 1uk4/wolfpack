@@ -58,6 +58,8 @@ describe("wolfpack test runner", () => {
     expect(code).toBe(3);
     expect(calls()[0]!.args).toContain("--maxWorkers=3");
     expect(calls()[0]!.args.slice(0, 2)).toEqual(["run", "a.test.ts"]);
+    // always the default project: an explicit .live./.eval. path must find nothing instead of running a slow test
+    expect(calls()[0]!.args).toEqual(expect.arrayContaining(["--project", "default"]));
   });
 
   it("reruns a failure, and a pass is served from the cache without starting vitest", async () => {

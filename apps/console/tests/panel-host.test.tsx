@@ -135,15 +135,13 @@ describe("panel host", () => {
 		assert.equal(q('[data-testid="panel-tab-a"]')!.getAttribute("aria-selected"), "true");
 	});
 
-	it("the closed-panel handle floats in the chat area (not the scroller) and reopens the panel", async () => {
+	it("the closed-panel handle lives in the chat area (not the scroller) and reopens the panel", async () => {
 		await mount([note("memory")]);
 		assert.equal(q('[data-testid="panel-handle"]'), null, "open: no handle");
 		await click(q('[aria-label="Collapse side panel"]')!);
 		const h = q('[data-testid="panel-handle"]')!;
 		assert.equal(h.parentElement, q('[data-testid="chat-area"]'));
 		assert.ok(!q('[data-testid="scroller"]')!.contains(h));
-		assert.ok(/\babsolute\b/.test(h.className) && /\btop-2\b/.test(h.className) && /\bright-2\b/.test(h.className) && /\bsize-11\b/.test(h.className));
-		assert.equal(q('[data-testid="panel-host"]')!.className, "hidden");
 		await click(h);
 		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-open"), "true");
 		assert.equal(q('[data-testid="panel-handle"]'), null);

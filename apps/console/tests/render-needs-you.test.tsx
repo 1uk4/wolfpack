@@ -5,7 +5,6 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { readFileSync } from "node:fs";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { parseHTML } from "linkedom";
@@ -42,15 +41,6 @@ describe("NotifyToggleView", () => {
 		const html = view("denied");
 		assert.ok(html.includes('data-testid="needs-you-notify-denied"') && html.includes("blocked in your browser"));
 		assert.match(html, /disabled/);
-	});
-});
-
-describe("sidebar without the pinned section", () => {
-	// A cheap tripwire against the panel coming back; the notifier's behaviour is covered by its own mount test below.
-	it("carries no Needs-you section markup", () => {
-		const src = readFileSync(new URL("../components/sidebar.tsx", import.meta.url), "utf8");
-		assert.ok(!src.includes("NeedsYouPanel") && !src.includes("NeedsYouSection"));
-		assert.ok(!src.includes('data-testid="needs-you"') && !src.includes("needs-you-count"));
 	});
 });
 

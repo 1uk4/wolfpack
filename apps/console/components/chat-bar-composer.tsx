@@ -6,12 +6,13 @@
  * page, so the draft hook never runs beside the page composer (their stale flushes would overwrite each other); on every
  * mount it re-reads the draft, so text typed on the page shows up here.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { useAttachedThread } from "@/components/attached-thread";
 import { threadBase } from "@/components/thread-transport";
 import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
 import { canSendWith, chipFor, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, uploadFile, UploadError, type AttachmentLimit, type PendingAttachment } from "@/components/attachments";
+import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
 import { useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
@@ -19,9 +20,16 @@ import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
 /** The text to put back after a failed send: the sent text, then whatever was typed meanwhile (never dropped). */
 export const mergeRestored = (sent: string, current: string): string => (current.trim() === "" ? sent : sent.trim() === "" ? current : `${sent}\n${current}`);
 
-export default function ChatBarComposer({ target, title, cardOpen = false, onReplied }: { target: AttachedRef; title: string; cardOpen?: boolean; onReplied?: () => void }) {
+/**
+ * `dictation` is owned by ChatBar (it must outlive this component: the composer unmounts when the bar is minimized or the
+ * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
+ * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
+ */
+export default function ChatBarComposer({ target, title, cardOpen = false, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
+	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
+	const waiting = api.pageAttachments?.threadId === target.threadId ? api.pageAttachments.count : 0;
 	const [text, setText] = useState("");
 	const textRef = useRef("");
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -35,6 +43,13 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 		applyText(v);
 		schedule(v);
 	}, [applyText, schedule]);
+
+	// The transcript lands in this input (and its draft) while the composer is mounted.
+	useEffect(() => {
+		const fn = (t: string) => onChange(joinDictation(textRef.current, t));
+		registerAppend(fn);
+		return () => registerAppend(null);
+	}, [onChange, registerAppend]);
 
 	// Pasted / picked images upload exactly as on the thread page.
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -92,24 +107,44 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 		}
 	}, [attachments, applyText, schedule, api, target, working, onReplied]);
 	const stop = useCallback(() => void abortThread(target), [target]);
+	// Enter while dictating finishes the run, then sends the spoken text (as on the thread page); one send in flight.
+	const sendRef = useRef(send);
+	sendRef.current = send;
+	const sendInFlight = useRef(false);
+	const onSend = useCallback(() => {
+		if (sendInFlight.current) return;
+		if (!dictation.active) return void send();
+		sendInFlight.current = true;
+		void dictation.finish().then(() => sendRef.current()).finally(() => void (sendInFlight.current = false));
+	}, [dictation, send]);
 
 	return (
 		<>
 			{error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
+			{waiting > 0 && (
+				<p data-testid="chat-bar-attachments-waiting" className="px-3 pt-1 font-ui text-xs text-muted-foreground">
+					{waiting} attachment{waiting === 1 ? "" : "s"} waiting in the thread
+				</p>
+			)}
 			<Composer
 				busy={working}
 				{...(cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
 				value={text}
 				onChange={onChange}
-				onSend={() => void send()}
+				onSend={onSend}
 				onStop={stop}
-				canSend={canSendWith(text, attachments)}
+				canSend={canSendWith(text, attachments) || (dictation.active && !working)}
+				onEscape={dictation.active ? dictation.cancel : undefined}
+				enterSends={dictation.active}
 				inputRef={inputRef}
 				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
 				onFiles={onFiles}
 				onPickFiles={onFiles}
 				chips={<AttachmentChips items={attachments} onRemove={(k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>
+			<div className="px-3 pb-2" data-testid="dictation-slot">
+				<DictationBar dictation={dictation} />
+			</div>
 		</>
 	);
 }

@@ -2,7 +2,7 @@
 
 /**
  * AttachedThreadProvider: the ONE thread the floating chat bar talks to (`{wolf, slug, threadId}`), persisted in
- * localStorage. Navigation never touches it; `attach()` sets it and `dock()` clears it (the chat-bar docks it on landing on the thread or using another composer).
+ * localStorage. Navigation never touches it; `attach()` (starting dictation on a thread pops it out) sets it and `dock()` clears it (the chat-bar docks it on landing on the thread or using another composer).
  *
  * It also holds what the bar and its switcher read: the wolf roster and each wolf's thread list, kept live from the
  * /api/events channel (thread-updated patches a row in place, needs-you-changed patches the status and refetches that
@@ -34,6 +34,9 @@ export interface AttachedThreadApi {
 	/** The quiet one-liner after a fallback to the home thread. */
 	minimized: boolean;
 	setMinimized: (v: boolean) => void;
+	/** Attachments pending in a thread page's composer (published by ThreadChat): the floating chat cannot send them and says so. */
+	pageAttachments: { threadId: string; count: number } | null;
+	setPageAttachments: (threadId: string, count: number) => void;
 	wolves: readonly WolfLite[];
 	threads: ThreadsByWolf;
 	groups: SwitcherGroup[];
@@ -90,6 +93,11 @@ export function AttachedThreadProvider({
 	const attachedRef = useRef<AttachedRef | null>(null);
 	const [ready, setReady] = useState(false);
 	const [minimized, setMinimizedState] = useState(false);
+	const [pageAttachments, setPageAttachmentsState] = useState<{ threadId: string; count: number } | null>(null);
+	const setPageAttachments = useCallback(
+		(threadId: string, count: number) => setPageAttachmentsState((prev) => (count === 0 ? (prev?.threadId === threadId ? null : prev) : prev?.threadId === threadId && prev.count === count ? prev : { threadId, count })),
+		[],
+	);
 	const [wolves, setWolves] = useState<readonly WolfLite[]>([]);
 	const [threads, setThreads] = useState<ThreadsByWolf>({});
 	const [sent, setSent] = useState(false);
@@ -238,8 +246,8 @@ export function AttachedThreadProvider({
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, ready, minimized, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh }),
-		[attached, ready, minimized, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh],
+		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh }),
+		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

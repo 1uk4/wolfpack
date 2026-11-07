@@ -20,11 +20,13 @@ import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/s
 import { PanelFloatingHandle, PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
-import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { useAttachedThread } from "@/components/attached-thread";
+import { DictationBar, joinDictation, useBarShown } from "@/components/dictation";
+import { useThreadDictation } from "@/components/use-thread-dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
-import { useComposerDraft, useRestoreOnSendFailure } from "@/lib/composer-draft";
+import { appendToDraft, draftKey, useComposerDraft, useRereadDraftWhenShown, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
@@ -403,12 +405,42 @@ function ThreadChatInner({
 	// Unsent text survives leaving the thread, switching wolves and reloads (localStorage, text only).
 	// Restore callback: deliberately skips applyText, so a restored draft is not re-scheduled for writing, does not
 	// focus the composer and does not touch the dictation state.
-	scheduleDraft.current = useComposerDraft(wolf, threadId, textRef, (v) => {
+	// The floating chat REPLACES this composer while it is popped out and shown here (dictating, desktop): ONE input owns the
+	// text. The card unmounts (attachments live up here in ThreadChat, so pending ones survive and are back when it
+	// returns); `ownedByBar` makes the draft hook inert meanwhile (a stale text must not overwrite or absorb the chat's);
+	// when it docks, the composer re-reads the draft (typed plus dictated) via useRereadDraftWhenShown below.
+	const attachedApi = useAttachedThread();
+	const barShown = useBarShown();
+	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
+	const ownedByBar = useRef(false);
+	ownedByBar.current = barOwnsInput;
+	const draftSchedule = useComposerDraft(
+		wolf,
+		threadId,
+		textRef,
+		(v) => {
+			textRef.current = v;
+			setText(v);
+		},
+		ownedByBar,
+	);
+	scheduleDraft.current = draftSchedule;
+	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
+	// Leaving the page mid-run saves what was heard into this thread's draft. This hook MUST stay declared after
+	// useComposerDraft: cleanups run in declaration order, so the composer's unmount flush runs first and the orphan
+	// append lands on top of it (the reverse order would lose the words).
+	const dictation = useThreadDictation(
+		wolf,
+		slug,
+		threadId,
+		(t) => applyText(joinDictation(textRef.current, t)),
+		(t) => appendToDraft(draftKey(wolf, threadId), t),
+		draftSchedule.flush, // the chat's input reads the draft: write it now and drop the pending debounce
+	);
+	useRereadDraftWhenShown(barOwnsInput, wolf, threadId, textRef, (v) => {
 		textRef.current = v;
 		setText(v);
 	});
-	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
-	const dictation = useDictation({ append: (t) => applyText(joinDictation(textRef.current, t)) });
 	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.
 	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
 	const setRowOpen = useCallback(
@@ -482,6 +514,12 @@ function ThreadChatInner({
 		[transport, patchAttachment],
 	);
 	const [dragging, setDragging] = useState(false);
+	const publishAttachments = attachedApi?.setPageAttachments;
+	const waitingAttachments = attachments.filter((a) => a.status !== "error").length;
+	useEffect(() => {
+		publishAttachments?.(threadId, waitingAttachments);
+		return () => publishAttachments?.(threadId, 0);
+	}, [publishAttachments, threadId, waitingAttachments]);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
 
 	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
@@ -712,7 +750,7 @@ function ThreadChatInner({
 											<div className="font-medium">Feature graduated</div>
 											<div className="text-muted-foreground">{closedReason}</div>
 										</div>
-									) : (
+									) : barOwnsInput ? null : (
 									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
 										<Composer
 											busy={busy}
@@ -730,7 +768,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={<>{threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}</>}
+											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

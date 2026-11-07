@@ -280,6 +280,8 @@ export function shipMoments(subjects: ShipSubject[], ctx: { feature: string | nu
 export const MIN_GAP_PX = 16;
 export const MAX_GAP_PX = 48;
 const PX_PER_HOUR = 2;
+/** Quiet stretches never squeeze below this while a busy stretch still needs room. */
+const QUIET_FLOOR_PX = 4;
 
 /**
  * Squeeze quiet stretches: a piecewise-linear time axis through the moment times where each stretch between
@@ -297,11 +299,21 @@ export function timeScale(times: number[], start: number, end: number, fit?: { w
 	const natural = xs[xs.length - 1]!;
 	if (fit && natural > 0 && (natural > fit.width || fit.grow)) {
 		const gaps = xs.slice(1).map((v, i) => v - xs[i]!);
-		const minTotal = gaps.length * MIN_GAP_PX;
+		// Busy: a recent (last day) gap whose neighbours are under 8h apart; everything else is quiet.
+		const busy = gaps.map((_, i) => anchors[i + 1]! - anchors[i]! < (MIN_GAP_PX / PX_PER_HOUR) * 3600 && anchors[i + 1]! > end - 86400);
+		const n = gaps.length;
+		const b = busy.filter(Boolean).length;
+		const q = n - b;
 		let out: number[];
-		if (natural > fit.width && fit.width > minTotal) {
-			const k = (fit.width - minTotal) / (natural - minTotal);
+		if (natural > fit.width && fit.width >= n * MIN_GAP_PX) {
+			const k = (fit.width - n * MIN_GAP_PX) / (natural - n * MIN_GAP_PX);
 			out = gaps.map((g) => MIN_GAP_PX + (g - MIN_GAP_PX) * k);
+		} else if (natural > fit.width && b > 0 && fit.width - q * QUIET_FLOOR_PX >= b) {
+			// The minimums overflow: quiet stretches drop to the floor, and the busy ones share what is left (they keep as much as fits).
+			const rest = fit.width - q * QUIET_FLOOR_PX;
+			const busyEach = rest / b;
+			const quietEach = busyEach > MIN_GAP_PX ? (fit.width - b * MIN_GAP_PX) / q : QUIET_FLOOR_PX;
+			out = gaps.map((_, i) => (busy[i] ? Math.min(MIN_GAP_PX, busyEach) : quietEach));
 		} else {
 			const k = fit.width / natural;
 			out = gaps.map((g) => g * k);
@@ -534,14 +546,21 @@ export interface LabelBox {
 	key: string;
 	x: number;
 	w: number;
+	/** A marker shape (a flag), not a label: always kept, and a label that would run into it is dropped. */
+	obstacle?: boolean;
 }
 
 /** Which labels to draw: left to right within a lane side, a label that would overlap the previous kept one is dropped. */
 export function placeLabels(labels: LabelBox[], gap = 4): boolean[] {
 	const keep = labels.map(() => true);
+	const obstacles = labels.filter((l) => l.obstacle);
+	labels.forEach((l, i) => {
+		if (!l.obstacle && obstacles.some((o) => o.key === l.key && l.x < o.x + o.w + gap && o.x < l.x + l.w + gap)) keep[i] = false;
+	});
 	const lastEnd = new Map<string, number>();
 	labels
 		.map((l, i) => ({ l, i }))
+		.filter(({ l, i }) => !l.obstacle && keep[i])
 		.sort((a, b) => a.l.x - b.l.x)
 		.forEach(({ l, i }) => {
 			const end = lastEnd.get(l.key);

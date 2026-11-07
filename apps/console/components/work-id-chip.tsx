@@ -107,8 +107,11 @@ async function fetchLookup(id: string, current: string | null, now: number): Pro
 
 /** Cached lookup: one request per id per TTL, concurrent callers share it. Transient failures are not cached. */
 export function lookupWorkItem(id: string, current: string | null = null, now: () => number = Date.now): Promise<WorkLookup> {
+	// Not a work id (a branch name, a ref): never asked, so it cannot 404.
+	if (!/^work-[a-z]+-[0-9A-Za-z]{7}$/.test(id)) return Promise.resolve({ kind: "unknown" });
 	const c = cache.get(id);
-	if (c && now() - c.at < WORK_CACHE_TTL_MS) return Promise.resolve(c.value);
+	// A confirmed 404 stays cached for the whole session; found items refresh after the TTL.
+	if (c && (c.value.kind === "unknown" || now() - c.at < WORK_CACHE_TTL_MS)) return Promise.resolve(c.value);
 	const f = inflight.get(id);
 	if (f) return f;
 	const p = fetchLookup(id, current, now())

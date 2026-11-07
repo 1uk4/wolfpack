@@ -193,6 +193,33 @@ describe("hover card", () => {
 		assert.equal(calls.length, n);
 	});
 
+	it("an id that does not exist is asked once per session (the 404 is cached past the TTL), and an id not shaped like a work id is never asked", async () => {
+		respond({});
+		const gone = "work-wolfpack-Zzzzzzz";
+		assert.equal((await lookupWorkItem(gone)).kind, "unknown");
+		const n = calls.length;
+		let t = Date.now();
+		assert.equal((await lookupWorkItem(gone, null, () => (t += 10 * 60_000))).kind, "unknown");
+		assert.equal(calls.length, n);
+		assert.equal((await lookupWorkItem("work-wolfpack-preview-slot-pair")).kind, "unknown");
+		assert.equal((await lookupWorkItem("origin/wolf/1uk4")).kind, "unknown");
+		assert.equal(calls.length, n);
+	});
+
+	it("a moments-list row with only a work id shows the item's title once the lookup resolves", async () => {
+		respond({ [ID]: record({ title: "Resolved row title", partOf: null }) });
+		const { MomentList } = await import("../components/branch-graph.tsx");
+		const { EMPTY_OVERVIEW } = await import("../src/core/index.ts");
+		const NOW = 1_800_000_000;
+		const ring = { at: NOW - 600, kind: "landed" as const, lane: "main", label: "", workId: ID };
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<MomentList overview={{ ...EMPTY_OVERVIEW, main: { name: "w", kind: "wolf" } }} rings={[ring]} days={30} nowSec={NOW} />));
+		await flush();
+		assert.match(q('[data-testid="git-moments"] li')!.textContent!, /Resolved row title/);
+	});
+
 	it("in-flight lookups are deduped", async () => {
 		respond({ [ID]: record({ partOf: null }) });
 		await Promise.all([lookupWorkItem(ID), lookupWorkItem(ID)]);

@@ -189,6 +189,16 @@ describe("isVersionTag", () => {
 	});
 });
 
+describe("placeLabels with obstacles", () => {
+	it("a label that would run into the NEXT flag's shape is dropped; the flag's own shape does not block it", () => {
+		const shape = (x: number) => ({ key: "stable-above", x: x - 6, w: 12, obstacle: true });
+		const label = (x: number, w: number) => ({ key: "stable-above", x: x + 13, w });
+		// flag A at 100 with an 80px label (113..193), flag B at 150 with a short label (163..193)
+		const keep = placeLabels([shape(100), label(100, 80), shape(150), label(150, 30)]);
+		assert.deepEqual(keep, [true, false, true, true]);
+	});
+});
+
 describe("placeLabels", () => {
 	it("drops the later label when two on the same side of a lane would overlap, keeps others", () => {
 		const keep = placeLabels([{ key: "stable-below", x: 90, w: 40 }, { key: "stable-below", x: 0, w: 40 }, { key: "stable-below", x: 30, w: 40 }, { key: "stable-above", x: 30, w: 40 }]);
@@ -270,6 +280,15 @@ describe("timeScale fit", () => {
 		for (let i = 1; i < busy.length; i++) assert.ok(Math.abs(fit.x(busy[i]!) - fit.x(busy[i - 1]!) - (nat.x(busy[i]!) - nat.x(busy[i - 1]!))) < 0.001, "busy stretch unchanged");
 		assert.ok(fit.x(quiet[1]!) - fit.x(quiet[0]!) >= 16 - 0.001, "quiet stretch not below the minimum while room remains");
 		assert.ok(fit.x(quiet[1]!) - fit.x(quiet[0]!) < nat.x(quiet[1]!) - nat.x(quiet[0]!), "quiet stretch squeezed");
+	});
+	it("this thread's real shape: 3 PRs and ~37 release tags over 6 days, then 30 moments in the last 4 hours; the last 4 hours get at least half the card", () => {
+		const quiet = Array.from({ length: 40 }, (_, i) => NOW - 6 * DAY + i * 3 * 3600);
+		const busy = Array.from({ length: 30 }, (_, i) => NOW - 4 * 3600 + 600 + i * 450);
+		const fit = timeScale([...quiet, ...busy], NOW - 7 * DAY, NOW, { width: 380, grow: false });
+		assert.ok(Math.abs(fit.width - 380) < 0.001);
+		assert.ok(fit.x(NOW) - fit.x(NOW - 4 * 3600) >= 190, `last 4h got ${fit.x(NOW) - fit.x(NOW - 4 * 3600)}px of 380`);
+		const xs = [...quiet, ...busy].map(fit.x);
+		assert.deepEqual([...xs].sort((a, b) => a - b), xs);
 	});
 	it("only when the minimums alone overflow does it scale everything evenly", () => {
 		const times = Array.from({ length: 20 }, (_, i) => NOW - 3600 + i * 60);

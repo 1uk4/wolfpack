@@ -203,9 +203,12 @@ export function Swimlanes({ overview, rings, days, nowSec, labelW = CARD_LABEL_W
 		return { i, key: regionOf(laneOf(m), side), x: left, w: text.length * CHAR_W };
 	};
 	const labelled = moments.map((m, i) => ({ m, i })).filter(({ m }) => m.kind !== "split" && m.label !== "").map(({ m, i }) => labelSpec(m, i));
-	const okLabels = placeLabels(labelled);
-	const kept = new Set(labelled.flatMap((l, k) => (okLabels[k] ? [l.i] : [])));
-	const taken = labelled.filter((_, k) => okLabels[k]);
+	// Each release flag is an obstacle for its neighbours' labels: a label that would run into the next flag is dropped (tooltip only).
+	const shapes = moments.flatMap((m) => (m.kind === "release" ? [{ i: -1, key: regionOf(laneOf(m), "above"), x: x(m.at) - 6, w: 12, obstacle: true as const }] : []));
+	const boxes = [...labelled, ...shapes];
+	const okLabels = placeLabels(boxes);
+	const kept = new Set(boxes.flatMap((l, k) => (okLabels[k] && !("obstacle" in l) ? [l.i] : [])));
+	const taken = boxes.filter((_, k) => okLabels[k]);
 	const bandOf = (since: number, laneName: string, label: string, key: string) => {
 		const bx = x(Math.max(since, start));
 		const w = label.length * CHAR_W;
@@ -295,6 +298,26 @@ export function Swimlanes({ overview, rings, days, nowSec, labelW = CARD_LABEL_W
 const KIND_LABEL: Record<Moment["kind"], string> = { split: "split", pr: "PR merged", release: "release", landed: "landed" };
 
 /** The large view's list of moments, newest first: time, kind, work item chip, title. */
+/** A list row's text: the work item's title from the same cached lookup the chip uses (its own domain is in the id), else what the moment carries. */
+function MomentText({ m }: { m: Moment }) {
+	const [title, setTitle] = useState<string>();
+	useEffect(() => {
+		if (!m.workId) return;
+		let live = true;
+		void lookupWorkItem(m.workId).then((v) => {
+			if (live && v.kind === "ok") setTitle(v.item.title);
+		});
+		return () => {
+			live = false;
+		};
+	}, [m.workId]);
+	return (
+		<span className="min-w-0 truncate" title={m.detail}>
+			{title ?? m.title ?? m.label}
+		</span>
+	);
+}
+
 export function MomentList({ overview, rings, days, nowSec }: { overview: GitOverview; rings: Moment[]; days: number; nowSec: number }) {
 	const moments = buildMoments(overview, rings, nowSec, days).reverse();
 	if (moments.length === 0) return <p className="text-muted-foreground">No moments in the last {days} days.</p>;
@@ -305,7 +328,7 @@ export function MomentList({ overview, rings, days, nowSec }: { overview: GitOve
 					<span className="w-28 shrink-0 text-muted-foreground">{new Date(m.at * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
 					<span className="w-20 shrink-0 text-muted-foreground">{KIND_LABEL[m.kind]}</span>
 					{m.workId && <WorkIdChip id={m.workId} />}
-					<span className="min-w-0 truncate" title={m.detail}>{m.title ?? m.label}</span>
+					<MomentText m={m} />
 					{count > 1 && <span className="shrink-0 text-muted-foreground">×{count}</span>}
 				</li>
 			))}

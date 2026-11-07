@@ -174,7 +174,7 @@ worker name (`detach-chat (worker)`), then a mark: **● built, ◐ stale, ○ n
 row's hint shows the path, and "builds first, ~3 min" for a stale or not-built row: picking one builds it (install plus build, output
 in `~/.wolfpack/preview/last-run.log`) and then starts the preview. Active comes first, then the worktree you are in, then the
 newest commit. `stable`, the main checkout, detached heads and branches already merged into `wolf/1uk4` or `stable` with no edits
-are hidden; "Show all worktrees…" at the bottom lists them. A worktree is built when a stamp
+are hidden; "Show all worktrees…" at the bottom lists them (the runtime checkout is never offered, not even there). The preview console always reads its keys from `~/.wolfpack/preview/auth.json` (`WOLFPACK_AUTH_FILE`), so they survive a switch between worktrees. A worktree is built when a stamp
 (`~/.wolfpack/preview/builds/<hash>.json`, kept outside the worktree so it never looks dirty) says so, or, with no stamp, when its
 `workerd.js` and cli `dist` are newer than its HEAD commit.
 

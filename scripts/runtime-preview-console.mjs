@@ -27,7 +27,7 @@ const plistPath = (home) => path.join(home, "Library", "LaunchAgents", `${CONSOL
 function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) {
 	const logFile = path.join(home, ".wolfpack", "preview", "console.log");
 	fs.mkdirSync(path.dirname(logFile), { recursive: true });
-	const env = { PORT: port, HOSTNAME: "127.0.0.1", WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}`, HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+	const env = { PORT: port, HOSTNAME: "127.0.0.1", WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}`, HOME: home, WOLFPACK_AUTH_FILE: path.join(home, ".wolfpack", "preview", "auth.json"), PATH: process.env.PATH ?? "/usr/bin:/bin" };
 	const file = plistPath(home);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(

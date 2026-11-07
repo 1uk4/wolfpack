@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 5;
+export const PREVIEW_VERSION = 6;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -69,6 +69,13 @@ const defaultSteps = {
 	launchctl: (...args) => spawnSync("launchctl", args, { stdio: "inherit" }).status,
 	sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 	portFree: probePortFree,
+	health: async (port) => {
+		try {
+			return (await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(2000) })).ok;
+		} catch {
+			return false;
+		}
+	},
 	fetchJson: async (url) => {
 		const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
 		if (!r.ok) throw new Error(`${url} answered ${r.status}`);
@@ -323,6 +330,12 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return serveDev(wtDir, state);
 	}
 
+	/** The runtime checkout. A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path. */
+	const findRuntime = () => {
+		const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
+		return state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
+	};
+
 	/** Plain `wolfpack preview`: list the worktrees, pick one (building it first when needed) and start its preview. */
 	const picker = async () => {
 		let worktrees;
@@ -337,9 +350,14 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			} catch {}
 		})();
 		const activeDir = state?.mode === "worktree" ? state.worktree : undefined;
+		const runtimeDir = (() => {
+			try {
+				return findRuntime();
+			} catch {}
+		})();
 		let showAll = false;
 		for (;;) {
-			const { rows, hiddenCount } = pickerModel({ worktrees, runtimeBranch, here, activeDir, showAll });
+			const { rows, hiddenCount } = pickerModel({ worktrees, runtimeBranch, runtimeDir, here, activeDir, showAll });
 			const items = rows.map((r) => ({ label: r.label, hint: r.hint, value: { dir: r.dir, build: r.build } }));
 			if (!showAll && hiddenCount > 0) items.push({ label: "Show all worktrees…", value: "all" });
 			const choice = await st.pick("Preview which worktree?", items);
@@ -501,17 +519,15 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			up = await st.health(port);
 			if (!up) await st.sleep(2000);
 		}
-		writeState({ ...readState(), stackStartedAt: new Date().toISOString() });
 		if (!up) return fail(`healthz on ${port} did not answer within 60 s; check \`wolfpack preview status\`.`);
+		writeState({ ...readState(), stackStartedAt: new Date().toISOString() });
 		log("the wolves restarted and /healthz answers.");
 		return { exitCode: 0 };
 	}
 
 	if (!sub) return picker();
 
-		// A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path.
-	const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
-	const rtWt = state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
+	const rtWt = findRuntime();
 	if (!rtWt) return fail(`branch ${runtimeBranch} is not checked out in any worktree`);
 	log(`${tag}runtime @ ${rtWt}`);
 

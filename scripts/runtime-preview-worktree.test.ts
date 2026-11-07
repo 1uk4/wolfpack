@@ -70,7 +70,7 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 type Item = { label: string; value: unknown };
-const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown } = {}) => {
+const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown; realHealth?: boolean } = {}) => {
 	const builds: { dir: string; logFile?: string }[] = [];
 	const menus: Item[][] = [];
 	const flags = { portBusy: false };
@@ -90,6 +90,7 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		pick: async (_title: string, items: Item[]) => (menus.push(items), o.pick ? o.pick(items) : null),
 		spawnHelper: (a: { args: string[] }) => helper.push(a.args.slice(4).join(" ")),
 	};
+	if (o.realHealth) delete steps.health; // the production default, answered by a stubbed fetch
 	if (o.confirm !== "none") steps.confirm = async (q: string) => (asked.push(q), o.confirm ?? true);
 	const run = (argv: string[], cwd = main) =>
 		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud() }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
@@ -106,6 +107,10 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect(h.helper).toEqual(["running 0"]);
 		expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA, previewRef: "feat/a", console: { mode: "dev", dir: wtA }, phase: "switching" });
 		expect(h.lc.some((a) => a[0] === "bootstrap" && a[2].endsWith("com.wolfpack.preview-console.plist"))).toBe(true);
+		// keys survive a switch: the console reads one auth file under ~/.wolfpack/preview, not the served worktree's
+		expect(fs.readFileSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"), "utf8")).toContain(
+			`<key>WOLFPACK_AUTH_FILE</key><string>${path.join(home, ".wolfpack", "preview", "auth.json")}</string>`,
+		);
 		expect(g(rt, "rev-parse", "--abbrev-ref", "HEAD")).toBe("stable"); // the runtime checkout is not touched
 	});
 
@@ -300,7 +305,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			h2.menus.length = 0;
 			await h2.run([], wtB);
 			expect(h2.menus.length).toBe(2);
-			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("stable"))).toBe(true);
+			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("stable"))).toBe(false); // the runtime checkout is never offered
 			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("main"))).toBe(true);
 		});
 
@@ -346,7 +351,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(rows.map((r: { name: string }) => r.name)).toEqual(["yu741qH-floating-chat…", "detach-chat (worker)", "fix/short"]);
 		});
 
-		it("hides stable, the main checkout, detached heads and clean merged branches, unless active or the cwd's; showAll hides nothing", () => {
+		it("hides stable, the main checkout, detached heads and clean merged branches, unless active or the cwd's; showAll lists all but stable", () => {
 			const all = [
 				wt({ dir: "/rt", branch: "stable", status: "built", commitTime: 9 }),
 				wt({ dir: "/main", branch: "main", status: "built", commitTime: 9, main: true }),
@@ -360,7 +365,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			const r = model(all, { here: "/merged-here", activeDir: "/merged-active" });
 			expect(r.rows.map((x: { dir: string }) => x.dir)).toEqual(["/merged-active", "/merged-here", "/merged-edit", "/live"]);
 			expect(r.hiddenCount).toBe(4);
-			expect(model(all, { showAll: true }).rows.length).toBe(8);
+			expect(model(all, { showAll: true }).rows.length).toBe(7); // everything but the runtime branch
 		});
 
 		it("orders active first, then the cwd's worktree, then newest commit first", () => {
@@ -388,6 +393,19 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(rows.map((r: { label: string }) => r.label)).toEqual(["a  ● built  active", "b  ◐ stale", "c  ○ not built"]);
 			expect(rows[1].hint).toContain("builds first");
 			expect(rows[0].hint).not.toContain("builds first");
+		});
+	});
+
+	describe("picker never offers the runtime checkout", () => {
+		it("hides the runtime dir even under Show all and even when it is the cwd", () => {
+			const worktrees = [
+				{ dir: "/rt/wolfpack", branch: "feat/detached-at-stable", status: "built", dirty: false, merged: false, main: false, commitTime: 9 },
+				{ dir: "/wt/a", branch: "feat/a", status: "built", dirty: false, merged: false, main: false, commitTime: 1 },
+			];
+			for (const showAll of [false, true]) {
+				const { rows } = pickerModel({ worktrees, runtimeBranch: "stable", runtimeDir: "/rt/wolfpack", here: "/rt/wolfpack", showAll });
+				expect(rows.map((r: { dir: string }) => r.dir)).toEqual(["/wt/a"]);
+			}
 		});
 	});
 
@@ -451,6 +469,23 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect((await h.run(["restart"])).exitCode).toBe(0);
 			expect(h.lc).toEqual([["kickstart", "-k", `gui/${process.getuid?.() ?? 501}/com.wolfpack.stack`]]);
 			expect((await status(h)).restartNeeded).toBe(false);
+		});
+
+		it("restart with the real health poll waits on /healthz, then clears restart needed", async () => {
+			await harness().run([wtA]);
+			fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), startedAt: new Date(Date.now() - 3_600_000).toISOString() }));
+			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.now() - 1_800_000).toISOString() }));
+			const urls: string[] = [];
+			const realFetch = globalThis.fetch;
+			globalThis.fetch = (async (u: string) => (urls.push(String(u)), { ok: true })) as unknown as typeof fetch;
+			try {
+				const h = harness({ realHealth: true });
+				expect((await h.run(["restart"])).exitCode).toBe(0);
+			} finally {
+				globalThis.fetch = realFetch;
+			}
+			expect(urls).toEqual(["http://127.0.0.1:7141/healthz"]);
+			expect((await status(harness())).restartNeeded).toBe(false);
 		});
 
 		it("off --rollback (used by the helper) stops the watcher too", async () => {

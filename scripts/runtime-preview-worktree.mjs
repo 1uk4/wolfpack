@@ -193,8 +193,9 @@ export function shortName(branch, dir) {
  * Hidden unless `showAll`, active or the cwd's: the runtime branch, the main checkout, detached heads, and merged branches with no edits.
  * Order: active, then the cwd's worktree, then newest commit first.
  */
-export function pickerModel({ worktrees, runtimeBranch = "stable", here, activeDir, showAll = false }) {
-	const keep = (w) => showAll || w.dir === activeDir || w.dir === here || !(w.branch === runtimeBranch || w.main || !w.branch || (w.merged && !w.dirty));
+// The runtime checkout is never offered (not even under Show all, not even as the cwd): previewing it is previewing stable.
+export function pickerModel({ worktrees, runtimeBranch = "stable", runtimeDir, here, activeDir, showAll = false }) {
+	const keep = (w) => w.dir !== runtimeDir && w.branch !== runtimeBranch && (showAll || w.dir === activeDir || w.dir === here || !(w.branch === runtimeBranch || w.main || !w.branch || (w.merged && !w.dirty)));
 	const kept = worktrees.filter(keep);
 	const rank = (w) => (w.dir === activeDir ? 0 : w.dir === here ? 1 : 2);
 	kept.sort((a, b) => rank(a) - rank(b) || b.commitTime - a.commitTime);

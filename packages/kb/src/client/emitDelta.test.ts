@@ -23,7 +23,7 @@ const emittedBody = () => join(roots.denLocal, "emitted-bodies", "t.md");
 
 describe("emitDelta force", () => {
   it("an unchanged body is skipped without force", () => {
-    expect(emitDelta(input("body"))).not.toBeNull();
+    expect(emitDelta(input("body"))).toMatchObject({ denTopicId: "t" });
     rmSync(join(roots.opsRoot, "inbox"), { recursive: true });
     expect(emitDelta(input("body"))).toBeNull();
     expect(existsSync(join(roots.opsRoot, "inbox", WOLF))).toBe(true);

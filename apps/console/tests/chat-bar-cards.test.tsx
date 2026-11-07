@@ -42,6 +42,7 @@ let threadStatus: Record<string, string> = {};
 let extraThreads: any[] = [];
 let failGet = new Set<string>();
 let failPost: RegExp | null = null;
+let needsYou: { wolf: string; threadId: string; raisedAt: string }[] | null = null; // null = the route fails
 /** A GET of this slug waits for the promise (its snapshot is taken first: a stale response). */
 let gate: { slug: string; until: Promise<void> } | null = null;
 const handlers = new Map<string, (d: string) => void>();
@@ -61,6 +62,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		if (m) body(slug).pendingCards = body(slug).pendingCards.filter((p) => p.callId !== m[1]);
 		return new Response(JSON.stringify({ disposition: "started" }), { status: 200 });
 	}
+	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a"), th("w/b"), th("w/c"), ...extraThreads] });
 	const g = /^\/api\/wolves\/w\/threads\/([^/?]+)\?/.exec(url);
@@ -136,6 +138,7 @@ afterEach(async () => {
 	extraThreads = [];
 	failGet = new Set();
 	failPost = null;
+	needsYou = null;
 	gate = null;
 	handlers.clear();
 });
@@ -408,6 +411,32 @@ describe("ChatBar needs-you badge", () => {
 		const next = q('[data-testid="chat-bar-needs-you"]')!;
 		assert.equal(next.textContent, "2", "w/a (no longer attached) and w/c wait now");
 		assert.equal(next.getAttribute("data-thread"), "w/a");
+	});
+});
+
+describe("ChatBar needs-you badge order", () => {
+	it("taps to the thread whose oldest card was raised first, even when list order disagrees", async () => {
+		threadStatus = { "w/b": "needs-you", "w/c": "needs-you" };
+		needsYou = [
+			{ wolf: "w", threadId: "w/b", raisedAt: "2026-01-02T00:00:00Z" },
+			{ wolf: "w", threadId: "w/c", raisedAt: "2026-01-01T00:00:00Z" },
+			{ wolf: "w", threadId: "w/b", raisedAt: "2026-01-03T00:00:00Z" },
+		];
+		await mount();
+		assert.equal(q('[data-testid="chat-bar-needs-you"]')!.getAttribute("data-thread"), "w/c");
+		assert.match(q('[data-testid="chat-bar-needs-you"]')!.getAttribute("title")!, /oldest: w\/c/);
+		await click(q('[data-testid="chat-bar-needs-you"]'));
+		await flush();
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/c");
+	});
+
+	it("falls back to list order when the route fails, and re-sorts on needs-you-changed", async () => {
+		threadStatus = { "w/b": "needs-you", "w/c": "needs-you" };
+		await mount();
+		assert.equal(q('[data-testid="chat-bar-needs-you"]')!.getAttribute("data-thread"), "w/b");
+		needsYou = [{ wolf: "w", threadId: "w/c", raisedAt: "2026-01-01T00:00:00Z" }];
+		await emit("needs-you-changed", { wolf: "w", kind: "card" });
+		await until(() => q('[data-testid="chat-bar-needs-you"]')!.getAttribute("data-thread") === "w/c", "the re-sort");
 	});
 });
 

@@ -19,6 +19,7 @@ import { useAttachedThread } from "@/components/attached-thread";
 import { onOwnThreadPage } from "@/components/chat-bar-io";
 import { useThreadColor } from "@/components/use-thread-color";
 import { useBarCards } from "@/components/chat-bar-cards";
+import { useOptionalServerEvent } from "@/components/server-events";
 import { attachable, kbdEventForAction, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar-io";
@@ -159,7 +160,8 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.settings ? { settings: attachedThread.settings } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all).hex;
 	const cards = useBarCards(target, working);
-	const waiting = useMemo(() => waitingElsewhere(api.threads, target), [api.threads, target]);
+	const raised = useRaisedAt(api.attached !== null);
+	const waiting = useMemo(() => oldestFirst(waitingElsewhere(api.threads, target), raised), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
 
 	const badge = waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
@@ -221,14 +223,53 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 	);
 }
 
-/** Threads on any wolf waiting for the owner, other than the attached one (home / feature threads only, no subagents). Thread lists carry no waiting-since time, so the order is list order: "first waiting", not strictly oldest. */
+/** Threads on any wolf waiting for the owner, other than the attached one (home / feature threads only, no subagents). List order; `oldestFirst` re-sorts it by when each thread's oldest card was raised. */
 export function waitingElsewhere(threads: Record<string, readonly BarThread[] | undefined>, current: Pick<AttachedRef, "wolf" | "threadId">): (BarThread & { wolf: string })[] {
 	return Object.entries(threads).flatMap(([wolf, list]) =>
 		(list ?? []).filter((t) => t.status === "needs-you" && !(wolf === current.wolf && t.id === current.threadId) && attachable(t)).map((t) => ({ ...t, wolf })),
 	);
 }
 
-/** Another thread has a card waiting: count + that thread's color dot. One tap attaches the bar to the first waiting one (no toast, no auto-switch). */
+/** `wolf\nthreadId` → raisedAt (ms) of that thread's oldest pending card, from GET /api/needs-you. Empty when the route fails (list order then). */
+export type RaisedAt = ReadonlyMap<string, number>;
+
+/** Waiting threads sorted by their oldest card's raisedAt, oldest first; threads with no known time keep list order after the known ones. Stable. */
+export function oldestFirst<T extends { id: string; wolf: string }>(list: readonly T[], raised: RaisedAt): T[] {
+	const at = (t: T) => raised.get(`${t.wolf}\n${t.id}`) ?? Infinity;
+	return list.map((t, i) => ({ t, i })).sort((a, b) => (at(a.t) === at(b.t) ? a.i - b.i : at(a.t) < at(b.t) ? -1 : 1)).map((x) => x.t);
+}
+
+/** Fetches /api/needs-you once and again on every needs-you-changed (no polling). */
+function useRaisedAt(enabled: boolean): RaisedAt {
+	const [raised, setRaised] = useState<RaisedAt>(() => new Map());
+	const seq = useRef(0);
+	const load = useCallback(() => {
+		if (!enabled) return;
+		const n = ++seq.current;
+		void (async () => {
+			try {
+				const res = await fetch("/api/needs-you", { cache: "no-store" });
+				if (!res.ok || n !== seq.current) return;
+				const body = (await res.json()) as { items?: { wolf: string; threadId: string; raisedAt: string }[] };
+				if (n !== seq.current || !Array.isArray(body.items)) return;
+				const m = new Map<string, number>();
+				for (const it of body.items) {
+					const t = Date.parse(it.raisedAt);
+					const k = `${it.wolf}\n${it.threadId}`;
+					if (!Number.isNaN(t) && t < (m.get(k) ?? Infinity)) m.set(k, t);
+				}
+				setRaised(m);
+			} catch {
+				/* list order */
+			}
+		})();
+	}, [enabled]);
+	useEffect(() => load(), [load]);
+	useOptionalServerEvent("needs-you-changed", load);
+	return raised;
+}
+
+/** Another thread has a card waiting: count + that thread's color dot. One tap attaches the bar to the oldest waiting one (no toast, no auto-switch). */
 function NeedsYouBadge({ waiting, all }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[] }) {
 	const api = useAttachedThread()!;
 	const first = waiting[0]!;
@@ -238,7 +279,7 @@ function NeedsYouBadge({ waiting, all }: { waiting: (BarThread & { wolf: string 
 			type="button"
 			data-testid="chat-bar-needs-you"
 			data-thread={first.id}
-			title={`${waiting.length} waiting for you · first: ${first.title}`}
+			title={`${waiting.length} waiting for you · oldest: ${first.title}`}
 			aria-label={`${waiting.length} waiting for you. Attach the bar to ${first.title}`}
 			onClick={() => api.attach({ wolf: first.wolf, threadId: first.id })}
 			className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25"

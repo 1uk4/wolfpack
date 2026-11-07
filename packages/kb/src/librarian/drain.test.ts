@@ -8,12 +8,6 @@ import { noteInfraFailure } from "./backoff.js";
 import { drainFile, readDrain } from "./drain.js";
 import type { KbRoots } from "../shared/index.js";
 
-vi.mock("./reorg.js", () => ({
-  reorg: vi.fn(async (opts: { domains?: string[] }) => ({
-    splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: opts.domains ?? [],
-  })),
-}));
-
 const opinion = {
   title: "Same",
   kind: { type: "fact" },

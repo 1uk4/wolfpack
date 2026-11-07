@@ -47,6 +47,51 @@ const LOOKS: Look[] = [
 	},
 ];
 
+const B_VARIATIONS: Look[] = [
+	{
+		id: "B1", name: "Original B",
+		chrome: "var(--f-geist), sans-serif", mono: "var(--f-geist-mono), monospace",
+		prose: "var(--f-geist), sans-serif", title: "var(--f-geist), sans-serif", titleWeight: 600, titleSize: 30,
+		bg: "#0f1012", surface: "#17181b", raised: "#222428", border: "#33363c", muted: "#8b9099", text: "#e8eaed",
+		accent: "#6e9cff", accentText: "#06101f", radius: 10, pill: 10, gap: 14,
+	},
+	{
+		id: "B2", name: "Mono-accent (Vercel-like)",
+		chrome: "var(--f-geist), sans-serif", mono: "var(--f-geist-mono), monospace",
+		prose: "var(--f-geist), sans-serif", title: "var(--f-geist), sans-serif", titleWeight: 600, titleSize: 30,
+		bg: "#0a0a0a", surface: "#111111", raised: "#1a1a1a", border: "#2e2e2e", muted: "#8f8f8f", text: "#ededed",
+		accent: "#ededed", accentText: "#0a0a0a", radius: 8, pill: 8, gap: 14,
+	},
+	{
+		id: "B3", name: "Violet",
+		chrome: "var(--f-geist), sans-serif", mono: "var(--f-geist-mono), monospace",
+		prose: "var(--f-geist), sans-serif", title: "var(--f-geist), sans-serif", titleWeight: 600, titleSize: 30,
+		bg: "#0f1012", surface: "#17181b", raised: "#222428", border: "#33363c", muted: "#8b9099", text: "#e8eaed",
+		accent: "#8b7cf6", accentText: "#0d0a24", radius: 10, pill: 10, gap: 14,
+	},
+	{
+		id: "B4", name: "Slate and teal",
+		chrome: "var(--f-inter), sans-serif", mono: "var(--f-geist-mono), monospace",
+		prose: "var(--f-inter), sans-serif", title: "var(--f-inter), sans-serif", titleWeight: 600, titleSize: 30,
+		bg: "#0f141a", surface: "#161c24", raised: "#1f2730", border: "#313b47", muted: "#8a96a3", text: "#e6ebf0",
+		accent: "#2dd4bf", accentText: "#04201c", radius: 10, pill: 10, gap: 14,
+	},
+	{
+		id: "B5", name: "Soft",
+		chrome: "var(--f-plex), sans-serif", mono: "var(--f-plex-mono), monospace",
+		prose: "var(--f-plex), sans-serif", title: "var(--f-plex), sans-serif", titleWeight: 600, titleSize: 30,
+		bg: "#18181b", surface: "#1f1f23", raised: "#27272a", border: "#3f3f46", muted: "#a1a1aa", text: "#f4f4f5",
+		accent: "#7aa2f7", accentText: "#0a1428", radius: 12, pill: 12, gap: 18,
+	},
+	{
+		id: "B6", name: "Warm modern",
+		chrome: "var(--f-geist), sans-serif", mono: "var(--f-geist-mono), monospace",
+		prose: "var(--f-geist), sans-serif", title: "var(--f-geist), sans-serif", titleWeight: 600, titleSize: 30,
+		bg: "#121212", surface: "#1a1a19", raised: "#252523", border: "#383835", muted: "#8e8c86", text: "#ecebe8",
+		accent: "#f0a848", accentText: "#201403", radius: 10, pill: 10, gap: 14,
+	},
+];
+
 const CURRENT: Look = {
 	id: "0", name: "Current (baseline)",
 	chrome: "'JetBrains Mono', ui-monospace, monospace", mono: "'JetBrains Mono', ui-monospace, monospace",
@@ -75,8 +120,10 @@ function Panel({ look, phone }: { look: Look; phone: boolean }) {
 		<div style={{ ...st, width: phone ? 390 : "100%", height: 600, display: "flex", overflow: "hidden", border, borderRadius: L.radius, flex: "none" }}>
 			<aside style={{ width: phone ? 64 : 200, background: L.surface, borderRight: border, padding: 10, display: "flex", flexDirection: "column", gap: 4, flex: "none" }}>
 				<div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px 12px" }}>
-					<div style={{ width: 22, height: 22, borderRadius: L.radius / 2, background: L.raised, border, flex: "none" }} />
-					{!phone && <span style={{ fontWeight: 600, fontSize: 13 }}>wolfpack</span>}
+					<svg width={22} height={22} viewBox="0 0 64 64" fill={L.text} fillRule="evenodd" style={{ flex: "none" }} role="img" aria-label="Wolfpack">
+						<path d="M8 2L24 18H40L56 2L57 27L63 33L52 39L32 62L12 39L1 33L7 27Z M16 28L27 32L19.5 35.5Z M48 28L37 32L44.5 35.5Z" />
+					</svg>
+					{!phone && <span style={{ fontFamily: L.title, fontWeight: 600, fontSize: 15, letterSpacing: L.id.startsWith("B") ? -0.2 : 0 }}>Wolfpack</span>}
 				</div>
 				{THREADS.map((t, i) => {
 					const active = i === 0;
@@ -90,7 +137,7 @@ function Panel({ look, phone }: { look: Look; phone: boolean }) {
 			</aside>
 			<main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
 				<header style={{ padding: `${L.gap}px 20px`, borderBottom: border }}>
-					<div style={{ fontFamily: L.title, fontWeight: L.titleWeight, fontSize: L.titleSize, lineHeight: 1.05, letterSpacing: L.id === "B" ? -0.5 : 0 }}>1uk4</div>
+					<div style={{ fontFamily: L.title, fontWeight: L.titleWeight, fontSize: L.titleSize, lineHeight: 1.05, letterSpacing: L.id.startsWith("B") ? -0.5 : 0 }}>1uk4</div>
 					<div style={{ color: L.muted, fontSize: 12, marginTop: 4, ...mono }}>claude-opus · main · 3 tasks · 12m ago</div>
 				</header>
 				<div style={{ flex: 1, overflow: "auto", padding: `${L.gap + 4}px 20px`, display: "flex", flexDirection: "column", gap: L.gap + 6, fontFamily: L.prose, fontSize: 15, lineHeight: 1.55 }}>
@@ -148,7 +195,9 @@ export default function LooksPage() {
 	const [width, setWidth] = useState("Wide");
 	const [cur, setCur] = useState("Off");
 	const phone = width === "Phone";
-	const list = cur === "On" ? [...LOOKS, CURRENT] : LOOKS;
+	const [abc, setAbc] = useState("Off");
+	const rest = [...(abc === "On" ? LOOKS : []), ...(cur === "On" ? [CURRENT] : [])];
+	const list = [...B_VARIATIONS, ...rest];
 	return (
 		<div style={{ background: "#0a0a0a", color: "#e6e6e6", minHeight: "100vh", padding: 24, fontFamily: "system-ui, sans-serif" }}>
 			<div style={{ display: "flex", gap: 20, alignItems: "center", marginBottom: 20, flexWrap: "wrap" }}>
@@ -156,10 +205,13 @@ export default function LooksPage() {
 				<Toggle on={width} set={setWidth} opts={["Wide", "Phone"]} />
 				<span style={{ fontSize: 13 }}>Current baseline</span>
 				<Toggle on={cur} set={setCur} opts={["Off", "On"]} />
+				<span style={{ fontSize: 13 }}>Show A / B / C</span>
+				<Toggle on={abc} set={setAbc} opts={["Off", "On"]} />
 			</div>
 			<div style={{ display: "flex", flexDirection: "column", gap: 28, overflowX: "auto" }}>
 				{list.map((l) => (
 					<section key={l.id}>
+						{l.id === "B1" && <h2 style={{ fontSize: 20, margin: "0 0 12px", color: "#e6e6e6" }}>B variations</h2>}
 						<h2 style={{ fontSize: 14, margin: "0 0 8px", color: "#8d8d8d" }}>
 							{l.id === "0" ? l.name : `${l.id}. ${l.name}`}
 						</h2>

@@ -74,9 +74,10 @@ Leanness comes from these rules (seams, one test per behaviour, no duplicates, r
 
 ## 7. Determinism, live tests, flakes
 - Tests don't depend on real time, randomness, network or run order.
-- Live tests (real wolf, Claude, network) carry the `live` gate and never run in the
-  default suite. Slow evals carry the `eval` gate. Both are meant to run only on the
-  PR into `stable` (planned).
+- Live tests (real Claude, network) are named `*.live.test.*`; slow evals `*.eval.test.*`.
+  Neither is in the default suite, and `wolfpack test` never collects them. Do not run
+  them or add ad hoc skips: the release PR runs them (`pnpm test:live` on the owner's
+  Mac, `pnpm test:eval` in CI).
 - A flaky test is a bug: fix it, or quarantine it with an owner and a date. Don't
   add retries to hide it.
 
@@ -85,7 +86,7 @@ Leanness comes from these rules (seams, one test per behaviour, no duplicates, r
 |---|---|---|
 | Task branch | `wolfpack test related <changed files>` plus typecheck | the worker |
 | Merge into `wolf/1uk4` | full default suite of every affected package; red blocks the merge (planned) | the auto-merge |
-| PR into `stable` | what `wolfpack pr prepare` runs (build, typecheck and the affected packages' tests; everything with `--full`) plus CI (the `ci` check), including the `live` and `eval` gates (planned) | the agent (prepare) and CI |
+| PR into `stable` | what `wolfpack pr prepare` runs (build, typecheck and the affected packages' tests; everything with `--full`) plus CI (the `ci` check); prepare also runs `pnpm test:live` (unless `--skip-live`) and CI runs `pnpm test:eval` | the agent (prepare) and CI |
 
 ## How to verify your work
 1. On a task branch, run `wolfpack test related <changed files>` while working, and again with typecheck

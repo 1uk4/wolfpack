@@ -11,10 +11,10 @@ Agents never merge a PR and never push `stable`. They open a PR that explains it
 
 `prepare --dry-run` and `post-merge` without `--apply` only print what would happen; use them first when unsure.
 
-### `wolfpack pr prepare [--full] [--dry-run] [--base stable]`
+### `wolfpack pr prepare [--full] [--skip-live] [--dry-run] [--base stable]`
 - Title: `Release <wolf> <date>: N features`. Features come from the work item IDs in the commit subjects (`origin/stable..HEAD`); commits with no readable ID go under **Other commits**.
 - Body, in order: the **Decide** header (what merging does, per-feature risk, rollback, per-feature manual checks, a warning for work items that could not be read), **Tests and CI** totals, one section per feature (diagram, before/after screenshots linked from `docs/pr-assets/<id>/` (**commit the screenshots**: only tracked files are linked; an untracked or ignored image is not shown), the full feature document), then Other commits.
-- Without `--full` it tests the affected packages; `--full` runs everything.
+- Without `--full` it tests the affected packages; `--full` runs everything. It then runs `pnpm run test:live` (real Claude through your login, so run it on your Mac). `--skip-live` omits that, and the PR body's live/eval line says it was skipped.
 - `--base` exists only to be explicit: `stable` is the only value accepted, anything else is refused.
 - Refuses before changing anything on a dirty tree (the console's generated `apps/console/next-env.d.ts` does not count), a branch that is not `wolf/*`, no `gh` login, a missing Work API config, a base other than `stable`, a failed or unreadable lookup of the existing PR, a failed ancestor check against `origin/stable` (anything other than "not an ancestor"), nothing to release, or a failing build or test.
 - It never calls `gh pr merge` and never pushes `stable`.

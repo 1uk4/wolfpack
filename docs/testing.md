@@ -12,6 +12,14 @@ Agents run tests with `wolfpack test [run|related] [paths…] [-t <name>] [--no-
 - **Owner bypass:** only agent shells (`WOLFPACK_AGENT_RUN=1`, or a subagent) wait in the queue. Your own shell runs `wolfpack test` straight away, still using the cache. `WOLFPACK_TEST_BYPASS=1` gives an agent shell the same treatment and also stops the rewrite of direct vitest runs.
 - **Exit codes:** 75 = waited 20 minutes in the queue without getting a slot (run it again); 124 = the run took longer than 20 minutes and was stopped. Otherwise vitest's own exit code.
 
+## Live and eval tests
+One mechanism: vitest projects in the root `vitest.config.ts`.
+- `default` collects everything except `*.live.test.*` and `*.eval.test.*`. `wolfpack test` always selects it, so a slow file named by path (or through `related`) is not run. `pnpm test` does too.
+- `pnpm test:live` runs only `*.live.test.*` with `WOLFPACK_LIVE=1`: real Claude through the Claude Code login, so only on the owner's Mac. Today that is the one-turn subscription smoke test (`wolfd.subscription.live.test.ts`); without a login it fails with a message that says so.
+- `pnpm test:eval` runs only `*.eval.test.*` (the KB tree-rules and llm-split evals, about a minute).
+- Both run on the release PR only, never per task or per merge: `wolfpack pr prepare` runs `test:live` before opening the PR (`--skip-live` omits it and the PR body says so), and CI runs `test:eval` (the workflow is a separate task).
+- A test that costs money or needs a login is never gated by a `skipIf` of its own: name it `.live.` or `.eval.`. `scripts/vitest-projects.test.ts` fails if the default selection ever collects one.
+
 ## Sources
 - Google Testing Blog: Change-Detector Tests Considered Harmful (2015);
   Test Behavior, Not Implementation (2013); Don't Overuse Mocks (2013);

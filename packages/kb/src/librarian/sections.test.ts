@@ -241,8 +241,7 @@ describe("sections — helpers", () => {
     
     // Roots
     const roots = index.get(null);
-    expect(roots!.length).toBe(1);
-    expect(roots![0].id).toBe("sec-wp-000001" as SectionId);
+    expect(roots!.map((s) => s.id)).toEqual(["sec-wp-000001" as SectionId]);
     
     // Children of sec-wp-000001
     const children = index.get("sec-wp-000001" as SectionId);

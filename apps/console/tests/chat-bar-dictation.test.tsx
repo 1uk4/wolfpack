@@ -81,7 +81,7 @@ class FakeCtx {
 Object.assign(globalThis, { WebSocket: FakeWS, AudioContext: FakeCtx, AudioWorkletNode: FakeNode });
 Object.defineProperty(globalThis, "navigator", {
 	configurable: true,
-	value: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => void stops++ }] }) } },
+	value: { userAgent: "test", mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => void stops++ }] }) } },
 });
 
 const { usePathname } = await import("next/navigation");
@@ -93,6 +93,9 @@ const { useThreadDictation } = await import("../components/use-thread-dictation.
 const { useComposerDraft, appendToDraft, draftKey, writeDraft, useRereadDraftWhenShown } = await import("../lib/composer-draft.ts");
 const { AttachedThreadProvider, useAttachedThread } = await import("../components/attached-thread.tsx");
 const { ChatBar } = await import("../components/chat-bar.tsx");
+const { useAttachedStripRow } = await import("../components/attached-strip-row.ts");
+const { NewSession } = await import("../components/new-session.tsx");
+const { SubagentStripView } = await import("../components/subagent-strip.tsx");
 const { useDictation, DictationBar, joinDictation, useBarShown } = await import("../components/dictation.tsx");
 const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
 
@@ -519,6 +522,12 @@ function ThreadPage({ slug }: { slug: "a" | "b" }) {
 	);
 }
 const OnPageA = () => (usePathname() === "/wolf/w/thread/a" ? <ThreadPage slug="a" /> : null);
+/** The strip a ThreadChat draws above its composer (no subagents here), on B's page. */
+const StripOnB = () => {
+	const row = useAttachedStripRow("w", "w/b");
+	return usePathname() === "/wolf/w/thread/b" ? <SubagentStripView items={[]} now={0} onOpen={() => {}} onStop={() => {}} attached={row} /> : null;
+};
+const NewOnNew = () => (usePathname() === "/chat/new" ? <NewSession initialConfigured /> : null);
 const OnPages = () => {
 	const p = usePathname();
 	return p === "/wolf/w/thread/a" ? <ThreadPage slug="a" /> : p === "/wolf/w/thread/b" ? <ThreadPage slug="b" /> : p === "/chat/new" ? <NewPage /> : null;
@@ -571,6 +580,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		assert.equal(ws.readyState, 1, "still live after coming back");
 		assert.equal(ws.sent.some((m) => typeof m === "string" && m.includes("CloseStream")), false, "coming back did not ask the run to finish");
 		assert.equal(q('[data-testid="chat-bar"]'), null, "back on the page: the page composer, not the floating chat");
+		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-reserve"), "", "no reserve left behind");
 		assert.ok(JSON.parse(mem.get(ATTACHED_KEY)!), "not docked");
 		assert.equal(FakeWS.count, 1);
 	});
@@ -691,29 +701,88 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		}
 	});
 
-	it("phone: a live run for another thread on a thread page shows a minimal listening pill with Stop", async () => {
+	it("phone: on another thread's page the attached chat is a strip row above the composer (no top-right pill); tapping it opens the sheet, closing it returns to the row", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
 		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 		try {
-			await mount("/kb", A, <OnPages />);
+			await mount("/kb", A, <><OnPages /><StripOnB /></>);
 			await fire(barToggle(), "click", { detail: 1 });
 			await wait();
 			const ws = await say("phone words for A");
 			await act(async () => go("/wolf/w/thread/b"));
 			await wait();
 			assert.equal(q('[data-testid="chat-bar"]'), null, "no dock over B's composer");
-			assert.ok(q('[data-testid="chat-bar-listening-pill"]'), "a pill shows the live run");
-			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 1, "the pill carries one live meter");
-			assert.ok(q('[data-testid="chat-bar-listening-pill"] [data-testid="dictation-meter"]'));
-			await fire(q('[data-testid="chat-bar-listening-stop"]')!, "click");
+			assert.equal(q('[data-testid="chat-bar-listening-pill"]'), null, "no top-right pill");
+			const row = q('[data-testid="subagent-strip"] [data-testid="attached-row"]')!;
+			assert.ok(row, "the chat is a row in the strip");
+			assert.equal(row.getAttribute("data-listening"), "true");
+			assert.match(q('[data-testid="attached-title"]')!.textContent ?? "", /w\/a/);
+			assert.equal(q('[data-testid="attached-open"]')!.getAttribute("aria-label"), "Open chat with w/a");
+			assert.equal(q('[data-testid="attached-dot"]')!.getAttribute("aria-hidden"), "true");
+			await fire(q('[data-testid="attached-open"]')!, "click");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "sheet", "tap opens the bar's sheet");
+			await fire(q('[data-testid="bar-sheet-close"]')!, "click");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]'), null, "closed: back to the row only");
+			assert.ok(q('[data-testid="attached-row"]'));
+			await key(); // Cmd+D stops the run
 			await endRun(ws);
 			await wait(400);
-			assert.equal(q('[data-testid="chat-bar-listening-pill"]'), null);
 			assert.equal(mem.get("wolfpack:draft:w:w/a"), "phone words for A", "words saved to A's draft");
-			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0, "no meter once stopped");
 		} finally {
 			delete w.matchMedia;
 		}
+	});
+
+	it("phone /chat/new: a live run for another thread shows in the page's strip with the chat row and a Stop that ends it (no pill, no dock)", async () => {
+		const w = window as unknown as { matchMedia?: unknown };
+		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		try {
+			await mount("/kb", A, <NewOnNew />);
+			await fire(barToggle(), "click", { detail: 1 });
+			await wait();
+			const ws = await say("words for A");
+			await act(async () => go("/chat/new"));
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]'), null, "no dock over the new-session composer");
+			assert.equal(q('[data-testid="chat-bar-listening-pill"]'), null);
+			const row = q('[data-testid="subagent-strip"] [data-testid="attached-row"]')!;
+			assert.equal(row.getAttribute("data-listening"), "true", "a visible live-run indicator");
+			await fire(q('[data-testid="attached-stop"]')!, "click");
+			await endRun(ws);
+			await wait(400);
+			assert.equal(mem.get("wolfpack:draft:w:w/a"), "words for A", "Stop ended the run and saved the words");
+			assert.equal(q('[data-testid="attached-stop"]'), null);
+		} finally {
+			delete w.matchMedia;
+		}
+	});
+
+	it("phone: docking from the sheet clears the sheet request, so a later attach on a thread page is the row again, not a sheet over the composer", async () => {
+		const w = window as unknown as { matchMedia?: unknown };
+		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		try {
+			await mount("/wolf/w/thread/b", A, <><OnPages /><StripOnB /><AttachBtn /></>);
+			await fire(q('[data-testid="attached-open"]')!, "click");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "sheet");
+			await fire(q('[data-testid="chat-bar-dock"]')!, "click");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]'), null);
+			await fire(q('[data-testid="test-attach"]')!, "click");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]'), null, "no docked bar over B's composer");
+			assert.ok(q('[data-testid="attached-row"]'), "the row is back");
+		} finally {
+			delete w.matchMedia;
+		}
+	});
+
+	it("wide screens: no strip row for the attached chat on another thread's page", async () => {
+		await mount("/wolf/w/thread/b", A, <><OnPages /><StripOnB /></>);
+		assert.equal(q('[data-testid="attached-row"]'), null);
+		assert.equal(q('[data-testid="subagent-strip"]'), null);
 	});
 
 	it("desktop minimized pill: one live meter while dictating, none when idle", async () => {

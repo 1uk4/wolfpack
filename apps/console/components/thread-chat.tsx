@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { TurnTimer, useTurnStart } from "@/components/turn-timer";
+import { useAttachedStripRow } from "@/components/attached-strip-row";
 import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelFloatingHandle, PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -464,6 +465,8 @@ function ThreadChatInner({
 	const busy = status === "submitted" || status === "streaming";
 	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
+	const attachedRow = useAttachedStripRow(wolf, threadId);
+	const stripRows = subagents.length + (attachedRow ? 1 : 0);
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
 		[messages],
@@ -739,13 +742,13 @@ function ThreadChatInner({
 								)}
 							</div>
 							{/* Reserve the composer's height so the tail scrolls clear of it. */}
-							<div aria-hidden className="h-40" style={subagents.length ? { marginTop: Math.min(subagents.length, 4) * STRIP_ROW_PX + 8 } : undefined} />
+							<div aria-hidden className="h-40" style={stripRows ? { marginTop: stripRows * STRIP_ROW_PX + 8 } : undefined} />
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
 							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
-									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
+									<SubagentStrip wolf={wolf} slug={slug} items={subagents} attached={attachedRow} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
 											<div className="font-medium">Feature graduated</div>

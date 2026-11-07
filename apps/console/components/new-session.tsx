@@ -10,6 +10,8 @@ import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
+import { useAttachedStripRow } from "@/components/attached-strip-row";
+import { SubagentStripView } from "@/components/subagent-strip";
 import { ComposerActions } from "@/components/composer-actions";
 
 /**
@@ -99,6 +101,7 @@ export function DraftShell({
 	};
 	/* Run end focuses the composer (owner, 2026-10-01): the hands are on
 	 * the keyboard from the stop — falling edge of `active` only. */
+	const attachedRow = useAttachedStripRow("", ""); // phone: the floating chat's live run has no dock here
 	const composerInputRef = useRef<HTMLTextAreaElement>(null);
 	const dictationWasActiveRef = useRef(false);
 	useEffect(() => {
@@ -139,6 +142,7 @@ export function DraftShell({
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
+								<SubagentStripView items={[]} now={0} onOpen={() => {}} onStop={() => {}} attached={attachedRow} />
 								<ComposerActions setup={setupCta} />
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 									<Composer

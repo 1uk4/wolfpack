@@ -650,18 +650,26 @@ d("browser extension (live): tab guard", () => {
   it("a noopener popup from one tab while other tabs are opening is closed, not kept as a stray page", async () => {
     const s = mk();
     try {
+      // Every phase is bounded and named, so a stall fails here saying which step it was, not at the 60 s test timeout.
+      const phase = <T,>(name: string, ms: number, p: Promise<T>): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
+        const limit = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`phase "${name}" still running after ${ms} ms (${s.pageCount()} pages)`)), ms); });
+        return Promise.race([p, limit]).finally(() => clearTimeout(timer));
+      };
       const url = `http://localhost:${port}/`;
       const openers = [s.thread("b1"), s.thread("b2")];
-      for (const o of openers) {
-        await o.run(() => o.goto(url));
-        // a click is a user gesture, so Chromium lets the popup open (a bare window.open() would be blocked)
-        await o.run(() => o.evaluate(`(document.body.innerHTML = '<a id=l target=_blank rel=noopener href="/">x</a>', 1)`));
-      }
+      await phase("set up the two opener tabs", 15000, (async () => {
+        for (const o of openers) {
+          await o.run(() => o.goto(url));
+          // a click is a user gesture, so Chromium lets the popup open (a bare window.open() would be blocked)
+          await o.run(() => o.evaluate(`(document.body.innerHTML = '<a id=l target=_blank rel=noopener href="/">x</a>', 1)`));
+        }
+      })());
       const storm = openers.map(async (o) => { for (let i = 0; i < 60; i++) await o.run(() => o.click("#l")); });
       await new Promise((r) => setTimeout(r, 100));
       const opening = [s.thread("a1"), s.thread("a2"), s.thread("a3"), s.thread("a4")];
-      for (const t of opening) await t.run(() => t.goto(url));
-      await Promise.all(storm);
+      await phase("open four tabs during the popup storm", 20000, (async () => { for (const t of opening) await t.run(() => t.goto(url)); })());
+      await phase("finish the popup storm", 20000, Promise.all(storm));
       const deadline = Date.now() + 5000;
       while (s.pageCount() > 6 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
       expect(s.pageCount()).toBe(6);

@@ -64,6 +64,16 @@ export const defaultPairRunner: PairRunner = (port) =>
     });
   });
 
+/** Reject with an error naming `step` if `p` has not settled in `ms`, so a stuck browser call fails fast and says where. */
+function bounded<T>(step: string, ms: number, p: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`browser: ${step} did not finish within ${ms} ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([p, limit]).finally(() => clearTimeout(timer));
+}
+
 export const DEFAULTS = { timeoutMs: 30_000, maxOutputChars: 20_000, maxResponseBytes: 25 * 1024 * 1024, logCap: 500, maxTabs: 6, tabIdleMs: 15 * 60_000 };
 
 export const INSTALL_HINT =
@@ -237,7 +247,7 @@ export class BrowserSession {
     if (!idle) {
       return Promise.reject(new Error(`Too many browser tabs open (${live.length}/${this.maxTabs}) and all are busy; retry shortly or call browser_close in an idle thread.`));
     }
-    return idle.closeTab({ keepBrowser: true });
+    return bounded("closing the least recently used tab", 10_000, idle.closeTab({ keepBrowser: true }));
   }
 
   /** Open a page for a tab (shared context). Serialised, so the cap check and the page it admits are one step. */
@@ -258,7 +268,17 @@ export class BrowserSession {
     this.opening++;
     let page: any;
     try {
-      page = await ctx.newPage();
+      // ctx.newPage() has no timeout of its own and sits inside the serialised open chain: unbounded, one wedged call
+      // stalls every later tab open. A page that shows up after the limit is closed instead of leaked.
+      const opened: Promise<any> = ctx.newPage();
+      let gaveUp = false;
+      opened.then((late: any) => { if (gaveUp) late.close().catch(() => undefined); }, () => undefined);
+      try {
+        page = await bounded("opening a new page (ctx.newPage)", 20_000, opened);
+      } catch (e) {
+        gaveUp = true;
+        throw e;
+      }
       this.byPage.set(page, tab);
       tab.page = page;
     } finally {
@@ -268,7 +288,7 @@ export class BrowserSession {
     }
     // WebSockets bypass context.route. The context-wide route (launchContext) covers every page, including the gap
     // before this line and popups; this page-level route only adds attribution to the tab.
-    await page.routeWebSocket(/.*/, this.wsHandler((url, why) => tab.blockRecord(url, why)));
+    await bounded("routing WebSockets on a new page", 10_000, page.routeWebSocket(/.*/, this.wsHandler((url, why) => tab.blockRecord(url, why))));
     return page;
   }
 
@@ -801,7 +821,7 @@ export class Tab {
     for (const f of this.shotFiles) rmSync(f, { force: true });
     this.reset();
     this.sess.forget(this);
-    if (page) await page.close({ runBeforeUnload: false }).catch(() => undefined);
+    if (page) await bounded("closing a tab's page", 5_000, page.close({ runBeforeUnload: false })).catch(() => undefined);
     if (!opts.keepBrowser) await this.sess.closeIfEmpty();
   }
 }

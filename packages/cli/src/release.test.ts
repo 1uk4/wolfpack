@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, type ReleaseDeps } from "./release.js";
+import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, pushTagsSeparately, type ReleaseDeps } from "./release.js";
 
 const COMPONENTS = ["wolfd", "workerd", "hubd"];
 function deps(tags: string[], affected: Record<string, string[]>): ReleaseDeps {
@@ -65,5 +65,31 @@ describe("planRelease", () => {
     const out = formatPlan(planRelease({ components: ["wolfd"] }, deps([], {})));
     expect(out).toContain("no tag yet -> wolfd/v0.1.0");
     expect(out).toContain("abc123 change since start");
+  });
+});
+
+describe("auto-tag on stable (patch plan)", () => {
+  it("gives changed components +1 patch, skips unchanged ones", () => {
+    const tags = ["wolfd/v0.1.4", "workerd/v0.2.0", "hubd/v1.0.9"];
+    const plan = planRelease({ components: COMPONENTS, bump: "patch" }, deps(tags, { "wolfd/v0.1.4": ["wolfd"], "hubd/v1.0.9": ["hubd"] }));
+    expect(plan.map((i) => i.tag)).toEqual(["wolfd/v0.1.5", "hubd/v1.0.10"]);
+  });
+  it("skips a component that already has a tag on the commit being tagged (rerun)", () => {
+    const tags = ["wolfd/v0.1.4", "wolfd/v0.1.5"];
+    const d = { ...deps(tags, { "wolfd/v0.1.4": ["wolfd"], "wolfd/v0.1.5": ["wolfd"] }), headTags: () => ["wolfd/v0.1.5"] };
+    expect(planRelease({ components: ["wolfd"] }, d)).toEqual([]);
+  });
+});
+
+describe("pushing tags", () => {
+  it("runs one git push per tag, never a branch", () => {
+    const calls: string[][] = [];
+    pushTagsSeparately((...args) => void calls.push(args), "origin", ["wolfd/v0.1.5", "hubd/v1.0.10", "console/v0.2.1", "workerd/v0.3.1"]);
+    expect(calls).toEqual([
+      ["push", "origin", "refs/tags/wolfd/v0.1.5"],
+      ["push", "origin", "refs/tags/hubd/v1.0.10"],
+      ["push", "origin", "refs/tags/console/v0.2.1"],
+      ["push", "origin", "refs/tags/workerd/v0.3.1"],
+    ]);
   });
 });

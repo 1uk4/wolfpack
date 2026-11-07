@@ -63,6 +63,8 @@ export interface ReleaseDeps {
   affected(base: string | null): string[];
   /** One-line commits in <base>..HEAD (all history when base is null). */
   commits(base: string | null): string[];
+  /** Tags that point at the commit being released (HEAD). A component with one is already released there. */
+  headTags?(): string[];
 }
 
 export interface ReleaseOptions {
@@ -86,9 +88,11 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
   const tags = deps.tags();
   const explicit = opts.version ? parseVersion(opts.version) : undefined;
   for (const o of opts.only ?? []) if (!opts.components.includes(o)) throw new Error(`unknown component "${o}" (releasable: ${opts.components.join(", ")})`);
+  const headTags = deps.headTags?.() ?? [];
   const items: ReleaseItem[] = [];
   for (const component of opts.components) {
     if (opts.only?.length && !opts.only.includes(component)) continue;
+    if (headTags.some((t) => parseTag(t)?.component === component)) continue;
     const prev = lastTag(component, tags) ?? null;
     // No tag yet counts as changed.
     if (prev && !deps.affected(prev).includes(component)) continue;
@@ -101,6 +105,11 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
     items.push({ component, previousTag: prev, version, tag, commits: deps.commits(prev), first: !prev });
   }
   return items;
+}
+
+/** GitHub fires no tag workflows when one push carries more than 3 tags, so push each tag on its own. Never a branch. */
+export function pushTagsSeparately(git: (...args: string[]) => unknown, remote: string, tags: string[]): void {
+  for (const tag of tags) git("push", remote, `refs/tags/${tag}`);
 }
 
 export function formatPlan(items: ReleaseItem[]): string {

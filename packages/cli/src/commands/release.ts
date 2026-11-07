@@ -1,7 +1,7 @@
 /**
  * wolfpack release [component...] [--minor|--major|--version X.Y.Z] [--dry-run] [--yes]
  * Lists components changed since their last <component>/vX.Y.Z tag, with commits and a suggested version.
- * Without --dry-run: asks, then creates annotated tags at HEAD and pushes ONLY those tags (CI release.yml builds + publishes).
+ * Without --dry-run: asks, then creates annotated tags at HEAD and pushes ONLY those tags, one per push (CI release.yml builds + publishes).
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -9,7 +9,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { c } from "../render.js";
-import { formatPlan, planRelease, type Bump, type ReleaseDeps } from "../release.js";
+import { formatPlan, planRelease, pushTagsSeparately, type Bump, type ReleaseDeps } from "../release.js";
 
 export interface ReleaseCmdOptions {
   only: string[];
@@ -39,6 +39,7 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
   const deps: ReleaseDeps = {
     tags: () => git(root, "tag", "--list").split("\n").filter(Boolean),
     affected: (base) => aff.computeAffected(aff.changedFiles(base, head, root), workspaces).components,
+    headTags: () => git(root, "tag", "--points-at", head).split("\n").filter(Boolean),
     commits: (base) => git(root, "log", "--no-merges", "--format=%h %s", base ? `${base}..HEAD` : "HEAD").split("\n").filter(Boolean),
   };
   const items = planRelease({ components, only: opts.only, bump: opts.bump, version: opts.version }, deps);
@@ -59,6 +60,6 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
   }
   for (const i of items) git(root, "tag", "-a", i.tag, "-m", `${i.component} ${i.version}`, head);
   // Only the tags, never a branch.
-  git(root, "push", opts.remote ?? "origin", ...items.map((i) => `refs/tags/${i.tag}`));
+  pushTagsSeparately((...a) => git(root, ...a), opts.remote ?? "origin", items.map((i) => i.tag));
   for (const i of items) console.log(`pushed ${i.tag}`);
 }

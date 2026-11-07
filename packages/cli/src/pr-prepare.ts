@@ -171,6 +171,44 @@ function listMarked(gh: PrDeps["gh"], slug: string, pr: string): MarkedComment[]
   return found;
 }
 
+interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string;
+}
+
+/**
+ * The CI state of a commit from its `ci` check (the last job in ci.yml; it fails when any job it needs failed or was cancelled).
+ * Returns the refusal text when CI is not green, or undefined when it passed.
+ */
+function ciProblem(gh: PrDeps["gh"], slug: string | undefined, sha: string): string | undefined {
+  // Without a GitHub remote gh fills in {owner}/{repo} from its own repo detection.
+  const r = gh(["api", `repos/${slug ?? "{owner}/{repo}"}/commits/${sha}/check-runs?per_page=100`, "--paginate", "--jq", ".check_runs[] | [.name, .status, .conclusion, .html_url] | @json"]);
+  if (r.code !== 0) return `could not read the check runs of ${sha}: ${detail(r)}`;
+  const runs: CheckRun[] = [];
+  for (const line of r.out.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const [name, status, conclusion, url] = JSON.parse(line) as [string, string, string | null, string];
+      runs.push({ name, status, conclusion, url: url ?? "" });
+    } catch {
+      continue;
+    }
+  }
+  // A commit has one `ci` check per workflow run (push, pull_request, ...): all of them must pass.
+  const cis = runs.filter((c) => c.name === "ci");
+  if (!cis.length) return `No ci check found on ${sha}: wait for CI to start and finish, then run prepare again.`;
+  const failedCi = cis.find((c) => c.status === "completed" && !["success", "skipped", "neutral"].includes(c.conclusion ?? ""));
+  if (failedCi) {
+    const bad = runs.filter((c) => c.status === "completed" && c.conclusion !== null && !["success", "skipped", "neutral"].includes(c.conclusion));
+    const names = [...new Set([...bad.map((c) => c.name), failedCi.name])];
+    return `CI failed on ${sha}: ${names.join(", ")}. ci run: ${failedCi.url}\nFix it and push, then run prepare again.`;
+  }
+  if (cis.some((c) => c.status !== "completed")) return `CI is still running on ${sha}: wait for CI to finish, then run prepare again.`;
+  return undefined;
+}
+
 const detail = (r: CmdResult) => (r.err.trim() || r.out.trim()).split("\n").slice(0, 8).join("\n");
 
 function must(r: CmdResult, what: string): string {
@@ -251,6 +289,14 @@ export async function prPrepare(opts: PrPrepareOptions, deps: PrDeps): Promise<v
         return `${sha} ${rest.join("\t")}`;
       });
     if (!commits.length) throw new PrRefusal("nothing to release: no commits on this branch beyond origin/stable");
+
+    // Red or unfinished CI on this commit never gets a release PR. A dry run only reports it.
+    const ciSlug = prRef?.slug ?? GITHUB_SLUG.exec(git(["remote", "get-url", "origin"]).out.trim())?.[1];
+    const ciIssue = ciProblem(gh, ciSlug, head);
+    if (ciIssue) {
+      if (!opts.dryRun) throw new PrRefusal(ciIssue);
+      log(`dry run: ${ciIssue}\ndry run: a real run would refuse here.`);
+    } else log(`CI passed on ${head}.`);
 
     // Work items, each looked up once. A missing or unreachable item is a warning, and its commit goes under Other commits.
     const cache = new Map<string, ReturnType<PrDeps["work"]>>();

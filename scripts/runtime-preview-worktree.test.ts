@@ -26,6 +26,13 @@ const stackPlist = (dir: string) => `<?xml version="1.0" encoding="UTF-8"?>
 	<key>KeepAlive</key><true/>
 </dict></plist>
 `;
+/** A checkout whose cli knows `preview` (what stable does not yet). */
+const previewCapable = (d: string) => {
+	fs.mkdirSync(path.join(d, "packages", "cli", "dist", "bin"), { recursive: true });
+	fs.writeFileSync(path.join(d, "packages", "cli", "dist", "bin", "wolfpack.js"), "//");
+	fs.mkdirSync(path.join(d, "packages", "cli", "dist", "commands"), { recursive: true });
+	fs.writeFileSync(path.join(d, "packages", "cli", "dist", "commands", "preview.js"), "export const PREVIEW_CLI = 1;\n");
+};
 /** Make a worktree look built: workerd entry, and a fake next for the live console. */
 const markBuilt = (d: string) => {
 	fs.mkdirSync(path.join(d, "packages", "workerd", "dist", "bin"), { recursive: true });
@@ -268,6 +275,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 	it("the global wolfpack cli follows the worktree: record, repoint, keep the original through a switch, restore on off and rollback", async () => {
 		const runtimeCli = path.join(rt, "packages", "cli");
+		previewCapable(rt); // a runtime that has preview: the original link is a valid place to go back to
 		const h = harness();
 		await h.run(["--wolves", wtA]);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli"));
@@ -286,8 +294,25 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
 	});
 
+	it("off never leaves the global cli on a stable that has no preview command: it moves to the picker checkout (or stays on the worktree's cli) and says so", async () => {
+		const h = harness();
+		markBuilt(fallbackDir());
+		await h.run(["--wolves", wtA]);
+		await h.run(["off", "--all"]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(fallbackDir(), "packages", "cli"));
+		expect(h.logs.join("\n")).toContain(`wolfpack stays on ${fallbackDir()} so preview is available (stable has no preview yet)`);
+		// no capable picker checkout: the link stays where the preview put it
+		fs.rmSync(path.join(fallbackDir(), "packages", "cli", "dist"), { recursive: true });
+		await h.run(["--wolves", wtA]);
+		h.logs.length = 0;
+		await h.run(["off", "--all"]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli"));
+		expect(h.logs.join("\n")).toContain(`wolfpack stays on ${wtA} so preview is available (stable has no preview yet)`);
+	});
+
 	it("a worktree whose cli predates the bin copy is not linked: the picker checkout's cli is, with a line saying so; restore is exact", async () => {
 		const runtimeCli = path.join(rt, "packages", "cli");
+		previewCapable(rt);
 		oldCli(wtA);
 		markBuilt(fallbackDir());
 		const h = harness();

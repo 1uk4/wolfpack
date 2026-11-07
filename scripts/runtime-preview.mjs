@@ -23,13 +23,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
+import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, resetCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 11;
+export const PREVIEW_VERSION = 12;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -195,6 +195,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	};
 	let yes = argv.includes("--yes") || argv.includes("-y");
 	/** Ask y/N before something restarts the wolves. Returns a result to hand back when the answer is no, else undefined. */
+	const keepCli = (dir) => {
+		if (dir) log(`wolfpack stays on ${dir} so preview is available (stable has no preview yet)`);
+	};
 	const gate = async (question) => {
 		if (yes) return undefined;
 		const answer = await st.confirm(question);
@@ -503,7 +506,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				if (cliRec && state.cli?.dir) pointCli(cliRec, state.cli.dir);
 			} else {
 				restorePlist(rec);
-				restoreCli(cliRec);
+				resetCli(cliRec);
 				if (priorText === undefined) fs.rmSync(stateFile, { force: true });
 				else fs.writeFileSync(stateFile, priorText);
 			}
@@ -540,14 +543,14 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		if (argv.includes("--rollback")) {
 			restorePlist(state.plist); // the switch helper restarts the stack itself
-			restoreCli(state.cli);
+			keepCli(restoreCli(state.cli, st.cliFallbackDir()));
 			stopWatch({ home, uid, launchctl: st.launchctl });
 			return { exitCode: 0 };
 		}
 		const refused = await gate("This restarts the wolves back on stable.");
 		if (refused) return refused;
 		restorePlist(state.plist);
-		restoreCli(state.cli);
+		keepCli(restoreCli(state.cli, st.cliFallbackDir()));
 		stopWatch({ home, uid, launchctl: st.launchctl });
 		writeState({ ...state, phase: "restoring" });
 		copyScripts(path.join(dir, "bin"));

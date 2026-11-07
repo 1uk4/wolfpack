@@ -69,8 +69,28 @@ const setLink = (link, target) => {
 /** Point the global cli at the worktree's packages/cli, so `wolfpack preview ...` works while the runtime stays on stable. */
 export const pointCli = (rec, wt) => setLink(rec.link, path.join(wt, "packages", "cli"));
 
-/** Put the original link target back. */
-export const restoreCli = (rec) => rec && setLink(rec.link, rec.target);
+/** Undo a start that failed: the link goes back to exactly what it was. */
+export const resetCli = (rec) => rec && setLink(rec.link, rec.target);
+
+/**
+ * Put the original link target back, but only if that checkout's cli has `preview` (stable does not yet, and a global `wolfpack` that
+ * answers "Unknown command: preview" is never left behind). Otherwise: the checkout the script ran from, else wherever the link
+ * points now (the worktree's cli, if it is compatible), else the original after all. Returns the checkout it stays on, or null
+ * when the original was restored.
+ */
+export function restoreCli(rec, fallbackDir) {
+	if (!rec) return null;
+	const checkoutOf = (cliDir) => path.dirname(path.dirname(cliDir));
+	if (cliCompatible(checkoutOf(rec.target))) return setLink(rec.link, rec.target), null;
+	let current;
+	try {
+		current = checkoutOf(fs.readlinkSync(rec.link));
+	} catch {}
+	const keep = [fallbackDir, current].find((d) => d && cliCompatible(d));
+	if (!keep) return setLink(rec.link, rec.target), null;
+	if (keep !== current) setLink(rec.link, path.join(keep, "packages", "cli"));
+	return keep;
+}
 
 const backupFile = (dir) => path.join(dir, "stack.plist.orig");
 

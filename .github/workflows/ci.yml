@@ -110,6 +110,14 @@ jobs:
           persist-credentials: false
       - name: stub tracer (hubd + workerd + stub wolfd, no secrets)
         run: infra/tracer/run-tracer.sh
+      - name: upload tracer logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracer-out
+          path: infra/tracer/out/
+          retention-days: 7
+          if-no-files-found: ignore
 
   release-smoke:
     needs: detect

@@ -33,6 +33,7 @@ const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
 const { migrateLegacyUserData } = require("./userdata-migrate.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
+const { createPreviewController } = require("./preview-window.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -82,7 +83,7 @@ if (!app.requestSingleInstanceLock()) {
 	app.quit();
 } else {
 	app.on("second-instance", () => {
-		const win = BrowserWindow.getAllWindows()[0];
+		const win = mainWindows()[0];
 		if (win) {
 			if (win.isMinimized()) win.restore();
 			win.focus();
@@ -92,6 +93,11 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let serverProcess = null;
+
+// The Preview window (preview-window.cjs) is a second window next to the main one. Everything below that means "the app's window"
+// goes through mainWindows(), so the preview can never be zoomed, repaired or reactivated in the main window's place.
+let preview = null;
+const mainWindows = () => BrowserWindow.getAllWindows().filter((w) => !preview?.isPreviewWindow(w));
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race
 // in an event handler): the window + child server are the product, and
@@ -391,7 +397,7 @@ const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let autoUpdater = null; // electron-updater's, packaged builds only
 
 function broadcastUpdateStatus(status) {
-	for (const win of BrowserWindow.getAllWindows()) {
+	for (const win of mainWindows()) {
 		try {
 			win.webContents.send("lh:update-status", status);
 		} catch {
@@ -492,7 +498,7 @@ function installMenu() {
 					? [{
 						label: "Pair this app…",
 						click: () => {
-							const w = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+							const w = mainWindows().find((x) => x === BrowserWindow.getFocusedWindow()) ?? mainWindows()[0];
 							if (w) void w.loadURL(pairUrl(new URL(remoteUrl).origin));
 						},
 					}]
@@ -518,23 +524,26 @@ function installMenu() {
 				{
 					label: "Actual Size",
 					accelerator: "CommandOrControl+0",
-					click: () => applyZoom(BrowserWindow.getAllWindows()[0], 1),
+					click: () => applyZoom(mainWindows()[0], 1),
 				},
 				{
 					label: "Zoom In",
 					accelerator: "CommandOrControl+Plus",
-					click: () => zoomStep(BrowserWindow.getAllWindows()[0], +1),
+					click: () => zoomStep(mainWindows()[0], +1),
 				},
 				{
 					label: "Zoom Out",
 					accelerator: "CommandOrControl+-",
-					click: () => zoomStep(BrowserWindow.getAllWindows()[0], -1),
+					click: () => zoomStep(mainWindows()[0], -1),
 				},
 				{ type: "separator" },
 				{ role: "togglefullscreen" },
 			],
 		},
-		{ role: "windowMenu" },
+		{
+			label: "Window",
+			submenu: [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, preview ? preview.menuItem() : { label: "Open Preview", enabled: false }, { type: "separator" }, { role: "front" }],
+		},
 	];
 	Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -602,10 +611,14 @@ async function main() {
 		if (width < target) win.setBounds({ x, y, width: target, height });
 	});
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
+		if (mainWindows().length === 0) createWindow(url);
 	});
 	createWindow(url);
 	log(`window open: ${url}`);
+	// Preview window: opens by itself when `wolfpack preview` starts one (also one already running at launch); the menu item follows it.
+	preview = createPreviewController({ electron: { BrowserWindow }, onChange: () => installMenu(), log });
+	preview.start();
+	app.on("before-quit", () => preview?.stop());
 	// First update check AFTER the window exists (the downloaded-banner
 	// push needs a listener); dev builds no-op (no autoUpdater).
 	if (autoUpdater) {

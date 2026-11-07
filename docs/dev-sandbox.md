@@ -143,24 +143,44 @@ reload the console (Cmd-R) or restart the stack. It never merges a branch, never
 is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
 override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).
 
+### Two windows: the main app stays on stable, the preview opens beside it
+
+A wolf editing the console's own code must never take away the window you are working in. So a preview does **not** repoint the
+app: the main window stays on the stable console (sfo-01, your `consoleUrl`), and the live preview opens in a separate
+**Preview window**: its own session (cookies and pairing do not collide with the main window), the title
+`Preview · <short worktree name>`, and an amber strip along its top edge so it cannot be mistaken for the main one.
+
+- **How the app finds the preview.** It watches `~/.wolfpack/preview/state.json` (`fs.watch` on the folder, plus a 2 s poll in case an
+  event is missed). Every preview path already writes that file (the CLI, the detached helper; `off` deletes it), so there is no
+  second file to go stale. The window opens when the phase is `running` or `dev` and a console is recorded, also for a preview
+  that was already running when the app launched. If one is open it is retitled in place (a worktree switch) instead of a second
+  window.
+- **Menu.** Window → Open Preview (⌥⌘P) focuses it, or reopens it after you closed it; disabled while no preview runs.
+- **No preview / server down.** After `off`, or when the console does not answer, the window shows a plain "No preview running"
+  page, never an error, and loads the preview again by itself when it is back.
+- **A broken edit** (compile error, crash) only ever shows in the Preview window; the main window is a different session on a
+  different console and is not touched.
+- **Needs the new desktop build.** The installed app (v0.3.4) has no Preview window. Until the new build is installed, open
+  http://127.0.0.1:3230 in a browser: the same live console. (If an older preview left the app pointing at 3230, `off` puts it back.)
+
 ### Live-edit the console from a worktree
 
-The fastest loop for UI work: every save shows in the desktop app within seconds, with no build and no wolf restart.
+The fastest loop for UI work: every save shows in the app's Preview window within seconds, with no build and no wolf restart.
 
 ```sh
 cd <worktree> && wolfpack preview dev     # or: wolfpack preview dev <dir>
 ```
 
-Then reload the app with ⌘R (quit and reopen Wolfpack Console the first time), and run `wolfpack preview off` when done.
+The app opens its **Preview window** by itself (see "Two windows" below); reload it with ⌘R after an edit that needs it. Run `wolfpack preview off` when done.
 
 `dev` serves `next dev` from `<dir>/apps/console` (default: the git worktree containing cwd; it needs `pnpm install` there first)
 on `127.0.0.1:3230` (`PREVIEW_CONSOLE_PORT`) against the local wolfd (`WOLFPACK_API_URL=http://127.0.0.1:7141`), under the same
 launchd agent as the ref preview (`com.wolfpack.preview-console`, log `~/.wolfpack/preview/console.log`), so only one preview
-console exists. It waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), then points the app's
-`console.json` with the same record-and-restore safety as below. It never checks out, builds or restarts the wolves, so it works
+console exists. It waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), then records it in the state
+file, which the Preview window watches. It never checks out, builds or restarts the wolves, so it works
 with the wolves on stable or on a ref preview. If port 3230 is held by something else (a hand-started `next dev`), it refuses.
 
-- `wolfpack preview dev <other dir>` while one is active switches the source in place (apps are kept; the original consoleUrl is never overwritten). The same dir again is a restart.
+- `wolfpack preview dev <other dir>` while one is active switches the source in place . The same dir again is a restart.
 - `wolfpack preview <new ref>` while a ref preview is active switches in place too, keeping the first preview's previous ref and branch; a dev console is left running.
 - `wolfpack preview off` stops the dev console and restores the app. It touches the wolves only if a ref preview is also active.
 - `wolfpack preview status` (and `--json`) shows the mode and dir. A worker worktree is deleted when the worker finishes: status then says the dir no longer exists; run `wolfpack preview dev` from another worktree, or `off`.
@@ -223,15 +243,13 @@ clear state. Both take `--dry-run` (print the plan, change nothing). It never pu
 
 Beyond the switch itself:
 
-- **Local console and the desktop app.** After a good switch the helper starts the preview build's standalone console
+- **Local console.** After a good switch the helper starts the preview build's standalone console
   (`apps/console/.next/standalone/apps/console/server.js`, with `.next/static` and `public` copied in) on `127.0.0.1:3230`
   (`PREVIEW_CONSOLE_PORT`), with `WOLFPACK_API_URL=http://127.0.0.1:7141`. It runs as its own launchd agent,
   `com.wolfpack.preview-console` (plist in `~/Library/LaunchAgents`), so it outlives the wolf session and the CLI, and survives a
-  reboot; its log is `~/.wolfpack/preview/console.log`. Then, in each of `~/Library/Application Support/LearnHarness` and
-  `Wolfpack Console` that exists, `console.json` is backed up (`console.json.preview-backup`), its old `consoleUrl` (or its
-  absence) is recorded in the state file, and `consoleUrl` is set to the local console; other keys are kept. **Quit and reopen
-  Wolfpack Console** (the app is never killed). `off` restores each file exactly (or removes the key), stops the agent and
-  removes its plist. `PREVIEW_USERDATA_ROOT` overrides the userData root (tests use it).
+  reboot; its log is `~/.wolfpack/preview/console.log`. The app's `console.json` is **not touched** any more (see "Two windows");
+  `off` stops the agent, removes its plist, and still undoes a pointing recorded by an older preview.
+  `PREVIEW_USERDATA_ROOT` overrides the userData root (tests use it).
 - **Deep health check and rollback.** `/healthz` alone is not enough: the console must list at least one wolf on `/api/wolves`
   and return a list on `/api/chats` (wolfd's `/v1/wolves` only tells a dead console from a dead wolfd). If that fails within
   the timeout, the helper stops the console, checks out `previousRef`, builds, restarts and ends in phase `rolled-back` with

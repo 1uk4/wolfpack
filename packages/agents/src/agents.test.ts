@@ -225,3 +225,16 @@ describe("standards", () => {
     }
   });
 });
+
+describe("orchestrator worker-reuse rule", () => {
+  it("starts a fresh worker in the existing worktree once a commit has landed, and reuses only mid-work", async () => {
+    const { orchestratorRules } = await import("./orchestrator.js");
+    const rules = orchestratorRules({ opsRef: "x", surface: "wolfd" });
+    expect(rules).toContain("once a worker's commit has landed, start a fresh worker");
+    expect(rules).toContain('isolation "none"');
+    expect(rules).toContain("what's done, what's left");
+    expect(rules).toContain("subagent_message");
+    expect(rules).toContain("packages/agents/standards/");
+    expect(rules).not.toContain("spawn fresh only for independent tasks");
+  });
+});

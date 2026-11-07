@@ -4,7 +4,7 @@
  * A subagent is a task-owned pi-durable conversation owned by the thread that spawned it (engine `createOwned`), served
  * as a thread of kind `subagent`. It starts fresh with its profile's system prompt and the brief, has the profile's tools
  * but never the spawn tools (depth 1), and returns its final answer to the parent as a steer message. Its questions
- * (ask_user_question cards) go to the parent the same way; it then waits until the parent (or the operator) replies.
+ * (brief cards) go to the parent the same way; it then waits until the parent (or the operator) replies.
  *
  * State lives in `<den>/wolfd/subagents.json` and the child ledgers (subagent-store.ts); the conversation and its
  * history are the store's. After a restart `recover()` re-attaches every child, so a turn that was running goes on and
@@ -49,7 +49,7 @@ import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js"
 /** The tools every spawn tool set shares; a child never gets them. */
 export const SPAWN_TOOLS = ["subagent", "subagent_message", "subagents_list", "subagent_stop", "subagent_merge"] as const;
 /** What a child always gets: the way to ask its parent a question. */
-const CHILD_ALWAYS_TOOLS = ["ask_user_question"];
+const CHILD_ALWAYS_TOOLS = ["brief"];
 /** A profile without `tools:` gets the coding tools. */
 const DEFAULT_PROFILE_TOOLS = ["read", "write", "edit", "bash"];
 
@@ -371,7 +371,7 @@ export class SubagentManager {
     const parent = this.port.threadOfConversation(callerConversationId);
     if (!parent) return fail("Cannot spawn: the calling conversation is not a thread of this wolf.");
     // Depth 1: only home and feature threads spawn. (A child is not even offered the tool.)
-    if (parent.summary.kind === "subagent") return fail("Sub-agents cannot spawn sub-agents. Do the work yourself, or ask your parent via ask_user_question.");
+    if (parent.summary.kind === "subagent") return fail("Sub-agents cannot spawn sub-agents. Do the work yourself, or ask your parent via brief.");
 
     const roster = discoverAgents(this.roster());
     const permitted = roster.map((a) => a.name).join(", ") || "(none)";
@@ -1757,7 +1757,7 @@ ${text}`;
     return this.parentCwd(parent);
   }
 
-  /** The profile's tools that this runtime has, plus ask_user_question; never the spawn tools. */
+  /** The profile's tools that this runtime has, plus brief; never the spawn tools. */
   private childTools(def: AgentDefinition): { tools: string[]; missing: string[] } {
     const registered = new Set(this.opts.registeredTools());
     const wanted = parseCommaList(def.tools) ?? DEFAULT_PROFILE_TOOLS;
@@ -1860,7 +1860,7 @@ export function childInstructions(def: AgentDefinition, name: string, worktree?:
     worktree
       ? `Your working copy is ${worktree.ws.path} on branch ${worktree.ws.branch}. Do all reads, edits, tests and commits there. The repository's main checkout at ${worktree.ws.repo.mainDir}${featurePath ? ` and the feature worktree at ${featurePath}` : ""} are off-limits; never edit or commit there. If your brief names a path in them, use the same path under ${worktree.ws.path} instead.`
       : "",
-    `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call ask_user_question: your parent receives the question and replies, and you continue.`,
+    `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call brief: your parent receives the question and replies, and you continue.`,
   ]
     .filter(Boolean)
     .join("\n\n");

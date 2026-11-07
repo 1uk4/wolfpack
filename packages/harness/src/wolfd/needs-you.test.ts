@@ -1,6 +1,7 @@
 /** Needs-you events over /v1: card events on the thread stream, status + card changes on the wolf activity stream. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WolfEvent } from "@wolfpack/protocol";
+import { askCall } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -13,7 +14,7 @@ afterEach(async () => {
   tw = undefined;
 });
 
-const ask = (...questions: string[]) => fauxAssistantMessage(questions.map((q) => fauxToolCall("ask_user_question", { question: q })), { stopReason: "toolUse" });
+const ask = (...questions: string[]) => fauxAssistantMessage(questions.map((q) => askCall({ question: q })), { stopReason: "toolUse" });
 const drain = async (w: TestWolf) => {
   for await (const _ of w.client.watch(w.home));
 };
@@ -40,7 +41,7 @@ describe("card events on the thread stream", () => {
     expect(pendingAt).toBeLessThan(types.indexOf("turn-end"));
     const raised = events[pendingAt];
     if (raised.type !== "card-pending") throw new Error("unreachable");
-    expect(raised.card).toMatchObject({ threadId: tw.home, card: { tool: "ask_user_question" } });
+    expect(raised.card).toMatchObject({ threadId: tw.home, card: { tool: "brief" } });
   });
 });
 

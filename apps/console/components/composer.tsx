@@ -69,7 +69,10 @@ export function Composer({
 	chips,
 	enterSends,
 	controls,
+	sendLabel,
 }: {
+	/** Replaces the send button's icon with this text while there is something to send (the bar's "Reply instead" with a card open). An empty composer keeps Send / Stop. */
+	sendLabel?: string;
 	busy: boolean;
 	value: string;
 	onChange: (v: string) => void;
@@ -98,6 +101,7 @@ export function Composer({
 	/** Per-thread controls (model tier, auto-ship), shown beside the send button. */
 	controls?: React.ReactNode;
 }) {
+	const labelled = sendLabel !== undefined && canSend;
 	const act = (viaEnter = false) => {
 		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
 		if (action === "stop") onStop();
@@ -184,16 +188,19 @@ export function Composer({
 					 (owner, subtlety round 2026-09-25). */}
 				<button
 					type="submit"
-					aria-label={busy && !canSend ? "Stop" : "Send"}
+					aria-label={labelled ? sendLabel : busy && !canSend ? "Stop" : "Send"}
 					disabled={!busy && !canSend}
 					className={cn(
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
+						labelled && "w-auto px-3 font-ui text-xs",
 						busy && !canSend
 							? "bg-secondary text-foreground hover:bg-accent max-md:bg-primary max-md:text-primary-foreground"
 							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
 					)}
 				>
-					{busy && !canSend ? (
+					{labelled ? (
+						sendLabel
+					) : busy && !canSend ? (
 						<SquareIcon className="size-4 max-md:fill-current" />
 					) : (
 						<>

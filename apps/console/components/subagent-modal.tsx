@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { SquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
+import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
@@ -82,7 +83,8 @@ export function PaneSwitch({ value, onChange }: { value: SubagentPane; onChange:
 	);
 }
 
-function Header({ summary, now, titleId, close, pane, onPane }: { summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; pane: SubagentPane; onPane: (v: SubagentPane) => void }) {
+function Header({ summary, now, titleId, close, pane, onPane, onLeave }: { /** Called when a link in the header opens the work reader: the modal closes so the reader is not hidden behind it. */ onLeave?: () => void; summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; pane: SubagentPane; onPane: (v: SubagentPane) => void }) {
+	const openWork = useOpenWorkItem();
 	const state = summary?.state;
 	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
 	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
@@ -107,7 +109,7 @@ function Header({ summary, now, titleId, close, pane, onPane }: { summary: Threa
 					)}
 					{summary.tokens !== undefined && <span data-testid="subagent-tokens">{formatTokens(summary.tokens)} tokens</span>}
 					{summary.taskId && (
-						<a data-testid="subagent-task" href={workHref(summary.taskId)} className="underline underline-offset-2">
+						<a data-testid="subagent-task" href={workHref(summary.taskId)} onClick={(e) => openReaderLink(e, (id) => { onLeave?.(); /* state-only close (setOpen(null)), so it cannot undo the reader push */ openWork(id); }, summary.taskId!)} className="underline underline-offset-2">
 							{summary.taskId}
 						</a>
 					)}
@@ -371,7 +373,7 @@ function useNow(active: boolean): number {
  * ledger of hand-offs, the child's transcript (read-only, live via the thread stream) and a message field that
  * steers a running child or resumes a finished one.
  */
-function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; childThreadId: string; titleId: string; close: ReactNode }) {
+function SubagentView({ wolf, childThreadId, titleId, close, onLeave }: { wolf: string; childThreadId: string; titleId: string; close: ReactNode; onLeave?: () => void }) {
 	const slug = threadSlug(wolf, childThreadId);
 	const base = threadBase(wolf, slug);
 	const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -466,7 +468,7 @@ function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; c
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-view" data-child={childThreadId}>
 			{/* One Header for every state, so the close button keeps its place (and focus) through loading. */}
-			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} pane={pane} onPane={setPane} />
+			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} pane={pane} onPane={setPane} onLeave={onLeave} />
 			{(note ?? stopNote) && (
 				<div className="mb-2 text-xs text-destructive" data-testid="subagent-note">
 					{note ?? stopNote}
@@ -511,7 +513,7 @@ export function SubagentModal({ wolf, childThreadId, onClose }: { wolf: string; 
 	const titleId = useId();
 	return (
 		<OverlayShell labelledBy={titleId} testId="subagent-modal" closeTestId="subagent-modal-close" onClose={onClose}>
-			{(close) => <SubagentView key={childThreadId} wolf={wolf} childThreadId={childThreadId} titleId={titleId} close={close} />}
+			{(close) => <SubagentView key={childThreadId} wolf={wolf} childThreadId={childThreadId} titleId={titleId} close={close} onLeave={onClose} />}
 		</OverlayShell>
 	);
 }

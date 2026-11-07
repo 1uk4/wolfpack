@@ -21,6 +21,7 @@ Object.assign(globalThis, {
 	KeyboardEvent: dom.window.KeyboardEvent,
 	Event: dom.window.Event,
 	IS_REACT_ACT_ENVIRONMENT: true,
+	self: globalThis, // next/link (the reader's Full page link) reads `self` when it mounts
 	requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0),
 	cancelAnimationFrame: (id: number) => clearTimeout(id),
 	ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },

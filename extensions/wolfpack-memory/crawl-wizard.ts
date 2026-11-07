@@ -1,21 +1,13 @@
 /**
- * crawl-wizard — a single-choice picker for the crawl-run wizard.
+ * crawl-wizard — the select prompt behind the pi TUI crawl commands
+ * (/wolf:crawl-run, /wolf:crawl-release and friends).
  *
- * The interaction (keyboard-driven option list + inline "Other" free-text
- * editor, rendered through ctx.ui.custom) is borrowed from the
- * ask-user-question extension's askSingleChoice, trimmed down to return a plain
- * string value. We vendor it here so /wolf:crawl-run can present a proper
- * wizard before starting a run without taking a hard dependency on that
- * extension being loaded.
+ * One function, `wizardSingleChoice`, shows a titled list and resolves with the
+ * picked value, a typed custom value, or null when the user backs out. It is
+ * written as a small pure state machine (`reduce`) plus a renderer, mounted
+ * through ctx.ui.custom, so the behaviour can be tested without a terminal.
  */
-import {
-  Editor,
-  type EditorTheme,
-  Key,
-  matchesKey,
-  truncateToWidth,
-  wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface WizardOption {
   label: string;
@@ -23,178 +15,148 @@ export interface WizardOption {
   description?: string;
 }
 
-interface DisplayOption extends WizardOption {
-  id: string;
-  index?: number;
-  isOther?: boolean;
+/** A row in the list: a caller option, or the synthetic free-text row. */
+type Row = { kind: "option"; option: WizardOption; number: number } | { kind: "custom" };
+
+/** Everything the prompt remembers between key presses. */
+export interface WizardState {
+  cursor: number;
+  /** null while browsing the list; the text typed so far while entering a custom value. */
+  typing: string | null;
 }
 
-function createEditorTheme(theme: any): EditorTheme {
-  return {
-    borderColor: (s) => theme.fg("accent", s),
-    selectList: {
-      selectedPrefix: (t) => theme.fg("accent", t),
-      selectedText: (t) => theme.fg("accent", t),
-      description: (t) => theme.fg("muted", t),
-      scrollInfo: (t) => theme.fg("dim", t),
-      noMatch: (t) => theme.fg("warning", t),
-    },
-  };
+export type WizardKey = "up" | "down" | "enter" | "escape" | "backspace" | { text: string };
+
+export type WizardStep =
+  | { state: WizardState }
+  | { done: string | null };
+
+function buildRows(options: WizardOption[], allowCustom: boolean): Row[] {
+  const rows: Row[] = options.map((option, i) => ({ kind: "option", option, number: i + 1 }));
+  if (allowCustom) rows.push({ kind: "custom" });
+  return rows;
 }
 
-function addWrapped(
-  lines: string[],
-  text: string,
-  width: number,
-  indent = ""
-): void {
-  const contentWidth = Math.max(1, width - indent.length);
-  for (const line of wrapTextWithAnsi(text, contentWidth)) {
-    lines.push(truncateToWidth(`${indent}${line}`, width));
+/** Advance the prompt by one key. Pure: returns the next state, or the final answer. */
+export function reduce(
+  state: WizardState,
+  key: WizardKey,
+  options: WizardOption[],
+  allowCustom: boolean,
+): WizardStep {
+  const rows = buildRows(options, allowCustom);
+
+  if (state.typing !== null) {
+    if (key === "escape") return { state: { ...state, typing: null } };
+    if (key === "enter") {
+      const text = state.typing.trim();
+      return text ? { done: text } : { state };
+    }
+    if (key === "backspace") return { state: { ...state, typing: state.typing.slice(0, -1) } };
+    if (typeof key === "object") return { state: { ...state, typing: state.typing + key.text } };
+    return { state };
   }
+
+  if (key === "up") return { state: { ...state, cursor: Math.max(0, state.cursor - 1) } };
+  if (key === "down") return { state: { ...state, cursor: Math.min(rows.length - 1, state.cursor + 1) } };
+  if (key === "escape") return { done: null };
+  if (key === "enter") {
+    const row = rows[state.cursor];
+    if (!row) return { state };
+    return row.kind === "custom" ? { state: { ...state, typing: "" } } : { done: row.option.value };
+  }
+  return { state };
+}
+
+/** Map a raw terminal chunk to a WizardKey, or null for keys the prompt ignores. */
+function toKey(data: string): WizardKey | null {
+  if (matchesKey(data, Key.up)) return "up";
+  if (matchesKey(data, Key.down)) return "down";
+  if (matchesKey(data, Key.enter)) return "enter";
+  if (matchesKey(data, Key.escape)) return "escape";
+  if (matchesKey(data, Key.backspace)) return "backspace";
+  // Printable input or a paste: anything free of control characters.
+  if (data.length > 0 && !/[\u0000-\u001f\u007f]/.test(data)) return { text: data };
+  return null;
+}
+
+/** Wrap `text` to the width and push each line, indented, onto `out`. */
+function pushWrapped(out: string[], text: string, width: number, indent = ""): void {
+  const room = Math.max(1, width - indent.length);
+  for (const line of wrapTextWithAnsi(text, room)) out.push(truncateToWidth(indent + line, width));
+}
+
+/** Draw the prompt for a state. `theme.fg(color, text)` is pi's colouring hook. */
+export function renderWizard(
+  theme: { fg: (color: string, text: string) => string },
+  width: number,
+  title: string,
+  context: string | undefined,
+  options: WizardOption[],
+  allowCustom: boolean,
+  state: WizardState,
+): string[] {
+  const out: string[] = [];
+  const rule = theme.fg("accent", "\u2500".repeat(width));
+  out.push(rule);
+  pushWrapped(out, theme.fg("text", ` ${title}`), width);
+  if (context) {
+    out.push("");
+    pushWrapped(out, theme.fg("muted", ` ${context}`), width);
+  }
+  out.push("");
+
+  buildRows(options, allowCustom).forEach((row, i) => {
+    const on = i === state.cursor;
+    const text = row.kind === "custom" ? "Other\u2026" : `${row.number}. ${row.option.label}`;
+    out.push(truncateToWidth(`${on ? theme.fg("accent", "> ") : "  "}${theme.fg(on ? "accent" : "text", text)}`, width));
+    if (row.kind === "option" && row.option.description) {
+      pushWrapped(out, theme.fg("muted", row.option.description), width, "     ");
+    }
+  });
+
+  out.push("");
+  if (state.typing !== null) {
+    out.push(truncateToWidth(theme.fg("muted", " Type a custom value:"), width));
+    out.push(truncateToWidth(` ${state.typing}\u2588`, width));
+    out.push("");
+    out.push(truncateToWidth(theme.fg("dim", " Enter to submit \u00b7 Esc to go back"), width));
+  } else {
+    out.push(truncateToWidth(theme.fg("dim", " \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc cancel"), width));
+  }
+  out.push(rule);
+  return out;
 }
 
 /**
- * Show a single-choice question. Returns the chosen option's `value`, a custom
- * string typed via "Other", or null if the user cancelled (Esc).
- *
- * `allowOther` appends an "Other…" row that opens an inline editor.
+ * Ask the user to pick one option. Resolves with the chosen option's `value`,
+ * the text typed into the "Other\u2026" row (when `allowOther`), or null if the
+ * user cancelled with Esc.
  */
 export function wizardSingleChoice(
   ctx: any,
   question: string,
   context: string | undefined,
   options: WizardOption[],
-  allowOther = false
+  allowOther = false,
 ): Promise<string | null> {
-  const allOptions: DisplayOption[] = options.map((o, index) => ({
-    ...o,
-    id: `option:${index}`,
-    index: index + 1,
-  }));
-  if (allowOther)
-    allOptions.push({
-      id: "other",
-      label: "Other\u2026",
-      value: "__other__",
-      isOther: true,
-    });
+  return ctx.ui.custom((tui: any, theme: any, _keys: any, finish: (answer: string | null) => void) => {
+    let state: WizardState = { cursor: 0, typing: null };
 
-  return ctx.ui.custom(
-    (tui: any, theme: any, _kb: any, done: (result: string | null) => void) => {
-      let optionIndex = 0;
-      let editMode = false;
-      let cachedLines: string[] | undefined;
-      let cachedWidth = -1;
-      const editor = new Editor(tui, createEditorTheme(theme));
-
-      editor.onSubmit = (value: string) => {
-        const trimmed = value.trim();
-        if (!trimmed) return;
-        done(trimmed);
-      };
-
-      function refresh() {
-        cachedLines = undefined;
+    return {
+      render: (width: number) => renderWizard(theme, width, question, context, options, allowOther, state),
+      invalidate: () => {},
+      handleInput: (data: string) => {
+        const key = toKey(data);
+        if (key === null) return;
+        const step = reduce(state, key, options, allowOther);
+        if ("done" in step) {
+          finish(step.done);
+          return;
+        }
+        state = step.state;
         tui.requestRender();
-      }
-
-      function handleInput(data: string) {
-        if (editMode) {
-          if (matchesKey(data, Key.escape)) {
-            editMode = false;
-            editor.setText("");
-            refresh();
-            return;
-          }
-          editor.handleInput(data);
-          refresh();
-          return;
-        }
-        if (matchesKey(data, Key.up)) {
-          optionIndex = Math.max(0, optionIndex - 1);
-          refresh();
-          return;
-        }
-        if (matchesKey(data, Key.down)) {
-          optionIndex = Math.min(allOptions.length - 1, optionIndex + 1);
-          refresh();
-          return;
-        }
-        if (matchesKey(data, Key.enter)) {
-          const selected = allOptions[optionIndex];
-          if (selected.isOther) {
-            editMode = true;
-            editor.setText("");
-            refresh();
-            return;
-          }
-          done(selected.value);
-          return;
-        }
-        if (matchesKey(data, Key.escape)) {
-          done(null);
-        }
-      }
-
-      function render(width: number): string[] {
-        // Cache keyed on width: pi-tui calls requestRender() but not
-        // invalidate() on resize, so render() can re-enter with a new width.
-        if (cachedLines && cachedWidth === width) return cachedLines;
-
-        const lines: string[] = [];
-        const add = (text: string) => lines.push(truncateToWidth(text, width));
-
-        add(theme.fg("accent", "\u2500".repeat(width)));
-        addWrapped(lines, theme.fg("text", ` ${question}`), width);
-        if (context) {
-          lines.push("");
-          addWrapped(lines, theme.fg("muted", ` ${context}`), width);
-        }
-        lines.push("");
-
-        for (let i = 0; i < allOptions.length; i++) {
-          const option = allOptions[i];
-          const selected = i === optionIndex;
-          const prefix = selected ? theme.fg("accent", "> ") : "  ";
-          const label = option.isOther
-            ? option.label
-            : `${option.index}. ${option.label}`;
-          const styled = selected
-            ? theme.fg("accent", label)
-            : theme.fg("text", label);
-          add(`${prefix}${styled}`);
-          if (option.description) {
-            addWrapped(lines, theme.fg("muted", option.description), width, "     ");
-          }
-        }
-
-        if (editMode) {
-          lines.push("");
-          add(theme.fg("muted", " Type a custom value:"));
-          for (const line of editor.render(Math.max(1, width - 2))) {
-            add(` ${line}`);
-          }
-          lines.push("");
-          add(theme.fg("dim", " Enter to submit \u00b7 Esc to go back"));
-        } else {
-          lines.push("");
-          add(theme.fg("dim", " \u2191\u2193 navigate \u00b7 Enter select \u00b7 Esc cancel"));
-        }
-
-        add(theme.fg("accent", "\u2500".repeat(width)));
-        cachedLines = lines;
-        cachedWidth = width;
-        return lines;
-      }
-
-      return {
-        render,
-        invalidate: () => {
-          cachedLines = undefined;
-        },
-        handleInput,
-      };
-    }
-  );
+      },
+    };
+  });
 }

@@ -14,7 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Composer, enterAction } from "../components/composer.tsx";
 
 function render(
-	opts: { busy?: boolean; canSend?: boolean; placeholder?: string } = {},
+	opts: { busy?: boolean; canSend?: boolean; placeholder?: string; sendLabel?: string } = {},
 ) {
 	return renderToStaticMarkup(
 		<Composer
@@ -24,6 +24,7 @@ function render(
 			onSend={() => {}}
 			onStop={() => {}}
 			canSend={opts.canSend ?? true}
+			{...(opts.sendLabel ? { sendLabel: opts.sendLabel } : {})}
 			{...(opts.placeholder ? { placeholder: opts.placeholder } : {})}
 		/>,
 	);
@@ -68,6 +69,22 @@ describe("Composer", () => {
 // verdict itself — the post-plan reply is a natural text message.) Pure
 // function so the static-render harness can pin it (key events can't be
 // simulated in renderToStaticMarkup).
+describe("Composer send button", () => {
+	it("is enabled with something to send (attachments and no text count) and idle-disabled without", () => {
+		assert.doesNotMatch(render({ canSend: true }), /<button type="submit"[^>]* disabled=""/);
+		assert.match(render({ canSend: false }), /<button type="submit"[^>]* disabled=""/);
+	});
+
+	it("a sendLabel replaces Send only when there is something to send; an empty busy composer keeps Stop", () => {
+		const withText = render({ sendLabel: "Reply instead", canSend: true, busy: true });
+		assert.match(withText, /aria-label="Reply instead"[^>]*>Reply instead</);
+		const empty = render({ sendLabel: "Reply instead", canSend: false, busy: true });
+		assert.ok(empty.includes('aria-label="Stop"'));
+		assert.doesNotMatch(empty, /Reply instead/);
+		assert.doesNotMatch(empty, /<button type="submit"[^>]* disabled=""/);
+	});
+});
+
 describe("enterAction", () => {
 	it("busy stream with text: Enter steers (the queued send)", () => {
 		assert.equal(enterAction({ busy: true, canSend: true }), "send");

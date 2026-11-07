@@ -3,9 +3,9 @@ import type { Card } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, CARD_DETAILS_KEY } from "../engine/index.js";
 import { CardTracker, answerText, validateAnswers } from "./cards.js";
 
-const card = (label: string): Card => ({ tool: "ask_user_question", fields: [{ id: "answer", kind: "free-text", label }] });
+const card = (label: string): Card => ({ tool: "brief", fields: [{ id: "answer", kind: "free-text", label }] });
 const toolEntry = (id: number, callId: string, c: Card) =>
-  ({ id, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: callId, toolName: "ask_user_question", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: c } }] }) as never;
+  ({ id, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: callId, toolName: "brief", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: c } }] }) as never;
 const answerEntry = (id: number, callIds: string[]) => ({ id, kind: CARD_ANSWER_KIND, data: { cards: callIds.map((callId) => ({ callId, answers: {} })) } }) as never;
 const userEntry = (id: number) => ({ id, kind: "pi.user", model: [{ role: "user", content: "hi" }] }) as never;
 
@@ -52,7 +52,7 @@ describe("CardTracker", () => {
 describe("answerText / validateAnswers", () => {
   it("includes each field's label for every card", () => {
     const text = answerText([{ callId: "a", card: card("Which?"), answers: { answer: { value: "main" } } }]);
-    expect(text).toBe("The user answered your ask_user_question question (call a):\n- Which?: main");
+    expect(text).toBe("The user answered your brief question (call a):\n- Which?: main");
   });
 
   it("validates single options, other, and unknown fields", () => {

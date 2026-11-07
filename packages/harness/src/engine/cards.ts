@@ -20,7 +20,7 @@ import {
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
-import { CardSchema } from "@wolfpack/protocol";
+import { BRIEF_LIMITS, CardSchema, type CardBrief } from "@wolfpack/protocol";
 
 /** Key of the card inside a tool result's `details`. */
 export const CARD_DETAILS_KEY = "wolfpackCard";
@@ -41,6 +41,22 @@ export function cardResult(card: Card, text = "The operator was asked. Your turn
   return { output: [{ type: "text", text }], details, control: { terminate: true } };
 }
 
+/** Shorten `s` to at most `max` chars (ellipsis included), on one line. */
+export function clipText(s: string, max: number): string {
+  const one = s.replace(/\s+/g, " ").trim();
+  if (one.length <= max) return one;
+  return `${one.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+/**
+ * Build a brief header that always satisfies the protocol limits: the headline is clipped to BRIEF_LIMITS.headline,
+ * empty bullets are dropped, at most BRIEF_LIMITS.contextBullets are kept, and each bullet is clipped to the soft length.
+ */
+export function briefHeader(headline: string, context: string[] = [], more?: string): CardBrief {
+  const bullets = context.map((c) => clipText(c, BRIEF_LIMITS.bulletSoftChars)).filter(Boolean).slice(0, BRIEF_LIMITS.contextBullets);
+  return { headline: clipText(headline, BRIEF_LIMITS.headline) || "Confirm", ...(bullets.length ? { context: bullets } : {}), ...(more ? { more } : {}) };
+}
+
 /**
  * A one-field confirm card, for tools that gate an action on the operator's yes/no (e.g. `task_done`). Pair with
  * `cardResult` (or return it as `card` from a `raisesCard` tool). `tool` must be the name of the raising tool: it
@@ -55,10 +71,13 @@ export function confirmCard(opts: {
   confirmLabel?: string;
   rejectLabel?: string;
   default?: boolean;
+  /** Brief header: what is being confirmed. Display only; fields and answers are unchanged. */
+  brief?: CardBrief;
 }): Card {
   return {
     tool: opts.tool,
     ...(opts.title ? { title: opts.title } : {}),
+    ...(opts.brief ? { brief: opts.brief } : {}),
     fields: [
       {
         id: "confirm",

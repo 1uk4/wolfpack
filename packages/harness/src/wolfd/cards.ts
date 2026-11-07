@@ -10,7 +10,8 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  */
-import { visibleFields, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type CardOption, type PendingCard } from "@wolfpack/protocol";
+import { visibleFields, type AnyField, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type PendingCard } from "@wolfpack/protocol";
+import { fieldKind, type AnyAnswer } from "./card-kinds/index.js";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -159,51 +160,20 @@ export class CardTracker {
   }
 }
 
-const EMPTY = "(empty response)";
 const SKIPPED = "(skipped)";
+const asField = (f: Card["fields"][number]): AnyField => f as unknown as AnyField;
 
-/** An optional field left blank: no answer, empty text (free-text/single, no custom entry), or no picks (multi). A confirm is skipped only when absent: a present but malformed one (non-boolean) falls through to validateField and is rejected. */
+/** An optional field left blank: no answer, or an answer its kind counts as empty. */
 function isSkipped(field: Card["fields"][number], a: CardFieldAnswer | undefined): boolean {
   if (a === undefined) return true;
-  if (field.kind === "confirm") return false;
-  if (field.kind === "multi") return Array.isArray(a.value) && a.value.length === 0;
-  return typeof a.value === "string" && a.value.trim() === "";
+  return fieldKind(field.kind).isEmpty(asField(field), a as AnyAnswer);
 }
 
-/** Quote an entry when it would blur the comma-separated list. */
-const listSafe = (text: string): string => (/[,"]/.test(text) ? JSON.stringify(text) : text);
-
-/** One picked entry of a multi or single answer: `Label (value)` (just `Label` when equal), or `other: "text"` for a custom one. */
-function multiEntry(options: readonly CardOption[], value: string, custom: boolean): string {
-  if (custom) return `other: ${JSON.stringify(value)}`;
-  const o = options.find((x) => x.value === value);
-  if (!o || o.label === o.value) return listSafe(value);
-  return listSafe(`${o.label} (${value})`);
-}
-
-/** The model-facing text of one answer, by field kind (labels for confirm/reject, comma list for multi). */
+/** The model-facing text of one answer, by field kind (the kind's own `answerText`). */
 export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | undefined): string {
   if (field.optional && isSkipped(field, a)) return SKIPPED;
   if (!a) return "(no answer)";
-  if (field.kind === "confirm") {
-    if (typeof a.value !== "boolean") return "(no answer)";
-    const text = a.value ? `yes (${field.confirmLabel ?? "Yes"})` : `no (${field.rejectLabel ?? "No"})`;
-    const note = "note" in a ? a.note?.trim() : undefined;
-    return note ? `${text} — ${note}` : text;
-  }
-  if (field.kind === "multi") {
-    if (!Array.isArray(a.value)) return "(no answer)";
-    if (a.value.length === 0) return "(none selected)";
-    const custom = "other" in a && Array.isArray(a.other) ? a.other : [];
-    return a.value.map((v) => multiEntry(field.options, v, custom.includes(v))).join(", ");
-  }
-  if (typeof a.value !== "string") return "(no answer)";
-  if (a.value.trim() === "") return EMPTY;
-  if (field.kind === "single") {
-    if ("other" in a && a.other === true) return `other: ${JSON.stringify(a.value)}`;
-    return multiEntry(field.options, a.value, false);
-  }
-  return a.value;
+  return fieldKind(field.kind).answerText(asField(field), a as AnyAnswer);
 }
 
 /** The model-facing user message for an answer submission: every card's questions with their answers (or skip), in raise order. */
@@ -212,6 +182,10 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
   for (const { callId, card, answers, skipped } of cards) {
     if (skipped) {
       lines.push(`The user skipped your ${card.tool} question (call ${callId}).`);
+      continue;
+    }
+    if (card.fields.length === 0) {
+      lines.push(`The user acknowledged your ${card.tool} brief (call ${callId}).`);
       continue;
     }
     lines.push(`The user answered your ${card.tool} question (call ${callId}):`);
@@ -223,44 +197,7 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
 export { stripSupersededNotes, supersededNotes } from "../superseded-note.js";
 
 function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | undefined {
-  const id = f.id;
-  switch (f.kind) {
-    case "free-text":
-      if (typeof a.value !== "string") return `field "${id}" is free text: the answer must be a string`;
-      if ("other" in a && a.other) return `field "${id}" is free text: "other" does not apply`;
-      if (!f.optional && a.value.trim() === "") return `field "${id}" is required: the answer cannot be blank`;
-      return undefined;
-    case "single": {
-      if (typeof a.value !== "string") return `field "${id}": the answer must be a string`;
-      if ("other" in a && a.other) {
-        if (f.allowOther === false) return `field "${id}" does not accept a custom answer`;
-        if (a.value.trim() === "") return `field "${id}": a custom answer cannot be empty`;
-      } else if (!f.options.some((o) => o.value === a.value)) return `"${a.value}" is not an option of field "${id}"`;
-      return undefined;
-    }
-    case "multi": {
-      if (!Array.isArray(a.value)) return `field "${id}": the answer must be a list of strings`;
-      const other = "other" in a && Array.isArray(a.other) ? a.other : [];
-      if (new Set(a.value).size !== a.value.length) return `field "${id}": duplicate entries`;
-      if (other.length > 0 && f.allowOther !== true) return `field "${id}" does not accept custom entries`;
-      for (const o of other) {
-        if (o.trim() === "") return `field "${id}": a custom entry cannot be empty`;
-        if (f.options.some((x) => x.value === o.trim())) return `field "${id}": custom entry "${o}" duplicates an option value`;
-        if (!a.value.includes(o)) return `field "${id}": custom entry "${o}" is not among the picked values`;
-      }
-      for (const v of a.value) {
-        if (!other.includes(v) && !f.options.some((o) => o.value === v)) return `"${v}" is not an option of field "${id}"`;
-      }
-      // A required multi needs at least one pick, whatever its min (an optional one may be blank, which never reaches here).
-      const min = Math.max(f.min ?? 0, f.optional ? 0 : 1);
-      if (min > 0 && a.value.length < min) return `field "${id}": pick at least ${min}`;
-      if (f.max !== undefined && a.value.length > f.max) return `field "${id}": pick at most ${f.max}`;
-      return undefined;
-    }
-    case "confirm":
-      if (typeof a.value !== "boolean") return `field "${id}" is a confirm: the answer must be true or false`;
-      return undefined;
-  }
+  return fieldKind(f.kind).validate(asField(f), a as AnyAnswer);
 }
 
 /**

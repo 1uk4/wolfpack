@@ -50,6 +50,7 @@ function toolResultBody(result: ToolResultMessage): { heading: string; body: str
 		return { heading, body };
 	}
 
+	// old-transcript compat: ask_user_question is retired, but saved sessions still hold its results
 	if (result.toolName === "ask_user_question") {
 		const question = typeof out?.questionText === "string" && out.questionText ? out.questionText : "(no question text)";
 		const body = [`**Q:** ${question}`];

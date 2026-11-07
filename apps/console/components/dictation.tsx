@@ -198,7 +198,7 @@ export function rmsToMeter(rms: number): number {
 /**
  * The primary-input registry: at most ONE non-composer input can claim the
  * dictation target while mounted — the pending question's answer/thinking
- * field (question-dock.tsx). The page's `append` (the composer) is the
+ * field (the ask card). The page's `append` (the composer) is the
  * fallback when nobody claims. Module-level by design: the claimant is a
  * sibling subtree far from the hook's owner, and there is exactly one
  * window, one pending question, one target at a time.

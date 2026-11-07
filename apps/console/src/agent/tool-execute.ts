@@ -15,7 +15,7 @@ import type { Static, TSchema } from "typebox";
  *   `details` keeps the problems as data),
  * - the result mapping (string verbatim / object JSON / image results to
  *   native content parts; details carries the record-facing value),
- * - the question-tool placeholder (quiz / ask_user_question): a synthetic
+ * - the question-tool placeholder (quiz / ask_user_question; old-transcript compat, the latter tool is retired): a synthetic
  *   "question posed" result that is NEVER persisted — the record keeps the
  *   tool part output-less until the client answers; the learner's answer
  *   re-enters the next turn as this call's result. terminate: true (owner

@@ -55,9 +55,9 @@ function fakeEngine(snapshotExtra: Record<string, unknown> = {}) {
   return { conv, push, submitted, state };
 }
 
-const card: Card = { tool: "ask_user_question", fields: [{ id: "answer", kind: "free-text", label: "Q" }] };
+const card: Card = { tool: "brief", fields: [{ id: "answer", kind: "free-text", label: "Q" }] };
 const toolEntry = (id: number, callId: string) =>
-  ({ id, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: callId, toolName: "ask_user_question", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: card } }] }) as never;
+  ({ id, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: callId, toolName: "brief", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: card } }] }) as never;
 
 async function rig(callIds: string[]) {
   const eng = fakeEngine({ run: { inputs: [1] }, entries: callIds.map((c, i) => toolEntry(10 + i, c)) });

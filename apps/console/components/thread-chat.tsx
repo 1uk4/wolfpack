@@ -29,6 +29,7 @@ import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
+import { AttachBarButton } from "@/components/attached-thread";
 import { TopBar } from "@/components/top-bar";
 import { ThreadGitRow } from "@/components/thread-git-tree";
 import { ThreadContextChip } from "@/components/thread-context";
@@ -51,7 +52,11 @@ import {
 	type ThreadCards,
 	type ToolItem,
 	ATTACHMENTS_PART,
+	threadTint,
+	threadTintSolid,
+	type ThreadColorSource,
 } from "@/src/core";
+import { useThreadColor } from "@/components/use-thread-color";
 import type { CardAnswers } from "@wolfpack/client";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
@@ -158,6 +163,8 @@ function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; op
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.
  */
+const NO_COLOR_THREADS: readonly ThreadColorSource[] = [];
+
 function ThreadChatInner({
 	wolf,
 	slug,
@@ -171,6 +178,8 @@ function ThreadChatInner({
 	initialCards = NO_CARDS,
 	closedReason,
 	initialBound,
+	parentThreadId,
+	colorThreads = NO_COLOR_THREADS,
 }: {
 	wolf: string;
 	slug: string;
@@ -191,6 +200,10 @@ function ThreadChatInner({
 	closedReason?: string;
 	/** The work item the thread is bound to at load (`boundItem ?? boundWorkItem`): its progress panel replaces the floating checklist from the first paint. */
 	initialBound?: string;
+	/** A subagent thread: the thread that spawned it (it shows that thread's color). */
+	parentThreadId?: string;
+	/** The wolf's threads (id, parent, settings) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
+	colorThreads?: readonly ThreadColorSource[];
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -203,7 +216,12 @@ function ThreadChatInner({
 		initiallyInFlight,
 		transport,
 	});
-	const threadSettings = useThreadSettings(wolf, slug);
+	const threadSettings = useThreadSettings(wolf, slug, threadId);
+	// A faint tint of the thread's color (its override, else the one its id gives; a subagent's = its parent's) behind the conversation.
+	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
+	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads).hex;
+	const tint = threadTint(tintHex);
+	const tintSolid = threadTintSolid(tintHex);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
@@ -540,11 +558,12 @@ function ThreadChatInner({
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
+					<AttachBarButton wolf={wolf} slug={slug} threadId={threadId} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
-				<div className="relative flex min-h-0 flex-1">
+				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex} style={{ backgroundColor: tint }}>
 					<PanelFloatingHandle />
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
@@ -686,8 +705,8 @@ function ThreadChatInner({
 							<div aria-hidden className="h-40" style={subagents.length ? { marginTop: Math.min(subagents.length, 4) * STRIP_ROW_PX + 8 } : undefined} />
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
-							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
-							<div className="bg-background pb-4">
+							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
+							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									{closedReason !== undefined ? (
@@ -713,7 +732,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : undefined}
+											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : undefined}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

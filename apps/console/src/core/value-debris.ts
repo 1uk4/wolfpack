@@ -13,7 +13,7 @@
  * (statements, questions, explanations may legitimately carry any of
  * these characters). Pure + browser-safe: shared by the call boundary
  * (quizInputProblems), the display parse (tool-parts), and grading
- * (question-dock) — the three consumers the tool-parts law keeps in
+ * (the answered card) — the three consumers the tool-parts law keeps in
  * lockstep. Idempotent by construction.
  */
 

@@ -1,6 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelsRefusal, parseProviderKeyRefusal } from "../components/chat.tsx";
 import { prefillFromSlots, prefillLevelFromPin, setupStage } from "../components/setup-dialog.tsx";
 import {
 	isModelsRefusal,
@@ -14,30 +13,9 @@ import type { ModelCatalogEntry, ModelSlotName } from "../src/core/index.ts";
 /**
  * The BYOK universal gate rendered honestly (owner, 2026-09-22): the server
  * refuses ALL turns with 503 {error, code: "models_not_configured", missing}
- * when a slot tier is unset. These pin the client's pure seams: the refusal
- * detector (the transport throws the 503 body verbatim as the error text),
- * the job-record refusal matcher, and the SetupDialog's prefill.
+ * when a slot tier is unset. These pin the client's pure seams that remain live:
+ * the job-record refusal matchers and the SetupDialog's prefill.
  */
-
-const REFUSAL = JSON.stringify(modelsNotConfigured(["strong"]));
-
-describe("parseModelsRefusal — the send refusal detector", () => {
-	it("reads the missing tiers from the envelope text", () => {
-		assert.deepEqual(parseModelsRefusal(REFUSAL), ["strong"]);
-		assert.deepEqual(parseModelsRefusal(JSON.stringify(modelsNotConfigured(["strong", "vision"]))), [
-			"strong",
-			"vision",
-		]);
-	});
-
-	it("anything else is a real error — null, the honest banner stays", () => {
-		assert.equal(parseModelsRefusal(undefined), null);
-		assert.equal(parseModelsRefusal("Something went wrong"), null); // not JSON
-		assert.equal(parseModelsRefusal('{"error":"A turn is already running"}'), null); // JSON, wrong code
-		assert.equal(parseModelsRefusal('{"code":"models_not_configured","missing":"strong"}'), null); // missing not an array
-		assert.equal(parseModelsRefusal('{"code":"models_not_configured","missing":[42]}'), null); // tiers are strings
-	});
-});
 
 describe("isModelsRefusal — the job-record matcher", () => {
 	it("matches the runner's composed wording, not real failures", () => {
@@ -63,21 +41,6 @@ describe("providerKeyMissing — the envelope factory (provider-key interlude, 2
 	it("an unknown provider falls back to its raw id as the label", () => {
 		const envelope = providerKeyMissing("weird", ["cheap"]);
 		assert.equal(envelope.error, "No weird key is set — add one in Settings → Keys");
-	});
-});
-
-describe("parseProviderKeyRefusal — the send refusal detector's twin (zero-keys wave)", () => {
-	it("reads the envelope's own code + invariant tail — the wording can never drift client-side", () => {
-		const REFUSED = JSON.stringify(providerKeyMissing("openrouter", ["strong"]));
-		assert.equal(parseProviderKeyRefusal(REFUSED), true);
-		assert.equal(parseProviderKeyRefusal(JSON.stringify(providerKeyMissing("anthropic", ["strong", "vision"]))), true);
-	});
-
-	it("anything else is a real error — false, the honest banner stays", () => {
-		assert.equal(parseProviderKeyRefusal(REFUSAL), false); // the models refusal is NOT this one
-		assert.equal(parseProviderKeyRefusal("FAILED: headless crashed"), false);
-		assert.equal(parseProviderKeyRefusal(undefined), false);
-		assert.equal(parseProviderKeyRefusal("{not json"), false);
 	});
 });
 

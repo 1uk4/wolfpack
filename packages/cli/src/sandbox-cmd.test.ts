@@ -92,7 +92,7 @@ describe("resolveExtensionKeys", () => {
   it("explicit > source wolf.yaml extensions > memory", () => {
     const y = path.join(tmp, "wolf.yaml");
     fs.writeFileSync(y, "name: w\nextensions: [memory, telegram]\n");
-    expect(resolveExtensionKeys("ask", y)).toEqual({ keys: ["ask"], from: "--extensions" });
+    expect(resolveExtensionKeys("tasks", y)).toEqual({ keys: ["tasks"], from: "--extensions" });
     expect(resolveExtensionKeys(undefined, y).keys).toEqual(["memory", "telegram"]);
     expect(resolveExtensionKeys(undefined, path.join(tmp, "nope.yaml")).keys).toEqual(["memory"]);
   });

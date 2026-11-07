@@ -68,6 +68,7 @@ describe("item building", () => {
 			["work", "/?focus=work%3Aw1"],
 		]);
 		assert.equal(items[1]!.hint, "task · in_build");
+		assert.deepEqual(items.map((i) => i.workId), [undefined, "w1"]); // the palette opens work items in the reader by id
 		assert.equal(focusHref("ent:x"), "/?focus=ent%3Ax");
 	});
 });

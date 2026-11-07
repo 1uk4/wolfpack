@@ -139,6 +139,10 @@ describe("crawl_run wizard card", () => {
     expect(CardSchema.safeParse(r.card).success).toBe(true);
     expect(r.card!.fields.map((f) => f.id)).toEqual(["concurrency"]);
     expect(r.card!.steps).toBeUndefined();
+    expect(r.card!.brief!.headline.length).toBeLessThanOrEqual(80);
+    expect(r.card!.brief!.context!.length).toBeLessThanOrEqual(5);
+    expect(r.card!.brief!.context![0]).toMatch(/\d+ batch\(es\), \d+ file pattern/);
+    expect(r.card!.fields.length).toBeLessThanOrEqual(3);
     expect(r.card!.fields[0]).toMatchObject({ kind: "single", allowOther: true });
     expect((r.card!.fields[0] as { options: { value: string }[] }).options.map((o) => o.value)).toEqual(["5", "8", "12", "16", "24", "32"]);
     expect(t.calls.run).toHaveLength(0);
@@ -298,6 +302,7 @@ describe("crawl_release", () => {
     const b = complete(t.crawlHome, planPath, "run-b");
     const r = await t.call("crawl_release");
     expect(r.card).toMatchObject({ tool: "crawl_release", title: "Release which crawl?" });
+    expect(r.card!.brief!.headline).toBe("Release which crawl?");
     expect((r.card!.fields[0] as { options: { value: string }[] }).options.map((o) => o.value).sort()).toEqual([a, b].sort());
     const outside = tmp("outside");
     copyFileSync(planPath, join(outside, "plan.yaml"));
@@ -324,6 +329,11 @@ describe("crawl_release", () => {
     const first = await t.call("crawl_release", { runDir: dir });
     expect(first.card?.fields[0]).toMatchObject({ kind: "confirm", label: expect.stringMatching(/^Release crawl run-a to the librarian\? \([0-9a-f]{8}\)$/), confirmLabel: "Release" });
     expect(first.card!.fields[0].description).toContain("**2** contribution(s)");
+    expect(first.card!.brief!.headline).toBe('Release 2 contribution(s) to "' + (first.card!.brief!.headline.match(/to "(.*)"\?/)?.[1] ?? "") + '"?');
+    expect(first.card!.brief!.headline.length).toBeLessThanOrEqual(80);
+    expect(first.card!.brief!.context!.length).toBeLessThanOrEqual(5);
+    expect(first.card!.brief!.context![0]).toContain("2 new or changed");
+    expect(first.card!.fields).toHaveLength(1);
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
     // waiting for the answer: nothing happens, no second card
     const waiting = await t.call("crawl_release", { runDir: dir });

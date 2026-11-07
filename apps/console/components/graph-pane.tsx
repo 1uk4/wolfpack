@@ -17,6 +17,7 @@
  * pane's content follows the cursor's node because the view hands it that
  * node's card.
  */
+import { openWorkHrefLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "lucide-react";
@@ -235,6 +236,7 @@ export function GraphPane({
 	/** The graduation seam (default: the console routes); tests inject a fake. */
 	graduate?: GraduateClient;
 }) {
+	const openWork = useOpenWorkItem();
 	const [width, setWidth] = usePaneWidth();
 	const graduateClient = useMemo(() => graduate ?? createGraduateClient(), [graduate]);
 	const data = usePaneData(card);
@@ -353,7 +355,7 @@ export function GraphPane({
 				{(card.openHref || card.focusIds) && (
 					<div className="mt-3 flex flex-wrap items-center gap-2">
 						{card.openHref && (
-							<Link href={card.openHref} className={BTN} data-testid="pane-open">
+							<Link href={card.openHref} className={BTN} data-testid="pane-open" onClick={(e) => openWorkHrefLink(e, card.openHref!, openWork)}>
 								Open page
 							</Link>
 						)}

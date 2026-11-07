@@ -225,7 +225,7 @@ export const ROUTES = {
    */
   getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   /**
-   * Change the thread's settings (body: `tier` and/or `autoShip`; the rest is kept). Persisted: survives a wolf restart.
+   * Change the thread's settings (body: `tier`, `autoShip` and/or `color` (a palette key; null = automatic); the rest is kept). Persisted: survives a wolf restart.
    * A tier change applies from the next turn (a running turn finishes on its model). Answers the new settings.
    * 400 `invalid_request` for a bad body or a subagent thread (its model comes from its profile), 404 `not_found` for an unknown thread.
    */

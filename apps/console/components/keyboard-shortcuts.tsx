@@ -93,8 +93,8 @@ export function KeyboardShortcuts() {
 				// the fallback, bottom-up: dictation (a live capture, not a
 				// surface — it survives Esc that closes a plan or overlay),
 				// then abort the turn (a server-side turn has no client
-				// request to abort — the abort seam in Chat decides what's
-				// honestly stoppable, layered by escAbortTarget).
+				// request to abort — the thread decides what's
+				// honestly stoppable).
 				if (isDictationActive()) {
 					e.preventDefault();
 					window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));
@@ -130,6 +130,12 @@ export function KeyboardShortcuts() {
 				case "cheat-sheet":
 					handlersRef.current.setCheatOpen(true);
 					break;
+				case "focus-chat-bar":
+				case "chat-bar-switcher":
+					// Browsers bind Mod+J (downloads). The bar claims the key (preventDefault on the event we hand it) only
+					// when it answers: hidden below md or with nothing attached, the browser keeps it.
+					window.dispatchEvent(new CustomEvent(kbdEventForAction(action), { detail: { event: e } }));
+					break;
 				case "find":
 					// The mounted surface owns Find (session text / graph nodes).
 					// Claim Mod+F so Chromium's whole-window finder cannot open too.
@@ -153,11 +159,12 @@ export function KeyboardShortcuts() {
 function CheatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 	const backdropDismiss = useBackdropDismiss(onClose);
 	if (!open) return null;
-	const scopes = ["global", "chat", "graph"] as const;
+	const scopes = ["global", "chat", "graph", "chatbar"] as const;
 	const scopeLabels: Record<(typeof scopes)[number], string> = {
 		global: "Global",
 		chat: "Chat",
 		graph: "Graph view",
+		chatbar: "Chat bar",
 	};
 	return (
 		<div

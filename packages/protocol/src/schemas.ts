@@ -1,4 +1,20 @@
 import { z } from "zod";
+import {
+  answerSchemaOf,
+  cardKind,
+  ConfirmFieldSchema,
+  fieldSchemaOf,
+  FreeTextFieldSchema,
+  MultiFieldSchema,
+  SingleFieldSchema,
+  type AnyField,
+  type CardOption,
+  type ConfirmFieldAnswer,
+  type FieldShowIf,
+  type MultiFieldAnswer,
+  type TextFieldAnswer,
+} from "./card-kinds/index.js";
+export * from "./card-kinds/index.js";
 
 /** Single integer protocol version. Additive changes do not bump it; see README. */
 export const PROTOCOL_VERSION = 1 as const;
@@ -79,84 +95,20 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
 // ---------------------------------------------------------------- cards
 
 /**
- * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `ask_user_question` or a
- * tool such as `task_done`). A card holds one or more fields; the shape extends `ask_user_question`
- * (question / options / free text). Additive: no version bump.
+ * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `brief` or a
+ * tool such as `task_done`). A card holds one or more fields (question / options / free text). Additive: no version bump.
  *
  * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
  * `default` only pre-selects in the UI, it is never auto-submitted (cards wait indefinitely; there is no timeout).
+ *
+ * Each kind is a module in `card-kinds/` (field schema + answer schema, one registry); the field union dispatches
+ * through that registry at parse time, so a kind added with `registerCardKind` parses everywhere.
+ * The static types below cover the four built-in kinds only: a registered kind parses and validates at runtime but is
+ * not part of these unions.
  */
-export const CardOptionSchema = z.object({
-  label: z.string(),
-  /** Machine-readable value returned when picked. Defaults to the label. */
-  value: z.string(),
-  description: z.string().optional(),
-});
-export type CardOption = z.infer<typeof CardOptionSchema>;
-
-/**
- * A field shown only while an earlier field's answer matches: `equals` compares a single/free-text value or a confirm
- * boolean; `oneOf` matches any of several single values. Exactly one of the two. A hidden field is neither shown nor
- * required, and any answer it carries is rejected.
- */
-export const FieldShowIfSchema = z
-  .object({
-    /** Id of the controlling field; it must be declared earlier in the card. */
-    field: z.string().min(1),
-    equals: z.union([z.string(), z.boolean()]).optional(),
-    oneOf: z.array(z.string()).min(1).optional(),
-  })
-  .refine((s) => (s.equals === undefined) !== (s.oneOf === undefined), { message: "showIf needs exactly one of equals / oneOf" });
-export type FieldShowIf = z.infer<typeof FieldShowIfSchema>;
-
-const cardFieldBase = z.object({
-  /** Unique within the card; keys the answer. */
-  id: z.string().min(1),
-  label: z.string(),
-  /** Extra context shown under the label. */
-  description: z.string().optional(),
-  /** Conditional visibility (stepped/dependent cards); absent = always shown. */
-  showIf: FieldShowIfSchema.optional(),
-  /**
-   * The operator may leave it blank. Default (absent) = required. A skipped optional field is submitted empty
-   * (free-text/single `{value: ""}`, multi `{value: []}`, confirm: no answer) and the wolf is told it was skipped;
-   * an answer that is given is validated normally (a multi's min/max still apply once something is picked).
-   */
-  optional: z.boolean().optional(),
-});
-export const FreeTextFieldSchema = cardFieldBase.extend({
-  kind: z.literal("free-text"),
-  default: z.string().optional(),
-});
-export const SingleFieldSchema = cardFieldBase.extend({
-  kind: z.literal("single"),
-  options: z.array(CardOptionSchema).min(1),
-  /** Offer an "Other" free-text entry beside the options (the `ask_user_question` behaviour). Default true. */
-  allowOther: z.boolean().optional(),
-  /** An option `value` to pre-select. */
-  default: z.string().optional(),
-});
-export const MultiFieldSchema = cardFieldBase.extend({
-  kind: z.literal("multi"),
-  options: z.array(CardOptionSchema).min(1),
-  /** Offer custom entries beside the options. Default false (unlike `single`): a multi answer is a subset of the options. */
-  allowOther: z.boolean().optional(),
-  /** Option values to pre-select. */
-  default: z.array(z.string()).optional(),
-  /** Bounds on the number of picked entries (options and custom ones together). A required multi needs at least one pick regardless; optional: true allows blank. */
-  min: z.number().int().min(0).optional(),
-  max: z.number().int().min(1).optional(),
-});
-export const ConfirmFieldSchema = cardFieldBase.extend({
-  kind: z.literal("confirm"),
-  /** Button labels; default "Yes" / "No". */
-  confirmLabel: z.string().optional(),
-  rejectLabel: z.string().optional(),
-  /** Pre-selects confirm (true) or reject (false); the operator still has to submit. */
-  default: z.boolean().optional(),
-});
-export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema, SingleFieldSchema, MultiFieldSchema, ConfirmFieldSchema]);
-export type CardField = z.infer<typeof CardFieldSchema>;
+export type CardField = z.infer<typeof FreeTextFieldSchema> | z.infer<typeof SingleFieldSchema> | z.infer<typeof MultiFieldSchema> | z.infer<typeof ConfirmFieldSchema>;
+export const CardFieldSchema = fieldSchemaOf() as unknown as z.ZodType<CardField>;
+/** Kind names of the built-in fields only (see CardField). */
 export type CardFieldKind = CardField["kind"];
 
 export const CardStepSchema = z.object({
@@ -166,29 +118,40 @@ export const CardStepSchema = z.object({
 });
 export type CardStep = z.infer<typeof CardStepSchema>;
 
-/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the ask_user_question builder. */
+/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the brief builder. */
 export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: readonly CardField[]): string | undefined {
   const s = f.showIf;
   if (!s) return undefined;
   const ctl = fields.find((x) => x.id === s.field);
   if (!ctl || ctl.id === f.id) return `showIf.field "${s.field}" is not another field of this card`;
-  if (ctl.kind === "confirm") return typeof s.equals === "boolean" && s.oneOf === undefined ? undefined : `showIf on confirm field "${ctl.id}" needs a boolean \`equals\``;
-  if (ctl.kind === "single") {
-    const values = ctl.options.map((o) => o.value);
-    const wanted = s.oneOf ?? (typeof s.equals === "string" ? [s.equals] : []);
-    if (wanted.length === 0) return `showIf on single field "${ctl.id}" needs a string \`equals\` or a non-empty \`oneOf\``;
-    const bad = wanted.find((w) => !values.includes(w));
-    return bad === undefined ? undefined : `showIf value "${bad}" is not an option of "${ctl.id}"`;
-  }
-  return `field "${ctl.id}" (${ctl.kind}) cannot control another field`;
+  const check = cardKind(ctl.kind)?.checkShowIfController;
+  if (!check) return `field "${ctl.id}" (${ctl.kind}) cannot control another field`;
+  return check(ctl as unknown as AnyField, s);
 }
+
+/** Limits of a brief header (owner decisions): the headline and the bullet count are hard, a bullet's length is soft (the console clamps it). */
+export const BRIEF_LIMITS = { headline: 80, contextBullets: 5, bulletSoftChars: 160, questions: 3 } as const;
+
+/**
+ * The header of a card raised by the `brief` tool: what the owner needs to know before answering.
+ * `context` bullets are short by convention (~160 chars) but never rejected for length; `more` points at detail in the thread.
+ */
+export const CardBriefSchema = z.object({
+  headline: z.string().min(1).max(BRIEF_LIMITS.headline),
+  context: z.array(z.string()).max(BRIEF_LIMITS.contextBullets).optional(),
+  more: z.string().optional(),
+});
+export type CardBrief = z.infer<typeof CardBriefSchema>;
 
 export const CardSchema = z
   .object({
-    /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
+    /** Tool that raised it, e.g. `brief`. Keys the console's card renderer. */
     tool: z.string(),
     title: z.string().optional(),
-    fields: z.array(CardFieldSchema).min(1),
+    /** A card needs at least one field, except a brief card, which may have none (the owner then acknowledges with OK); a brief holds at most 3. */
+    fields: z.array(CardFieldSchema),
+    /** Brief header (the `brief` tool). Absent on cards from other tools. */
+    brief: CardBriefSchema.optional(),
     /**
      * Optional stepped presentation: the fields grouped into ordered steps (every field in exactly one step; a step
      * whose fields are all hidden by `showIf` is skipped). The answer is still ONE submission for the whole card.
@@ -196,6 +159,8 @@ export const CardSchema = z
      */
     steps: z.array(CardStepSchema).min(1).optional(),
   })
+  .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field (only a brief card may have none)", path: ["fields"] })
+  .refine((c) => c.brief === undefined || c.fields.length <= BRIEF_LIMITS.questions, { message: `a brief card holds at most ${BRIEF_LIMITS.questions} questions`, path: ["fields"] })
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
   .refine(
     (c) => {
@@ -221,29 +186,12 @@ export const CardSchema = z
     (c) => c.fields.every((f) => showIfProblem(f, c.fields) === undefined),
     { message: "a showIf does not fit its controlling field (confirm: boolean equals; single: option values; other kinds cannot control)", path: ["fields"] },
   )
-  .refine((c) => c.fields.every((f) => f.kind !== "single" || f.default === undefined || f.options.some((o) => o.value === f.default)), {
-    message: "a single field's default must be one of its option values",
-    path: ["fields"],
-  })
-  .refine((c) => c.fields.every((f) => f.kind !== "multi" || (f.default ?? []).every((d) => f.options.some((o) => o.value === d))), {
-    message: "a multi field's default must be a subset of its option values",
-    path: ["fields"],
-  })
-  .refine((c) => c.fields.every((f) => f.kind !== "multi" || new Set(f.default ?? []).size === (f.default ?? []).length), {
-    message: "a multi field's default must not repeat a value",
-    path: ["fields"],
-  })
-  .refine((c) => c.fields.every((f) => f.kind !== "multi" || (f.min ?? 0) <= (f.max ?? Infinity)), {
-    message: "a multi field's min must not exceed its max",
-    path: ["fields"],
-  })
-  .refine((c) => c.fields.every((f) => f.kind !== "multi" || f.allowOther === true || (f.min ?? 0) <= f.options.length), {
-    message: "a multi field's min exceeds its number of options (and allowOther is not set), so it can never be satisfied",
-    path: ["fields"],
-  })
-  .refine((c) => c.fields.every((f) => f.kind !== "multi" || f.default === undefined || (f.default.length >= (f.min ?? 0) && f.default.length <= (f.max ?? Infinity))), {
-    message: "a multi field's default must respect its min and max",
-    path: ["fields"],
+  .superRefine((c, ctx) => {
+    // Kind-specific rules (defaults within options, min/max, ...) live in each kind's `checkField`.
+    for (const f of c.fields) {
+      const problem = cardKind(f.kind)?.checkField?.(f as unknown as AnyField);
+      if (problem) ctx.addIssue({ code: "custom", message: problem, path: ["fields"] });
+    }
   });
 export type Card = z.infer<typeof CardSchema>;
 
@@ -280,14 +228,10 @@ export function visibleFields(card: Card, answers: Readonly<Record<string, { val
  *   of `value`).
  * - confirm: `value` is true (confirm) or false (reject), with an optional `note`.
  */
-export const TextFieldAnswerSchema = z.object({ value: z.string(), other: z.boolean().optional() });
-export const MultiFieldAnswerSchema = z.object({ value: z.array(z.string()), other: z.array(z.string()).optional() });
-export const ConfirmFieldAnswerSchema = z.object({ value: z.boolean(), note: z.string().optional() });
-export const CardFieldAnswerSchema = z.union([TextFieldAnswerSchema, MultiFieldAnswerSchema, ConfirmFieldAnswerSchema]);
-export type TextFieldAnswer = z.infer<typeof TextFieldAnswerSchema>;
-export type MultiFieldAnswer = z.infer<typeof MultiFieldAnswerSchema>;
-export type ConfirmFieldAnswer = z.infer<typeof ConfirmFieldAnswerSchema>;
-export type CardFieldAnswer = z.infer<typeof CardFieldAnswerSchema>;
+export type { TextFieldAnswer, MultiFieldAnswer, ConfirmFieldAnswer };
+export type CardFieldAnswer = TextFieldAnswer | MultiFieldAnswer | ConfirmFieldAnswer;
+/** Any registered kind's answer shape (see card-kinds/). */
+export const CardFieldAnswerSchema = answerSchemaOf() as unknown as z.ZodType<CardFieldAnswer>;
 /** Answers keyed by field id. */
 export const CardAnswersSchema = z.record(z.string(), CardFieldAnswerSchema);
 export type CardAnswers = z.infer<typeof CardAnswersSchema>;
@@ -364,8 +308,24 @@ export type ThreadWorkspace = z.infer<typeof ThreadWorkspaceSchema>;
 export const ThreadTierSchema = z.enum(["main", "smart", "fast"]);
 export type ThreadTier = z.infer<typeof ThreadTierSchema>;
 export const THREAD_TIERS = ThreadTierSchema.options;
+/** The fixed thread palette (readable on the dark theme). Keys are what settings store; hex is for display. */
+export const THREAD_COLORS = {
+  red: "#f07178",
+  orange: "#f5a15a",
+  yellow: "#e6cd69",
+  green: "#8bd17c",
+  teal: "#5fd4c4",
+  blue: "#6cb2f2",
+  purple: "#b69cf5",
+  pink: "#f28cc4",
+} as const;
+export const THREAD_COLOR_KEYS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"] as const;
+export const ThreadColorSchema = z.enum(THREAD_COLOR_KEYS);
+export type ThreadColor = z.infer<typeof ThreadColorSchema>;
 /** Per-thread composer settings. Persisted by the wolf; the defaults are `main` and auto-ship off. */
 export const ThreadSettingsSchema = z.object({
+  /** Owner's colour override (a palette key). Absent = automatic (derived from the thread id). */
+  color: ThreadColorSchema.optional(),
   tier: ThreadTierSchema,
   /** true: task_done ships in this thread without raising a ship card. false: it asks (one multi-select card). */
   autoShip: z.boolean(),
@@ -401,7 +361,11 @@ export type CompactBody = z.infer<typeof CompactBodySchema>;
 export const CompactAckSchema = z.object({ accepted: z.literal(true) });
 export type CompactAck = z.infer<typeof CompactAckSchema>;
 
-export const ThreadSettingsPatchSchema = ThreadSettingsSchema.partial().refine((p) => p.tier !== undefined || p.autoShip !== undefined, { message: "tier or autoShip is required" });
+/** `color: null` resets to automatic. */
+export const ThreadSettingsPatchSchema = ThreadSettingsSchema.omit({ color: true })
+  .partial()
+  .extend({ color: ThreadColorSchema.nullable().optional() })
+  .refine((p) => p.tier !== undefined || p.autoShip !== undefined || p.color !== undefined, { message: "tier, autoShip or color is required" });
 export type ThreadSettingsPatch = z.infer<typeof ThreadSettingsPatchSchema>;
 // ---- /composer controls ---------------------------------------------------------------------------------------------
 

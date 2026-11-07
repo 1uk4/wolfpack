@@ -5,7 +5,8 @@
  */
 import { GenerationTask, defineExtension as defineDurable, hook, type Extension } from "@earendil-works/pi-durable";
 import { adaptToDurable } from "../adapters/durable.js";
-import { confirmCard } from "../engine/cards.js";
+import type { Card } from "@wolfpack/protocol";
+import { briefHeader, confirmCard } from "../engine/cards.js";
 import { Type, defineExtension, defineTool, type Tool, type ToolContext, type ToolResult } from "../extension-api.js";
 import type { SubagentManager, ToolOutcome } from "./subagents.js";
 import { SPAWN_TOOLS } from "./subagents.js";
@@ -70,7 +71,7 @@ const firstLine = (m: { message: { content?: unknown } }): string => {
  * <branch>" result), or the conflict card's own "Abandon branch" option for this branch, matched by label and value.
  * Skipping the card counts as no. Returns undefined to go ahead, else the result to return instead.
  */
-async function abandonGate(bridge: SubagentBridge, tool: string, ctx: ToolContext, name: string): Promise<ToolResult | undefined> {
+export async function abandonGate(bridge: SubagentBridge, tool: string, ctx: ToolContext, name: string): Promise<ToolResult | undefined> {
   const info = await bridge.require().abandonInfo(String(ctx.conversationId), name);
   if (!info) return undefined;
   if (info.refusal) return { content: [{ type: "text", text: info.refusal }], isError: true };
@@ -89,17 +90,19 @@ async function abandonGate(bridge: SubagentBridge, tool: string, ctx: ToolContex
   const spent = found?.laterResults.some((m) => firstLine(m).startsWith(`Abandoned ${info.branch}`)) ?? false;
   if (yes && !spent) return undefined;
   // The conflict card's own "Abandon branch" answer (this branch, matched by label and value).
-  const conflict = await ctx.conversation.latestCard("ask_user_question", (c) => {
+  const isConflictCard = (c: Card) => {
     const f = c.fields[0];
     return c.fields.length === 1 && f.kind === "single" && f.label.startsWith(`Merge conflict merging ${info.branch} into `) && f.options.some((o) => o.value === "abandon" && o.label === "Abandon branch");
-  });
+  };
+  // Raised with `brief` now; older transcripts hold it under the retired `ask_user_question`.
+  const conflict = (await ctx.conversation.latestCard("brief", isConflictCard)) ?? (await ctx.conversation.latestCard("ask_user_question", isConflictCard));
   if (conflict?.status === "answered") {
     const f = conflict.card.fields[0];
     if ((conflict.answers?.[f.id] as { value?: unknown } | undefined)?.value === "abandon") return undefined;
   }
   if (found?.status === "skipped" || found?.status === "answered") return text(`Not abandoned: the user said no. ${info.branch} stays. Do not ask again unless they bring it up.`);
   return text(`Asked the user to confirm abandoning ${info.branch}, which has ${n}. Your turn ends here. If they answer yes, call the same tool again to abandon it; if no, do not.`, {
-    card: confirmCard({ tool, question: label, title: "Abandon branch?", description: `Its worktree and branch are deleted and the unmerged work is lost.`, confirmLabel: "Abandon", rejectLabel: "Keep" }),
+    card: confirmCard({ tool, question: label, title: "Abandon branch?", description: `Its worktree and branch are deleted and the unmerged work is lost.`, confirmLabel: "Abandon", rejectLabel: "Keep", brief: briefHeader(`Abandon ${info.branch}?`, [`${info.branch} has ${n}.`, "Its worktree and branch are deleted and the unmerged work is lost."]) }),
   });
 }
 

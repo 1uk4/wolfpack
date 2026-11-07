@@ -46,9 +46,15 @@ export interface ProjectContextInput {
 export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show the user live structured objects; prose stays the primary channel.
 - show_graph: a plan with dependencies or branching (3+ steps with ordering); revise statuses as work progresses.
 - show_checklist: a linear to-do you tick off in place. Don't emit both a graph and a checklist for the same plan.
-- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the user an open question, use ask_user_question instead.
+- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the user an open question, use the brief tool instead.
 - Revise an object by reusing its objectId and resending it in full.
 - No objects for trivial answers or one-step tasks.`;
+
+/** The "Ending a turn" section: when to end with `brief` instead of plain chat. */
+export const BRIEF_GUIDANCE = `Whenever the owner has to make a decision, supply an answer or look over a finished result, close your turn with the brief tool rather than a plain message. The owner gets a card with a headline (up to 80 characters), at most 5 brief context bullets and 0 to 3 questions (single, multi, confirm or free). A brief with no questions is simply acknowledged with OK.
+- Keep the card terse. The full explanation goes in your thread message; reference it with \`more\`.
+- Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications that need no decision.
+- A brief closes the turn, so make no further tool calls after it; the owner's response opens your next turn.`;
 
 export interface FoundFile {
   path: string;
@@ -173,5 +179,6 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
   }
   const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
   if (so !== false && so.trim()) parts.push(`# Structured output\n\n${so.trim()}`);
+  parts.push(`# Ending a turn\n\n${BRIEF_GUIDANCE}`);
   return { identity, agents, claude, skills, instructions: parts.join("\n\n") };
 }

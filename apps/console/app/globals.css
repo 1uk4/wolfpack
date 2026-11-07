@@ -10,7 +10,7 @@
  *     padding/margin/gap in the app uses whole units of a 4px base.
  *   - The type scale below is a declared modular ladder (each --text-* token
  *     carries its own line-height); components never invent pixel sizes.
- *   - Radii ladder is 4 / 8 / 12 / 16px multiples of the 4px base.
+ *   - Radii: 4px small, 10px for md/lg (the B4 look), 16px xl.
  *   - Emphasis colors live in tokens (--lh-ink-strong / --lh-ink-italic) so a
  *     future settings UI reassigns them (configurable per the owner).
  */
@@ -27,8 +27,8 @@
 	outline: none;
 }
 
-/* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
-   B4 slate and teal (2026-11): chrome = Geist Mono; prose = Inter; titles = CMU Serif. */
+/* B4 slate and teal (2026-11): page #0f141a with teal accents (hexes below).
+   Chrome = Inter; prose = Inter; titles = Inter 600; code = Geist Mono. */
 :root {
 	color-scheme: dark;
 	--radius: 10px;
@@ -64,7 +64,7 @@
 	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 	/* Markdown heading weight (appearance settings; 900 = the Black cut). */
-	--lh-heading-weight: 900;
+	--lh-heading-weight: 600;
 }
 
 /* The app is always dark (<html class="dark">); mirror the same values so
@@ -99,26 +99,17 @@
 	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 	/* Markdown heading weight (appearance settings; 900 = the Black cut). */
-	--lh-heading-weight: 900;
-}
-
-/* CMU Serif bold (titles) — bundled local file, no CDN dependency. */
-@font-face {
-	font-family: "lh-cmu";
-	src: url("/fonts/cmunbx.ttf") format("truetype");
-	font-weight: 700;
-	font-style: normal;
-	font-display: swap;
+	--lh-heading-weight: 600;
 }
 
 @theme inline {
-	/* Fonts: chrome = Geist Mono, prose = Inter, titles = CMU
-	   Serif bold. The Geist Mono/Inter variables attach in app/layout.tsx.
+	/* Fonts: chrome = Inter, prose = Inter, titles = Inter 600, code =
+	   Geist Mono. The Geist Mono/Inter variables attach in app/layout.tsx.
 	   (owner, typography round) The Tailwind defaults are ALIASED to the app
 	   fonts: `font-mono`/`font-sans` utilities would otherwise fall to the
 	   SYSTEM stacks — a fourth font the app never chose — and streamdown's
 	   code-block chrome + mermaid-error + demo-card all use them. */
-	--font-ui: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+	--font-ui: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 	--font-prose: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 	--font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
 	--font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -131,7 +122,7 @@
 	   --lh-prose-size.) */
 	/* --font-title lives in the NON-inline @theme below: inline tokens get
 	   their literal values baked into the utilities (.font-title{font-family:
-	   lh-cmu,serif}), which made the appearance "session names in serif"
+	   <stack>}), which made the appearance "session names in serif"
 	   toggle write a runtime --font-title no consumer ever read (owner, fix
 	   wave: toggle looked dead). Non-inline emits :root { --font-title: … }
 	   and the utility reads var(--font-title) — appearance overrides win. */
@@ -149,7 +140,7 @@
 	--text-2xl--line-height: 1.3;
 	--text-3xl: 32px;
 	--text-3xl--line-height: 1.25;
-	/* Radii ladder — 4/8/12/16 multiples of the 4px base. */
+	/* Radii: sm 4px, md/lg 10px (B4), xl 16px. */
 	--radius-sm: 4px;
 	--radius-md: 10px;
 	--radius-lg: 10px;
@@ -186,7 +177,7 @@ body {
 }
 
 /* Teaching prose (the markdown renderer's container gets .lh-prose):
-   Source Sans 3 with the size/leading tokens; emphasis color bound to
+   Inter with the size/leading tokens; emphasis color bound to
    the settings-ready tokens. */
 .lh-prose {
 	font-family: var(--font-prose);
@@ -195,13 +186,11 @@ body {
 }
 
 /* Session-name weight (owner, fix wave round 3): with the serif toggle
-   OFF, --font-title resolves to the prose font — Source Sans 3 is loaded
-   as a VARIABLE font, and without an explicit weight the titles render at
-   400, a whisper next to CMU's bold-only face. Request 900: the variable
-   font takes it, and CMU (a single 700 face) snaps to its nearest
-   available weight — the same rendering it already had. */
+   OFF, --font-title resolves to the prose font. Titles are Inter 600 (B4);
+   Inter is a VARIABLE font, so the explicit weight is honoured. With the
+   toggle ON, --font-title is the default below (also Inter). */
 .font-title {
-	font-weight: 900;
+	font-weight: 600;
 }
 
 .lh-prose :where(strong, b) {
@@ -223,14 +212,12 @@ body {
 	padding-left: 1.5rem;
 }
 
-/* Markdown headings render at the font's BLACK weight (owner ask,
-   2026-09-19) — 900, not streamdown's font-semibold 600. The variable
-   Source Sans 3 axis spans 200–900 (next/font loads the full range), so
-   900 draws the real Black cut. Unlayered CSS beats the utility layer;
-   :where keeps specificity zero. Chrome titles (CMU Serif) don't live
-   under .lh-prose and stay untouched. */
+/* Markdown headings render at weight 600 (B4), via --lh-heading-weight.
+   Inter is variable (next/font loads the full range). Unlayered CSS beats
+   the utility layer; :where keeps specificity zero. Chrome titles don't
+   live under .lh-prose and stay untouched. */
 .lh-prose :where(h1, h2, h3, h4, h5, h6) {
-	font-weight: var(--lh-heading-weight, 900);
+	font-weight: var(--lh-heading-weight, 600);
 }
 
 /* lh-input (owner, typography round 2): lh-prose's 1.5 READING leading
@@ -327,8 +314,8 @@ body {
  * ============================================================ */
 
 /* Code blocks: no header bar — one quiet rounded tint so code reads as a
-   unit. The tint is DARKER than the page (muted #1c1c1c was LIGHTER than the
-   background #141414 and read as raised — owner note, chrome-melt tweaks
+   unit. The tint is DARKER than the page (a muted tint LIGHTER than the
+   page background read as raised — owner note, chrome-melt tweaks
    2026-09-19) plus a subtle hairline outline. (md-blocks renders its own
    hover copy corner.) */
 [data-streamdown="code-block"] {
@@ -560,7 +547,7 @@ body {
    session-name-serif toggle overrides this var at runtime, so the
    .font-title utility must read it through var(), not carry a baked copy. */
 @theme {
-	--font-title: "lh-cmu", serif;
+	--font-title: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
 /* Card enter (owner round, 2026-10-05): the transcript cards' one-shot

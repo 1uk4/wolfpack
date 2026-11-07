@@ -16,8 +16,7 @@ import HubAuth from "@/components/hub-auth";
 import UpdateBanner from "@/components/update-banner";
 import { ViewportVars } from "@/components/viewport-vars";
 
-// Chrome = Geist Mono, prose = Inter, titles = CMU
-// Serif (the bundled lh-cmu @font-face in globals.css — no CDN).
+// Chrome, prose and titles = Inter; code = Geist Mono.
 const ui = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 const prose = Inter({ subsets: ["latin"], variable: "--font-inter" });
 

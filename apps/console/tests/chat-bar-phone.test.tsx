@@ -185,6 +185,14 @@ describe("ChatBar on a phone", () => {
 		assert.match(q('[data-testid="bar-sheet-close"]')!.className, /min-h-11/);
 	});
 
+	it("puts attach before the input and send after it, in the dock and the wide panel", async () => {
+		const order = () => qa('[data-testid="composer"] button[aria-label="Attach images"], [data-testid="composer"] textarea, [data-testid="composer"] button[type="submit"]').map((e) => (e.tagName === "TEXTAREA" ? "input" : e.getAttribute("aria-label") === "Attach images" ? "attach" : "send"));
+		await mount();
+		assert.deepEqual(order(), ["attach", "input", "send"]);
+		await resize(false);
+		assert.deepEqual(order(), ["attach", "input", "send"]);
+	});
+
 	it("a pending card shows as a strip; tapping it opens the sheet with the card above the composer", async () => {
 		raise("a", "c1", "c2");
 		await mount();

@@ -668,6 +668,10 @@ body {
 		order: -1;
 		flex: 1 1 100%;
 	}
+	/* send stays at the right end of the button row even with no controls beside it (the floating chat has none) */
+	[data-testid="composer"] > button[type="submit"] {
+		margin-left: auto;
+	}
 	[data-testid="composer"] [data-testid="composer-controls"] {
 		flex: 1 1 0;
 		min-width: 0;

@@ -142,13 +142,17 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first. Nothing was changed.`);
 	if (dryRun) log(`${tag}not fetching; using local refs`);
 	else if (!tryGit(rtWt, "fetch", "origin").ok) return fail("git fetch failed. Nothing was changed.");
-	let sha;
-	for (const cand of [`refs/remotes/origin/${ref}`, ref]) {
-		const r = tryGit(rtWt, "rev-parse", "--verify", `${cand}^{commit}`);
-		if (r.ok) {
-			sha = r.out;
-			break;
-		}
+	const resolve = (r) => {
+		const x = tryGit(rtWt, "rev-parse", "--verify", `${r}^{commit}`);
+		return x.ok ? x.out : undefined;
+	};
+	const remoteSha = resolve(`refs/remotes/origin/${ref}`);
+	const localSha = resolve(`refs/heads/${ref}`);
+	let sha = remoteSha ?? resolve(ref);
+	if (remoteSha && localSha && remoteSha !== localSha && !tryGit(rtWt, "merge-base", "--is-ancestor", localSha, remoteSha).ok) {
+		// Local is ahead of (or diverged from) origin: the stale origin/<ref> must not silently replace it.
+		sha = localSha;
+		warn(`preview: local ${ref} is ahead of origin/${ref} (or diverged); using the local ${ref} at ${localSha.slice(0, 8)}. Push it first if the wolves should see origin's copy.`);
 	}
 	if (!sha) return fail(`cannot resolve "${ref}". Nothing was changed.`);
 

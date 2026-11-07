@@ -178,6 +178,17 @@ describe("runtime-preview", () => {
 		expect(h.logs.join("\n")).toContain("[dry-run]");
 	});
 
+	it("on: a local ref ahead of origin wins over the stale origin/<ref>, with a warning", async () => {
+		g(main, "checkout", "-q", "feat/x");
+		commit(main, "c.txt", "c");
+		const localSha = g(main, "rev-parse", "HEAD");
+		g(main, "checkout", "-q", "main");
+		const h = harness();
+		await h.run(["feat/x"]);
+		expect(readState().previewSha).toBe(localSha);
+		expect(h.logs.join("\n")).toContain("ahead of origin");
+	});
+
 	it("status with no state says stable, no preview", async () => {
 		const h = harness();
 		await h.run(["status"]);

@@ -1,7 +1,7 @@
 "use client";
 
 import { createEarlierScroll } from "@/components/earlier-scroll";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
@@ -405,10 +405,11 @@ function ThreadChatInner({
 	// Unsent text survives leaving the thread, switching wolves and reloads (localStorage, text only).
 	// Restore callback: deliberately skips applyText, so a restored draft is not re-scheduled for writing, does not
 	// focus the composer and does not touch the dictation state.
-	// The floating chat REPLACES this composer while it is popped out and shown here (dictating, desktop): ONE input owns the
-	// text. The card unmounts (attachments live up here in ThreadChat, so pending ones survive and are back when it
-	// returns); `ownedByBar` makes the draft hook inert meanwhile (a stale text must not overwrite or absorb the chat's);
-	// when it docks, the composer re-reads the draft (typed plus dictated) via useRereadDraftWhenShown below.
+	// While the floating chat is shown for this thread (a live run followed the owner away and back through a route where the
+	// bar still shows, or a phone sheet), it owns the text: the composer card unmounts (attachments live up here in
+	// ThreadChat, so pending ones survive); `ownedByBar` makes the draft hook inert meanwhile (a stale text must not
+	// overwrite or absorb the chat's); when it docks, the composer re-reads the draft via useRereadDraftWhenShown below.
+	// Dictating on this thread's own page does NOT do this: the composer stays and highlights itself.
 	const attachedApi = useAttachedThread();
 	const barShown = useBarShown();
 	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
@@ -751,7 +752,12 @@ function ThreadChatInner({
 											<div className="text-muted-foreground">{closedReason}</div>
 										</div>
 									) : barOwnsInput ? null : (
-									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
+									<div
+										data-testid="thread-composer-card"
+										{...(dictation.active ? { "data-listening": "true" } : {})}
+										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}${dictation.active ? " border-transparent ring-2" : ""}`}
+										style={dictation.active ? ({ "--tw-ring-color": tintHex, boxShadow: `0 0 24px ${tintHex}66` } as CSSProperties) : undefined}
+									>
 										<Composer
 											busy={busy}
 											value={text}

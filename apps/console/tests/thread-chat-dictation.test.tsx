@@ -38,6 +38,12 @@ const { AppRouterContext } = await import("next/dist/shared/lib/app-router-conte
 const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
+const { useRouter } = await import("next/navigation");
+let goTo: (href: string) => void = () => {};
+function RouterGrab() {
+	goTo = useRouter().push;
+	return null;
+}
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { AttachedThreadProvider } = await import("../components/attached-thread.tsx");
 const { ChatBar } = await import("../components/chat-bar.tsx");
@@ -174,6 +180,7 @@ async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?:
 						<ServerEventsProvider connect={() => ({ close() {}, onOpen() {}, onEvent() {} })}>
 							<AttachedThreadProvider>
 								<ChatBar />
+								<RouterGrab />
 								{chat}
 							</AttachedThreadProvider>
 						</ServerEventsProvider>
@@ -233,6 +240,11 @@ const typeIn = (el: HTMLTextAreaElement, v: string) =>
 		const k = Object.keys(el).find((x) => x.startsWith("__reactProps$"))!;
 		(el as any)[k].onChange({ target: el, currentTarget: el });
 	});
+/** Navigate away from the thread's page (the page stays mounted in this harness) so a live run shows as the floating chat. */
+const leavePage = async () => {
+	await act(async () => goTo("/graph"));
+	await settle(60);
+};
 const barTa = () => q('[data-testid="chat-bar"] textarea') as HTMLTextAreaElement | null;
 /** Composer cards on the thread page itself (the floating chat's own card is inside [data-testid="chat-bar"]). */
 const pageComposers = () => document.querySelectorAll('[data-testid="composer"]').length - document.querySelectorAll('[data-testid="chat-bar"] [data-testid="composer"]').length;
@@ -369,42 +381,62 @@ describe("ThreadChat dictation", () => {
 		assert.equal(store.get(`wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`), undefined, "nothing left in the draft");
 	});
 
-	it("popped out, real page: dictating swaps the page composer for the floating chat holding the typed text; stopping brings the composer back with typed plus dictated, unsent", async () => {
+	it("dictating on the thread's own page keeps the page composer in place, highlighted, with no floating chat; stopping returns it to normal with typed plus dictated text, unsent", async () => {
 		await mount(new CardClient(null), { poppedOut: true });
 		await typeIn(composer(), "typed");
 		await click(toggle());
 		await settle(60);
 		const ws = FakeWS.last!;
 		await act(async () => ws.open());
-		assert.equal(pageComposers(), 0, "the page composer card is gone");
-		assert.equal(barTa()!.value, "typed", "the floating input shows the page's text");
+		assert.equal(q('[data-testid="chat-bar"]'), null, "no floating chat");
+		assert.equal(pageComposers(), 1, "the page composer stays");
+		assert.equal(composer().value, "typed");
+		assert.equal(q('[data-testid="thread-composer-card"]')?.getAttribute("data-listening"), "true", "highlighted while listening");
 		await act(async () => ws.final("tail"));
-		await click(toggle()); // Stop (the floating chat's)
+		await click(toggle()); // Stop
 		await closeSocket(ws);
 		await settle(60);
-		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
-		assert.equal(pageComposers(), 1);
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(q('[data-testid="thread-composer-card"]')?.hasAttribute("data-listening"), false, "back to normal");
 		assert.equal(composer().value, "typed tail");
-		assert.equal(DRAFT(), "typed tail");
 		assert.deepEqual(posts, [], "nothing sent");
 	});
 
-	it("popped out: a debounced page write pending at the hand-off cannot bring back text the owner cleared in the floating input", async () => {
+	it("dictating on the thread's page then leaving it hands the run to the floating chat, which shows the words so far in its input", async () => {
+		await mount(new CardClient(null), { poppedOut: true });
+		await click(toggle());
+		await settle(60);
+		const ws = FakeWS.last!;
+		await act(async () => ws.open());
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		await act(async () => goTo("/graph"));
+		await settle(60);
+		assert.ok(q('[data-testid="chat-bar"]'), "the floating chat follows");
+		await act(async () => ws.final("away"));
+		await click(q('[data-testid="chat-bar"] [data-testid="dictation-toggle"]')!);
+		await closeSocket(ws);
+		await settle(400);
+		assert.equal(barTa()!.value, "away");
+	});
+
+	it("popped out, run followed off the page: a debounced page write pending at the hand-off cannot bring back text the owner cleared in the floating input", async () => {
 		await mount(new CardClient(null), { poppedOut: true });
 		await typeIn(composer(), "page text"); // debounce pending
 		await click(toggle());
 		await settle(60);
+		await leavePage();
 		assert.equal(barTa()!.value, "page text");
 		await typeIn(barTa()!, ""); // clearing removes the draft at once
 		await settle(500); // past the page's old debounce
 		assert.equal(DRAFT(), undefined);
 	});
 
-	it("popped out: words appended to the draft from outside while the chat owns the input are not merged into the hidden page composer's stale text", async () => {
+	it("popped out, run followed off the page: words appended to the draft from outside while the chat owns the input are not merged into the hidden page composer's stale text", async () => {
 		await mount(new CardClient(null), { poppedOut: true });
 		await typeIn(composer(), "a");
 		await click(toggle());
 		await settle(60);
+		await leavePage();
 		await typeIn(barTa()!, "a b");
 		await settle(500);
 		const { appendToDraft, draftKey } = await import("../lib/composer-draft.ts");
@@ -414,7 +446,7 @@ describe("ThreadChat dictation", () => {
 		assert.equal(barTa()!.value, "a b X");
 	});
 
-	it("popped out: the floating chat says how many attachments wait in the page, and Enter there sends text only", async () => {
+	it("popped out, run followed off the page: the floating chat says how many attachments wait in the page, and Enter there sends text only", async () => {
 		await mount(new CardClient(null), { poppedOut: true, inFlight: true });
 		const prev = globalThis.fetch;
 		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -426,6 +458,7 @@ describe("ThreadChat dictation", () => {
 		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1, "the page holds one attachment");
 		await click(toggle());
 		await settle(60);
+		await leavePage();
 		assert.equal(pageComposers(), 0);
 		assert.match(q('[data-testid="chat-bar-attachments-waiting"]')?.textContent ?? "", /^1 attachment waiting in the thread$/);
 		await typeIn(barTa()!, "words only");

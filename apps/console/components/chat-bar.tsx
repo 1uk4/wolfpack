@@ -119,11 +119,12 @@ export function ChatBar() {
 		},
 	});
 
-	// On its own page the bar shows only while dictating; `own` = "hidden because it is the page's thread".
+	// On its own thread's page the bar never shows, even while dictating: the page composer stays put and highlights
+	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
-	const own = onOwn && !dictating;
+	const own = onOwn;
 	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating };
-	const full = !!attached && !own && !dockless && (!wide || !minimized || onOwn);
+	const full = !!attached && !own && !dockless && (!wide || !minimized);
 	const shown = !!attached && !own && !dockless;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
@@ -195,8 +196,8 @@ export function ChatBar() {
 		const onFocus = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			// On its own page the page composer is the input, except while dictating: then the chat has replaced it.
-			if (l.onOwn && !l.dictating) {
+			// On its own page the page composer is always the input (dictating included).
+			if (l.onOwn) {
 				const page = document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement | null;
 				if (!page) return;
 				kev?.preventDefault();
@@ -227,9 +228,7 @@ export function ChatBar() {
 	// Scroll room: while the full bar floats over a scrolling page, main reserves its height (--chat-bar-reserve, globals.css).
 	useLayoutEffect(() => {
 		const root = document.documentElement;
-		// On its own thread's page (dictating) the pill would sit over the page composer: reserve its height there too, so the
-		// composer is pushed up above it instead of being covered.
-		if (!full || (wide && !scrolls && !onOwn) || !wrapRef.current) {
+		if (!full || (wide && !scrolls) || !wrapRef.current) {
 			root.style.removeProperty("--chat-bar-reserve");
 			return;
 		}
@@ -246,7 +245,7 @@ export function ChatBar() {
 			ro.disconnect();
 			root.style.removeProperty("--chat-bar-reserve");
 		};
-	}, [full, scrolls, wide, onOwn, attached?.wolf, attached?.threadId]);
+	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
 
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
@@ -288,7 +287,7 @@ export function ChatBar() {
 		);
 	}
 	if (!api || !attached || own || dockless) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} ownPage={onOwn} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
 }
 
 function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
@@ -299,12 +298,10 @@ function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThrea
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-function Bar({ target, ownPage, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
 	dictation: Dictation;
 	registerAppend: (fn: ((t: string) => void) | null) => void;
 	target: AttachedRef;
-	/** Showing on the thread's own page (while dictating): it replaces the page composer, so never minimized. */
-	ownPage: boolean;
 	phone: boolean;
 	wrapRef: React.RefObject<HTMLDivElement | null>;
 	chipRef: React.RefObject<HTMLButtonElement | null>;
@@ -314,7 +311,7 @@ function Bar({ target, ownPage, phone, wrapRef, chipRef, switcher, setSwitcher, 
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
-	const minimized = api.minimized && !ownPage;
+	const minimized = api.minimized;
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.settings ? { settings: attachedThread.settings } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all).hex;
 	const router = useRouter();

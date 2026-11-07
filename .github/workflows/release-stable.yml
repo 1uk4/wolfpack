@@ -1,0 +1,47 @@
+# Auto-release: every push to stable tags each component changed since its last <component>/vX.Y.Z tag at +1 patch
+# (scripts/auto-tag.mjs, same planner as `wolfpack release`), pushing each tag separately, then builds each tag by
+# calling release.yml directly (tags pushed with GITHUB_TOKEN trigger no workflows). No PAT, no new secrets.
+# Deploying stays manual.
+name: release-stable
+on:
+  push:
+    branches: [stable]
+permissions:
+  contents: write
+concurrency:
+  group: release-stable
+  cancel-in-progress: false   # queue, never cancel a half-tagged run
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tags: ${{ steps.tag.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history and all tags
+          fetch-tags: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22   # >= 22.18: runs the planner's .ts directly
+          package-manager-cache: false
+      - name: configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - id: tag
+        name: tag changed components (one push per tag)
+        run: node scripts/auto-tag.mjs
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.tags != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.tag.outputs.tags) }}
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ matrix.tag }}

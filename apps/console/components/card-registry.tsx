@@ -80,6 +80,10 @@ export interface InteractionCardProps {
 	onAnswer(answers: CardAnswers): void;
 	/** Skip the card instead of answering it. */
 	onSkip?(): void;
+	/** The tight variant (the floating chat bar). */
+	compact?: boolean;
+	/** What a brief's "Open thread for more" does. */
+	onOpenThread?(): void;
 }
 
 /**

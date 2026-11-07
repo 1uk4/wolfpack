@@ -19,7 +19,7 @@ import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
 /** The text to put back after a failed send: the sent text, then whatever was typed meanwhile (never dropped). */
 export const mergeRestored = (sent: string, current: string): string => (current.trim() === "" ? sent : sent.trim() === "" ? current : `${sent}\n${current}`);
 
-export default function ChatBarComposer({ target, title }: { target: AttachedRef; title: string }) {
+export default function ChatBarComposer({ target, title, cardOpen = false, onReplied }: { target: AttachedRef; title: string; cardOpen?: boolean; onReplied?: () => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	const [text, setText] = useState("");
@@ -80,7 +80,8 @@ export default function ChatBarComposer({ target, title }: { target: AttachedRef
 		setError(null);
 		api.markSent();
 		const ok = await submitToThread(target, t, working, refs);
-		if (!ok) {
+		if (ok) onReplied?.(); // free text supersedes any open card (the wolf closes them as superseded)
+		else {
 			api.clearSent();
 			setError("Could not send.");
 			// Put the message back (merged with anything typed since) together with its attachments.
@@ -89,7 +90,7 @@ export default function ChatBarComposer({ target, title }: { target: AttachedRef
 			schedule(merged);
 			setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
 		}
-	}, [attachments, applyText, schedule, api, target, working]);
+	}, [attachments, applyText, schedule, api, target, working, onReplied]);
 	const stop = useCallback(() => void abortThread(target), [target]);
 
 	return (
@@ -97,6 +98,7 @@ export default function ChatBarComposer({ target, title }: { target: AttachedRef
 			{error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
 			<Composer
 				busy={working}
+				{...(cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
 				value={text}
 				onChange={onChange}
 				onSend={() => void send()}

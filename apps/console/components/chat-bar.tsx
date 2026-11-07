@@ -18,12 +18,14 @@ import { BrailleSpinner } from "@/components/braille-spinner";
 import { useAttachedThread } from "@/components/attached-thread";
 import { onOwnThreadPage } from "@/components/chat-bar-io";
 import { useThreadColor } from "@/components/use-thread-color";
-import { kbdEventForAction, type AttachedRef, type SwitcherGroup } from "@/src/core";
+import { useBarCards } from "@/components/chat-bar-cards";
+import { attachable, kbdEventForAction, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar-io";
 
 const loadComposer = () => import("@/components/chat-bar-composer");
 const BarComposer = dynamic(loadComposer, { ssr: false });
+const BarCardSurface = dynamic(() => import("@/components/bar-card-surface").then((m) => m.BarCardSurface), { ssr: false });
 
 /** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
 const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings)(\/|$)|^\/wolf\/[^/]+$/;
@@ -156,8 +158,11 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 	const { minimized, setMinimized, working, attachedThread, groups, note } = api;
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.settings ? { settings: attachedThread.settings } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all).hex;
+	const cards = useBarCards(target, working);
+	const waiting = useMemo(() => waitingElsewhere(api.threads, target), [api.threads, target]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
 
+	const badge = waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
 	const chip = (
 		<button
 			ref={chipRef}
@@ -182,6 +187,7 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 				<div className="relative rounded-full border bg-card shadow-md" style={{ borderColor: color }}>
 					<div className="flex items-center">
 						{chip}
+						{badge}
 						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className="mr-1 rounded-full p-1 text-muted-foreground hover:bg-accent">
 							<MessageSquareIcon className="size-3.5" />
 						</button>
@@ -195,20 +201,51 @@ function Bar({ target, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }:
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
 			{/* Card surface slot (PtJkpk6): the thread's pending question/brief cards and the last-reply peek mount here, above the input. */}
-			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="mb-2 empty:hidden" />
+			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="mb-2 empty:hidden">
+				{(cards.pending.length > 0 || cards.superseded.length > 0 || cards.peek || cards.error) && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
+			</div>
 			<div className="relative rounded-2xl border bg-card shadow-lg" style={{ borderColor: color }}>
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
+					{badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					{note && !working && <span data-testid="chat-bar-note" className="truncate font-ui text-xs text-muted-foreground">{note}</span>}
 					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-accent">
 						<ChevronDownIcon className="size-4" />
 					</button>
 				</div>
-				<BarComposer target={target} title={title} />
+				<BarComposer target={target} title={title} cardOpen={cards.pending.length > 0} onReplied={cards.replied} />
 				{switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>
+	);
+}
+
+/** Threads on any wolf waiting for the owner, other than the attached one (home / feature threads only, no subagents). Thread lists carry no waiting-since time, so the order is list order: "first waiting", not strictly oldest. */
+export function waitingElsewhere(threads: Record<string, readonly BarThread[] | undefined>, current: Pick<AttachedRef, "wolf" | "threadId">): (BarThread & { wolf: string })[] {
+	return Object.entries(threads).flatMap(([wolf, list]) =>
+		(list ?? []).filter((t) => t.status === "needs-you" && !(wolf === current.wolf && t.id === current.threadId) && attachable(t)).map((t) => ({ ...t, wolf })),
+	);
+}
+
+/** Another thread has a card waiting: count + that thread's color dot. One tap attaches the bar to the first waiting one (no toast, no auto-switch). */
+function NeedsYouBadge({ waiting, all }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[] }) {
+	const api = useAttachedThread()!;
+	const first = waiting[0]!;
+	const color = useThreadColor({ id: first.id, ...(first.settings ? { settings: first.settings } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) }, all).hex;
+	return (
+		<button
+			type="button"
+			data-testid="chat-bar-needs-you"
+			data-thread={first.id}
+			title={`${waiting.length} waiting for you · first: ${first.title}`}
+			aria-label={`${waiting.length} waiting for you. Attach the bar to ${first.title}`}
+			onClick={() => api.attach({ wolf: first.wolf, threadId: first.id })}
+			className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25"
+		>
+			<span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
+			{waiting.length}
+		</button>
 	);
 }
 

@@ -20,7 +20,7 @@ export { CardTextInput };
  * card, "Question" kicker, markdown question, option rows with an Other entry. Pending it is a form; answered it is the
  * static record. Defaults only pre-select; nothing submits until the operator presses Submit.
  */
-export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswer, heldSkip, pending, submitting, onAnswer, onSkip }: InteractionCardProps) {
+export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswer, heldSkip, pending, submitting, onAnswer, onSkip, compact, onOpenThread }: InteractionCardProps) {
 	const [draft, setDraft] = useState<CardDraft>(() => initialDraft(card, heldAnswer));
 	const [stepIdx, setStepIdx] = useState(0);
 	const rootRef = useRef<HTMLDivElement | null>(null);
@@ -130,7 +130,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 
 	return (
 		<div
-			className={cn("rounded-xl border bg-card p-4 text-card-foreground", closedKind && CLOSED_STYLE[closedKind].card)}
+			className={cn("rounded-xl border bg-card text-card-foreground", compact ? "p-2.5 text-sm" : "p-4", closedKind && CLOSED_STYLE[closedKind].card)}
 			data-testid={closedKind === "skipped" || closedKind === "superseded" ? "dismissed-card" : answered ? "answered-card" : "pending-card"}
 			data-closed={closedKind}
 			data-card-tool={card.tool}
@@ -160,7 +160,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 				{!closed && heldSkip && <span data-testid="card-held-skip" className="ml-2 rounded bg-muted px-1.5 py-0.5">skip saved · waiting for the other questions</span>}
 				{!closed && !heldSkip && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
 			</div>
-			{card.brief && <BriefHeader brief={card.brief} className="mb-3" />}
+			{card.brief && <BriefHeader brief={card.brief} compact={compact} onOpenThread={onOpenThread} className={compact ? "mb-2" : "mb-3"} />}
 			{stepped && steps.length > 1 && (
 				<div className="mb-2 text-xs text-muted-foreground" data-testid="card-step-indicator" aria-live="polite">
 					Step {step + 1} of {steps.length}
@@ -182,6 +182,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 					dictation={dictationProps.field(f.id)}
 					pendingError={folded.errors[f.id]}
 					missing={showHint && missingIds.has(f.id)}
+					compact={compact}
 				/>
 			))}
 			{!closed && (
@@ -315,7 +316,9 @@ function FieldView({
 	pendingError,
 	dictation,
 	missing,
+	compact,
 }: {
+	compact?: boolean;
 	field: CardField;
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
@@ -360,6 +363,7 @@ function FieldView({
 					onChange={onChange}
 					onClear={onClear}
 					labelledBy={labelId}
+					compact={compact}
 					typed={typed}
 					onType={onType}
 					onAddCustom={onAddCustom}

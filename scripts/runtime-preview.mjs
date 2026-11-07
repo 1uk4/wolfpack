@@ -96,7 +96,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	}
 
 	const activePreview = state && state.phase !== "build-failed" ? state : undefined;
-	const rtWt = state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch);
+	// A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path.
+	const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
+	const rtWt = state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
 	if (!rtWt) return fail(`branch ${runtimeBranch} is not checked out in any worktree`);
 	log(`${tag}runtime @ ${rtWt}`);
 
@@ -160,7 +162,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const abbrev = git(rtWt, "rev-parse", "--abbrev-ref", "HEAD");
 	// Any existing state (even build-failed) wins over HEAD: a failed restore can leave HEAD on the preview SHA.
 	const previousRef = state?.previousRef ?? head;
-	const previousBranch = state ? state.previousBranch : abbrev === "HEAD" ? null : abbrev;
+	const previousBranch = state ? state.previousBranch : abbrev === "HEAD" ? runtimeBranch : abbrev;
 	if (dryRun) {
 		log(`${tag}would record state in ${stateFile} (previous ${previousBranch ?? previousRef})`);
 		log(`${tag}would check out ${sha.slice(0, 8)} (${ref}) detached, install and build while the wolves stay up`);

@@ -59,7 +59,7 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean } = {}) =
 	};
 	const run = (argv: string[]) =>
 		runPreview({ argv, env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves") }, cwd: rtWt, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { calls, gitCalls, logs, run };
+	return { calls, gitCalls, logs, run, steps };
 };
 
 describe("runtime-preview", () => {
@@ -187,6 +187,16 @@ describe("runtime-preview", () => {
 		await h.run(["feat/x"]);
 		expect(readState().previewSha).toBe(localSha);
 		expect(h.logs.join("\n")).toContain("ahead of origin");
+	});
+
+	it("on: a detached runtime is found by its known path and its previous branch defaults to RUNTIME_BRANCH", async () => {
+		g(main, "worktree", "remove", "--force", rtWt);
+		const known = path.join(tmp, "wolves", "runtime", "wolfpack");
+		g(main, "worktree", "add", "-q", "--detach", known, "stable");
+		const h = harness();
+		const r = await runPreview({ argv: ["feat/x"], env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves") }, cwd: main, steps: { ...h.steps }, log: () => {}, warn: () => {} });
+		expect(r.exitCode).toBe(0);
+		expect(readState()).toMatchObject({ previousBranch: "stable", runtimeDir: known });
 	});
 
 	it("status with no state says stable, no preview", async () => {

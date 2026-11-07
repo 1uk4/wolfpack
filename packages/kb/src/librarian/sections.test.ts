@@ -68,7 +68,6 @@ describe("sections — fold events into tree", () => {
     expect(sections.length).toBe(3);
 
     const root = sections.find((s) => s.id === "sec-wp-000001");
-    expect(root).toBeDefined();
     expect(root!.childIds).toContain("sec-wp-000002" as SectionId);
     expect(root!.childIds).toContain("sec-wp-000003" as SectionId);
 
@@ -198,7 +197,6 @@ describe("sections — helpers", () => {
     ];
 
     const found = findSection(sections, "sec-wp-000002" as SectionId);
-    expect(found).toBeDefined();
     expect(found!.id).toBe("sec-wp-000002" as SectionId);
   });
 
@@ -243,13 +241,11 @@ describe("sections — helpers", () => {
     
     // Roots
     const roots = index.get(null);
-    expect(roots).toBeDefined();
     expect(roots!.length).toBe(1);
     expect(roots![0].id).toBe("sec-wp-000001" as SectionId);
     
     // Children of sec-wp-000001
     const children = index.get("sec-wp-000001" as SectionId);
-    expect(children).toBeDefined();
     expect(children!.length).toBe(2);
   });
 });

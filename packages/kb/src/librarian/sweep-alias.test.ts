@@ -121,7 +121,6 @@ describe("sweep: missing alias target creates fresh entry", () => {
     const topicBefore = Array.from(regBefore.values()).find((t) =>
       t.aliases.some((a) => a.wolf === "w1" && a.denTopicId === "t1")
     );
-    expect(topicBefore).toBeDefined();
     expect(topicBefore!.entries[0]).toBe(initialEntryId);
 
     // Step 2: Delete the entry file (simulate retire/split)
@@ -172,7 +171,6 @@ describe("sweep: missing alias target creates fresh entry", () => {
     const aliasInNewTopic = newTopic!.aliases.find(
       (a) => a.wolf === "w1" && a.denTopicId === "t1"
     );
-    expect(aliasInNewTopic).toBeDefined();
     expect(aliasInNewTopic!.lastHash).toBe("aaa789");
 
     // Verify the new aliased event was recorded

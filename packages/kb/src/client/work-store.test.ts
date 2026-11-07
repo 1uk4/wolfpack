@@ -56,7 +56,6 @@ describe("work-store", () => {
     it("round-trips a work item through markdown", () => {
       commitWorkItem(roots, testItem);
       const resolved = resolveWorkItem(roots, "snapjack", "work-snapjack-Ft00001");
-      expect(resolved).not.toBeNull();
       expect(resolved!.item.id).toBe("work-snapjack-Ft00001");
       expect(resolved!.item.kind).toBe("feature");
       expect(resolved!.item.area).toBe("marketing");

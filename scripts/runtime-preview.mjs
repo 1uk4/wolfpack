@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * wolfpack preview [<ref> | <worktree dir> [--build] | status | restart | off [--console|--all] | dev [dir]] [--dry-run] [--yes]
+ * wolfpack preview [<ref> | <worktree dir> [--build] | status | restart | off [--console|--all] | slot get|list|release | dev [dir]] [--dry-run] [--yes]
  * (no argument: a picker of the repo's worktrees; a worktree preview runs the wolves from it via the stack plist: see runtime-preview-worktree.mjs)
  *
  * Try a branch on the live Mac stack, and get back to stable, with one command each. The runtime is the stable worktree
@@ -22,6 +22,7 @@ import readline from "node:readline";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runLaunchctl, hubTokens, resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { createSlots } from "./runtime-preview-slots.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
 import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, resetCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
@@ -29,10 +30,10 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 19;
+export const PREVIEW_VERSION = 20;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
+const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs", "runtime-preview-slots.mjs", "runtime-preview-slot-run.mjs"];
 
 /** Copy this command and its imports out of the runtime tree, so `off` works after checking out a branch that lacks them. */
 function copyScripts(binDir) {
@@ -66,6 +67,7 @@ async function loadPrompts() {
 
 const defaultSteps = {
 	git: realGit,
+	slots: createSlots,
 	launchctl: (...args) => runLaunchctl(args),
 	sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 	portFree: probePortFree,
@@ -296,6 +298,12 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		if (!state?.console) {
 			const stray = await strays(state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230);
 			if (stray.length) log(`console: http://127.0.0.1:${state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230} (running outside preview; \`wolfpack preview off\` stops it)`);
+		}
+		if (!argv.includes("--json")) {
+			try {
+				const running = st.slots({ home, env }).peek();
+				if (running.length) log(`slots: ${running.map((r) => `${r.port} ${path.basename(r.worktree)}`).join(", ")}`);
+			} catch {}
 		}
 		if (!state) {
 			if (!argv.includes("--json")) log("stable, no preview");
@@ -551,6 +559,64 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
 		return state?.runtimeDir ?? worktrees(anchor).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
 	};
+
+	/** A worktree name or directory → its directory; null after saying why. Slots only serve worktrees, never the runtime checkout. */
+	function slotWorktree(key) {
+		let list;
+		try {
+			list = collectWorktrees({ home, cwd: anchor, git });
+		} catch {
+			fail("not inside a wolfpack checkout, so there is no worktree list; pass a worktree directory.");
+			return null;
+		}
+		const abs = path.resolve(cwd, key);
+		if (list.some((w) => w.dir === abs)) return abs;
+		const { matches } = matchWorktrees({ worktrees: list, name: key, runtimeBranch, runtimeDir: undefined });
+		if (matches.length === 1) return matches[0].dir;
+		fail(matches.length ? `"${key}" matches several worktrees: ${matches.map((m) => m.dir).join(", ")}` : `no worktree matches "${key}"`);
+		return null;
+	}
+
+	const SLOT_USAGE = "usage: wolfpack preview slot get <worktree> [--json] | list [--json] | release <worktree|port>. A slot stops after 20 min without a `get`: re-run `slot get` to keep it alive.";
+	if (sub === "slot") {
+		const [, action, key] = pos;
+		const slots = st.slots({ home, env });
+		const json = argv.includes("--json");
+		const iso = (t) => new Date(t).toISOString();
+		try {
+			if (action === "list") {
+				const rows = await slots.list();
+				if (json) log(JSON.stringify(rows, null, 2));
+				else if (!rows.length) log("no slots running");
+				else for (const r of rows) log(`${r.port}  ${r.worktree}  pid ${r.pid}  started ${iso(r.startedAt)}  last used ${iso(r.lastUsed)}`);
+				return { exitCode: 0 };
+			}
+			if (action === "reap") {
+				// internal (not in the usage): stops idle and dead slots
+				for (const p of await slots.reap()) log(`stopped idle slot ${p}`);
+				return { exitCode: 0 };
+			}
+			if (!key) return fail(SLOT_USAGE);
+			if (action === "release") {
+				// resolved against the running slots, not git, so a slot whose worktree was deleted can still be released
+				const alt = key.includes("/") ? path.resolve(cwd, key) : undefined;
+				log(`released slot ${await slots.release(key, alt)}`);
+				return { exitCode: 0 };
+			}
+			if (action === "get") {
+				const wt = slotWorktree(key);
+				if (!wt) return { exitCode: 1 };
+				const r = await slots.get(wt);
+				if (r.noToken && !r.reused) warn("preview: WOLFPACK_HUB_TOKEN is not set, so the slot's pages will ask you to pair (/pair) first");
+				if (json) log(JSON.stringify({ url: r.url, port: r.port, pid: r.pid, worktree: wt, reused: r.reused }));
+				else log(r.url);
+				return { exitCode: 0 };
+			}
+			return fail(`unknown slot command ${action ?? ""}: use get, list or release`);
+		} catch (err) {
+			return fail(err.message);
+		}
+	}
 
 	/** Plain `wolfpack preview`: list the worktrees and pick one. Default: its live console in the browser. `--wolves`: move the wolves onto it (building it first when needed). */
 	const picker = async (wolves) => {

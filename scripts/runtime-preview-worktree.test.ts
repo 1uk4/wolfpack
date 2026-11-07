@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
 import { runPreview } from "./runtime-preview.mjs";
 // @ts-expect-error plain .mjs script
+import { createSlots } from "./runtime-preview-slots.mjs";
+// @ts-expect-error plain .mjs script
 import { pickerModel } from "./runtime-preview-worktree.mjs";
 
 const fallbackDir = () => path.join(tmp, "picker-checkout");
@@ -991,5 +993,43 @@ describe("default steps", () => {
 		const block = src.slice(src.indexOf("const defaultSteps = {"), src.indexOf("export async function runPreview"));
 		const defined = new Set([...block.matchAll(/^\t(\w+)(?::|,| \()/gm)].map((m) => m[1]));
 		expect([...used].filter((u) => !defined.has(u))).toEqual([]);
+	});
+});
+
+describe("agent slots through `wolfpack preview slot`", () => {
+	const slotsFile = () => path.join(home, ".wolfpack", "preview", "slots.json");
+	const fakeSlots = (o: object) => createSlots({ ...o, spawn: () => 4242, isAlive: (pid: number) => pid === 4242, kill: () => {}, reapLeftovers: () => {}, prepare: () => {}, portFree: async () => true, waitListening: async () => true });
+	const slot = async (...argv: string[]) => {
+		const out: string[] = [];
+		const err: string[] = [];
+		const r = await runPreview({ argv: ["slot", ...argv], env: { HOME: home, WOLFPACK_HUB_TOKEN: "t" }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => out.push(m), warn: (m: string) => err.push(m) });
+		return { code: r.exitCode, out, err };
+	};
+
+	it("get --json names the worktree's slot by port and url", async () => {
+		const r = await slot("get", "wt-a", "--json");
+		expect(r.code).toBe(0);
+		expect(JSON.parse(r.out[0])).toMatchObject({ port: 3231, url: "http://127.0.0.1:3231", worktree: wtA });
+	});
+
+	it("release takes the worktree's name, even after the worktree is deleted, with no error output", async () => {
+		await slot("get", "wt-a");
+		fs.rmSync(wtA, { recursive: true, force: true });
+		const r = await slot("release", "wt-a");
+		expect(r).toEqual({ code: 0, out: ["released slot 3231"], err: [] });
+	});
+
+	it("status lists running slots and writes nothing", async () => {
+		const before = await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: () => {}, warn: () => {} });
+		expect(before.exitCode).toBe(0);
+		expect(fs.existsSync(slotsFile())).toBe(false);
+		expect(fs.existsSync(`${slotsFile().replace("slots.json", "slots.lock")}`)).toBe(false);
+		fs.mkdirSync(path.dirname(slotsFile()), { recursive: true });
+		const seeded = JSON.stringify({ slots: [{ port: 3231, worktree: wtA, pid: 4242, startedAt: 1, lastUsed: 1 }, { port: 3232, worktree: wtB, pid: 4343, startedAt: 1, lastUsed: 1 }] });
+		fs.writeFileSync(slotsFile(), seeded);
+		const logs: string[] = [];
+		await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => logs.push(m), warn: () => {} });
+		expect(logs).toContain("slots: 3231 wt-a");
+		expect(fs.readFileSync(slotsFile(), "utf8")).toBe(seeded);
 	});
 });

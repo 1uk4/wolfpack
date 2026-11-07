@@ -189,6 +189,24 @@ wolfpack preview off             # stop the console
 - A branch literally named `dev` cannot be previewed by that name (use `origin/dev`).
 - Older previews that pointed the app's `console.json` at the local console are still undone by `off`.
 
+### Agent slots: a thread checks its own worktree's console
+
+An agent that needs to look at its own worktree gets a private `next dev` console, so the owner's preview on 3230 is never touched.
+
+```sh
+wolfpack preview slot get detach-chat [--json]   # prints http://127.0.0.1:3231 (3231 and up), starting it if needed
+wolfpack preview slot list [--json]              # port, worktree, pid, start, last use
+wolfpack preview slot release <worktree|port>    # stop it
+```
+
+- `get` takes a worktree name or directory (same matching as `wolfpack preview <name>`) and returns once `next` is listening (up to 60 s; the first page compiles on its first request). Asking again reuses the slot and resets its idle timer. `release` takes the port, the directory or the folder name (matched against running slots, so a slot whose worktree was deleted can still be released).
+- **Keep it alive:** a slot stops after 20 minutes without a `get` (`PREVIEW_SLOT_IDLE_MS`). A thread that keeps using its slot re-runs `slot get` now and then; there is no separate `touch`.
+- **At most 2 slots** (`PREVIEW_SLOT_MAX`, never more than 4). A third worktree is refused at once with the busy slots and the `release` command; it does not wait.
+- Each slot is a detached process group (a small runner plus `next dev` and its workers), log `~/.wolfpack/preview/slots/<port>.log`, state in `~/.wolfpack/preview/slots.json` under a lock file (two simultaneous `get`s never share a port; ports something else listens on are skipped). No launchd job per slot. A dead runner is dropped, and what it left behind stopped, on the next slot command. Only a pid that `ps` shows is a slot runner is ever signalled.
+- **Idle stop:** the runner exits (stopping `next` and its workers) when its slot is idle or gone from `slots.json`, with no command needed.
+- Slots get `WOLFPACK_HUB_TOKEN` from the caller's environment, so pages load without `/pair` (without it `get` warns). The worktree needs `apps/console/node_modules` and built workspace packages; otherwise `get` refuses and says to run `pnpm install` / `pnpm build` there. Nothing is built for you.
+- `wolfpack preview status` adds a read-only `slots:` line when any are running. Port 3230 and the other commands are unchanged.
+
 ### Move the wolves onto a worktree (`--wolves`)
 
 Only when the *backend* is under test: `wolfpack preview --wolves [name]` opens the picker (or takes a name, a path) and runs the

@@ -5,13 +5,14 @@ import { useAttachedThread } from "@/components/attached-thread";
 import { finishDictation, useBarDictation, useDictation, type Dictation } from "@/components/dictation";
 
 /**
- * A thread page's dictation. Starting it (the composer's mic button or Cmd+D) ALWAYS pops this thread out and makes the
- * run the floating chat's, whose hook (ChatBar, always mounted) outlives page changes, so leaving the page never stops
+ * A thread page's dictation. Starting it (the composer's mic button or Cmd+D) ALWAYS attaches this thread and makes the
+ * run the floating chat's (invisible while on this page), whose hook (ChatBar, always mounted) outlives page changes, so leaving the page never stops
  * it. If another thread is popped out, its bar run is finished first so its words land in its own draft, unsent. Already
  * popped out: the page just shows and drives the bar's run (its own hook is disabled, so Cmd+D reaches the bar's hook).
  * The words land through the thread's draft (ChatBar writes them with appendToDraft; the mounted page composer picks them
- * up, or the floating chat's input shows them). While the run is live the floating chat shows on this thread's page too (meter and Stop, no
- * input; the page hides its own meter); stopping here docks it back (see ChatBar).
+ * up). On the thread's own page nothing floats: the page's composer stays where it is, highlighted while the run is live
+ * (ThreadChat), with its own meter and Stop; stopping there docks the chat back (see ChatBar). Leaving the page mid-run
+ * makes the floating chat appear with the run still live.
  *
  * The handoff (finish the old run, attach, start the bar's run) takes a few renders, so it is PENDING until the bar's
  * run is live (or failed): a second mic or Cmd+D press meanwhile is a no-op, which also covers the render or two where

@@ -72,7 +72,12 @@ class FakeCtx {
 	createMediaStreamSource() {
 		return new FakeNode();
 	}
-	async resume() {}
+	async resume() {
+		this.state = "running";
+	}
+	async suspend() {
+		this.state = "suspended";
+	}
 }
 let tokenStatus = 200;
 Object.assign(globalThis, { WebSocket: FakeWS, AudioContext: FakeCtx, AudioWorkletNode: FakeNode });

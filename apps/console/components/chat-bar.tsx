@@ -55,7 +55,7 @@ function subscribeWide(cb: () => void): () => void {
 	return () => mq.removeEventListener?.("change", cb);
 }
 /** Read synchronously (useSyncExternalStore), so a phone never paints the pill for a frame; the server snapshot is wide (desktop first). */
-function useWide(): boolean {
+export function useWide(): boolean {
 	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
 }
 
@@ -90,7 +90,9 @@ export function ChatBar() {
 	const chipRef = useRef<HTMLButtonElement | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
 	const minimized = api?.minimized ?? false;
-	const dockless = !wide && !!pathname && THREAD_PAGE.test(pathname);
+	const phoneSheet = api?.phoneSheet ?? false;
+	// A thread page's strip row can ask for the sheet (phoneSheet); otherwise the dock stays off there.
+	const dockless = !wide && !!pathname && THREAD_PAGE.test(pathname) && !phoneSheet;
 	const scrolls = !!pathname && SCROLLING.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
@@ -119,11 +121,12 @@ export function ChatBar() {
 		},
 	});
 
-	// On its own page the bar shows only while dictating; `own` = "hidden because it is the page's thread".
+	// On its own thread's page the bar never shows, even while dictating: the page composer stays put and highlights
+	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
-	const own = onOwn && !dictating;
+	const own = onOwn;
 	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating };
-	const full = !!attached && !own && !dockless && (!wide || !minimized || onOwn);
+	const full = !!attached && !own && !dockless && (!wide || !minimized);
 	const shown = !!attached && !own && !dockless;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
@@ -136,6 +139,11 @@ export function ChatBar() {
 
 	// Landing on the popped-out thread's own page docks it (its page composer shows the draft), unless a run is live:
 	// dictation keeps going and the bar stays. Only a navigation does this, so popping out on the page itself leaves it popped out.
+	const setPhoneSheet = api?.setPhoneSheet;
+	useEffect(() => setPhoneSheet?.(false), [pathname, setPhoneSheet]); // a requested sheet does not follow the owner to another page
+	useEffect(() => {
+		if (!attached) setPhoneSheet?.(false); // docked while the sheet was open: the flag must not outlive the bar
+	}, [!!attached, setPhoneSheet]);
 	useEffect(() => {
 		const l = live.current;
 		if (api?.ready && onOwnThreadPage(pathname, l.attached) && !l.dictating) afterBarDictation(l.dock);
@@ -195,8 +203,8 @@ export function ChatBar() {
 		const onFocus = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			// On its own page the page composer is the input, except while dictating: then the chat has replaced it.
-			if (l.onOwn && !l.dictating) {
+			// On its own page the page composer is always the input (dictating included).
+			if (l.onOwn) {
 				const page = document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement | null;
 				if (!page) return;
 				kev?.preventDefault();
@@ -227,9 +235,7 @@ export function ChatBar() {
 	// Scroll room: while the full bar floats over a scrolling page, main reserves its height (--chat-bar-reserve, globals.css).
 	useLayoutEffect(() => {
 		const root = document.documentElement;
-		// On its own thread's page (dictating) the pill would sit over the page composer: reserve its height there too, so the
-		// composer is pushed up above it instead of being covered.
-		if (!full || (wide && !scrolls && !onOwn) || !wrapRef.current) {
+		if (!full || (wide && !scrolls) || !wrapRef.current) {
 			root.style.removeProperty("--chat-bar-reserve");
 			return;
 		}
@@ -246,7 +252,7 @@ export function ChatBar() {
 			ro.disconnect();
 			root.style.removeProperty("--chat-bar-reserve");
 		};
-	}, [full, scrolls, wide, onOwn, attached?.wolf, attached?.threadId]);
+	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
 
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
@@ -273,25 +279,12 @@ export function ChatBar() {
 		else setTimeout(() => void loadComposer(), 200);
 	}, [!!attached]);
 
-	// Phone: the dock is off on thread pages, so a live run for ANOTHER thread there would have no meter or Stop. Show a
-	// minimal listening pill with Stop (the words go to that thread's draft; the chat stays attached for when they leave).
-	if (api && attached && dockless && dictating && !onOwn) {
-		return (
-			<div data-testid="chat-bar-listening-pill" className="fixed right-2 top-2 z-30 flex items-center gap-2 rounded-full border bg-card px-3 py-1 shadow-md" style={{ paddingTop: "max(0.25rem, env(safe-area-inset-top))" }}>
-				<MicIcon className="size-4 text-red-500" />
-				<CompactMeter dictation={dictation} />
-				<span className="max-w-32 truncate font-ui text-xs">{attachedThreadTitle(api, attached)}</span>
-				<button type="button" data-testid="chat-bar-listening-stop" aria-label="Stop dictation" onClick={dictation.toggle} className="min-h-8 rounded-full px-2 font-ui text-xs hover:bg-accent">
-					Stop
-				</button>
-			</div>
-		);
-	}
+	// Phone thread pages show the attached chat as a row in the subagent strip (attached-strip-row.tsx), never a pill.
 	if (!api || !attached || own || dockless) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} ownPage={onOwn} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
 }
 
-function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
+export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
 	const t = api.attachedThread;
 	return t ? (t.kind === "home" ? a.wolf : t.title) : a.slug;
 }
@@ -299,12 +292,10 @@ function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThrea
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-function Bar({ target, ownPage, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
 	dictation: Dictation;
 	registerAppend: (fn: ((t: string) => void) | null) => void;
 	target: AttachedRef;
-	/** Showing on the thread's own page (while dictating): it replaces the page composer, so never minimized. */
-	ownPage: boolean;
 	phone: boolean;
 	wrapRef: React.RefObject<HTMLDivElement | null>;
 	chipRef: React.RefObject<HTMLButtonElement | null>;
@@ -314,7 +305,7 @@ function Bar({ target, ownPage, phone, wrapRef, chipRef, switcher, setSwitcher, 
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
-	const minimized = api.minimized && !ownPage;
+	const minimized = api.minimized;
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.settings ? { settings: attachedThread.settings } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all).hex;
 	const router = useRouter();
@@ -323,7 +314,10 @@ function Bar({ target, ownPage, phone, wrapRef, chipRef, switcher, setSwitcher, 
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
 	// Phone only: the dock expands into a full-screen sheet. The composer stays at the same spot in the tree, so the draft survives both ways.
-	const [sheet, setSheet] = useState(false);
+	const [sheet, setSheet] = useState(api.phoneSheet);
+	useEffect(() => {
+		if (!sheet) api.setPhoneSheet(false);
+	}, [sheet]);
 	const inset = useKeyboardInset(phone);
 	const swipeFrom = useRef<{ x: number; y: number } | null>(null);
 	const opener = useRef<"strip" | "chevron">("chevron");

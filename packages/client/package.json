@@ -13,13 +13,14 @@
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/client\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/client/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/client/src"
   },
   "dependencies": {
     "@wolfpack/protocol": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

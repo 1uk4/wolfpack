@@ -250,7 +250,10 @@ export class MockConsoleClient implements ConsoleClient {
   }
   async putThreadSettings(threadId: string, patch: ThreadSettingsPatch): Promise<ThreadSettingsResponse> {
     this.get(threadId);
-    const next = { ...DEFAULT_THREAD_SETTINGS, ...this.settings.get(threadId), ...patch };
+    const { color, ...rest } = patch;
+    const next: ThreadSettings = { ...DEFAULT_THREAD_SETTINGS, ...this.settings.get(threadId), ...rest };
+    if (color === null) delete next.color;
+    else if (color !== undefined) next.color = color;
     this.settings.set(threadId, next);
     return next;
   }

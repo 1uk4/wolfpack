@@ -9,13 +9,14 @@
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/memory\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/memory/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/memory/src"
   },
   "dependencies": {
     "@wolfpack/engine": "*",
     "@wolfpack/kb": "*",
     "@wolfpack/protocol": "*",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

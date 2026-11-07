@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { acquireKbLock, withKbLock, kbLockFile, KbLockBusy, LOCK_HEARTBEAT_MS, LOCK_STALE_MS } from "./lock.js";
 import type { KbRoots } from "../shared/index.js";
 
@@ -50,12 +51,15 @@ console.log(release ? "won" : "busy");
 if (release) setTimeout(release, 3000); else process.exit(0);
 `
     );
-    const bin = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../../node_modules/.bin/vite-node");
+    // Layout-independent: npm hoists vite-node to the root, pnpm links it under packages/kb. Resolve the package, read its bin, run with node.
+    const viteNodePkg = createRequire(import.meta.url).resolve("vite-node/package.json");
+    const viteNodeBin = (JSON.parse(readFileSync(viteNodePkg, "utf-8")) as { bin: Record<string, string> }).bin["vite-node"]!;
+    const bin = resolve(viteNodePkg, "..", viteNodeBin);
     const startAt = Date.now() + 6000;
     const run = () =>
       new Promise<string>((res, rej) => {
         let out = "";
-        const c = spawn(bin, [script, JSON.stringify(roots), String(startAt)], { cwd: base });
+        const c = spawn(process.execPath, [bin, script, JSON.stringify(roots), String(startAt)], { cwd: base });
         c.stdout.on("data", (d) => (out += d));
         c.on("error", rej);
         c.on("exit", () => res(out.trim()));

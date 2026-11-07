@@ -255,8 +255,7 @@ export interface ExtensionContext {
 /** Explicit host capability signals (never inferred from a UI flag). */
 export interface HostCapabilities {
   /**
-   * The host installs a card-raising `ask_user_question` (wolfd: single/multi/confirm/free-text fields, batched via
-   * `questions`; the answers arrive as the next submission). Interactive flows may interview the user through it.
+   * The host installs a card-raising `brief` (wolfd: single/multi/confirm/free-text questions under a header; the answers arrive as the next submission). Interactive flows may interview the user through it.
    * Host-level: it says wolfd serves the console card protocol, NOT that the current conversation has an operator
    * (a task-owned conversation, e.g. a subagent, has none). Callers that need the latter combine it with their own
    * conversation check (ticket 5: "askCards and not task-owned").

@@ -6,7 +6,7 @@ import { CONFIDENCE_STOPS } from "@/src/core";
  * The confidence RAIL — the slider's paint, shared by two surfaces so they
  * can never drift apart (owner, 2026-10-01):
  *
- *   - the dock's live slider (question-dock) — a transparent range input
+ *   - a live slider — a transparent range input
  *     rides on top of this paint, disc and all;
  *   - the ANSWERED card (owner round 6) — the same rail with NO disc,
  *     which itself communicates "this is a record, not a control".

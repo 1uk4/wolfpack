@@ -1,5 +1,8 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deflateSync } from "node:zlib";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { DEFAULT_IMAGE_LIMITS, type ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { headerSize, lazyImageProcessor } from "./tools.js";
@@ -160,5 +163,37 @@ describe("headerSize", () => {
   it("JPEG without SOI or with a garbage segment is undefined", () => {
     expect(headerSize(Buffer.alloc(32, 1), "image/jpeg")).toBeUndefined();
     expect(headerSize(Buffer.from([0xff, 0xd8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "image/jpeg")).toBeUndefined();
+  });
+});
+
+/** A `wolfpack` on PATH that supports `test` (a temp dir; the real PATH is never consulted). */
+beforeAll(() => {
+  const dir = mkdtempSync(join(tmpdir(), "wolfpack-shim-"));
+  writeFileSync(join(dir, "wolfpack"), "#!/bin/sh\n[ \"$1 $2\" = \"test --help\" ] && exit 0\nexit 1\n", { mode: 0o755 });
+  process.env.PATH = `${dir}:${process.env.PATH}`;
+});
+
+describe("coding bash env", () => {
+  it("marks the shell as an agent's (WOLFPACK_AGENT_RUN=1) in the execution env, never in process.env", async () => {
+    const { prepareCodingBash } = await import("./tools.js");
+    const execution = { command: "echo hi", cwd: "/tmp", env: { KEEP: "1" } as Record<string, string>, inheritEnv: true };
+    const before = process.env.WOLFPACK_AGENT_RUN;
+    prepareCodingBash(execution);
+    expect(execution.env).toEqual({ KEEP: "1", WOLFPACK_AGENT_RUN: "1" });
+    expect(process.env.WOLFPACK_AGENT_RUN).toBe(before);
+  });
+
+  it("routes a direct test run through `wolfpack test`, and leaves other commands and the bypass alone", async () => {
+    const { prepareCodingBash } = await import("./tools.js");
+    const ex = (command: string, env: Record<string, string> = {}) => ({ command, cwd: "/tmp", env, inheritEnv: true });
+    const a = ex("cd packages/cli && pnpm exec vitest run src/pm.test.ts");
+    prepareCodingBash(a);
+    expect(a.command).toMatch(/routed through the test queue.*; cd packages\/cli && wolfpack test run src\/pm\.test\.ts$/);
+    const b = ex("pnpm run build");
+    prepareCodingBash(b);
+    expect(b.command).toBe("pnpm run build");
+    const c = ex("pnpm exec vitest run x.test.ts", { WOLFPACK_TEST_BYPASS: "1" });
+    prepareCodingBash(c);
+    expect(c.command).toBe("pnpm exec vitest run x.test.ts");
   });
 });

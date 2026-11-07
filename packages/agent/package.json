@@ -10,11 +10,11 @@
     "wolfpack-work-server": "dist/bin/wolfpack-work-server.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node -e \"import('node:fs').then(f=>{f.chmodSync('dist/bin/wolfpack-agent.js',0o755);f.chmodSync('dist/bin/wolfpack-work-server.js',0o755);})\"",
     "typecheck": "tsc --noEmit",
     "start": "node dist/bin/wolfpack-agent.js",
     "lint": "echo \"no lint configured for @wolfpack/agent\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/agent/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/agent/src"
   },
   "dependencies": {
     "@wolfpack/engine": "*",

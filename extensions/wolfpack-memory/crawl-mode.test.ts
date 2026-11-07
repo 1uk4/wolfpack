@@ -48,13 +48,13 @@ describe("crawlMode state (file-backed)", () => {
     const den = tmp();
     crawlMode.begin(den, 1);
     clock += IDLE_MS - 1;
-    noteToolCalls(den, 1, ["ask_user_question"]); // touch
+    noteToolCalls(den, 1, ["brief"]); // touch
     clock += IDLE_MS - 1;
     expect(crawlMode.active(den, 1)).toBe(true);
     clock += 2;
     expect(crawlMode.active(den, 1)).toBe(false); // idle: closed
     expect(crawlMode.takeReseed(den, 1)).toBe(true); // and the interview turns get skipped past
-    noteToolCalls(den, 1, ["ask_user_question"]); // not planning: a touch does not start it
+    noteToolCalls(den, 1, ["brief"]); // not planning: a touch does not start it
     expect(crawlMode.pending(den, 1)).toBe(false);
   });
 });

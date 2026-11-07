@@ -16,10 +16,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
-import { QuestionDock } from "../components/question-dock.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
 import { JobsContext } from "../components/jobs-context.ts";
-import { ChatActionsContext } from "../components/chat.tsx";
+import { ChatActionsContext } from "../components/chat-actions-context.ts";
 import type { JobRecord } from "../src/core/contracts.ts";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import {
@@ -60,20 +59,6 @@ function askQD(): QuestionData {
 		options,
 		createdAt: new Date().toISOString(),
 	};
-}
-
-function renderDock(props: {
-	toolName: "quiz" | "ask_user_question" | "explain";
-	toolCallId: string;
-	input: never;
-	onSubmit?: () => void;
-}) {
-	// expanded=true renders the full form (the collapsed bar is covered by the
-	// QuestionDockBar test below). No scroll context needed — the DockOverlay
-	// in the chat view owns that.
-	return renderToStaticMarkup(
-		<QuestionDock {...props} expanded={true} onExpand={() => {}} onSubmit={props.onSubmit ?? (() => {})} />,
-	);
 }
 
 describe("DispatchCard — the BYOK refusal tone (owner, 2026-09-22)", () => {
@@ -136,90 +121,6 @@ describe("DispatchCard — the BYOK refusal tone (owner, 2026-09-22)", () => {
 });
 
 describe("render smoke tests", () => {
-	it("QuizCard renders question, options, and the automatic 'I don't know'", () => {
-		const html = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
-		assert.match(html, /Which planet is closest to the sun\?/);
-		assert.match(html, /Mercury/);
-		assert.match(html, /I don&#x27;t know|I don't know/);
-		// The learner's voice: a labeled "Your thinking" composer-twin lives
-		// INSIDE the dock — never called optional, inviting the dump.
-		assert.ok(html.includes('data-testid="thinking-field"'), "thinking field present");
-		assert.match(html, /YOUR THINKING/, "labeled as the learner's voice (all caps, owner round 3)");
-		assert.match(html, /Why this answer\? Whatever comes to mind/, "placeholder invites, not apologizes (owner, placeholder round 2026-10-07)");
-		assert.ok(!html.includes("optional"), "the field is never called optional");
-		assert.match(html, /Submit answer/, "send becomes Submit answer");
-		assert.match(html, /↵ submits · ⇧↵ newline/, "the standard chord is discoverable (owner round 5)");
-		// The v1 desync bug: options are buttons with ARIA roles, not native inputs.
-		assert.ok(!html.includes('type="radio"'), "no native radio inputs");
-		assert.ok(html.includes('role="radio"'), "button-based radio role present");
-	});
-
-	it("QuizCard never leaks the explanation or the correct answer before submit", () => {
-		const html = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
-		assert.ok(!html.includes("innermost"), "explanation must not render pre-answer");
-	});
-
-	it("ask dock renders the editable Other row + thinking field, no grading affordance", () => {
-		const html = renderDock({
-			toolName: "ask_user_question",
-			toolCallId: "a1",
-			input: { question: "How confident are you?", options: [{ label: "Very" }, { label: "Somewhat" }] } as never,
-		});
-		assert.ok(!html.includes("I don&#x27;t know"), "ask has no 'I don't know'");
-		// Other is an editable OPTION ROW — a sibling of the options, with the
-		// radio circle + an inline input; picking it never displaces thinking.
-		assert.ok(html.includes('data-testid="other-option"'), "Other is an option row");
-		assert.match(html, /Type your own answer/, "type directly into the option");
-		assert.ok(html.includes('role="radio"'), "Other row keeps the option role");
-		assert.match(html, /aria-checked="false"/, "circle starts unfilled");
-		assert.ok(html.includes('data-testid="thinking-field"'), "thinking field coexists with Other");
-		assert.match(html, /YOUR THINKING/, "ask select-mode also gets the learner's voice");
-	});
-
-	it("multi-select ask renders checkbox rows and the select-all hint", () => {
-		const html = renderDock({
-			toolName: "ask_user_question",
-			toolCallId: "m1",
-			input: {
-				question: "Which topics interest you?",
-				multiSelect: true,
-				options: [{ label: "Physics" }, { label: "Philosophy" }],
-			} as never,
-		});
-		assert.match(html, /select all that apply/);
-		assert.ok(html.includes('role="group"'), "checkbox group");
-		assert.ok((html.match(/role="checkbox"/g) ?? []).length >= 3, "options AND the Other row are checkboxes");
-		assert.ok(html.includes('data-testid="other-option"'), "Other is still an option row in multi-select");
-		// The bigger \u2713 glyph (text-base, 2026-09-24 owner round) only
-		// mounts on a CHECKED row — unreachable from the unselected static
-		// render, so it's live-verified (Playwright: 14px computed in the
-		// 16px box) instead of pinned here.
-	});
-
-	it("a malformed question input renders the quiet fallback, never a crash", () => {
-		// The seam rule (tool-parts.ts): the dock PARSES the model-authored
-		// input instead of casting it — the live crash shape (options as a
-		// JSON string) must render the fallback, not die on .map.
-		const html = renderDock({
-			toolName: "quiz",
-			toolCallId: "bad",
-			input: { question: "q?", options: JSON.stringify([{ label: "a" }, { label: "b" }]) } as never,
-		});
-		assert.ok(html.includes('data-testid="malformed-question"'));
-		assert.match(html, /malformed/);
-	});
-
-	it("text-mode asks keep Enter-to-submit and the answer label", () => {
-		const html = renderDock({
-			toolName: "ask_user_question",
-			toolCallId: "a2",
-			input: { question: "Explain the chain rule in your own words." } as never,
-		});
-		assert.ok(html.includes('data-testid="answer-field"'), "text mode is the answer field");
-		assert.match(html, /Your answer/, "labeled as the answer");
-		assert.ok(!html.includes('data-testid="thinking-field"'), "no thinking field in text mode (v1)");
-		assert.ok(!html.includes("⌘/Ctrl"), "no dump shortcut hint — Enter already submits");
-	});
 
 	it("AnsweredCard grades quiz answers (✓/✗ + explanation)", () => {
 		const answer = buildAnswer(quizQD(), { values: ["Venus"] });
@@ -351,55 +252,10 @@ describe("math rendering (streamdown + KaTeX)", () => {
 		assert.match(html, /\$5/);
 	});
 
-	it("quiz cards render math in question, options, and explanation", () => {
-		const mathQuiz = {
-			question: "What is $\\frac{dy}{dx}$ of $y = x^2$?",
-			options: [{ label: "$2x$" }, { label: "$x^2$" }, { label: "$x$" }],
-			correctAnswer: "$2x$",
-			explanation: "The power rule gives $\\frac{dy}{dx} = 2x$.",
-		};
-		const pendingHtml = renderDock({ toolName: "quiz", toolCallId: "m1", input: mathQuiz as never });
-		assert.ok(pendingHtml.includes("katex"), "pending dock: question/options math renders");
-
-		const options = normalizeOptions(mathQuiz.options);
-		const qd: QuestionData = {
-			id: "m1",
-			kind: "quiz",
-			question: mathQuiz.question,
-			mode: "single-select",
-			options,
-			correctIndices: resolveCorrect(mathQuiz.correctAnswer, options).indices,
-			explanation: mathQuiz.explanation,
-			createdAt: new Date().toISOString(),
-		};
-		const answeredHtml = renderToStaticMarkup(
-			<AnsweredCard answer={buildAnswer(qd, { values: ["$2x$"] })} />,
-		);
-		assert.ok(answeredHtml.includes("katex"), "answered card: option/explanation math renders");
-	});
 });
 
 describe("the collapsed question bar", () => {
-	it("a collapsed question renders the scroll bar with an Answer affordance", () => {
-		const html = renderToStaticMarkup(
-			<QuestionDock
-				toolName="quiz"
-				toolCallId="q1"
-				input={quizInput as never}
-				expanded={false}
-				onExpand={() => {}}
-				onSubmit={() => {}}
-			/>,
-		);
-		assert.ok(html.includes('data-testid="question-dock-bar"'), "the scroll-collapse strip");
-		assert.match(html, /Answer/, "the strip keeps its Answer affordance");
-	});
 
-	it("an expanded question renders the full form", () => {
-		const html = renderDock({ toolName: "quiz", toolCallId: "t1", input: quizInput as never });
-		assert.ok(html.includes('data-testid="question-dock"'), "the form is the dock's content once expanded");
-		assert.match(html, /Submit answer/);
-	});
 });
 
 // ─── the explain reveal (free-recall, owner 2026-09-27) ────────────────────
@@ -455,38 +311,6 @@ describe("answered-card kind labels", () => {
 // explanation (the teaching that follows IS the explanation) while a check's
 // stays inline.
 describe("predict vs check rendering", () => {
-	it("a predict quiz renders the 'Prediction' eyebrow in the dock", () => {
-		const html = renderToStaticMarkup(
-			<QuestionDock
-				{...{
-					toolName: "quiz" as const,
-					toolCallId: "call-p1",
-					input: { ...quizInput, type: "predict", nodeId: "planet-order" },
-				}}
-				expanded={true}
-				onExpand={() => {}}
-				onSubmit={() => {}}
-			/>,
-		);
-		assert.ok(html.includes("Prediction"), `eyebrow missing: ${html.slice(0, 200)}`);
-	});
-
-	it("a check quiz reads the 'Check' eyebrow — the type name IS the label (owner, 2026-10-09)", () => {
-		const html = renderToStaticMarkup(
-			<QuestionDock
-				{...{
-					toolName: "quiz" as const,
-					toolCallId: "call-c1",
-					input: { ...quizInput, type: "check", nodeId: "planet-order" },
-				}}
-				expanded={true}
-				onExpand={() => {}}
-				onSubmit={() => {}}
-			/>,
-		);
-		assert.ok(html.includes("Check"), "the chip carries the question's type");
-		assert.ok(!html.includes(">Quiz<"), "the generic label is retired");
-	});
 
 	it("a prediction answer SHOWS the verdict but TUCKS the explanation behind a toggle", () => {
 		const qd: QuestionData = { ...quizQD(), questionType: "predict" };
@@ -515,24 +339,6 @@ describe("predict vs check rendering", () => {
 // ─── details + option descriptions render as markdown (owner, 2026-10-12) ──
 
 describe("question context renders as markdown everywhere (owner, 2026-10-12)", () => {
-	it("pending dock: ask option descriptions render LaTeX, not plain text", () => {
-		const html = renderDock({
-			toolName: "ask_user_question",
-			toolCallId: "d1",
-			input: {
-				question: "Which tool?",
-				options: [
-					{ label: "Pencil", description: "Wood around $\\text{Pb}_x\\text{C}$ graphite — the classic $x^2$ choice." },
-					{ label: "Pen" },
-				],
-			} as never,
-		});
-		// The description rides the same MessageResponse path as the label:
-		// KaTeX spans render inside the option subtext.
-		const katexCount = (html.match(/class="katex"/g) ?? []).length;
-		assert.ok(katexCount >= 2, `option description math renders (got ${katexCount})`);
-		assert.ok(!html.includes("$\\text"), "raw dollar delimiters do not leak as visible text");
-	});
 
 	it("settled ask card keeps the details line and option descriptions — retroactively from the persisted call", () => {
 		const input = {

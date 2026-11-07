@@ -15,7 +15,6 @@ import {
   KbActivityResponseSchema,
   parseMemoryEvent,
   EventEnvelopeSchema,
-  PROTOCOL_VERSION,
   ProtocolVersionSchema,
   SnapshotEventSchema,
   SubmitAckSchema,
@@ -59,7 +58,6 @@ const turn = [
 
 describe("version", () => {
   it("is the integer 1", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
     expect(ProtocolVersionSchema.parse(1)).toBe(1);
     expect(ProtocolVersionSchema.safeParse(2).success).toBe(false);
   });
@@ -263,8 +261,7 @@ describe("MemoryEvent", () => {
     expect(parseMemoryEvent({ ...item, outcome: "unclassified" })).toMatchObject({ kind: "invalid" });
   });
 
-  it("is not a ThreadEvent and needs no protocol bump", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+  it("is not a ThreadEvent", () => {
     expect(parseThreadEvent(variants[0])).toMatchObject({ kind: "invalid" });
   });
 });
@@ -284,10 +281,9 @@ describe("memory action responses", () => {
     expect(PromoteResponseSchema.safeParse({ jobId: "promote-1", status: "done" }).success).toBe(false);
     expect(PromoteResponseSchema.safeParse({ status: "started" }).success).toBe(false);
   });
-  it("new error codes map to 409 and need no protocol bump", () => {
+  it("new error codes map to 409", () => {
     expect(ERROR_HTTP_STATUS.memory_unavailable).toBe(409);
     expect(ERROR_HTTP_STATUS.promote_unavailable).toBe(409);
-    expect(PROTOCOL_VERSION).toBe(1);
   });
 });
 
@@ -538,5 +534,14 @@ describe("KbActivityResponseSchema", () => {
     expect(KbActivityResponseSchema.safeParse({ ...empty, extra: 1 }).success).toBe(true);
     const bad = { ...full, decisions: { ...full.decisions, items: [{ ...full.decisions.items[0], outcome: "weird" }] } };
     expect(KbActivityResponseSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+const compactionBase = { id: "entry-1", role: "assistant" as const, text: "", at: "2026-10-29T00:00:00.000Z" };
+describe("ThreadMessage.compaction", () => {
+  it("accepts a marker with summary and optional reason; stays optional for older servers", () => {
+    expect(ThreadMessageSchema.parse({ ...compactionBase, compaction: { summary: "s", reason: "manual" } }).compaction).toEqual({ summary: "s", reason: "manual" });
+    expect(ThreadMessageSchema.parse(compactionBase).compaction).toBeUndefined();
+    expect(ThreadMessageSchema.safeParse({ ...compactionBase, compaction: {} }).success).toBe(false);
   });
 });

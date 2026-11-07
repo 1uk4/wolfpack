@@ -7,7 +7,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findHolder, writeBindingFile } from "@wolfpack/memory";
-import { DEFAULT_THREAD_SETTINGS, ThreadSettingsSchema, type ThreadSettings } from "@wolfpack/protocol";
+import { DEFAULT_THREAD_SETTINGS, ThreadSettingsSchema, ThreadColorSchema, type ThreadSettings } from "@wolfpack/protocol";
 import type { Workspace } from "@wolfpack/workspaces";
 import { fetchWorkItem } from "./memory-read.js";
 
@@ -26,12 +26,16 @@ export interface SavedThread {
   /** Composer settings (model tier, auto-ship). Absent = the defaults (main, off). */
   tier?: ThreadSettings["tier"];
   autoShip?: boolean;
+  /** Owner colour override (a palette key); absent = automatic. */
+  color?: string;
 }
 
 /** A saved thread's settings, defaults filled in (an invalid stored tier reads as main). */
-export function settingsOfSaved(t: Pick<SavedThread, "tier" | "autoShip">): ThreadSettings {
-  const r = ThreadSettingsSchema.safeParse({ tier: t.tier ?? DEFAULT_THREAD_SETTINGS.tier, autoShip: t.autoShip === true });
-  return r.success ? r.data : { ...DEFAULT_THREAD_SETTINGS, autoShip: t.autoShip === true };
+export function settingsOfSaved(t: Pick<SavedThread, "tier" | "autoShip"> & { color?: unknown }): ThreadSettings {
+  const color = ThreadColorSchema.safeParse(t.color);
+  const c = color.success ? { color: color.data } : {};
+  const r = ThreadSettingsSchema.safeParse({ tier: t.tier ?? DEFAULT_THREAD_SETTINGS.tier, autoShip: t.autoShip === true, ...c });
+  return r.success ? r.data : { ...DEFAULT_THREAD_SETTINGS, autoShip: t.autoShip === true, ...c };
 }
 
 /** The home thread has no registry entry: its settings live in `<den>/wolfd/home-settings.json`. */
@@ -39,8 +43,8 @@ const homeSettingsFile = (den: string) => join(den, "wolfd", "home-settings.json
 
 export function loadHomeSettings(den: string): ThreadSettings {
   try {
-    const raw = JSON.parse(readFileSync(homeSettingsFile(den), "utf8")) as { tier?: unknown; autoShip?: unknown } | null;
-    return settingsOfSaved({ tier: raw?.tier as ThreadSettings["tier"], autoShip: raw?.autoShip === true });
+    const raw = JSON.parse(readFileSync(homeSettingsFile(den), "utf8")) as { tier?: unknown; autoShip?: unknown; color?: unknown } | null;
+    return settingsOfSaved({ tier: raw?.tier as ThreadSettings["tier"], autoShip: raw?.autoShip === true, color: raw?.color });
   } catch {
     return { ...DEFAULT_THREAD_SETTINGS };
   }
@@ -58,7 +62,11 @@ export function saveHomeSettings(den: string, settings: ThreadSettings): void {
 export function setThreadSettings(den: string, id: string, settings: ThreadSettings, onError?: (e: unknown) => void): boolean {
   const threads = loadThreads(den, onError);
   if (!threads.some((t) => t.id === id)) return false;
-  writeThreads(den, threads.map((t) => (t.id === id ? { ...t, tier: settings.tier, autoShip: settings.autoShip } : t)));
+  writeThreads(den, threads.map((t) => {
+    if (t.id !== id) return t;
+    const { color: _old, ...rest } = t;
+    return { ...rest, tier: settings.tier, autoShip: settings.autoShip, ...(settings.color ? { color: settings.color } : {}) };
+  }));
   return true;
 }
 

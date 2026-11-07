@@ -10,6 +10,7 @@
  *   den topic wolf + summary, minimal
  * Presentational: placement is the graph view's job.
  */
+import { openWorkHrefLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import Link from "next/link";
 import { stageLabel, type CardLink, type NodeCard } from "@/src/core";
 import { RouteNav, type RouteNavModel } from "./graph-route-nav.tsx";
@@ -73,6 +74,7 @@ export function GraphCard({
 	/** Jump to another node (focus + open its card). */
 	onSelectNode: (id: string) => void;
 }) {
+	const openWork = useOpenWorkItem();
 	return (
 		<div data-testid="graph-card" data-kind={card.kind}>
 			<div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{KIND_LABEL[card.kind]}</div>
@@ -108,6 +110,7 @@ export function GraphCard({
 					{card.openHref && (
 						<Link
 							href={card.openHref}
+							onClick={(e) => openWorkHrefLink(e, card.openHref!, openWork)}
 							className="rounded-lg border px-3 py-1 text-xs font-medium transition-colors hover:bg-accent"
 						>
 							Open

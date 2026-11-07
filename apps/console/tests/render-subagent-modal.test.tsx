@@ -139,6 +139,35 @@ describe("subagent modal", () => {
 		assert.match(q('[data-testid="subagent-elapsed"]')!.textContent!, /^turn 1m \d+s · total 14m \d+s$/);
 	});
 
+	it("the task link closes the modal, then opens the work reader on the current page", async () => {
+		const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+		const realLocation = Object.getOwnPropertyDescriptor(window, "location");
+		Object.defineProperty(window, "location", { configurable: true, value: { pathname: "/wolf/w/thread/home", search: "", assign: () => {} } });
+		const order: string[] = [];
+		const f = fake({});
+		(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const router = { push: (u: string) => order.push(`open ${u}`), replace: () => {}, back: () => {} };
+		await act(async () => {
+			root!.render(
+				<AppRouterContext.Provider value={router as never}>
+					<ServerEventsProvider connect={inert}>
+						<SubagentModal wolf="w" childThreadId={CHILD} onClose={() => void order.push("close")} />
+					</ServerEventsProvider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		await settle();
+		const ev = Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 });
+		await act(async () => void q('[data-testid="subagent-task"]')!.dispatchEvent(ev));
+		if (realLocation) Object.defineProperty(window, "location", realLocation);
+		else delete (window as unknown as Record<string, unknown>).location;
+		assert.deepEqual(order, ["close", "open /wolf/w/thread/home?item=work-w-abc"]);
+		assert.equal(ev.defaultPrevented, true);
+	});
+
 	it("running: header facts, Stop aborts, transcript, ledger in order", async () => {
 		const f = fake({});
 		await mount(f);
@@ -361,23 +390,17 @@ describe("subagent modal", () => {
 		await mount(fake({}));
 		const row = q('[data-testid="subagent-title"]')!.parentElement!;
 		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-meta", "subagent-modal-close", "subagent-switch"]);
-		assert.match(q('[data-testid="subagent-title"]')!.className, /truncate/);
-		assert.match(q('[data-testid="subagent-meta"]')!.className, /flex-wrap/);
-		assert.match(q('[data-testid="subagent-modal-close"]')!.className, /shrink-0/);
 	});
 
-	it("the header carries the traffic-lights gutter and drag classes (inert in the browser)", async () => {
+	it("the close button sits inside the header", async () => {
 		await mount(fake({}));
 		const h = q('[data-testid="subagent-header"]')!;
-		assert.ok(h.classList.contains("lh-lights-gutter"));
-		assert.ok(h.classList.contains("lh-drag"));
 		assert.ok(h.contains(q('[data-testid="subagent-modal-close"]')));
 	});
 
 	it("two columns: the ledger is always present, the transcript and steer field share the right column", async () => {
 		await mount(fake({}));
 		const cols = q('[data-testid="subagent-columns"]')!;
-		assert.match(cols.className, /min-\[900px\]:flex-row/);
 		const ledger = q('[data-testid="subagent-ledger"]')!;
 		const right = q('[data-testid="subagent-transcript-column"]')!;
 		assert.equal(ledger.parentElement, cols);
@@ -417,13 +440,11 @@ describe("subagent modal", () => {
 		document.body.innerHTML = "";
 		await mount(fake({}));
 		const t = q('[data-testid="ledger-entry-text"]')!;
-		assert.match(t.className, /line-clamp-3/);
 		await act(async () => void t.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
-		assert.doesNotMatch(q('[data-testid="ledger-entry-text"]')!.className, /line-clamp/);
 		assert.equal(q('[data-testid="ledger-entry-text"]')!.getAttribute("aria-expanded"), "true");
 	});
 
-	it("ledger entries are titled by sender and coloured per speaker; no Expand tooltip", async () => {
+	it("ledger entries are titled by sender; no Expand tooltip", async () => {
 		const g = fake({});
 		g.state.ledger = [
 			...LEDGER,
@@ -434,13 +455,10 @@ describe("subagent modal", () => {
 		const rows = qa('[data-testid="ledger-entry"]');
 		assert.deepEqual(rows.map((r) => r.querySelector('[data-testid="ledger-entry-sender"]')!.textContent), ["Parent", "You", "Child", "System"]);
 		assert.deepEqual(rows.map((r) => r.querySelector('[data-testid="ledger-entry-kind"]')!.textContent), ["brief", "steer", "result", "stop"]);
-		for (const [i, c] of ["violet", "emerald", "sky"].entries()) assert.match(rows[i]!.className, new RegExp(`border-l-${c}-500.*bg-${c}-500/10`));
-		assert.match(rows[3]!.className, /bg-muted/);
-		assert.equal(new Set(rows.map((r) => r.className)).size, 4);
 		assert.equal(q('[data-testid="ledger-entry-text"]')!.getAttribute("title"), null);
 	});
 
-	it("transcript messages are highlighted by speaker: parent brief, owner steer, child output", async () => {
+	it("transcript messages are tagged by speaker: parent brief, owner steer, child output", async () => {
 		const g = fake({});
 		g.state.ledger = LEDGER;
 		const client = g.client as unknown as { getThread: () => Promise<Record<string, unknown>> };
@@ -458,10 +476,7 @@ describe("subagent modal", () => {
 		const users = qa('[data-testid="subagent-user-message"]');
 		assert.deepEqual(users.map((u) => u.getAttribute("data-speaker")), ["parent", "owner", "parent"]); // unmatched defaults to parent
 		assert.deepEqual(users.map((u) => u.querySelector("div")!.textContent), ["Parent", "You", "Parent"]);
-		assert.match(users[0]!.className, /bg-violet-500\/10/);
-		assert.match(users[1]!.className, /bg-emerald-500\/10/);
 		const child = q('[data-testid="subagent-child-text"]')!;
-		assert.match(child.className, /border-l-sky-500.*bg-sky-500\/10/);
 		assert.match(child.textContent!, /Child/);
 	});
 

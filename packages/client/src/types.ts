@@ -44,7 +44,7 @@ export type ThreadEventType = ThreadEvent["type"];
 
 export type { ThreadContext, CreateThreadBody, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, ThreadTier } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, HubEvent, HubEventType, CardOutcome } from "@wolfpack/protocol";
-export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
+export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, CardBrief, PendingCard, ThreadStatus } from "@wolfpack/protocol";
 export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, WorkItemResponse, GraduationPreview, GraduationContribution, GraduationResult, GraduationJob, GraduationJobKind, GraduationStatus, GraduationObservations, WorkListResponse, WorkListItem, SweepOutcome } from "@wolfpack/protocol";
 /** Query of the hub KB activity route: `since` 7d|30d|all|ISO (default 30d), `before` cursor, `limit` 1..200 (default 50), `domain`. */
 export interface KbActivityQuery {

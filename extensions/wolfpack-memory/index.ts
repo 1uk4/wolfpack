@@ -43,7 +43,7 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig, type WorkSystemHandle } from "./work-system.js";
-import { WorkClient } from "./work-client.js";
+import { WorkClient, GRADUATION_TIMEOUT_MS } from "./work-client.js";
 export { WorkStoreReadOnlyError, WorkStorePermissionError } from "./work-client.js";
 import { writeParentBody } from "./parent-embed.js";
 import {
@@ -84,8 +84,9 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
 import { createCrawlCore, crawlPlanTools } from "./crawl-core.ts";
-import { buildCrawlDirective, canInterview as crawlCanInterview } from "./crawl-interview.ts";
-import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
+import { canInterview as crawlCanInterview } from "./crawl-interview.ts";
+import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.js";
+import { runCrawlInterview, withPause } from "./crawl-tui.js";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -1581,11 +1582,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
+        return previewGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-        const done = await confirmGraduation({ client: new WorkClient(), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
+        const done = await confirmGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
         unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;
@@ -2098,7 +2099,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       // A questionnaire can ask for the source directory itself, so a bare
       // `/wolf:crawl` is fine when we can interview. Only the deterministic
       // draft path (explicit --draft, or headless/busy) needs a path up front.
-      // pi has no card-raising ask_user_question (askCards: false): it needs an idle TUI. See crawl-interview.ts.
+      // pi has no card-raising tool (askCards: false): it needs an idle TUI, where the wizard asks. See crawl-interview.ts.
       const canInterview = crawlCanInterview({
         draftOnly,
         hasUI: !!ctx.hasUI,
@@ -2134,38 +2135,16 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // Questionnaire: hand the agent a directive so it interviews the user with
-      // the ask_user_question tool, then drafts the plan from their answers.
-      const declared = declaredDomains();
-      const hints: string[] = [];
-      if (parts[1]) hints.push(`domain=${parts[1]}`);
-      if (parts[2]) hints.push(`strategy=${parts[2]}`);
-      if (parts[3]) hints.push(`depth=${parts[3]}`);
-      const directive = buildCrawlDirective({
-        src,
-        cwd: process.cwd(),
-        domains: declared ? [...declared] : null,
-        defaultDomain,
-        hints,
-        cards: false,
-      });
-
-      if (ctx.hasUI)
-        ctx.ui.notify(
-          `🐺 crawl questionnaire starting${src ? ` for ${src}` : ""} — observation paused.${scribeNudge}`,
-          "info"
-        );
-      try {
-        pi.sendUserMessage(directive);
-      } catch (e) {
-        // sendUserMessage throws if streaming / no agent: fall back to a draft.
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            `🐺 could not start questionnaire (${String(e)}); drafting a plan directly.`,
-            "warning"
-          );
-        draftCrawlPlan(ctx, parts);
-      }
+      // Questionnaire, preview and approval through the wizard (crawl-tui.ts): no model turn.
+      // The pause stays only for a returned `drafted` (the user refines it with the crawl_* tools; /wolf:crawl-cancel
+      // or running the plan ends it). Anything else, including a throw from the wizard or the core, releases it.
+      await withPause(
+        () => runCrawlInterview({ ctx, args: parts, cwd: process.cwd(), domains: declaredDomains(), defaultDomain, core: crawl }),
+        (keepPause) => {
+          crawlPlanMode = keepPause;
+          refreshStatus(ctx);
+        }
+      );
     },
   });
 
@@ -2423,8 +2402,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // Interactive path: a short wizard (single-choice UI borrowed from the
-      // ask-user-question extension) configures the run, then we drive the live
+      // Interactive path: a short wizard (crawl-wizard.ts) configures the run, then we drive the live
       // monitor and offer reruns.
       let runPlanFile = planFile;
       let seedRunDir: string | undefined;

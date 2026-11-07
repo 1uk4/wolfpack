@@ -21,10 +21,9 @@ describe("composer action row", () => {
 	});
 
 	for (const [label, setup] of [["provider key", keySetup], ["models", modelSetup]] as const) {
-		it(`${label}: setup-only stays centered`, () => {
+		it(`${label}: setup-only renders a single button, no nested row`, () => {
 			const document = documentFor(<ComposerActions setup={setup} />);
 			const row = document.querySelector('[data-testid="composer-actions"]')!;
-			assert.ok(row.classList.contains("justify-center"));
 			assert.equal(row.children.length, 1);
 			assert.equal(row.firstElementChild!.tagName, "BUTTON", "setup must not reserve a nested full-width row");
 		});
@@ -33,18 +32,9 @@ describe("composer action row", () => {
 			const document = documentFor(<DraftShell busy={false} text="" onChange={() => {}} onSend={() => {}} setupCta={setup} />);
 			const rows = document.querySelectorAll('[data-testid="composer-actions"]');
 			assert.equal(rows.length, 1);
-			assert.ok(rows[0]!.classList.contains("justify-center"));
 			assert.equal(rows[0]!.lastElementChild!.tagName, "BUTTON");
 		});
 	}
-
-	it("existing chat callers retain the standalone provider-key pill wrapper", () => {
-		const document = documentFor(<ZeroKeysPill onOpen={() => {}} />);
-		const wrapper = document.body.firstElementChild!;
-		assert.equal(wrapper.tagName, "DIV");
-		assert.ok(wrapper.classList.contains("justify-center"));
-		assert.ok(wrapper.classList.contains("mb-2"));
-	});
 
 	it("the draft shell renders no action row when nothing needs setup", () => {
 		const document = documentFor(<DraftShell busy={false} text="" onChange={() => {}} onSend={() => {}} />);

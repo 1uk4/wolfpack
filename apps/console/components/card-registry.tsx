@@ -80,6 +80,10 @@ export interface InteractionCardProps {
 	onAnswer(answers: CardAnswers): void;
 	/** Skip the card instead of answering it. */
 	onSkip?(): void;
+	/** The tight variant (the floating chat bar). */
+	compact?: boolean;
+	/** What a brief's "Open thread for more" does. */
+	onOpenThread?(): void;
 }
 
 /**
@@ -149,8 +153,9 @@ export function lookupInteractionCard(tool: string): InteractionCardEntry | unde
 }
 
 /**
- * Pending/streaming questions live in the dock, not the transcript;
- * answered ones render as graded records.
+ * Settled quiz / explain / ask_user_question tool calls (older transcripts) render as graded records. A pending or
+ * streaming one renders nothing: wolf threads raise questions as protocol cards (AskCard), and no tool in a live
+ * thread produces a pending quiz or explain call.
  */
 function QuestionCard({ part }: ArtifactPartProps) {
 	if (part.state !== "output-available") return null;
@@ -162,6 +167,7 @@ for (const name of ["quiz", "ask_user_question", "explain"]) {
 }
 
 // Wolf-thread interaction cards (protocol cards): the ask card renders any free-text / single card.
+registerCard("card", "brief", { Renderer: AskCard });
 registerCard("card", "ask_user_question", { Renderer: AskCard });
 registerCard("card", "default", { Renderer: AskCard });
 

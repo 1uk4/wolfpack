@@ -113,6 +113,10 @@ describe("durable task_done ship gate (confirm card)", () => {
     expect(card.tool).toBe("task_done");
     expect(card.fields[0]).toMatchObject({ id: "confirm", kind: "confirm", label: `Ship "Ship me" (${t.id})?`, confirmLabel: "Ship", rejectLabel: "Not yet" });
     expect((card.fields[0] as { default?: boolean }).default).toBeUndefined();
+    expect(card.brief?.headline).toBe('Ship "Ship me"?');
+    expect(card.brief!.headline.length).toBeLessThanOrEqual(80);
+    expect(card.brief!.context!.length).toBeLessThanOrEqual(5);
+    expect(card.brief!.context![0]).toContain(t.id);
     expect(items.get(t.id)!.stage).toBe("approved");
     expect(tw.scripted.faux.state.callCount).toBe(1);
 
@@ -122,6 +126,17 @@ describe("durable task_done ship gate (confirm card)", () => {
     expect(seen).toContain(`Ship "Ship me" (${t.id})?: yes (Ship)`);
     expect(items.get(t.id)!.stage).toBe("shipped");
     expect((await tw.client.getThread(tw.home)).status).toBe("idle");
+  });
+
+  it("a long title is clipped in the headline, the field label keeps the exact title", async () => {
+    const long = "T".repeat(200);
+    const t = add({ kind: "task", title: long });
+    tw = await wolf([toolUse(fauxToolCall("task_done", { id: t.id })), fauxAssistantMessage("unreachable")]);
+    await tw.submit("go");
+    const card = (await tw.client.getThread(tw.home)).pendingCards![0].card;
+    expect(card.brief!.headline.length).toBeLessThanOrEqual(80);
+    expect(card.brief!.headline.endsWith("…")).toBe(true);
+    expect(card.fields[0].label).toBe(`Ship "${long}" (${t.id})?`);
   });
 
   it("the bound task ships through the same gate", async () => {
@@ -190,6 +205,10 @@ describe("durable task_done ship gate (confirm card)", () => {
     const d = await tw.client.getThread(tw.home);
     expect(d.pendingCards).toHaveLength(1);
     expect(d.pendingCards![0].card.fields[0]).toMatchObject({ kind: "multi", options: [{ value: a.id }, { value: b.id }] });
+    const mb = d.pendingCards![0].card.brief!;
+    expect(mb.headline).toBe("Ship 2 tasks?");
+    expect(mb.context).toEqual([`${a.id}: A`, `${b.id}: B`]);
+    expect(d.pendingCards![0].card.fields).toHaveLength(1);
     expect(tw.scripted.faux.state.callCount).toBe(1);
   });
 

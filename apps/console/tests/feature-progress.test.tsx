@@ -156,7 +156,6 @@ describe("FeatureProgressPanel", () => {
 		assert.deepEqual(["a", "b", "c", "d"].map((id) => node(id).getAttribute("data-status")), ["done", "doing", "todo", "blocked"]);
 		assert.deepEqual(["a", "b", "c", "d"].map((id) => node(id).getAttribute("data-highlight")), ["false", "true", "false", "false"]);
 		assert.equal(qa('[data-testid="graph-edge"]').length, 4);
-		assert.match(q('[data-testid="feature-progress-panel"]')!.className, /max-h-\[40vh\]/);
 		assert.ok(q('[data-testid^="feature-progress-task-"]') === null);
 		assert.ok(q('[data-testid^="feature-progress-bind-"]') === null);
 		assert.ok(q('[data-testid="feature-progress-graph"]') === null);

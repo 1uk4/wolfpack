@@ -9,10 +9,10 @@
     "wolfpack": "dist/bin/wolfpack.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node -e \"import('node:fs').then(f=>{f.chmodSync('dist/bin/wolfpack.js',0o755);})\"",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/cli\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/cli/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/cli/src"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^1.1.0",
@@ -26,7 +26,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@wolfpack/harness": "*"
   },
   "optionalDependencies": {
     "playwright-core": "1.63.0"

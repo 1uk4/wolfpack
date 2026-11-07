@@ -8,10 +8,12 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
+import type { WorkItem } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import {
   confirmGraduation,
   drainScope,
+  loadGraduationScope,
   previewGraduation,
   readinessOf,
   unbindOnGraduation,
@@ -52,11 +54,12 @@ export function createGraduation(deps: GraduationDeps) {
   };
 
   /** Refuse an item that is not ready with the reason, before any model work. */
-  async function assertReady(id: string): Promise<void> {
-    const all = (await client.query({})) ?? [];
+  async function assertReady(id: string): Promise<WorkItem[]> {
+    const all = await loadGraduationScope(client, id);
     const item = all.find((i) => i.id === id);
     const r = readinessOf(item, all);
     if (!r.ready) throw new GraduationError("not_ready", `${item?.title ?? id} is not ready to graduate: ${r.reason}`);
+    return all;
   }
 
   /** Refusals keep their code; anything else stops the graduation with nothing archived. */
@@ -70,9 +73,9 @@ export function createGraduation(deps: GraduationDeps) {
   /** Step 1: distill, write the token file. Nothing is sent or archived. */
   async function preview(id: string): Promise<GraduationPreview> {
     try {
-      await assertReady(id);
+      const scope = await assertReady(id);
       const roots = needRoots();
-      const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain });
+      const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain, scope });
       await mkdir(previewDir(), { recursive: true });
       await writeFile(previewFile(p.token), JSON.stringify(p));
       return p;
@@ -182,7 +185,7 @@ export function createGraduation(deps: GraduationDeps) {
   /** Pending observations of this wolf's pool that a graduation of the item folds: tagged with the item or a descendant. */
   async function observations(id: string): Promise<GraduationObservationCount> {
     try {
-      const all = (await client.query({})) ?? [];
+      const all = await loadGraduationScope(client, id);
       const item = all.find((i) => i.id === id);
       if (!item) throw new GraduationError("not_ready", `${id} was not found`);
       const scope = new Set(drainScope(item, all));

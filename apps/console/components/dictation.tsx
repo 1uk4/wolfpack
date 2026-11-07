@@ -198,7 +198,7 @@ export function rmsToMeter(rms: number): number {
 /**
  * The primary-input registry: at most ONE non-composer input can claim the
  * dictation target while mounted — the pending question's answer/thinking
- * field (question-dock.tsx). The page's `append` (the composer) is the
+ * field (the ask card). The page's `append` (the composer) is the
  * fallback when nobody claims. Module-level by design: the claimant is a
  * sibling subtree far from the hook's owner, and there is exactly one
  * window, one pending question, one target at a time.
@@ -213,15 +213,37 @@ const topClaim = (): Claim | undefined => claims[claims.length - 1];
 
 /* Observable UI state for the inline mics (a few fields far from the hook's owner): the run's phase + error, the
  * top claim's key, the key of the last claimant (where an error is announced), and whether any hook is mounted. Hooks
- * register in `hookStates`; the LAST-mounted one is the guard-holder whose phase/error is mirrored (two hooks overlap
- * briefly across a route transition — the old one's unmount must not clobber the new one). */
+ * register in `hookStates`; `uiHolder` picks the one whose phase/error is mirrored. */
 type DictationUi = { phase: DictationPhase; error: string | null; targetKey: string | null; lastKey: string | null; available: boolean };
 let ui: DictationUi = { phase: "idle", error: null, targetKey: null, lastKey: null, available: false };
 let lastKey: string | null = null;
-const hookStates = new Map<symbol, { phase: DictationPhase; error: string | null; clear: () => void }>();
+const hookStates = new Map<symbol, { phase: DictationPhase; error: string | null; clear: () => void; kind: "page" | "bar"; enabled: boolean }>();
+
+/** The hook whose phase/error the inline mics mirror: one with a live run first, else the last-mounted enabled one (two hooks overlap briefly across a route transition; the old one's unmount must not clobber the new one). */
+function uiHolder() {
+	const all = [...hookStates.values()];
+	return all.find((h) => h.phase !== "idle") ?? all.filter((h) => h.enabled).pop() ?? all.pop();
+}
+
+/**
+ * ⌘D ROUTING when several hooks are mounted: exactly one answers. A live run keeps it; else focus inside the floating
+ * chat → the floating chat; else a page's own composer (on a thread page its start pops the thread out and hands the run
+ * to the floating chat, see useThreadDictation); else the floating chat, when a thread is popped out. A pending
+ * question's field claim still wins where the transcript lands (see flush).
+ */
+function shortcutHook(): symbol | undefined {
+	const hooks = [...hookStates.entries()].filter(([, h]) => h.enabled);
+	const running = hooks.find(([, h]) => h.phase !== "idle");
+	if (running) return running[0];
+	const bar = hooks.find(([, h]) => h.kind === "bar")?.[0];
+	const page = hooks.filter(([, h]) => h.kind === "page").pop()?.[0];
+	const inBar = typeof document !== "undefined" && !!(document.activeElement as HTMLElement | null)?.closest?.('[data-testid="chat-bar"]');
+	if (bar && (inBar || !page)) return bar;
+	return page ?? bar;
+}
 const uiListeners = new Set<() => void>();
 function publishUi() {
-	const holder = [...hookStates.values()].pop();
+	const holder = uiHolder();
 	const next: DictationUi = {
 		phase: holder?.phase ?? "idle",
 		error: holder?.error ?? null,
@@ -291,17 +313,49 @@ export function isDictationActive(): boolean {
  * pending question's dock) need finish() without a prop bridge. Same
  * module-level pattern as questionTarget — one window, one instance,
  * one finisher. Empty registry (no hook mounted) → resolve immediately. */
-let dictationFinisher: (() => Promise<void>) | null = null;
+const dictationFinishers = new Map<() => Promise<void>, "page" | "bar">();
 
 /** Finish any live dictation run before continuing (see Dictation.finish). */
-export function finishDictation(): Promise<void> {
-	return dictationFinisher ? dictationFinisher() : Promise.resolve();
+export function finishDictation(only?: "page" | "bar"): Promise<void> {
+	return Promise.all([...dictationFinishers].filter(([, k]) => !only || k === only).map(([f]) => f())).then(() => undefined);
 }
 
-/** Join a dictated final onto the current text (shared separator rule). */
-export function joinDictation(current: string, final: string): string {
-	return current ? current.replace(/\s+$/, "") + " " + final : final;
+/* The floating chat's dictation, published by ChatBar (always mounted) so a thread page can show and drive the same run
+ * while its thread is popped out. */
+let barDictation: Dictation | null = null;
+const barListeners = new Set<() => void>();
+/** Whether the floating chat is on screen (it carries the meter, so a page composer hides its own). */
+let barShown = false;
+export function publishBarDictation(d: Dictation | null, shown = false) {
+	barDictation = d;
+	barShown = shown;
+	queueMicrotask(() => {
+		for (const l of [...barListeners]) l();
+	});
 }
+export function useBarShown(): boolean {
+	return useSyncExternalStore(
+		(l) => {
+			barListeners.add(l);
+			return () => void barListeners.delete(l);
+		},
+		() => barShown,
+		() => false,
+	);
+}
+export function useBarDictation(): Dictation | null {
+	return useSyncExternalStore(
+		(l) => {
+			barListeners.add(l);
+			return () => void barListeners.delete(l);
+		},
+		() => barDictation,
+		() => null,
+	);
+}
+
+/** Join a dictated final onto the current text (shared separator rule, defined with the draft store). */
+export { joinDictation } from "@/lib/composer-draft";
 
 /**
  * Claim the dictation target while mounted (and `claimed` is true). The
@@ -354,7 +408,7 @@ export type Dictation = {
  * composer fallback; the mounted question form's claim wins while a
  * question waits.
  */
-export function useDictation({ append }: { append: (text: string) => void }): Dictation {
+export function useDictation({ append, kind = "page", enabled = true, onOrphan, interceptStart }: { append: (text: string) => void; kind?: "page" | "bar"; enabled?: boolean; onOrphan?: (text: string) => void; interceptStart?: () => boolean }): Dictation {
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string | null>(null);
 	/** Latest RMS from the worklet — the meter samples this (dictate pattern). */
@@ -639,16 +693,14 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	// Publish finish() for the sibling subtrees (the pending question's
 	// dock) — registered for as long as this page owns the hook.
 	useEffect(() => {
-		dictationFinisher = finish;
-		return () => {
-			if (dictationFinisher === finish) dictationFinisher = null;
-		};
-	}, [finish]);
+		dictationFinishers.set(finish, kind);
+		return () => void dictationFinishers.delete(finish);
+	}, [finish, kind]);
 	// Mirror the run state for the inline mics (see hookStates).
 	const idRef = useRef<symbol>(Symbol("dictation"));
 	useEffect(() => {
 		const id = idRef.current;
-		hookStates.set(id, { phase: "idle", error: null, clear: () => setError(null) });
+		hookStates.set(id, { phase: "idle", error: null, clear: () => setError(null), kind, enabled });
 		publishUi();
 		return () => {
 			hookStates.delete(id);
@@ -661,11 +713,38 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		if (!st) return;
 		st.phase = phase;
 		st.error = error;
+		st.enabled = enabled;
 		publishUi();
-	}, [phase, error]);
+	}, [phase, error, enabled]);
 
+	// Unmounting mid-run ends it at once (no wait for Deepgram): the mic, worklet nodes and socket die with the owner. The
+	// finals already received are not thrown away: they go to `onOrphan` (the owner's draft store), never to the dead
+	// input or a pending question's field (which is unmounting too). No `onOrphan` = they are dropped.
+	const onOrphanRef = useRef(onOrphan);
+	onOrphanRef.current = onOrphan;
+	const phaseRef = useRef(phase);
+	phaseRef.current = phase;
+	const cleanupRef = useRef(cleanup);
+	cleanupRef.current = cleanup;
+	useEffect(
+		() => () => {
+			if (phaseRef.current === "idle") return;
+			const text = bufferRef.current.join(" ");
+			bufferRef.current = [];
+			cleanupRef.current();
+			if (text) onOrphanRef.current?.(text);
+		},
+		[],
+	);
+
+	// A start can be taken over (a thread page hands it to the floating chat; see use-thread-dictation.ts).
+	const interceptRef = useRef(interceptStart);
+	interceptRef.current = interceptStart;
 	const toggle = useCallback(() => {
-		if (phase === "idle") void start();
+		if (phase === "idle") {
+			if (interceptRef.current?.()) return;
+			void start();
+		}
 		else if (phase === "recording" || phase === "connecting") stop();
 		// "stopping" presses are ignored — the flush is in flight.
 	}, [phase, start, stop]);
@@ -675,11 +754,14 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	// page owns ONE hook instance, and only the mounted page's listener is
 	// attached.
 	useEffect(() => {
-		warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
-	}, []);
+		if (enabled) warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
+	}, [enabled]);
 	useEffect(() => {
-		window.addEventListener("lh:kbd-toggle-dictation", toggle);
-		return () => window.removeEventListener("lh:kbd-toggle-dictation", toggle);
+		const onToggle = () => {
+			if (shortcutHook() === idRef.current) toggle();
+		};
+		window.addEventListener("lh:kbd-toggle-dictation", onToggle);
+		return () => window.removeEventListener("lh:kbd-toggle-dictation", onToggle);
 	}, [toggle]);
 	useEffect(() => {
 		window.addEventListener("lh:kbd-cancel-dictation", cancel);
@@ -697,6 +779,57 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		cancel,
 		clearError: () => setError(null),
 	};
+}
+
+/**
+ * The live waveform strip: 60ms samples of the run's level into a rolling ring, the cell count adapting to the measured
+ * width. The repaint lives HERE, so only this strip re-renders (the bar, pill or page around it never does). Mount it only
+ * while a run is live (`DictationBar` does; the compact pills do via `CompactMeter`).
+ */
+export function LiveMeter({ dictation, className }: { dictation: Dictation; className?: string }) {
+	const { levelRef, active } = dictation;
+	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
+	const [cellCount, setCellCount] = useState(METER_CELLS);
+	const meterRef = useRef<HTMLDivElement | null>(null);
+
+	useEffect(() => {
+		if (!active) return;
+		setLevels(new Array(METER_CELLS).fill(0));
+		const id = setInterval(() => {
+			setLevels((ring) => {
+				const next = ring.slice(1);
+				next.push(rmsToMeter(levelRef.current));
+				return next;
+			});
+		}, METER_TICK_MS);
+		return () => clearInterval(id);
+	}, [active, levelRef]);
+
+	// Fit the cell count to the available width (4px pitch per cell: 2px bar + 2px gap, clamped 8..48).
+	useEffect(() => {
+		if (!active) return;
+		const el = meterRef.current;
+		if (!el) return;
+		const fit = () => setCellCount(Math.max(8, Math.min(METER_CELLS, Math.floor(el.clientWidth / 4))));
+		fit();
+		const ro = new ResizeObserver(fit);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [active]);
+
+	return (
+		<div ref={meterRef} className={className ?? "flex h-4 min-w-0 flex-1 items-center gap-[2px]"} data-testid="dictation-meter">
+			{levels.slice(-cellCount).map((v, i) => (
+				<span key={i} className="min-w-0 flex-1 rounded-full bg-foreground/40" style={{ height: `${2 + Math.round(v * 14)}px` }} />
+			))}
+		</div>
+	);
+}
+
+/** A narrow fixed-width meter for a compact view (minimized pill, phone pill): shows only while a run is live, and its width is reserved while it does. */
+export function CompactMeter({ dictation }: { dictation: Dictation }) {
+	if (!dictation.active) return null;
+	return <LiveMeter dictation={dictation} className="flex h-4 w-20 shrink-0 items-center gap-[2px]" />;
 }
 
 /**
@@ -719,47 +852,7 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 	 *  the error — the surface is clean when the user returns. Any other
 	 *  error keeps the old behavior (click = retry, which clears). */
 	const keyless = error === DICTATION_KEYLESS;
-	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
 	const recording = phase === "recording" || phase === "stopping";
-	/** Adaptive cell count (owner round 2): derived from the meter's
-	 *  measured width — narrow rows show fewer bars instead of
-	 *  overflowing under neighbors. */
-	const [cellCount, setCellCount] = useState(METER_CELLS);
-	const meterRef = useRef<HTMLDivElement | null>(null);
-
-	// The meter's own heartbeat — 60ms samples of the level ref into a
-	// rolling ring. Only THIS strip re-renders; the page never does.
-	useEffect(() => {
-		if (!active) return;
-		setLevels(new Array(METER_CELLS).fill(0));
-		const id = setInterval(() => {
-			setLevels((ring) => {
-				const next = ring.slice(1);
-				next.push(rmsToMeter(levelRef.current));
-				return next;
-			});
-		}, METER_TICK_MS);
-		return () => clearInterval(id);
-	}, [active, levelRef]);
-
-	// Fit the cell count to the available width (4px pitch per cell:
-	// 2px bar + 2px gap, clamped 8..48). The meter div's width is set by
-	// the row's free space — cells carry no minimum width — so measuring
-	// it once per activation + on resize keeps the strip honest in the
-	// draft/home rows where the slider leaves little middle.
-	useEffect(() => {
-		if (!active) return;
-		const el = meterRef.current;
-		if (!el) return;
-		const fit = () => {
-			const w = el.clientWidth;
-			setCellCount(Math.max(8, Math.min(METER_CELLS, Math.floor(w / 4))));
-		};
-		fit();
-		const ro = new ResizeObserver(fit);
-		ro.observe(el);
-		return () => ro.disconnect();
-	}, [active]);
 
 	if (!active) {
 		return (
@@ -823,15 +916,7 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 			{/* Fixed width while recording — nothing ever appends text beside it
 			    (no interims, owner round 1). Cells carry no minimum width; the
 			    COUNT adapts to the measured row space (owner round 2). */}
-			<div ref={meterRef} className="flex h-4 min-w-0 flex-1 items-center gap-[2px]" data-testid="dictation-meter">
-				{levels.slice(-cellCount).map((v, i) => (
-					<span
-						key={i}
-						className="min-w-0 flex-1 rounded-full bg-foreground/40"
-						style={{ height: `${2 + Math.round(v * 14)}px` }}
-					/>
-				))}
-			</div>
+			<LiveMeter dictation={dictation} />
 		</div>
 	);
 }
@@ -903,7 +988,7 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 	);
 }
 
-const hookStatesHolder = () => [...hookStates.values()].pop();
+const hookStatesHolder = () => uiHolder();
 
 /**
  * Dictation for a standalone prose field: returns the props for <InlineMic>. The claim is TRANSIENT — taken on click,

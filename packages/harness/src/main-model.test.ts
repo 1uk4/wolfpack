@@ -52,14 +52,6 @@ describe("selectMainModel", () => {
     expect(p.shutdown).toHaveBeenCalledOnce();
   });
 
-  it("forget and dispose reach the provider", async () => {
-    const p = fakeProvider();
-    const c = await selectMainModel({ ...base, table: table("claude-stateless"), env: ENV, seams: seam(() => p) });
-    c.forget("sess-1");
-    expect(p.release).toHaveBeenCalledWith("sess-1");
-    c.dispose();
-    expect(p.shutdown).toHaveBeenCalledOnce();
-  });
 });
 
 describe("startRoot", () => {

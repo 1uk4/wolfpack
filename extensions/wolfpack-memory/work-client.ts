@@ -11,6 +11,9 @@ import type { RollupClient } from "@wolfpack/memory";
 /** Every Work call gives up after this long: binding self-detection must never hang a prompt or a tool. */
 export const WORK_TIMEOUT_MS = 3000;
 
+/** Graduation reads a whole domain and runs on the owner's say-so, so it may wait much longer than a binding lookup. */
+export const GRADUATION_TIMEOUT_MS = 60_000;
+
 /** Thrown for a write the hub refused because its work store is read-only. The message is what the model sees. */
 export class WorkStoreReadOnlyError extends Error {
   readonly code = "work_store_read_only";
@@ -32,10 +35,17 @@ export class WorkStorePermissionError extends Error {
 export class WorkClient {
   private endpoint: string;
   private token: string;
+  private timeoutMs: number;
 
-  constructor(endpoint?: string, token?: string) {
+  constructor(endpoint?: string, token?: string, timeoutMs: number = WORK_TIMEOUT_MS) {
+    this.timeoutMs = timeoutMs;
     this.endpoint = (endpoint ?? process.env.WORK_ENDPOINT ?? "").replace(/\/$/, "");
     this.token = token ?? process.env.WORK_TOKEN ?? "";
+  }
+
+  /** The same hub and token with another per-request limit (the default stays WORK_TIMEOUT_MS). */
+  withTimeout(ms: number): WorkClient {
+    return new WorkClient(this.endpoint, this.token, ms);
   }
 
   get configured(): boolean {
@@ -55,7 +65,7 @@ export class WorkClient {
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(WORK_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     const data = await res.json() as Record<string, unknown>;

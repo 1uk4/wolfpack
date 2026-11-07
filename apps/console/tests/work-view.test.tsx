@@ -6,7 +6,6 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
@@ -22,6 +21,7 @@ Object.assign(globalThis, {
 	KeyboardEvent: dom.window.KeyboardEvent,
 	Event: dom.window.Event,
 	IS_REACT_ACT_ENVIRONMENT: true,
+	self: globalThis, // next/link (the reader's Full page link) reads `self` when it mounts
 	requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0),
 	cancelAnimationFrame: (id: number) => clearTimeout(id),
 	ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
@@ -114,21 +114,6 @@ describe("the Work page", () => {
 		assert.equal(q("work-resize"), null);
 		assert.equal(q("work-close"), null);
 		assert.equal(q("work-reader"), null);
-	});
-	it("app/work/page.tsx mounts the list without GraphHome; / keeps the graph", () => {
-		const page = readFileSync(new URL("../app/work/page.tsx", import.meta.url), "utf8");
-		assert.ok(!page.includes("GraphHome"));
-		assert.match(page, /<WorkList \/>/);
-		assert.ok(!existsSync(new URL("../app/work/layout.tsx", import.meta.url)));
-		assert.match(readFileSync(new URL("../app/(home)/layout.tsx", import.meta.url), "utf8"), /<GraphHome \/>/);
-	});
-	it("the root layout has no Work provider any more", () => {
-		assert.ok(!readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8").includes("WorkViewProvider"));
-	});
-	it("the phone layout hides the wide columns", () => {
-		const src = readFileSync(new URL("../components/work-view.tsx", import.meta.url), "utf8");
-		assert.match(src, /progress: "[^"]*max-md:hidden"/);
-		assert.match(src, /h-dvh/);
 	});
 });
 

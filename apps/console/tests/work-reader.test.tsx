@@ -14,6 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<!doctype html><html><body></body></html>");
+(globalThis as Record<string, unknown>).self ??= globalThis; // next/link touches `self` (requestIdleCallback) when it mounts
 Object.assign(globalThis, {
 	window: dom.window,
 	document: dom.document,
@@ -25,8 +26,18 @@ Object.assign(globalThis, {
 	fetch: async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => "" }),
 });
 
+// linkedom has no focus model: track it so the reader's focus-on-open can be asserted.
+let focused: Element | null = null;
+(dom.window.Element.prototype as unknown as { focus: () => void }).focus = function (this: Element) {
+	focused = this;
+};
+Object.defineProperty(dom.document, "activeElement", { get: () => focused ?? dom.document.body, configurable: true });
+
 const { FakeNav, navLog, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
 const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../components/work-reader.tsx");
+const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../components/work-reader-nav.ts");
+const { WorkReaderHost } = await import("../components/work-reader.tsx");
+const { StatusSection } = await import("../components/memory-panel.tsx");
 const { nodeClickAction } = await import("../components/graph-view.tsx");
 const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
@@ -48,6 +59,71 @@ describe("the reader URL", () => {
 		assert.equal(readerUrl("/", "focus=work%3Aa", "f1"), "/?focus=work%3Aa&item=f1");
 		assert.equal(readerUrl("/work", "item=f1", null), "/work");
 		assert.equal(readerUrl("/", "focus=x&item=f1", null), "/?focus=x");
+	});
+});
+
+describe("isPlainClick", () => {
+	const ev = (o: Record<string, unknown> = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, ...o });
+	it("is true only for an unmodified primary click nobody else handled", () => {
+		assert.equal(isPlainClick(ev()), true);
+		for (const o of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }]) assert.equal(isPlainClick(ev(o)), false, JSON.stringify(o));
+	});
+});
+
+describe("shouldOpenInReader", () => {
+	const plain = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false };
+	it("table: an in-place link takes over only a plain click on a link that has a work id", () => {
+		const rows: [string, Record<string, unknown>, string | null | undefined, boolean][] = [
+			["plain click, id", {}, "w1", true],
+			["no id", {}, undefined, false],
+			["null id", {}, null, false],
+			["empty id", {}, "", false],
+			["cmd", { metaKey: true }, "w1", false],
+			["ctrl", { ctrlKey: true }, "w1", false],
+			["shift", { shiftKey: true }, "w1", false],
+			["alt", { altKey: true }, "w1", false],
+			["middle button", { button: 1 }, "w1", false],
+			["already handled", { defaultPrevented: true }, "w1", false],
+		];
+		for (const [name, o, id, want] of rows) assert.equal(shouldOpenInReader({ ...plain, ...o }, id), want, name);
+	});
+});
+
+describe("focus return", () => {
+	it("closing the reader gives focus back to the element that had it; a detached opener is skipped", async () => {
+		const opener = document.createElement("button");
+		document.body.appendChild(opener);
+		focused = opener;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => {}} /></FakeNav>));
+		assert.ok(focused !== opener, "reader took focus");
+		await act(async () => root!.unmount());
+		root = null;
+		assert.ok(focused === opener, "focus returned to the opener");
+		const gone = document.createElement("button");
+		focused = gone; // never attached
+		const host2 = document.createElement("div");
+		document.body.appendChild(host2);
+		root = createRoot(host2);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => {}} /></FakeNav>));
+		const readerFocus = focused;
+		await act(async () => root!.unmount());
+		root = null;
+		assert.ok(focused === readerFocus, "a detached opener is left alone");
+	});
+});
+
+describe("focus", () => {
+	it("the reader takes focus when it opens: the close button", async () => {
+		focused = null;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => {}} /></FakeNav>));
+		// Booleans, not the nodes: a failing assert.equal on two DOM nodes tries to diff the whole tree and hangs.
+		assert.ok(focused === document.querySelector('[data-testid="work-reader-close"]'), "the close button has focus after open");
 	});
 });
 
@@ -77,6 +153,73 @@ describe("Esc", () => {
 			Object.defineProperty(e2, "key", { value: "Escape" });
 			window.dispatchEvent(e2);
 		});
+		assert.equal(closed, 1);
+	});
+});
+
+describe("Esc order", () => {
+	const esc = (target: EventTarget = window) => {
+		const e = new dom.window.Event("keydown", { bubbles: true, cancelable: true });
+		Object.defineProperty(e, "key", { value: "Escape" });
+		target.dispatchEvent(e);
+		return e;
+	};
+	const mountPanel = async (onClose: () => void) => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={onClose} /></FakeNav>));
+	};
+	const overlay = (attrs: Record<string, string>) => {
+		const el = document.createElement("div");
+		for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+		document.body.appendChild(el);
+		return el;
+	};
+	it("leaves Esc to the id hover card (a portaled dialog) while it is open, then closes the reader", async () => {
+		let closed = 0;
+		await mountPanel(() => closed++);
+		const card = overlay({ role: "dialog", "data-testid": "work-card" });
+		await act(async () => void esc());
+		assert.equal(closed, 0);
+		card.remove();
+		await act(async () => void esc());
+		assert.equal(closed, 1);
+	});
+	it("leaves Esc to the REAL id hover card (a role=dialog portal) and ignores hidden or closed overlays", async () => {
+		const { WorkIdChip } = await import("../components/work-id-chip.tsx");
+		let closed = 0;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => closed++} /><WorkIdChip id="work-wolfpack-cEg92qS" /></FakeNav>));
+		await act(async () => void (document.querySelector("[data-work-id]") as HTMLElement).dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+		const card = document.querySelector('[data-testid="work-card"]');
+		assert.equal(card?.getAttribute("role"), "dialog");
+		await act(async () => void esc());
+		assert.equal(closed, 0, "the open hover card owns Esc");
+		// closed/hidden overlays do not block
+		card!.setAttribute("hidden", "");
+		overlay({ role: "listbox", "aria-hidden": "true" });
+		overlay({ role: "dialog", style: "display: none" });
+		await act(async () => void esc());
+		assert.equal(closed, 1);
+	});
+	it("leaves Esc to the chat bar's thread switcher while it is open", async () => {
+		let closed = 0;
+		await mountPanel(() => closed++);
+		const sw = overlay({ role: "dialog", "data-testid": "chat-bar-switcher" });
+		await act(async () => void esc(sw));
+		assert.equal(closed, 0);
+	});
+	it("closes the reader on Esc typed in the bar composer, which has no Esc of its own", async () => {
+		let closed = 0;
+		await mountPanel(() => closed++);
+		const bar = overlay({ "data-testid": "chat-bar" });
+		const input = document.createElement("textarea");
+		bar.appendChild(input);
+		await act(async () => void esc(input));
 		assert.equal(closed, 1);
 	});
 });
@@ -259,8 +402,117 @@ describe("deep links", () => {
 	it("/kb/entry/<id> is a standalone page outside the (home) graph layout; / and /work both mount the reader host", () => {
 		assert.match(src("../app/kb/entry/[id]/page.tsx"), /EntryReaderPage/);
 		assert.ok(!existsSync(new URL("../app/(home)/kb/entry", import.meta.url)));
-		assert.match(src("../app/(home)/page.tsx"), /WorkReaderHost/);
-		assert.match(src("../app/work/page.tsx"), /WorkReaderHost/);
+	});
+
+	it("exactly one WorkReaderHost is mounted, in the shell every page (threads included) renders under", () => {
+		const mounts = ["../components/sidebar.tsx", "../app/(home)/page.tsx", "../app/work/page.tsx", "../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
+		assert.deepEqual(mounts, ["../components/sidebar.tsx"]);
+	});
+});
+
+describe("opening a work item from any page", () => {
+	const realLocation = Object.getOwnPropertyDescriptor(window, "location");
+	afterEach(() => {
+		if (realLocation) Object.defineProperty(window, "location", realLocation);
+		else delete (window as unknown as Record<string, unknown>).location;
+	});
+	const useLocation = () =>
+		Object.defineProperty(window, "location", {
+			configurable: true,
+			value: { get pathname() { return currentUrl().split("?")[0]; }, get search() { return currentUrl().split("?")[1] ? `?${currentUrl().split("?")[1]}` : ""; }, assign: () => {} },
+		});
+	function Opener() {
+		const open = useOpenWorkItem();
+		return <button data-testid="go" onClick={() => open("wk1")} />;
+	}
+	it("from a wolf thread page keeps the path and its params and adds ?item=; a second open replaces instead of stacking", async () => {
+		useLocation();
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/wolf/hal/thread/t1?x=1"><Opener /></FakeNav>));
+		await act(async () => (document.querySelector('[data-testid="go"]') as HTMLElement).click());
+		assert.equal(currentUrl(), "/wolf/hal/thread/t1?x=1&item=wk1");
+		assert.equal(navLog.stack.length, 2);
+		await act(async () => (document.querySelector('[data-testid="go"]') as HTMLElement).click());
+		assert.equal(navLog.stack.length, 2, "switching items does not add a history entry");
+	});
+
+	it("a second open before the router has updated window.location replaces instead of stacking a second entry", async () => {
+		settleReaderOpen();
+		const committed = "/wolf/hal/thread/t1"; // window.location lags: it still shows the page without ?item=
+		Object.defineProperty(window, "location", { configurable: true, value: { pathname: committed, search: "", assign: () => {} } });
+		function Two() {
+			const open = useOpenWorkItem();
+			return <><button data-testid="a" onClick={() => open("wk1")} /><button data-testid="b" onClick={() => open("wk2")} /></>;
+		}
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start={committed}><Two /></FakeNav>));
+		await act(async () => {
+			(document.querySelector('[data-testid="a"]') as HTMLElement).click();
+			(document.querySelector('[data-testid="b"]') as HTMLElement).click();
+		});
+		assert.equal(navLog.stack.length, 2, "one pushed entry, not two");
+		assert.equal(currentUrl(), "/wolf/hal/thread/t1?item=wk2");
+		settleReaderOpen();
+	});
+
+	it("the host opens the reader for ?item= on a wolf thread page", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/wolf/hal/thread/t1?item=wk1"><WorkReaderHost /></FakeNav>));
+		assert.equal(document.querySelector('[data-testid="work-reader"]')?.getAttribute("data-work"), "wk1");
+	});
+
+	it("openReaderLink leaves modified and non-primary clicks to the browser", () => {
+		const click = (o: object) => {
+			let prevented = false;
+			const opened: string[] = [];
+			openReaderLink({ button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault: () => (prevented = true), ...o }, (i) => opened.push(i), "x");
+			return { prevented, opened };
+		};
+		assert.deepEqual(click({}), { prevented: true, opened: ["x"] });
+		for (const o of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) assert.deepEqual(click(o), { prevented: false, opened: [] }, JSON.stringify(o));
+	});
+
+	it("the memory panel's item link opens the reader on the current page", async () => {
+		settleReaderOpen();
+		useLocation();
+		const item = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "p", successCriteria: "", record: "", children: [] } as never;
+		const shown = { item, rec: { record: "", inheritedFrom: null } } as never;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(
+			<FakeNav start="/wolf/hal/thread/t1">
+				<StatusSection view="item" bound={{ workId: "work-1", title: "Item" } as never} shown={shown} observations={{ list: [], error: null, info: {}, open: null, onOpen: () => {} }} onToggleFeed={() => {}} onSelect={() => {}} onBack={() => {}} />
+			</FakeNav>,
+		));
+		const a = document.querySelector('[data-testid="memory-work-link"]') as HTMLElement;
+		assert.equal(a.getAttribute("href"), "/kb/work/work-1");
+		await act(async () => void a.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
+		assert.equal(currentUrl(), "/wolf/hal/thread/t1?item=work-1");
+		settleReaderOpen();
+	});
+
+	it("the reader's PART OF and DEPENDS ON links switch the item in place instead of navigating", async () => {
+		const opened: string[] = [];
+		const item = { id: "f1", title: "T", kind: "task", stage: "plan", domain: "d", partOf: "parent1", dependsOn: ["dep1"], plan: "p", record: "r", children: [] } as never;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work?item=f1"><WorkItemView id="f1" state={{ kind: "ready", item, parent: null }} onOpenTask={(i) => opened.push(i)} onClose={() => {}} /></FakeNav>));
+		for (const href of ["/kb/work/parent1", "/kb/work/dep1"]) {
+			const a = document.querySelector(`a[href="${href}"]`) as HTMLElement;
+			const ev = new dom.window.Event("click", { bubbles: true, cancelable: true }); Object.assign(ev, { button: 0 });
+			await act(async () => { a.dispatchEvent(ev); });
+			assert.equal(ev.defaultPrevented, true);
+		}
+		assert.deepEqual(opened, ["parent1", "dep1"]);
+		assert.ok(document.querySelector('[data-testid="work-reader-full"]')?.getAttribute("href") === "/kb/work/f1", "the full page stays reachable");
 	});
 });
 

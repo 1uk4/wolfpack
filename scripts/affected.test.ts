@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { computeAffected, loadWorkspaces } from "./affected.mjs";
 
 const ws = loadWorkspaces(new URL("..", import.meta.url).pathname);
-const run = (files: string[] | null) => computeAffected(files, ws) as { all: boolean; packages: string[]; components: string[]; tsProjects: string[]; tracer: boolean; release: boolean };
+const run = (files: string[] | null) => computeAffected(files, ws) as { all: boolean; packages: string[]; components: string[]; tsProjects: string[]; consoleTests: boolean; tracer: boolean; release: boolean };
 
 describe("affected", () => {
   it("leaf change: only that package (and dependents, none for cli)", () => {
@@ -29,6 +29,13 @@ describe("affected", () => {
     expect(r.tsProjects).toEqual(["."]);
     expect(r.release).toBe(true);
   });
+  it("the pnpm lockfile and workspace file mark everything affected, like package-lock.json", () => {
+    for (const f of ["pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+      const r = run([f]);
+      expect(r.all, f).toBe(true);
+      expect(r.packages.length, f).toBe(ws.length);
+    }
+  });
   it("workflow / root config change marks everything; unknown base marks everything", () => {
     expect(run([".github/workflows/ci.yml"]).all).toBe(true);
     expect(run(["tsconfig.json"]).all).toBe(true);
@@ -47,5 +54,14 @@ describe("affected", () => {
     const r = run(["scripts/build-wolfd-release.sh"]);
     expect(r.release).toBe(true);
     expect(r.packages).toEqual([]);
+  });
+  it("a console-only change still builds the packages console imports from dist", () => {
+    const r = run(["apps/console/app/page.tsx"]);
+    expect(r.all).toBe(false);
+    expect(r.consoleTests).toBe(true);
+    expect(r.tsProjects).toEqual(expect.arrayContaining(["packages/client", "packages/protocol"]));
+  });
+  it("no console tests, no extra build projects", () => {
+    expect(run(["packages/cli/src/x.ts"]).tsProjects).toEqual(["packages/cli"]);
   });
 });

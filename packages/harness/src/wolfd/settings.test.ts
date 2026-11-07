@@ -48,6 +48,37 @@ const newDen = () => {
 };
 const feature = (url: string) => fetch(`${url}/v1/wolves/w/threads`, { method: "POST", body: JSON.stringify({ kind: "feature", workItemId: "work-wolfpack-feat0001" }) }).then((r) => r.json());
 
+describe("thread color", () => {
+  it("is saved through the settings route, read back, kept across a restart, and reset with null", async () => {
+    const den = newDen();
+    const h = harness(den);
+    const first = await h.boot();
+    const feat = await feature(first.url);
+    const r = await put(first.url, feat.id, { color: "purple" });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ color: "purple", tier: "main" });
+    expect((await (await fetch(`${first.url}/v1/threads/${encodeURIComponent(feat.id)}`)).json()).settings.color).toBe("purple");
+    expect((await put(first.url, "w/home", { color: "teal" })).status).toBe(200);
+    expect((await put(first.url, feat.id, { color: "chartreuse" })).status).toBe(400);
+    await first.s.close();
+
+    // a fresh server over the same den reloads both from persistence
+    const again = await h.boot();
+    expect(await (await get(again.url, feat.id)).json()).toMatchObject({ color: "purple" });
+    expect(await (await get(again.url, "w/home")).json()).toMatchObject({ color: "teal" });
+
+    // other fields keep the color; null resets to automatic (absent), also on disk
+    expect(await (await put(again.url, feat.id, { autoShip: true })).json()).toMatchObject({ color: "purple", autoShip: true });
+    const reset = await (await put(again.url, feat.id, { color: null })).json();
+    expect(reset.color).toBeUndefined();
+    expect(reset.autoShip).toBe(true);
+    expect(JSON.parse(readFileSync(join(den, "wolfd", "threads.json"), "utf8")).threads[0].color).toBeUndefined();
+    await again.s.close();
+    const third = await h.boot();
+    expect((await (await get(third.url, feat.id)).json()).color).toBeUndefined();
+  });
+});
+
 describe("thread settings", () => {
   it("defaults to main / auto-ship off, with the model each tier resolves to", async () => {
     const h = harness(newDen());

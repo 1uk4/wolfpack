@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
@@ -11,7 +11,10 @@ import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
+import { ChatBar } from "@/components/chat-bar";
+import { WorkReaderHost } from "@/components/work-reader";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
+import { shouldOpenInReader, useOpenWorkItem } from "@/components/work-reader-nav";
 import { WorkNavEntry } from "@/components/work-nav-link";
 import { CommandPalette } from "@/components/command-palette";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
@@ -20,12 +23,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
+import { ThreadColorPicker } from "@/components/thread-color-picker";
+import { settingsUrl } from "@/components/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
+import { THREAD_COLORS, autoThreadColor, beginColorChange, onThreadColor, pendingColor, settleColorChange, threadColor, threadColorIndex, threadColorVersion, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -353,8 +358,11 @@ export function SessionRow({
 	indented = false,
 	offline = false,
 	wolfStatus,
+	dotColor,
 }: {
 	chat: SessionItem;
+	/** The thread's color (hex) for the dot: its override, else the id's, a subagent's = its parent's. */
+	dotColor?: string;
 	/** The wolf's liveness, drawn as a badge on its group header (the Home row). */
 	wolfStatus?: WolfStatus;
 	/** Its wolf is offline: the row we still hold is greyed and says so. */
@@ -371,6 +379,7 @@ export function SessionRow({
 	/** Right-click opens the context menu (wave 6: Rename / Delete). */
 	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
+	const openWorkItem = useOpenWorkItem();
 	// The thread you are looking at needs no mark: you are already there.
 	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
 	const home = chat.kind === "home";
@@ -398,6 +407,7 @@ export function SessionRow({
 					title={sessionMeta(chat)}
 					className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left"
 				>
+					{dotColor && <span data-testid="thread-color-dot" aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />}
 					{running ? (
 						<BrailleSpinner className="h-[1.25em] text-foreground" label={stateLabel(chat)} />
 					) : (
@@ -409,7 +419,7 @@ export function SessionRow({
 					</span>
 				</button>
 				{chat.taskId && (
-					<Link href={`/kb/work/${encodeURIComponent(chat.taskId)}`} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
+					<Link href={workHref(chat.taskId)} onClick={(e) => { if (!shouldOpenInReader(e, chat.taskId)) return; e.preventDefault(); openWorkItem(chat.taskId); }} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
 						task
 					</Link>
 				)}
@@ -433,6 +443,7 @@ export function SessionRow({
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
 		>
+			{dotColor && <span data-testid="thread-color-dot" aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />}
 			<SessionStatus busy={chat.busy || chat.compacting || chat.state === "running"} />
 			{chat.needsYou && !chat.busy && (
 				// A wolf is waiting on an answer: the one resting state that earns a mark (it needs the operator).
@@ -593,6 +604,26 @@ export function SessionsSidebar() {
 			.sort((a, b) => b.score - a.score)
 			.map((r) => r.c);
 	}, [chats, query]);
+	/* Thread colors: a pick anywhere (this menu, the thread settings menu) is announced on the shared store and patched into
+	   the rows; while a PUT is in flight its value wins over a poll that lands meanwhile. The parent lookup is built once per render. */
+	const colorTick = useSyncExternalStore((cb) => onThreadColor(() => cb()), threadColorVersion, threadColorVersion);
+	useEffect(
+		() =>
+			onThreadColor((id, color) =>
+				setChats((prev) => (prev ? prev.map((x) => (x.id !== id || (x.color ?? null) === color ? x : ((): SessionItem => { const { color: _o, ...rest } = x; return color ? { ...rest, color } : rest; })())) : prev)),
+			),
+		[],
+	);
+	const colorIndex = useMemo(() => {
+		void colorTick;
+		const rows = (chats ?? []).map((x): SessionItem => {
+			const p = pendingColor(x.id);
+			if (!p) return x;
+			const { color: _o, ...rest } = x;
+			return p.color ? { ...rest, color: p.color } : rest;
+		});
+		return threadColorIndex(rows);
+	}, [chats, colorTick]);
 	/* Live subagents nest under their parent thread (settled ones are hidden); they never sit at the top level.
 	   `shown` stays the flat walk order of the rows on screen. */
 	const [showArchived, setShowArchived] = useState(false);
@@ -622,6 +653,7 @@ export function SessionsSidebar() {
 									<SessionRow
 										key={c.id}
 										chat={c}
+										dotColor={c.href ? threadColor(colorIndex.get(c.id) ?? c, colorIndex).hex : undefined}
 										nested={nested}
 										indented={indented}
 										offline={offlineWolves.has(rowWolf(c))}
@@ -632,9 +664,8 @@ export function SessionsSidebar() {
 											setKbdIndex(null);
 											openItem(c);
 										}}
-										// Thread rows have no management menu (rename/delete/export are
-										// legacy chat-record actions; the client has no such calls yet).
-										onContextMenu={c.href ? undefined : (e) => openContext(e, c)}
+										// Thread rows: a color-only menu (rename/delete/export are legacy chat-record actions).
+										onContextMenu={(e) => openContext(e, c)}
 									/>
 								);
 							};
@@ -659,7 +690,7 @@ export function SessionsSidebar() {
 				wolves.wolves.map(async (w) => {
 					try {
 						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string } }[] };
+						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } }[] };
 						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
 					} catch {
 						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
@@ -798,9 +829,32 @@ export function SessionsSidebar() {
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState<ChatListItem | null>(null);
 
+	/** Captured when the menu opens: a thread row gets the color menu, anything else the legacy session menu. */
+	const [ctxIsThread, setCtxIsThread] = useState(false);
+	const ctxThread = ctxChatId !== null && ctxIsThread ? chats?.find((c) => c.id === ctxChatId) : undefined;
+	// A thread row that vanished (poll) closes its menu; it never falls through to rename/delete.
+	useEffect(() => {
+		if (ctxChatId !== null && ctxIsThread && ctxThread === undefined) setCtxChatId(null);
+	}, [ctxChatId, ctxIsThread, ctxThread]);
+	/** Save the override through the thread settings route. The shared store announces it, holds it over polls, and only the latest call may roll back. */
+	const setThreadColorOf = async (c: SessionItem, color: string | null) => {
+		const seq = beginColorChange(c.id, color, c.color ?? null);
+		let ok = false;
+		try {
+			const wolf = rowWolf(c);
+			const res = await fetch(settingsUrl(wolf, threadSlug(wolf, c.id)), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ color }) });
+			if (!res.ok) throw new Error(`color ${res.status}`);
+			ok = true;
+		} catch (err) {
+			console.error("thread color failed:", err);
+		}
+		settleColorChange(c.id, seq, ok);
+	};
+
 	const openContext = (e: React.MouseEvent<HTMLButtonElement>, chat: ChatListItem) => {
 		e.preventDefault(); // suppress the native menu
 		ctxAnchorRef.current = e.currentTarget;
+		setCtxIsThread(Boolean((chat as SessionItem).href));
 		setCtxChatId(chat.id);
 	};
 
@@ -1113,7 +1167,29 @@ export function SessionsSidebar() {
 				{/* The context menu (wave 6): the management actions. MenuShell
 				    owns placement/focus/arrow cycling; the dismissal effect above
 				    owns the contract. */}
-				{ctxChatId !== null && (
+				{ctxChatId !== null && ctxThread !== undefined && (
+					<MenuShell
+						anchorRef={ctxAnchorRef}
+						testid="thread-context-menu"
+						preferredSide="down"
+						menuClass="flex w-56 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+					>
+						<div className="px-2 text-muted-foreground">Thread color</div>
+						{isChildThread(ctxThread) ? (
+							<div className="px-2 py-1.5 text-muted-foreground">A subagent uses its parent's color.</div>
+						) : (
+							<ThreadColorPicker
+								value={colorIndex.get(ctxThread.id)?.color ?? undefined}
+								autoHex={THREAD_COLORS[autoThreadColor(ctxThread.id)]}
+								onPick={(color) => {
+									setCtxChatId(null);
+									void setThreadColorOf(ctxThread, color);
+								}}
+							/>
+						)}
+					</MenuShell>
+				)}
+				{ctxChatId !== null && !ctxIsThread && (
 					<MenuShell
 						anchorRef={ctxAnchorRef}
 						testid="session-context-menu"
@@ -1185,6 +1261,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 		<SettingsDialogProvider>
 			<SessionsSidebar />
 			<main className="min-w-0 flex-1">{children}</main>
+			{/* The floating chat bar: one per window, on every route (draws nothing without its provider). */}
+			<ChatBar />
+			{/* The one work reader: `?item=<id>` opens it over whichever page this is. */}
+			<WorkReaderHost />
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}

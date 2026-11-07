@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -40,7 +40,7 @@ describe("crawl_start by capability", () => {
   it("with askCards it returns the cards questionnaire", async () => {
     const r = await start(ctx({ askCards: true }), {});
     expect(r.isError).toBeFalsy();
-    expect(r.content[0].text).toContain("`questions` list");
+    expect(r.content[0].text).toContain("TWO brief calls");
     expect(r.content[0].text).toContain('id "source"'); // no path given: the card asks for it
   });
 
@@ -60,29 +60,10 @@ describe("crawl_start by capability", () => {
 describe("crawl directive", () => {
   const base = { cwd: "/cwd", domains: ["wolfpack", "snapjack"], defaultDomain: "wolfpack", hints: [] as string[] };
 
-  it("pi/TUI wording is the one-question-per-call directive", () => {
-    const d = buildCrawlDirective({ ...base, src: "/src", cards: false });
-    expect(d).toContain("Ask exactly ONE question per tool call");
-    expect(d).toContain("Offer options: wolfpack, snapjack.");
-    expect(d).not.toContain("`questions`");
-  });
-
-  // The pi/TUI directive as master's own template produced it (the pre-refactor block of index.ts, evaluated with the
-  // same inputs, 6e5cc1f): /wolf:crawl must keep sending exactly this.
-  const golden = JSON.parse(readFileSync(new URL("./fixtures/crawl-tui-directive.golden.json", import.meta.url), "utf8")) as { withSrc: string; noSrc: string };
-
-  it("pi/TUI directive is byte-for-byte what master sent (with a source, with pre-filled hints)", () => {
-    const d = buildCrawlDirective({ src: "/src", cwd: "/cwd", domains: ["wolfpack", "snapjack"], defaultDomain: "wolfpack", hints: ["domain=snapjack"], cards: false });
-    expect(d).toBe(golden.withSrc);
-  });
-
-  it("pi/TUI directive is byte-for-byte what master sent (no source, no declared domains)", () => {
-    expect(buildCrawlDirective({ cwd: "/cwd", domains: null, defaultDomain: "wolfpack", hints: [], cards: false })).toBe(golden.noSrc);
-  });
-
-  it("cards wording batches the questions and uses confirm", () => {
-    const d = buildCrawlDirective({ ...base, src: "/src", cards: true, hints: ["domain=snapjack"] });
-    expect(d).toContain("ONE ask_user_question call whose `questions` list");
+  it("the directive raises two brief cards and a confirm", () => {
+    const d = buildCrawlDirective({ ...base, src: "/src", hints: ["domain=snapjack"] });
+    expect(d).toContain("TWO brief calls");
+    expect(d).not.toContain("ask_user_question");
     expect(d).toContain('kind "confirm"');
     expect(d).toContain("include / exclude");
     expect(d).toContain("domain=snapjack");
@@ -93,9 +74,26 @@ describe("crawl directive", () => {
   });
 
   it("cards wording uses the wolf workspace for the source hint, and omits it when unknown", () => {
-    expect(buildCrawlDirective({ ...base, cwd: "/wolf/work", cards: true })).toContain("the wolf's workspace is /wolf/work");
-    const none = buildCrawlDirective({ ...base, cwd: undefined, cards: true });
+    expect(buildCrawlDirective({ ...base, cwd: "/wolf/work" })).toContain("the wolf's workspace is /wolf/work");
+    const none = buildCrawlDirective({ ...base, cwd: undefined });
     expect(none).not.toContain("workspace is");
     expect(none).not.toContain("undefined");
+  });
+
+  it("every field name the directive tells the model to use exists in the real brief schema", async () => {
+    const { createBriefExtension } = await import("../../packages/harness/src/extensions/brief.js");
+    const params = createBriefExtension().tools![0].parameters as { properties: Record<string, { items?: { properties: Record<string, unknown> } }> };
+    const question = params.properties.questions.items!.properties;
+    const d = buildCrawlDirective({ ...base, src: "/src" });
+    // the names as the directive spells them: `ask`, choices, kind "confirm" with yesLabel / noLabel, showIf, headline
+    for (const name of ["ask", "choices", "kind", "yesLabel", "noLabel", "showIf", "id"]) {
+      expect(Object.keys(question), `brief question has ${name}`).toContain(name);
+    }
+    expect(Object.keys(params.properties)).toContain("headline");
+    for (const spelled of ["`ask`", "`headline`", 'kind "confirm"', "yesLabel", "noLabel", "showIf: { field: \"strategy\", equals: \"by-folder\" }"]) {
+      expect(d, spelled).toContain(spelled);
+    }
+    // names of the retired ask_user_question shape must be gone
+    for (const old of ["confirmLabel", "rejectLabel", "multiSelect", "`questions` list", "details"]) expect(d).not.toContain(old);
   });
 });

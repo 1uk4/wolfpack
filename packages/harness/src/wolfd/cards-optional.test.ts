@@ -6,7 +6,7 @@ import { answerText, validateAnswers } from "./cards.js";
 const opts = [{ label: "A", value: "a" }, { label: "B", value: "b" }];
 const card = (steps = false): Card =>
   CardSchema.parse({
-    tool: "ask_user_question",
+    tool: "brief",
     fields: [
       { id: "name", kind: "free-text", label: "Name?" },
       { id: "note", kind: "free-text", label: "Note?", optional: true },

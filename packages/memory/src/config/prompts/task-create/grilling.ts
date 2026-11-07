@@ -8,7 +8,7 @@
  * - rounds are rendered as plain markdown text in chat (survives both the Pi
  *   TUI and Telegram MarkdownV2 escaping — no `❓` / `➡️` glyphs)
  * - fact-finding dispatches `subagent`, not web/API probes
- * - user answers come as free text (not forced through ask_user_question),
+ * - user answers come as free text (not forced through brief),
  *   since a round is many related questions that read better together
  */
 

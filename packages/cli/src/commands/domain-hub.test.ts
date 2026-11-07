@@ -3,25 +3,29 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Real config and registry under a temp HOME (os.homedir() is read at import time, so set it before the imports).
 const h = await vi.hoisted(async () => {
   const { mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  return { root: mkdtempSync(join(tmpdir(), "dom-")), saved: vi.fn(), registry: { domains: {} as Record<string, unknown> } };
+  const root = mkdtempSync(join(tmpdir(), "dom-"));
+  process.env.HOME = root;
+  process.env.WOLFPACK_REGISTRY_DIR = join(root, ".wolfpack");
+  return { root };
 });
-vi.mock("../config.js", async (orig) => ({ ...(await orig<any>()), loadConfig: () => ({ wolvesRoot: h.root, librarian: undefined }) }));
-vi.mock("../domains.js", async (orig) => ({ ...(await orig<any>()), loadRegistry: () => h.registry, saveRegistry: h.saved }));
 
 import { domainCmd } from "./domain.js";
 import { kbBaseDir, loadConfig } from "../config.js";
+import { loadRegistry, saveRegistry } from "../domains.js";
 import { commitWorkItem } from "@wolfpack/kb/client";
 
 const hubEnv = () => { vi.stubEnv("WOLFPACK_HUB_URL", "http://hub.test:9"); vi.stubEnv("WOLFPACK_HUB_TOKEN", "tok"); };
 const respond = (status: number, body: unknown = {}) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
 
 describe("domain add/rm with a hub configured", () => {
-  beforeEach(() => { h.saved.mockClear(); h.registry.domains = {}; });
-  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); rmSync(h.root, { recursive: true, force: true }); });
+  beforeEach(() => saveRegistry({ domains: {} }));
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+  const olddom = () => saveRegistry({ domains: { olddom: { label: "o", description: "", created: "2026-01-01" } } });
 
   it("add registers on the hub, saves only the CLI registry, creates no local folders", async () => {
     hubEnv();
@@ -31,7 +35,7 @@ describe("domain add/rm with a hub configured", () => {
     expect(url).toBe("http://hub.test:9/v1/registry/domains");
     expect(init.headers.Authorization).toBe("Bearer tok");
     expect(JSON.parse(init.body).name).toBe("newdom");
-    expect(h.saved).toHaveBeenCalledTimes(1);
+    expect(Object.keys(loadRegistry().domains)).toEqual(["newdom"]);
     expect(existsSync(join(kbBaseDir(loadConfig()), "domains"))).toBe(false);
     expect(existsSync(join(kbBaseDir(loadConfig()), "domains.yaml"))).toBe(false);
   });
@@ -39,7 +43,7 @@ describe("domain add/rm with a hub configured", () => {
   it("add: a hub 409 means already registered and continues", async () => {
     hubEnv(); vi.stubGlobal("fetch", respond(409, { error: "domain newdom exists" }));
     await domainCmd(["add", "newdom"], { yes: true } as any);
-    expect(h.saved).toHaveBeenCalledTimes(1);
+    expect(Object.keys(loadRegistry().domains)).toEqual(["newdom"]);
   });
 
   it("add: a hub failure leaves no local registry change and no folders", async () => {
@@ -47,25 +51,25 @@ describe("domain add/rm with a hub configured", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("exit"); }) as any);
     await expect(domainCmd(["add", "newdom"], { yes: true } as any)).rejects.toThrow("exit");
     exit.mockRestore();
-    expect(h.saved).not.toHaveBeenCalled();
+    expect(loadRegistry().domains).toEqual({});
     expect(existsSync(join(kbBaseDir(loadConfig()), "domains"))).toBe(false);
   });
 
   it("rm in hub mode DELETEs on the hub and never writes domains.yaml under KB_BASE", async () => {
-    hubEnv(); h.registry.domains = { olddom: { label: "o", description: "", created: "2026-01-01" } };
+    hubEnv(); olddom();
     const f = respond(200); vi.stubGlobal("fetch", f);
     await domainCmd(["rm", "olddom"], { yes: true } as any);
     expect((f.mock.calls[0] as any)[0]).toBe("http://hub.test:9/v1/registry/domains/olddom");
     expect((f.mock.calls[0] as any)[1].method).toBe("DELETE");
-    expect(h.saved).toHaveBeenCalledTimes(1);
+    expect(loadRegistry().domains).toEqual({});
     expect(existsSync(join(kbBaseDir(loadConfig()), "domains.yaml"))).toBe(false);
   });
 
   it("rm in hub mode treats a hub 404 as success", async () => {
-    hubEnv(); h.registry.domains = { olddom: { label: "o", description: "", created: "2026-01-01" } };
+    hubEnv(); olddom();
     vi.stubGlobal("fetch", respond(404, { code: "not_found", message: "domain olddom not found" }));
     await domainCmd(["rm", "olddom"], { yes: true } as any);
-    expect(h.saved).toHaveBeenCalledTimes(1);
+    expect(loadRegistry().domains).toEqual({});
   });
 });
 

@@ -51,9 +51,6 @@ export function createWolfIdentityExtension(options: WolfIdentityOptions) {
         if (exts.includes("subagents")) {
           capabilities.push("Subagents (can spawn workers for parallel tasks)");
         }
-        if (exts.includes("ask")) {
-          capabilities.push("Ask (can ask clarifying questions)");
-        }
         if (config.telegram) {
           capabilities.push("Telegram (messages, buttons, reactions, files)");
         }

@@ -3,7 +3,7 @@
 //   node scripts/affected.mjs <base> <head> [--github-output]    prints JSON on stdout
 // Rules:
 //  - changed files come from `git diff --name-only <base> <head>`; a missing/zero/unknown base marks EVERYTHING.
-//  - root config (package-lock.json, root package.json, root tsconfig*.json, vitest/turbo config, .github/workflows/**) marks everything.
+//  - root config (package-lock.json, pnpm-lock.yaml, pnpm-workspace.yaml, root package.json, root tsconfig*.json, vitest/turbo config, .github/workflows/**) marks everything.
 //  - a file under a workspace dir marks that workspace; docs (*.md, docs/**, LICENSE) mark nothing.
 //  - affected packages = changed + everything that depends on them (dependencies/devDependencies/peer/optional), transitively.
 import { execFileSync } from "node:child_process";
@@ -17,7 +17,7 @@ export const COMPONENTS = {
   hubd: "@wolfpack/hubd",
   console: "@wolfpack/console",
 };
-const ROOT_CONFIG = [/^package-lock\.json$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
+const ROOT_CONFIG = [/^package-lock\.json$/, /^pnpm-lock\.yaml$/, /^pnpm-workspace\.yaml$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
 const DOC = [/\.md$/i, /^docs\//, /^LICENSE/, /^ATTRIBUTION/];
 const ZERO = /^0+$/;
 
@@ -60,20 +60,24 @@ export function computeAffected(changed, workspaces) {
   const has = (re) => all || files.some((f) => re.test(f));
   const byName = new Map(workspaces.map((w) => [w.name, w]));
   const dirs = (f) => packages.map((n) => byName.get(n)).filter(f).map((w) => w.dir);
+  // console tests import @wolfpack/* deps from dist, so build them too (tsc --build follows their references)
+  const consoleTests = hit.has("@wolfpack/console");
+  const consoleDeps = !all && consoleTests ? (byName.get("@wolfpack/console")?.deps ?? []).map((n) => byName.get(n)).filter((w) => w?.inTsRoot).map((w) => w.dir) : [];
+  const tsProjects = all ? ["."] : [...new Set([...dirs((w) => w.inTsRoot), ...consoleDeps])];
   const tracerPk = ["@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/harness"];
   return {
     all,
     changedFiles: changed ?? null,
     packages,
     components,
-    /** `tsc --build` targets: affected packages that are root TS references (all => the root project). */
-    tsProjects: all ? ["."] : dirs((w) => w.inTsRoot),
+    /** `tsc --build` targets: affected packages that are root TS references (all => the root project); with console tests, also console's workspace deps. */
+    tsProjects,
     /** vitest path filters for affected packages (all => whole suite). */
     vitestPaths: all ? [] : dirs((w) => w.inTsRoot).map((d) => `${d}/src`),
     /** root-level vitest suites outside packages/ */
     extensionsTests: has(/^extensions\//) || packages.includes("@wolfpack/harness") || packages.includes("@wolfpack/memory"),
     scriptsTests: has(/^scripts\/[^/]*\.test\.ts$|^scripts\/(runtime-update|dev-stack-extensions)\./),
-    consoleTests: hit.has("@wolfpack/console"),
+    consoleTests,
     tracer: tracerPk.some((p) => hit.has(p)) || has(/^infra\/tracer\//),
     release: has(/^infra\/release\//) || has(/^scripts\/[^/]*release[^/]*$/) || has(/^package-lock\.json$/),
   };

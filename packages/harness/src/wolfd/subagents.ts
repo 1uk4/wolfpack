@@ -4,7 +4,7 @@
  * A subagent is a task-owned pi-durable conversation owned by the thread that spawned it (engine `createOwned`), served
  * as a thread of kind `subagent`. It starts fresh with its profile's system prompt and the brief, has the profile's tools
  * but never the spawn tools (depth 1), and returns its final answer to the parent as a steer message. Its questions
- * (ask_user_question cards) go to the parent the same way; it then waits until the parent (or the operator) replies.
+ * (brief cards) go to the parent the same way; it then waits until the parent (or the operator) replies.
  *
  * State lives in `<den>/wolfd/subagents.json` and the child ledgers (subagent-store.ts); the conversation and its
  * history are the store's. After a restart `recover()` re-attaches every child, so a turn that was running goes on and
@@ -35,7 +35,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { discoverAgents, formatRosterLines, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
-import { WriterGuard, abandonChild, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
+import { WriterGuard, abandonChild, dependenciesLine, installDependencies, wantsInstall, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type InstallResult, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { fenceRoot, offLimitsRegex, unfenceRoot } from "../engine/fence.js";
@@ -49,7 +49,7 @@ import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js"
 /** The tools every spawn tool set shares; a child never gets them. */
 export const SPAWN_TOOLS = ["subagent", "subagent_message", "subagents_list", "subagent_stop", "subagent_merge"] as const;
 /** What a child always gets: the way to ask its parent a question. */
-const CHILD_ALWAYS_TOOLS = ["ask_user_question"];
+const CHILD_ALWAYS_TOOLS = ["brief"];
 /** A profile without `tools:` gets the coding tools. */
 const DEFAULT_PROFILE_TOOLS = ["read", "write", "edit", "bash"];
 
@@ -217,6 +217,14 @@ export class SubagentManager {
   /** Spawns/resumes that decided to queue and have not yet put their record in: id -> queue seq (keeps FIFO tight). */
   private readonly reserved = new Map<string, number>();
   private lastSlotError = "";
+  /** Dependency installs in flight for children that have not been given their brief yet, by child id. */
+  private readonly installs = new Map<string, { ctl: AbortController; path: string; p: Promise<InstallResult> }>();
+  /**
+   * Children being given their brief: from spawn or start() through the install to the moment the brief submit has
+   * landed (or failed). A message in that span waits in `rec.pending` (it is neither a resume nor a steer). The value
+   * is a token, so a stale finisher (a stopped start whose install was killed) cannot clear a newer one.
+   */
+  private readonly starting = new Map<string, symbol>();
 
   constructor(
     private readonly port: SubagentPort,
@@ -231,6 +239,7 @@ export class SubagentManager {
 
   close(): void {
     this.closed = true;
+    for (const id of [...this.installs.keys()]) this.abortInstall(id);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = undefined;
     // A clean shutdown gives its slots back; recover() takes them again for the children that go on.
@@ -362,7 +371,7 @@ export class SubagentManager {
     const parent = this.port.threadOfConversation(callerConversationId);
     if (!parent) return fail("Cannot spawn: the calling conversation is not a thread of this wolf.");
     // Depth 1: only home and feature threads spawn. (A child is not even offered the tool.)
-    if (parent.summary.kind === "subagent") return fail("Sub-agents cannot spawn sub-agents. Do the work yourself, or ask your parent via ask_user_question.");
+    if (parent.summary.kind === "subagent") return fail("Sub-agents cannot spawn sub-agents. Do the work yourself, or ask your parent via brief.");
 
     const roster = discoverAgents(this.roster());
     const permitted = roster.map((a) => a.name).join(", ") || "(none)";
@@ -460,16 +469,31 @@ export class SubagentManager {
       await this.discard(rec);
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
-    if (run) {
+    // A writer's new worktree gets its dependencies linked from the shared pnpm store, in the background: the child
+    // starts (and is told the outcome in one line) when that is over; spawn does not wait for it.
+    const deferred = plan.workspace !== undefined && plan.guardDir !== undefined && wantsInstall(plan.workspace.path);
+    if (deferred) this.startInstall(rec, plan.workspace!.path);
+    let landed = false;
+    if (run && deferred) {
+      void this.submitWhenInstalled(rec, this.beginStarting(id));
+    } else if (run) {
+      const token = this.beginStarting(id);
       try {
-        await owned.conversation.submit({ input: brief, whenBusy: "reject" });
+        await this.deliverBrief(rec, owned.conversation);
+        landed = true;
       } catch (e) {
+        this.endStarting(id, token);
         await this.discard(rec);
         return fail(`Sub-agent "${name}" could not start: ${e instanceof Error ? e.message : String(e)}`);
       }
+      this.endStarting(id, token);
     }
     this.ledger(rec, "parent", "child", "brief", brief);
     this.announce(rec);
+    if (landed) {
+      const thread = this.port.thread(id);
+      if (thread) await this.flushPending(rec, thread); // (messages that came in while the brief was being submitted)
+    }
     if (!run) {
       this.shownPosition.set(id, this.positionOf(rec)); // (announced just above)
       void this.pump(); // (a slot may have freed while this spawn was being set up; also starts the poll)
@@ -562,14 +586,15 @@ export class SubagentManager {
     if (rec.resolves && !existsSync(rec.cwd)) throw new HttpError("invalid_request", `"${rec.name}" cannot be resumed: the worktree it worked in (${rec.cwd}) was merged or abandoned. Spawn a new sub-agent.`);
     if (rec.isolation === "worktree" && !rec.workspace) throw new HttpError("invalid_request", `"${rec.name}" cannot be resumed: its worktree was merged or abandoned. Spawn a new sub-agent.`);
     const live = thread.isRunning;
-    if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
-    if (rec.state === "queued") {
-      // Not started yet: the message waits with it and goes in when its slot comes.
+    if (rec.state === "queued" || this.starting.has(rec.id)) {
+      // Not briefed yet (waiting for a slot, for its dependency install, or for the brief submit to land): the message
+      // waits in `pending` and goes in with the brief, or right after it if the input was already built.
       (rec.pending ??= []).push(text);
       this.persist();
       this.ledger(rec, from, "child", "steer", text);
       return { messageId: randomUUID(), disposition: "queued" };
     }
+    if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
     // An owner release still in flight must finish first: its abort could otherwise kill the turn started below.
     await this.releasing.get(rec.id);
     if (!live && rec.guardDir) {
@@ -588,6 +613,21 @@ export class SubagentManager {
         this.ledger(rec, from, "child", "resume", text);
         return { messageId: randomUUID(), disposition: "queued" };
       }
+    }
+    if (!live && rec.state !== "running" && !thread.hadHistory && thread.messageCount() === 0) {
+      // Never got its brief (stopped during its install): the brief goes in now, behind a fresh install, with this message.
+      (rec.pending ??= []).push(text);
+      delete rec.mergeTried;
+      rec.runStartedAt = new Date().toISOString();
+      delete rec.step;
+      const token = this.beginStarting(rec.id);
+      this.setState(rec, "running");
+      this.persist();
+      this.announce(rec);
+      this.ensureInstall(rec);
+      this.ledger(rec, from, "child", "resume", text);
+      void this.submitWhenInstalled(rec, token);
+      return { messageId: randomUUID(), disposition: "queued" };
     }
     if (!live) {
       // Not `running` until the submit has landed; `resuming` (persisted first) lets recover() tell whether it did.
@@ -625,6 +665,8 @@ export class SubagentManager {
     const thread = this.port.thread(id);
     if (!rec || !thread) return fail(`No subagent ${id}.`);
     if (rec.state === "done" || rec.state === "failed" || rec.state === "stopped") return { text: `Sub-agent "${rec.name}" is not running (${rec.state}).` };
+    this.abortInstall(id);
+    this.starting.delete(id);
     if (thread.isRunning) {
       rec.stopping = by;
       this.persist();
@@ -675,10 +717,18 @@ export class SubagentManager {
           }
         } else if (rec.state === "running") {
           if (!thread.hadHistory) {
-            // Crashed between creating the conversation and submitting the brief.
-            await conv.submit({ input: this.startInput(rec, false), whenBusy: "reject" });
-            delete rec.pending;
-            this.persist();
+            // Crashed between creating the conversation and submitting the brief (maybe mid-install: run it again).
+            const token = this.beginStarting(rec.id);
+            this.ensureInstall(rec);
+            if (this.installs.has(rec.id)) {
+              void this.submitWhenInstalled(rec, token);
+            } else {
+              try {
+                await this.deliverBrief(rec, conv); // (no install wanted: the plain, awaited submit; errors are "not attached")
+              } finally {
+                this.endStarting(rec.id, token);
+              }
+            }
           } else if (!thread.isRunning) {
             // The turn ended but wolfd went down before the result was recorded.
             await this.endTurn(rec, thread, "complete");
@@ -1262,6 +1312,7 @@ ${text}`;
 
   /** Remove a child worktree and branch that never ran (errors are reported, not thrown). */
   private async dropWorkspace(ws: Workspace): Promise<void> {
+    for (const [id, e] of [...this.installs]) if (e.path === ws.path) this.abortInstall(id);
     unfenceRoot(ws.path);
     await abandonChild(ws).catch((e) => this.port.onError(e));
   }
@@ -1395,6 +1446,110 @@ ${text}`;
     }
   }
 
+  /** Start the child's dependency install (never throws); a failure is also reported to the parent through onError. */
+  private startInstall(rec: ChildRecord, path: string): void {
+    const ctl = new AbortController();
+    const p = installDependencies(path, { signal: ctl.signal }).then((r) => {
+      if (r.status === "failed" && r.cause !== "aborted") {
+        this.port.onError(new Error(`subagent ${rec.id}: ${r.reason} (dependencies in ${path}${r.logPath ? `, log: ${r.logPath}` : ""})`));
+      }
+      return r;
+    });
+    this.installs.set(rec.id, { ctl, path, p });
+  }
+
+  /**
+   * (Re)start the install of a writer's worktree that still needs one: it has a pnpm-lock.yaml and no node_modules,
+   * and none is running. (A partial node_modules left by a failed or killed install counts as installed: it is not
+   * retried, and the child was told about the failure in its brief.)
+   */
+  private ensureInstall(rec: ChildRecord): void {
+    const path = rec.workspace?.path;
+    if (!path || !rec.guardDir || this.installs.has(rec.id)) return;
+    if (!wantsInstall(path) || existsSync(join(path, "node_modules"))) return;
+    this.startInstall(rec, path);
+  }
+
+  /** Cancel a child's install (kills pnpm) and forget it, so nothing is submitted for it afterwards. */
+  private abortInstall(id: string): void {
+    const e = this.installs.get(id);
+    if (!e) return;
+    this.installs.delete(id);
+    e.ctl.abort();
+  }
+
+  /**
+   * Detached: wait for the child's install, then, if the child is still running, submit its brief behind one line
+   * saying how the install went. A child that was stopped or dropped meanwhile gets nothing (so does a closing wolfd;
+   * recover() resubmits the plain brief of a running child that never got one).
+   */
+  private async submitWhenInstalled(rec: ChildRecord, token: symbol): Promise<void> {
+    let thread: ThreadRuntime | undefined;
+    try {
+      const entry = this.installs.get(rec.id);
+      const r: InstallResult = entry ? await entry.p : { status: "skipped", reason: "", ms: 0 };
+      if (this.installs.get(rec.id) !== entry) return; // (stopped or dropped meanwhile)
+      this.installs.delete(rec.id);
+      if (this.closed || rec.state !== "running" || this.starting.get(rec.id) !== token) return;
+      thread = this.port.thread(rec.id);
+      if (!thread) {
+        this.ledger(rec, "system", "parent", "error", "could not start: the child's thread is not attached");
+        this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: its thread is not attached.`);
+        return;
+      }
+      await this.deliverBrief(rec, thread.conv, r.status === "skipped" ? "" : `${dependenciesLine(r)}\n\n`);
+    } catch (e) {
+      if ((rec.state as string) === "stopped") return; // (stopped while submitting)
+      const message = e instanceof Error ? e.message : String(e);
+      this.ledger(rec, "child", "parent", "error", message);
+      this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: ${message}`);
+      return;
+    } finally {
+      this.endStarting(rec.id, token);
+    }
+    await this.flushPending(rec, thread);
+    await this.cancelIfStopped(rec, thread);
+  }
+
+  /**
+   * Submit the brief with the messages that waited for it (and `line` before them). Only the pending items that went
+   * into this input are cleared when it lands: anything pushed while it was in flight stays for flushPending().
+   */
+  private async deliverBrief(rec: ChildRecord, conv: EngineConversation, line = ""): Promise<void> {
+    const included = rec.pending?.length ?? 0;
+    const input = line + [rec.brief, ...(rec.pending ?? []).slice(0, included)].join("\n\n");
+    await conv.submit({ input, whenBusy: "reject" });
+    const rest = (rec.pending ?? []).slice(included);
+    if (rest.length > 0) rec.pending = rest;
+    else delete rec.pending;
+    this.persist();
+  }
+
+  /** Deliver what was said to a child while its brief was going in, as the next message. */
+  private async flushPending(rec: ChildRecord, thread: ThreadRuntime): Promise<void> {
+    if (rec.state !== "running" || !rec.pending?.length) return;
+    const text = rec.pending.join("\n\n");
+    delete rec.pending;
+    this.persist();
+    try {
+      await thread.submit(text, "followUp");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.ledger(rec, "child", "parent", "error", `message not delivered: ${message}`);
+      this.port.onError(new Error(`subagent ${rec.id}: message not delivered: ${message}`));
+    }
+  }
+
+  private beginStarting(id: string): symbol {
+    const token = Symbol(id);
+    this.starting.set(id, token);
+    return token;
+  }
+
+  private endStarting(id: string, token: symbol): void {
+    if (this.starting.get(id) === token) this.starting.delete(id);
+  }
+
   /** A queued child got its slot: submit what it was waiting to do. */
   private async start(rec: ChildRecord): Promise<void> {
     this.resultDelivered.delete(rec.id);
@@ -1420,11 +1575,20 @@ ${text}`;
         await this.cancelIfStopped(rec, thread);
       } else {
         // Running is recorded before the brief goes in (recover() resubmits a brief that never landed).
+        const token = this.beginStarting(rec.id);
         rec.runStartedAt = now;
         this.setState(rec, "running");
-        await thread.conv.submit({ input: this.startInput(rec, false), whenBusy: "reject" });
-        delete rec.pending;
-        this.persist();
+        this.ensureInstall(rec);
+        if (this.installs.has(rec.id)) {
+          void this.submitWhenInstalled(rec, token); // (detached: the queue must not wait for an install)
+          return;
+        }
+        try {
+          await this.deliverBrief(rec, thread.conv);
+        } finally {
+          this.endStarting(rec.id, token);
+        }
+        await this.flushPending(rec, thread);
         await this.cancelIfStopped(rec, thread);
       }
     } catch (e) {
@@ -1593,7 +1757,7 @@ ${text}`;
     return this.parentCwd(parent);
   }
 
-  /** The profile's tools that this runtime has, plus ask_user_question; never the spawn tools. */
+  /** The profile's tools that this runtime has, plus brief; never the spawn tools. */
   private childTools(def: AgentDefinition): { tools: string[]; missing: string[] } {
     const registered = new Set(this.opts.registeredTools());
     const wanted = parseCommaList(def.tools) ?? DEFAULT_PROFILE_TOOLS;
@@ -1696,7 +1860,7 @@ export function childInstructions(def: AgentDefinition, name: string, worktree?:
     worktree
       ? `Your working copy is ${worktree.ws.path} on branch ${worktree.ws.branch}. Do all reads, edits, tests and commits there. The repository's main checkout at ${worktree.ws.repo.mainDir}${featurePath ? ` and the feature worktree at ${featurePath}` : ""} are off-limits; never edit or commit there. If your brief names a path in them, use the same path under ${worktree.ws.path} instead.`
       : "",
-    `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call ask_user_question: your parent receives the question and replies, and you continue.`,
+    `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call brief: your parent receives the question and replies, and you continue.`,
   ]
     .filter(Boolean)
     .join("\n\n");

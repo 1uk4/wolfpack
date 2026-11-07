@@ -15,7 +15,11 @@ let root: string;
 let env: NodeJS.ProcessEnv;
 const running: RunningWolf[] = [];
 
+// The suite itself may run under an agent shell that carries the marker: start clean, give it back after.
+let savedMarker: string | undefined;
 beforeEach(() => {
+  savedMarker = process.env.WOLFPACK_AGENT_RUN;
+  delete process.env.WOLFPACK_AGENT_RUN;
   root = mkdtempSync(join(tmpdir(), "wolfd-boot-"));
   const tier = { model: "claude-haiku-5-5", modelSource: "default", provider: "anthropic", piModel: "anthropic/claude-haiku-5-5" };
   writeFileSync(
@@ -35,6 +39,7 @@ beforeEach(() => {
   env = { WOLFPACK_MODELS_FILE: join(root, "models.json") };
 });
 afterEach(async () => {
+  if (savedMarker === undefined) delete process.env.WOLFPACK_AGENT_RUN; else process.env.WOLFPACK_AGENT_RUN = savedMarker;
   await Promise.all(running.splice(0).map((w) => w.close()));
   rmSync(root, { recursive: true, force: true });
 });
@@ -72,6 +77,21 @@ describe("startWolf", () => {
     }
   });
 
+  it("never puts the agent marker into wolfd's own process.env, with two wolves running", async () => {
+    mkdirSync(join(root, "work2"));
+    writeFileSync(join(root, "wolf2.yaml"), `name: bootwolf2\nworkspace: ${join(root, "work2")}\n`);
+    // (inherited env: the path that patches process.env for the wolf's lifetime)
+    const w1 = await startWolf({ configPath: join(root, "wolf.yaml"), home: root });
+    running.push(w1);
+    expect(process.env.WOLFPACK_AGENT_RUN).toBeUndefined();
+    const w2 = await startWolf({ configPath: join(root, "wolf2.yaml"), home: root });
+    running.push(w2);
+    expect(process.env.WOLFPACK_AGENT_RUN).toBeUndefined();
+    await w1.close();
+    await w2.close();
+    expect(process.env.WOLFPACK_AGENT_RUN).toBeUndefined();
+  });
+
   it("exports the wolf's subscriptions as WOLF_DOMAINS, overriding an inherited value, restored on close", async () => {
     writeFileSync(join(root, "wolf.yaml"), `name: bootwolf\nworkspace: ${join(root, "work")}\ndomains: [personal, snapjack]\n`);
     const saved = process.env.WOLF_DOMAINS;
@@ -105,8 +125,8 @@ describe("startWolf", () => {
     await watch.stop();
     expect(agent.model).toMatchObject({ provider: "anthropic", modelId: "claude-haiku-5-5" });
     expect(agent.tools).toEqual([
-      "ask_user_question",
       "bash",
+      "brief",
       "edit",
       "read",
       "show_checklist",

@@ -26,7 +26,7 @@ import { ToolCallIdUniquifier } from "./call-ids.ts";
  *   carries the same full partial a SECOND time as `assistantMessageEvent`
  *   — nothing in this app ever reads it, and re-serializing it per chunk
  *   doubled every stream frame. Client reads `event.message`, always.
- * - Question tools (quiz / ask_user_question): NO suppression (owner ruling,
+ * - Question tools (quiz / ask_user_question; old-transcript compat, the latter tool is retired): NO suppression (owner ruling,
  *   Wave D fork 2) — the closing `tool_execution_end` with the in-memory
  *   "Question posed" placeholder flows to the client, which ignores it
  *   (question tools are client-owned; the answer arrives as the input event).

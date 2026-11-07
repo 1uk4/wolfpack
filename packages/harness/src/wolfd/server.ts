@@ -538,10 +538,13 @@ export class WolfServer {
       case "putThreadSettings": {
         const t = this.checkThread(params.id);
         const body = ThreadSettingsPatchSchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", "body must be {tier?: main|smart|fast, autoShip?: boolean} with at least one");
+        if (!body.success) throw new HttpError("invalid_request", "body must be {tier?: main|smart|fast, autoShip?: boolean, color?: <palette key>|null} with at least one");
         if (t.isChild || t.summary.kind === "process") throw new HttpError("invalid_request", `a ${t.summary.kind} thread has no composer settings`);
         const prev = t.settings;
-        const next: ThreadSettings = { ...prev, ...body.data };
+        const { color, ...rest } = body.data;
+        const next: ThreadSettings = { ...prev, ...rest };
+        if (color === null) delete next.color;
+        else if (color !== undefined) next.color = color;
         if (next.tier !== prev.tier && !this.opts.conversations?.setTier) throw new HttpError("invalid_request", "this wolf cannot switch model tiers");
         // Record first (a refused save changes nothing), then apply; a refused configure puts the old record back.
         this.persistSettings(t, next);

@@ -23,7 +23,7 @@ import { basename, dirname, join } from "node:path";
 import { defineTool, Type, type ExtensionContext, type ToolContext, type ToolResult } from "@wolfpack/harness/extension";
 import type { Card } from "@wolfpack/protocol";
 import { engineSteps, createEngine, loadModelTable } from "@wolfpack/engine";
-import { confirmCard } from "@wolfpack/harness/engine";
+import { briefHeader, confirmCard } from "@wolfpack/harness/engine";
 import { CONCURRENCY_CHOICES, CRAWL_CONCURRENCY_MAX, CrawlServiceError, defaultEmit, envConcurrency as envConcurrencyOf, describeTarget, parseConcurrency, readPlan, runCrawl, type CrawlRunner, type CrawlService, type RunView } from "@wolfpack/memory";
 import type { CrawlCore } from "./crawl-core.js";
 import {
@@ -139,7 +139,9 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       });
       steps.push({ title: "Concurrency", fields: ["concurrency"] });
     }
-    return { tool: "crawl_run", title: `Run crawl — ${planName}`, fields, ...(steps.length > 1 ? { steps } : {}) };
+    const asked = [askResume ? "resume or start fresh" : "", askConcurrency ? "how many batches at once" : ""].filter(Boolean).join(" and ");
+    const brief = briefHeader(`Run crawl "${planName}"?`, [`Choose ${asked}.`, ...(askResume ? [`${outstanding.length} unfinished run(s) of this plan exist.`] : [])]);
+    return { tool: "crawl_run", title: `Run crawl — ${planName}`, brief, fields, ...(steps.length > 1 ? { steps } : {}) };
   }
 
   const runTool = defineTool({
@@ -181,6 +183,11 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const askConcurrency = !concurrencyGiven;
       if ((askResume || askConcurrency) && (await canAsk(ctx))) {
         const card = wizardCard(basename(dirname(planPath)), outstanding, askResume, askConcurrency);
+        const fileGlobs = plan.batches.reduce((n, b) => n + b.files.length, 0);
+        card.brief = briefHeader(`Run crawl "${basename(dirname(planPath))}"?`, [
+          `Domain ${plan.domain}: ${plan.batches.length} batch(es), ${fileGlobs} file pattern(s).`,
+          ...(card.brief?.context ?? []),
+        ]);
         if (await pendingCard(ctx, "crawl_run", card.title!)) return waiting("run options");
         return text("Run options sent to the user as a card. Your turn ends here; their answer arrives with your next message — then call crawl_run again with it.", { card });
       }
@@ -314,6 +321,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
           const card: Card = {
             tool: "crawl_release",
             title: "Release which crawl?",
+            brief: briefHeader("Release which crawl?", [`${all.length} completed crawls can be released.`, "Nothing is released yet; the next step shows a preview to confirm."]),
             fields: [
               {
                 id: "run",
@@ -392,6 +400,16 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
             `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
           confirmLabel: "Release",
           rejectLabel: "Not now",
+          brief: briefHeader(
+            `Release ${toEmit} contribution(s) to "${plan.domain}"?`,
+            [
+              `${items.length} contribution(s) in the run, ${toEmit} new or changed, ${unchanged} unchanged (skipped).`,
+              `Goes to ${describeTarget(target, ctx.wolfName)}, the hub curator files it into the KB.`,
+              "A shared, one-way handoff: it cannot be recalled.",
+              ...(already ? [already] : []),
+            ],
+            "The full list and hub check are in the card body below and in the thread.",
+          ),
         });
         return text(`${review}\n\nConfirmation sent to the user as a card. Your turn ends here; if they say yes, call crawl_release again with the same runDir.`, { card });
       }

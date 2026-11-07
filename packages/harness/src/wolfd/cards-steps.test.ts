@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { cardResult } from "../engine/cards.js";
-import { askCard } from "../extensions/ask-user-question.js";
+import { briefCard } from "../extensions/brief.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 import { answerText, dropHiddenAnswers, validateAnswers } from "./cards.js";
@@ -24,12 +24,12 @@ const lastUserText = (context: { messages: { role: string; content: unknown }[] 
 };
 
 /** The crawl interview shape: depth only matters for by-folder. */
-const CRAWL: Card = askCard({
-  title: "Crawl",
+const CRAWL: Card = briefCard({
+  headline: "Crawl",
   questions: [
-    { id: "source", question: "Source dir?" },
-    { id: "strategy", question: "Strategy?", options: [{ label: "By folder", value: "by-folder" }, { label: "By pattern", value: "by-pattern" }] },
-    { id: "depth", question: "Depth?", options: [{ label: "1" }, { label: "2" }], showIf: { field: "strategy", equals: "by-folder" } },
+    { id: "source", ask: "Source dir?" },
+    { id: "strategy", ask: "Strategy?", choices: [{ label: "By folder", value: "by-folder" }, { label: "By pattern", value: "by-pattern" }] },
+    { id: "depth", ask: "Depth?", choices: [{ label: "1" }, { label: "2" }], showIf: { field: "strategy", equals: "by-folder" } },
   ],
   steps: [{ title: "Source", questions: ["source"] }, { title: "Shape", questions: ["strategy", "depth"] }],
 });

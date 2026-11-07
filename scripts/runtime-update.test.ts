@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain .mjs script
-import { classify, runUpdate } from "./runtime-update.mjs";
+import { buildCommands, classify, runUpdate } from "./runtime-update.mjs";
 
 let tmp: string;
-let main: string, intWt: string, rtWt: string, featWt: string, origin: string;
+let main: string, intWt: string, rtWt: string, origin: string;
 const g = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 const commit = (cwd: string, file: string, body: string, msg = `edit ${file}`) => {
 	fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
@@ -29,15 +29,26 @@ beforeEach(() => {
 	commit(main, "shared.txt", "base\n");
 	g(main, "branch", "wolf/1uk4");
 	g(main, "branch", "stable");
-	g(main, "branch", "feat/x");
+	g(main, "push", "-q", "origin", "stable");
 	intWt = path.join(tmp, "int");
 	rtWt = path.join(tmp, "rt");
-	featWt = path.join(tmp, "feat");
 	g(main, "worktree", "add", "-q", intWt, "wolf/1uk4");
 	g(main, "worktree", "add", "-q", rtWt, "stable");
-	g(main, "worktree", "add", "-q", featWt, "feat/x");
 });
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+/** The owner merges a release on GitHub: stable on origin moves. Done from a separate clone, like the owner's merge would. */
+const ownerMerges = (file: string, body = "x") => {
+	const clone = path.join(tmp, "owner");
+	if (!fs.existsSync(clone)) {
+		g(tmp, "clone", "-q", "-b", "stable", origin, clone);
+		g(clone, "config", "user.email", "o@o");
+		g(clone, "config", "user.name", "o");
+	}
+	commit(clone, file, body);
+	g(clone, "push", "-q", "origin", "stable");
+	return g(clone, "rev-parse", "HEAD");
+};
 
 const steps = () => ({ build: vi.fn(), refreshExtensions: vi.fn(async () => []) });
 const run = (argv: string[], s = steps()) => {
@@ -47,45 +58,36 @@ const run = (argv: string[], s = steps()) => {
 };
 
 describe("runtime-update", () => {
-	it("fast-forwards integration and runtime, builds, pushes", async () => {
-		commit(featWt, "apps/console/a.tsx", "x");
-		const { r, s } = await run(["feat/x"]);
+	it("fetches, fast-forwards the stable worktree to origin/stable and builds; it never pushes and never touches wolf/1uk4", async () => {
+		const owner = ownerMerges("apps/console/a.tsx");
+		const intBefore = g(intWt, "rev-parse", "HEAD");
+		const { r, s } = await run([]);
 		expect(r.exitCode).toBe(0);
-		expect(g(intWt, "rev-parse", "HEAD")).toBe(g(featWt, "rev-parse", "HEAD"));
-		expect(g(rtWt, "rev-parse", "HEAD")).toBe(g(featWt, "rev-parse", "HEAD"));
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(owner);
 		expect(s.build).toHaveBeenCalledWith(rtWt);
 		expect(r.classification.action).toBe("reload");
-		expect(r.pushed).toBe(true);
-		expect(g(origin, "rev-parse", "stable")).toBe(g(rtWt, "rev-parse", "HEAD"));
+		expect(r).not.toHaveProperty("pushed");
+		expect(g(intWt, "rev-parse", "HEAD")).toBe(intBefore);
+		expect(g(origin, "rev-parse", "stable")).toBe(owner);
+		expect(g(origin, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/stable");
 	});
 
-	it("makes a merge commit when integration has moved", async () => {
-		commit(featWt, "packages/kb/src/a.ts", "x");
-		commit(intWt, "other.txt", "y");
-		const { r } = await run(["feat/x"]);
-		expect(r.exitCode).toBe(0);
-		expect(g(intWt, "log", "-1", "--format=%s")).toBe("Merge branch 'feat/x' into wolf/1uk4");
-		expect(g(rtWt, "rev-parse", "HEAD")).toBe(g(intWt, "rev-parse", "HEAD"));
-		expect(r.classification.action).toBe("restart");
-	});
-
-	it("aborts a conflicting merge and leaves the integration tree clean", async () => {
-		commit(featWt, "shared.txt", "feat\n");
-		commit(intWt, "shared.txt", "int\n");
-		const before = g(intWt, "rev-parse", "HEAD");
+	it("refuses a branch argument, pointing at wolfpack pr prepare, and changes nothing", async () => {
+		const stableBefore = g(rtWt, "rev-parse", "HEAD");
+		ownerMerges("a.txt");
 		const { r, warns, s } = await run(["feat/x"]);
 		expect(r.exitCode).toBe(1);
-		expect(r.conflicts).toEqual(["shared.txt"]);
-		expect(warns.join("\n")).toContain("shared.txt");
-		expect(g(intWt, "status", "--porcelain")).toBe("");
-		expect(g(intWt, "rev-parse", "HEAD")).toBe(before);
+		expect(warns.join("\n")).toContain("wolfpack pr prepare");
+		expect(warns.join("\n")).toContain("feat/x");
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(stableBefore);
 		expect(s.build).not.toHaveBeenCalled();
+		expect(s.refreshExtensions).not.toHaveBeenCalled();
 	});
 
-	it("refuses when stable has diverged", async () => {
+	it("refuses when stable has diverged from origin/stable, and changes nothing there", async () => {
 		commit(rtWt, "stable-only.txt", "s");
 		const stableBefore = g(rtWt, "rev-parse", "HEAD");
-		commit(intWt, "int.txt", "i");
+		ownerMerges("owner.txt");
 		const { r, warns, s } = await run([]);
 		expect(r.exitCode).toBe(1);
 		expect(warns.join("\n")).toContain("diverged");
@@ -93,26 +95,34 @@ describe("runtime-update", () => {
 		expect(s.build).not.toHaveBeenCalled();
 	});
 
-	it("refuses dirty integration and runtime trees", async () => {
-		commit(featWt, "a.txt", "a");
-		fs.writeFileSync(path.join(intWt, "README.md"), "dirty");
-		let o = await run(["feat/x"]);
-		expect(o.r.exitCode).toBe(1);
-		expect(o.warns.join()).toContain("integration worktree");
-		g(intWt, "checkout", "--", "README.md");
+	it("says 'ahead' not 'diverged', and changes nothing, when stable is merely ahead of origin/stable", async () => {
+		commit(rtWt, "local-only.txt", "s");
+		const before = g(rtWt, "rev-parse", "HEAD");
+		const { r, warns, s } = await run([]);
+		expect(r.exitCode).toBe(1);
+		expect(warns.join("\n")).toContain("ahead of origin/stable");
+		expect(warns.join("\n")).not.toContain("diverged");
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(before);
+		expect(s.build).not.toHaveBeenCalled();
+	});
+
+	it("refuses a dirty runtime worktree", async () => {
+		ownerMerges("a.txt");
 		fs.writeFileSync(path.join(rtWt, "README.md"), "dirty");
-		o = await run(["feat/x"]);
+		const o = await run([]);
 		expect(o.r.exitCode).toBe(1);
 		expect(o.warns.join()).toContain("runtime worktree");
-		expect(g(intWt, "rev-parse", "HEAD")).not.toBe(g(featWt, "rev-parse", "HEAD"));
+		expect(o.s.build).not.toHaveBeenCalled();
 	});
 
 	it("ignores generated files when checking for a dirty tree", async () => {
-		commit(intWt, "apps/console/next-env.d.ts", "a");
-		g(rtWt, "merge", "-q", "--ff-only", "wolf/1uk4");
+		const owner = ownerMerges("apps/console/next-env.d.ts", "a");
+		g(main, "fetch", "-q", "origin");
+		g(rtWt, "merge", "-q", "--ff-only", "origin/stable");
 		fs.writeFileSync(path.join(rtWt, "apps/console/next-env.d.ts"), "regenerated");
 		const { r } = await run([]);
 		expect(r.exitCode).toBe(0);
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(owner);
 		fs.writeFileSync(path.join(rtWt, "README.md"), "dirty");
 		expect((await run([])).r.exitCode).toBe(1);
 	});
@@ -124,31 +134,79 @@ describe("runtime-update", () => {
 		expect(logs[0]).toContain("nope is not checked out");
 	});
 
-	it("dry-run changes no refs and runs no steps", async () => {
-		commit(featWt, "packages/agent/src/a.ts", "x");
+	it("fails clearly, changing nothing, when the fetch fails", async () => {
+		const before = g(rtWt, "rev-parse", "HEAD");
+		g(main, "remote", "set-url", "origin", path.join(tmp, "missing.git"));
+		const { r, warns, s } = await run([]);
+		expect(r.exitCode).toBe(1);
+		expect(warns.join()).toContain("fetch failed");
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(before);
+		expect(s.build).not.toHaveBeenCalled();
+	});
+
+	it("dry-run does not fetch, changes no refs and runs no steps", async () => {
+		ownerMerges("packages/agent/src/a.ts");
+		g(main, "fetch", "-q", "origin", "+refs/heads/stable:refs/remotes/origin/stable");
+		ownerMerges("later.txt");
 		const refs = () => g(main, "for-each-ref", "--format=%(refname) %(objectname)");
 		const before = refs();
-		const { r, logs, s } = await run(["feat/x", "--dry-run"]);
+		const { r, logs, s } = await run(["--dry-run"]);
 		expect(r.exitCode).toBe(0);
 		expect(refs()).toBe(before);
 		expect(s.build).not.toHaveBeenCalled();
+		expect(logs.join("\n")).toContain("would fast-forward stable to origin/stable");
 		expect(logs.join("\n")).toContain("sfo-01 runs packages/agent");
-		expect(g(origin, "for-each-ref")).toBe("");
-	});
-
-	it("still succeeds when the push fails", async () => {
-		commit(featWt, "docs/a.md", "x");
-		g(main, "remote", "set-url", "origin", path.join(tmp, "missing.git"));
-		const { r, warns } = await run(["feat/x"]);
-		expect(r.exitCode).toBe(0);
-		expect(r.pushed).toBe(false);
-		expect(warns.join()).toContain("push failed");
 	});
 
 	it("reports already up to date", async () => {
 		const { r, logs } = await run([]);
 		expect(r.classification.lines).toEqual(["already up to date"]);
 		expect(logs.join()).toContain("already up to date");
+	});
+});
+
+describe("runtime-update: pnpm checkouts and npm checkouts", () => {
+	const dry = (pnpmFound: boolean) => {
+		const logs: string[] = [];
+		return runUpdate({ argv: ["--dry-run"], env: { WOLVES_DIR: path.join(tmp, "wolves") }, cwd: intWt, pnpmFound, steps: steps(), log: (m: string) => logs.push(m), warn: () => {} }).then(() => logs.join("\n"));
+	};
+	const stableGainsPnpmLock = () => {
+		commit(rtWt, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+		g(rtWt, "push", "-q", "origin", "stable");
+	};
+
+	it("buildCommands: pnpm = frozen install + the shared-cache turbo wrapper; npm = the old npx turbo", () => {
+		expect(buildCommands("pnpm")).toEqual([
+			{ cmd: "pnpm", args: ["install", "--frozen-lockfile", "--prefer-offline"] },
+			{ cmd: "node", args: ["scripts/turbo.mjs", "run", "build"] },
+		]);
+		expect(buildCommands("npm")).toEqual([{ cmd: "npx", args: ["turbo", "run", "build"] }]);
+	});
+
+	it("a target with pnpm-lock.yaml and pnpm on the PATH installs and builds with pnpm", async () => {
+		stableGainsPnpmLock();
+		const text = await dry(true);
+		expect(text).toContain("pnpm install --frozen-lockfile --prefer-offline");
+		expect(text).toContain("node scripts/turbo.mjs run build");
+		expect(text).not.toContain("npx turbo");
+	});
+
+	it("a target without pnpm-lock.yaml keeps the npm path unchanged", async () => {
+		const text = await dry(true);
+		expect(text).toContain("would run: npx turbo run build");
+		expect(text).not.toContain("pnpm install");
+	});
+
+	it("pnpm-lock.yaml but no pnpm on the PATH falls back to npm and says why", async () => {
+		stableGainsPnpmLock();
+		const text = await dry(false);
+		expect(text).toContain("would run: npx turbo run build");
+		expect(text).toContain("pnpm is not installed");
+	});
+
+	it("tells the pnpm checkout to restart with pnpm", () => {
+		expect(classify(["packages/harness/src/a.ts"], [], "pnpm").lines[0]).toBe("restart the stack: pnpm stack restart");
+		expect(classify(["packages/harness/src/a.ts"]).lines[0]).toBe("restart the stack: npm run stack -- restart");
 	});
 });
 

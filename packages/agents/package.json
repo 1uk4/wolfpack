@@ -5,12 +5,12 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "agents"],
+  "files": ["dist", "agents", "standards"],
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/agents\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/agents/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/agents/src"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

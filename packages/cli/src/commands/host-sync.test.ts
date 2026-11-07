@@ -18,12 +18,16 @@ vi.mock("../ssh-helper.js", () => ({
   scpToHost: () => { ssh.push("scp"); },
   execSsh: () => { ssh.push("exec"); return { code: 0, stdout: "", stderr: "" }; },
 }));
-vi.mock("../config.js", () => ({ loadConfig: () => ({ wolvesRoot: "/w", hosts: {} }), getHost: () => undefined }));
-
-vi.mock("../mesh.js", async (orig) => ({
-  ...(await orig<typeof import("../mesh.js")>()),
-  loadDevices: () => ({ devices: { W1hOrJ: { role: "wolf", host: "sfo-01", deviceId: "WOLFINSTANCE" } } }),
-}));
+// Real config and mesh registry, read from a temp HOME (set before the modules read os.homedir()).
+vi.hoisted(() => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const os = require("node:os") as typeof import("node:os");
+  const path = require("node:path") as typeof import("node:path");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "host-sync-"));
+  fs.mkdirSync(path.join(home, ".wolfpack"));
+  fs.writeFileSync(path.join(home, ".wolfpack", "devices.yaml"), "devices:\n  W1hOrJ:\n    role: wolf\n    host: sfo-01\n    deviceId: WOLFINSTANCE\n");
+  process.env.HOME = home;
+});
 
 import { ensureDenMirror } from "./host-sync.js";
 

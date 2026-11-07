@@ -20,11 +20,13 @@ import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/s
 import { PanelFloatingHandle, PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
-import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { useAttachedThread } from "@/components/attached-thread";
+import { DictationBar, joinDictation, useBarShown } from "@/components/dictation";
+import { useThreadDictation } from "@/components/use-thread-dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
-import { useComposerDraft, useRestoreOnSendFailure } from "@/lib/composer-draft";
+import { appendToDraft, draftKey, useComposerDraft, useRereadDraftWhenShown, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
@@ -51,7 +53,11 @@ import {
 	type ThreadCards,
 	type ToolItem,
 	ATTACHMENTS_PART,
+	threadTint,
+	threadTintSolid,
+	type ThreadColorSource,
 } from "@/src/core";
+import { useThreadColor } from "@/components/use-thread-color";
 import type { CardAnswers } from "@wolfpack/client";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
@@ -158,6 +164,8 @@ function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; op
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.
  */
+const NO_COLOR_THREADS: readonly ThreadColorSource[] = [];
+
 function ThreadChatInner({
 	wolf,
 	slug,
@@ -171,6 +179,8 @@ function ThreadChatInner({
 	initialCards = NO_CARDS,
 	closedReason,
 	initialBound,
+	parentThreadId,
+	colorThreads = NO_COLOR_THREADS,
 }: {
 	wolf: string;
 	slug: string;
@@ -191,6 +201,10 @@ function ThreadChatInner({
 	closedReason?: string;
 	/** The work item the thread is bound to at load (`boundItem ?? boundWorkItem`): its progress panel replaces the floating checklist from the first paint. */
 	initialBound?: string;
+	/** A subagent thread: the thread that spawned it (it shows that thread's color). */
+	parentThreadId?: string;
+	/** The wolf's threads (id, parent, settings) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
+	colorThreads?: readonly ThreadColorSource[];
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -203,7 +217,12 @@ function ThreadChatInner({
 		initiallyInFlight,
 		transport,
 	});
-	const threadSettings = useThreadSettings(wolf, slug);
+	const threadSettings = useThreadSettings(wolf, slug, threadId);
+	// A faint tint of the thread's color (its override, else the one its id gives; a subagent's = its parent's) behind the conversation.
+	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
+	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads).hex;
+	const tint = threadTint(tintHex);
+	const tintSolid = threadTintSolid(tintHex);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
@@ -386,12 +405,42 @@ function ThreadChatInner({
 	// Unsent text survives leaving the thread, switching wolves and reloads (localStorage, text only).
 	// Restore callback: deliberately skips applyText, so a restored draft is not re-scheduled for writing, does not
 	// focus the composer and does not touch the dictation state.
-	scheduleDraft.current = useComposerDraft(wolf, threadId, textRef, (v) => {
+	// The floating chat REPLACES this composer while it is popped out and shown here (dictating, desktop): ONE input owns the
+	// text. The card unmounts (attachments live up here in ThreadChat, so pending ones survive and are back when it
+	// returns); `ownedByBar` makes the draft hook inert meanwhile (a stale text must not overwrite or absorb the chat's);
+	// when it docks, the composer re-reads the draft (typed plus dictated) via useRereadDraftWhenShown below.
+	const attachedApi = useAttachedThread();
+	const barShown = useBarShown();
+	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
+	const ownedByBar = useRef(false);
+	ownedByBar.current = barOwnsInput;
+	const draftSchedule = useComposerDraft(
+		wolf,
+		threadId,
+		textRef,
+		(v) => {
+			textRef.current = v;
+			setText(v);
+		},
+		ownedByBar,
+	);
+	scheduleDraft.current = draftSchedule;
+	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
+	// Leaving the page mid-run saves what was heard into this thread's draft. This hook MUST stay declared after
+	// useComposerDraft: cleanups run in declaration order, so the composer's unmount flush runs first and the orphan
+	// append lands on top of it (the reverse order would lose the words).
+	const dictation = useThreadDictation(
+		wolf,
+		slug,
+		threadId,
+		(t) => applyText(joinDictation(textRef.current, t)),
+		(t) => appendToDraft(draftKey(wolf, threadId), t),
+		draftSchedule.flush, // the chat's input reads the draft: write it now and drop the pending debounce
+	);
+	useRereadDraftWhenShown(barOwnsInput, wolf, threadId, textRef, (v) => {
 		textRef.current = v;
 		setText(v);
 	});
-	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
-	const dictation = useDictation({ append: (t) => applyText(joinDictation(textRef.current, t)) });
 	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.
 	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
 	const setRowOpen = useCallback(
@@ -465,6 +514,12 @@ function ThreadChatInner({
 		[transport, patchAttachment],
 	);
 	const [dragging, setDragging] = useState(false);
+	const publishAttachments = attachedApi?.setPageAttachments;
+	const waitingAttachments = attachments.filter((a) => a.status !== "error").length;
+	useEffect(() => {
+		publishAttachments?.(threadId, waitingAttachments);
+		return () => publishAttachments?.(threadId, 0);
+	}, [publishAttachments, threadId, waitingAttachments]);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
 
 	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
@@ -544,7 +599,7 @@ function ThreadChatInner({
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
-				<div className="relative flex min-h-0 flex-1">
+				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex} style={{ backgroundColor: tint }}>
 					<PanelFloatingHandle />
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
@@ -686,8 +741,8 @@ function ThreadChatInner({
 							<div aria-hidden className="h-40" style={subagents.length ? { marginTop: Math.min(subagents.length, 4) * STRIP_ROW_PX + 8 } : undefined} />
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
-							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
-							<div className="bg-background pb-4">
+							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
+							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									{closedReason !== undefined ? (
@@ -695,7 +750,7 @@ function ThreadChatInner({
 											<div className="font-medium">Feature graduated</div>
 											<div className="text-muted-foreground">{closedReason}</div>
 										</div>
-									) : (
+									) : barOwnsInput ? null : (
 									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
 										<Composer
 											busy={busy}
@@ -713,7 +768,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : undefined}
+											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

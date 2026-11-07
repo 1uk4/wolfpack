@@ -18,7 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
-import { confirmCard } from "@wolfpack/harness/engine";
+import { briefHeader, confirmCard } from "@wolfpack/harness/engine";
 import type { Card } from "@wolfpack/protocol";
 import { drainWorkObservations } from "@wolfpack/harness/memory";
 import {
@@ -73,7 +73,7 @@ import {
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
-import { WorkClient, shipAndRollup } from "./work-client.js";
+import { WorkClient, GRADUATION_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
@@ -308,12 +308,23 @@ export default function createTasksExtension(
   /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
   const shipCard = (title: string, id: string) =>
-    confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" });
+    confirmCard({
+      tool: "task_done",
+      question: shipLabel(title, id),
+      confirmLabel: "Ship",
+      rejectLabel: "Not yet",
+      brief: briefHeader(`Ship "${title}"?`, [`Work item ${id}: ${title}`, "Marks it done; this can't be undone from the card."]),
+    });
   /** Several ids: ONE card with a multi field, one option per task (value = id), all ticked, at least one. */
   const SHIPS_FIELD = "ships";
   const optionLabel = (title: string, id: string) => `${title} (${id})`;
   const shipsCard = (entries: { id: string; title: string }[]): Card => ({
     tool: "task_done",
+    brief: briefHeader(
+      `Ship ${entries.length} tasks?`,
+      [...entries.slice(0, 4).map((e) => `${e.id}: ${e.title}`), ...(entries.length > 4 ? [`…and ${entries.length - 4} more`] : [])],
+      entries.length > 4 ? "Every task is listed with a checkbox in the question below; untick any you want to hold back." : undefined,
+    ),
     fields: [
       {
         id: SHIPS_FIELD,
@@ -648,7 +659,7 @@ export default function createTasksExtension(
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
   // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
-  const graduation = createGraduation({ client, wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion });
+  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion });
   registerGraduationActions(wolfDen, graduation.actions);
 
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */

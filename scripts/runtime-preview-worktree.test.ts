@@ -795,7 +795,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		for (const f of fs.readdirSync(__dirname).filter((n) => /^(runtime-preview.*|runtime-update|dev-stack-extensions)\.mjs$/.test(n))) fs.copyFileSync(path.join(__dirname, f), path.join(src, f));
 		fs.rmSync(path.join(src, "runtime-preview-watch.mjs"));
 		const mod = await import(`${path.join(src, "runtime-preview.mjs")}?partial`);
-		const r = await mod.runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: {}, log: () => {}, warn: () => {} });
+		const r = await mod.runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { listeners: async () => [], procInfo: async () => null }, log: () => {}, warn: () => {} }); // no real lsof: status looks for a stray next dev on 3230
 		expect(r.exitCode).toBe(0);
 		expect(fs.existsSync(path.join(home, ".wolfpack", "preview", "bin", "runtime-preview-worktree.mjs"))).toBe(true);
 	});
@@ -1021,7 +1021,7 @@ describe("agent slots through `wolfpack preview slot`", () => {
 	});
 
 	it("status lists running slots and writes nothing", async () => {
-		const before = await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: () => {}, warn: () => {} });
+		const before = await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots, listeners: async () => [], procInfo: async () => null }, log: () => {}, warn: () => {} });
 		expect(before.exitCode).toBe(0);
 		expect(fs.existsSync(slotsFile())).toBe(false);
 		expect(fs.existsSync(`${slotsFile().replace("slots.json", "slots.lock")}`)).toBe(false);
@@ -1029,7 +1029,7 @@ describe("agent slots through `wolfpack preview slot`", () => {
 		const seeded = JSON.stringify({ slots: [{ port: 3231, worktree: wtA, pid: 4242, startedAt: 1, lastUsed: 1 }, { port: 3232, worktree: wtB, pid: 4343, startedAt: 1, lastUsed: 1 }] });
 		fs.writeFileSync(slotsFile(), seeded);
 		const logs: string[] = [];
-		await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => logs.push(m), warn: () => {} });
+		await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots, listeners: async () => [], procInfo: async () => null }, log: (m: string) => logs.push(m), warn: () => {} });
 		expect(logs).toContain("slots: 3231 wt-a");
 		expect(fs.readFileSync(slotsFile(), "utf8")).toBe(seeded);
 	});

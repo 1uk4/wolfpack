@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { TaskGraph } from "@/components/task-graph";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb-client";
-import { AttachBarWorkButton } from "@/components/attached-thread";
 import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import { TopBar } from "@/components/top-bar";
 import { WorkBadges } from "@/components/work-badges";
@@ -120,7 +119,7 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 	return (
 		<article>
 			<WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mb-4" />
-			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread wolves={threadWolves} onOpen={onOpenThread} error={threadError} workItemId={item.id} />}
+			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread wolves={threadWolves} onOpen={onOpenThread} error={threadError} />}
 			<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
 				{item.partOf && (
 					<div data-fact="parent">
@@ -168,8 +167,7 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 
 
 /** "Open thread": a thread on a wolf bound to this feature (one wolf: a button; several: a button per wolf). */
-function OpenThread({ wolves, onOpen, error, workItemId }: { wolves: string[]; onOpen?: (wolf: string) => void; error?: string | null; workItemId: string }) {
-	const [attachError, setAttachError] = useState<string | null>(null);
+function OpenThread({ wolves, onOpen, error }: { wolves: string[]; onOpen?: (wolf: string) => void; error?: string | null }) {
 	return (
 		<div className="mb-4 flex flex-wrap items-center gap-2" data-testid="open-feature-thread">
 			{wolves.map((w) => (
@@ -183,12 +181,9 @@ function OpenThread({ wolves, onOpen, error, workItemId }: { wolves: string[]; o
 					{wolves.length > 1 ? `Open thread on ${w}` : "Open thread"}
 				</button>
 			))}
-			{wolves.map((w) => (
-				<AttachBarWorkButton key={`attach-${w}`} wolf={w} workItemId={workItemId} label={wolves.length > 1 ? `Attach bar to ${w}` : "Attach bar here"} onError={setAttachError} />
-			))}
-			{(error ?? attachError) && (
+			{error && (
 				<span className="text-sm text-destructive" role="alert">
-					{error ?? attachError}
+					{error}
 				</span>
 			)}
 		</div>

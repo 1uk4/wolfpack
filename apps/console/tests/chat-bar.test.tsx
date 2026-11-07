@@ -217,12 +217,12 @@ describe("ChatBar", () => {
 				page()!.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
 			});
 			await wait();
-			assert.ok(q('[data-testid="chat-bar"]'));
+			assert.equal(q('[data-testid="chat-bar"]'), null, "wide: B's page shows the chat as a strip row, no bar over its composer");
 			assert.equal(popped(), true);
 		});
 
 		it("clicking B's composer docks, keeping the draft", async () => {
-			await mount("/wolf/w/thread/b", A, pageComposer);
+			await mount("/graph", A, pageComposer);
 			await type("for a");
 			await fire(page(), "pointerdown");
 			await wait();

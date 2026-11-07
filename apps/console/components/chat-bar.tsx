@@ -59,7 +59,7 @@ export function useWide(): boolean {
 	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
 }
 
-/** Phone only: a thread page has its own composer at the bottom, which a docked bar would cover, so the dock stays off those pages (desktop pill is unaffected). */
+/** A thread page has its own composer at the bottom, which the bar would cover, so the bar stays off those pages (phone dock and wide pill alike); the attached chat is a strip row there until it is opened. */
 const THREAD_PAGE = /^\/wolf\/[^/]+\/thread(\/|$)|^\/chat\/new(\/|$)/;
 
 /** Phone keyboard: how far the visual viewport's bottom sits above the layout viewport's bottom (iOS does not resize the layout, so a fixed dock would stay under the keyboard). 0 when the layout itself resizes (Android, interactive-widget=resizes-content). */
@@ -92,12 +92,14 @@ export function ChatBar() {
 	const minimized = api?.minimized ?? false;
 	const phoneSheet = api?.phoneSheet ?? false;
 	// A thread page's strip row can ask for the sheet (phoneSheet); otherwise the dock stays off there.
-	const dockless = !wide && !!pathname && THREAD_PAGE.test(pathname) && !phoneSheet;
+	// Wide: a requested bar that gets collapsed goes back to the row, not to a pill over the composer.
+	const threadPage = !!pathname && THREAD_PAGE.test(pathname);
+	const dockless = threadPage && (!phoneSheet || (wide && minimized));
 	const scrolls = !!pathname && SCROLLING.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
 	// when the bar (or, on its own thread's page, the page composer) actually answers.
-	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating: false });
+	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating: false, threadPage, setPhoneSheet: api?.setPhoneSheet });
 
 	// Dictation lives HERE, not in the composer: ChatBar stays mounted across page changes (and while the composer is
 	// unmounted: minimized, or the phone on a thread page), so a run keeps listening while the owner browses. The
@@ -125,7 +127,7 @@ export function ChatBar() {
 	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
 	const own = onOwn;
-	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating };
+	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating, threadPage, setPhoneSheet: api?.setPhoneSheet };
 	const full = !!attached && !own && !dockless && (!wide || !minimized);
 	const shown = !!attached && !own && !dockless;
 
@@ -144,6 +146,9 @@ export function ChatBar() {
 	useEffect(() => {
 		if (!attached) setPhoneSheet?.(false); // docked while the sheet was open: the flag must not outlive the bar
 	}, [!!attached, setPhoneSheet]);
+	useEffect(() => {
+		if (wide && minimized) setPhoneSheet?.(false); // collapsed: the request is spent, the row is all that shows
+	}, [wide, minimized, setPhoneSheet]);
 	useEffect(() => {
 		const l = live.current;
 		if (api?.ready && onOwnThreadPage(pathname, l.attached) && !l.dictating) afterBarDictation(l.dock);
@@ -214,6 +219,7 @@ export function ChatBar() {
 			if (!l.attached || !l.wide) return;
 			kev?.preventDefault();
 			if (l.minimized) l.setMinimized?.(false);
+			if (l.threadPage) l.setPhoneSheet?.(true); // another thread's page: Cmd+J opens the row's chat over it
 			focusInput();
 		};
 		const onSwitcher = (e: Event) => {
@@ -279,7 +285,7 @@ export function ChatBar() {
 		else setTimeout(() => void loadComposer(), 200);
 	}, [!!attached]);
 
-	// Phone thread pages show the attached chat as a row in the subagent strip (attached-strip-row.tsx), never a pill.
+	// Thread pages show the attached chat as a row in the subagent strip (attached-strip-row.tsx), never a pill.
 	if (!api || !attached || own || dockless) return null;
 	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
 }

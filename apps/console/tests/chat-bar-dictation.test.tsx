@@ -256,7 +256,7 @@ describe("floating chat dictation", () => {
 		});
 
 		it("clicking into another thread's composer", async () => {
-			await mount("/wolf/w/thread/b", A, <PageComposer />);
+			await mount("/graph", A, <PageComposer />);
 			const ws = await dictating();
 			await fire(pageTa(), "pointerdown");
 			await endRun(ws);
@@ -286,7 +286,7 @@ describe("floating chat dictation", () => {
 		}
 
 		it("focus in the floating chat → the floating chat, even on a page with its own composer", async () => {
-			await mount("/wolf/w/thread/b", A, <PageComposer />);
+			await mount("/graph", A, <PageComposer />);
 			barTa()!.focus();
 			await dictateByKey("to the bar");
 			assert.equal(barTa()!.value, "to the bar");
@@ -294,7 +294,7 @@ describe("floating chat dictation", () => {
 		});
 
 		it("a page with its own composer and focus elsewhere → that page's composer", async () => {
-			await mount("/wolf/w/thread/b", A, <PageComposer />);
+			await mount("/graph", A, <PageComposer />);
 			pageTa().focus();
 			await dictateByKey("to the page");
 			assert.equal(pageTa().value, "to the page");
@@ -356,7 +356,7 @@ const OnThreadA = () => (usePathname() === "/wolf/w/thread/a" ? <PageDraftCompos
 
 describe("floating chat dictation: docking details", () => {
 	it("Dock finishes only the bar's run: a page composer's live run keeps going", async () => {
-		await mount("/wolf/w/thread/b", A, <PageComposer />);
+		await mount("/graph", A, <PageComposer />);
 		await fire(q('[data-testid="page-dictation"] [data-testid="dictation-toggle"]')!, "click", { detail: 1 });
 		await wait();
 		const ws = FakeWS.last!;
@@ -784,10 +784,53 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		}
 	});
 
-	it("wide screens: no strip row for the attached chat on another thread's page", async () => {
+	it("wide: on another thread's page the attached chat is a strip row, not a bar: no reserve; clicking opens the bar, collapsing or detaching returns to the row only", async () => {
 		await mount("/wolf/w/thread/b", A, <><OnPages /><StripOnB /></>);
+		assert.equal(q('[data-testid="chat-bar"]'), null, "nothing floats over B's composer");
+		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-reserve"), "", "no reserve");
+		assert.match(q('[data-testid="subagent-strip"] [data-testid="attached-title"]')?.textContent ?? "", /w\/a/);
+		await fire(q('[data-testid="attached-open"]')!, "click");
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open", "click opens the bar");
+		await fire(q('[data-testid="chat-bar-minimize"]')!, "click");
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), null, "collapsed: back to the row");
+		assert.ok(q('[data-testid="attached-row"]'));
+		await fire(q('[data-testid="attached-open"]')!, "click");
+		await wait();
+		assert.ok(q('[data-testid="chat-bar"]'));
+		await fire(q('[data-testid="chat-bar-dock"]')!, "click");
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), null, "detached while open: nothing stuck");
 		assert.equal(q('[data-testid="attached-row"]'), null);
-		assert.equal(q('[data-testid="subagent-strip"]'), null);
+	});
+
+	it("wide: Cmd+J on another thread's page opens the attached chat over it", async () => {
+		await mount("/wolf/w/thread/b", A, <><OnPages /><StripOnB /></>);
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-focus-chat-bar", { detail: {} })));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
+	});
+
+	it("wide /chat/new: a live run for another thread shows as the strip row with a Stop that ends it and saves the words", async () => {
+		await mount("/kb", A, <NewOnNew />);
+		await fire(barToggle(), "click", { detail: 1 });
+		await wait();
+		const ws = await say("wide words for A");
+		await act(async () => go("/chat/new"));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), null, "no bar over the new-session composer");
+		assert.equal(q('[data-testid="subagent-strip"] [data-testid="attached-row"]')?.getAttribute("data-listening"), "true");
+		await fire(q('[data-testid="attached-stop"]')!, "click");
+		await endRun(ws);
+		await wait(400);
+		assert.equal(mem.get("wolfpack:draft:w:w/a"), "wide words for A");
+	});
+
+	it("wide: pages with no page composer keep the floating bar", async () => {
+		await mount("/kb", A, <StripOnB />);
+		assert.ok(q('[data-testid="chat-bar"]'));
+		assert.equal(q('[data-testid="attached-row"]'), null);
 	});
 
 	it("desktop minimized pill: one live meter while dictating, none when idle", async () => {
@@ -879,10 +922,13 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 	});
 
 	it("handoff A to B on B's own page: B's run goes live even when A's stop and B's attach land together", async () => {
-		await mount("/wolf/w/thread/b", A, <OnPages />);
+		await mount("/kb", A, <><OnPages /><StripOnB /></>);
 		await fire(barToggle(), "click", { detail: 1 });
 		await wait();
 		const wsA = await say("words for A");
+		await act(async () => go("/wolf/w/thread/b"));
+		await wait();
+		assert.equal(q('[data-testid="attached-row"]')?.getAttribute("data-listening"), "true", "wide: A's live run shows as the row on B's page");
 		await act(async () => {
 			pageToggle().dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 }));
 			wsA.emit("close", { code: 1000 });

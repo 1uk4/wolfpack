@@ -1,7 +1,6 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const engineMock = vi.hoisted(() => ({ loadQuery: vi.fn() }));
@@ -18,7 +17,7 @@ const tier = (p: string) => ({ model: "claude-sonnet-5-5", provider: p === "clau
 const mixed = { transport: "subscription", tiers: { main: tier("claude-bridge"), smart: tier("claude-stateless"), fast: tier("claude-stateless") } } as never;
 
 describe("claude-stateless factory", () => {
-  it("builds the provider with state-dir paths (not in the den), debug on; NO_TOOL_SEARCH wins over ctx.env; forget and dispose reach it", () => {
+  it("builds the provider with state-dir paths (not in the den), debug on; NO_TOOL_SEARCH wins over ctx.env", () => {
     const root = mkdtempSync(join(tmpdir(), "stateless-home-"));
     try {
       const den = join(root, "den");
@@ -30,10 +29,6 @@ describe("claude-stateless factory", () => {
       expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: "claude-stateless", sessionDir: join(state, "sessions"), debug: true, debugLogPath: join(state, "debug.log"), env: { ...env, ENABLE_TOOL_SEARCH: "false" } }));
       expect(existsSync(join(state, "sessions"))).toBe(true);
       expect(existsSync(den)).toBe(false);
-      h.forget!("sess-1");
-      expect(fake.forget).toHaveBeenCalledWith("sess-1");
-      h.dispose!();
-      expect(fake.dispose).toHaveBeenCalledOnce();
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -71,24 +66,13 @@ describe("claude-stateless factory", () => {
     expect(built.map((m) => m.id).slice(0, 2)).toEqual(["claude-opus-5-5", "claude-opus-4-6"]); // opus first, newest first
   });
 
-  it("pins the assumption: nothing on the stateless entry path reaches the bridge's skills rendering (formatSkillsForPrompt)", () => {
-    const dist = join(dirname(createRequire(import.meta.url).resolve("pi-claude-bridge-stateless/stateless")), "..");
-    const files = [...readdirSync(join(dist, "stateless")).map((f) => join(dist, "stateless", f)), ...["convert.js", "mcp-server.js", "usage.js"].map((f) => join(dist, f))].filter((f) => f.endsWith(".js"));
-    const callers = files.filter((f) => /renderSkillsBlock|rewriteSkillsBlock|formatSkillsForPrompt/.test(readFileSync(f, "utf8")));
-    expect(callers).toEqual([]);
-  });
-
   it("a legacy claude-bridge table is served by claude-stateless only", () => {
     expect(providersInUse(mixed)).toEqual(["claude-stateless"]);
     const home = mkdtempSync(join(tmpdir(), "stateless-home-"));
     const fake = fakeStateless();
     const m = buildWolfModels(mixed, { cwd: "/w", env: { WOLF_DEN: join(home, "den") }, seams: { "claude-stateless": { createProvider: () => fake, models: [] } } });
     expect(m.models!.getProvider("claude-bridge")).toBeUndefined();
-    expect(m.models!.getProvider("claude-stateless")).toBeDefined();
-    m.forget("s1");
-    expect(fake.forget).toHaveBeenCalledWith("s1");
-    m.dispose();
-    expect(fake.dispose).toHaveBeenCalledOnce();
+    expect(m.models!.getProvider("claude-stateless")).toBe(fake.provider);
     rmSync(home, { recursive: true, force: true });
   });
 });

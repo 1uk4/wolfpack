@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 15;
+export const PREVIEW_VERSION = 16;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -408,17 +408,30 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return serveDev(wtDir, state);
 	}
 
+	/**
+	 * The directory to ask git about worktrees: cwd when it is inside a repo, else a checkout we know of (the runtime, or the one the
+	 * script ran from), so a name or the picker works from ~ too.
+	 */
+	const anchor = (() => {
+		try {
+			git(cwd, "rev-parse", "--show-toplevel");
+			return cwd;
+		} catch {}
+		const known = [state?.runtimeDir, path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack"), st.cliFallbackDir?.()];
+		return known.find((d) => d && fs.existsSync(path.join(d, ".git"))) ?? cwd;
+	})();
+
 	/** The runtime checkout. A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path. */
 	const findRuntime = () => {
 		const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
-		return state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
+		return state?.runtimeDir ?? worktrees(anchor).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
 	};
 
 	/** Plain `wolfpack preview`: list the worktrees and pick one. Default: its live console in the browser. `--wolves`: move the wolves onto it (building it first when needed). */
 	const picker = async (wolves) => {
 		let worktrees;
 		try {
-			worktrees = collectWorktrees({ home, cwd, git });
+			worktrees = collectWorktrees({ home, cwd: anchor, git });
 		} catch {
 			return fail("usage: wolfpack preview <ref> | <worktree dir> | status | off [--dry-run]. (Not inside a wolfpack checkout, so there is no worktree list.)");
 		}
@@ -609,7 +622,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	if (sub !== "off" && !sub.startsWith("-")) {
 		let worktrees = [];
 		try {
-			worktrees = collectWorktrees({ home, cwd, git });
+			worktrees = collectWorktrees({ home, cwd: anchor, git });
 		} catch {}
 		const runtimeDir = (() => {
 			try {

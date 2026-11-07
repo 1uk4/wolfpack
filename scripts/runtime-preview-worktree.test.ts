@@ -815,6 +815,23 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	});
 });
 
+describe("worktrees are found from any directory", () => {
+	it("a name and the picker work from a directory outside any repo, via the runtime checkout", async () => {
+		const wl = path.join(tmp, "wl");
+		fs.mkdirSync(path.join(wl, "runtime"), { recursive: true });
+		g(main, "worktree", "move", rt, path.join(wl, "runtime", "wolfpack"));
+		const away = path.join(tmp, "elsewhere"); // not a git repo
+		fs.mkdirSync(away);
+		const h = harness();
+		const r = await h.run(["feat/a"], away, { WOLVES_DIR: wl });
+		expect(r.exitCode).toBe(0);
+		expect(readState().console.dir).toBe(fs.realpathSync(wtA));
+		const p = harness({ pick: (items) => items.find((i) => String(i.label).includes("wt-a"))?.value });
+		expect((await p.run([], away, { WOLVES_DIR: wl })).exitCode).toBe(0);
+		expect(p.menus[0].some((i) => String(i.label).includes("wt-a"))).toBe(true);
+	});
+});
+
 describe("hub mode health", () => {
 	const ready = (h: ReturnType<typeof harness>) => h.run(["dev", wtA]);
 

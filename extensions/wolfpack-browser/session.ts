@@ -1,5 +1,6 @@
 /**
- * One lazily launched, guarded Chromium for a wolf. All calls run through a single queue on a single page.
+ * One lazily launched, guarded Chromium for a wolf, with one tab per thread (conversation): each tab has its own queue,
+ * page and logs; the browser, profile and cookies are shared.
  * Playwright is imported lazily so a wolf that never uses the browser (or a host without the binary) loads fine.
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
@@ -24,9 +25,13 @@ export interface BrowserConfig {
   maxOutputChars?: number;
   /** Largest response body the browser may receive, bytes. Default 25 MB. */
   maxResponseBytes?: number;
+  /** Most tabs (threads with a live page) at once. Default 6. */
+  maxTabs?: number;
+  /** Close a thread's tab after this many ms without a call. Default 15 minutes. */
+  tabIdleMs?: number;
 }
 
-export const DEFAULTS = { timeoutMs: 30_000, maxOutputChars: 20_000, maxResponseBytes: 25 * 1024 * 1024, logCap: 500 };
+export const DEFAULTS = { timeoutMs: 30_000, maxOutputChars: 20_000, maxResponseBytes: 25 * 1024 * 1024, logCap: 500, maxTabs: 6, tabIdleMs: 15 * 60_000 };
 
 export const INSTALL_HINT =
   "No browser binary found. Install one without touching your own profile: `npx playwright-core install chromium` " +
@@ -80,8 +85,8 @@ export function findBrowser(cfg: BrowserConfig, headless: boolean, env: NodeJS.P
   return undefined;
 }
 
-interface ConsoleEntry { t: string; type: string; text: string }
-interface NetEntry {
+export interface ConsoleEntry { t: string; type: string; text: string }
+export interface NetEntry {
   method: string;
   url: string;
   status?: number;
@@ -92,19 +97,21 @@ interface NetEntry {
 
 export class BrowserSession {
   private ctx: any;
-  private page: any;
-  private launching?: Promise<void>;
-  private chain: Promise<unknown> = Promise.resolve();
+  private ctxLaunching?: Promise<void>;
+  /** In-flight close(): a new launch waits for it so two Chromiums never share the profile. */
+  private closing?: Promise<void>;
+  private readonly tabs = new Map<string, Tab>();
+  private readonly byPage = new WeakMap<object, Tab>();
   private shotDir?: string;
   private shots = 0;
-  private consoleLog: ConsoleEntry[] = [];
-  private netLog: NetEntry[] = [];
-  private blocked: string[] = [];
   private readonly resolver?: Resolver;
-  /** True while openPage creates the working page, so the popup-closer leaves it alone. */
-  private opening = false;
-  /** Set while browser_goto navigates: that request is user-typed ("none"); redirect hops are judged against the chain. */
-  private gotoNav?: { url: string; prev: string; tainted: boolean };
+  private sweeper?: NodeJS.Timeout;
+  private openChain: Promise<unknown> = Promise.resolve();
+  /** Number of tabs currently inside newPage(). */
+  private opening = 0;
+  private readonly stray: string[] = [];
+  /** Injectable clock (ms), for idle and LRU decisions. */
+  now: () => number = () => Date.now();
 
   constructor(
     private readonly den: string,
@@ -114,29 +121,34 @@ export class BrowserSession {
     this.resolver = opts.resolver;
   }
 
-  private get max(): number { return this.cfg.maxOutputChars ?? DEFAULTS.maxOutputChars; }
-  private get timeout(): number { return this.cfg.timeoutMs ?? DEFAULTS.timeoutMs; }
+  get max(): number { return this.cfg.maxOutputChars ?? DEFAULTS.maxOutputChars; }
+  get timeout(): number { return this.cfg.timeoutMs ?? DEFAULTS.timeoutMs; }
+  private get maxTabs(): number { return Math.max(1, this.cfg.maxTabs ?? DEFAULTS.maxTabs); }
+  private get tabIdleMs(): number { return this.cfg.tabIdleMs ?? DEFAULTS.tabIdleMs; }
   get profileDir(): string { return join(this.den, "state", "browser-profile"); }
   get isOpen(): boolean { return !!this.ctx; }
 
-  /** Serialise `fn` after every earlier call; a failure does not poison the queue. */
-  run<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.chain.then(fn, fn);
-    this.chain = next.catch(() => undefined);
-    return next;
+  /** The tab of one thread (conversation), created lazily; its page opens on the first browser call. */
+  thread(id: string | number = "default"): Tab {
+    const key = String(id);
+    let t = this.tabs.get(key);
+    if (!t) { t = new Tab(this, key); this.tabs.set(key, t); }
+    return t;
   }
 
-  private async verdict(url: string, navigation: boolean) {
+  /** Ids of the threads that currently have a live page. */
+  openTabs(): string[] { return [...this.tabs.values()].filter((t) => t.page).map((t) => t.id); }
+
+  /** @internal used by Tab */
+  async verdict(url: string, navigation: boolean) {
     return checkUrlResolved(url, { allowHosts: this.cfg.allowHosts, navigation }, this.resolver);
   }
 
-  private async launch(): Promise<void> {
-    if (this.page) return;
-    this.launching ??= this.doLaunch().finally(() => { this.launching = undefined; });
-    await this.launching;
+  private tabOf(req: any): Tab | undefined {
+    try { return this.byPage.get(req.frame().page()); } catch { return undefined; }
   }
 
-  private ensureShotDir(): string {
+  ensureShotDir(): string {
     if (!this.shotDir || !existsSync(this.shotDir)) {
       sweepStaleShotDirs();
       this.shotDir = mkdtempSync(join(tmpdir(), `wolf-browser-${process.pid}-`));
@@ -144,20 +156,129 @@ export class BrowserSession {
     return this.shotDir;
   }
 
+  nextShot(): number { return ++this.shots; }
+
   private removeShotDir() {
     if (this.shotDir) rmSync(this.shotDir, { recursive: true, force: true });
     this.shotDir = undefined;
   }
 
-  private blockRecord(url: string, why: string | undefined) {
-    this.blocked.push(`${redactUrl(url)}: ${why}`);
-    if (this.blocked.length > 50) this.blocked.shift();
+  /** Launch the shared Chromium context once. */
+  async ensureContext(): Promise<void> {
+    if (this.closing) await this.closing.catch(() => undefined);
+    if (this.ctx) return;
+    this.ctxLaunching ??= this.launchContext().finally(() => { this.ctxLaunching = undefined; });
+    await this.ctxLaunching;
+    this.startSweeper();
   }
 
-  private async doLaunch(): Promise<void> {
-    if (!this.ctx) await this.launchContext();
-    if (!this.page) await this.openPage();
+  /** Make room for one more live page: close the least recently used idle tab, or refuse. */
+  makeRoom(except: Tab): Promise<void> {
+    const live = [...this.tabs.values()].filter((t) => t.page && t !== except);
+    if (live.length < this.maxTabs) return Promise.resolve();
+    const idle = live.filter((t) => t.busy === 0).sort((x, y) => x.lastUsed - y.lastUsed)[0];
+    if (!idle) {
+      return Promise.reject(new Error(`Too many browser tabs open (${live.length}/${this.maxTabs}) and all are busy; retry shortly or call browser_close in an idle thread.`));
+    }
+    return idle.closeTab({ keepBrowser: true });
   }
+
+  /** Open a page for a tab (shared context). Serialised, so the cap check and the page it admits are one step. */
+  newPage(tab: Tab): Promise<any> {
+    const next = this.openChain.then(() => this.newPageLocked(tab), () => this.newPageLocked(tab));
+    this.openChain = next.catch(() => undefined);
+    return next;
+  }
+
+  private async newPageLocked(tab: Tab): Promise<any> {
+    await this.ensureContext();
+    const held = this.tabs.get(tab.id);
+    if (held && held !== tab) throw new Error("tab closed: this thread has a newer tab");
+    this.tabs.set(tab.id, tab);
+    await this.makeRoom(tab);
+    const ctx = this.ctx;
+    if (!ctx) throw new Error("Browser closed while opening a tab");
+    this.opening++;
+    let page: any;
+    try {
+      page = await ctx.newPage();
+      this.byPage.set(page, tab);
+      tab.page = page;
+    } finally {
+      this.opening--;
+      // Also when newPage() threw: pages that appeared meanwhile were not judged by the "page" handler.
+      if (this.opening === 0) await this.closeStrays();
+    }
+    // WebSockets bypass context.route. The context-wide route (launchContext) covers every page, including the gap
+    // before this line and popups; this page-level route only adds attribution to the tab.
+    await page.routeWebSocket(/.*/, this.wsHandler((url, why) => tab.blockRecord(url, why)));
+    return page;
+  }
+
+  private startSweeper() {
+    if (this.sweeper) return;
+    this.sweeper = setInterval(() => { void this.sweepIdle(); }, Math.max(1000, Math.min(60_000, this.tabIdleMs / 4)));
+    this.sweeper.unref?.();
+  }
+  private stopSweeper() {
+    if (this.sweeper) clearInterval(this.sweeper);
+    this.sweeper = undefined;
+  }
+
+  /** Close tabs idle longer than the timeout; the browser shuts down with its last tab. */
+  async sweepIdle(): Promise<void> {
+    // One clock reading for the whole sweep, so every tab is judged at the same instant.
+    const t0 = this.now();
+    for (const t of [...this.tabs.values()]) {
+      if (t.busy === 0 && t0 - t.lastUsed >= this.tabIdleMs) await t.closeTab({ keepBrowser: true }).catch(() => undefined);
+    }
+    await this.closeIfEmpty();
+  }
+
+  async closeIfEmpty(): Promise<void> {
+    if (this.ctx && ![...this.tabs.values()].some((t) => t.page || t.busy > 0)) await this.close();
+  }
+
+  /** Same WebSocket policy for every route; `record` says where a block is listed. */
+  private wsHandler(record: (url: string, why: string | undefined) => void) {
+    return async (ws: any) => {
+      const url: string = ws.url();
+      const v = await checkUrlResolved(url, { allowHosts: this.cfg.allowHosts, websocket: true }, this.resolver);
+      if (!v.ok) {
+        record(url, v.reason);
+        await ws.close({ code: 1008, reason: "blocked by browser policy" }).catch(() => undefined);
+        return;
+      }
+      ws.connectToServer();
+    };
+  }
+
+  /** Close every page of the context that no tab owns. */
+  private async closeStrays(): Promise<void> {
+    for (const p of this.ctx?.pages() ?? []) if (!this.byPage.has(p)) await p.close().catch(() => undefined);
+  }
+
+  /** @internal Live pages in the browser context (tests: every one should belong to a tab). */
+  pageCount(): number { return this.ctx ? this.ctx.pages().length : 0; }
+
+  /** Record a block on the tab that owns the page, or on the session when no tab does. */
+  private blockOn(tab: Tab | undefined, url: string, why: string | undefined) {
+    if (tab) tab.blockRecord(url, why);
+    else this.strayRecord(url, why);
+  }
+
+  private strayRecord(url: string, why: string | undefined) {
+    this.stray.push(`${redactUrl(url)}: ${why}`);
+    if (this.stray.length > 50) this.stray.shift();
+  }
+
+  /** @internal Blocks (HTTP and WebSocket) on pages without a tab: popups, strays. */
+  strayBlocked(): string[] { return [...this.stray]; }
+
+  /** @internal True when another Tab object now holds this thread's slot. */
+  replaced(tab: Tab): boolean { const t = this.tabs.get(tab.id); return !!t && t !== tab; }
+
+  forget(tab: Tab) { if (this.tabs.get(tab.id) === tab) this.tabs.delete(tab.id); }
 
   private async launchContext(): Promise<void> {
     const headless = !this.cfg.headed;
@@ -195,12 +316,26 @@ export class BrowserSession {
       throw new Error(`Browser failed to launch: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}. ${INSTALL_HINT}`);
     }
     this.ctx = ctx;
+    // Installed before the old-page cleanup and the "page" handler: any page, including one restored from the profile
+    // or opened as a popup, must never be able to open a socket before the policy exists.
+    await ctx.routeWebSocket(/.*/, this.wsHandler((url, why) => {
+      this.strayRecord(url, why);
+    }));
     // Pages restored from the profile exist before any route is installed: close them first.
     for (const old of ctx.pages()) await old.close().catch(() => undefined);
     // Popups (window.open, target=_blank) are closed; registered ONCE per context, not per page.
-    ctx.on("page", (p: any) => { if (!this.opening && p !== this.page) p.close().catch(() => undefined); });
+    // Popups (window.open, target=_blank) and strays are closed. While a tab is inside newPage() any new page could be
+    // its own, so nothing is judged then: closeStrays() runs when the last opening finishes and closes every page that
+    // no tab owns, whatever its opener.
+    // Known window: a popup that appears while a tab is opening a slow page is kept until closeStrays() runs. It is
+    // guarded (context-wide HTTP and WebSocket routes apply) but its blocks are unattributed (listed via strayBlocked()).
+    ctx.on("page", (p: any) => { if (this.opening === 0) p.close().catch(() => undefined); });
     ctx.on("close", () => {
-      if (this.ctx === ctx) { this.ctx = undefined; this.page = undefined; }
+      if (this.ctx !== ctx) return;
+      this.ctx = undefined;
+      this.stopSweeper();
+      for (const t of this.tabs.values()) t.invalidate();
+      this.tabs.clear();
       this.removeShotDir();
     });
     const allowHosts = this.cfg.allowHosts;
@@ -209,10 +344,11 @@ export class BrowserSession {
     await ctx.route(/.*/, async (route: any) => {
       const req = route.request();
       const url: string = req.url();
+      const tab = this.tabOf(req);
       try {
         const v = await this.verdict(url, req.isNavigationRequest());
         if (!v.ok) {
-          this.blockRecord(url, v.reason);
+          this.blockOn(tab, url, v.reason);
           return await route.abort("blockedbyclient").catch(() => undefined);
         }
         if (!/^https?:/i.test(url)) return await route.continue().catch(() => undefined);
@@ -222,7 +358,7 @@ export class BrowserSession {
         // and page JS cannot forge it (unlike the Accept header). Redirects on this path are NOT vetted: Playwright
         // does not show the hop to this handler.
         // The host comparison ignores scheme and port, consistent with how allowHosts matches.
-        if (req.resourceType() === "eventsource" && hostAllowed(parsed.hostname, allowHosts) && this.pageHost() === parsed.hostname) {
+        if (req.resourceType() === "eventsource" && hostAllowed(parsed.hostname, allowHosts) && tab?.pageHost() === parsed.hostname) {
           return await route.continue().catch(() => undefined);
         }
         const method: string = req.method();
@@ -235,11 +371,11 @@ export class BrowserSession {
         headers["accept-encoding"] = "identity";
         const body: Buffer | null = req.postDataBuffer();
         if (!["GET", "HEAD"].includes(method.toUpperCase()) && !body && /multipart|octet-stream/i.test(rawHeaders["content-type"] ?? "")) {
-          this.blockRecord(url, "unsupported request body (file/blob upload cannot be read); aborted instead of sending it empty");
+          this.blockOn(tab, url, "unsupported request body (file/blob upload cannot be read); aborted instead of sending it empty");
           return await route.abort("failed").catch(() => undefined);
         }
         const topLevel = req.isNavigationRequest() && !req.frame().parentFrame();
-        const site = this.siteFor(url, req, rawHeaders["sec-fetch-site"], topLevel);
+        const site = this.siteFor(tab, url, req, rawHeaders["sec-fetch-site"], topLevel);
         const jar = (await ctx.cookies(url)) as JarCookie[];
         const cookies = selectCookies(jar, { requestUrl: url, site, method, topLevelNavigation: topLevel });
         if (cookies.length) headers["cookie"] = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
@@ -257,7 +393,7 @@ export class BrowserSession {
           const target = new URL(loc, url).toString();
           const rv = await this.verdict(target, req.isNavigationRequest());
           if (!rv.ok) {
-            this.blockRecord(url, `redirect to ${redactUrl(target)}: ${rv.reason}`);
+            this.blockOn(tab, url, `redirect to ${redactUrl(target)}: ${rv.reason}`);
             return await route.abort("blockedbyclient").catch(() => undefined);
           }
         }
@@ -271,35 +407,20 @@ export class BrowserSession {
         return await route.fulfill({ status: res.status, headers: out, body: res.body }).catch(() => undefined);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.startsWith("blocked:")) this.blockRecord(url, msg.slice(8).trim());
-        else this.blockRecord(url, `request failed: ${msg}`);
+        if (msg.startsWith("blocked:")) this.blockOn(tab, url, msg.slice(8).trim());
+        else this.blockOn(tab, url, `request failed: ${msg}`);
         return route.abort(msg.startsWith("blocked:") ? "blockedbyclient" : "failed").catch(() => undefined);
       }
     });
-    // WebSockets bypass context.route: same policy, applied before the page may talk to the server.
-    await ctx.routeWebSocket(/.*/, async (ws: any) => {
-      const url: string = ws.url();
-      const v = await checkUrlResolved(url, { allowHosts, websocket: true }, this.resolver);
-      if (!v.ok) {
-        this.blockRecord(url, v.reason);
-        await ws.close({ code: 1008, reason: "blocked by browser policy" }).catch(() => undefined);
-        return;
-      }
-      ws.connectToServer();
-    });
   }
 
-  /** Hostname of the page's current URL, or undefined. */
-  private pageHost(): string | undefined {
-    try { return new URL(this.page?.url() ?? "").hostname; } catch { return undefined; }
-  }
-
-  /** Open the single working page; pages restored from the profile and later popups are closed. */
   /** Sec-Fetch-Site for a request: user navigations are "none"; frames are judged against EVERY ancestor. */
-  private siteFor(url: string, req: any, header: string | undefined, topLevel: boolean): FetchSite {
+  private siteFor(tab: Tab | undefined, url: string, req: any, header: string | undefined, topLevel: boolean): FetchSite {
     const valid = (h?: string): h is FetchSite => h === "same-origin" || h === "same-site" || h === "cross-site" || h === "none";
+    // A page no tab owns (stray, popup) has no navigation state to vouch for it: never "none".
+    if (!tab) return "cross-site";
     if (topLevel) {
-      const nav = this.gotoNav;
+      const nav = tab.gotoNav;
       if (nav) {
         if (url === nav.url && nav.prev === "") { nav.prev = url; return "none"; }
         // redirect hop: relative to the previous hop; once any hop is cross-site the rest of the chain is too
@@ -309,7 +430,7 @@ export class BrowserSession {
         return nav.tainted ? "cross-site" : rel === "same-origin" ? "none" : rel;
       }
       if (valid(header)) return header;
-      return fetchSite(url, this.page?.url(), !this.page?.url());
+      return fetchSite(url, tab.page?.url(), !tab.page?.url());
     }
     const sites: FetchSite[] = valid(header) ? [header] : [];
     let f = req.frame();
@@ -318,19 +439,117 @@ export class BrowserSession {
     return worstSite(sites);
   }
 
-  private async openPage(): Promise<void> {
+  /** Close the whole browser and delete all screenshots. Safe to call repeatedly. */
+  close(): Promise<void> {
+    const run: Promise<void> = this.closeNow().finally(() => { if (this.closing === run) this.closing = undefined; });
+    this.closing = run;
+    return run;
+  }
+
+  private async closeNow(): Promise<void> {
+    if (this.ctxLaunching) await Promise.race([this.ctxLaunching.catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
     const ctx = this.ctx;
-    this.opening = true;
-    let page: any;
-    try {
-      page = await ctx.newPage();
-      this.page = page;
-    } finally {
-      this.opening = false;
+    this.ctx = undefined;
+    this.stopSweeper();
+    for (const t of this.tabs.values()) t.invalidate();
+    this.tabs.clear();
+    if (ctx) {
+      let timer: NodeJS.Timeout | undefined;
+      const timedOut = await Promise.race([
+        ctx.close().then(() => false, () => false),
+        new Promise<boolean>((r) => { timer = setTimeout(() => r(true), 10_000); }),
+      ]);
+      clearTimeout(timer);
+      if (timedOut) {
+        // A wedged Chromium: kill the process itself rather than leak it.
+        try { ctx.browser()?.process?.()?.kill("SIGKILL"); } catch { /* best effort */ }
+        try { (ctx as any)._browser?._connection?.close?.(); } catch { /* best effort */ }
+      }
     }
-    for (const old of ctx.pages()) if (old !== page) await old.close().catch(() => undefined);
-    page.setDefaultTimeout(this.timeout);
-    page.on("close", () => { if (this.page === page) this.page = undefined; });
+    this.removeShotDir();
+  }
+}
+
+/** One thread's tab: its own queue, page, logs, blocked list and screenshots, in the shared browser context. */
+export class Tab {
+  page: any;
+  chain: Promise<unknown> = Promise.resolve();
+  busy = 0;
+  /** Bumped by closeTab: calls queued before it fail with "tab closed". */
+  private epoch = 0;
+  lastUsed: number;
+  consoleLog: ConsoleEntry[] = [];
+  netLog: NetEntry[] = [];
+  blocked: string[] = [];
+  private shotFiles: string[] = [];
+  private pageOpening?: Promise<void>;
+  /** Set while browser_goto navigates: that request is user-typed ("none"); redirect hops are judged against the chain. */
+  gotoNav?: { url: string; prev: string; tainted: boolean };
+
+  constructor(private readonly sess: BrowserSession, readonly id: string) {
+    this.lastUsed = sess.now();
+  }
+
+  /** Serialise `fn` after every earlier call of this thread; a failure does not poison the queue. */
+  run<T>(fn: () => Promise<T>): Promise<T> {
+    this.busy++;
+    this.lastUsed = this.sess.now();
+    // A call still queued when its tab is closed (or replaced) fails instead of silently reopening the tab.
+    const epoch = this.epoch;
+    const guarded = () => {
+      if (this.epoch !== epoch || this.sess.replaced(this)) return Promise.reject(new Error("tab closed"));
+      return fn();
+    };
+    const next = this.chain.then(guarded, guarded);
+    this.chain = next.then(() => undefined, () => undefined).then(() => { this.busy--; this.lastUsed = this.sess.now(); });
+    return next;
+  }
+
+  blockRecord(url: string, why: string | undefined) {
+    this.blocked.push(`${redactUrl(url)}: ${why}`);
+    if (this.blocked.length > 50) this.blocked.shift();
+  }
+
+  /** Hostname of the tab's current URL, or undefined. */
+  pageHost(): string | undefined {
+    try { return new URL(this.page?.url() ?? "").hostname; } catch { return undefined; }
+  }
+
+  /** The whole browser is closing: calls still queued on this tab fail with "tab closed", and its state is dropped. */
+  invalidate() {
+    this.epoch++;
+    this.reset();
+  }
+
+  /** Forget the page and logs without touching the browser (the browser itself is closing). */
+  reset() {
+    this.page = undefined;
+    this.consoleLog = [];
+    this.netLog = [];
+    this.blocked = [];
+    this.shotFiles = [];
+  }
+
+  private push<T>(arr: T[], item: T) {
+    arr.push(item);
+    if (arr.length > DEFAULTS.logCap) arr.shift();
+  }
+
+  private async ready() {
+    if (!this.page) {
+      this.pageOpening ??= this.openPage().finally(() => { this.pageOpening = undefined; });
+      await this.pageOpening;
+    }
+    return this.page;
+  }
+
+  private async openPage(): Promise<void> {
+    const page = await this.sess.newPage(this);
+    this.page = page;
+    page.setDefaultTimeout(this.sess.timeout);
+    const gone = () => { if (this.page === page) this.page = undefined; };
+    page.on("close", gone);
+    page.on("crash", () => { gone(); page.close().catch(() => undefined); });
     page.on("console", (m: any) => this.push(this.consoleLog, { t: new Date().toISOString(), type: m.type(), text: redactText(m.text()) }));
     page.on("pageerror", (e: Error) => this.push(this.consoleLog, { t: new Date().toISOString(), type: "pageerror", text: redactText(String(e.message)) }));
     const byReq = new WeakMap<object, NetEntry>();
@@ -349,25 +568,15 @@ export class BrowserSession {
     });
   }
 
-  private push<T>(arr: T[], item: T) {
-    arr.push(item);
-    if (arr.length > DEFAULTS.logCap) arr.shift();
-  }
-
-  private async ready() {
-    await this.launch();
-    return this.page;
-  }
-
   async goto(url: string, waitUntil: "load" | "domcontentloaded" | "networkidle" | "commit" = "load", timeoutMs?: number): Promise<string> {
-    const v = await this.verdict(url, true);
+    const v = await this.sess.verdict(url, true);
     if (!v.ok) throw new Error(`Navigation blocked: ${v.reason}`);
     const page = await this.ready();
     const before = this.blocked.length;
     let status: number | undefined;
     this.gotoNav = { url: new URL(url).toString(), prev: "", tainted: false };
     try {
-      const go = () => page.goto(url, { waitUntil, timeout: timeoutMs ?? this.timeout });
+      const go = () => page.goto(url, { waitUntil, timeout: timeoutMs ?? this.sess.timeout });
       // A reset to about:blank after an earlier blocked navigation can still be settling: retry once.
       const res = await go().catch(async (e: Error) => {
         if (!/interrupted by another navigation/.test(e.message) || this.blocked.length > before) throw e;
@@ -389,7 +598,7 @@ export class BrowserSession {
     }
     // Belt and braces: whatever we ended on (redirects, JS) must pass too.
     const final = page.url();
-    const fv = await this.verdict(final, true);
+    const fv = await this.sess.verdict(final, true);
     if (!fv.ok) {
       await page.goto("about:blank").catch(() => undefined);
       throw new Error(`Navigation ended on a blocked URL (${fv.reason}); page reset`);
@@ -419,8 +628,8 @@ export class BrowserSession {
         timer = setTimeout(() => {
           if (this.page === page) this.page = undefined;
           page.close({ runBeforeUnload: false }).catch(() => undefined);
-          reject(new Error(`browser_eval timed out after ${this.timeout}ms; the page was closed (the next call opens a fresh one)`));
-        }, this.timeout);
+          reject(new Error(`browser_eval timed out after ${this.sess.timeout}ms; the page was closed (the next call opens a fresh one)`));
+        }, this.sess.timeout);
       }),
     ]).finally(() => clearTimeout(timer));
     let text: string;
@@ -429,13 +638,14 @@ export class BrowserSession {
     } catch {
       text = String(result);
     }
-    return capText(text ?? "undefined", this.max);
+    return capText(text ?? "undefined", this.sess.max);
   }
 
   async screenshot(fullPage = false): Promise<string> {
     const page = await this.ready();
-    const file = join(this.ensureShotDir(), `shot-${++this.shots}.png`);
+    const file = join(this.sess.ensureShotDir(), `shot-${this.id.replace(/[^\w-]/g, "_")}-${this.sess.nextShot()}.png`);
     await page.screenshot({ path: file, fullPage });
+    this.shotFiles.push(file);
     return file;
   }
 
@@ -444,40 +654,28 @@ export class BrowserSession {
     const rows = this.consoleLog.filter((e) => !f || e.text.toLowerCase().includes(f) || e.type.includes(f));
     const out = lastN(rows, opts.limit, 200).map((e) => `${e.t} [${e.type}] ${e.text}`).join("\n");
     if (opts.clear) this.consoleLog = [];
-    return capText(out || "(no console messages)", this.max);
+    return capText(out || "(no console messages)", this.sess.max);
   }
 
   network(opts: { limit?: number; urlFilter?: string; status?: number; clear?: boolean }): string {
     const rows = this.netLog.filter((e) => (!opts.urlFilter || e.url.includes(opts.urlFilter)) && (opts.status === undefined || e.status === opts.status));
     const out = lastN(rows, opts.limit, 200).map((e) => JSON.stringify(e)).join("\n");
     if (opts.clear) this.netLog = [];
-    return capText(out || "(no network entries)", this.max);
+    return capText(out || "(no network entries)", this.sess.max);
   }
 
   blockedRequests(): string[] { return [...this.blocked]; }
 
-  /** Close the browser and delete the session's screenshots. Safe to call repeatedly. */
-  async close(): Promise<void> {
-    if (this.launching) await Promise.race([this.launching.catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
-    const ctx = this.ctx;
-    this.ctx = undefined;
+  /** Close only this thread's tab (its page, logs and screenshots). The browser closes with its last tab. */
+  async closeTab(opts: { keepBrowser?: boolean } = {}): Promise<void> {
+    this.epoch++;
+    const page = this.page;
     this.page = undefined;
-    this.consoleLog = [];
-    this.netLog = [];
-    if (ctx) {
-      let timer: NodeJS.Timeout | undefined;
-      const timedOut = await Promise.race([
-        ctx.close().then(() => false, () => false),
-        new Promise<boolean>((r) => { timer = setTimeout(() => r(true), 10_000); }),
-      ]);
-      clearTimeout(timer);
-      if (timedOut) {
-        // A wedged Chromium: kill the process itself rather than leak it.
-        try { ctx.browser()?.process?.()?.kill("SIGKILL"); } catch { /* best effort */ }
-        try { (ctx as any)._browser?._connection?.close?.(); } catch { /* best effort */ }
-      }
-    }
-    this.removeShotDir();
+    for (const f of this.shotFiles) rmSync(f, { force: true });
+    this.reset();
+    this.sess.forget(this);
+    if (page) await page.close({ runBeforeUnload: false }).catch(() => undefined);
+    if (!opts.keepBrowser) await this.sess.closeIfEmpty();
   }
 }
 

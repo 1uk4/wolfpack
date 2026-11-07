@@ -15,6 +15,8 @@ browser:
   timeoutMs: 30000
   maxOutputChars: 20000
   maxResponseBytes: 26214400   # largest response body the page may receive
+  maxTabs: 6               # live tabs at once (one per thread)
+  tabIdleMs: 900000        # close a thread's tab after this idle time
 ```
 
 ## Install into a den
@@ -25,7 +27,18 @@ browser:
 
 ## Tools
 browser_goto, browser_click, browser_fill, browser_eval, browser_screenshot (returns a file path: the tool API is
-text-only), browser_console, browser_network, browser_close. One page, calls serialized.
+text-only), browser_console, browser_network, browser_close.
+
+## Tabs (one per thread)
+One Chromium context (one profile, shared sign-in and cookies), one tab per thread (conversation), keyed by the tool
+call's `conversationId` and created on that thread's first browser call. A call with no id uses the `default` tab.
+- Each thread has its own queue: calls inside a thread run in order, threads run in parallel.
+- Console, network log, blocked-request list and screenshots are per tab. `browser_close` closes only the calling
+  thread's tab (and its screenshots); the browser exits with its last tab. A closed or crashed tab is recreated by the
+  thread's next call.
+- At most `maxTabs` (default 6) tabs are live. Opening one more closes the least recently used idle tab; if every tab
+  is busy the call fails with "Too many browser tabs". A tab idle for `tabIdleMs` (default 900000 = 15 min) is closed.
+- Popups are closed. Chromium flags and the request guard are context-wide and unchanged.
 
 ## Guards
 - Profile: `<den>/state/browser-profile` (0700), never the user's Chrome profile.
@@ -50,7 +63,7 @@ text-only), browser_console, browser_network, browser_close. One page, calls ser
   query values and fragments.
 - eval/console/network output capped at `maxOutputChars`; logs keep the last 500 entries.
 - Screenshots live in a per-session temp dir (`wolf-browser-<pid>-*`), removed when the browser closes; dirs of dead
-  processes are swept at launch. Popups are closed; there is one page.
+  processes are swept at launch. Popups are closed.
 
 ## Limits (read this)
 - An allowlisted host can redirect anywhere the policy allows, and anything it serves is trusted as far as the page

@@ -9,9 +9,10 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildCommands, consoleTestCommand, detectPm, toolCommand, type Cmd } from "../pm.js";
+import { buildCommands, detectPm } from "../pm.js";
 import { prPostMerge, type PostMergeOptions } from "../pr-post-merge.js";
-import { parseTotals, prPrepare, PrRefusal, type CmdResult, type PrDeps, type PrPrepareOptions } from "../pr-prepare.js";
+import { verifyChanges, type Affected } from "../pr-verify.js";
+import { prPrepare, PrRefusal, type CmdResult, type PrDeps, type PrPrepareOptions } from "../pr-prepare.js";
 
 export interface PrCmdOptions extends PrPrepareOptions {
   cwd?: string;
@@ -44,26 +45,12 @@ function realDeps(root: string): PrDeps {
     async verify({ base, full }) {
       // Same steps as CI: tsc --build and vitest over the affected packages, console tests if affected.
       const aff = (await import(pathToFileURL(path.join(root, "scripts/affected.mjs")).href)) as {
-        computeAffected(c: string[] | null, ws: unknown): { all: boolean; tsProjects: string[]; vitestPaths: string[]; extensionsTests: boolean; scriptsTests: boolean; consoleTests: boolean };
+        computeAffected(c: string[] | null, ws: unknown): Affected;
         changedFiles(b: string | null, h: string, cwd: string): string[] | null;
         loadWorkspaces(r: string): unknown;
       };
       const a = aff.computeAffected(full ? null : aff.changedFiles(base, "HEAD", root), aff.loadWorkspaces(root));
-      const pm = detectPm(root);
-      const steps: ({ name: string } & Cmd)[] = [];
-      if (a.tsProjects.length) steps.push({ name: "build+typecheck", ...toolCommand(pm, "tsc", ["--build", ...a.tsProjects]) });
-      const paths = [...a.vitestPaths, ...(a.extensionsTests ? ["extensions/"] : []), ...(a.scriptsTests ? ["scripts/"] : [])];
-      if (a.all) steps.push({ name: "vitest (all)", ...toolCommand(pm, "vitest", ["run"]) });
-      else if (paths.length) steps.push({ name: "vitest (affected)", ...toolCommand(pm, "vitest", ["run", ...paths]) });
-      if (a.consoleTests) steps.push({ name: "console tests", ...consoleTestCommand(pm) });
-      const lines: string[] = [];
-      for (const s of steps) {
-        const r = sh(s.cmd, s.args, root, undefined, STEP_TIMEOUT_MS);
-        if (r.code !== 0) return { ok: false, summary: `${s.name} FAILED\n${(r.out + r.err).trim().split("\n").slice(-15).join("\n")}` };
-        const totals = parseTotals(r.out);
-        lines.push(`${s.name}: ok${totals ? ` (${totals})` : ""}`);
-      }
-      return { ok: true, summary: lines.length ? lines.join("; ") : "no affected packages" };
+      return verifyChanges(a, detectPm(root), (cmd, args) => sh(cmd, args, root, undefined, STEP_TIMEOUT_MS));
     },
     now: () => new Date(),
     log: (l) => console.log(l),

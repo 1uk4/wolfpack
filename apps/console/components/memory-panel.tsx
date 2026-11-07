@@ -1,25 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
-import { ChevronLeftIcon, CornerDownRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryObservations, fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
-import { KbMarkdown } from "@/components/kb-markdown";
-import { WorkBadges } from "@/components/work-badges";
+import { ContextSection } from "@/components/context-section";
 import { useMemoryEvents } from "@/components/memory-events";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
-import { bindUrl } from "@/components/thread-transport";
 import {
 	BUSY_TEXT,
 	MEMORY_PANEL_OPEN_KEY,
-	MEMORY_PANEL_VIEW_KEY,
 	PROMOTE_IDLE,
 	actionBlock,
 	applyPromoteEvent,
 	bannerOf,
-	bindOffered,
-	isWorkEvent,
 	BLOCKED_LABELS,
 	pendingWarning,
 	type PoolPending,
@@ -29,27 +23,16 @@ import {
 	focusRefetchDue,
 	latestOnly,
 	parseOpen,
-	parseView,
-	parentToFetch,
 	poolSummary,
 	promoteLine,
 	promoteStartedState,
-	feedItemOf,
 	refreshPlan,
 	settlePromotePost,
-	recordStale,
-	recordView,
-	composeItemDocument,
 	serializeOpen,
-	serializeView,
-	workHref,
 	type GroupInfo,
 	type PoolObservation,
 	type MemoryStatus,
-	type PanelView,
-	type RecordView,
 	type PromoteState,
-	type WorkRecordResponse,
 } from "@/src/core";
 
 const REFRESH_DEBOUNCE_MS = 250;
@@ -57,30 +40,17 @@ const REFRESH_DEBOUNCE_MS = 250;
 const INFO_TTL_MS = 60_000;
 
 
-/** An item's own record plus the parent's when the Record is inherited. */
-interface Loaded {
-	own: WorkRecordResponse;
-	parent: WorkRecordResponse | null;
-}
-
 /**
- * The thread's Status panel (flex sibling of the conversation column):
- * off/inert banner, pool gauge with its consolidate / promote actions,
- * and one section, running to the bottom of the panel, with two views:
- * the item viewer (the bound item, or the task a graph node click opened:
- * `selectTaskId`) and the observation pool (loaded from wolfd on open,
- * refetched on every live capture, grouped into the den and work items). The
- * viewer offers "Bind this thread to this task" for another task. Collapse and view state persist in
- * localStorage (lh.memory-panel.open.v1 / lh.memory-panel.view.v1).
+ * The thread's Memory panel (flex sibling of the conversation column): off/inert banner, pool gauge with its
+ * consolidate / promote actions, the observation pool (loaded from wolfd on open, refetched on every live capture,
+ * grouped into the den and work items) and the Context section (live context, compaction settings). It shows no
+ * tasks: work items open in the large task view. Collapse state persists in localStorage (lh.memory-panel.open.v1).
  */
-export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, embedded = false }: {
+export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	wolf: string;
 	threadId: string;
-	/** The thread's route slug: needed for the bind button (the bind route is keyed by it). */
+	/** The thread's route slug: the context routes are keyed by it (no slug, no Context section). */
 	slug?: string;
-	/** Open this work item in the viewer (a graph node was clicked); `selectNonce` re-selects it after the user moved away. */
-	selectTaskId?: string;
-	selectNonce?: number;
 	/** Inside the panel host: body only; the host owns the aside, header, collapse and open state. */
 	embedded?: boolean;
 }) {
@@ -99,35 +69,8 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 		} catch {}
 	};
 
-	const [view, setView] = useState<PanelView>("item");
-	const viewRef = useRef<PanelView>("item");
-	viewRef.current = view;
-	const [unread, setUnread] = useState(0);
-	useEffect(() => {
-		try {
-			setView(parseView(localStorage.getItem(MEMORY_PANEL_VIEW_KEY)));
-		} catch {}
-	}, []);
-	const chooseView = (next: PanelView) => {
-		setView(next);
-		if (next === "feed") setUnread(0);
-		try {
-			localStorage.setItem(MEMORY_PANEL_VIEW_KEY, serializeView(next));
-		} catch {}
-	};
-
 	const [status, setStatus] = useState<MemoryStatus | null>(null);
 	const [statusError, setStatusError] = useState<string | null>(null);
-	const [bound, setBound] = useState<Loaded | null>(null);
-	/** A task picked in the graph (not the bound item) and its record. */
-	const [selectedId, setSelectedId] = useState<string | null>(selectTaskId ?? null);
-	/** A task asked for from outside, until the bound item is known (the bound-item effect must not wipe it). */
-	const wantedRef = useRef<string | null>(selectTaskId ?? null);
-	/** The bind in flight or its refusal, keyed by the task it concerns (never shown on another task). */
-	const [bindSt, setBindSt] = useState<{ id: string; busy: boolean; error: string | null } | null>(null);
-	const bindInFlight = useRef(false);
-	const [selected, setSelected] = useState<Loaded | null>(null);
-	const [selectedFailed, setSelectedFailed] = useState(false);
 	/** The wolf's observation pool (null until the first load) and the work items' titles/stages looked up for its groups. */
 	const [obsPool, setObsPool] = useState<PoolObservation[] | null>(null);
 	const [poolError, setPoolError] = useState<string | null>(null);
@@ -139,19 +82,7 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 	const [consolidating, setConsolidating] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
 
-	const boundId = status?.bound?.workId ?? null;
-	const boundTitle = status?.bound?.title;
-	const boundRef = useRef<string | null>(null);
-	boundRef.current = boundId;
-	const selectedRef = useRef<string | null>(null);
-	selectedRef.current = selectedId;
-	/** Work ids whose Record the panel shows: a record_written for any of them refetches. */
-	const shownRef = useRef<(string | null | undefined)[]>([]);
-	shownRef.current = [boundId, bound?.own.partOf, selectedId, selected?.own.partOf];
-
 	const statusReq = useRef(0);
-	const recordReq = useRef(0);
-	const selectedReq = useRef(latestOnly());
 	const poolReq = useRef(latestOnly());
 	/** When each work id's info was fetched (success or failure), so lookups are not repeated every event. */
 	const infoAt = useRef(new Map<string, number>());
@@ -191,76 +122,22 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 		}
 	}, [obsPool, wolf]);
 
-	const loadItem = useCallback(
-		async (id: string): Promise<Loaded | null> => {
-			const r = await fetchWorkRecord(wolf, id);
-			if (!r.ok) return null;
-			const pid = parentToFetch(r.data);
-			const p = pid ? await fetchWorkRecord(wolf, pid) : null;
-			return { own: r.data, parent: p?.ok ? p.data : null };
-		},
-		[wolf],
-	);
-
-	/** The bound item (and its parent's Record when its own is empty). */
-	const refreshRecord = useCallback(
-		async (id: string | null) => {
-			const req = ++recordReq.current;
-			if (!id) {
-				setBound(null);
-				return;
-			}
-			const l = await loadItem(id);
-			if (req !== recordReq.current || !l) return;
-			setBound(l);
-		},
-		[loadItem],
-	);
-
-	const refreshSelected = useCallback(
-		async (id: string | null) => {
-			const guard = selectedReq.current;
-			const token = guard.start();
-			if (!id) {
-				setSelected(null);
-				setSelectedFailed(false);
-				return;
-			}
-			const l = await loadItem(id);
-			if (!guard.isCurrent(token)) return;
-			if (l) {
-				setSelected(l);
-				setSelectedFailed(false);
-			} else setSelectedFailed(true);
-		},
-		[loadItem],
-	);
-
-	// Trailing-debounced refetch shared by status + record: event bursts coalesce.
-	const dirty = useRef({ status: false, record: false, pool: false });
+	// Trailing-debounced refetch of status + pool: event bursts coalesce.
+	const dirty = useRef(false);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const flush = useCallback(() => {
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = null;
-		const d = dirty.current;
-		dirty.current = { status: false, record: false, pool: false };
-		if (d.status) void refreshStatus();
-		if (d.pool) void refreshPool();
-		if (d.record) {
-			void refreshRecord(boundRef.current);
-			void refreshSelected(selectedRef.current);
-		}
-	}, [refreshStatus, refreshPool, refreshRecord, refreshSelected]);
-	const schedule = useCallback(
+		dirty.current = false;
 		// the pool is read whenever the status is (a capture, consolidation, promote or archive all change both)
-		(plan: { status: boolean; record: boolean }) => {
-			if (!plan.status && !plan.record) return;
-			dirty.current = { status: dirty.current.status || plan.status, record: dirty.current.record || plan.record, pool: dirty.current.pool || plan.status };
-			if (timer.current) clearTimeout(timer.current);
-			timer.current = setTimeout(flush, REFRESH_DEBOUNCE_MS);
-		},
-		[flush],
-	);
+		void refreshStatus();
+		void refreshPool();
+	}, [refreshStatus, refreshPool]);
+	const schedule = useCallback(() => {
+		dirty.current = true;
+		if (timer.current) clearTimeout(timer.current);
+		timer.current = setTimeout(flush, REFRESH_DEBOUNCE_MS);
+	}, [flush]);
 	useEffect(
 		() => () => {
 			if (timer.current) clearTimeout(timer.current);
@@ -274,76 +151,39 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 		setGroupInfo({});
 		infoAt.current.clear();
 		setOpenGroup(null);
-		setUnread(0);
 		setPromote(PROMOTE_IDLE);
 		void refreshStatus();
 		void refreshPool();
 	}, [refreshStatus, refreshPool]);
-	useEffect(() => {
-		const want = wantedRef.current;
-		setSelectedId(want && want !== boundId ? want : null);
-		if (boundId !== null) wantedRef.current = null;
-		void refreshRecord(boundId);
-	}, [boundId, refreshRecord]);
-	// A graph node click: show that task (after the stored-view effect above, so "item" wins over a stored "feed").
-	useEffect(() => {
-		if (!selectTaskId) return;
-		wantedRef.current = boundRef.current === null ? selectTaskId : null;
-		setSelectedId(selectTaskId === boundRef.current ? null : selectTaskId);
-		setView("item");
-	}, [selectTaskId, selectNonce]);
-	useEffect(() => {
-		setSelected(null);
-		setSelectedFailed(false);
-		void refreshSelected(selectedId);
-	}, [selectedId, refreshSelected]);
-	// Stage changes emit no event yet (and a sibling's change never reaches this thread): refetch when the
-	// window regains focus, debounced via schedule(), only while visible, at most once per 5s.
+	// Refetch when the window regains focus, debounced via schedule(), only while visible, at most once per 5s.
 	const lastFocus = useRef(0);
 	useEffect(() => {
 		const onFocus = () => {
 			const now = Date.now();
 			if (!focusRefetchDue(document.visibilityState === "visible", now, lastFocus.current)) return;
 			lastFocus.current = now;
-			schedule({ status: true, record: true });
+			schedule();
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
 	}, [schedule]);
 
-	// What can change a shown stage or the bind state: this thread's own change (a bind, a graduation), any bound thread's
-	// (a task moved; the event names no feature, so refetch anyway), memory events about a work item, a reconnect and a
-	// 15 s poll (a stage change is a Work API write that emits nothing itself).
+	// What changes the bind state or the pool: this thread's own change (a bind), a memory event, a reconnect.
 	useOptionalServerEvent("thread-updated", (p) => {
-		const t = p.thread as { id: string; boundWorkItem?: string; boundItem?: string };
-		if (p.wolf !== wolf) return;
-		if (t.id === threadId) schedule({ status: true, record: true });
-		else if (t.boundItem || t.boundWorkItem) schedule({ status: false, record: true });
+		if (p.wolf === wolf && p.thread.id === threadId) schedule();
 	});
 	useOptionalServerEvent("needs-you-changed", (p) => {
-		if (p.wolf === wolf && (p.threadId === undefined || (p.threadId === threadId && p.kind === "status"))) schedule({ status: p.threadId === threadId, record: true });
+		if (p.wolf === wolf && p.threadId === threadId && p.kind === "status") schedule();
 	});
-	useOptionalServerResync(() => schedule({ status: true, record: true }));
-	useEffect(() => {
-		const t = setInterval(() => {
-			if (document.visibilityState !== "hidden") schedule({ status: false, record: true });
-		}, 15_000);
-		return () => clearInterval(t);
-	}, [schedule]);
+	useOptionalServerResync(() => schedule());
 
 	useMemoryEvents(
 		wolf,
 		(e) => {
-			if (isWorkEvent(e)) schedule({ status: false, record: true });
-			// this thread's captures raise the unread badge; the pool itself is wolf-wide and refetched below
-			if (feedItemOf(e, threadId, "") && viewRef.current !== "feed" && boundRef.current) setUnread((n) => n + 1);
 			if (e.type.startsWith("promote_")) setPromote((s) => applyPromoteEvent(s, e));
-			schedule(refreshPlan(e, shownRef.current));
+			if (refreshPlan(e, []).status) schedule();
 		},
-		() => {
-			dirty.current = { status: true, record: true, pool: true };
-			flush();
-		},
+		() => flush(),
 	);
 
 	const pline = promoteLine(promote);
@@ -358,8 +198,6 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 		else setNote(r.code === "memory_busy" ? BUSY_TEXT : r.message);
 		void refreshStatus();
 		void refreshPool();
-		void refreshRecord(boundRef.current);
-		void refreshSelected(selectedRef.current);
 	};
 	const startPromote = async () => {
 		setNote(null);
@@ -374,33 +212,6 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
-	const bindHere = async (id: string) => {
-		if (!slug || bindInFlight.current) return;
-		bindInFlight.current = true;
-		setBindSt({ id, busy: true, error: null });
-		let error: string | null = null;
-		try {
-			const res = await fetch(bindUrl(wolf, slug), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workItemId: id }) });
-			if (!res.ok) {
-				const body = (await res.json().catch(() => null)) as { error?: unknown; message?: unknown } | null;
-				const text = body?.error ?? body?.message;
-				error = typeof text === "string" && text ? text : `Could not bind (${res.status}).`;
-			} else await refreshStatus();
-		} catch {
-			error = "Could not reach the console server.";
-		} finally {
-			bindInFlight.current = false;
-			setBindSt({ id, busy: false, error });
-		}
-	};
-	const viewingOther = !!selectedId && selectedId !== boundId;
-	// the viewer shows a clicked task only once ITS record is in; never the bound item's under another title
-	const showing = viewingOther ? (selected?.own.id === selectedId ? selected : null) : bound;
-	const otherState = viewingOther && !showing ? (selectedFailed ? "error" : "loading") : undefined;
-
-	// The bind button (see bindOffered).
-	const bindState = bindOffered(showing?.own ?? null, boundId, !!slug) ? { id: showing!.own.id, busy: bindSt?.id === showing!.own.id && bindSt.busy, error: bindSt?.id === showing!.own.id ? bindSt.error : null, onBind: () => void bindHere(showing!.own.id) } : null;
-
 	const content = (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
 			{statusError && !status ? <p className="text-muted-foreground" data-testid="memory-status-error">Memory status unavailable: {statusError}</p> : null}
@@ -430,16 +241,7 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground" data-testid="memory-pool-line">
 						{pool.tokensText} ·{" "}
-						<button
-							type="button"
-							className="inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-							aria-pressed={view === "feed"}
-							data-testid="memory-observations"
-							onClick={() => chooseView(view === "feed" ? "item" : "feed")}
-						>
-							{pool.observationsText}
-							{view !== "feed" && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
-						</button>
+						<span data-testid="memory-observations">{pool.observationsText}</span>
 					</p>
 					<p className="text-xs text-muted-foreground" data-testid="memory-trigger">Consolidation {pool.triggerText}</p>
 					{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
@@ -452,26 +254,8 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 				</div>
 			)}
 
-			<StatusSection
-				view={view}
-				bound={status?.bound ?? null}
-				shown={showing ? { item: showing.own, rec: recordView(showing.own, showing.parent) } : null}
-				viewingOther={viewingOther}
-				otherState={otherState}
-				onRetry={() => {
-					setSelectedFailed(false);
-					void refreshSelected(selectedRef.current);
-				}}
-				observations={{ list: obsPool, pending: poolPending, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup }}
-				bind={bindState}
-				onToggleFeed={() => chooseView(view === "feed" ? "item" : "feed")}
-				// intentionally does not persist the view: a click never changes the saved choice
-				onSelect={(id) => {
-					setSelectedId(id === boundId ? null : id);
-					setView("item");
-				}}
-				onBack={() => setSelectedId(null)}
-			/>
+			<ObservationsSection observations={{ list: obsPool, pending: poolPending, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup }} />
+			{slug ? <ContextSection wolf={wolf} slug={slug} threadId={threadId} /> : null}
 		</div>
 	);
 	if (embedded) return content;
@@ -499,155 +283,74 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 	);
 }
 
-/** The Status section: the item viewer or the live observation feed, one at a time; no bound item (and no task opened) → feed only. */
-export function StatusSection({ view, bound, shown, viewingOther = false, otherState, onRetry, observations, bind = null, onToggleFeed, onSelect, onBack }: {
-	view: PanelView;
-	bound: MemoryStatus["bound"] | null;
-	/** The item the viewer shows (the bound one or a clicked task): its record (badges, plan) and the Record to display. */
-	shown: { item: WorkRecordResponse; rec: RecordView } | null;
-	/** The viewer shows a task other than the bound item: offer the way back. */
-	viewingOther?: boolean;
-	/** Viewing another task whose record is not in: still loading, or the fetch failed. */
-	otherState?: "loading" | "error";
-	onRetry?: () => void;
-	/** The pool view: the loaded observations (null until the first load), grouped; `open` is the group being read. */
+/** The observation pool, grouped into the den and work items; opening a group lists its observations. */
+export function ObservationsSection({ observations }: {
+	/** The loaded observations (null until the first load), grouped; `open` is the group being read. */
 	observations: { list: PoolObservation[] | null; pending?: PoolPending | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
-	/** The "Bind this thread to this task" button for the shown item (null: not offered). */
-	bind?: { id: string; busy: boolean; error: string | null; onBind: () => void } | null;
-	onToggleFeed: () => void;
-	onSelect: (id: string) => void;
-	onBack: () => void;
 }) {
-	const openWork = useOpenWorkItem();
-	const showFeed = view === "feed" || (!bound && !viewingOther);
 	const list = observations.list;
 	const groups = list ? groupObservations(list) : [];
 	// a group that emptied (consolidated away) falls back to the list
 	const openKey = observations.open && groups.some((g) => g.key === observations.open) ? observations.open : null;
-	/** The shown item is a task of a feature. */
-	const isChild = !!shown?.item.partOf;
-	const doc = shown ? composeItemDocument(shown.item, shown.rec) : "";
 	return (
-		<section data-testid={showFeed ? "memory-feed" : "memory-record"} data-view={showFeed ? "feed" : "item"}>
+		<section data-testid="memory-feed">
 			<div className="mb-1 flex items-center justify-between gap-2">
-				{showFeed ? (
-					openKey ? (
-						<button
-							type="button"
-							className="-ml-1 flex min-w-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-							aria-label="Back to observation groups"
-							data-testid="memory-obs-back"
-							onClick={() => observations.onOpen(null)}
-						>
-							<ChevronLeftIcon className="size-3 shrink-0" />
-							<span className="truncate">{groupLabel(openKey, observations.info)}</span>
-						</button>
-					) : (
-						<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
-					)
-				) : viewingOther && bound ? (
-					<Button size="xs" variant="ghost" className="-ml-1 shrink-0" data-testid="memory-back-bound" onClick={onBack}>
-						<ChevronLeftIcon className="size-3 shrink-0" />
-						Bound item
-					</Button>
-				) : (
-					<h3 className="text-xs font-medium uppercase text-muted-foreground">Status</h3>
-				)}
-				{showFeed && bound ? (
+				{openKey ? (
 					<button
 						type="button"
-						className="rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label="Back to previous view"
-						data-testid="memory-feed-back"
-						onClick={onToggleFeed}
+						className="-ml-1 flex min-w-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+						aria-label="Back to observation groups"
+						data-testid="memory-obs-back"
+						onClick={() => observations.onOpen(null)}
 					>
-						‹ back
+						<ChevronLeftIcon className="size-3 shrink-0" />
+						<span className="truncate">{groupLabel(openKey, observations.info)}</span>
 					</button>
-				) : null}
+				) : (
+					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
+				)}
 			</div>
-			{showFeed ? (
-				<>
-					{list === null ? (
-						<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
-					) : groups.length === 0 ? (
-						<p className="text-xs text-muted-foreground">Nothing captured yet.</p>
-					) : openKey ? (
-						<ul className="flex flex-col gap-2" data-testid="memory-obs-items" data-group={openKey}>
-							{observationsInGroup(list, openKey).map((o) => (
-								<li key={o.id} className="text-xs" data-testid="memory-obs-item">
-									<div className="text-muted-foreground">{o.timestamp}</div>
-									<div className="whitespace-pre-wrap break-words">{o.content}</div>
+				{list === null ? (
+					<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
+				) : groups.length === 0 ? (
+					<p className="text-xs text-muted-foreground">Nothing captured yet.</p>
+				) : openKey ? (
+					<ul className="flex flex-col gap-2" data-testid="memory-obs-items" data-group={openKey}>
+						{observationsInGroup(list, openKey).map((o) => (
+							<li key={o.id} className="text-xs" data-testid="memory-obs-item">
+								<div className="text-muted-foreground">{o.timestamp}</div>
+								<div className="whitespace-pre-wrap break-words">{o.content}</div>
+							</li>
+						))}
+					</ul>
+				) : (
+					<>
+					{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
+					<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
+						{groups.map((g) => {
+							const info = observations.info[g.key];
+							return (
+								<li key={g.key}>
+									<button
+										type="button"
+										className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+										data-testid={`memory-obs-group-${g.key}`}
+										data-count={g.count}
+										onClick={() => observations.onOpen(g.key)}
+									>
+										<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
+										<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+											{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{BLOCKED_LABELS[g.blocked]}</span> : null}
+											{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
+											<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
+										</span>
+									</button>
 								</li>
-							))}
-						</ul>
-					) : (
-						<>
-						{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
-						<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
-							{groups.map((g) => {
-								const info = observations.info[g.key];
-								return (
-									<li key={g.key}>
-										<button
-											type="button"
-											className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-											data-testid={`memory-obs-group-${g.key}`}
-											data-count={g.count}
-											onClick={() => observations.onOpen(g.key)}
-										>
-											<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
-											<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-												{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{BLOCKED_LABELS[g.blocked]}</span> : null}
-												{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
-												<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
-											</span>
-										</button>
-									</li>
-								);
-							})}
-						</ul>
-						</>
-					)}
-				</>
-			) : (
-				<>
-					{viewingOther && !shown ? (
-						otherState === "error" ? (
-							<p className="text-xs text-muted-foreground" data-testid="memory-other-error">
-								Couldn't load this task.{" "}
-								<Button size="xs" variant="ghost" data-testid="memory-other-retry" onClick={onRetry}>Retry</Button>
-							</p>
-						) : (
-							<p className="text-xs text-muted-foreground" data-testid="memory-other-loading">Loading…</p>
-						)
-					) : shown || bound ? (
-						<div className="flex items-start gap-1">
-							{isChild ? <CornerDownRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-label="task in this feature" data-testid="memory-child-arrow" /> : null}
-							<a className="min-w-0 underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)} data-testid="memory-work-link" onClick={(e) => openReaderLink(e, openWork, shown?.item.id ?? bound!.workId)}>
-								{shown?.item.title || bound?.title || shown?.item.id || bound?.workId}
-							</a>
-						</div>
-					) : null}
-					{shown ? <WorkBadges kind={shown.item.kind} stage={shown.item.stage} domain={shown.item.domain} className="mt-1.5" /> : null}
-					{bind ? (
-						<div className="mt-2" data-testid="memory-bind">
-							<Button size="xs" variant="outline" disabled={bind.busy} data-testid="memory-bind-button" onClick={bind.onBind}>
-								{bind.busy ? "Binding…" : "Bind this thread to this task"}
-							</Button>
-							{bind.error ? (
-								<p role="alert" className="mt-1 text-xs text-destructive" data-testid="memory-bind-error">
-									{bind.error}
-								</p>
-							) : null}
-						</div>
-					) : null}
-					{shown ? (
-						<div className="mt-2" data-testid="memory-record-md">
-							{doc ? <KbMarkdown density="compact">{doc}</KbMarkdown> : <p className="text-xs text-muted-foreground">Nothing written yet.</p>}
-						</div>
-					) : null}
-				</>
-			)}
+							);
+						})}
+					</ul>
+					</>
+				)}
 		</section>
 	);
 }

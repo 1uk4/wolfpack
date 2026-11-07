@@ -184,6 +184,48 @@ function MenuTrigger({
  * viewport cap and auto-flip. data-lh-menu rides the shell — the
  * outside-click contract's exemption mark. */
 
+/** The compaction threshold row: shared by Settings → Agent and the Memory panel's Context section (one write discipline: the whole compaction section). */
+export function CompactionThresholdRow({ compaction, onChange }: { compaction: CompactionSettings | undefined; onChange: (next: CompactionSettings) => void }) {
+	// Resolved through the SAME core resolver the server's effective
+	// settings use (the GraphSection precedent): the hint and placeholder
+	// report exactly the number the trigger waits for.
+	const resolvedCompaction = resolveSettings(
+		compaction === undefined ? null : { version: 1, compaction },
+	).compaction;
+	return (
+		<SettingsRow
+			label="Compaction threshold"
+			hint={`${resolvedCompaction.thresholdTokens} tok`}
+			testid="compaction-row-threshold"
+		>
+			<CommitInput
+				type="number"
+				value={String(compaction?.thresholdTokens ?? "")}
+				placeholder={String(resolvedCompaction.thresholdTokens)}
+				ariaLabel="compaction threshold"
+				testid="input-compaction-threshold"
+				onCommit={(v) => {
+					// Empty = factory default (the budget row's discipline):
+					// absence is the unset for numbers.
+					if (v === "") {
+						onChange({ ...compaction, thresholdTokens: undefined });
+						return;
+					}
+					const n = Number(v);
+					if (!Number.isFinite(n) || n <= 0) return; // bad input: no write
+					// Mirror the server floor (anti-churn: each compaction
+					// keeps a ~20k-token tail); no ceiling — the effective
+					// trigger is min(threshold, contextWindow − 16k) anyway.
+					onChange({
+						...compaction,
+						thresholdTokens: Math.max(COMPACTION_THRESHOLD_FLOOR, Math.round(n)),
+					});
+				}}
+			/>
+		</SettingsRow>
+	);
+}
+
 export function AgentSection({
 	agent,
 	models,
@@ -443,13 +485,6 @@ export function AgentSection({
 
 
 
-	// Resolved through the SAME core resolver the server's effective
-	// settings use (the GraphSection precedent): the hint and placeholder
-	// report exactly the number the trigger waits for.
-	const resolvedCompaction = resolveSettings(
-		compaction === undefined ? null : { version: 1, compaction },
-	).compaction;
-
 	return (
 		<>
 			<SettingsGroup label="Models" testid="group-models">
@@ -561,36 +596,7 @@ export function AgentSection({
 			</SettingsGroup>
 
 			<SettingsGroup label="Context" testid="group-context">
-				<SettingsRow
-					label="Compaction threshold"
-					hint={`${resolvedCompaction.thresholdTokens} tok`}
-					testid="compaction-row-threshold"
-				>
-					<CommitInput
-						type="number"
-						value={String(compaction?.thresholdTokens ?? "")}
-						placeholder={String(resolvedCompaction.thresholdTokens)}
-						ariaLabel="compaction threshold"
-						testid="input-compaction-threshold"
-						onCommit={(v) => {
-							// Empty = factory default (the budget row's discipline):
-							// absence is the unset for numbers.
-							if (v === "") {
-								onCompactionChange({ ...compaction, thresholdTokens: undefined });
-								return;
-							}
-							const n = Number(v);
-							if (!Number.isFinite(n) || n <= 0) return; // bad input: no write
-							// Mirror the server floor (anti-churn: each compaction
-							// keeps a ~20k-token tail); no ceiling — the effective
-							// trigger is min(threshold, contextWindow − 16k) anyway.
-							onCompactionChange({
-								...compaction,
-								thresholdTokens: Math.max(COMPACTION_THRESHOLD_FLOOR, Math.round(n)),
-							});
-						}}
-					/>
-				</SettingsRow>
+				<CompactionThresholdRow compaction={compaction} onChange={onCompactionChange} />
 			</SettingsGroup>
 
 			<SettingsGroup label="System prompts" testid="group-prompts">

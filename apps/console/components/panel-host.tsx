@@ -36,8 +36,8 @@ export const PANELS: readonly PanelDef[] = [
 		icon: ActivityIcon,
 		testId: "memory-panel",
 		available: () => true,
-		render: ({ wolf, threadId, slug, props }) => (
-			<MemoryPanel embedded wolf={wolf} threadId={threadId} slug={slug} selectTaskId={typeof props.taskId === "string" ? props.taskId : undefined} selectNonce={typeof props.nonce === "number" ? props.nonce : undefined} />
+		render: ({ wolf, threadId, slug }) => (
+			<MemoryPanel embedded wolf={wolf} threadId={threadId} slug={slug} />
 		),
 	},
 ];

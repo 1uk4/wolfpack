@@ -31,8 +31,6 @@ Object.assign(globalThis, {
 const { buildFeatureGraph, featureStrip, GRAPH_STATUS_OF, isWorkItemId, isWorkEvent } = await import("../src/core/index.ts");
 type WorkRecordResponse = import("../src/core/index.ts").WorkRecordResponse;
 const { FeatureProgressPanel, useFeatureProgress } = await import("../components/feature-progress.tsx");
-const { PanelHostProvider, RightPanelHost } = await import("../components/panel-host.tsx");
-const { ActivityIcon } = await import("lucide-react");
 const { FIXTURE_THREAD } = await import("@wolfpack/client");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
@@ -112,13 +110,9 @@ afterEach(async () => {
 });
 after(() => void (globalThis.fetch = realFetch));
 
-const stubPanel = {
-	id: "memory",
-	label: "Status",
-	icon: ActivityIcon,
-	available: () => true,
-	render: ({ props }: { props: Record<string, unknown> }) => <div data-testid="stub-status" data-task={String(props.taskId ?? "")} />,
-};
+Object.defineProperty(window, "location", { configurable: true, value: { pathname: "/wolf/hal/thread/t1", search: "", assign: () => {} } });
+const opened: string[] = [];
+const router = { push: (u: string) => void opened.push(u), replace: (u: string) => void opened.push(u) };
 
 async function mountPanel(over: Partial<React.ComponentProps<typeof FeatureProgressPanel>> = {}, threadId = "w/feature-F") {
 	const host = document.createElement("div");
@@ -126,10 +120,9 @@ async function mountPanel(over: Partial<React.ComponentProps<typeof FeatureProgr
 	root = createRoot(host);
 	await act(async () =>
 		root!.render(
-			<PanelHostProvider wolf="w" threadId={threadId} panels={[stubPanel as never]}>
+			<AppRouterContext.Provider value={router as never}>
 				<FeatureProgressPanel threadId={threadId} model={modelOf()} busy={false} {...over} />
-				<RightPanelHost />
-			</PanelHostProvider>,
+			</AppRouterContext.Provider>,
 		),
 	);
 }
@@ -168,17 +161,15 @@ describe("FeatureProgressPanel", () => {
 		assert.equal(qa('[data-highlight="true"]').length, 0);
 	});
 
-	it("a node click opens the Status panel on that task", async () => {
+	it("a node click opens that task in the task view, and another click switches to it", async () => {
+		opened.length = 0;
 		await mountPanel({}, "w/feature-F-click");
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		await click(q('[data-node-id="c"] [data-testid="graph-node-hit"]')!);
-		await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
-		const stub = q('[data-testid="stub-status"]')!;
-		assert.ok(stub, "the Status panel opened");
-		assert.equal(stub.getAttribute("data-task"), "c");
+		assert.equal(opened.length, 1);
+		assert.match(opened[0]!, /item=c$/);
 		await click(q('[data-node-id="d"] [data-testid="graph-node-hit"]')!);
-		await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
-		assert.equal(q('[data-testid="stub-status"]')!.getAttribute("data-task"), "d");
+		assert.match(opened[1]!, /item=d$/);
 	});
 
 	it("the graph pans by dragging; folding and reopening resets the view", async () => {
@@ -198,7 +189,7 @@ describe("FeatureProgressPanel", () => {
 		assert.equal(Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x")), x0);
 	});
 
-	it("full screen: the button opens the canvas in a modal, Esc closes it, a node click there opens the Status panel and closes the modal", async () => {
+	it("full screen: the button opens the canvas in a modal, Esc closes it, a node click there opens the task view and closes the modal", async () => {
 		await mountPanel({}, "w/feature-F-full");
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		assert.ok(q('[data-testid="feature-progress-modal"]') === null);
@@ -211,11 +202,11 @@ describe("FeatureProgressPanel", () => {
 		assert.equal(modal!.querySelector('[data-testid="graph-scroll"]')!.getAttribute("data-draggable"), "true");
 		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
 		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "Esc closed it");
+		opened.length = 0;
 		await click(q('[data-testid="feature-progress-fullscreen"]')!);
 		await click(q('[data-testid="feature-progress-modal"] [data-node-id="c"] [data-testid="graph-node-hit"]')!);
-		await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
-		assert.equal(q('[data-testid="stub-status"]')!.getAttribute("data-task"), "c");
-		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "modal closed so the panel is visible");
+		assert.match(opened[0]!, /item=c$/);
+		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "modal closed so the task view is visible");
 	});
 
 	it("collapse state is remembered per thread (across a remount), not shared between threads", async () => {

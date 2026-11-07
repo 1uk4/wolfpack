@@ -1,16 +1,16 @@
 import { parseObjectData } from "@wolfpack/protocol/objects";
 import type { ObjectCardProps } from "@/components/card-registry";
 import { ObjectCardFrame } from "@/components/object-card";
-import { usePanelHost } from "@/components/panel-host";
+import { useOpenWorkItem } from "@/components/work-reader-nav";
 import { PlanGraphView } from "@/components/plan-graph-view";
 import { isWorkItemId } from "@/src/core";
 
 /**
- * A plan/task graph object. A node whose id is a work item id opens the Status panel on that task; any other node
+ * A plan/task graph object. A node whose id is a work item id opens that task in the large task view; any other node
  * (a free-form step id the model chose) does nothing.
  */
 export function PlanGraphCard({ objectId, rev, data }: ObjectCardProps) {
-	const panels = usePanelHost();
+	const openWork = useOpenWorkItem();
 	const g = parseObjectData("graph", data);
 	if (!g) return null;
 	const detailed = g.nodes.filter((n) => n.detail);
@@ -28,7 +28,7 @@ export function PlanGraphCard({ objectId, rev, data }: ObjectCardProps) {
 			}
 		>
 			{g.title && <div className="mb-2 text-sm font-medium">{g.title}</div>}
-			<PlanGraphView graph={g} onNodeClick={(id) => void (isWorkItemId(id) && panels.openPanel("memory", { taskId: id, nonce: Date.now() }))} />
+			<PlanGraphView graph={g} onNodeClick={(id) => void (isWorkItemId(id) && openWork(id))} />
 			{detailed.length > 0 && (
 				<details className="mt-2 text-xs" data-testid="graph-details">
 					<summary className="cursor-pointer text-muted-foreground">Details</summary>

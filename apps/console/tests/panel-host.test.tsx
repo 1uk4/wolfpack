@@ -249,7 +249,7 @@ describe("panel host", () => {
 		assert.deepEqual(JSON.parse(store.get(RIGHT_PANEL_KEY)!), { other: "a" });
 	});
 
-	it("Memory keeps its subscription, feed and unread across collapse, reopen and switching tabs", async () => {
+	it("Memory keeps its subscription and feed across collapse, reopen and switching tabs", async () => {
 		boundMode = true;
 		await mount([PANELS[0]!, note("a")]);
 		await settle();
@@ -257,7 +257,6 @@ describe("panel host", () => {
 		const node = q('[data-testid="memory-panel"]')!;
 		const obs = (summary: string) => emit({ type: "observation_captured", wolf: "w", threadId: "t1", summary, count: 1, target: { kind: "den", topicId: "x" } });
 		await act(async () => obs("one"));
-		assert.equal(q('[data-testid="memory-unread"]')!.textContent, "1");
 
 		await click(q('[aria-label="Collapse side panel"]')!);
 		assert.ok(q('[data-testid="memory-panel"]') === node, "same element, not remounted");
@@ -265,7 +264,6 @@ describe("panel host", () => {
 		assert.equal(open, 1);
 		await act(async () => obs("two"));
 		await click(q('[aria-label="Open side panel"]')!);
-		assert.equal(q('[data-testid="memory-unread"]')!.textContent, "2");
 
 		await click(q('[data-testid="panel-tab-a"]')!);
 		assert.ok(q('[data-testid="body-a"]'));
@@ -273,8 +271,6 @@ describe("panel host", () => {
 		await act(async () => obs("three"));
 		await click(q('[data-testid="panel-tab-memory"]')!);
 		assert.ok(q('[data-testid="memory-panel"]') === node);
-		assert.equal(q('[data-testid="memory-unread"]')!.textContent, "3");
-		await click(q('[data-testid="memory-observations"]')!);
 		assert.ok(q('[data-testid="memory-feed"]'));
 	});
 });

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BrailleSpinner } from "@/components/braille-spinner";
-import { usePopoverDismiss } from "@/components/popover-dismiss";
+import { usePanelHost, usePanelState } from "@/components/panel-host";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { compactUrl, contextUrl } from "@/components/thread-transport";
 import type { ThreadContext } from "@wolfpack/client";
@@ -134,7 +134,7 @@ export function useThreadContext(wolf: string, slug: string, threadId: string, r
 }
 
 /** A small bar: tokens filled, ticks at the background threshold (startAt), the wait threshold and the window's end. */
-function ContextBar({ c }: { c: ThreadContext }) {
+export function ContextBar({ c }: { c: ThreadContext }) {
 	const max = c.window ?? Math.max(c.tokens, 1);
 	const pct = (n: number) => `${Math.min(100, (n / max) * 100)}%`;
 	return (
@@ -147,32 +147,37 @@ function ContextBar({ c }: { c: ThreadContext }) {
 }
 
 /**
- * The thread header's context chip (`312k / 1M · 2× compacted 14:05`): amber past the background threshold,
- * `summarising…` with the braille spinner while compacting. Click opens the popover: bar, counts, optional
- * instructions and "Compact now" (enabled while a turn runs).
+ * The thread header's context chip (`312k / 1M · 2× compacted 14:05` plus a small fill bar and the percentage of the
+ * window): amber past the background threshold, `summarising…` with the braille spinner while compacting. Click toggles
+ * the Memory panel, whose Context section holds the detail and the Compact button.
  */
 export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: string; slug: string; threadId: string; refreshKey?: unknown }) {
-	const { ctx, compacting, error, compact } = useThreadContext(wolf, slug, threadId, refreshKey);
-	const [open, setOpen] = useState(false);
-	const [instructions, setInstructions] = useState("");
-	const rootRef = useRef<HTMLDivElement>(null);
-	usePopoverDismiss(rootRef, open, () => setOpen(false));
+	const { ctx, compacting } = useThreadContext(wolf, slug, threadId, refreshKey);
+	const panels = usePanelHost();
+	const { open, selected } = usePanelState();
 	if (!ctx) return null;
 	const amber = pastStartAt(ctx);
+	const shown = open && selected === "memory";
+	const pct = ctx.window ? Math.min(100, Math.round((ctx.tokens / ctx.window) * 100)) : undefined;
 	return (
-		<div ref={rootRef} className="relative ml-auto shrink-0 max-md:min-w-0 max-md:shrink" data-testid="context-chip">
+		<div className="relative ml-auto shrink-0 max-md:min-w-0 max-md:shrink" data-testid="context-chip">
 			<button
 				type="button"
 				data-testid="context-chip-button"
 				data-amber={amber || undefined}
 				data-compacting={compacting || undefined}
-				aria-expanded={open}
-				aria-haspopup="dialog"
-				title="Thread context"
-				onClick={() => setOpen((v) => !v)}
+				aria-pressed={shown}
+				title="Thread context: toggle the Memory panel"
+				onClick={() => (shown ? panels.closePanel() : void panels.openPanel("memory"))}
 				className={`flex max-md:max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-xs hover:bg-accent ${amber ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
 			>
+				{pct !== undefined && (
+					<span aria-hidden className="h-1.5 w-8 shrink-0 overflow-hidden rounded bg-accent" data-testid="context-chip-bar">
+						<span className={`block h-full ${amber ? "bg-amber-500" : "bg-foreground/60"}`} style={{ width: `${pct}%` }} />
+					</span>
+				)}
 				<span data-testid="context-label" className="max-md:truncate">{contextLabel(ctx)}</span>
+				{pct !== undefined && <span data-testid="context-pct">{pct}%</span>}
 				{compacting && (
 					<span data-testid="context-summarising" className="flex items-center gap-1">
 						{"· summarising…"}
@@ -180,47 +185,6 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: 
 					</span>
 				)}
 			</button>
-			{open && (
-				<div role="dialog" aria-label="Thread context" data-testid="context-popover" className="absolute right-0 top-full z-50 mt-1 flex w-80 flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs shadow-lg">
-					<div className="flex items-baseline justify-between">
-						<span className="font-medium text-foreground">Context</span>
-						<span data-testid="context-popover-size" className="font-mono text-muted-foreground">{ctx.window ? `${formatTokens(ctx.tokens)} / ${formatTokens(ctx.window)}` : formatTokens(ctx.tokens)}</span>
-					</div>
-					<ContextBar c={ctx} />
-					<div className="flex flex-col gap-0.5 text-muted-foreground">
-						{ctx.startAt !== undefined && <span data-testid="context-start">Summary starts at {formatTokens(ctx.startAt)}</span>}
-						{ctx.waitAt !== undefined && <span data-testid="context-wait">A turn waits for it at {formatTokens(ctx.waitAt)}</span>}
-						<span data-testid="context-count">
-							{ctx.compactions.count === 0 ? "Not compacted yet" : `Compacted ${ctx.compactions.count}×${ctx.compactions.lastAt ? `, last at ${clock(ctx.compactions.lastAt)}` : ""}`}
-						</span>
-					</div>
-					<textarea
-						data-testid="context-instructions"
-						value={instructions}
-						onChange={(e) => setInstructions(e.target.value)}
-						placeholder="Optional: what the summary should keep"
-						rows={2}
-						className="w-full resize-none rounded-md border border-border bg-background p-1.5 text-xs"
-					/>
-					{error && <div data-testid="context-error" role="alert" className="text-destructive">{error}</div>}
-					<button
-						type="button"
-						data-testid="context-compact"
-						disabled={compacting}
-						onClick={() => void compact(instructions).then((ok) => ok && setInstructions(""))}
-						className="flex items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 hover:bg-accent disabled:opacity-60"
-					>
-						{compacting ? (
-							<>
-								<BrailleSpinner label="Summarising" className="h-3" />
-								Summarising…
-							</>
-						) : (
-							"Compact now"
-						)}
-					</button>
-				</div>
-			)}
 		</div>
 	);
 }

@@ -317,7 +317,7 @@ describe("durable memory: sandbox acceptance", { timeout: 60_000 }, () => {
     expect(hashTree(live.dev)).not.toEqual({});
   });
 
-  it("[D6] a wolf without sandbox or memory.live has inert memory; routes answer memory_unavailable", async () => {
+  it("[D6] a wolf without sandbox or memory.live has inert memory: no events, no pool (the 409s are in memory-routes)", async () => {
     const kb = tmp("kb");
     tw = await startTestWolf({
       name: "1uk4",
@@ -342,11 +342,5 @@ describe("durable memory: sandbox acceptance", { timeout: 60_000 }, () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(events).toEqual([]);
     expect(existsSync(join(tw.wolf.config.den, ".memory", "pool"))).toBe(false);
-    for (const action of ["consolidate", "promote"] as const) {
-      const res = await post(tw, action);
-      expect(res.status).toBe(409);
-      expect(ErrorEnvelopeSchema.parse(await res.json()).code).toBe("memory_unavailable");
-    }
-    await expect(tw.client.promoteMemory!("1uk4")).rejects.toMatchObject({ code: "memory_unavailable" });
   });
 });

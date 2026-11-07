@@ -152,13 +152,35 @@ up**. A failed build checks the previous ref back out and never stops the stack 
 detached helper (copied to `~/.wolfpack/preview/`) restarts `com.wolfpack.stack`, polls `/healthz` on 7141 for 60 s and logs to
 `~/.wolfpack/preview/last-run.log`. Restarting ends the wolf session that ran the command: run `status` from Terminal.
 `off` needs only the state file (it works after a crash at any phase): previous branch, fast-forward, install, build, restart,
-clear state. Both take `--dry-run` (print the plan, change nothing). It never pushes or merges. Use `pnpm runtime:update` for
+clear state. Both take `--dry-run` (print the plan, change nothing). It never pushes or merges.
+
+Beyond the switch itself:
+
+- **Local console and the desktop app.** After a good switch the helper starts the preview build's standalone console
+  (`apps/console/.next/standalone/apps/console/server.js`, with `.next/static` and `public` copied in) on `127.0.0.1:3230`
+  (`PREVIEW_CONSOLE_PORT`), with `WOLFPACK_API_URL=http://127.0.0.1:7141`. It runs as its own launchd agent,
+  `com.wolfpack.preview-console` (plist in `~/Library/LaunchAgents`), so it outlives the wolf session and the CLI, and survives a
+  reboot; its log is `~/.wolfpack/preview/console.log`. Then, in each of `~/Library/Application Support/LearnHarness` and
+  `Wolfpack Console` that exists, `console.json` is backed up (`console.json.preview-backup`), its old `consoleUrl` (or its
+  absence) is recorded in the state file, and `consoleUrl` is set to the local console; other keys are kept. **Quit and reopen
+  Wolfpack Console** (the app is never killed). `off` restores each file exactly (or removes the key), stops the agent and
+  removes its plist. `PREVIEW_USERDATA_ROOT` overrides the userData root (tests use it).
+- **Deep health check and rollback.** `/healthz` alone is not enough: the console must list at least one wolf on `/api/wolves`
+  and return a list on `/api/chats` (wolfd's `/v1/wolves` only tells a dead console from a dead wolfd). If that fails within
+  the timeout, the helper stops the console, checks out `previousRef`, builds, restarts and ends in phase `rolled-back` with
+  the `reason` in the state (see `wolfpack preview status`). A rollback that itself fails ends `stack-down`: use the manual way back.
+- **`off` from an old branch.** `on` copies the preview scripts and their imports to `~/.wolfpack/preview/bin/`; `wolfpack
+  preview` runs that copy when present. The guaranteed way back is `node ~/.wolfpack/preview/bin/runtime-preview.mjs off`.
+- **Refs.** `origin/<ref>` is preferred, unless the local `<ref>` is ahead of it or has diverged: then the local one is used
+  with a warning. A detached runtime is found at `WOLVES_DIR/runtime/wolfpack` (or `~/wolves/local/runtime/wolfpack`) and its
+  previous branch defaults to `RUNTIME_BRANCH`. If local `stable` is ahead of `origin/stable`, `off` warns and stays on the local one.
+- **Output.** Build output goes to `~/.wolfpack/preview/last-run.log` (one progress line on the terminal).
+  `wolfpack preview status --json` prints the state, `consoleUrl` and the last log lines. Use `pnpm runtime:update` for
 the normal stable update, which still refuses a branch argument.
 
 #### Manual way back
 
-If `wolfpack preview off` is not available (the previewed branch is older than `wolfpack preview`, so the CLI in the runtime
-tree has no such command), or the helper reports `stack-down` or `unhealthy` (it prints this block too):
+If `node ~/.wolfpack/preview/bin/runtime-preview.mjs off` does not work, or the helper reports `stack-down` or `unhealthy` (it prints this block too):
 
 ```sh
 cd ~/wolves/local/runtime/wolfpack && git checkout stable && pnpm install --frozen-lockfile --prefer-offline && node scripts/turbo.mjs run build

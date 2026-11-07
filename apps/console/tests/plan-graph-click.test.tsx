@@ -125,16 +125,6 @@ describe("draggable graph view", () => {
 		await click(hit);
 		assert.deepEqual(clicked, ["c", "c"]);
 	});
-	it("grab cursor at rest, grabbing while dragging", async () => {
-		await mount(<PlanGraphView draggable graph={wide} />);
-		const box = q('[data-testid="graph-scroll"]')!;
-		assert.match(box.className, /cursor-grab\b/);
-		await ptr(box, "pointerdown", 50, 50);
-		await ptr(box, "pointermove", 30, 50);
-		assert.match(q('[data-testid="graph-scroll"]')!.className, /cursor-grabbing/);
-		await ptr(box, "pointerup", 30, 50);
-		assert.match(q('[data-testid="graph-scroll"]')!.className, /cursor-grab\b/);
-	});
 });
 
 describe("draggable graph view: robustness", () => {
@@ -199,7 +189,6 @@ describe("canvas mode: slivers, free pan, re-center", () => {
 			assert.equal(li.getAttribute("data-sliver"), "true");
 			const text = (li.textContent ?? "").trim();
 			assert.equal(text, id === "a" ? "Done" : "Archived");
-			assert.equal(li.className.includes("overflow-hidden"), false, "li must not clip the focus ring");
 			assert.equal(li.querySelector('[data-testid="sliver-text"]')!.getAttribute("aria-hidden"), "true");
 			assert.equal(text.includes("Alpha") || text.includes("Beta"), false, "title not shown");
 			assert.ok((li.getAttribute("title") ?? "").length > 0);

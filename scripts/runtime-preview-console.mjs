@@ -23,8 +23,8 @@ export function prepareConsole(runtimeDir) {
 
 const plistPath = (home) => path.join(home, "Library", "LaunchAgents", `${CONSOLE_LABEL}.plist`);
 
-export function startConsole({ home, runtimeDir, port, stackPort, node, uid, launchctl }) {
-	const dir = prepareConsole(runtimeDir);
+/** Write the agent's plist and (re)load it. `args` is the full program (node + script); never a shell wrapper. */
+function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) {
 	const logFile = path.join(home, ".wolfpack", "preview", "console.log");
 	fs.mkdirSync(path.dirname(logFile), { recursive: true });
 	const env = { PORT: port, HOSTNAME: "127.0.0.1", WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}`, HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
@@ -37,8 +37,8 @@ export function startConsole({ home, runtimeDir, port, stackPort, node, uid, lau
 <plist version="1.0">
 <dict>
 	<key>Label</key><string>${CONSOLE_LABEL}</string>
-	<key>ProgramArguments</key><array><string>${xml(node)}</string><string>${xml(path.join(dir, "server.js"))}</string></array>
-	<key>WorkingDirectory</key><string>${xml(dir)}</string>
+	<key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join("")}</array>
+	<key>WorkingDirectory</key><string>${xml(workingDir)}</string>
 	<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join("")}</dict>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
@@ -50,6 +50,25 @@ export function startConsole({ home, runtimeDir, port, stackPort, node, uid, lau
 	);
 	launchctl("bootout", `gui/${uid}/${CONSOLE_LABEL}`); // a leftover from an earlier preview
 	if (launchctl("bootstrap", `gui/${uid}`, file) !== 0) throw new Error(`launchctl bootstrap of ${file} failed`);
+}
+
+export function startConsole({ home, runtimeDir, port, stackPort, node, uid, launchctl }) {
+	const dir = prepareConsole(runtimeDir);
+	loadAgent({ home, args: [node, path.join(dir, "server.js")], workingDir: dir, port, stackPort, uid, launchctl });
+}
+
+/** `next dev` from a worktree's apps/console (hot reload), under the same agent. Returns the app dir; throws with a hint when it can't run. */
+export function devConsoleApp(dir) {
+	const app = path.join(dir, "apps", "console");
+	const next = path.join(app, "node_modules", "next", "dist", "bin", "next");
+	if (!fs.existsSync(app)) throw new Error(`${app} does not exist: not a wolfpack worktree`);
+	if (!fs.existsSync(next)) throw new Error(`${path.join(app, "node_modules")} has no next: run \`pnpm install\` in ${dir} first`);
+	return { app, next };
+}
+
+export function startDevConsole({ home, dir, port, stackPort, node, uid, launchctl }) {
+	const { app, next } = devConsoleApp(dir);
+	loadAgent({ home, args: [node, next, "dev", "--hostname", "127.0.0.1", "--port", port], workingDir: app, port, stackPort, uid, launchctl });
 }
 
 export function stopConsole({ home, uid, launchctl }) {

@@ -16,12 +16,24 @@ const commit = (cwd: string, file: string, body: string) => {
 	g(cwd, "commit", "-q", "-m", `edit ${file}`);
 };
 const stateFile = () => path.join(home, ".wolfpack", "preview", "state.json");
+const ud = () => path.join(tmp, "Application Support");
+const consoleJson = (name: string) => path.join(ud(), name, "console.json");
+const readConsoleJson = (name: string) => JSON.parse(fs.readFileSync(consoleJson(name), "utf8"));
+/** A worktree-like dir with apps/console and a fake next bin. */
+const devDir = (name: string) => {
+	const d = path.join(tmp, name);
+	fs.mkdirSync(path.join(d, "apps", "console", "node_modules", "next", "dist", "bin"), { recursive: true });
+	fs.writeFileSync(path.join(d, "apps", "console", "node_modules", "next", "dist", "bin", "next"), "//");
+	return d;
+};
 const readState = () => JSON.parse(fs.readFileSync(stateFile(), "utf8"));
 
 beforeEach(() => {
 	tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rtprev-")));
 	home = path.join(tmp, "home");
 	fs.mkdirSync(home);
+	fs.mkdirSync(path.join(tmp, "Application Support", "LearnHarness"), { recursive: true });
+	fs.writeFileSync(path.join(tmp, "Application Support", "LearnHarness", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
 	origin = path.join(tmp, "origin.git");
 	g(tmp, "init", "-q", "--bare", "-b", "main", origin);
 	main = path.join(tmp, "main");
@@ -42,7 +54,8 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 /** Stubbed steps record into `calls`; the git runner is real but spied on. */
-const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean } = {}) => {
+const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves?: boolean; portBusy?: boolean } = {}) => {
+	const lc: string[][] = [];
 	const calls: string[] = [];
 	const gitCalls: string[][] = [];
 	const logs: string[] = [];
@@ -60,10 +73,14 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean } = {}) =
 			if (opts.buildFails && g(wt, "rev-parse", "HEAD") === featSha) throw new Error("boom");
 		},
 		spawnHelper: (a: { args: string[] }) => calls.push(`helper ${a.args.slice(4).join(" ")}`),
+		launchctl: (...a: string[]) => (lc.push(a), 0),
+		sleep: async () => {},
+		portFree: async () => !opts.portBusy,
+		fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: opts.noWolves ? [] : [{ id: "ddkyhT", name: "1uk4", host: "local", status: "busy", librarian: false, kbReadable: true }] } : { chats: [] }),
 	};
 	const run = (argv: string[]) =>
-		runPreview({ argv, env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves") }, cwd: rtWt, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { calls, gitCalls, logs, run, steps, builds };
+		runPreview({ argv, env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves"), PREVIEW_USERDATA_ROOT: ud() }, cwd: rtWt, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
+	return { calls, gitCalls, logs, run, steps, builds, lc };
 };
 
 describe("runtime-preview", () => {
@@ -296,5 +313,62 @@ describe("runtime-preview", () => {
 		const h = harness();
 		await h.run(["status"]);
 		expect(h.logs.join("\n")).toContain("stable, no preview");
+	});
+
+	describe("preview dev", () => {
+		const plistText = () => fs.readFileSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"), "utf8");
+
+		it("refuses a dir without apps/console or without node_modules, hints pnpm install, and changes nothing", async () => {
+			const h = harness();
+			expect((await h.run(["dev", path.join(tmp, "nope")])).exitCode).toBe(1);
+			const noModules = path.join(tmp, "nm");
+			fs.mkdirSync(path.join(noModules, "apps", "console"), { recursive: true });
+			expect((await h.run(["dev", noModules])).exitCode).toBe(1);
+			expect(h.logs.join("\n")).toContain("pnpm install");
+			expect(h.lc).toEqual([]);
+			expect(fs.existsSync(stateFile())).toBe(false);
+		});
+
+		it("serves next dev from the worktree under the preview-console agent, then points the app and records the original first", async () => {
+			const h = harness();
+			const d = devDir("wt");
+			expect((await h.run(["dev", d])).exitCode).toBe(0);
+			const t = plistText();
+			const app = path.join(fs.realpathSync(d), "apps", "console");
+			expect(t).toContain(`<string>${path.join(app, "node_modules", "next", "dist", "bin", "next")}</string><string>dev</string>`);
+			expect(t).toContain(`<key>WorkingDirectory</key><string>${app}</string>`);
+			expect(t).toContain("<key>WOLFPACK_API_URL</key><string>http://127.0.0.1:7141</string>");
+			expect(t).toContain("<key>HOSTNAME</key><string>127.0.0.1</string>");
+			expect(t).toContain("<key>PORT</key><string>3230</string>");
+			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" });
+			expect(readState()).toMatchObject({ console: { mode: "dev", dir: fs.realpathSync(d) }, consolePort: 3230, apps: [{ previous: "https://sfo-01.example" }] });
+			// the wolves are never touched
+			expect(h.lc.every((a) => a.join(" ").includes("preview-console") || a[0] === "bootstrap" && String(a[2]).includes("preview-console"))).toBe(true);
+			expect(h.gitCalls.filter((a) => a[0] === "checkout")).toEqual([]);
+			expect(h.calls).toEqual([]);
+		});
+
+		it("defaults to the git worktree containing cwd", async () => {
+			const h = harness();
+			fs.mkdirSync(path.join(rtWt, "apps", "console", "node_modules", "next", "dist", "bin"), { recursive: true });
+			fs.writeFileSync(path.join(rtWt, "apps", "console", "node_modules", "next", "dist", "bin", "next"), "//");
+			expect((await h.run(["dev"])).exitCode).toBe(0);
+			expect(readState().console.dir).toBe(rtWt);
+		});
+
+		it("fails when no wolf is listed in time: the agent is stopped, the app untouched and the state removed", async () => {
+			const h = harness({ noWolves: true });
+			expect((await h.run(["dev", devDir("wt")])).exitCode).toBe(1);
+			expect(readConsoleJson("LearnHarness").consoleUrl).toBe("https://sfo-01.example");
+			expect(h.lc.at(-1)).toEqual(["bootout", `gui/${process.getuid?.()}/com.wolfpack.preview-console`]);
+			expect(fs.existsSync(stateFile())).toBe(false);
+		});
+
+		it("fails with the reason when the port is held by something else, starting nothing", async () => {
+			const h = harness({ portBusy: true });
+			expect((await h.run(["dev", devDir("wt")])).exitCode).toBe(1);
+			expect(h.logs.join("\n")).toContain("3230");
+			expect(h.lc.some((a) => a[0] === "bootstrap")).toBe(false);
+		});
 	});
 });

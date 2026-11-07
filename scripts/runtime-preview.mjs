@@ -14,11 +14,13 @@
  * Never pushes or merges a branch: only fetch, rev-parse, checkout and `merge --ff-only` of the previous branch's origin.
  * Steps (git, build, spawnHelper) are injectable so tests can stub them. Env: HOME, RUNTIME_BRANCH, STACK_LABEL, STACK_PORT.
  */
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyApps, planApps, recoverApps, restoreApps, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { probePortFree } from "./runtime-preview-switch.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -35,6 +37,14 @@ function copyScripts(binDir) {
 
 const defaultSteps = {
 	git: realGit,
+	launchctl: (...args) => spawnSync("launchctl", args, { stdio: "inherit" }).status,
+	sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+	portFree: probePortFree,
+	fetchJson: async (url) => {
+		const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+		if (!r.ok) throw new Error(`${url} answered ${r.status}`);
+		return r.json();
+	},
 	build: (wt, { logFile } = {}) => {
 		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
 		let fd;
@@ -97,6 +107,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const helper = (okPhase, clear) => st.spawnHelper({ dir, logFile, args: [stateFile, plist, label, port, okPhase, clear ? "1" : "0"] });
 	const state = readState();
 
+	const uid = process.getuid?.() ?? 501;
+	const userDataRoot = env.PREVIEW_USERDATA_ROOT || path.join(home, "Library", "Application Support");
+
 	if (!sub) return fail("usage: wolfpack preview <ref> | status | off [--dry-run]");
 
 	if (sub === "status") {
@@ -113,6 +126,66 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
 		for (const l of tail) log(`  ${l}`);
 		return { exitCode: 0, state };
+	}
+
+	if (sub === "dev") {
+		const given = pos[1];
+		let wtDir;
+		if (given) wtDir = path.resolve(cwd, given);
+		else {
+			try {
+				wtDir = git(cwd, "rev-parse", "--show-toplevel");
+			} catch {
+				return fail("not inside a git worktree: pass the directory, `wolfpack preview dev <dir>`. Nothing was changed.");
+			}
+		}
+		try {
+			wtDir = fs.realpathSync(wtDir);
+			devConsoleApp(wtDir);
+		} catch (err) {
+			return fail(`${err.message}. Nothing was changed.`);
+		}
+		const consolePort = String(state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230);
+		const url = `http://127.0.0.1:${consolePort}`;
+		if (dryRun) {
+			log(`${tag}would serve \`next dev\` from ${wtDir}/apps/console on ${url} (WOLFPACK_API_URL=http://127.0.0.1:${port}) under com.wolfpack.preview-console`);
+			log(`${tag}then point the app's console.json at it; the wolves are not touched`);
+			return { exitCode: 0 };
+		}
+		const lcx = { home, uid, launchctl: st.launchctl };
+		stopConsole(lcx); // an earlier console (build or dev) or a restart of this one
+		await st.sleep(1000);
+		if (!(await st.portFree(consolePort))) return fail(`port ${consolePort} is already in use by something else (a hand-started \`next dev\`?). Stop it or set PREVIEW_CONSOLE_PORT. Nothing was changed.`);
+		const tearDown = () => {
+			stopConsole(lcx);
+			restoreApps(readState()?.apps);
+			const cur = readState();
+			if (cur && !cur.previewRef) fs.rmSync(stateFile, { force: true });
+		};
+		try {
+			startDevConsole({ home, dir: wtDir, port: consolePort, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
+		} catch (err) {
+			tearDown();
+			return fail(`cannot start the dev console: ${err.message}`);
+		}
+		log(`compiling the console from ${wtDir}/apps/console (the first request can take a minute)`);
+		let up = false;
+		for (let i = 0; i < 45 && !up; i++) {
+			try {
+				const w = (await st.fetchJson(`${url}/api/wolves`))?.wolves;
+				up = Array.isArray(w) && w.length > 0;
+			} catch {}
+			if (!up) await st.sleep(2000);
+		}
+		if (!up) {
+			tearDown();
+			return fail(`${url}/api/wolves listed no wolf within 90 s; the dev console was stopped. See ${path.join(dir, "console.log")}`);
+		}
+		const apps = planApps({ root: userDataRoot, url, existing: state?.apps });
+		writeState({ ...(state ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir }, apps }); // state first
+		applyApps(apps, url);
+		log(`live console from ${wtDir} on ${url}. Quit and reopen Wolfpack Console (or press ⌘R). \`wolfpack preview off\` when done.`);
+		return { exitCode: 0 };
 	}
 
 	const activePreview = state && state.phase !== "build-failed" ? state : undefined;

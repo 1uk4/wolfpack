@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 13;
+export const PREVIEW_VERSION = 14;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -195,6 +195,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	};
 	let yes = argv.includes("--yes") || argv.includes("-y");
 	/** Ask y/N before something restarts the wolves. Returns a result to hand back when the answer is no, else undefined. */
+	// The harness sets WOLF_ID / WOLF_NAME in a wolf's shell; from Terminal neither exists, so no wolf session can end.
+	const inWolf = !!(env.WOLF_ID || env.WOLF_NAME);
 	const keepCli = (dir) => {
 		if (dir) log(`wolfpack stays on ${dir} so preview is available (stable has no preview yet)`);
 	};
@@ -259,7 +261,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
 			let putBack = false;
 			if (!flag) {
-				const answer = yes ? true : await st.confirm(`The wolves are on ${state.previewRef}. Put them back on stable? This restarts the wolves and ends the wolf session running this command.`);
+				const answer = yes ? true : await st.confirm(`The wolves are on ${state.previewRef}. Put them back on stable? This restarts the wolves${inWolf ? " and ends the wolf session running this command" : ""}.`);
 				putBack = answer === true;
 				if (answer === null) log("no terminal to ask on: the wolves stay on the preview. `wolfpack preview off --all` puts them back on stable.");
 			}
@@ -531,7 +533,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		writeState({ ...readState(), phase: "switching", stackStartedAt: undefined });
 		helper("running", false);
-		log(`previewing ${branch ?? wtDir} from ${wtDir}: the stack is restarting, so the wolf session running this command will end.`);
+		log(`previewing ${branch ?? wtDir} from ${wtDir}: the stack is restarting${inWolf ? ", so the wolf session running this command will end" : ""}.`);
 		log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable. If the deep health check fails, the switch rolls back by itself.");
 		return { exitCode: 0 };
 	};
@@ -555,7 +557,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		writeState({ ...state, phase: "restoring" });
 		copyScripts(path.join(dir, "bin"));
 		helper("stable", true);
-		log("restoring stable: the wolf session running this command will end. Run `wolfpack preview status` from Terminal.");
+		log(inWolf ? "restoring stable: the wolf session running this command will end. Run `wolfpack preview status` from Terminal." : "restoring stable…");
 		return { exitCode: 0 };
 	}
 
@@ -572,7 +574,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			log(`${tag}would run launchctl kickstart -k gui/${uid}/${label} and wait for /healthz on ${port}`);
 			return { exitCode: 0 };
 		}
-		const refused = await gate("This restarts the wolves (it ends the wolf session running this command).");
+		const refused = await gate(`This restarts the wolves${inWolf ? " (it ends the wolf session running this command)" : ""}.`);
 		if (refused) return refused;
 		st.launchctl("kickstart", "-k", `gui/${uid}/${label}`);
 		let up = false;
@@ -650,7 +652,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		if (argv.includes("--rollback")) return { exitCode: 0 }; // the switch helper restarts the stack itself
 		helper(branch ?? "stable", true);
-		log("restoring stable: the wolf session running this command will end. Run `wolfpack preview status` from Terminal.");
+		log(inWolf ? "restoring stable: the wolf session running this command will end. Run `wolfpack preview status` from Terminal." : "restoring stable…");
 		return { exitCode: 0 };
 	}
 
@@ -715,7 +717,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	}
 	writeState({ ...readState(), phase: "switching" });
 	helper("running", false);
-	log(`previewing ${ref} (${sha.slice(0, 8)}): the stack is restarting, so the wolf session running this command will end.`);
+	log(`previewing ${ref} (${sha.slice(0, 8)}): the stack is restarting${inWolf ? ", so the wolf session running this command will end" : ""}.`);
 	log(`Then a local console on http://127.0.0.1:${readState().consolePort} is started for the app's Preview window (the main window stays on its own console). If the deep health check fails, the switch rolls back by itself (phase rolled-back).`);
 	log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable. If that command is missing: node ~/.wolfpack/preview/bin/runtime-preview.mjs off");
 	return { exitCode: 0 };

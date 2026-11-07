@@ -110,8 +110,8 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	};
 	if (o.realHealth) delete steps.health; // the production default, answered by a stubbed fetch
 	if (o.confirm !== "none") steps.confirm = async (q: string) => (asked.push(q), o.confirm ?? true);
-	const run = (argv: string[], cwd = main) =>
-		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud() }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
+	const run = (argv: string[], cwd = main, extraEnv: Record<string, string> = {}) =>
+		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud(), ...extraEnv }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
 	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs };
 };
 
@@ -292,6 +292,21 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli")); // console-only leaves it
 		await h.run(["off", "--all"]);
 		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
+	});
+
+	it("says the wolf session will end only when the command runs inside a wolf session (WOLF_NAME set); from Terminal it just says restoring stable", async () => {
+		const h = harness();
+		await h.run(["--wolves", wtA]);
+		expect(h.logs.join("\n")).not.toContain("wolf session");
+		h.logs.length = 0;
+		await h.run(["off", "--all"]);
+		expect(h.logs).toContain("restoring stable…");
+		expect(h.logs.join("\n")).not.toContain("wolf session");
+		await h.run(["--wolves", wtA], main, { WOLF_NAME: "1uk4" });
+		expect(h.logs.join("\n")).toContain("the wolf session running this command will end");
+		h.logs.length = 0;
+		await h.run(["off", "--all"], main, { WOLF_NAME: "1uk4" });
+		expect(h.logs.join("\n")).toContain("restoring stable: the wolf session running this command will end");
 	});
 
 	it("off never leaves the global cli on a stable that has no preview command: it moves to the picker checkout (or stays on the worktree's cli) and says so", async () => {

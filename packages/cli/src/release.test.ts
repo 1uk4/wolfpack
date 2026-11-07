@@ -88,7 +88,8 @@ describe("release filter: only files a component ships make a tag", () => {
   const ws = (name: string, dir: string, deps: string[] = []) => ({ name, dir, deps, inTsRoot: true, hasTest: true, distImports: [] });
   const workspaces = [
     ws("@wolfpack/protocol", "packages/protocol"),
-    ws("@wolfpack/harness", "packages/harness", ["@wolfpack/protocol"]),
+    ws("@wolfpack/agents", "packages/agents"),
+    ws("@wolfpack/harness", "packages/harness", ["@wolfpack/protocol", "@wolfpack/agents"]),
     ws("@wolfpack/hubd", "packages/hubd"),
     ws("@wolfpack/workerd", "packages/workerd"),
     ws("@wolfpack/console", "packages/console"),
@@ -117,6 +118,11 @@ describe("release filter: only files a component ships make a tag", () => {
   });
   it("source of a workspace dep tags its dependents", () => {
     expect(tagsFor(["packages/protocol/src/a.ts"])).toEqual(["wolfd"]);
+  });
+  it("shipped Markdown (agent prompts, standards) tags its dependents; plain docs and READMEs tag nothing", () => {
+    expect(tagsFor(["packages/agents/agents/x.md"])).toEqual(["wolfd"]);
+    expect(tagsFor(["packages/agents/standards/testing.md"])).toEqual(["wolfd"]);
+    expect(tagsFor(["README.md", "docs/x.md", "packages/client/README.md", "packages/agents/README.md"])).toEqual([]);
   });
   it("a deploy/<component>/ file tags only that component", () => {
     expect(tagsFor(["deploy/hubd/setup.sh"])).toEqual(["hubd"]);

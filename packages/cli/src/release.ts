@@ -105,10 +105,17 @@ const NOT_SHIPPED = [
 /** Build and release recipes: computeAffected ignores them, but a change can alter every artifact. */
 const REBUILDS_ALL = [/^scripts\/(release|build)-[^/]*$/, /^infra\/release\//];
 
+/**
+ * Non-code runtime assets a package ships (read relative to dist; infra/release/Dockerfile copies package.json "files").
+ * computeAffected ignores *.md, so each is reported as a change to its package's package.json: the package and its
+ * dependents tag. Only @wolfpack/agents lists such dirs.
+ */
+const SHIPPED_ASSETS = /^(packages\/agents)\/(agents|standards)\/.*/;
+
 /** Files to feed computeAffected for a release; null (everything) when a build recipe changed. */
 export function releaseFiles(changed: string[] | null): string[] | null {
   if (!changed || changed.some((f) => REBUILDS_ALL.some((r) => r.test(f)))) return null;
-  return changed.filter((f) => !NOT_SHIPPED.some((r) => r.test(f)));
+  return changed.filter((f) => !NOT_SHIPPED.some((r) => r.test(f))).map((f) => f.replace(SHIPPED_ASSETS, "$1/package.json"));
 }
 
 /** Changed components with their commits and the suggested next tag. Unchanged components are omitted. */

@@ -51,7 +51,7 @@ Set `WOLFPACK_HUB_URL` (and `WOLFPACK_HUB_TOKEN`, a console token from `hubd pai
 WOLFPACK_MODELS_FILE=/path/to/models.subscription.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
 ```
 
-Live proof (tagged, never in CI): `WOLFD_LIVE=1 pnpm --filter @wolfpack/harness test -- wolfd.subscription.live` runs a chat turn and a `read` tool turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
+Live proof (this Mac only, never in CI): `pnpm run test:live` runs one chat turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
 
 ## Test seams
 

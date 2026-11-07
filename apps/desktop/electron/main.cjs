@@ -73,9 +73,9 @@ if (readEnv("WOLFPACK_DEV_URL", "LH_DEV_URL")) {
 }
 // One-time copy from the pre-rename userData folder (see userdata-migrate.cjs).
 try {
-	migrateLegacyUserData(app.getPath("userData"), (m) => console.log(m));
+	migrateLegacyUserData(app.getPath("userData"), log);
 } catch (err) {
-	console.error("userData migration error:", err);
+	log(`userData migration error: ${err?.message ?? err}`);
 }
 
 if (!app.requestSingleInstanceLock()) {

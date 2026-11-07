@@ -240,6 +240,14 @@ describe("the strip's done rows", () => {
 		assert.match(listening, />listening</);
 	});
 
+	it("the attached row shows the live dictation meter while listening and drops it after Stop", () => {
+		const dictation = { active: true, levelRef: { current: 0 } } as never;
+		const row = { title: "Home", color: "#123456", state: "idle" as const, listening: true, onStop: () => {}, dictation, onOpen: () => {} };
+		const render = (r: typeof row) => renderToStaticMarkup(<SubagentStripView items={[]} now={NOW} onOpen={() => {}} onStop={() => {}} attached={r} />);
+		assert.match(render(row), /data-testid="dictation-meter"/);
+		assert.doesNotMatch(render({ ...row, listening: false, dictation: { active: false, levelRef: { current: 0 } } as never }), /dictation-meter/);
+	});
+
 	it("a settled row leaves at once (no linger, no N done row); only live ones show", () => {
 		const html = view();
 		assert.equal((html.match(/data-testid="subagent-row"/g) ?? []).length, 1); // the running one

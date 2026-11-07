@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BotIcon, MicIcon, SquareIcon } from "lucide-react";
+import { LiveMeter } from "@/components/dictation";
 import type { AttachedRow } from "@/components/attached-strip-row";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
@@ -106,6 +107,7 @@ export function SubagentStripView({
 						{attached.listening && <MicIcon data-testid="attached-listening" className="size-3 shrink-0 text-red-500" />}
 						<span data-testid="attached-state" className="shrink-0 text-muted-foreground">{attached.listening ? "listening" : attached.state === "busy" ? "working" : attached.state === "needs-you" ? "needs you" : "chat"}</span>
 					</button>
+					{attached.listening && attached.dictation && <LiveMeter dictation={attached.dictation} className="flex h-3 w-16 shrink-0 items-center gap-[2px]" />}
 					{attached.listening && attached.onStop && (
 						<button type="button" data-testid="attached-stop" aria-label="Stop dictation" onClick={attached.onStop} className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-background hover:text-foreground">
 							<SquareIcon className="size-3" />

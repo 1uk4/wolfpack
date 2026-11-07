@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useAttachedThread } from "@/components/attached-thread";
 import { attachedThreadTitle } from "@/components/chat-bar";
-import { useBarDictation } from "@/components/dictation";
+import { useBarDictation, type Dictation } from "@/components/dictation";
 import { useThreadColor } from "@/components/use-thread-color";
 
 export interface AttachedRow {
@@ -14,6 +14,8 @@ export interface AttachedRow {
 	listening: boolean;
 	/** Ends the live run (set while listening). */
 	onStop?: () => void;
+	/** The chat bar's live run (set while listening), the source of the strip's level meter. */
+	dictation?: Dictation;
 	onOpen: () => void;
 }
 
@@ -37,7 +39,7 @@ export function useAttachedStripRow(wolf: string, threadId: string): AttachedRow
 		color,
 		state: status === "needs-you" ? "needs-you" : api.working ? "busy" : "idle",
 		listening: !!bar?.active,
-		...(bar?.active ? { onStop: bar.toggle } : {}),
+		...(bar?.active ? { onStop: bar.toggle, dictation: bar } : {}),
 		onOpen: () => {
 			api.setMinimized(false);
 			api.setPhoneSheet(true);

@@ -49,8 +49,8 @@ test("manifest: installable, theme matches the console, icons exist on disk", ()
 	assert.equal(m.display, "standalone");
 	assert.equal(m.start_url, "/");
 	assert.ok(m.name && m.short_name);
-	assert.equal(m.background_color, "#141414");
-	assert.equal(m.theme_color, "#141414");
+	assert.equal(m.background_color, "#0f141a");
+	assert.equal(m.theme_color, "#0f141a");
 	const sizes = new Set((m.icons ?? []).map((i) => i.sizes));
 	assert.ok(sizes.has("192x192") && sizes.has("512x512"));
 	for (const i of m.icons ?? []) assert.ok(existsSync(new URL(`../public${i.src}`, import.meta.url)), i.src);

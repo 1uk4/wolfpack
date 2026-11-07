@@ -28,28 +28,28 @@
 }
 
 /* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
-   Mono chrome = JetBrains Mono; prose = Source Sans 3; titles = CMU Serif. */
+   B4 slate and teal (2026-11): chrome = Geist Mono; prose = Inter; titles = CMU Serif. */
 :root {
 	color-scheme: dark;
-	--radius: 8px;
-	--background: #141414;
-	--foreground: #e6e6e6;
-	--card: #1c1c1c;
-	--card-foreground: #e6e6e6;
-	--popover: #1c1c1c;
-	--popover-foreground: #e6e6e6;
-	--primary: #e6e6e6;
-	--primary-foreground: #141414;
-	--secondary: #1c1c1c;
-	--secondary-foreground: #e6e6e6;
-	--muted: #1c1c1c;
-	--muted-foreground: #8d8d8d;
-	--accent: #2a2a2a;
-	--accent-foreground: #e6e6e6;
+	--radius: 10px;
+	--background: #0f141a;
+	--foreground: #e6ebf0;
+	--card: #161c24;
+	--card-foreground: #e6ebf0;
+	--popover: #161c24;
+	--popover-foreground: #e6ebf0;
+	--primary: #2dd4bf;
+	--primary-foreground: #04201c;
+	--secondary: #161c24;
+	--secondary-foreground: #e6ebf0;
+	--muted: #161c24;
+	--muted-foreground: #8a96a3;
+	--accent: #1f2730;
+	--accent-foreground: #e6ebf0;
 	--destructive: oklch(0.704 0.191 22.216);
-	--border: #434343;
-	--input: #434343;
-	--ring: #8d8d8d;
+	--border: #313b47;
+	--input: #313b47;
+	--ring: #8a96a3;
 	/* Emphasis inks default to the REGULAR TEXT COLOR (owner ruling,
 	   appearance wave 2026-09-26 — the old #ee928c/#6fa9d6 factory
 	   emphasis colors are gone). Explicit overrides land via the
@@ -70,24 +70,24 @@
 /* The app is always dark (<html class="dark">); mirror the same values so
    the block stays coherent under Tailwind's variant. */
 .dark {
-	--background: #141414;
-	--foreground: #e6e6e6;
-	--card: #1c1c1c;
-	--card-foreground: #e6e6e6;
-	--popover: #1c1c1c;
-	--popover-foreground: #e6e6e6;
-	--primary: #e6e6e6;
-	--primary-foreground: #141414;
-	--secondary: #1c1c1c;
-	--secondary-foreground: #e6e6e6;
-	--muted: #1c1c1c;
-	--muted-foreground: #8d8d8d;
-	--accent: #2a2a2a;
-	--accent-foreground: #e6e6e6;
+	--background: #0f141a;
+	--foreground: #e6ebf0;
+	--card: #161c24;
+	--card-foreground: #e6ebf0;
+	--popover: #161c24;
+	--popover-foreground: #e6ebf0;
+	--primary: #2dd4bf;
+	--primary-foreground: #04201c;
+	--secondary: #161c24;
+	--secondary-foreground: #e6ebf0;
+	--muted: #161c24;
+	--muted-foreground: #8a96a3;
+	--accent: #1f2730;
+	--accent-foreground: #e6ebf0;
 	--destructive: oklch(0.704 0.191 22.216);
-	--border: #434343;
-	--input: #434343;
-	--ring: #8d8d8d;
+	--border: #313b47;
+	--input: #313b47;
+	--ring: #8a96a3;
 	/* Same emphasis ruling as the block above: unset = text color. */
 	--lh-ink-strong: var(--foreground);
 	--lh-ink-italic: var(--foreground);
@@ -112,16 +112,16 @@
 }
 
 @theme inline {
-	/* Fonts: chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
-	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx.
+	/* Fonts: chrome = Geist Mono, prose = Inter, titles = CMU
+	   Serif bold. The Geist Mono/Inter variables attach in app/layout.tsx.
 	   (owner, typography round) The Tailwind defaults are ALIASED to the app
 	   fonts: `font-mono`/`font-sans` utilities would otherwise fall to the
 	   SYSTEM stacks — a fourth font the app never chose — and streamdown's
 	   code-block chrome + mermaid-error + demo-card all use them. */
-	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
-	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
-	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
-	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
+	--font-ui: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+	--font-prose: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+	--font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+	--font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
 	   Component sizes must pull from this ladder. (owner, typography
 	   round 4: the 10px rung is merged into 11 — one pixel apart was a
@@ -151,10 +151,10 @@
 	--text-3xl--line-height: 1.25;
 	/* Radii ladder — 4/8/12/16 multiples of the 4px base. */
 	--radius-sm: 4px;
-	--radius-md: 8px;
-	--radius-lg: 12px;
+	--radius-md: 10px;
+	--radius-lg: 10px;
 	--radius-xl: 16px;
-	--radius: 8px;
+	--radius: 10px;
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);

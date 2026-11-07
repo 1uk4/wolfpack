@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Source_Sans_3 } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
@@ -16,10 +16,10 @@ import HubAuth from "@/components/hub-auth";
 import UpdateBanner from "@/components/update-banner";
 import { ViewportVars } from "@/components/viewport-vars";
 
-// Chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
+// Chrome = Geist Mono, prose = Inter, titles = CMU
 // Serif (the bundled lh-cmu @font-face in globals.css — no CDN).
-const ui = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
-const prose = Source_Sans_3({ subsets: ["latin"], variable: "--font-sans3" });
+const ui = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
+const prose = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
 	title: "Wolfpack Console",
@@ -37,7 +37,7 @@ export const viewport: Viewport = {
 	maximumScale: 1,
 	userScalable: false,
 	viewportFit: "cover",
-	themeColor: "#141414",
+	themeColor: "#0f141a",
 	interactiveWidget: "resizes-content",
 };
 

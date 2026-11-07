@@ -9,7 +9,7 @@
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/work-server\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/work-server/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/work-server/src"
   },
   "dependencies": {
     "@wolfpack/engine": "*",

@@ -17,7 +17,7 @@ afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 /** launchctl, sleep and health are stubs; `bootstrapResults` is consumed one per bootstrap call (then repeats the last). */
 type Json = unknown;
-type Local = { port: string; home: string; userDataRoot: string; runtimeDir: string; node: string };
+type Local = { keepConsole?: boolean; port: string; home: string; userDataRoot: string; runtimeDir: string; node: string };
 const sw = (o: { bootstrapResults?: number[]; healthy?: boolean; okPhase?: string; clear?: boolean; deep?: { consoleUrl: string; fetchJson: (url: string) => Promise<Json>; rollback: () => Promise<boolean> }; local?: Local; portFree?: boolean } = {}) => {
 	const full: string[][] = [];
 	const calls: string[] = [];
@@ -162,6 +162,13 @@ describe("runtime-preview-switch", () => {
 			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 			expect(fs.existsSync(path.join(ud, "Wolfpack Console", "console.json"))).toBe(false);
 			expect(off.full).toContainEqual(["bootout", "gui/501/com.wolfpack.preview-console"]);
+		});
+
+		it("with a dev console active (keepConsole) a ref switch neither starts, stops nor re-points the console", async () => {
+			const s = sw({ deep: okDeep(), local: { ...local, keepConsole: true } });
+			expect(await s.run()).toBe(0);
+			expect(s.full.some((a) => String(a[1] ?? "").includes("preview-console") || String(a[2] ?? "").includes("preview-console"))).toBe(false);
+			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
 		it("a failed deep check leaves console.json untouched and stops the console before rolling back", async () => {

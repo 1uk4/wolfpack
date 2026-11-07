@@ -79,7 +79,7 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 	};
 	const lc = localConsole;
 	const teardownConsole = () => {
-		if (!lc) return;
+		if (!lc || lc.keepConsole) return; // a dev console outlives a ref preview switch; only `off` stops it
 		stopConsole({ home: lc.home, uid, launchctl });
 		restoreApps(readState().apps ?? recoverApps({ root: lc.userDataRoot, url: `http://127.0.0.1:${lc.port}` }));
 		setPhase(readState().phase, { apps: undefined });
@@ -126,7 +126,7 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 	let reason;
 	if (await waitHealthz()) {
 		say(`healthz answered on ${port}`);
-		if (lc && !clear) {
+		if (lc && !clear && !lc.keepConsole) {
 			stopConsole({ home: lc.home, uid, launchctl }); // a console left by an earlier preview would hold the port
 			await sleep(1000);
 			try {
@@ -159,7 +159,7 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 			teardownConsole();
 			fs.rmSync(stateFile, { force: true });
 		} else {
-			if (lc) {
+			if (lc && !lc.keepConsole) {
 				const url = `http://127.0.0.1:${lc.port}`;
 				try {
 					const apps = planApps({ root: lc.userDataRoot, url, existing: readState().apps });
@@ -216,7 +216,7 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(file
 		// Only a preview switch ("on") that started a local console is deep-checked and can roll back.
 		...(st.consolePort
 			? {
-					localConsole: { port: String(st.consolePort), home: process.env.HOME || os.homedir(), userDataRoot: process.env.PREVIEW_USERDATA_ROOT || path.join(process.env.HOME || os.homedir(), "Library", "Application Support"), runtimeDir: st.runtimeDir, node: process.execPath },
+					localConsole: { port: String(st.consolePort), home: process.env.HOME || os.homedir(), userDataRoot: process.env.PREVIEW_USERDATA_ROOT || path.join(process.env.HOME || os.homedir(), "Library", "Application Support"), runtimeDir: st.runtimeDir, node: process.execPath, keepConsole: st.console?.mode === "dev" && clear !== "1" },
 				}
 			: {}),
 		...(st.consolePort && clear !== "1"

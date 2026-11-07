@@ -188,8 +188,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0 };
 	}
 
-	const activePreview = state && state.phase !== "build-failed" ? state : undefined;
-	// A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path.
+		// A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path.
 	const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
 	const rtWt = state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
 	if (!rtWt) return fail(`branch ${runtimeBranch} is not checked out in any worktree`);
@@ -235,9 +234,6 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	// on <ref>
 	const ref = sub;
 	if (ref.startsWith("-")) return fail(`"${ref}" looks like an option, not a ref. Nothing was changed.`);
-	if (activePreview && activePreview.previewRef !== ref) {
-		return fail(`a preview of ${activePreview.previewRef} is already active (${activePreview.phase}); run \`wolfpack preview off\` first. Nothing was changed.`);
-	}
 	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first. Nothing was changed.`);
 	if (dryRun) log(`${tag}not fetching; using local refs`);
 	else if (!tryGit(rtWt, "fetch", "origin").ok) return fail("git fetch failed. Nothing was changed.");
@@ -257,9 +253,10 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 
 	const head = git(rtWt, "rev-parse", "HEAD");
 	const abbrev = git(rtWt, "rev-parse", "--abbrev-ref", "HEAD");
-	// Any existing state (even build-failed) wins over HEAD: a failed restore can leave HEAD on the preview SHA.
+	// A ref preview in any phase (even build-failed) wins over HEAD: a failed restore can leave HEAD on the preview SHA, and a switch
+	// to a new ref keeps the first preview's previous ref. A dev-only state has no previousRef: take it from HEAD.
 	const previousRef = state?.previousRef ?? head;
-	const previousBranch = state ? state.previousBranch : abbrev === "HEAD" ? runtimeBranch : abbrev;
+	const previousBranch = state?.previousRef ? state.previousBranch : abbrev === "HEAD" ? runtimeBranch : abbrev;
 	if (dryRun) {
 		log(`${tag}would record state in ${stateFile} (previous ${previousBranch ?? previousRef})`);
 		log(`${tag}would check out ${sha.slice(0, 8)} (${ref}) detached, install and build while the wolves stay up`);
@@ -267,7 +264,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0 };
 	}
 	const priorStateText = fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : undefined;
-	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt, consolePort: Number(env.PREVIEW_CONSOLE_PORT || 3230), ...(state?.apps ? { apps: state.apps } : {}) });
+	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt, consolePort: state?.consolePort ?? Number(env.PREVIEW_CONSOLE_PORT || 3230), console: state?.console ?? { mode: "build", dir: rtWt }, ...(state?.apps ? { apps: state.apps } : {}) });
 	copyScripts(path.join(dir, "bin"));
 	const co = tryGit(rtWt, "checkout", "--detach", sha);
 	if (!co.ok) {

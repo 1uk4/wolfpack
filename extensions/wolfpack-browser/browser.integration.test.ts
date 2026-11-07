@@ -221,7 +221,7 @@ d("browser extension (live): allowlisted hosts use the browser's own network", (
         return res.write("data: hello-sse\n\n");
       }
       if (req.url === "/hop") {
-        res.writeHead(302, { location: "http://169.254.169.254/" });
+        res.writeHead(302, { location: `http://localhost:${port}/events` });
         return res.end();
       }
       res.writeHead(200, { "content-type": "text/html" });
@@ -280,14 +280,30 @@ d("browser extension (live): allowlisted hosts use the browser's own network", (
     }
   }, 60000);
 
-  it("an EventSource on an allowlisted host is not stopped when it redirects to a private host (redirect is unvetted on the native path)", async () => {
-    // Pins current behaviour: Playwright does not show the redirect hop of a route.continue()d request to the
-    // route handler, so nothing is recorded as blocked. Documented in the README as a known trade-off.
+  it("KNOWN GAP (pinned): an EventSource redirect hop on the native path is followed unvetted; flip this if the hop becomes vetted", async () => {
+    // Page and allowlist are 127.0.0.1; /hop redirects to localhost, which is NOT allowlisted. The server seeing a
+    // localhost Host header proves Chromium followed the hop, and nothing is recorded as blocked.
     const s = new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 15000 });
     try {
       await s.run(() => s.goto(`http://127.0.0.1:${port}/`));
+      sseHits.length = 0;
       await s.run(() => s.evaluate(sse("/hop")));
-      expect(s.blockedRequests().join("\n")).not.toMatch(/169\.254\.169\.254/);
+      expect(sseHits).toContain(`localhost:${port}`);
+      expect(s.blockedRequests()).toEqual([]);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("an EventSource to an allowlisted host other than the page's own host is not served natively", async () => {
+    const s = new BrowserSession(den, { allowHosts: ["localhost", "127.0.0.1"], timeoutMs: 15000 });
+    try {
+      await s.run(() => s.goto(`http://localhost:${port}/`));
+      sseHits.length = 0;
+      expect(await s.run(() => s.evaluate(sse(`http://127.0.0.1:${port}/events`)))).toBe("error");
+      // The fetcher still reaches the server (so sseHits is not empty) but refuses the stream and records it;
+      // a native EventSource would record nothing.
+      expect(s.blockedRequests().join("\n")).toMatch(/event-stream/);
     } finally {
       await s.close();
     }

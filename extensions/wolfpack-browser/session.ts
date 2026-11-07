@@ -221,6 +221,7 @@ export class BrowserSession {
         // also the page's own host is served by Chromium's own network stack. resourceType() comes from the browser
         // and page JS cannot forge it (unlike the Accept header). Redirects on this path are NOT vetted: Playwright
         // does not show the hop to this handler.
+        // The host comparison ignores scheme and port, consistent with how allowHosts matches.
         if (req.resourceType() === "eventsource" && hostAllowed(parsed.hostname, allowHosts) && this.pageHost() === parsed.hostname) {
           return await route.continue().catch(() => undefined);
         }

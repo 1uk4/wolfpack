@@ -139,7 +139,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		if (branch) {
 			if (!tryGit(rtWt, "fetch", "origin", branch).ok) warn("preview: git fetch failed (offline?); using the local branch");
 			const remote = tryGit(rtWt, "rev-parse", "--verify", `refs/remotes/origin/${branch}^{commit}`);
-			if (remote.ok && remote.out !== git(rtWt, "rev-parse", "HEAD")) {
+			if (remote.ok && tryGit(rtWt, "merge-base", "--is-ancestor", remote.out, "HEAD").ok && remote.out !== git(rtWt, "rev-parse", "HEAD")) {
+				warn(`preview: local ${branch} is ahead of origin/${branch}; staying at the local ${branch}`);
+			} else if (remote.ok && remote.out !== git(rtWt, "rev-parse", "HEAD")) {
 				const ff = tryGit(rtWt, "merge", "--ff-only", `origin/${branch}`);
 				if (!ff.ok) warn(`preview: ${branch} cannot fast-forward to origin/${branch}; staying at the local ${branch}`);
 			}

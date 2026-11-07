@@ -1,7 +1,7 @@
 /** Read-only git for the popover's overview: ref discovery, one bounded first-parent log and a few cheap counts per child branch. */
 import { execFile } from "node:child_process";
 import { dirname, sep } from "node:path";
-import { branchShortId, EMPTY_OVERVIEW, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit } from "../core/branch-graph.ts";
+import { branchShortId, EMPTY_OVERVIEW, groupRuns, type GitOverview, type OverviewBranch, type RawCommit } from "../core/branch-graph.ts";
 
 export type GitRunner = (cwd: string, args: string[]) => Promise<string>;
 
@@ -10,15 +10,24 @@ export const runGit: GitRunner = (cwd, args) =>
 		execFile("git", ["-C", cwd, ...args], { maxBuffer: 8 * 1024 * 1024, timeout: 10_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
 	});
 
-/** Parse `git log --format=%H%x00%P%x00%s%x00%ct`. */
+/** Parse `git log --numstat --format=%x01%H%x00%P%x00%s%x00%ct`: a header line per commit, then its numstat lines. */
 export function parseLog(out: string): RawCommit[] {
-	return out
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => {
-			const [sha = "", parents = "", subject = "", time] = line.split("\0");
-			return { sha, parents: parents.split(" ").filter(Boolean), subject, ...(time ? { time: Number(time) } : {}) };
-		});
+	const commits: RawCommit[] = [];
+	for (const line of out.split("\n")) {
+		if (!line) continue;
+		const stat = /^(\d+|-)\t(\d+|-)\t/.exec(line);
+		if (stat) {
+			const last = commits[commits.length - 1];
+			if (last) {
+				last.added = (last.added ?? 0) + (Number(stat[1]) || 0);
+				last.removed = (last.removed ?? 0) + (Number(stat[2]) || 0);
+			}
+			continue;
+		}
+		const [sha = "", parents = "", subject = "", time] = line.replace(/^\x01/, "").split("\0");
+		commits.push({ sha, parents: parents.split(" ").filter(Boolean), subject, ...(time ? { time: Number(time) } : {}) });
+	}
+	return commits;
 }
 
 export interface GraphWorkspace {
@@ -88,7 +97,7 @@ async function overview(ws: GraphWorkspace, git: GitRunner, window: HistoryWindo
 
 	// Main lane: one bounded first-parent log, cut to the time window, grouped by work item.
 	const cutoff = Date.now() / 1000 - window.days * 86400;
-	const log = parseLog(await git(cwd, ["log", "--first-parent", "-n", String(window.commits), "--format=%H%x00%P%x00%s%x00%ct", ws.branch, "--"]));
+	const log = parseLog(await git(cwd, ["log", "--first-parent", "--numstat", "-n", String(window.commits), "--format=%x01%H%x00%P%x00%s%x00%ct", ws.branch, "--"]));
 	const recent = log.filter((c, i) => i === 0 || (c.time ?? Infinity) >= cutoff);
 	const history = groupRuns(recent);
 	const timeOf = new Map(log.map((c) => [c.sha, c.time ?? null]));
@@ -96,9 +105,8 @@ async function overview(ws: GraphWorkspace, git: GitRunner, window: HistoryWindo
 	// Children: a feature thread owns `<branch>--*`; a home thread the `feat/*` heads with a worktree beside its checkout.
 	const folder = dirname(cwd);
 	const names = [...heads.keys()]
-		.filter((n) => (isFeature ? n.startsWith(`${ws.branch}--`) : n.startsWith("feat/") && (paths.get(n) ?? "").startsWith(folder + sep)))
+		.filter((n) => (isFeature ? n.startsWith(`${ws.branch}--`) : n.startsWith("feat/") && !n.includes("--") && (paths.get(n) ?? "").startsWith(folder + sep)))
 		.sort();
-	const idsSeen = recent.map((c) => workIdOfSubject(c.subject)).filter((x): x is string => x !== null);
 	const branches: OverviewBranch[] = [];
 	for (const name of names) {
 		const head = heads.get(name)!;
@@ -109,9 +117,6 @@ async function overview(ws: GraphWorkspace, git: GitRunner, window: HistoryWindo
 		if (splitAt === null && base) splitAt = Number((await git(cwd, ["log", "-1", "--format=%ct", base])).trim()) || null;
 		const path = paths.get(name);
 		const dirty = path ? (await git(path, ["status", "--porcelain"])).trim() !== "" : false;
-		// The work ID: the one in the tip's subject (or a recent main commit) whose 7-char id matches the branch name.
-		const short = branchShortId(name);
-		const workId = short ? [workIdOfSubject(head.subject), ...idsSeen].find((id) => id?.endsWith(short)) ?? null : null;
 		branches.push({
 			name,
 			kind: isFeature ? "subagent" : "feature",
@@ -123,7 +128,7 @@ async function overview(ws: GraphWorkspace, git: GitRunner, window: HistoryWindo
 			splitAt,
 			lastAt: head.time,
 			dirty,
-			workId,
+			shortId: branchShortId(name),
 		});
 	}
 

@@ -3,7 +3,7 @@
  * item, plus one entry per child branch (where it forked, how far ahead/behind). Pure; src/server/branch-graph.ts
  * feeds it from read-only git.
  */
-import { WORK_ID_SOURCE } from "./work-id-link.ts";
+import { WORK_DOMAINS, WORK_ID_SOURCE } from "./work-id-link.ts";
 
 /** One `git log` row (newest first). */
 export interface RawCommit {
@@ -12,6 +12,9 @@ export interface RawCommit {
 	subject: string;
 	/** Committer time, unix seconds. */
 	time?: number;
+	/** Lines added / removed (from --numstat; binary files count as 0). */
+	added?: number;
+	removed?: number;
 }
 
 /** Consecutive main-lane commits that share one work item (`workId` null: no ID in the subject). */
@@ -25,6 +28,8 @@ export interface RunNode {
 	shas: string[];
 	/** Committer time (unix s) of the newest commit in the run; null if unknown. */
 	time?: number | null;
+	added: number;
+	removed: number;
 }
 
 export interface OverviewBranch {
@@ -42,8 +47,8 @@ export interface OverviewBranch {
 	splitAt: number | null;
 	lastAt: number | null;
 	dirty: boolean;
-	/** Full `work-<domain>-<id>` the branch name points at, when its tip's subject confirms the domain. */
-	workId: string | null;
+	/** The 7-char work id in the branch name (`feat/<id>-…`); the domain is found by looking it up. */
+	shortId: string | null;
 }
 
 export interface GitOverview {
@@ -76,7 +81,9 @@ export function groupRuns(log: RawCommit[]): RunNode[] {
 			last.subject = c.subject;
 			last.shas.push(c.sha);
 			last.time = c.time ?? null;
-		} else runs.push({ workId: id, count: 1, sha: c.sha, subject: c.subject, shas: [c.sha], time: c.time ?? null });
+			last.added += c.added ?? 0;
+			last.removed += c.removed ?? 0;
+		} else runs.push({ workId: id, count: 1, sha: c.sha, subject: c.subject, shas: [c.sha], time: c.time ?? null, added: c.added ?? 0, removed: c.removed ?? 0 });
 	}
 	return runs;
 }
@@ -141,4 +148,9 @@ export function headerStatus(overview: GitOverview, dirty: boolean): string {
 	const active = overview.branches.filter((b) => !b.landed).length;
 	const landed = overview.branches.length - active;
 	return [state, `${active} active ${active === 1 ? "branch" : "branches"}`, ...(landed > 0 ? [`${landed} landed`] : [])].join(" · ");
+}
+
+/** Every full work ID a 7-char branch id could be: one per work domain. */
+export function candidateWorkIds(shortId: string): string[] {
+	return WORK_DOMAINS.map((d) => `work-${d}-${shortId}`);
 }

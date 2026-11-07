@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { WorkIdChip, lookupWorkItem } from "@/components/work-id-chip";
-import { ageLabel, agentName, buildCard, type GitOverview, type OverviewBranch, type RunNode } from "@/src/core";
+import { ageLabel, agentName, buildCard, candidateWorkIds, type GitOverview, type OverviewBranch, type RunNode } from "@/src/core";
 
 const ROW_H = 20;
 const LANE_W = 16;
@@ -32,15 +32,37 @@ function useWorkTitle(workId: string | null | undefined): string | undefined {
 	return title;
 }
 
+/** The work item a feature branch's 7-char id names: tried in every work domain, first hit wins. */
+function useBranchWork(shortId: string | null): { id: string; title: string } | undefined {
+	const [found, setFound] = useState<{ id: string; title: string }>();
+	useEffect(() => {
+		if (!shortId) return;
+		let live = true;
+		void (async () => {
+			for (const id of candidateWorkIds(shortId)) {
+				const v = await lookupWorkItem(id);
+				if (v.kind === "ok") {
+					if (live) setFound({ id, title: v.item.title });
+					return;
+				}
+			}
+		})();
+		return () => {
+			live = false;
+		};
+	}, [shortId]);
+	return found;
+}
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** A branch's label: the agent name for a subagent, else its work item title, else the branch name. */
 function BranchLabel({ branch }: { branch: OverviewBranch }) {
-	const title = useWorkTitle(branch.kind === "subagent" ? null : branch.workId);
-	const text = branch.kind === "subagent" ? agentName(branch.name) : (title ?? branch.name);
+	const work = useBranchWork(branch.kind === "subagent" ? null : branch.shortId);
+	const text = branch.kind === "subagent" ? agentName(branch.name) : (work?.title ?? branch.name);
 	return (
 		<>
-			{branch.kind !== "subagent" && branch.workId && <WorkIdChip id={branch.workId} />}
+			{work && <WorkIdChip id={work.id} />}
 			<span className="min-w-0 truncate" title={branch.name}>{text}</span>
 		</>
 	);
@@ -78,7 +100,7 @@ export function BranchOverview({ overview }: { overview: GitOverview }) {
 	}
 	if (rows.length === 0) return null;
 	const nowSec = Date.now() / 1000;
-	const gutter = MAIN_X + Math.max(1, card.active.length) * LANE_W + 4;
+	const gutter = MAIN_X + card.active.length * LANE_W + DOT / 2 + 10;
 	const height = rows.length * ROW_H;
 	const cy = (i: number) => i * ROW_H + ROW_H / 2;
 	const laneX = (lane: number) => MAIN_X + (lane + 1) * LANE_W;
@@ -93,7 +115,7 @@ export function BranchOverview({ overview }: { overview: GitOverview }) {
 						const x = laneX(r.lane);
 						return (
 							<g key={r.branch.name} data-testid="branch-graph-lane" data-kind={r.branch.kind}>
-								<path d={`M${MAIN_X} ${blockBottom} Q${x} ${blockBottom} ${x} ${blockBottom - 8} V${cy(i)}`} fill="none" stroke={color(r.lane)} strokeWidth={2} />
+								<path d={`M${MAIN_X} ${blockBottom} C${MAIN_X + LANE_W / 2} ${blockBottom} ${x} ${blockBottom} ${x} ${blockBottom - 10} V${cy(i)}`} fill="none" stroke={color(r.lane)} strokeWidth={2} />
 								<circle cx={x} cy={cy(i)} r={DOT / 2} fill={color(r.lane)} />
 							</g>
 						);
@@ -125,7 +147,9 @@ export function BranchOverview({ overview }: { overview: GitOverview }) {
 						{r.type === "run" && (
 							<div data-testid="git-tree-run" className="flex min-w-0 flex-1 items-center gap-1.5">
 								<RunLabel run={r.run} />
-								<span className="ml-auto shrink-0 pl-2 text-muted-foreground">{r.run.count} · {ageLabel(r.run.time ?? null, nowSec)}</span>
+								<span className="ml-auto shrink-0 pl-2 text-muted-foreground">
+									{r.run.count} · <span className="text-emerald-600 dark:text-emerald-400">+{r.run.added}</span> <span className="text-red-600 dark:text-red-400">−{r.run.removed}</span> · {ageLabel(r.run.time ?? null, nowSec)}
+								</span>
 							</div>
 						)}
 						{r.type === "more" && <span data-testid="git-tree-more" className="text-muted-foreground">+ {plural(r.items, "more work item")} · {plural(r.commits, "commit")}</span>}

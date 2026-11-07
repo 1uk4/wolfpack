@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, agentName, buildCard, headerStatus, branchShortId, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit, type RunNode } from "../src/core/branch-graph.ts";
+import { ageLabel, agentName, candidateWorkIds, buildCard, headerStatus, branchShortId, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit, type RunNode } from "../src/core/branch-graph.ts";
 import { parseLog, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
@@ -22,6 +22,14 @@ describe("groupRuns", () => {
 		assert.equal(branchShortId("feat/n73bJGY-console-polish--thread-git-graph-b7f21ea4"), "n73bJGY");
 		assert.equal(branchShortId("feat/home--x-1"), null);
 	});
+	it("sums added and removed lines per run from numstat", () => {
+		const log = parseLog("\x01b\0a\0two (work-wolfpack-1nLJglH)\x00200\n3\t1\tf.ts\n-\t-\timg.png\n\x01a\0\0one (work-wolfpack-1nLJglH)\x00100\n10\t4\tg.ts\n");
+		const runs = groupRuns(log);
+		assert.deepEqual(runs.map((r) => [r.count, r.added, r.removed]), [[2, 13, 5]]);
+	});
+	it("looks a branch's short id up in every work domain", () => {
+		assert.deepEqual(candidateWorkIds("0HuY8Al"), ["work-personal-0HuY8Al", "work-snapjack-0HuY8Al", "work-wolfpack-0HuY8Al"]);
+	});
 	it("labels ages", () => {
 		assert.equal(ageLabel(1000, 1000 + 4 * 86400 + 5), "4d ago");
 		assert.equal(ageLabel(1000, 1000 + 7200), "2h ago");
@@ -29,8 +37,8 @@ describe("groupRuns", () => {
 	});
 });
 
-const br = (name: string, ahead: number, behind = 0): OverviewBranch => ({ name, kind: "feature", ahead, behind, landed: ahead === 0, forkIndex: 0, gap: 0, splitAt: 1, lastAt: 1, dirty: false, workId: null });
-const run = (workId: string | null, count: number): RunNode => ({ workId, count, sha: "x", subject: "s", shas: ["x"], time: 5 });
+const br = (name: string, ahead: number, behind = 0): OverviewBranch => ({ name, kind: "feature", ahead, behind, landed: ahead === 0, forkIndex: 0, gap: 0, splitAt: 1, lastAt: 1, dirty: false, shortId: null });
+const run = (workId: string | null, count: number): RunNode => ({ workId, count, sha: "x", subject: "s", shas: ["x"], time: 5, added: 0, removed: 0 });
 const ov = (over: Partial<GitOverview>): GitOverview => ({ main: { name: "wolf/w", kind: "wolf" }, history: [], branches: [], parent: null, ...over });
 
 describe("buildCard", () => {
@@ -105,6 +113,7 @@ describe("workspaceGraph (real repo)", () => {
 		g("worktree", "add", "-b", "feat/Else444-else", join(elsewhere, "else"));
 		commit(join(elsewhere, "else"), "other wolf");
 		g("branch", "feat/Nowt555-no-worktree");
+		g("worktree", "add", "-b", "feat/Done333-done--agent-ab12cd34", join(root, "child")); // a feature's subagent: not home's
 		commit(dir, "main 5 no id");
 		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w", undefined, { commits: 4, days: 7 });
 		assert.deepEqual(o.main, { name: "wolf/w", kind: "wolf" });
@@ -112,10 +121,11 @@ describe("workspaceGraph (real repo)", () => {
 		// window = the newest 4 main commits: BBBBBBB x3 before the unlabelled one
 		assert.deepEqual(o.history.map((h) => [h.workId, h.count]), [["work-wolfpack-BBBBBBB", 3], [null, 1]]);
 		assert.deepEqual(o.branches.map((b) => b.name), ["feat/Done333-done", "feat/New2222-new", "feat/Old1111-old"]);
+		assert.deepEqual([o.history[0]!.added, o.history[0]!.removed], [0, 0]);
 		const by = Object.fromEntries(o.branches.map((b) => [b.name, b]));
 		assert.deepEqual([by["feat/Old1111-old"]!.ahead, by["feat/Old1111-old"]!.behind, by["feat/Old1111-old"]!.forkIndex], [2, 5, -1]);
 		assert.equal(by["feat/Old1111-old"]!.gap, 1); // 5 behind, 4 in the window
-		assert.equal(by["feat/Old1111-old"]!.workId, "work-wolfpack-Old1111");
+		assert.equal(by["feat/Old1111-old"]!.shortId, "Old1111");
 		assert.deepEqual([by["feat/New2222-new"]!.ahead, by["feat/New2222-new"]!.behind, by["feat/New2222-new"]!.forkIndex, by["feat/New2222-new"]!.dirty], [1, 1, 0, true]);
 		assert.deepEqual([by["feat/Done333-done"]!.landed, by["feat/Done333-done"]!.dirty], [true, false]);
 		assert.equal(by["feat/Old1111-old"]!.landed, false);

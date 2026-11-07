@@ -24,7 +24,8 @@ export const metadata: Metadata = {
 	title: "Wolfpack Console",
 	description: "The control plane for wolfpack agents.",
 	// manifest.webmanifest is emitted from app/manifest.ts; iOS ignores manifest icons, so the touch icon is explicit.
-	icons: { apple: "/icons/apple-touch-icon.png" },
+	// An explicit `icons` object stops Next adding the app/icon.png file-convention link, so the favicon is listed here too.
+	icons: { icon: { url: "/icon.png", type: "image/png", sizes: "64x64" }, apple: "/icons/apple-touch-icon.png" },
 	appleWebApp: { capable: true, title: "Wolfpack", statusBarStyle: "black-translucent" },
 };
 

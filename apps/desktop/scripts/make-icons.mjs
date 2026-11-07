@@ -1,6 +1,7 @@
 // Regenerate the Windows/Linux icon set from the flat design source
-// (build/icon-flat.svg — the owner's Affinity export, rounded squircle
-// with baked transparency, owner ruling 2026-10-13).
+// (build/icon-flat.svg — generated from brand/wolf-head.svg by
+// scripts/gen-wolf-icons.mjs at the repo root: dark rounded square with
+// transparent corners).
 //
 //   build/icon.ico  — Windows (.ico with 16/24/32/48/64/128/256 PNG entries)
 //   build/icon.png  — Linux (512×512; AppImage/deb/desktop entry)
@@ -13,16 +14,18 @@
 //
 // Renders each size DIRECTLY from the SVG (resvg) — sharper squircle
 // edges than downsampling a raster. Committed outputs; rerun only when
-// the design changes: `node scripts/make-icons.mjs`.
+// the design changes: `node scripts/make-icons.mjs [dir]` (dir defaults to build/; it is
+// both where icon-flat.svg is read and where icon.ico / icon.png are written).
 import { Resvg } from "@resvg/resvg-js";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const svg = readFileSync(path.join(root, "build", "icon-flat.svg"), "utf8");
+const dir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, "build");
+const svg = readFileSync(path.join(dir, "icon-flat.svg"), "utf8");
 
-const render = (size) => new Resvg(svg, { fitTo: { mode: "width", value: size } }).render(size, size).asPng();
+const render = (size) => new Resvg(svg, { fitTo: { mode: "width", value: size } }).render().asPng();
 
 // ---- build/icon.ico: ICONDIR + PNG entries ------------------------------
 const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
@@ -46,10 +49,10 @@ ICO_SIZES.forEach((size, i) => {
 	offset += pngs[i].length;
 });
 const ico = Buffer.concat([header, ...pngs]);
-writeFileSync(path.join(root, "build", "icon.ico"), ico);
+writeFileSync(path.join(dir, "icon.ico"), ico);
 console.log(`build/icon.ico  ${ICO_SIZES.join("/")} — ${(ico.length / 1024).toFixed(1)} KB`);
 
 // ---- build/icon.png: the Linux icon -------------------------------------
 const png512 = render(512);
-writeFileSync(path.join(root, "build", "icon.png"), png512);
+writeFileSync(path.join(dir, "icon.png"), png512);
 console.log(`build/icon.png  512×512 — ${(png512.length / 1024).toFixed(1)} KB`);

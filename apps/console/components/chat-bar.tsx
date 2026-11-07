@@ -429,8 +429,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
 				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? "z-[70] rounded-t-2xl" : "z-30")}
-				// A bottom sheet: about two-thirds of the screen, anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color, ...(sheet ? { height: "66dvh", maxHeight: "70dvh" } : {}) }}
+				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
+				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color, ...(sheet ? { maxHeight: "70dvh" } : {}) }}
 				onKeyDown={trapTab}
 			>
 				{sheet && !minimized && (

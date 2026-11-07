@@ -728,6 +728,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 			await wait();
 			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "sheet", "tap opens the bar's sheet");
 			assert.equal(q('[data-testid="chat-bar"]')!.style.maxHeight, "70dvh", "a bottom sheet capped at 70dvh, not full screen");
+			assert.equal(q('[data-testid="chat-bar"]')!.style.height, "", "no fixed height: the sheet sizes to its content");
 			assert.ok(q('[data-testid="bar-sheet-handle"]'), "grab handle");
 			await fire(q('[data-testid="bar-sheet-backdrop"]')!, "click");
 			await wait();

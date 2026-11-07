@@ -14,30 +14,55 @@
  * Never pushes or merges a branch: only fetch, rev-parse, checkout and `merge --ff-only` of the previous branch's origin.
  * Steps (git, build, spawnHelper) are injectable so tests can stub them. Env: HOME, RUNTIME_BRANCH, STACK_LABEL, STACK_PORT.
  */
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyApps, planApps, recoverApps, restoreApps, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { probePortFree } from "./runtime-preview-switch.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-// Read at load time: by the time the helper is spawned the checked-out tree may be a branch that has no such file.
-const HELPER_SRC = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime-preview-switch.mjs"), "utf8");
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs"];
+
+/** Copy this command and its imports out of the runtime tree, so `off` works after checking out a branch that lacks them. */
+function copyScripts(binDir) {
+	fs.mkdirSync(binDir, { recursive: true });
+	if (path.resolve(binDir) === SCRIPT_DIR) return; // already running from the copy
+	for (const f of COPIED_SCRIPTS) fs.copyFileSync(path.join(SCRIPT_DIR, f), path.join(binDir, f));
+}
 
 const defaultSteps = {
 	git: realGit,
-	build: (wt) => {
-		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
-		for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: "inherit", shell: process.platform === "win32" });
+	launchctl: (...args) => spawnSync("launchctl", args, { stdio: "inherit" }).status,
+	sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+	portFree: probePortFree,
+	fetchJson: async (url) => {
+		const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+		if (!r.ok) throw new Error(`${url} answered ${r.status}`);
+		return r.json();
 	},
-	/** Copy the helper out of the runtime tree and run it detached, output to the last-run log. */
+	build: (wt, { logFile } = {}) => {
+		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
+		let fd;
+		if (logFile) {
+			fs.mkdirSync(path.dirname(logFile), { recursive: true });
+			fd = fs.openSync(logFile, "w");
+		}
+		try {
+			for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: fd === undefined ? "inherit" : ["ignore", fd, fd], shell: process.platform === "win32" });
+		} finally {
+			if (fd !== undefined) fs.closeSync(fd);
+		}
+	},
+	/** Run the helper from the stable copy under bin/ (the runtime tree is being switched under it), detached, output to the last-run log. */
 	spawnHelper: ({ args, dir, logFile }) => {
-		fs.mkdirSync(dir, { recursive: true });
-		const copy = path.join(dir, "runtime-preview-switch.mjs");
-		fs.writeFileSync(copy, HELPER_SRC);
-		const fd = fs.openSync(logFile, "w");
+		copyScripts(path.join(dir, "bin"));
+		const copy = path.join(dir, "bin", "runtime-preview-switch.mjs");
+		const fd = fs.openSync(logFile, "a");
 		spawn(process.execPath, [copy, ...args], { detached: true, stdio: ["ignore", fd, fd] }).unref();
 	},
 };
@@ -82,21 +107,112 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const helper = (okPhase, clear) => st.spawnHelper({ dir, logFile, args: [stateFile, plist, label, port, okPhase, clear ? "1" : "0"] });
 	const state = readState();
 
+	const uid = process.getuid?.() ?? 501;
+	const userDataRoot = env.PREVIEW_USERDATA_ROOT || path.join(home, "Library", "Application Support");
+
 	if (!sub) return fail("usage: wolfpack preview <ref> | status | off [--dry-run]");
 
 	if (sub === "status") {
+		const tail = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5) : [];
+		const cons = state?.console ? { ...state.console, missing: !fs.existsSync(state.console.dir) } : undefined;
+		const consoleUrl = state?.console ? `http://127.0.0.1:${state.consolePort ?? 3230}` : null;
+		if (argv.includes("--json")) {
+			log(JSON.stringify({ state: state ?? null, consoleUrl, console: cons ?? null, log: tail }, null, 2));
+			return { exitCode: 0, state };
+		}
 		if (!state) {
 			log("stable, no preview");
 			return { exitCode: 0 };
 		}
-		log(`preview ${state.previewRef} @ ${state.previewSha}`);
-		log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
-		if (fs.existsSync(logFile)) for (const l of fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5)) log(`  ${l}`);
+		if (state.previewRef) {
+			log(`preview ${state.previewRef} @ ${state.previewSha}`);
+			log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
+		}
+		if (cons) {
+			log(`${cons.mode} console from ${cons.dir} on ${consoleUrl}${state.previewRef ? "" : " (the wolves are on stable)"}`);
+			if (cons.missing) log(`  ${cons.dir} no longer exists (a worker worktree is deleted when it finishes). Fix: cd <another worktree> && wolfpack preview dev, or wolfpack preview off`);
+		}
+		if (state.reason) log(`reason: ${state.reason}`);
+		for (const l of tail) log(`  ${l}`);
 		return { exitCode: 0, state };
 	}
 
-	const activePreview = state && state.phase !== "build-failed" ? state : undefined;
-	const rtWt = state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch);
+	// off with only a dev console: nothing about the wolves is touched.
+	if (sub === "off" && state && !state.previewRef) {
+		if (dryRun) {
+			log(`${tag}would stop com.wolfpack.preview-console, restore the app's console.json and clear ${stateFile}; the wolves are not touched`);
+			return { exitCode: 0 };
+		}
+		stopConsole({ home, uid, launchctl: st.launchctl });
+		restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
+		fs.rmSync(stateFile, { force: true });
+		log("dev console stopped and the app's console.json restored. Quit and reopen Wolfpack Console.");
+		return { exitCode: 0 };
+	}
+
+	if (sub === "dev") {
+		const given = pos[1];
+		let wtDir;
+		if (given) wtDir = path.resolve(cwd, given);
+		else {
+			try {
+				wtDir = git(cwd, "rev-parse", "--show-toplevel");
+			} catch {
+				return fail("not inside a git worktree: pass the directory, `wolfpack preview dev <dir>`. Nothing was changed.");
+			}
+		}
+		try {
+			wtDir = fs.realpathSync(wtDir);
+			devConsoleApp(wtDir);
+		} catch (err) {
+			return fail(`${err.message}. Nothing was changed.`);
+		}
+		const consolePort = String(state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230);
+		const url = `http://127.0.0.1:${consolePort}`;
+		if (dryRun) {
+			log(`${tag}would serve \`next dev\` from ${wtDir}/apps/console on ${url} (WOLFPACK_API_URL=http://127.0.0.1:${port}) under com.wolfpack.preview-console`);
+			log(`${tag}then point the app's console.json at it; the wolves are not touched`);
+			return { exitCode: 0 };
+		}
+		const lcx = { home, uid, launchctl: st.launchctl };
+		stopConsole(lcx); // an earlier console (build or dev) or a restart of this one
+		await st.sleep(1000);
+		if (!(await st.portFree(consolePort))) return fail(`port ${consolePort} is already in use by something else (a hand-started \`next dev\`?). Stop it or set PREVIEW_CONSOLE_PORT. Nothing was changed.`);
+		const tearDown = () => {
+			stopConsole(lcx);
+			restoreApps(readState()?.apps);
+			const cur = readState();
+			if (cur && !cur.previewRef) fs.rmSync(stateFile, { force: true });
+		};
+		try {
+			startDevConsole({ home, dir: wtDir, port: consolePort, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
+		} catch (err) {
+			tearDown();
+			return fail(`cannot start the dev console: ${err.message}`);
+		}
+		log(`compiling the console from ${wtDir}/apps/console (the first request can take a minute)`);
+		let up = false;
+		for (let i = 0; i < 45 && !up; i++) {
+			try {
+				const w = (await st.fetchJson(`${url}/api/wolves`))?.wolves;
+				up = Array.isArray(w) && w.length > 0;
+			} catch {}
+			if (!up) await st.sleep(2000);
+		}
+		if (!up) {
+			tearDown();
+			return fail(`${url}/api/wolves listed no wolf within 90 s; the dev console was stopped. See ${path.join(dir, "console.log")}`);
+		}
+		const apps = planApps({ root: userDataRoot, url, existing: state?.apps });
+		writeState({ ...(state ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir }, apps }); // state first
+		applyApps(apps, url);
+		log(`live console from ${wtDir} on ${url}. Quit and reopen Wolfpack Console (or press ⌘R). \`wolfpack preview off\` when done.`);
+		return { exitCode: 0 };
+	}
+
+		// A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path.
+	const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];
+	const rtWt = state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
 	if (!rtWt) return fail(`branch ${runtimeBranch} is not checked out in any worktree`);
 	log(`${tag}runtime @ ${rtWt}`);
 
@@ -117,17 +233,21 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		if (branch) {
 			if (!tryGit(rtWt, "fetch", "origin", branch).ok) warn("preview: git fetch failed (offline?); using the local branch");
 			const remote = tryGit(rtWt, "rev-parse", "--verify", `refs/remotes/origin/${branch}^{commit}`);
-			if (remote.ok && remote.out !== git(rtWt, "rev-parse", "HEAD")) {
+			if (remote.ok && tryGit(rtWt, "merge-base", "--is-ancestor", remote.out, "HEAD").ok && remote.out !== git(rtWt, "rev-parse", "HEAD")) {
+				warn(`preview: local ${branch} is ahead of origin/${branch}; staying at the local ${branch}`);
+			} else if (remote.ok && remote.out !== git(rtWt, "rev-parse", "HEAD")) {
 				const ff = tryGit(rtWt, "merge", "--ff-only", `origin/${branch}`);
 				if (!ff.ok) warn(`preview: ${branch} cannot fast-forward to origin/${branch}; staying at the local ${branch}`);
 			}
 		}
 		writeState({ ...state, phase: "restoring" });
+		log(`building ${branch ?? state.previousRef} (output in ${logFile})`);
 		try {
-			st.build(rtWt);
+			st.build(rtWt, { logFile });
 		} catch (err) {
 			return fail(`build of ${branch ?? state.previousRef} failed: ${err.message}. The stack was not touched; state kept, run \`wolfpack preview off\` again.`);
 		}
+		if (argv.includes("--rollback")) return { exitCode: 0 }; // the switch helper restarts the stack itself
 		helper(branch ?? "stable", true);
 		log("restoring stable: the wolf session running this command will end. Run `wolfpack preview status` from Terminal.");
 		return { exitCode: 0 };
@@ -136,27 +256,29 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	// on <ref>
 	const ref = sub;
 	if (ref.startsWith("-")) return fail(`"${ref}" looks like an option, not a ref. Nothing was changed.`);
-	if (activePreview && activePreview.previewRef !== ref) {
-		return fail(`a preview of ${activePreview.previewRef} is already active (${activePreview.phase}); run \`wolfpack preview off\` first. Nothing was changed.`);
-	}
 	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first. Nothing was changed.`);
 	if (dryRun) log(`${tag}not fetching; using local refs`);
 	else if (!tryGit(rtWt, "fetch", "origin").ok) return fail("git fetch failed. Nothing was changed.");
-	let sha;
-	for (const cand of [`refs/remotes/origin/${ref}`, ref]) {
-		const r = tryGit(rtWt, "rev-parse", "--verify", `${cand}^{commit}`);
-		if (r.ok) {
-			sha = r.out;
-			break;
-		}
+	const resolve = (r) => {
+		const x = tryGit(rtWt, "rev-parse", "--verify", `${r}^{commit}`);
+		return x.ok ? x.out : undefined;
+	};
+	const remoteSha = resolve(`refs/remotes/origin/${ref}`);
+	const localSha = resolve(`refs/heads/${ref}`);
+	let sha = remoteSha ?? resolve(ref);
+	if (remoteSha && localSha && remoteSha !== localSha && !tryGit(rtWt, "merge-base", "--is-ancestor", localSha, remoteSha).ok) {
+		// Local is ahead of (or diverged from) origin: the stale origin/<ref> must not silently replace it.
+		sha = localSha;
+		warn(`preview: local ${ref} is ahead of origin/${ref} (or diverged); using the local ${ref} at ${localSha.slice(0, 8)}. Push it first if the wolves should see origin's copy.`);
 	}
 	if (!sha) return fail(`cannot resolve "${ref}". Nothing was changed.`);
 
 	const head = git(rtWt, "rev-parse", "HEAD");
 	const abbrev = git(rtWt, "rev-parse", "--abbrev-ref", "HEAD");
-	// Any existing state (even build-failed) wins over HEAD: a failed restore can leave HEAD on the preview SHA.
+	// A ref preview in any phase (even build-failed) wins over HEAD: a failed restore can leave HEAD on the preview SHA, and a switch
+	// to a new ref keeps the first preview's previous ref. A dev-only state has no previousRef: take it from HEAD.
 	const previousRef = state?.previousRef ?? head;
-	const previousBranch = state ? state.previousBranch : abbrev === "HEAD" ? null : abbrev;
+	const previousBranch = state?.previousRef ? state.previousBranch : abbrev === "HEAD" ? runtimeBranch : abbrev;
 	if (dryRun) {
 		log(`${tag}would record state in ${stateFile} (previous ${previousBranch ?? previousRef})`);
 		log(`${tag}would check out ${sha.slice(0, 8)} (${ref}) detached, install and build while the wolves stay up`);
@@ -164,21 +286,23 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0 };
 	}
 	const priorStateText = fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : undefined;
-	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt });
+	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt, consolePort: state?.consolePort ?? Number(env.PREVIEW_CONSOLE_PORT || 3230), console: state?.console ?? { mode: "build", dir: rtWt }, ...(state?.apps ? { apps: state.apps } : {}) });
+	copyScripts(path.join(dir, "bin"));
 	const co = tryGit(rtWt, "checkout", "--detach", sha);
 	if (!co.ok) {
 		if (priorStateText === undefined) fs.rmSync(stateFile, { force: true });
 		else fs.writeFileSync(stateFile, priorStateText);
 		return fail(`cannot check out ${sha}: ${co.out.split("\n")[0]}`);
 	}
+	log(`building ${ref} (output in ${logFile})`);
 	try {
-		st.build(rtWt);
+		st.build(rtWt, { logFile });
 	} catch (err) {
 		warn(`preview: build of ${ref} failed: ${err.message}. Restoring ${previousBranch ?? previousRef}; the stack was not stopped.`);
 		if (previousBranch) tryGit(rtWt, "checkout", previousBranch);
 		else tryGit(rtWt, "checkout", "--detach", previousRef);
 		try {
-			st.build(rtWt);
+			st.build(rtWt, { logFile });
 		} catch (err2) {
 			warn(`preview: rebuild of the previous ref failed too: ${err2.message}`);
 		}
@@ -188,7 +312,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	writeState({ ...readState(), phase: "switching" });
 	helper("running", false);
 	log(`previewing ${ref} (${sha.slice(0, 8)}): the stack is restarting, so the wolf session running this command will end.`);
-	log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable.");
+	log(`Then a local console on http://127.0.0.1:${readState().consolePort} is started and the desktop app is pointed at it: quit and reopen Wolfpack Console. If the deep health check fails, the switch rolls back by itself (phase rolled-back).`);
+	log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable. If that command is missing: node ~/.wolfpack/preview/bin/runtime-preview.mjs off");
 	return { exitCode: 0 };
 }
 

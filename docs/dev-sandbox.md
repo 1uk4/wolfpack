@@ -143,6 +143,29 @@ reload the console (Cmd-R) or restart the stack. It never merges a branch, never
 is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
 override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).
 
+### Live-edit the console from a worktree
+
+The fastest loop for UI work: every save shows in the desktop app within seconds, with no build and no wolf restart.
+
+```sh
+cd <worktree> && wolfpack preview dev     # or: wolfpack preview dev <dir>
+```
+
+Then reload the app with ⌘R (quit and reopen Wolfpack Console the first time), and run `wolfpack preview off` when done.
+
+`dev` serves `next dev` from `<dir>/apps/console` (default: the git worktree containing cwd; it needs `pnpm install` there first)
+on `127.0.0.1:3230` (`PREVIEW_CONSOLE_PORT`) against the local wolfd (`WOLFPACK_API_URL=http://127.0.0.1:7141`), under the same
+launchd agent as the ref preview (`com.wolfpack.preview-console`, log `~/.wolfpack/preview/console.log`), so only one preview
+console exists. It waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), then points the app's
+`console.json` with the same record-and-restore safety as below. It never checks out, builds or restarts the wolves, so it works
+with the wolves on stable or on a ref preview. If port 3230 is held by something else (a hand-started `next dev`), it refuses.
+
+- `wolfpack preview dev <other dir>` while one is active switches the source in place (apps are kept; the original consoleUrl is never overwritten). The same dir again is a restart.
+- `wolfpack preview <new ref>` while a ref preview is active switches in place too, keeping the first preview's previous ref and branch; a dev console is left running.
+- `wolfpack preview off` stops the dev console and restores the app. It touches the wolves only if a ref preview is also active.
+- `wolfpack preview status` (and `--json`) shows the mode and dir. A worker worktree is deleted when the worker finishes: status then says the dir no longer exists; run `wolfpack preview dev` from another worktree, or `off`.
+- A branch literally named `dev` cannot be previewed by that name (use `origin/dev`).
+
 ### Preview a branch on the live stack
 
 `wolfpack preview <ref>` runs a branch on the Mac, `wolfpack preview status` shows where you are, and `wolfpack preview off`
@@ -152,13 +175,35 @@ up**. A failed build checks the previous ref back out and never stops the stack 
 detached helper (copied to `~/.wolfpack/preview/`) restarts `com.wolfpack.stack`, polls `/healthz` on 7141 for 60 s and logs to
 `~/.wolfpack/preview/last-run.log`. Restarting ends the wolf session that ran the command: run `status` from Terminal.
 `off` needs only the state file (it works after a crash at any phase): previous branch, fast-forward, install, build, restart,
-clear state. Both take `--dry-run` (print the plan, change nothing). It never pushes or merges. Use `pnpm runtime:update` for
+clear state. Both take `--dry-run` (print the plan, change nothing). It never pushes or merges.
+
+Beyond the switch itself:
+
+- **Local console and the desktop app.** After a good switch the helper starts the preview build's standalone console
+  (`apps/console/.next/standalone/apps/console/server.js`, with `.next/static` and `public` copied in) on `127.0.0.1:3230`
+  (`PREVIEW_CONSOLE_PORT`), with `WOLFPACK_API_URL=http://127.0.0.1:7141`. It runs as its own launchd agent,
+  `com.wolfpack.preview-console` (plist in `~/Library/LaunchAgents`), so it outlives the wolf session and the CLI, and survives a
+  reboot; its log is `~/.wolfpack/preview/console.log`. Then, in each of `~/Library/Application Support/LearnHarness` and
+  `Wolfpack Console` that exists, `console.json` is backed up (`console.json.preview-backup`), its old `consoleUrl` (or its
+  absence) is recorded in the state file, and `consoleUrl` is set to the local console; other keys are kept. **Quit and reopen
+  Wolfpack Console** (the app is never killed). `off` restores each file exactly (or removes the key), stops the agent and
+  removes its plist. `PREVIEW_USERDATA_ROOT` overrides the userData root (tests use it).
+- **Deep health check and rollback.** `/healthz` alone is not enough: the console must list at least one wolf on `/api/wolves`
+  and return a list on `/api/chats` (wolfd's `/v1/wolves` only tells a dead console from a dead wolfd). If that fails within
+  the timeout, the helper stops the console, checks out `previousRef`, builds, restarts and ends in phase `rolled-back` with
+  the `reason` in the state (see `wolfpack preview status`). A rollback that itself fails ends `stack-down`: use the manual way back.
+- **`off` from an old branch.** `on` copies the preview scripts and their imports to `~/.wolfpack/preview/bin/`; `wolfpack
+  preview` runs that copy when present. The guaranteed way back is `node ~/.wolfpack/preview/bin/runtime-preview.mjs off`.
+- **Refs.** `origin/<ref>` is preferred, unless the local `<ref>` is ahead of it or has diverged: then the local one is used
+  with a warning. A detached runtime is found at `WOLVES_DIR/runtime/wolfpack` (or `~/wolves/local/runtime/wolfpack`) and its
+  previous branch defaults to `RUNTIME_BRANCH`. If local `stable` is ahead of `origin/stable`, `off` warns and stays on the local one.
+- **Output.** Build output goes to `~/.wolfpack/preview/last-run.log` (one progress line on the terminal).
+  `wolfpack preview status --json` prints the state, `consoleUrl` and the last log lines. Use `pnpm runtime:update` for
 the normal stable update, which still refuses a branch argument.
 
 #### Manual way back
 
-If `wolfpack preview off` is not available (the previewed branch is older than `wolfpack preview`, so the CLI in the runtime
-tree has no such command), or the helper reports `stack-down` or `unhealthy` (it prints this block too):
+If `node ~/.wolfpack/preview/bin/runtime-preview.mjs off` does not work, or the helper reports `stack-down` or `unhealthy` (it prints this block too):
 
 ```sh
 cd ~/wolves/local/runtime/wolfpack && git checkout stable && pnpm install --frozen-lockfile --prefer-offline && node scripts/turbo.mjs run build

@@ -20,16 +20,16 @@ import fs from "node:fs";
 import os from "node:os";
 import readline from "node:readline";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { applyApps, planApps, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { buildStatus, listWorktrees, pickerRows, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, rowLabel, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
+import { collectWorktrees, listWorktrees, pickerModel, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 4;
+export const PREVIEW_VERSION = 5;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -47,6 +47,21 @@ function copyScripts(binDir) {
 		if (f !== "runtime-preview.mjs" && !fs.existsSync(from)) continue; // optional; only this script itself is required
 		fs.copyFileSync(from, path.join(binDir, f));
 	}
+	const prompts = path.join(SCRIPT_DIR, "..", "packages", "cli", "dist", "prompts.js"); // self-contained: lets the bin copy draw the arrow-key picker
+	if (fs.existsSync(prompts)) fs.copyFileSync(prompts, path.join(binDir, "prompts.js"));
+}
+
+/** The CLI's prompts (select, confirm): from the checkout this script is in, the bin copy next to it, or ~/.wolfpack/preview/bin. Null when none is found. */
+async function loadPrompts() {
+	const home = process.env.HOME || os.homedir();
+	for (const f of [path.join(SCRIPT_DIR, "..", "packages", "cli", "dist", "prompts.js"), path.join(SCRIPT_DIR, "prompts.js"), path.join(home, ".wolfpack", "preview", "bin", "prompts.js")]) {
+		if (!fs.existsSync(f)) continue;
+		try {
+			const m = await import(pathToFileURL(f).href);
+			if (typeof m.select === "function" && typeof m.confirm === "function") return m;
+		} catch {}
+	}
+	return null;
 }
 
 const defaultSteps = {
@@ -59,30 +74,27 @@ const defaultSteps = {
 		if (!r.ok) throw new Error(`${url} answered ${r.status}`);
 		return r.json();
 	},
-	/** y/N on the terminal; null when there is no terminal to ask on. */
+	/** y/N on the terminal (the CLI's own `confirm` when its prompts.js is found); null when there is no terminal to ask on. */
 	confirm: async (question) => {
 		if (!process.stdin.isTTY) return null;
+		const prompts = await loadPrompts();
+		if (prompts) return prompts.confirm(question, false);
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 		const answer = await new Promise((resolve) => rl.question(`${question} [y/N] `, resolve));
 		rl.close();
 		return /^y(es)?$/i.test(String(answer).trim());
 	},
-	/** Pick one of `items` ([{label, value}]) on the terminal; null when there is no terminal or the answer is not a number. */
+	/** Pick one of `items` ([{label, hint?, value}]): the CLI's arrow-key `select`, else a numbered list; null when there is no terminal. */
 	pick: async (title, items) => {
 		if (!process.stdin.isTTY) return null;
+		const prompts = await loadPrompts();
+		if (prompts) return prompts.select(title, items);
 		console.log(`\n${title}`);
 		items.forEach((it, i) => console.log(`  ${i + 1}) ${it.label}`));
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 		const answer = await new Promise((resolve) => rl.question("number: ", resolve));
 		rl.close();
 		return items[Number(String(answer).trim()) - 1]?.value ?? null;
-	},
-	health: async (p) => {
-		try {
-			return (await fetch(`http://127.0.0.1:${p}/healthz`, { signal: AbortSignal.timeout(2000) })).ok;
-		} catch {
-			return false;
-		}
 	},
 	/** Where the global `wolfpack` package is linked (npm's global root, else next to this node). */
 	cliLink: () => {
@@ -313,9 +325,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 
 	/** Plain `wolfpack preview`: list the worktrees, pick one (building it first when needed) and start its preview. */
 	const picker = async () => {
-		let rows;
+		let worktrees;
 		try {
-			rows = pickerRows({ home, cwd, git, activeDir: state?.mode === "worktree" ? state.worktree : undefined });
+			worktrees = collectWorktrees({ home, cwd, git });
 		} catch {
 			return fail("usage: wolfpack preview <ref> | <worktree dir> | status | off [--dry-run]. (Not inside a wolfpack checkout, so there is no worktree list.)");
 		}
@@ -324,17 +336,23 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				return fs.realpathSync(git(cwd, "rev-parse", "--show-toplevel"));
 			} catch {}
 		})();
-		const items = rows.map((r) => ({ label: rowLabel(r), value: { dir: r.dir, build: r.status !== "built" } }));
-		const mine = rows.find((r) => r.dir === here);
-		if (mine && mine.status !== "built") items.push({ label: "Build this worktree", value: { dir: mine.dir, build: true } });
-		items.push({ label: "Build another worktree…", value: "other" });
-		let choice = await st.pick("Preview which worktree?", items);
-		if (choice === "other") choice = await st.pick("Build which worktree?", rows.map((r) => ({ label: rowLabel(r), value: { dir: r.dir, build: true } })));
-		if (!choice) {
-			for (const it of items) log(it.label);
-			return fail("pick a worktree on a terminal, or pass its directory: `wolfpack preview <dir> [--build] --yes`.");
+		const activeDir = state?.mode === "worktree" ? state.worktree : undefined;
+		let showAll = false;
+		for (;;) {
+			const { rows, hiddenCount } = pickerModel({ worktrees, runtimeBranch, here, activeDir, showAll });
+			const items = rows.map((r) => ({ label: r.label, hint: r.hint, value: { dir: r.dir, build: r.build } }));
+			if (!showAll && hiddenCount > 0) items.push({ label: "Show all worktrees…", value: "all" });
+			const choice = await st.pick("Preview which worktree?", items);
+			if (choice === "all") {
+				showAll = true;
+				continue;
+			}
+			if (!choice) {
+				for (const it of items) log(it.label);
+				return fail("pick a worktree on a terminal, or pass its directory: `wolfpack preview <dir> [--build] --yes`.");
+			}
+			return startWorktree(choice.dir, { build: choice.build });
 		}
-		return startWorktree(choice.dir, { build: choice.build });
 	};
 
 	/** Run the wolves (and the live console) straight from a built worktree: no copy, no rebuild. */

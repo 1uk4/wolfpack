@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
 import { runPreview } from "./runtime-preview.mjs";
+// @ts-expect-error plain .mjs script
+import { pickerModel } from "./runtime-preview-worktree.mjs";
 
 const fallbackDir = () => path.join(tmp, "picker-checkout");
 const oldCli = (d: string) => fs.writeFileSync(path.join(d, "packages", "cli", "dist", "commands", "preview.js"), "export async function previewCmd() {}\n"); // the task 1 version
@@ -254,72 +256,152 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	});
 
 	describe("picker", () => {
-		const worker = () => path.join(tmp, "wt-c--fix-12ab34cd");
-		/** A: built and active with a tracked edit. B: built, then a new commit. C: never built. W: a worker's copy. */
+		const labels = (h: ReturnType<typeof harness>) => h.menus[0].map((i) => i.label);
+		const commit = (d: string, f: string) => {
+			fs.writeFileSync(path.join(d, f), f);
+			g(d, "add", f);
+			g(d, "commit", "-q", "-m", f);
+		};
+		/** A: built (stamped) with an edit. B: built, then a new commit (stale). C: a never-built branch with a commit. W: a worker's copy with a commit. */
 		const setup = async () => {
-			g(main, "worktree", "add", "-q", "-b", "feat/c", path.join(tmp, "wt-c"));
-			g(main, "worktree", "add", "-q", "-b", "feat/w", worker());
+			const c = path.join(tmp, "wt-c");
+			const w = path.join(tmp, "wt-c--detach-chat-12ab34cd");
+			g(main, "worktree", "add", "-q", "-b", "feat/yu741qH-floating-chat-bar-talk-to-one", c);
+			g(main, "worktree", "add", "-q", "-b", "feat/w", w);
+			commit(c, "c.txt");
+			commit(w, "w.txt");
 			const h = harness();
 			await h.run([wtB, "--build"]);
 			await h.run(["off", "--all"]);
-			fs.writeFileSync(path.join(wtB, "b.txt"), "b");
-			g(wtB, "add", "b.txt");
-			g(wtB, "commit", "-q", "-m", "b");
+			commit(wtB, "b.txt");
+			commit(wtA, "a.txt");
 			await h.run([wtA, "--build"]);
 			fs.writeFileSync(path.join(wtA, "a.txt"), "edited");
+			await h.run(["off", "--all"]);
 			return h;
 		};
 
-		it("lists every worktree with built, stale or not built, uncommitted edits, the active one and a worker's copy, then the build options", async () => {
+		it("shows one short line per worktree (name, status mark, no paths), hides stable and the main checkout, and offers Show all at the bottom", async () => {
 			const h = await setup();
 			h.menus.length = 0;
 			await h.run([], wtB);
-			const labels = h.menus[0].map((i) => i.label);
-			const row = (needle: string) => labels.find((l) => l.includes(needle)) ?? "";
-			expect(row("feat/a")).toMatch(/\bbuilt\b/);
-			expect(row("feat/a")).toContain("uncommitted edits");
-			expect(row("feat/a")).toContain("active");
-			expect(row("feat/b")).toContain("stale");
-			expect(row("feat/c")).toContain("not built");
-			expect(row("wt-c--fix-12ab34cd")).toContain("worker's copy");
-			expect(labels.slice(-2)).toEqual(["Build this worktree", "Build another worktree…"]);
-			h.menus.length = 0;
-			await h.run([], wtA);
-			expect(h.menus[0].map((i) => i.label).slice(-1)).toEqual(["Build another worktree…"]); // A is built: no "build this"
+			const l = labels(h);
+			expect(l).toContain("yu741qH-floating-chat…  ○ not built");
+			expect(l).toContain("detach-chat (worker)  ○ not built");
+			expect(l.some((x) => x.startsWith("stable") || x.startsWith("main"))).toBe(false);
+			expect(l.every((x) => !x.includes(tmp))).toBe(true);
+			expect(l.at(-1)).toBe("Show all worktrees…");
+			expect(l.length).toBe(5); // a, b, c, worker, Show all
+		});
+
+		it("Show all worktrees lists the hidden ones too", async () => {
+			const h = await setup();
+			const h2 = harness({ pick: (items) => (items.some((i) => i.label === "Show all worktrees…") && h2.menus.length === 1 ? "all" : null) });
+			h2.menus.length = 0;
+			await h2.run([], wtB);
+			expect(h2.menus.length).toBe(2);
+			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("stable"))).toBe(true);
+			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("main"))).toBe(true);
 		});
 
 		it("without a terminal prints the list and exits 1", async () => {
 			const h = await setup();
 			h.logs.length = 0;
 			expect((await h.run([])).exitCode).toBe(1);
-			expect(h.logs.join("\n")).toMatch(/feat\/b.*stale/);
+			expect(h.logs.join("\n")).toContain("◐ stale");
 		});
 
-		it("build this worktree installs and builds it with output in last-run.log, then starts its preview", async () => {
+		it("picking a not-built row builds it first, with output in last-run.log, then starts its preview", async () => {
 			const h = await setup();
-			await h.run(["off", "--all"]);
-			h.builds.length = 0;
-			h.helper.length = 0;
-			const r = await h.run([], wtB);
-			expect(r.exitCode).toBe(1);
-			const h2 = harness({ pick: (items) => items.find((i) => i.label === "Build this worktree")?.value });
+			const h2 = harness({ pick: (items) => items.find((i) => i.label.startsWith("yu741qH"))?.value });
 			expect((await h2.run([], wtB)).exitCode).toBe(0);
-			expect(h2.builds).toEqual([{ dir: wtB, logFile: path.join(home, ".wolfpack", "preview", "last-run.log") }]);
-			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtB));
+			expect(h2.builds.map((b) => b.dir)).toEqual([path.join(tmp, "wt-c")]);
+			expect(h2.builds[0].logFile).toBe(path.join(home, ".wolfpack", "preview", "last-run.log"));
 			expect(h2.helper).toEqual(["running 0"]);
-			h2.menus.length = 0;
-			await h2.run(["off", "--all"]);
-			await h2.run([], wtA);
-			expect(h2.menus[0].find((i) => i.label.includes("feat/b"))?.label).toMatch(/\bbuilt\b/); // the build left a stamp
+			void h;
 		});
 
-		it("picking a built worktree starts it without building", async () => {
-			const h = await setup();
-			await h.run(["off", "--all"]);
-			const h2 = harness({ pick: (items) => items.find((i) => i.label.includes("feat/a"))?.value });
+		it("picking a built row starts it without building", async () => {
+			await setup();
+			fs.writeFileSync(path.join(wtA, "a.txt"), "a.txt"); // undo the edit: built again
+			const h2 = harness({ pick: (items) => items.find((i) => i.label.includes("● built"))?.value });
 			expect((await h2.run([], wtB)).exitCode).toBe(0);
 			expect(h2.builds).toEqual([]);
 			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
+		});
+	});
+
+	describe("picker row model", () => {
+		type W = { dir: string; branch: string | null; status: string; dirty?: boolean; commitTime: number; merged?: boolean; main?: boolean };
+		const wt = (o: W) => ({ dirty: false, merged: false, main: false, ...o });
+		const model = (worktrees: ReturnType<typeof wt>[], o: { here?: string; activeDir?: string; showAll?: boolean } = {}) =>
+			pickerModel({ worktrees, runtimeBranch: "stable", ...o });
+
+		it("names a branch without feat/ and the slug tail, and a worker's copy by its worker name", () => {
+			const { rows } = model([
+				wt({ dir: "/w/feat-yu741qH-floating-chat-bar-talk-to-one", branch: "feat/yu741qH-floating-chat-bar-talk-to-one", status: "built", commitTime: 5 }),
+				wt({ dir: "/w/feat-yu741qH-x--detach-chat-30b2c6aa", branch: "feat/yu741qH-x--detach-chat-30b2c6aa", status: "stale", commitTime: 4 }),
+				wt({ dir: "/w/fix", branch: "fix/short", status: "not built", commitTime: 3 }),
+			]);
+			expect(rows.map((r: { name: string }) => r.name)).toEqual(["yu741qH-floating-chat…", "detach-chat (worker)", "fix/short"]);
+		});
+
+		it("hides stable, the main checkout, detached heads and clean merged branches, unless active or the cwd's; showAll hides nothing", () => {
+			const all = [
+				wt({ dir: "/rt", branch: "stable", status: "built", commitTime: 9 }),
+				wt({ dir: "/main", branch: "main", status: "built", commitTime: 9, main: true }),
+				wt({ dir: "/det", branch: null, status: "built", commitTime: 9 }),
+				wt({ dir: "/merged", branch: "feat/m", status: "built", commitTime: 9, merged: true }),
+				wt({ dir: "/merged-edit", branch: "feat/me", status: "built", commitTime: 8, merged: true, dirty: true }),
+				wt({ dir: "/merged-here", branch: "feat/mh", status: "built", commitTime: 7, merged: true }),
+				wt({ dir: "/merged-active", branch: "feat/ma", status: "built", commitTime: 6, merged: true }),
+				wt({ dir: "/live", branch: "feat/live", status: "not built", commitTime: 5 }),
+			];
+			const r = model(all, { here: "/merged-here", activeDir: "/merged-active" });
+			expect(r.rows.map((x: { dir: string }) => x.dir)).toEqual(["/merged-active", "/merged-here", "/merged-edit", "/live"]);
+			expect(r.hiddenCount).toBe(4);
+			expect(model(all, { showAll: true }).rows.length).toBe(8);
+		});
+
+		it("orders active first, then the cwd's worktree, then newest commit first", () => {
+			const { rows } = model(
+				[
+					wt({ dir: "/old", branch: "feat/old", status: "built", commitTime: 1 }),
+					wt({ dir: "/new", branch: "feat/new", status: "built", commitTime: 9 }),
+					wt({ dir: "/here", branch: "feat/here", status: "built", commitTime: 2 }),
+					wt({ dir: "/act", branch: "feat/act", status: "built", commitTime: 0 }),
+				],
+				{ here: "/here", activeDir: "/act" },
+			);
+			expect(rows.map((r: { dir: string }) => r.dir)).toEqual(["/act", "/here", "/new", "/old"]);
+		});
+
+		it("marks status with ● built, ◐ stale, ○ not built, plus active, and says unbuilt rows build first", () => {
+			const { rows } = model(
+				[
+					wt({ dir: "/a", branch: "feat/a", status: "built", commitTime: 3 }),
+					wt({ dir: "/b", branch: "feat/b", status: "stale", commitTime: 2 }),
+					wt({ dir: "/c", branch: "feat/c", status: "not built", commitTime: 1 }),
+				],
+				{ activeDir: "/a" },
+			);
+			expect(rows.map((r: { label: string }) => r.label)).toEqual(["a  ● built  active", "b  ◐ stale", "c  ○ not built"]);
+			expect(rows[1].hint).toContain("builds first");
+			expect(rows[0].hint).not.toContain("builds first");
+		});
+	});
+
+	describe("build status without a stamp", () => {
+		it("a worktree whose workerd and cli dist are newer than its HEAD commit counts as built; older dist counts as not built", async () => {
+			const h = harness({ pick: () => null });
+			h.menus.length = 0;
+			await h.run([], wtA); // markBuilt just wrote dist files after the commit
+			expect(h.logs.join("\n")).toContain("a  ● built");
+			const old = new Date(Date.now() - 86_400_000 * 365);
+			for (const f of [path.join(wtA, "packages", "workerd", "dist", "bin", "workerd.js"), path.join(wtA, "packages", "cli", "dist", "bin", "wolfpack.js")]) fs.utimesSync(f, old, old);
+			h.logs.length = 0;
+			await h.run([], wtA);
+			expect(h.logs.join("\n")).toContain("a  ○ not built");
 		});
 	});
 

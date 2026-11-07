@@ -24,7 +24,7 @@ export async function prompt(question: string, defaultValue?: string): Promise<s
 
 export async function select<T>(
   question: string,
-  options: Array<{ label: string; value: T }>,
+  options: Array<{ label: string; value: T; hint?: string }>,
 ): Promise<T> {
   if (!process.stdin.isTTY) {
     return options[0]!.value;
@@ -50,8 +50,12 @@ export async function select<T>(
       const pointer = isCursor ? cyan("\u276f") : " ";
       const raw = options[i]!.label;
       const text = raw.length > maxLabel ? `${raw.slice(0, maxLabel - 1)}\u2026` : raw;
+      // The highlighted row also shows its hint (dim), if it still fits on the line.
+      const hint = isCursor ? options[i]!.hint : undefined;
+      const room = maxLabel - text.length - 3;
+      const tail = hint && room > 8 ? dim(`  ${hint.length > room ? `${hint.slice(0, room - 1)}\u2026` : hint}`) : "";
       const label = isCursor ? cyan(text) : text;
-      stdout.write(`\x1b[2K ${pointer} ${label}\n`);
+      stdout.write(`\x1b[2K ${pointer} ${label}${tail}\n`);
     }
   }
 

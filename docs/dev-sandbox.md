@@ -168,12 +168,15 @@ with the wolves on stable or on a ref preview. If port 3230 is held by something
 
 ### Preview a worktree: wolves and console straight from a built tree
 
-`wolfpack preview` with no argument opens a picker of every worktree of the wolfpack repo. Each row shows the branch and path,
-**built / stale / not built** (stale: HEAD moved, or a file changed after the last build), uncommitted edits, which one is
-active, and worker copies (`*--<name>-<hex8>`, which vanish when the worker finishes). The last rows are **Build this worktree**
-(the one containing cwd, shown when it is not built or stale) and **Build another worktree…**. Building runs install plus build
-in that worktree (output in `~/.wolfpack/preview/last-run.log`, one progress line), records a stamp outside the worktree
-(`~/.wolfpack/preview/builds/<hash>.json`, so it never looks dirty), then starts the preview.
+`wolfpack preview` with no argument opens the CLI's arrow-key picker (the numbered list only when there is no terminal). One short
+line per worktree: the branch without `feat/` and cut to its id and two words (`yu741qH-floating-chat…`), a worker's copy by its
+worker name (`detach-chat (worker)`), then a mark: **● built, ◐ stale, ○ not built**, plus `active` and `edited`. The highlighted
+row's hint shows the path, and "builds first, ~3 min" for a stale or not-built row: picking one builds it (install plus build, output
+in `~/.wolfpack/preview/last-run.log`) and then starts the preview. Active comes first, then the worktree you are in, then the
+newest commit. `stable`, the main checkout, detached heads and branches already merged into `wolf/1uk4` or `stable` with no edits
+are hidden; "Show all worktrees…" at the bottom lists them. A worktree is built when a stamp
+(`~/.wolfpack/preview/builds/<hash>.json`, kept outside the worktree so it never looks dirty) says so, or, with no stamp, when its
+`workerd.js` and cli `dist` are newer than its HEAD commit.
 
 Picking a worktree runs the wolves **straight from it**: no copy and no rebuild. `~/Library/LaunchAgents/com.wolfpack.stack.plist`
 is rewritten so its working directory and `workerd.js` path point at the worktree (everything else is kept); the original bytes

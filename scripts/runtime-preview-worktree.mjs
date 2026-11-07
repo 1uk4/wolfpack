@@ -105,43 +105,115 @@ export function writeStamp({ home, dir, head }) {
 
 const GENERATED = ["apps/console/next-env.d.ts"];
 
-/** {status: "built"|"stale"|"not built", dirty}. Stale: HEAD moved, or a changed file is newer than the last build. */
+/**
+ * {status: "built"|"stale"|"not built", dirty}. A stamp wins: stale when HEAD moved or a changed file is newer than the build.
+ * Without a stamp, a worktree counts as built when its workerd and cli dist exist and are newer than its HEAD commit (and than any edit).
+ */
 export function buildStatus({ home, dir, git }) {
 	let dirty = false;
 	let newest = 0;
+	let newestTracked = 0; // edits to tracked files only: untracked files may be build output
 	for (const l of git(dir, "status", "--porcelain").split("\n")) {
 		const f = l.slice(3);
 		if (!l || GENERATED.includes(f)) continue;
 		if (!l.startsWith("??")) dirty = true;
 		try {
-			newest = Math.max(newest, fs.statSync(path.join(dir, f)).mtimeMs);
+			const t = fs.statSync(path.join(dir, f)).mtimeMs;
+			newest = Math.max(newest, t);
+			if (!l.startsWith("??")) newestTracked = Math.max(newestTracked, t);
 		} catch {}
 	}
 	let stamp;
 	try {
 		stamp = JSON.parse(fs.readFileSync(stampFile(home, dir), "utf8"));
 	} catch {}
-	if (!stamp || !fs.existsSync(workerdEntry(dir))) return { status: "not built", dirty };
-	const stale = stamp.head !== git(dir, "rev-parse", "HEAD") || newest > Date.parse(stamp.builtAt);
-	return { status: stale ? "stale" : "built", dirty };
+	if (stamp && fs.existsSync(workerdEntry(dir))) {
+		const stale = stamp.head !== git(dir, "rev-parse", "HEAD") || newest > Date.parse(stamp.builtAt);
+		return { status: stale ? "stale" : "built", dirty };
+	}
+	try {
+		const dist = Math.min(fs.statSync(workerdEntry(dir)).mtimeMs, fs.statSync(cliEntry(dir)).mtimeMs);
+		const committed = Number(git(dir, "log", "-1", "--format=%ct")) * 1000;
+		if (dist >= committed) return { status: newestTracked > dist ? "stale" : "built", dirty };
+	} catch {} // no dist yet
+	return { status: "not built", dirty };
 }
 
 /** A worker's worktree: `<repo>--<name>-<hex8>`. It is deleted when the worker finishes. */
 export const isWorkerCopy = (dir) => /--[A-Za-z0-9_-]+-[0-9a-f]{8}$/.test(path.basename(dir));
+const workerName = (dir) => /--(.+)-[0-9a-f]{8}$/.exec(path.basename(dir))?.[1];
 
-/** One picker row per worktree: {dir, name, status, dirty, active, worker}. */
-export function pickerRows({ home, cwd, git, activeDir }) {
-	return listWorktrees(cwd, git).map((w) => ({
-		dir: w.dir,
-		name: w.branch ?? w.dir,
-		...buildStatus({ home, dir: w.dir, git }),
-		active: w.dir === activeDir,
-		worker: isWorkerCopy(w.dir),
-	}));
+/** Raw facts per worktree, newest information first is not assumed: [{dir, branch, status, dirty, commitTime, merged, main, worker}]. */
+export function collectWorktrees({ home, cwd, git, mergedInto = ["wolf/1uk4", "stable"] }) {
+	return listWorktrees(cwd, git).map((w, i) => {
+		const has = (ref) => {
+			try {
+				git(w.dir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		const isAncestor = (ref) => {
+			try {
+				git(w.dir, "merge-base", "--is-ancestor", "HEAD", ref);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		let commitTime = 0;
+		try {
+			commitTime = Number(git(w.dir, "log", "-1", "--format=%ct"));
+		} catch {}
+		return {
+			dir: w.dir,
+			branch: w.branch,
+			...buildStatus({ home, dir: w.dir, git }),
+			commitTime,
+			merged: mergedInto.some((ref) => has(ref) && isAncestor(ref)),
+			main: i === 0,
+			worker: isWorkerCopy(w.dir),
+		};
+	});
 }
 
-export const rowLabel = (r) =>
-	[`${r.name}  ${r.dir}`, `[${r.status}]`, r.active ? "active" : "", r.dirty ? "uncommitted edits" : "", r.worker ? "worker's copy (vanishes when the worker finishes)" : ""].filter(Boolean).join("  ");
+const MARKS = { built: "●", stale: "◐", "not built": "○" };
+
+/** `feat/` dropped; a long slug cut to the id and two words ("yu741qH-floating-chat…"); a worker's copy by its worker name. */
+export function shortName(branch, dir) {
+	if (isWorkerCopy(dir)) return `${workerName(dir)} (worker)`;
+	const b = (branch ?? dir).replace(/^feat\//, "");
+	const parts = b.split("-");
+	return parts.length > 3 ? `${parts.slice(0, 3).join("-")}…` : b;
+}
+
+/**
+ * The picker's rows, pure: {rows: [{dir, name, status, active, build, label, hint}], hiddenCount}.
+ * Hidden unless `showAll`, active or the cwd's: the runtime branch, the main checkout, detached heads, and merged branches with no edits.
+ * Order: active, then the cwd's worktree, then newest commit first.
+ */
+export function pickerModel({ worktrees, runtimeBranch = "stable", here, activeDir, showAll = false }) {
+	const keep = (w) => showAll || w.dir === activeDir || w.dir === here || !(w.branch === runtimeBranch || w.main || !w.branch || (w.merged && !w.dirty));
+	const kept = worktrees.filter(keep);
+	const rank = (w) => (w.dir === activeDir ? 0 : w.dir === here ? 1 : 2);
+	kept.sort((a, b) => rank(a) - rank(b) || b.commitTime - a.commitTime);
+	const rows = kept.map((w) => {
+		const active = w.dir === activeDir;
+		const name = shortName(w.branch, w.dir);
+		const build = w.status !== "built";
+		return {
+			dir: w.dir,
+			name,
+			status: w.status,
+			active,
+			build,
+			label: [`${name}  ${MARKS[w.status]} ${w.status}`, active ? "active" : "", w.dirty ? "edited" : ""].filter(Boolean).join("  "),
+			hint: [build ? "builds first, ~3 min" : "", w.worker ? "worker's copy, vanishes when it finishes" : "", w.dir].filter(Boolean).join(" · "), // the path last: the hint is cut to the line
+		};
+	});
+	return { rows, hiddenCount: worktrees.length - kept.length };
+}
 
 export const WATCH_LABEL = "com.wolfpack.preview-watch";
 const watchPlist = (home) => path.join(home, "Library", "LaunchAgents", `${WATCH_LABEL}.plist`);

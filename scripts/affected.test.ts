@@ -55,11 +55,11 @@ describe("affected", () => {
     expect(r.release).toBe(true);
     expect(r.packages).toEqual([]);
   });
-  it("a console-only change still builds the packages console imports from dist", () => {
+  it("a console-only change builds every package console declares or imports from dist (client, protocol, harness)", () => {
     const r = run(["apps/console/app/page.tsx"]);
     expect(r.all).toBe(false);
     expect(r.consoleTests).toBe(true);
-    expect(r.tsProjects).toEqual(expect.arrayContaining(["packages/client", "packages/protocol"]));
+    expect(r.tsProjects).toEqual(expect.arrayContaining(["packages/client", "packages/protocol", "packages/harness"]));
   });
   it("no console tests, no extra build projects", () => {
     expect(run(["packages/cli/src/x.ts"]).tsProjects).toEqual(["packages/cli"]);

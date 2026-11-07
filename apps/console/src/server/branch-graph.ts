@@ -26,7 +26,12 @@ export interface GraphWorkspace {
 	base?: string;
 }
 
-/** The branch graph of a workspace: base, wolf branch, current branch and its `<branch>--*` subagent branches. */
+/**
+ * The branch graph of a workspace. The main lane is the thread's own branch. Its children are lanes: for a feature
+ * thread (`feat/*`) the `<branch>--*` subagent branches; for a home thread the `feat/*` feature branches cut from it.
+ * A child whose ref is gone but whose merge commit is on the main lane is drawn from the merge's second parent.
+ * The base, `stable`/`main` and other branches are not shown.
+ */
 export async function workspaceGraph(ws: GraphWorkspace, wolf: string, git: GitRunner = runGit): Promise<BranchGraph> {
 	try {
 		return await workspaceGraphUnsafe(ws, wolf, git);
@@ -38,27 +43,39 @@ export async function workspaceGraph(ws: GraphWorkspace, wolf: string, git: GitR
 	}
 }
 
-async function workspaceGraphUnsafe(ws: GraphWorkspace, wolf: string, git: GitRunner): Promise<BranchGraph> {
+/** The branch a merge commit brought in, from its subject ("Merge branch 'x'", "Merge pull request #1 from o/x"), else the short sha. */
+export function mergedName(subject: string, sha: string): string {
+	const m = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(subject) ?? /^Merge pull request #\d+ from [^/\s]+\/(\S+)/.exec(subject);
+	return m?.[1] ?? `merged ${sha.slice(0, 7)}`;
+}
+
+async function workspaceGraphUnsafe(ws: GraphWorkspace, _wolf: string, git: GitRunner): Promise<BranchGraph> {
 	const heads = new Map<string, string>();
 	for (const line of (await git(ws.toplevel, ["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])).split("\n")) {
 		const [name, sha] = line.split("\0");
 		if (name && sha) heads.set(name, sha);
 	}
-	const refs: LaneRef[] = [];
-	const seen = new Set<string>();
-	const add = (name: string | undefined, kind: LaneRef["kind"]) => {
-		const tip = name ? heads.get(name) : undefined;
-		if (!name || !tip || seen.has(name)) return;
-		seen.add(name);
-		refs.push({ name, kind, tip });
-	};
-	// A base that is not a local head (e.g. origin/stable) falls back to stable, then main.
-	add(ws.base && heads.has(ws.base) ? ws.base : ["stable", "main"].find((b) => heads.has(b)), "base");
-	add(`wolf/${wolf}`, "wolf");
-	add(ws.branch, "feature");
-	const subs = [...heads.keys()].filter((n) => n.startsWith(`${ws.branch}--`)).sort();
-	for (const n of subs) add(n, "subagent");
-	if (refs.length === 0) return { lanes: [], commits: [] };
+	const main = heads.get(ws.branch);
+	if (!main) return { lanes: [], commits: [] };
+	const isFeature = ws.branch.startsWith("feat/");
+	const refs: LaneRef[] = [{ name: ws.branch, kind: isFeature ? "feature" : "wolf", tip: main }];
+	const children = [...heads.keys()]
+		.filter((n) => (isFeature ? n.startsWith(`${ws.branch}--`) : n.startsWith("feat/") && (!n.includes("--") || n.startsWith("feat/home--"))))
+		.sort();
+	for (const n of children) refs.push({ name: n, kind: isFeature ? "subagent" : "feature", tip: heads.get(n)! });
+	// Deleted children: second parents of merges on the main lane that no live branch already claims.
+	const merges = await git(ws.toplevel, ["log", "--first-parent", "--merges", "-n", "20", "--format=%H%x00%P%x00%s", main, "--"]);
+	const live = new Set(refs.map((r) => r.tip));
+	const names = new Set(refs.map((r) => r.name));
+	for (const m of parseLog(merges)) {
+		const second = m.parents[1];
+		if (!second || live.has(second)) continue;
+		let name = mergedName(m.subject, second);
+		if (names.has(name)) name = `${name} ${second.slice(0, 7)}`;
+		names.add(name);
+		live.add(second);
+		refs.push({ name, kind: "merged", tip: second });
+	}
 	const out = await git(ws.toplevel, ["log", "--topo-order", "-n", "80", "--format=%H%x00%P%x00%s", ...new Set(refs.map((r) => r.tip)), "--"]);
 	return buildBranchGraph(refs, parseLog(out));
 }

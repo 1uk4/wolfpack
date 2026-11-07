@@ -63,7 +63,7 @@ describe("parseLog", () => {
 });
 
 describe("workspaceGraph (real repo)", () => {
-	it("lays out base, feature and a subagent branch from read-only git", async () => {
+	it("lays out a feature thread\u2019s branch and a subagent branch from read-only git", async () => {
 		const { execFileSync } = await import("node:child_process");
 		const { mkdtempSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
@@ -78,18 +78,48 @@ describe("workspaceGraph (real repo)", () => {
 		g("checkout", "-b", "feat/x--sub-1");
 		g("commit", "--allow-empty", "-m", "s1");
 		const graph = await workspaceGraph({ toplevel: dir, branch: "feat/x", base: "main" }, "w");
-		assert.deepEqual(graph.lanes.map((l) => l.name), ["main", "feat/x", "feat/x--sub-1"]);
+		assert.deepEqual(graph.lanes.map((l) => l.name), ["feat/x", "feat/x--sub-1"]);
 		assert.deepEqual(graph.commits.map((c) => c.subject), ["root", "f1", "s1"]);
 	});
 
-	it("a base that is not a local head (origin/stable) falls back to stable", async () => {
+	it("a feature thread shows its own subagent lanes only, not the base or unrelated branches", async () => {
 		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
 		const git = async (_cwd: string, args: string[]) => {
-			if (args[0] === "for-each-ref") return "stable\0s1\nfeat/x\0f1\n";
-			return "f1\0s1\0feat\ns1\0\0root\n";
+			if (args[0] === "for-each-ref") return "stable\0s1\nfeat/x\0f1\nfeat/x--a-1\0a1\nfeat/y\0y1\nfeat/y--b-2\0b1\n";
+			return "a1\0f1\0sub\nf1\0s1\0feat\ns1\0\0root\n";
 		};
 		const graph = await workspaceGraph({ toplevel: "/x", branch: "feat/x", base: "origin/stable" }, "w", git);
-		assert.deepEqual(graph.lanes.map((l) => l.name), ["stable", "feat/x"]);
+		assert.deepEqual(graph.lanes.map((l) => l.name), ["feat/x", "feat/x--a-1"]);
+	});
+
+	it("a home thread shows feature branches cut from it, merged ones from the merge's second parent, and not stable or other wolves", async () => {
+		const { execFileSync } = await import("node:child_process");
+		const { mkdtempSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
+		const dir = mkdtempSync(join(tmpdir(), "bg-home-"));
+		const g = (...a: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "pipe" });
+		g("init", "-b", "wolf/w");
+		g("commit", "--allow-empty", "-m", "root");
+		g("branch", "stable");
+		g("branch", "other/wolf");
+		g("checkout", "-b", "feat/a-live");
+		g("commit", "--allow-empty", "-m", "live1");
+		g("checkout", "wolf/w");
+		g("checkout", "-b", "feat/b-done");
+		g("commit", "--allow-empty", "-m", "done1");
+		g("checkout", "wolf/w");
+		g("commit", "--allow-empty", "-m", "home1");
+		g("merge", "--no-ff", "-m", "Merge branch 'feat/b-done'", "feat/b-done");
+		g("branch", "-D", "feat/b-done");
+		const graph = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
+		assert.deepEqual(graph.lanes.map((l) => l.name), ["wolf/w", "feat/a-live", "feat/b-done"]);
+		assert.deepEqual(graph.lanes.map((l) => l.kind), ["wolf", "feature", "merged"]);
+		const lane = (subject: string) => graph.lanes[graph.commits.find((c) => c.subject === subject)!.lane]!.name;
+		assert.equal(lane("done1"), "feat/b-done");
+		assert.equal(lane("live1"), "feat/a-live");
+		assert.equal(lane("home1"), "wolf/w");
 	});
 
 	it("a git timeout gives an empty graph; other errors still throw", async () => {

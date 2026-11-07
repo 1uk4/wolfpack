@@ -3,7 +3,8 @@
  * No I/O here; src/server/branch-graph.ts feeds it from read-only git.
  */
 
-export type LaneKind = "base" | "wolf" | "feature" | "subagent";
+/** `merged`: a child whose branch ref is gone, drawn from its merge commit's second parent. */
+export type LaneKind = "base" | "wolf" | "feature" | "subagent" | "merged";
 
 /** A branch to draw, in priority order (earlier lanes claim shared history first). `tip` is its head sha. */
 export interface LaneRef {

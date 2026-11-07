@@ -17,7 +17,7 @@
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/protocol\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/protocol/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/protocol/src"
   },
   "dependencies": {
     "zod": "^4.6.7"

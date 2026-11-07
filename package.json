@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck:extensions": "tsc -p tsconfig.extensions.json",
-    "test": "vitest",
+    "test": "vitest --project default",
+    "test:eval": "vitest run --project eval",
+    "test:live": "WOLFPACK_LIVE=1 vitest run --project live",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
     "install:cli": "pnpm run build && cd packages/cli && pnpm link --global",
     "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js packages/agent/dist/bin/wolfpack-work-server.js packages/harness/dist/bin/harness.js packages/workerd/dist/bin/workerd.js",

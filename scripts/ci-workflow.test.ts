@@ -19,6 +19,12 @@ describe("ci.yml uses pnpm", () => {
 		expect(bad).toEqual([]);
 	});
 
+	it("every vitest invocation in the verify job selects the default project (no evals or live tests in CI verify)", () => {
+		const lines = runs.filter((r) => r.job === "verify").flatMap((r) => code(r.run).split("\n")).filter((l) => /\bvitest run\b/.test(l));
+		expect(lines.length).toBeGreaterThanOrEqual(2);
+		expect(lines.filter((l) => !/--project default\b/.test(l))).toEqual([]);
+	});
+
 	it("the verify job installs with a frozen pnpm lockfile", () => {
 		expect(runs.some((r) => r.job === "verify" && /pnpm install --frozen-lockfile/.test(r.run))).toBe(true);
 	});

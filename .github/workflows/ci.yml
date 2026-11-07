@@ -76,14 +76,14 @@ jobs:
       - name: vitest (affected packages)
         run: |
           ALL=$(node -p 'JSON.parse(process.env.A).all')
-          if [ "$ALL" = true ]; then pnpm exec vitest run; exit; fi
+          if [ "$ALL" = true ]; then pnpm exec vitest run --project default; exit; fi
           mapfile -t F < <(node -e '
             const a=JSON.parse(process.env.A);
             const f=[...a.vitestPaths];
             if(a.extensionsTests)f.push("extensions/");
             if(a.scriptsTests)f.push("scripts/");
             console.log(f.join("\n"))')
-          [ -n "${F[0]:-}" ] && pnpm exec vitest run "${F[@]}" || echo "no vitest paths affected"
+          [ -n "${F[0]:-}" ] && pnpm exec vitest run --project default "${F[@]}" || echo "no vitest paths affected"
       - name: console tests
         if: fromJSON(needs.detect.outputs.affected).consoleTests
         run: pnpm --filter @wolfpack/console test

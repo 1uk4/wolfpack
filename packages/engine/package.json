@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/engine/src",
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/engine/src",
     "lint": "echo \"no lint configured for @wolfpack/engine\""
   },
   "dependencies": {

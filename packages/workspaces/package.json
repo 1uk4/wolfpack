@@ -9,7 +9,7 @@
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/workspaces\"",
-    "test": "vitest run --root ../.. --config vitest.config.ts packages/workspaces/src"
+    "test": "vitest run --project default --root ../.. --config vitest.config.ts packages/workspaces/src"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

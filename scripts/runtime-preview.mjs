@@ -24,7 +24,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs"];
+const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs"];
 
 /** Copy this command and its imports out of the runtime tree, so `off` works after checking out a branch that lacks them. */
 function copyScripts(binDir) {
@@ -192,7 +192,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0 };
 	}
 	const priorStateText = fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : undefined;
-	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt });
+	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt, consolePort: Number(env.PREVIEW_CONSOLE_PORT || 3230), ...(state?.apps ? { apps: state.apps } : {}) });
 	copyScripts(path.join(dir, "bin"));
 	const co = tryGit(rtWt, "checkout", "--detach", sha);
 	if (!co.ok) {
@@ -218,7 +218,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	writeState({ ...readState(), phase: "switching" });
 	helper("running", false);
 	log(`previewing ${ref} (${sha.slice(0, 8)}): the stack is restarting, so the wolf session running this command will end.`);
-	log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable.");
+	log(`Then a local console on http://127.0.0.1:${readState().consolePort} is started and the desktop app is pointed at it: quit and reopen Wolfpack Console. If the deep health check fails, the switch rolls back by itself (phase rolled-back).`);
+	log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable. If that command is missing: node ~/.wolfpack/preview/bin/runtime-preview.mjs off");
 	return { exitCode: 0 };
 }
 

@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
 import { runPreview } from "./runtime-preview.mjs";
+// @ts-expect-error plain .mjs script
+import { runSwitch } from "./runtime-preview-switch.mjs";
 
 let tmp: string, home: string, main: string, rtWt: string, origin: string, featSha: string;
 const g = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
@@ -238,6 +240,56 @@ describe("runtime-preview", () => {
 		expect((await h.run(["off", "--rollback"])).exitCode).toBe(0);
 		expect(h.calls).toEqual(["git checkout stable", `build@${stableSha}`]);
 		expect(readState()).toMatchObject({ previewRef: "feat/x" });
+	});
+
+	it("on: records the local console port (PREVIEW_CONSOLE_PORT, default 3230) for the helper and says to reopen the app", async () => {
+		const h = harness();
+		await h.run(["feat/x"]);
+		expect(readState().consolePort).toBe(3230);
+		expect(h.logs.join("\n")).toContain("local console on http://127.0.0.1:3230");
+		fs.rmSync(stateFile());
+		g(rtWt, "checkout", "-q", "stable");
+		await runPreview({ argv: ["feat/x"], env: { HOME: home, PREVIEW_CONSOLE_PORT: "3999", WOLVES_DIR: path.join(tmp, "wolves") }, cwd: rtWt, steps: h.steps, log: () => {}, warn: () => {} });
+		expect(readState().consolePort).toBe(3999);
+	});
+
+	it("off with a local stable ahead of origin/stable warns and stays on the local stable", async () => {
+		g(rtWt, "checkout", "-q", "stable");
+		commit(rtWt, "local.txt", "x"); // 1 commit ahead of origin/stable
+		const aheadSha = g(rtWt, "rev-parse", "HEAD");
+		const h = harness();
+		await h.run(["feat/x"]);
+		h.logs.length = 0;
+		expect((await h.run(["off"])).exitCode).toBe(0);
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(aheadSha);
+		expect(h.logs.join("\n")).toContain("ahead of origin/stable");
+	});
+
+	it("on, helper, on again, helper, off ends with the owner's original consoleUrl", async () => {
+		const ud = path.join(tmp, "Application Support");
+		fs.mkdirSync(path.join(ud, "LearnHarness"), { recursive: true });
+		const cj = path.join(ud, "LearnHarness", "console.json");
+		fs.writeFileSync(cj, JSON.stringify({ consoleUrl: "https://sfo-01.example" }));
+		const app = path.join(rtWt, "apps", "console");
+		fs.mkdirSync(path.join(app, ".next", "standalone", "apps", "console"), { recursive: true });
+		fs.writeFileSync(path.join(app, ".next", "standalone", "apps", "console", "server.js"), "//");
+		const plist = path.join(tmp, "stack.plist");
+		fs.writeFileSync(plist, "<plist/>");
+		const h = harness();
+		const helper = (clear: boolean) =>
+			runSwitch({
+				stateFile: stateFile(), plist, label: "com.wolfpack.stack", port: "7141", okPhase: "running", clear, uid: 501,
+				launchctl: () => 0, sleep: async () => {}, health: async () => true, log: () => {}, portFree: async () => true,
+				localConsole: { port: "3230", home, userDataRoot: ud, runtimeDir: rtWt, node: "/usr/bin/node" },
+				deep: { consoleUrl: "http://127.0.0.1:3230" }, rollback: async () => true,
+				fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: [{ id: "ddkyhT", name: "1uk4" }] } : { chats: [] }),
+			});
+		await h.run(["feat/x"]);
+		await helper(false);
+		await h.run(["feat/x"]); // a repeat on of the active ref rewrites the state file
+		await helper(false);
+		await helper(true); // off
+		expect(JSON.parse(fs.readFileSync(cj, "utf8")).consoleUrl).toBe("https://sfo-01.example");
 	});
 
 	it("status with no state says stable, no preview", async () => {

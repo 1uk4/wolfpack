@@ -23,6 +23,8 @@ export interface RunNode {
 	subject: string;
 	/** Every sha in the run, so a branch's fork commit can be placed on its node. */
 	shas: string[];
+	/** Committer time (unix s) of the newest commit in the run; null if unknown. */
+	time?: number | null;
 }
 
 export interface OverviewBranch {
@@ -73,7 +75,8 @@ export function groupRuns(log: RawCommit[]): RunNode[] {
 			last.sha = c.sha;
 			last.subject = c.subject;
 			last.shas.push(c.sha);
-		} else runs.push({ workId: id, count: 1, sha: c.sha, subject: c.subject, shas: [c.sha] });
+			last.time = c.time ?? null;
+		} else runs.push({ workId: id, count: 1, sha: c.sha, subject: c.subject, shas: [c.sha], time: c.time ?? null });
 	}
 	return runs;
 }
@@ -90,4 +93,52 @@ export function ageLabel(time: number | null, nowSec: number): string {
 	if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`;
 	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
 	return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** The agent name of a subagent branch `feat/<id>-<slug>--<agent-name>-<hex>`; any other branch name comes back unchanged. */
+export function agentName(branch: string): string {
+	const suffix = branch.split("--")[1];
+	if (suffix === undefined) return branch;
+	return suffix.replace(/-[0-9a-f]{4,}$/, "") || branch;
+}
+
+export const RECENT_RUNS = 3;
+
+export interface Card {
+	/** Children with commits not on the main lane. */
+	active: OverviewBranch[];
+	/** Children with nothing ahead: everything they did is on the main lane. */
+	landed: OverviewBranch[];
+	/** The newest runs, newest first. */
+	recent: RunNode[];
+	/** What the `recent` rows leave out. */
+	more: { items: number; commits: number };
+}
+
+/** The popover's rows: active vs landed children, the 3 newest work-item runs and a count of the rest. */
+export function buildCard(overview: GitOverview): Card {
+	const newestFirst = [...overview.history].reverse();
+	const rest = newestFirst.slice(RECENT_RUNS);
+	return {
+		active: overview.branches.filter((b) => !b.landed),
+		landed: overview.branches.filter((b) => b.landed),
+		recent: newestFirst.slice(0, RECENT_RUNS),
+		more: { items: rest.length, commits: rest.reduce((n, r) => n + r.count, 0) },
+	};
+}
+
+/** The muted second header line: a feature against its parent, a home thread by its branch counts. */
+export function headerStatus(overview: GitOverview, dirty: boolean): string {
+	const state = dirty ? "dirty" : "clean";
+	if (overview.main.kind === "feature") {
+		const short = branchShortId(overview.main.name);
+		const name = short ? `feat/${short}` : overview.main.name;
+		const p = overview.parent;
+		if (!p) return `${name} · ${state}`;
+		const counts = p.ahead === 0 ? `landed (0 ahead · ${p.behind} behind)` : `${p.ahead} ahead · ${p.behind} behind`;
+		return `${name} ← ${p.name} · ${counts} · ${state}`;
+	}
+	const active = overview.branches.filter((b) => !b.landed).length;
+	const landed = overview.branches.length - active;
+	return [state, `${active} active ${active === 1 ? "branch" : "branches"}`, ...(landed > 0 ? [`${landed} landed`] : [])].join(" · ");
 }

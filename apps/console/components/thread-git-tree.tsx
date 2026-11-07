@@ -5,8 +5,8 @@ import { CheckIcon, CopyIcon, GitBranchIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
-import { BranchGraphView, BranchRows, HistoryRuns } from "@/components/branch-graph";
-import type { GitOverview } from "@/src/core";
+import { BranchOverview } from "@/components/branch-graph";
+import { headerStatus, type GitOverview } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
 
 /** The header's repo · base → branch label (a home thread has no base). */
@@ -172,7 +172,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 					<div role="dialog" aria-label="Git workspace" data-testid="git-tree-popover" className="mx-auto flex w-full max-w-[46rem] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs shadow-lg">
 						<div className="flex items-center gap-1.5">
 							<span data-testid="git-tree-title" className="min-w-0 truncate text-sm font-medium text-foreground">
-								{title ?? branch}
+								{graph?.main.kind === "wolf" ? `Home · ${graph.main.name}` : (title ?? branch)}
 							</span>
 							<button
 								type="button"
@@ -190,20 +190,18 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 								{copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
 							</button>
 						</div>
-						<div data-testid="git-tree-branch" title={branch} className="truncate font-mono text-muted-foreground">
-							{middleTruncate(branch)}
-							{workspace.base ? ` ← ${workspace.base}` : ""}
-							{graph?.parent ? ` · ${graph.parent.ahead} ahead · ${graph.parent.behind} behind` : ""}
+						<div data-testid="git-tree-branch" title={branch} className="truncate font-mono text-[11px] text-muted-foreground">
+							{graph && status
+								? headerStatus(graph, status.dirty.length > 0)
+								: `${middleTruncate(branch)}${workspace.base ? ` ← ${workspace.base}` : ""}`}
 						</div>
 						{!status ? (
 							<div className="text-muted-foreground">Loading…</div>
 						) : (
 							<>
-								{graph && graph.history.length > 0 ? (
-									<section data-testid="git-tree-graph" className="space-y-1.5 py-1">
-										<BranchGraphView overview={graph} />
-										<HistoryRuns overview={graph} />
-										<BranchRows overview={graph} />
+								{graph && (graph.history.length > 0 || graph.branches.length > 0) ? (
+									<section data-testid="git-tree-graph" className="py-1">
+										<BranchOverview overview={graph} />
 									</section>
 								) : (
 									status.commits.length > 0 && (
@@ -217,10 +215,8 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 										</section>
 									)
 								)}
-								<section data-testid="git-tree-dirty-files" className="font-mono">
-									{status.dirty.length === 0 ? (
-										<span className="text-muted-foreground">Changes: clean</span>
-									) : (
+								{status.dirty.length > 0 && (
+									<section data-testid="git-tree-dirty-files" className="font-mono">
 										<details>
 											<summary className="cursor-pointer text-muted-foreground">
 												Changes: {status.dirty.length} {status.dirty.length === 1 ? "file" : "files"} changed
@@ -232,9 +228,9 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 												</div>
 											))}
 										</details>
-									)}
-								</section>
-								{status.children.length > 0 && (
+									</section>
+								)}
+								{!graph && status.children.length > 0 && (
 									<section data-testid="git-tree-children">
 										<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Subagent worktrees</div>
 										{status.children.map((c) => (

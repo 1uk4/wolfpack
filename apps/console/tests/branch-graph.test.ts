@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, branchShortId, groupRuns, workIdOfSubject, type RawCommit } from "../src/core/branch-graph.ts";
+import { ageLabel, agentName, buildCard, headerStatus, branchShortId, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit, type RunNode } from "../src/core/branch-graph.ts";
 import { parseLog, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
@@ -26,6 +26,44 @@ describe("groupRuns", () => {
 		assert.equal(ageLabel(1000, 1000 + 4 * 86400 + 5), "4d ago");
 		assert.equal(ageLabel(1000, 1000 + 7200), "2h ago");
 		assert.equal(ageLabel(null, 5), "?");
+	});
+});
+
+const br = (name: string, ahead: number, behind = 0): OverviewBranch => ({ name, kind: "feature", ahead, behind, landed: ahead === 0, forkIndex: 0, gap: 0, splitAt: 1, lastAt: 1, dirty: false, workId: null });
+const run = (workId: string | null, count: number): RunNode => ({ workId, count, sha: "x", subject: "s", shas: ["x"], time: 5 });
+const ov = (over: Partial<GitOverview>): GitOverview => ({ main: { name: "wolf/w", kind: "wolf" }, history: [], branches: [], parent: null, ...over });
+
+describe("buildCard", () => {
+	it("splits active from landed branches and keeps the 3 newest work-item runs with counts for the rest", () => {
+		// history is oldest → newest
+		const card = buildCard(ov({ history: [run("work-wolfpack-AAAAAAA", 4), run(null, 20), run("work-wolfpack-BBBBBBB", 5), run("work-wolfpack-CCCCCCC", 1), run(null, 2)], branches: [br("feat/a", 2), br("feat/b", 0), br("feat/c", 1)] }));
+		assert.deepEqual(card.active.map((b) => b.name), ["feat/a", "feat/c"]);
+		assert.deepEqual(card.landed.map((b) => b.name), ["feat/b"]);
+		assert.deepEqual(card.recent.map((r) => [r.workId, r.count]), [[null, 2], ["work-wolfpack-CCCCCCC", 1], ["work-wolfpack-BBBBBBB", 5]]);
+		assert.deepEqual(card.more, { items: 2, commits: 24 });
+	});
+	it("has no 'more' when the history fits in 3 runs", () => {
+		assert.deepEqual(buildCard(ov({ history: [run(null, 1)] })).more, { items: 0, commits: 0 });
+	});
+});
+
+describe("headerStatus", () => {
+	it("home: clean/dirty, active and landed counts", () => {
+		const o = ov({ branches: [br("feat/a", 2), br("feat/b", 1), br("feat/c", 0), br("feat/d", 0), br("feat/e", 0)] });
+		assert.equal(headerStatus(o, false), "clean · 2 active branches · 3 landed");
+		assert.equal(headerStatus(ov({ branches: [br("feat/a", 1)] }), true), "dirty · 1 active branch");
+	});
+	it("feature: says landed at 0 ahead, else ahead/behind, against its parent", () => {
+		const parentOf = (ahead: number, behind: number) => ov({ main: { name: "feat/M72D2sk-install-and-onboarding", kind: "feature" }, parent: { name: "wolf/1uk4", ahead, behind } });
+		assert.equal(headerStatus(parentOf(0, 20), false), "feat/M72D2sk ← wolf/1uk4 · landed (0 ahead · 20 behind) · clean");
+		assert.equal(headerStatus(parentOf(3, 1), true), "feat/M72D2sk ← wolf/1uk4 · 3 ahead · 1 behind · dirty");
+	});
+});
+
+describe("agentName", () => {
+	it("takes the agent name from the --<agent>-<hex> suffix", () => {
+		assert.equal(agentName("feat/n73bJGY-console--thread-git-graph-b7f21ea4"), "thread-git-graph");
+		assert.equal(agentName("feat/x"), "feat/x");
 	});
 });
 

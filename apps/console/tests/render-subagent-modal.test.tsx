@@ -139,6 +139,35 @@ describe("subagent modal", () => {
 		assert.match(q('[data-testid="subagent-elapsed"]')!.textContent!, /^turn 1m \d+s · total 14m \d+s$/);
 	});
 
+	it("the task link closes the modal, then opens the work reader on the current page", async () => {
+		const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+		const realLocation = Object.getOwnPropertyDescriptor(window, "location");
+		Object.defineProperty(window, "location", { configurable: true, value: { pathname: "/wolf/w/thread/home", search: "", assign: () => {} } });
+		const order: string[] = [];
+		const f = fake({});
+		(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const router = { push: (u: string) => order.push(`open ${u}`), replace: () => {}, back: () => {} };
+		await act(async () => {
+			root!.render(
+				<AppRouterContext.Provider value={router as never}>
+					<ServerEventsProvider connect={inert}>
+						<SubagentModal wolf="w" childThreadId={CHILD} onClose={() => void order.push("close")} />
+					</ServerEventsProvider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		await settle();
+		const ev = Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 });
+		await act(async () => void q('[data-testid="subagent-task"]')!.dispatchEvent(ev));
+		if (realLocation) Object.defineProperty(window, "location", realLocation);
+		else delete (window as unknown as Record<string, unknown>).location;
+		assert.deepEqual(order, ["close", "open /wolf/w/thread/home?item=work-w-abc"]);
+		assert.equal(ev.defaultPrevented, true);
+	});
+
 	it("running: header facts, Stop aborts, transcript, ledger in order", async () => {
 		const f = fake({});
 		await mount(f);

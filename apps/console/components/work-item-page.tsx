@@ -2,14 +2,15 @@
 
 /** A work item page body (/kb/work/[id]): header facts, links to parent / dependencies, plan and Record. */
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { XIcon } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { TaskGraph } from "@/components/task-graph";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb-client";
 import { AttachBarWorkButton } from "@/components/attached-thread";
+import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import { TopBar } from "@/components/top-bar";
 import { WorkBadges } from "@/components/work-badges";
 import { useLibrarian } from "@/components/use-librarian";
@@ -25,6 +26,7 @@ export type WorkPageState =
 export function WorkItemPage({ id, onClose, onOpenTask }: { id: string; /** Reader-panel mode: draws a close button and fills its container. */ onClose?: () => void; /** Overrides the default navigation to the full page (the reader switches item in place). */ onOpenTask?: (id: string) => void }) {
 	const { librarian, loading } = useLibrarian();
 	const router = useRouter();
+	const openWork = useOpenWorkItem();
 	const [fetched, setFetched] = useState<{ id: string; state: WorkPageState } | null>(null);
 
 	useEffect(() => {
@@ -62,7 +64,7 @@ export function WorkItemPage({ id, onClose, onOpenTask }: { id: string; /** Read
 		if (r.ok) router.push(threadHref(wolf, r.data.id));
 		else setThreadError(r.message);
 	};
-	return <WorkItemView id={id} state={state} onOpenTask={onOpenTask ?? ((taskId) => router.push(workHref(taskId)))} onOpenThread={openThread} threadError={threadError} onClose={onClose} />;
+	return <WorkItemView id={id} state={state} onOpenTask={onOpenTask ?? openWork} onOpenThread={openThread} threadError={threadError} onClose={onClose} />;
 }
 
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
@@ -75,7 +77,12 @@ export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError,
 			<TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{item?.title ?? id}</h1>
 				{onClose && (
-					<Button size="icon-xs" variant="ghost" className="ml-auto shrink-0 max-md:size-11" aria-label="Close" data-testid="work-reader-close" onClick={onClose}>
+					<Link href={workHref(id)} className="ml-auto shrink-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" data-testid="work-reader-full">
+						Full page
+					</Link>
+				)}
+				{onClose && (
+					<Button size="icon-xs" variant="ghost" className="shrink-0 max-md:size-11" aria-label="Close" data-testid="work-reader-close" onClick={onClose}>
 						<XIcon />
 					</Button>
 				)}
@@ -119,9 +126,9 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 					<div data-fact="parent">
 						<dt className={LABEL}>part of</dt>
 						<dd>
-							<Link href={workHref(item.partOf)} className="underline underline-offset-2">
+							<a href={workHref(item.partOf)} onClick={(e) => openReaderLink(e, onOpenTask, item.partOf!)} className="underline underline-offset-2">
 								{parent?.title ?? item.partOf}
-							</Link>
+							</a>
 						</dd>
 					</div>
 				)}
@@ -130,9 +137,9 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 						<dt className={LABEL}>depends on</dt>
 						<dd className="flex flex-wrap gap-x-3">
 							{deps.map((d) => (
-								<Link key={d} href={workHref(d)} className="underline underline-offset-2">
+								<a key={d} href={workHref(d)} onClick={(e) => openReaderLink(e, onOpenTask, d)} className="underline underline-offset-2">
 									{d}
-								</Link>
+								</a>
 							))}
 						</dd>
 					</div>

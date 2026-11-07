@@ -8,7 +8,7 @@
  *    first) and opened at /wolf/<wolf>/thread/<slug>. With none the button reads "Start thread" and creates it on the
  *    CURRENT wolf only (POST /api/wolves/<wolf>/threads {kind:"feature", workItemId}); no fallback to other wolves.
  *    Disabled when the item has no feature.
- *  - Open in Work: the Work view (WorkViewContext open + select).
+ *  - Open: the Work view (WorkViewContext open + select).
  * Lookup: GET /api/wolves/<wolf>/work/<id>/record (fetchWorkRecord) over the librarian then other online wolves,
  * fetched on first open only, cached per id (module level, in-flight dedupe, ~60s TTL). Inside a button (card
  * options) the chip is inert plain text: the inert markdown set passes `inert`.
@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { cn } from "@/lib/utils";
 import { fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "@/components/kb-client";
-import { openReaderVia, readerUrl } from "@/components/work-reader-nav";
+import { openWorkItem } from "@/components/work-reader-nav";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
 
@@ -189,7 +189,7 @@ export function WorkItemCard({
 					{featureId !== null && lookup.thread === null ? "Start thread" : "Open thread"}
 				</button>
 				<button type="button" data-testid="work-card-work" onClick={onOpenWork} className="rounded-md border border-border px-2 py-1 text-xs hover:bg-accent">
-					Open in Work
+					Open
 				</button>
 			</div>
 		</div>
@@ -316,9 +316,7 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 	const go = (href: string) => (router ? router.push(href) : window.location.assign(href));
 	const openWork = () => {
 		close(false);
-		const params = new URLSearchParams(window.location.search);
-		if (router) openReaderVia(router, window.location.pathname, params.toString(), params.get("item") || null, id);
-		else window.location.assign(readerUrl(window.location.pathname, params.toString(), id));
+		openWorkItem(router, id);
 	};
 	const openThread = async () => {
 		if (!lookup || lookup.kind !== "ok") return;

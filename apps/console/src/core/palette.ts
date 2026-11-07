@@ -30,6 +30,8 @@ export interface PaletteItem {
 	href?: string;
 	/** Action to run instead of navigating. */
 	command?: PaletteCommandId;
+	/** Work items: the work item id the reader opens (instead of navigating to `href`). */
+	workId?: string;
 	/** Thread items: the thread's color (hex), drawn as a dot. */
 	color?: string;
 }
@@ -125,6 +127,7 @@ export function graphItems(nodes: readonly KbGraphNode[]): PaletteItem[] {
 				label: n.label,
 				hint: [n.workKind, n.stage].filter(Boolean).join(" · ") || n.domain,
 				keywords: [n.domain, n.assignee, n.workKind, n.stage].filter((s): s is string => !!s),
+				workId: n.id.startsWith("work:") ? n.id.slice(5) : undefined,
 				href: focusHref(n.id),
 			});
 		}

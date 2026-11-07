@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import { ChevronLeftIcon, CornerDownRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryObservations, fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
@@ -518,6 +518,7 @@ export function StatusSection({ view, bound, shown, viewingOther = false, otherS
 	onSelect: (id: string) => void;
 	onBack: () => void;
 }) {
+	const openWork = useOpenWorkItem();
 	const showFeed = view === "feed" || (!bound && !viewingOther);
 	const list = observations.list;
 	const groups = list ? groupObservations(list) : [];
@@ -622,9 +623,9 @@ export function StatusSection({ view, bound, shown, viewingOther = false, otherS
 					) : shown || bound ? (
 						<div className="flex items-start gap-1">
 							{isChild ? <CornerDownRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-label="task in this feature" data-testid="memory-child-arrow" /> : null}
-							<Link className="min-w-0 underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)}>
+							<a className="min-w-0 underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)} data-testid="memory-work-link" onClick={(e) => openReaderLink(e, openWork, shown?.item.id ?? bound!.workId)}>
 								{shown?.item.title || bound?.title || shown?.item.id || bound?.workId}
-							</Link>
+							</a>
 						</div>
 					) : null}
 					{shown ? <WorkBadges kind={shown.item.kind} stage={shown.item.stage} domain={shown.item.domain} className="mt-1.5" /> : null}

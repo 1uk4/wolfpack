@@ -5,14 +5,29 @@
  * `?item=<id>` on the page you are on. Opening pushes that URL (Back closes, Forward re-opens), the page underneath
  * stays mounted so closing returns to it exactly as it was. Neither page knows about the other.
  * Desktop: a right-side panel. Phone (<768px, Tailwind `max-md`): full screen, h-dvh, safe-area padded.
- * Esc closes only the reader (window capture), unless a dialog is open above it; then the page's own Esc behaviour applies.
+ * Mounted ONCE, in AppShell (components/sidebar.tsx): `?item=<id>` opens it over whichever page is showing.
+ *
+ * Esc order, topmost first: (1) anything with role dialog/alertdialog/menu/listbox or aria-modal other than the reader
+ * itself (the id hover card, the chat bar's thread switcher, the command palette, the subagent modal, the graduate dialog)
+ * owns the key and closes first; the reader stays. (2) An Esc another layer already claimed (defaultPrevented) is left alone.
+ * (3) Otherwise the reader closes, including with focus in the chat bar composer or a bar card (neither handles Esc).
  */
-import { Suspense, useCallback, useEffect, useRef } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef } from "react";
 import { WorkItemPage } from "@/components/work-item-page";
 
 export { ITEM_PARAM, readerUrl, useWorkReader } from "@/components/work-reader-nav";
-import { ITEM_PARAM, readerUrl, useWorkReader } from "@/components/work-reader-nav";
+import { useWorkReader } from "@/components/work-reader-nav";
+
+const OVERLAY = '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[aria-modal="true"]';
+/** An overlay that is really up: connected and not hidden by an attribute or inline style (a persistent closed list must not swallow Esc forever). */
+function shown(el: Element): boolean {
+	if (!el.isConnected || el.closest('[hidden],[aria-hidden="true"],[inert]')) return false;
+	for (let n: Element | null = el; n; n = n.parentElement) {
+		const st = (n as HTMLElement).style;
+		if (st?.display === "none" || st?.visibility === "hidden") return false;
+	}
+	return true;
+}
 
 /** Presentational shell (SSR-testable): the panel itself. */
 export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClose: () => void; onOpenTask?: (id: string) => void }) {
@@ -22,7 +37,7 @@ export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClo
 			if (e.key !== "Escape" || e.defaultPrevented) return;
 			// A dialog above the reader (the graduate dialog from the visible list, a popover) owns this Esc.
 			const own = panelRef.current;
-			for (const d of Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],[aria-modal="true"]'))) if (d !== own) return;
+			for (const d of Array.from(document.querySelectorAll(OVERLAY))) if (d !== own && shown(d)) return;
 			e.preventDefault();
 			e.stopPropagation();
 			onClose();
@@ -50,7 +65,7 @@ function Host() {
 	return <WorkReaderPanel id={itemId} onClose={close} onOpenTask={open} />;
 }
 
-/** Mount once per page that can open work items. */
+/** Mount once, in AppShell: the reader for every page. */
 export function WorkReaderHost() {
 	return (
 		<Suspense fallback={null}>

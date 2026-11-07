@@ -206,6 +206,20 @@ describe("hover card", () => {
 		assert.equal(q('[data-testid="work-card-work"]')!.hasAttribute("disabled"), false);
 	});
 
+	it("the card's button reads Open and opens the reader on the current page", async () => {
+		respond({ [ID]: record({ partOf: null }) });
+		const assigned: string[] = [];
+		const realLocation = Object.getOwnPropertyDescriptor(window, "location");
+		Object.defineProperty(window, "location", { configurable: true, value: { pathname: "/wolf/hal/thread/t1", search: "?x=1", assign: (u: string) => assigned.push(u) } });
+		await openChip();
+		const btn = q('[data-testid="work-card-work"]')!;
+		assert.equal(btn.textContent!.trim(), "Open");
+		await act(async () => void btn.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		if (realLocation) Object.defineProperty(window, "location", realLocation);
+		else delete (window as unknown as Record<string, unknown>).location;
+		assert.deepEqual(assigned, [`/wolf/hal/thread/t1?x=1&item=${ID}`]);
+	});
+
 	it("an unknown id shows Unknown item", async () => {
 		respond({});
 		await openChip("work-wolfpack-zzzzzzz");

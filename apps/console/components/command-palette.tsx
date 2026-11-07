@@ -11,6 +11,7 @@
  * first open and cached for the session.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOpenWorkItem } from "@/components/work-reader-nav";
 import { Command } from "cmdk";
 import { DialogTitle } from "@radix-ui/react-dialog";
 import { usePathname, useRouter } from "next/navigation";
@@ -61,6 +62,7 @@ type Load = "loading" | "ready" | "error";
 export function CommandPalette() {
 	const router = useRouter();
 	const pathname = usePathname();
+	const openWork = useOpenWorkItem();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const [selected, setSelected] = useState("");
@@ -160,6 +162,11 @@ export function CommandPalette() {
 
 	const run = useCallback(
 		async (item: PaletteItem) => {
+			if (item.workId) {
+				setOpen(false);
+				openWork(item.workId);
+				return;
+			}
 			if (item.href) {
 				setOpen(false);
 				router.push(item.href);

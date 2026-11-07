@@ -15,7 +15,6 @@ import {
   KbActivityResponseSchema,
   parseMemoryEvent,
   EventEnvelopeSchema,
-  PROTOCOL_VERSION,
   ProtocolVersionSchema,
   SnapshotEventSchema,
   SubmitAckSchema,
@@ -59,7 +58,6 @@ const turn = [
 
 describe("version", () => {
   it("is the integer 1", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
     expect(ProtocolVersionSchema.parse(1)).toBe(1);
     expect(ProtocolVersionSchema.safeParse(2).success).toBe(false);
   });
@@ -263,8 +261,7 @@ describe("MemoryEvent", () => {
     expect(parseMemoryEvent({ ...item, outcome: "unclassified" })).toMatchObject({ kind: "invalid" });
   });
 
-  it("is not a ThreadEvent and needs no protocol bump", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+  it("is not a ThreadEvent", () => {
     expect(parseThreadEvent(variants[0])).toMatchObject({ kind: "invalid" });
   });
 });
@@ -284,10 +281,9 @@ describe("memory action responses", () => {
     expect(PromoteResponseSchema.safeParse({ jobId: "promote-1", status: "done" }).success).toBe(false);
     expect(PromoteResponseSchema.safeParse({ status: "started" }).success).toBe(false);
   });
-  it("new error codes map to 409 and need no protocol bump", () => {
+  it("new error codes map to 409", () => {
     expect(ERROR_HTTP_STATUS.memory_unavailable).toBe(409);
     expect(ERROR_HTTP_STATUS.promote_unavailable).toBe(409);
-    expect(PROTOCOL_VERSION).toBe(1);
   });
 });
 

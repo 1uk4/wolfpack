@@ -23,10 +23,5 @@
     "extensions": [
       "./durable.ts"
     ]
-  },
-  "wolfpack": {
-    "assets": [
-      "./kb-graph"
-    ]
   }
 }

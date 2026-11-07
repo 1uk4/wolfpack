@@ -110,10 +110,10 @@ function fakes(over: Over = {}) {
       return over.ghWrite ?? ok(`Creating pull request...\n${over.createUrl ?? "https://github.com/1uk4/wolfpack/pull/9"}`);
     },
     workConfigured: () => over.workConfigured ?? true,
-    async verify() {
+    async verify(o) {
       verifyCalls++;
       if (over.verifyThrows) throw new Error("spawn npx ENOENT");
-      return { ok: over.verifyOk ?? true, summary: "build ok, typecheck ok, 312 tests passed" };
+      return { ok: over.verifyOk ?? true, summary: "build ok, typecheck ok, 312 tests passed", live: o.skipLive ? "skipped (--skip-live)" : "passed on this machine" };
     },
     async work(id) {
       workCalls.push(id);
@@ -300,10 +300,16 @@ describe("wolfpack pr prepare: opening the PR", () => {
     expect(create.input).toContain("- bbb2222 chore(deps): bump");
     expect(create.input).toContain("312 tests passed");
     expect(create.input).toContain("- CI: see the checks on this PR");
-    expect(create.input).toContain("- live/eval: not wired yet (work-wolfpack-tJ18SgU)");
+    expect(create.input).toContain("- live/eval: live tests passed on this machine; eval tests run on the release PR's CI");
     expect(c.filter((x) => /^gh pr merge|--force|--force-with-lease| -f /.test(x))).toEqual([]);
     expect(c.filter((x) => x.startsWith("gh api"))).toEqual([]);
     expect(c.filter((x) => x.startsWith("git push") && x.includes("stable"))).toEqual([]);
+  });
+
+  it("--skip-live is passed to verify and the PR body says the live tests were skipped", async () => {
+    const f = fakes();
+    await run({ skipLive: true }, f);
+    expect(body(f)).toContain("- live/eval: live tests skipped (--skip-live); eval tests run on the release PR's CI");
   });
 
   it("collects risk and manual checks from each feature's Release notes into the Decide header, labelled by feature", async () => {
@@ -582,8 +588,8 @@ describe("wolfpack pr prepare: arguments", () => {
   const pr = (...rest: string[]) => ["pr", "prepare", ...rest];
 
   it("accepts exactly --full, --dry-run and --base <value>, wherever the command words sit", () => {
-    expect(parsePrArgs(pr())).toEqual({ full: false, dryRun: false, base: undefined });
-    expect(parsePrArgs(pr("--full", "--dry-run", "--base", "stable"))).toEqual({ full: true, dryRun: true, base: "stable" });
+    expect(parsePrArgs(pr())).toEqual({ full: false, dryRun: false, skipLive: false, base: undefined });
+    expect(parsePrArgs(pr("--full", "--dry-run", "--skip-live", "--base", "stable"))).toEqual({ full: true, dryRun: true, skipLive: true, base: "stable" });
     expect(parsePrArgs(["--dry-run", "pr", "prepare"])).toMatchObject({ dryRun: true });
     expect(parsePrArgs(["pr", "--dry-run", "prepare"])).toMatchObject({ dryRun: true });
   });

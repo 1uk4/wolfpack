@@ -42,7 +42,7 @@ function realDeps(root: string): PrDeps {
       if (!res.ok) throw new Error(`GET /work/${id} returned ${res.status}`);
       return (await res.json()) as { item: { id: string; kind: string; title: string; partOf?: string | null }; body: string | null };
     },
-    async verify({ base, full }) {
+    async verify({ base, full, skipLive }) {
       // Same steps as CI: tsc --build and vitest over the affected packages, console tests if affected.
       const aff = (await import(pathToFileURL(path.join(root, "scripts/affected.mjs")).href)) as {
         computeAffected(c: string[] | null, ws: unknown): Affected;
@@ -50,7 +50,7 @@ function realDeps(root: string): PrDeps {
         loadWorkspaces(r: string): unknown;
       };
       const a = aff.computeAffected(full ? null : aff.changedFiles(base, "HEAD", root), aff.loadWorkspaces(root));
-      return verifyChanges(a, detectPm(root), (cmd, args) => sh(cmd, args, root, undefined, STEP_TIMEOUT_MS));
+      return verifyChanges(a, detectPm(root), (cmd, args) => sh(cmd, args, root, undefined, STEP_TIMEOUT_MS), undefined, { skipLive });
     },
     now: () => new Date(),
     log: (l) => console.log(l),

@@ -25,7 +25,7 @@ export interface PrDeps {
   /** Runs gh; `input` goes to stdin. */
   gh(args: string[], input?: string): CmdResult;
   /** Build + typecheck + the full suite of affected packages (the whole suite with `full`). */
-  verify(opts: { base: string; full: boolean }): Promise<{ ok: boolean; summary: string }>;
+  verify(opts: { base: string; full: boolean; skipLive: boolean }): Promise<{ ok: boolean; summary: string; live: string }>;
   /** Whether the Work API is configured (endpoint and key). Checked first, so a missing config refuses before anything changes. */
   workConfigured(): boolean;
   /** `GET /work/:id`: the item and its markdown body; null when unknown. Throws when the API cannot be reached. */
@@ -36,6 +36,8 @@ export interface PrDeps {
 
 export interface PrPrepareOptions {
   full?: boolean;
+  /** Do not run `test:live` before opening the PR; the PR body says so. */
+  skipLive?: boolean;
   dryRun?: boolean;
   /** Anything but "stable" is refused. */
   base?: string;
@@ -89,23 +91,24 @@ function planComments(existing: MarkedComment[], count: number): CommentPlan {
   return plan;
 }
 
-const USAGE = "Usage: wolfpack pr prepare [--full] [--dry-run] [--base stable]";
+const USAGE = "Usage: wolfpack pr prepare [--full] [--skip-live] [--dry-run] [--base stable]";
 
 /**
  * The arguments of `wolfpack pr prepare`, from the raw argv after the node and script names. The global flag layer in the
  * bin swallows some flags (--host, --yes, ...) and passes the rest through unchecked, so this sees everything and accepts
- * only --full, --dry-run and --base <value>. The command words may sit anywhere.
+ * only --full, --skip-live, --dry-run and --base <value>. The command words may sit anywhere.
  */
-export function parsePrArgs(argv: string[]): { full: boolean; dryRun: boolean; base: string | undefined } {
+export function parsePrArgs(argv: string[]): { full: boolean; dryRun: boolean; skipLive: boolean; base: string | undefined } {
   const rest = [...argv];
   for (const word of ["pr", "prepare"]) {
     const i = rest.indexOf(word);
     if (i >= 0) rest.splice(i, 1);
   }
-  const out = { full: false, dryRun: false, base: undefined as string | undefined };
+  const out = { full: false, dryRun: false, skipLive: false, base: undefined as string | undefined };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
     if (a === "--full") out.full = true;
+    else if (a === "--skip-live") out.skipLive = true;
     else if (a === "--dry-run") out.dryRun = true;
     else if (a === "--base") {
       const v = rest[++i];
@@ -321,12 +324,14 @@ export async function prPrepare(opts: PrPrepareOptions, deps: PrDeps): Promise<v
     }
 
     let tests: string;
+    let live = "not run (dry run)";
     if (opts.dryRun) tests = "not run (dry run)";
     else {
       // A crash in the build step is turned into a clean refusal by the handler around finish().
-      const v = await deps.verify({ base: "origin/stable", full: !!opts.full });
+      const v = await deps.verify({ base: "origin/stable", full: !!opts.full, skipLive: !!opts.skipLive });
       if (!v.ok) throw new PrRefusal(`build, typecheck or tests failed; no PR opened.\n${v.summary}`);
       tests = v.summary;
+      live = v.live;
     }
 
     const input = {
@@ -338,7 +343,7 @@ export async function prPrepare(opts: PrPrepareOptions, deps: PrDeps): Promise<v
       tests,
       unreadable: [...unreadable].sort(),
       ci: "see the checks on this PR",
-      liveEval: "not wired yet (work-wolfpack-tJ18SgU)",
+      liveEval: `live tests ${live}; eval tests run on the release PR's CI`,
     };
     const title = releaseTitle(input);
     const { body, comments } = releaseBody(input);

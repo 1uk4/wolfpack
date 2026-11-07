@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +63,7 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves
 	const gitCalls: string[][] = [];
 	const logs: string[] = [];
 	const builds: (string | undefined)[] = [];
+	const kills: string[] = [];
 	const steps = {
 		git: (cwd: string, ...args: string[]) => {
 			gitCalls.push(args);
@@ -80,12 +82,17 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves
 		pick: async () => "all",
 		sleep: async () => {},
 		portFree: async () => !opts.portBusy,
+		// Never the real lsof or process.kill: `off` and `status` look for a stray next dev on the console port, and the real steps would
+		// find (and SIGTERM) the owner's console on 3230. A test that wants a stray passes its own fakes.
+		listeners: async () => [],
+		procInfo: async () => null,
+		kill: (pid: number, sig: string) => void kills.push(`${sig} ${pid}`),
 		probe: async () => 401, // hub mode: compiled, not paired yet
 		fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: opts.noWolves ? [] : [{ id: "ddkyhT", name: "1uk4", host: "local", status: "busy", librarian: false, kbReadable: true }] } : { chats: [] }),
 	};
 	const run = (argv: string[]) =>
 		runPreview({ argv, env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves"), PREVIEW_USERDATA_ROOT: ud() }, cwd: rtWt, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { calls, gitCalls, logs, run, steps, builds, lc };
+	return { calls, gitCalls, logs, run, steps, builds, lc, kills };
 };
 
 describe("runtime-preview", () => {
@@ -496,6 +503,35 @@ describe("runtime-preview", () => {
 			expect(h.logs.join("\n")).toContain("3230");
 			expect(h.lc.some((a) => a[0] === "bootstrap")).toBe(false);
 		});
+	});
+});
+
+describe("off never signals a real process the test did not start", () => {
+	it("leaves a next dev that holds the console port alone when the harness stubs no lsof or kill", async () => {
+		// A stand-in for the owner's console: a `next` process whose cwd is an apps/console dir, listening on a port this test owns (never 3230).
+		const port = await new Promise<number>((res) => {
+			const s = net.createServer().listen(0, "127.0.0.1", () => {
+				const p = (s.address() as net.AddressInfo).port;
+				s.close(() => res(p));
+			});
+		});
+		const cwd = path.join(tmp, "fixture", "apps", "console");
+		fs.mkdirSync(cwd, { recursive: true });
+		const script = path.join(tmp, "listener.js");
+		fs.writeFileSync(script, `require("net").createServer().listen(${port}, "127.0.0.1"); setInterval(() => {}, 1000);\n`);
+		const fixture = spawn(process.execPath, [script, "next", "dev"], { cwd, stdio: "ignore" });
+		try {
+			for (let i = 0; i < 50 && !(await new Promise<boolean>((r) => net.connect(port, "127.0.0.1").once("connect", () => r(true)).once("error", () => r(false)))); i++) await new Promise((r) => setTimeout(r, 100));
+			const h = harness();
+			const r = await runPreview({ argv: ["off"], env: { HOME: home, PREVIEW_CONSOLE_PORT: String(port) }, cwd: rtWt, steps: h.steps, log: () => {}, warn: () => {} });
+			expect(r.exitCode).toBe(0);
+			await new Promise((res) => setTimeout(res, 300));
+			expect(fixture.exitCode).toBeNull();
+			expect(fixture.signalCode).toBeNull();
+			expect(h.kills).toEqual([]);
+		} finally {
+			fixture.kill("SIGKILL");
+		}
 	});
 });
 

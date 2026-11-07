@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
 import { runPreview } from "./runtime-preview.mjs";
 // @ts-expect-error plain .mjs script
+import { runLaunchctl } from "./runtime-preview-console.mjs";
+// @ts-expect-error plain .mjs script
 import { runSwitch } from "./runtime-preview-switch.mjs";
 
 let tmp: string, home: string, main: string, rtWt: string, origin: string, featSha: string;
@@ -74,8 +76,11 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves
 		},
 		spawnHelper: (a: { args: string[] }) => calls.push(`helper ${a.args.slice(4).join(" ")}`),
 		launchctl: (...a: string[]) => (lc.push(a), 0),
+		confirm: async () => true,
+		pick: async () => "all",
 		sleep: async () => {},
 		portFree: async () => !opts.portBusy,
+		probe: async () => 401, // hub mode: compiled, not paired yet
 		fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: opts.noWolves ? [] : [{ id: "ddkyhT", name: "1uk4", host: "local", status: "busy", librarian: false, kbReadable: true }] } : { chats: [] }),
 	};
 	const run = (argv: string[]) =>
@@ -323,7 +328,7 @@ describe("runtime-preview", () => {
 			expect(fs.existsSync(stateFile())).toBe(false);
 		});
 
-		it("serves next dev from the worktree under the preview-console agent, then points the app and records the original first", async () => {
+		it("serves next dev from the worktree under the preview-console agent and leaves the app on its own console", async () => {
 			const h = harness();
 			const d = devDir("wt");
 			expect((await h.run(["dev", d])).exitCode).toBe(0);
@@ -334,12 +339,46 @@ describe("runtime-preview", () => {
 			expect(t).toContain("<key>WOLFPACK_API_URL</key><string>http://127.0.0.1:7141</string>");
 			expect(t).toContain("<key>HOSTNAME</key><string>127.0.0.1</string>");
 			expect(t).toContain("<key>PORT</key><string>3230</string>");
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" });
-			expect(readState()).toMatchObject({ console: { mode: "dev", dir: fs.realpathSync(d) }, consolePort: 3230, apps: [{ previous: "https://sfo-01.example" }] });
+			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(readState()).toMatchObject({ console: { mode: "dev", dir: fs.realpathSync(d) }, consolePort: 3230 });
+			expect(readState().apps).toBeUndefined();
+			expect(h.logs.join("\n")).not.toContain("reopen");
 			// the wolves are never touched
 			expect(h.lc.every((a) => a.join(" ").includes("preview-console") || a[0] === "bootstrap" && String(a[2]).includes("preview-console"))).toBe(true);
 			expect(h.gitCalls.filter((a) => a[0] === "checkout")).toEqual([]);
 			expect(h.calls).toEqual([]);
+		});
+
+		const pairHub = (url = "http://100.64.0.9:3150") => {
+			fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+			fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: url, token: "SECRET-TOKEN", hostId: "h" }));
+		};
+
+		it("with this Mac paired to a hub the console runs in relay mode like stable: hub env, a loopback origin, no direct API url, and no secret in the plist or the output", async () => {
+			pairHub();
+			const h = harness();
+			expect((await h.run(["dev", devDir("wt")])).exitCode).toBe(0);
+			const t = plistText();
+			expect(t).toContain("<key>WOLFPACK_HUB_URL</key><string>http://100.64.0.9:3150</string>");
+			expect(t).toContain("<key>HUBD_PUBLIC_URL</key><string>http://100.64.0.9:3150</string>");
+			expect(t).toContain("<key>WOLFPACK_CONSOLE_PUBLIC_ORIGIN</key><string>http://127.0.0.1:3230</string>");
+			expect(t).not.toContain("WOLFPACK_API_URL");
+			expect(t + h.logs.join("\n")).not.toContain("SECRET-TOKEN");
+			expect(h.logs.join("\n")).not.toContain("local wolves only");
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toContain("hub: http://100.64.0.9:3150");
+		});
+
+		it("with no hub paired it keeps today's local-only env and says so in the output and in status", async () => {
+			const h = harness();
+			await h.run(["dev", devDir("wt")]);
+			const t = plistText();
+			expect(t).toContain("<key>WOLFPACK_API_URL</key><string>http://127.0.0.1:7141</string>");
+			expect(t).not.toContain("WOLFPACK_HUB_URL");
+			expect(h.logs.join("\n")).toContain("no hub configured: the console lists the local wolves only");
+			h.logs.length = 0;
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toContain("hub: none (local wolves only)");
 		});
 
 		it("defaults to the git worktree containing cwd", async () => {
@@ -358,16 +397,16 @@ describe("runtime-preview", () => {
 			expect(fs.existsSync(stateFile())).toBe(false);
 		});
 
-		it("dev in another dir while one is active re-points the agent and keeps apps with the original url", async () => {
+		it("dev in another dir while one is active re-points the agent", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
 			expect((await h.run(["dev", devDir("wt2")])).exitCode).toBe(0);
 			expect(plistText()).toContain(`<key>WorkingDirectory</key><string>${path.join(fs.realpathSync(tmp), "wt2", "apps", "console")}</string>`);
-			expect(readState()).toMatchObject({ console: { mode: "dev", dir: path.join(fs.realpathSync(tmp), "wt2") }, apps: [{ previous: "https://sfo-01.example" }] });
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" });
+			expect(readState()).toMatchObject({ console: { mode: "dev", dir: path.join(fs.realpathSync(tmp), "wt2") } });
+			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
-		it("dev run again in the same dir is a restart: agent reloaded, state and apps unchanged", async () => {
+		it("dev run again in the same dir is a restart: agent reloaded, state unchanged", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
 			const before = readState();
@@ -377,7 +416,7 @@ describe("runtime-preview", () => {
 			expect(readState()).toEqual(before);
 		});
 
-		it("on a new ref while another ref preview is active switches in place, keeping previousRef, previousBranch and apps", async () => {
+		it("on a new ref while another ref preview is active switches in place, keeping previousRef and previousBranch", async () => {
 			const h = harness();
 			const stableSha = g(rtWt, "rev-parse", "HEAD");
 			await h.run(["feat/x"]);
@@ -391,18 +430,20 @@ describe("runtime-preview", () => {
 			expect(h.calls.at(-1)).toBe("helper running 0");
 		});
 
-		it("on with a dev console active keeps the dev console and its apps, and takes the previous ref from HEAD", async () => {
+		it("on with a dev console active keeps the dev console, and takes the previous ref from HEAD", async () => {
 			const h = harness();
 			const stableSha = g(rtWt, "rev-parse", "HEAD");
 			await h.run(["dev", devDir("wt1")]);
-			const apps = readState().apps;
 			expect((await h.run(["feat/x"])).exitCode).toBe(0);
-			expect(readState()).toMatchObject({ previousRef: stableSha, previousBranch: "stable", previewRef: "feat/x", console: { mode: "dev" }, apps });
+			expect(readState()).toMatchObject({ previousRef: stableSha, previousBranch: "stable", previewRef: "feat/x", console: { mode: "dev" } });
 		});
 
-		it("off with only a dev console stops the agent, restores the app and clears the state, never touching the wolves", async () => {
+		it("off with only a dev console stops the agent, undoes an old pointing and clears the state, never touching the wolves", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
+			const cj = path.join(ud(), "LearnHarness", "console.json"); // an app pointed by an older preview
+			fs.writeFileSync(`${cj}.preview-backup`, JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
+			fs.writeFileSync(cj, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" }));
 			h.lc.length = 0;
 			h.gitCalls.length = 0;
 			expect((await h.run(["off"])).exitCode).toBe(0);
@@ -429,14 +470,14 @@ describe("runtime-preview", () => {
 			await h.run(["dev", d]);
 			h.logs.length = 0;
 			await h.run(["status"]);
-			expect(h.logs.join("\n")).toContain(`dev console from ${fs.realpathSync(d)}`);
+			expect(h.logs.join("\n")).toContain(`(${fs.realpathSync(d)})`);
 			fs.rmSync(d, { recursive: true });
 			h.logs.length = 0;
 			await h.run(["status", "--json"]);
 			expect(JSON.parse(h.logs.join("\n"))).toMatchObject({ consoleUrl: "http://127.0.0.1:3230", console: { mode: "dev", dir: fs.realpathSync(tmp) + "/wt1", missing: true } });
 			h.logs.length = 0;
 			await h.run(["status"]);
-			expect(h.logs.join("\n")).toMatch(/no longer exists[\s\S]*wolfpack preview dev/);
+			expect(h.logs.join("\n")).toMatch(/no longer exists[\s\S]*pick another with `wolfpack preview`/);
 		});
 
 		it("off --dry-run of a dev console prints the plan and changes nothing", async () => {
@@ -455,5 +496,25 @@ describe("runtime-preview", () => {
 			expect(h.logs.join("\n")).toContain("3230");
 			expect(h.lc.some((a) => a[0] === "bootstrap")).toBe(false);
 		});
+	});
+});
+
+describe("real launchctl step", () => {
+	const fake = (status: number, stderr: string) => {
+		const shown: string[] = [];
+		const spawn = () => ({ status, stderr: Buffer.from(stderr) });
+		return { shown, run: (...a: string[]) => runLaunchctl(a, { spawn, write: (t: string) => shown.push(t) }) };
+	};
+
+	it("unloading an agent that is not loaded (bootout exit 3, No such process) is silent and still returns 3", () => {
+		const f = fake(3, "Boot-out failed: 3: No such process\n");
+		expect(f.run("bootout", "gui/501/com.wolfpack.preview-console")).toBe(3);
+		expect(f.shown).toEqual([]);
+	});
+
+	it("any other launchctl failure is still shown", () => {
+		const f = fake(5, "Bootstrap failed: 5: Input/output error\n");
+		expect(f.run("bootstrap", "gui/501", "/x.plist")).toBe(5);
+		expect(f.shown.join("")).toContain("Input/output error");
 	});
 });

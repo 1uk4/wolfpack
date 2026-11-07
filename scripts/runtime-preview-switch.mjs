@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import { CONSOLE_LABEL, applyApps, planApps, recoverApps, restoreApps, startConsole, stopConsole } from "./runtime-preview-console.mjs";
+import { runLaunchctl, CONSOLE_LABEL, recoverApps, restoreApps, startConsole, stopConsole } from "./runtime-preview-console.mjs";
 
 const BOOTSTRAP_TRIES = 5;
 
@@ -26,12 +26,17 @@ export const probePortFree = (port) =>
 		sock.once("error", () => resolve(true));
 	});
 
-export const MANUAL_WAY_BACK = (plist, { loaded = false } = {}) =>
-	[
-		"Manual way back:",
-		"  cd ~/wolves/local/runtime/wolfpack && git checkout stable && pnpm install --frozen-lockfile --prefer-offline && node scripts/turbo.mjs run build",
-		loaded ? "  launchctl kickstart -k gui/$(id -u)/com.wolfpack.stack   # the stack is still loaded; restart it on the restored build" : `  launchctl bootstrap gui/$(id -u) ${plist}`,
-	].join("\n");
+export const MANUAL_WAY_BACK = (plist, { loaded = false, worktree = false } = {}) =>
+	worktree
+		? [
+				"Manual way back:",
+				`  ${loaded ? "launchctl bootout gui/$(id -u)/com.wolfpack.stack; " : ""}cp ~/.wolfpack/preview/stack.plist.orig ~/Library/LaunchAgents/com.wolfpack.stack.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wolfpack.stack.plist`,
+			].join("\n")
+		: [
+				"Manual way back:",
+				"  cd ~/wolves/local/runtime/wolfpack && git checkout stable && pnpm install --frozen-lockfile --prefer-offline && node scripts/turbo.mjs run build",
+				loaded ? "  launchctl kickstart -k gui/$(id -u)/com.wolfpack.stack   # the stack is still loaded; restart it on the restored build" : `  launchctl bootstrap gui/$(id -u) ${plist}`,
+			].join("\n");
 
 /**
  * Deep health: prove the app reaches real data, not just /healthz. The console must list at least one wolf and answer a chat list;
@@ -103,16 +108,17 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 		}
 		return false;
 	};
+	const isWorktree = () => readState().mode === "worktree";
 	const down = (why) => {
 		say(`the stack is DOWN${why ? ` (${why})` : ""}. Recover with: launchctl bootstrap gui/${uid} ${plist}`);
-		say(MANUAL_WAY_BACK(plist));
+		say(MANUAL_WAY_BACK(plist, { worktree: isWorktree() }));
 		setPhase("stack-down");
 		return 1;
 	};
 	// The rollback could not restore the previous build: the stack is still loaded and still running the preview build.
 	const stuckOnPreview = (why) => {
 		say(`${why}: the stack is still running the preview build (it is loaded, not down).`);
-		say(MANUAL_WAY_BACK(plist, { loaded: true }));
+		say(MANUAL_WAY_BACK(plist, { loaded: true, worktree: isWorktree() }));
 		setPhase("stack-down");
 		return 1;
 	};
@@ -148,7 +154,7 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 		reason = "healthz did not answer within 60s";
 		if (!(deep && rollback)) {
 			say(`${reason} (the stack is bootstrapped, so it may still be starting)`);
-			say(MANUAL_WAY_BACK(plist));
+			say(MANUAL_WAY_BACK(plist, { worktree: isWorktree() }));
 			if (clear) teardownConsole(); // off: never leave the app pointed at a preview console
 			setPhase("unhealthy");
 			return 1;
@@ -159,18 +165,9 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 			teardownConsole();
 			fs.rmSync(stateFile, { force: true });
 		} else {
-			if (lc && !lc.keepConsole) {
-				const url = `http://127.0.0.1:${lc.port}`;
-				try {
-					const apps = planApps({ root: lc.userDataRoot, url, existing: readState().apps });
-					setPhase(okPhase, { apps }); // state first: if this throws, no console.json was touched
-					applyApps(apps, url);
-				} catch (err) {
-					stopConsole({ home: lc.home, uid, launchctl });
-					throw err;
-				}
-			} else setPhase(okPhase);
-			if (lc) say(`quit and reopen Wolfpack Console: it now loads http://127.0.0.1:${lc.port}`);
+			// The app's main window stays on its own console; the Preview window picks the preview up from the state file.
+			setPhase(okPhase, { stackStartedAt: new Date().toISOString() });
+			if (lc) say(`the preview console is on http://127.0.0.1:${lc.port} (the app's Preview window opens it; the main window is untouched)`);
 		}
 		return 0;
 	}
@@ -204,7 +201,7 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(file
 	const here = path.dirname(fileURLToPath(import.meta.url));
 	const code = await runSwitch({
 		stateFile, plist, label, port, okPhase, clear: clear === "1", uid: process.getuid?.() ?? 501,
-		launchctl: (...args) => spawnSync("launchctl", args, { stdio: "inherit" }).status,
+		launchctl: (...args) => runLaunchctl(args),
 		sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 		health: async (p) => {
 			try {

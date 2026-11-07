@@ -3,6 +3,7 @@
  * (com.wolfpack.preview-console, so it outlives the wolf session and the CLI, and survives a reboot), and point the desktop app's
  * console.json at it. Node builtins only: copied next to the switch helper under ~/.wolfpack/preview/bin/.
  */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,11 +24,63 @@ export function prepareConsole(runtimeDir) {
 
 const plistPath = (home) => path.join(home, "Library", "LaunchAgents", `${CONSOLE_LABEL}.plist`);
 
+/**
+ * The hub this Mac's stack is paired with: `hubUrl` from workerd's hub.json (`$WORKERD_CONFIG_DIR` or ~/.wolfpack/workerd), the same
+ * file workerd links with. Only the url is read (the file also holds a token, which is never returned, logged or written to a plist).
+ * → {url} or undefined when unpaired. `HUBD_PUBLIC_URL` in `env` overrides the public url used for the console's pairing link.
+ */
+export function resolveHub({ home, env = {} }) {
+	const dir = env.WORKERD_CONFIG_DIR || path.join(home, ".wolfpack", "workerd");
+	try {
+		const url = JSON.parse(fs.readFileSync(path.join(dir, "hub.json"), "utf8")).hubUrl;
+		if (typeof url !== "string" || !/^https?:\/\//.test(url)) return undefined;
+		const clean = url.trim().replace(/\/+$/, "");
+		const pub = env.HUBD_PUBLIC_URL?.trim().replace(/\/+$/, "");
+		return { url: clean, publicUrl: pub || clean };
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The tokens this Mac can try to mint a browser pairing code with, best first: WOLFPACK_HUB_TOKEN (a console/browser token, which may
+ * mint) then the token in workerd's hub.json (a WORKER token, which the hub answers 403). Values stay inside the process: callers put
+ * them in an Authorization header and nowhere else.
+ */
+export function hubTokens({ home, env = {} }) {
+	const out = [];
+	if (env.WOLFPACK_HUB_TOKEN?.trim()) out.push(env.WOLFPACK_HUB_TOKEN.trim());
+	try {
+		const dir = env.WORKERD_CONFIG_DIR || path.join(home, ".wolfpack", "workerd");
+		const t = JSON.parse(fs.readFileSync(path.join(dir, "hub.json"), "utf8")).token;
+		if (typeof t === "string" && t) out.push(t);
+	} catch {}
+	return out;
+}
+
+/**
+ * The real launchctl: output is shown, except that unloading an agent that is not loaded (`bootout` exit 3, "No such process")
+ * is a normal case here and prints nothing. The exit status is returned either way. `spawn` and `write` are injectable for tests.
+ */
+export function runLaunchctl(args, { spawn = spawnSync, write = (t) => process.stderr.write(t) } = {}) {
+	const r = spawn("launchctl", args, { stdio: ["inherit", "inherit", "pipe"] });
+	const err = r.stderr ? r.stderr.toString() : "";
+	if (!(args[0] === "bootout" && r.status === 3 && /No such process/i.test(err)) && err) write(err);
+	return r.status;
+}
+
 /** Write the agent's plist and (re)load it. `args` is the full program (node + script); never a shell wrapper. */
-function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) {
+function loadAgent({ home, env: hostEnv = {}, args, workingDir, port, stackPort, uid, launchctl }) {
 	const logFile = path.join(home, ".wolfpack", "preview", "console.log");
 	fs.mkdirSync(path.dirname(logFile), { recursive: true });
-	const env = { PORT: port, HOSTNAME: "127.0.0.1", WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}`, HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+	// With a hub the console runs in RELAY mode like stable (the browser pairs once, then every call goes through the hub, so every wolf is
+	// listed, Hal included). The origin is the loopback address: http, so the cookie mirror uses the plain (non-Secure) name. Without a
+	// hub: today's local-only env, which lists only the wolves on this stack.
+	const hub = resolveHub({ home, env: hostEnv });
+	const access = hub
+		? { WOLFPACK_HUB_URL: hub.url, HUBD_PUBLIC_URL: hub.publicUrl, WOLFPACK_CONSOLE_PUBLIC_ORIGIN: `http://127.0.0.1:${port}` }
+		: { WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}` };
+	const env = { PORT: port, HOSTNAME: "127.0.0.1", ...access, HOME: home, WOLFPACK_AUTH_FILE: path.join(home, ".wolfpack", "preview", "auth.json"), PATH: process.env.PATH ?? "/usr/bin:/bin" };
 	const file = plistPath(home);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(
@@ -42,6 +95,7 @@ function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) 
 	<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join("")}</dict>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>30</integer>
 	<key>StandardOutPath</key><string>${xml(logFile)}</string>
 	<key>StandardErrorPath</key><string>${xml(logFile)}</string>
 </dict>
@@ -52,9 +106,9 @@ function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) 
 	if (launchctl("bootstrap", `gui/${uid}`, file) !== 0) throw new Error(`launchctl bootstrap of ${file} failed`);
 }
 
-export function startConsole({ home, runtimeDir, port, stackPort, node, uid, launchctl }) {
+export function startConsole({ home, env, runtimeDir, port, stackPort, node, uid, launchctl }) {
 	const dir = prepareConsole(runtimeDir);
-	loadAgent({ home, args: [node, path.join(dir, "server.js")], workingDir: dir, port, stackPort, uid, launchctl });
+	loadAgent({ home, env, args: [node, path.join(dir, "server.js")], workingDir: dir, port, stackPort, uid, launchctl });
 }
 
 /** `next dev` from a worktree's apps/console (hot reload), under the same agent. Returns the app dir; throws with a hint when it can't run. */
@@ -66,9 +120,9 @@ export function devConsoleApp(dir) {
 	return { app, next };
 }
 
-export function startDevConsole({ home, dir, port, stackPort, node, uid, launchctl }) {
+export function startDevConsole({ home, env, dir, port, stackPort, node, uid, launchctl }) {
 	const { app, next } = devConsoleApp(dir);
-	loadAgent({ home, args: [node, next, "dev", "--hostname", "127.0.0.1", "--port", port], workingDir: app, port, stackPort, uid, launchctl });
+	loadAgent({ home, env, args: [node, next, "dev", "--hostname", "127.0.0.1", "--port", port], workingDir: app, port, stackPort, uid, launchctl });
 }
 
 export function stopConsole({ home, uid, launchctl }) {
@@ -84,42 +138,6 @@ const readJson = (f) => {
 		return undefined;
 	}
 };
-
-/**
- * Decide what to record for each existing app folder, WITHOUT touching it: {file, fileExisted, previous}. The caller writes these
- * to the state file first, then calls applyApps. `existing` records are reused (a repeat run must not record our own url as the
- * original); if the file already holds `url` (a crash after pointing, before state was written) the original comes from the backup.
- */
-export function planApps({ root, url, existing }) {
-	if (existing) return existing;
-	const apps = [];
-	for (const d of APP_FOLDERS.map((f) => path.join(root, f))) {
-		if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) continue;
-		const file = path.join(d, "console.json");
-		const fileExisted = fs.existsSync(file);
-		let cfg = {};
-		if (fileExisted) {
-			cfg = readJson(file);
-			if (!cfg) continue; // unreadable: leave the owner's file alone
-		}
-		let previous = typeof cfg.consoleUrl === "string" ? cfg.consoleUrl : null;
-		if (previous === url) {
-			const b = readJson(`${file}${BACKUP}`);
-			previous = typeof b?.consoleUrl === "string" ? b.consoleUrl : null;
-		}
-		apps.push({ file, fileExisted, previous });
-	}
-	return apps;
-}
-
-/** Back up (once) and point each planned file at `url`, keeping every other key. */
-export function applyApps(apps, url) {
-	for (const { file } of apps) {
-		const cfg = readJson(file) ?? {};
-		if (fs.existsSync(file) && !fs.existsSync(`${file}${BACKUP}`)) fs.copyFileSync(file, `${file}${BACKUP}`);
-		fs.writeFileSync(file, `${JSON.stringify({ ...cfg, consoleUrl: url }, null, 2)}\n`);
-	}
-}
 
 /** Records for folders that still have a backup next to a console.json holding `url`: the state lost its apps (crash). */
 export function recoverApps({ root, url }) {

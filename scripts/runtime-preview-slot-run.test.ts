@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +13,7 @@ const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
 if (process.argv.includes("--worker")) setInterval(() => {}, 1000);
 else {
 const w = cp.spawn(process.execPath, [__filename, "--worker"], { stdio: "ignore" });
-fs.writeFileSync(path.join(process.cwd(), "pids.json"), JSON.stringify({ next: process.pid, worker: w.pid }));
+fs.writeFileSync(path.join(process.cwd(), "pids.json"), JSON.stringify({ next: process.pid, worker: w.pid, token: process.env.WOLFPACK_HUB_TOKEN }));
 http.createServer((q, r) => r.end("ok")).listen(port, "127.0.0.1");
 }
 `;
@@ -43,7 +44,8 @@ const worktree = (name: string) => {
 	fs.writeFileSync(path.join(bin, "next"), FAKE_NEXT);
 	return wt;
 };
-const slots = (env: Record<string, string> = {}) => createSlots({ home, env: { WOLFPACK_HUB_TOKEN: "t", PREVIEW_SLOT_TICK_MS: "200", PREVIEW_SLOT_IDLE_MS: "600000", ...env } });
+// lsof is stubbed (no real lookup of what listens on the machine) unless a test passes its own servedElsewhere.
+const slots = (env: Record<string, string> = {}, over: Record<string, unknown> = {}) => createSlots({ home, env: { WOLFPACK_HUB_TOKEN: "tok-real-looking-123", PREVIEW_SLOT_TICK_MS: "200", PREVIEW_SLOT_IDLE_MS: "600000", ...env }, servedElsewhere: () => null, ...over });
 const slotsFile = () => path.join(home, ".wolfpack", "preview", "slots.json");
 
 beforeEach(() => {
@@ -188,6 +190,54 @@ describe("slot runner (real processes)", () => {
 					process.kill(-c.pid!, "SIGKILL");
 				} catch {}
 			}
+		}
+	}, 30000);
+
+	it("get fails and leaves no slot when next exits at once (another next dev already owns the app)", async () => {
+		const wt = worktree("dies");
+		fs.writeFileSync(path.join(wt, "apps", "console", "node_modules", "next", "dist", "bin", "next"), 'console.log("\\u2a2f Another next dev server is already running."); process.exit(1);\n');
+		const s = slots({ PREVIEW_SLOT_WAIT_MS: "15000" });
+		await expect(s.get(wt)).rejects.toThrow(/Another next dev server is already running/);
+		expect(await s.list()).toEqual([]);
+	}, 30000);
+
+	it("starts next with the hub token from the token file in its environment, but not in the runner's command line", async () => {
+		fs.mkdirSync(path.join(home, ".wolfpack", "preview"), { recursive: true });
+		fs.writeFileSync(path.join(home, ".wolfpack", "preview", "hub-token"), "FILE-SECRET\n", { mode: 0o600 });
+		const s = slots({ WOLFPACK_HUB_TOKEN: "" });
+		const a = await s.get(worktree("a"));
+		expect(pidsOf(path.join(home, "a")).token).toBe("FILE-SECRET");
+		const cmd = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(a.pid)], { encoding: "utf8" }).stdout;
+		expect(cmd).not.toContain("FILE-SECRET");
+		expect(fs.readFileSync(slotsFile(), "utf8")).not.toContain("FILE-SECRET");
+	}, 30000);
+
+	it("refuses a worktree whose apps/console is already served by a next dev outside the slots, found by a read-only cwd lookup", async () => {
+		const wt = fs.realpathSync(worktree("served"));
+		const app = path.join(wt, "apps", "console");
+		const port = await new Promise<number>((res) => {
+			const srv = net.createServer().listen(0, "127.0.0.1", () => {
+				const p = (srv.address() as net.AddressInfo).port;
+				srv.close(() => res(p));
+			});
+		});
+		const fixture = spawn(process.execPath, ["-e", `require("net").createServer().listen(${port}, "127.0.0.1"); setInterval(() => {}, 1000);`, wt], { cwd: app, stdio: "ignore" });
+		try {
+			await until(
+				() =>
+					new Promise<boolean>((r) => {
+						const sock = net.connect(port, "127.0.0.1");
+						sock.once("connect", () => (sock.destroy(), r(true)));
+						sock.once("error", () => (sock.destroy(), r(false)));
+					}),
+			);
+			const real = createSlots({ home, env: { WOLFPACK_HUB_TOKEN: "t" } }); // the real lsof lookup, which only reads
+			await expect(real.get(wt)).rejects.toThrow(new RegExp(`already runs on :${port} \\(pid ${fixture.pid}\\)`));
+			expect(fixture.exitCode).toBeNull();
+			expect(fixture.signalCode).toBeNull();
+			expect(await real.list()).toEqual([]);
+		} finally {
+			fixture.kill("SIGKILL");
 		}
 	}, 30000);
 

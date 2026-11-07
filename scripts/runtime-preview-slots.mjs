@@ -78,6 +78,55 @@ async function defaultReapLeftovers(slot) {
 	}
 }
 
+/**
+ * A next dev (or anything) that is NOT one of our slots, listens on a TCP port, and has this worktree's apps/console as its cwd.
+ * Read-only: two lsof lookups, never a signal. → {pid, port} or null. `slotPorts` are ours and are skipped.
+ */
+function defaultServedElsewhere(worktree, slotPorts) {
+	const apps = [path.join(worktree, "apps", "console")];
+	try {
+		apps.push(fs.realpathSync(apps[0]));
+	} catch {}
+	const listen = spawnSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], { encoding: "utf8" });
+	const portOf = new Map();
+	let pid = 0;
+	for (const line of String(listen.stdout ?? "").split("\n")) {
+		if (line[0] === "p") pid = Number(line.slice(1));
+		else if (line[0] === "n" && pid) {
+			const m = /:(\d+)$/.exec(line);
+			if (m && !slotPorts.includes(Number(m[1])) && !portOf.has(pid)) portOf.set(pid, Number(m[1]));
+		}
+	}
+	if (!portOf.size) return null;
+	const cwds = spawnSync("lsof", ["-a", "-d", "cwd", "-Fpn", "-p", [...portOf.keys()].join(",")], { encoding: "utf8" });
+	pid = 0;
+	for (const line of String(cwds.stdout ?? "").split("\n")) {
+		if (line[0] === "p") pid = Number(line.slice(1));
+		else if (line[0] === "n" && pid && apps.includes(line.slice(1))) return { pid, port: portOf.get(pid) };
+	}
+	return null;
+}
+
+/** The last useful line of a slot's log (ANSI stripped): an error-looking line if there is one, else the last non-empty line. */
+function lastLogLine(logFile, secret) {
+	let text = "";
+	try {
+		const fd = fs.openSync(logFile, "r");
+		const size = fs.fstatSync(fd).size;
+		const buf = Buffer.alloc(Math.min(size, 16_384));
+		fs.readSync(fd, buf, 0, buf.length, size - buf.length);
+		fs.closeSync(fd);
+		text = buf.toString("utf8");
+	} catch {
+		return "";
+	}
+	const lines = text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+	const line = [...lines].reverse().find((l) => /\u2a2f|error|already running|EADDRINUSE|cannot|failed/i.test(l)) ?? lines.at(-1) ?? "";
+	// Redact the hub token if next echoed it. A secret under 16 characters is not redacted: it would garble the line (a one-letter value
+	// matches everywhere) and real hub tokens are far longer.
+	return (secret && secret.length >= 16 ? line.split(secret).join("[redacted]") : line).slice(0, 200);
+}
+
 /** Refuse a worktree that cannot serve the console: no next, or a @wolfpack/* dependency whose dist is missing. → {app, next} */
 function defaultPrepare(worktree) {
 	const found = devConsoleApp(worktree);
@@ -125,12 +174,16 @@ export function createSlots({
 	reapLeftovers = defaultReapLeftovers,
 	prepare = defaultPrepare,
 	portFree = probePortFree,
-	// "Listening" means a TCP connect to 127.0.0.1:<port> succeeds. Next binds the port before it can compile anything, so there is a short
-	// window where the URL accepts connections but the first page is still compiling (that request is just slow, not refused).
+	servedElsewhere = defaultServedElsewhere,
+	// Ready means the slot port answers an HTTP request. Any answer counts (a 500 or a redirect to /pair still means next is serving). A slow answer
+	// (the first page compiling) is retried until the deadline; if the runner dies first the slot never came up. Injectable for tests.
 	waitListening = async ({ port, pid }) => {
-		const until = Date.now() + (Number(env.PREVIEW_SLOT_WAIT_MS) || 60_000);
+		const until = Date.now() + (Number(env.PREVIEW_SLOT_WAIT_MS) || 90_000);
 		while (Date.now() < until) {
-			if (!(await probePortFree(port))) return true;
+			try {
+				await fetch(`http://127.0.0.1:${port}/`, { redirect: "manual", signal: AbortSignal.timeout(2000) });
+				return true;
+			} catch {} // refused, or still compiling: look at the runner, then try again
 			if (!defaultIsAlive(pid, { home, port })) return false;
 			await sleepAsync(500);
 		}
@@ -231,11 +284,32 @@ export function createSlots({
 		return { slots: keep, stopped };
 	};
 	const url = (port) => `http://127.0.0.1:${port}`;
+	const tokenFile = path.join(dir, "hub-token");
+	/** The hub token for a slot's environment: WOLFPACK_HUB_TOKEN, else the trimmed contents of ~/.wolfpack/preview/hub-token. The value goes only into the slot's env. */
+	const hubToken = () => {
+		const fromEnv = env.WOLFPACK_HUB_TOKEN?.trim();
+		if (fromEnv) return { token: fromEnv };
+		try {
+			const token = fs.readFileSync(tokenFile, "utf8").trim();
+			if (!token) return {};
+			return { token, ...(fs.statSync(tokenFile).mode & 0o077 ? { looseFile: tokenFile } : {}) };
+		} catch {
+			return {};
+		}
+	};
 	const logOf = (port) => path.join(dir, "slots", `${port}.log`);
 
-	return {
+	const api = {
 		async get(worktree) {
 			let slot;
+			let tok = {};
+			// Two lsof lookups: done before taking the lock so a slow machine cannot hold other commands past lockWaitMs. Skipped for a worktree
+			// that already has a slot (asking again just reuses it). A slot or console that appears in between is caught by the port checks.
+			const known = read();
+			if (!known.some((x) => x.worktree === worktree)) {
+				const other = servedElsewhere(worktree, known.map((x) => x.port));
+				if (other) throw new Error(`this worktree's console already runs on :${other.port} (pid ${other.pid}); use that, or a separate worktree`);
+			}
 			try {
 				slot = await locked(async () => {
 					const { slots } = sweep();
@@ -250,6 +324,7 @@ export function createSlots({
 						throw new Error(`all ${max} slots are in use: ${busy}. Free one with \`wolfpack preview slot release <worktree|port>\`, then ask again.`);
 					}
 					const prep = prepare(worktree);
+					tok = hubToken();
 					let port = SLOT_BASE_PORT;
 					while (slots.some((s) => s.port === port) || !(await portFree(port))) port++;
 					const hub = resolveHub({ home, env });
@@ -258,7 +333,7 @@ export function createSlots({
 						: { WOLFPACK_API_URL: `http://127.0.0.1:${env.STACK_PORT || 7141}` };
 					const childEnv = {
 						...access,
-						...(env.WOLFPACK_HUB_TOKEN ? { WOLFPACK_HUB_TOKEN: env.WOLFPACK_HUB_TOKEN } : {}),
+						...(tok.token ? { WOLFPACK_HUB_TOKEN: tok.token } : {}),
 						...(env.PREVIEW_SLOT_TICK_MS ? { PREVIEW_SLOT_TICK_MS: env.PREVIEW_SLOT_TICK_MS } : {}),
 						PORT: String(port),
 						HOSTNAME: "127.0.0.1",
@@ -277,14 +352,35 @@ export function createSlots({
 				await settled(); // the SIGKILL escalation of any dead runner's leftovers, also when this get is refused
 			}
 			// Outside the lock: the first request can take a while, and other commands must not wait on it.
-			if (!(await waitListening({ port: slot.port, pid: slot.pid }))) throw new Error(`slot ${slot.port} for ${worktree} is not listening yet; see ${logOf(slot.port)} (\`wolfpack preview slot release ${slot.port}\` stops it)`);
-			return { port: slot.port, url: url(slot.port), pid: slot.pid, reused: slot.reused, noToken: !env.WOLFPACK_HUB_TOKEN };
+			if (slot.reused) tok = hubToken(); // read before the wait: a reused slot whose wait fails quotes the log, which must be redacted too
+			if (!(await waitListening({ port: slot.port, pid: slot.pid }))) {
+				const line = lastLogLine(logOf(slot.port), tok.token);
+				try {
+					await api.releaseExact(slot); // the slot never came up: do not leave a record (or a runner) behind
+				} catch {}
+				throw new Error(`slot ${slot.port} for ${worktree} is not listening${line ? `: ${line}` : ""}; see ${logOf(slot.port)}`);
+			}
+			return { port: slot.port, url: url(slot.port), pid: slot.pid, reused: slot.reused, noToken: !tok.token, ...(tok.looseFile ? { tokenFileLoose: tok.looseFile } : {}) };
 		},
 		list: async () => settled(await locked(() => sweep().slots)),
 		/** Read-only view for `status`: no lock, no sweep, no write. Dead slots are just left out. */
 		peek: () => read().filter((s) => isAlive(s.pid, { ...s, home })),
 		/** Stop idle and dead slots. → [port] stopped for idleness */
 		reap: async () => settled(await locked(() => sweep().stopped)),
+		/**
+		 * Internal (used by a failed get): stop the slot only if the record still holds this very runner (port, pid and start time). If the
+		 * runner died and another get took the port, the record is not ours any more and nothing is signalled. No name matching.
+		 */
+		async releaseExact({ port, pid, startedAt }) {
+			return settled(await locked(() => {
+				const { slots } = sweep();
+				const s = slots.find((x) => x.port === port && x.pid === pid && x.startedAt === startedAt);
+				if (!s) return false;
+				kill(s.pid, { ...s, home });
+				write(slots.filter((x) => x !== s));
+				return true;
+			}));
+		},
 		/** Stop one slot by port, worktree path, folder name, or a unique part of the folder name. → its port */
 		async release(key, alt) {
 			return settled(await locked(() => {
@@ -302,4 +398,5 @@ export function createSlots({
 			}));
 		},
 	};
+	return api;
 }

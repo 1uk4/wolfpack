@@ -24,6 +24,7 @@ const mk = (over: Record<string, unknown> = {}) =>
 			alive.delete(pid);
 		},
 		portFree: async () => true,
+		servedElsewhere: () => null,
 		waitListening: async () => true,
 		prepare: () => {},
 		reapLeftovers: (slot: { port: number }) => leftovers.push(slot.port),
@@ -247,5 +248,132 @@ describe("agent slots: safety and readiness", () => {
 		const s = mk();
 		await s.get("/gone/feat-a");
 		expect(await s.release("feat-a")).toBe(3231);
+	});
+
+	const tokenFile = () => path.join(home, ".wolfpack", "preview", "hub-token");
+	const putToken = (text: string, mode: number) => {
+		fs.mkdirSync(path.dirname(tokenFile()), { recursive: true });
+		fs.writeFileSync(tokenFile(), text, { mode });
+		fs.chmodSync(tokenFile(), mode);
+	};
+
+	it("takes the hub token from the environment, else from ~/.wolfpack/preview/hub-token (trimmed), and never records it", async () => {
+		putToken("file-tok\n", 0o600);
+		const fromFile = await mk({ env: {} }).get("/wt/a");
+		expect(spawned[0].env.WOLFPACK_HUB_TOKEN).toBe("file-tok");
+		const fromEnv = await mk({ env: { WOLFPACK_HUB_TOKEN: "env-tok" } }).get("/wt/b");
+		expect(spawned[1].env.WOLFPACK_HUB_TOKEN).toBe("env-tok");
+		expect(fromFile.noToken).toBe(false);
+		const written = fs.readFileSync(path.join(home, ".wolfpack", "preview", "slots.json"), "utf8");
+		for (const secret of ["file-tok", "env-tok"]) expect(written + JSON.stringify([fromFile, fromEnv])).not.toContain(secret);
+	});
+
+	it("reports a token file open to group or other, and still uses it", async () => {
+		putToken("file-tok", 0o644);
+		const loose = await mk({ env: {} }).get("/wt/a");
+		expect(loose.tokenFileLoose).toBe(tokenFile());
+		expect(spawned[0].env.WOLFPACK_HUB_TOKEN).toBe("file-tok");
+		putToken("file-tok", 0o600);
+		expect((await mk({ env: {} }).get("/wt/b")).tokenFileLoose).toBeUndefined();
+	});
+
+	it("refuses a worktree whose console already runs outside the slots, without signalling it", async () => {
+		const s = mk({ servedElsewhere: () => ({ pid: 99106, port: 3230 }) });
+		await expect(s.get("/wt/a")).rejects.toThrow(/already runs on :3230 \(pid 99106\); use that, or a separate worktree/);
+		expect(await s.list()).toEqual([]);
+		expect(killed).toEqual([]);
+	});
+
+	it("releases the slot and quotes the log when next dies instead of serving", async () => {
+		const logFile = path.join(home, ".wolfpack", "preview", "slots", "3231.log");
+		const s = mk({
+			waitListening: async () => false,
+			spawn: () => {
+				fs.mkdirSync(path.dirname(logFile), { recursive: true });
+				fs.writeFileSync(logFile, "   \u25b2 Next.js 16\n \u001b[31m\u2a2f\u001b[0m Another next dev server is already running.\n\n");
+				alive.add(500);
+				return 500;
+			},
+		});
+		await expect(s.get("/wt/a")).rejects.toThrow(/3231.*Another next dev server is already running\./s);
+		expect(await s.list()).toEqual([]);
+		expect(killed).toEqual([500]);
+	});
+
+	it("a failed get does not stop the next get's slot that took over the dead runner's port", async () => {
+		// A's runner dies while A waits; C's get sweeps A's record and takes 3231; then A's wait gives up.
+		const a = mk({
+			waitListening: async () => {
+				alive.delete(500);
+				await mk({ waitListening: async () => true }).get("/wt/c");
+				return false;
+			},
+		});
+		await expect(a.get("/wt/a")).rejects.toThrow(/3231.*not listening/s);
+		expect(killed).toEqual([]);
+		expect((await mk().list()).map((x: { port: number; worktree: string }) => `${x.port} ${x.worktree}`)).toEqual(["3231 /wt/c"]);
+	});
+
+	it("a failed get never stops another slot just because its folder name contains the port", async () => {
+		const a = mk({
+			waitListening: async () => {
+				alive.delete(500);
+				await mk({ waitListening: async () => true, portFree: async (p: number) => p !== 3231 }).get("/wt/feat-3231-x"); // lands on 3232
+				return false;
+			},
+		});
+		await expect(a.get("/wt/a")).rejects.toThrow(/not listening/);
+		expect(killed).toEqual([]);
+		expect((await mk().list()).map((x: { worktree: string }) => x.worktree)).toEqual(["/wt/feat-3231-x"]);
+	});
+
+	it("looks for a console served outside the slots before it takes the lock", async () => {
+		const lock = path.join(home, ".wolfpack", "preview", "slots.lock");
+		let lockHeld: boolean | undefined;
+		await mk({ servedElsewhere: () => ((lockHeld = fs.existsSync(lock)), null) }).get("/wt/a");
+		expect(lockHeld).toBe(false);
+	});
+
+	it("keeps the hub token out of the error when next's log line quotes it", async () => {
+		const logFile = path.join(home, ".wolfpack", "preview", "slots", "3231.log");
+		const s = mk({
+			env: { WOLFPACK_HUB_TOKEN: "SECRET-TOKEN-VALUE" },
+			waitListening: async () => false,
+			spawn: () => {
+				fs.mkdirSync(path.dirname(logFile), { recursive: true });
+				fs.writeFileSync(logFile, "Error: request failed with Authorization: Bearer SECRET-TOKEN-VALUE\n");
+				alive.add(500);
+				return 500;
+			},
+		});
+		const err = await s.get("/wt/a").then(() => "", (e: Error) => e.message);
+		expect(err).toMatch(/request failed/);
+		expect(err).not.toContain("SECRET-TOKEN-VALUE");
+	});
+
+	it("keeps the hub token out of the error for a reused slot whose wait fails too", async () => {
+		const logFile = path.join(home, ".wolfpack", "preview", "slots", "3231.log");
+		const env = { WOLFPACK_HUB_TOKEN: "SECRET-TOKEN-VALUE-0123456789" };
+		await mk({ env }).get("/wt/a"); // the slot exists; now it stops answering
+		fs.mkdirSync(path.dirname(logFile), { recursive: true });
+		fs.writeFileSync(logFile, "Error: upstream rejected Bearer SECRET-TOKEN-VALUE-0123456789\n");
+		const err = await mk({ env, waitListening: async () => false }).get("/wt/a").then(() => "", (e: Error) => e.message);
+		expect(err).toMatch(/upstream rejected/);
+		expect(err).not.toContain("SECRET-TOKEN-VALUE-0123456789");
+	});
+
+	it("does not redact a token shorter than 16 characters (it would garble the log line); real hub tokens are longer", async () => {
+		const logFile = path.join(home, ".wolfpack", "preview", "slots", "3231.log");
+		const s = mk({
+			env: { WOLFPACK_HUB_TOKEN: "t" },
+			waitListening: async () => false,
+			spawn: () => {
+				fs.mkdirSync(path.dirname(logFile), { recursive: true });
+				fs.writeFileSync(logFile, "Error: port in use\n");
+				alive.add(500);
+				return 500;
+			},
+		});
+		await expect(s.get("/wt/a")).rejects.toThrow(/Error: port in use/);
 	});
 });

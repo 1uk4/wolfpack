@@ -30,7 +30,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 20;
+export const PREVIEW_VERSION = 21;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs", "runtime-preview-slots.mjs", "runtime-preview-slot-run.mjs"];
@@ -607,7 +607,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				const wt = slotWorktree(key);
 				if (!wt) return { exitCode: 1 };
 				const r = await slots.get(wt);
-				if (r.noToken && !r.reused) warn("preview: WOLFPACK_HUB_TOKEN is not set, so the slot's pages will ask you to pair (/pair) first");
+				if (r.noToken && !r.reused) warn("preview: WOLFPACK_HUB_TOKEN is not set and ~/.wolfpack/preview/hub-token does not exist, so the slot's pages will ask you to pair (/pair) first. Put a token there: printf %s <token> > ~/.wolfpack/preview/hub-token && chmod 600 ~/.wolfpack/preview/hub-token");
+				if (r.tokenFileLoose) warn(`preview: ${r.tokenFileLoose} can be read by group or other; run chmod 600 on it (the token is still used)`);
 				if (json) log(JSON.stringify({ url: r.url, port: r.port, pid: r.pid, worktree: wt, reused: r.reused }));
 				else log(r.url);
 				return { exitCode: 0 };

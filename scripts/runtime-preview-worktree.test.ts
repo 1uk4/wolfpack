@@ -998,7 +998,7 @@ describe("default steps", () => {
 
 describe("agent slots through `wolfpack preview slot`", () => {
 	const slotsFile = () => path.join(home, ".wolfpack", "preview", "slots.json");
-	const fakeSlots = (o: object) => createSlots({ ...o, spawn: () => 4242, isAlive: (pid: number) => pid === 4242, kill: () => {}, reapLeftovers: () => {}, prepare: () => {}, portFree: async () => true, waitListening: async () => true });
+	const fakeSlots = (o: object) => createSlots({ ...o, spawn: () => 4242, isAlive: (pid: number) => pid === 4242, kill: () => {}, reapLeftovers: () => {}, prepare: () => {}, portFree: async () => true, servedElsewhere: () => null, waitListening: async () => true });
 	const slot = async (...argv: string[]) => {
 		const out: string[] = [];
 		const err: string[] = [];
@@ -1031,5 +1031,24 @@ describe("agent slots through `wolfpack preview slot`", () => {
 		await runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => logs.push(m), warn: () => {} });
 		expect(logs).toContain("slots: 3231 wt-a");
 		expect(fs.readFileSync(slotsFile(), "utf8")).toBe(seeded);
+	});
+
+	it("get warns, naming the token file, when there is no hub token; and warns about a file open to group or other, never printing the value", async () => {
+		const tf = path.join(home, ".wolfpack", "preview", "hub-token");
+		const get = async (wt: string) => {
+			const out: string[] = [];
+			const err: string[] = [];
+			const r = await runPreview({ argv: ["slot", "get", wt, "--json"], env: { HOME: home }, cwd: main, steps: { slots: fakeSlots }, log: (m: string) => out.push(m), warn: (m: string) => err.push(m) });
+			return { code: r.exitCode, text: [...out, ...err].join("\n"), err: err.join("\n") };
+		};
+		const none = await get("wt-a");
+		expect(none.err).toMatch(/WOLFPACK_HUB_TOKEN.*not set.*\.wolfpack\/preview\/hub-token/);
+		fs.mkdirSync(path.dirname(tf), { recursive: true });
+		fs.writeFileSync(tf, "SECRET-VALUE\n", { mode: 0o644 });
+		fs.chmodSync(tf, 0o644);
+		const loose = await get("wt-b");
+		expect(loose.code).toBe(0);
+		expect(loose.err).toMatch(/hub-token.*group or other.*chmod 600/);
+		expect(loose.text).not.toContain("SECRET-VALUE");
 	});
 });

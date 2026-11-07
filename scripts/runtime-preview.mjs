@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 18;
+export const PREVIEW_VERSION = 19;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -75,6 +75,23 @@ const defaultSteps = {
 		} catch {
 			return false;
 		}
+	},
+	/** Pids listening on a TCP port (lsof). */
+	listeners: async (port) => {
+		const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" });
+		return String(r.stdout ?? "").split("\n").map((x) => Number(x.trim())).filter((n) => n > 0);
+	},
+	/** {command, cwd} of a process, or null. */
+	procInfo: async (pid) => {
+		const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+		const cwd = spawnSync("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { encoding: "utf8" });
+		const n = String(cwd.stdout ?? "").split("\n").find((l) => l.startsWith("n"));
+		return ps.status === 0 && n ? { command: String(ps.stdout).trim(), cwd: n.slice(1) } : null;
+	},
+	kill: (pid, signal) => {
+		try {
+			process.kill(pid, signal);
+		} catch {}
 	},
 	/** A JSON request to the hub → {status, json}; {status: 0} when it cannot be reached. */
 	hubFetch: async (url, init) => {
@@ -233,6 +250,39 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const uid = process.getuid?.() ?? 501;
 	const userDataRoot = env.PREVIEW_USERDATA_ROOT || path.join(home, "Library", "Application Support");
 
+	/**
+	 * A `next` / `next-server` listening on the console port whose cwd is a checkout's apps/console, found by lsof. Nothing else
+	 * qualifies, so nothing else is ever stopped. → [{pid, command}]
+	 */
+	const strays = async (consolePort) => {
+		const found = [];
+		let pids = [];
+		try {
+			pids = await st.listeners(consolePort);
+		} catch {}
+		for (const pid of pids) {
+			let info = null;
+			try {
+				info = await st.procInfo(pid);
+			} catch {}
+			if (info && /\bnext(-server)?\b/.test(info.command) && /[\\/]apps[\\/]console$/.test(info.cwd)) found.push({ pid, command: info.command });
+		}
+		return found;
+	};
+	/** Stop strays: SIGTERM, then SIGKILL after 5 s if still listening. One line per process naming it. */
+	const stopStrays = async (consolePort) => {
+		for (const { pid } of await strays(consolePort)) {
+			st.kill(pid, "SIGTERM");
+			let gone = false;
+			for (let i = 0; i < 5 && !gone; i++) {
+				await st.sleep(1000);
+				gone = !(await st.listeners(consolePort)).includes(pid);
+			}
+			if (!gone) st.kill(pid, "SIGKILL");
+			log(`stopped next dev (pid ${pid}) on port ${consolePort}${gone ? "" : " (SIGKILL)"}`);
+		}
+	};
+
 	if (sub === "status") {
 		const tail = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5) : [];
 		const cons = state?.console ? { ...state.console, missing: !fs.existsSync(state.console.dir) } : undefined;
@@ -243,8 +293,12 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			log(JSON.stringify({ state: state ?? null, consoleUrl, console: cons ?? null, worktreeMissing, restartNeeded: needsRestart, log: tail }, null, 2));
 			return { exitCode: 0, state };
 		}
+		if (!state?.console) {
+			const stray = await strays(state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230);
+			if (stray.length) log(`console: http://127.0.0.1:${state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230} (running outside preview; \`wolfpack preview off\` stops it)`);
+		}
 		if (!state) {
-			log("stable, no preview");
+			if (!argv.includes("--json")) log("stable, no preview");
 			return { exitCode: 0 };
 		}
 		const wtDir = state.console?.dir ?? state.worktree;
@@ -270,11 +324,19 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0, state };
 	}
 
+	let consoleStopped = false;
+	// Every real `off` first stops the preview console's agent, then any stray `next dev` still holding the port (one nobody recorded).
+	if (sub === "off" && !dryRun && !argv.includes("--rollback")) {
+		const consolePort = state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230;
+		if (state?.console || state?.previewRef) (stopConsole({ home, uid, launchctl: st.launchctl }), (consoleStopped = true));
+		await stopStrays(consolePort);
+	}
+
 	// off while the wolves run a preview (moved now, or by an older run): the console always stops; the wolves only on a yes.
 	if (sub === "off" && state?.previewRef) {
 		const flag = argv.includes("--console") ? "console" : argv.includes("--all") || argv.includes("--rollback") || dryRun ? "all" : undefined;
 		if (flag === "console" || !flag) {
-			stopConsole({ home, uid, launchctl: st.launchctl });
+			if (!consoleStopped) stopConsole({ home, uid, launchctl: st.launchctl });
 			restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
 			let putBack = false;
 			if (!flag) {
@@ -297,7 +359,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			log(`${tag}would stop com.wolfpack.preview-console, undo any old console.json pointing and clear ${stateFile}; the wolves are not touched`);
 			return { exitCode: 0 };
 		}
-		stopConsole({ home, uid, launchctl: st.launchctl });
+		if (!consoleStopped) stopConsole({ home, uid, launchctl: st.launchctl });
 		restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
 		fs.rmSync(stateFile, { force: true });
 		log("dev console stopped.");

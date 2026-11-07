@@ -107,7 +107,7 @@ after(() => void (globalThis.fetch = realFetch));
 
 const A = { wolf: "w", slug: "a", threadId: "w/a" };
 
-/** Test stand-in for whatever attaches a thread (the product has no Pop out button); the dock/landing rules are what is under test. */
+/** Test stand-in for what starting dictation on a thread page does (attach it); the product has no Pop out button. */
 function AttachHere() {
 	const api = useAttachedThread();
 	return <button type="button" data-testid="test-attach" onClick={() => api!.attach({ wolf: "w", threadId: "w/a", slug: "a" })} />;

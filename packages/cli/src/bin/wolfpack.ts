@@ -17,6 +17,10 @@ import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
+import { postMergeCmd, prCmd } from "../commands/pr.js";
+import { testCmd } from "../commands/test.js";
+import { parsePostMergeArgs } from "../pr-post-merge.js";
+import { parsePrArgs } from "../pr-prepare.js";
 import { deployCmd } from "../commands/deploy.js";
 import { workDoctor } from "../commands/work-doctor.js";
 import { workBackfillFeatureStages } from "../commands/work-backfill.js";
@@ -51,6 +55,8 @@ ${c.bold("COMMANDS")}
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
   deploy <wolf> --release <tag>   Host downloads + verifies a release, switches, health-checks, rolls back (--host, --dry-run, --component hubd|workerd)
   release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
+  test [run|related] [paths…]     Run vitest with a result cache; agents queue for a slot (-t <name>, --no-cache)
+  pr prepare                      Open/update the release PR wolf/<wolf> -> stable; the owner merges (--full, --dry-run)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -411,6 +417,24 @@ async function main(): Promise<void> {
           dryRun: a.includes("--dry-run"),
           yes: a.includes("--yes") || a.includes("-y"),
         });
+        break;
+      }
+
+      case "pr": {
+        // The global flag layer above ignores or swallows flags, so parsePrArgs reads the raw argv and rejects anything unknown.
+        if (sub === "post-merge") {
+          await postMergeCmd(parsePostMergeArgs(process.argv.slice(2)));
+          break;
+        }
+        if (sub !== "prepare") throw new Error("Usage: wolfpack pr prepare [--full] [--dry-run] [--base stable] | wolfpack pr post-merge [--dry-run] [--apply]");
+        await prCmd(parsePrArgs(process.argv.slice(2)));
+        break;
+      }
+
+      case "test": {
+        // Allow-list parsing of the raw argv, like pr: unknown flags are refused.
+        const code = await testCmd(process.argv.slice(2));
+        if (code !== 0) process.exit(code);
         break;
       }
 

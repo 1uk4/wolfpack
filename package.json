@@ -12,21 +12,40 @@
     "typecheck:extensions": "tsc -p tsconfig.extensions.json",
     "test": "vitest",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
-    "install:cli": "npm run build && cd packages/cli && npm link",
+    "install:cli": "pnpm run build && cd packages/cli && pnpm link --global",
     "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js packages/agent/dist/bin/wolfpack-work-server.js packages/harness/dist/bin/harness.js packages/workerd/dist/bin/workerd.js",
-    "dev": "turbo run dev --filter=@wolfpack/console",
-    "verify": "turbo run build typecheck lint test",
+    "dev": "node scripts/turbo.mjs run dev --filter=@wolfpack/console",
+    "verify": "node scripts/turbo.mjs run build typecheck lint test",
     "runtime:update": "node scripts/runtime-update.mjs",
     "dev:stack": "node scripts/dev-stack.mjs",
-    "stack": "node scripts/stack.mjs"
+    "stack": "node scripts/stack.mjs",
+    "check:deps": "node scripts/check-deps.mjs .",
+    "check:lockfiles": "node scripts/check-lockfiles.mjs ."
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@types/node": "^22.0.0",
+    "@wolfpack/agents": "*",
+    "@wolfpack/client": "*",
+    "@wolfpack/engine": "*",
+    "@wolfpack/harness": "*",
+    "@wolfpack/kb": "*",
+    "@wolfpack/memory": "*",
+    "@wolfpack/protocol": "*",
+    "@wolfpack/work-server": "*",
+    "@wolfpack/workspaces": "*",
+    "esbuild": "^0.28.0",
+    "playwright-core": "1.63.0",
+    "tldts": "7.4.19",
     "turbo": "^2.11.10",
+    "typebox": "^1.3.27",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.6.0"
   },
   "overrides": {
     "katex": "0.18.2"
   },
-  "packageManager": "npm@10.9.9"
+  "packageManager": "pnpm@12.18.0"
 }

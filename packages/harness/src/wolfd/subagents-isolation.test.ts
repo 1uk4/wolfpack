@@ -4,10 +4,10 @@
  * overrides, no git outside a repo, the guard (refuse, release, restart).
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempRepo, setGitCommand, type TempRepo } from "@wolfpack/workspaces";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
@@ -53,6 +53,8 @@ function scripted(gate?: Promise<void>) {
         const opt = Object.fromEntries([...m[2].matchAll(/(\w+)=(\S+)/g)].map((x) => [x[1], x[2]]));
         return tool("subagent", { agent: m[1], task: m[3], ...(opt.name ? { name: opt.name } : {}), ...(opt.iso ? { isolation: opt.iso } : {}) });
       }
+      const stop = /^stop (\w+)$/.exec(lastText);
+      if (stop) return tool("subagent_stop", { name: stop[1] });
       const msg = /^message (\w+): (.*)$/s.exec(lastText);
       if (msg) return tool("subagent_message", { name: msg[1], message: msg[2] });
       if (lastText === "pwd") return tool("bash", { command: "pwd" });
@@ -432,5 +434,312 @@ describe("rollback and edge repos", () => {
     expect(await kids(tw)).toHaveLength(0);
     await say(tw, "spawn reader name=r: x");
     await settled(tw, 1);
+  });
+});
+
+describe("dependencies in a new worktree", () => {
+  /** A fake `pnpm` first on PATH: records pid, cwd, argv and env; prints "boom"; waits for the gate file when gated; exits with `code`. */
+  function fakePnpm(o: { code?: number; gated?: boolean } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "fake-pnpm-"));
+    const log = join(dir, "calls.log");
+    const gateFile = join(dir, "gate");
+    const pidFile = join(dir, "pid");
+    writeFileSync(join(dir, "pnpm"), `#!/bin/sh\necho $$ > ${pidFile}\necho "$PWD :: $@ :: CI=$CI :: WP=$WOLFPACK_TEST" >> ${log}\necho boom\n${o.gated ? `n=0\nwhile [ ! -f ${gateFile} ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n` : ""}exit ${o.code ?? 0}\n`);
+    chmodSync(join(dir, "pnpm"), 0o755);
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    fakeDirs.push(dir);
+    // (idempotent) release the gate, kill whatever still runs from this dir, put PATH back, remove the dir
+    const cleanup = () => {
+      try { writeFileSync(gateFile, ""); } catch { /* dir already gone */ }
+      for (const pid of pidsIn(dir)) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+      process.env.PATH = prev;
+      rmSync(dir, { recursive: true, force: true });
+    };
+    cleanups.push(cleanup);
+    const started = () => existsSync(log);
+    return { dir, cleanup, log, started, open: () => writeFileSync(gateFile, ""), pid: () => Number(readFileSync(pidFile, "utf8").trim()) };
+  }
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const firstText = async (w: TestWolf, i = 0) => (await w.client.getThread((await kids(w))[i].id)).messages[0]?.text ?? "";
+  const lockedRepo = () => { repo = makeTempRepo("demo"); repo.commitFile("pnpm-lock.yaml", "lockfileVersion: '9.0'\n"); return repo; };
+
+  // A gated fake pnpm must never outlive its test, whatever the test did (stopped the wolf, failed early, never opened the gate).
+  const fakeDirs: string[] = [];
+  const pidsIn = (dir: string): number[] =>
+    spawnSync("pgrep", ["-f", dir], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map(Number).filter((n) => n !== process.pid);
+  afterAll(() => {
+    const leaked = fakeDirs.flatMap((d) => pidsIn(d).map((pid) => `${pid} (${d})`));
+    for (const l of leaked) { try { process.kill(Number(l.split(" ")[0]), "SIGKILL"); } catch { /* gone */ } }
+    expect(leaked, "fake pnpm processes still alive after the suite").toEqual([]);
+  });
+
+  it("the fake pnpm's cleanup kills a process that is still waiting on its gate", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const child = spawn(join(pnpm.dir, "pnpm"), ["install"], { stdio: "ignore", detached: true });
+    child.unref();
+    await vi.waitFor(() => expect(pidsIn(pnpm.dir).length).toBeGreaterThan(0));
+    pnpm.cleanup();
+    await vi.waitFor(() => expect(pidsIn(pnpm.dir)).toEqual([]));
+  });
+
+  it("the fake pnpm's gate script gives up by itself", () => {
+    const pnpm = fakePnpm({ gated: true });
+    expect(readFileSync(join(pnpm.dir, "pnpm"), "utf8")).toMatch(/\[ \$n -lt 300 \]/); // a bounded wait loop, not an endless one
+    pnpm.cleanup();
+  });
+
+  it("spawn returns before the install finishes; the child is told the outcome once it has", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer: PWD please"); // (returns with the install still running)
+    await vi.waitFor(() => expect(pnpm.started()).toBe(true));
+    const [kid] = await kids(w);
+    expect(kid.state).toBe("running");
+    expect((await w.client.getThread(kid.id)).messages).toHaveLength(0);
+    pnpm.open();
+    await settled(w, 1);
+    const [rec] = regOf(w).children;
+    expect(rec.brief).toBe("PWD please");
+    expect(await firstText(w)).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD please$/);
+    expect(readFileSync(pnpm.log, "utf8").trim()).toContain(`${rec.workspace.path} :: install --frozen-lockfile --prefer-offline`);
+  });
+
+  it("gives pnpm no WOLFPACK_* variables and CI=true", async () => {
+    process.env.WOLFPACK_TEST = "leak";
+    cleanups.push(() => { delete process.env.WOLFPACK_TEST; });
+    const pnpm = fakePnpm();
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer: PWD please");
+    await settled(w, 1);
+    expect(readFileSync(pnpm.log, "utf8")).toContain(":: CI=true :: WP=\n");
+  });
+
+  it("a queued child gets the line too, when it starts", async () => {
+    fakePnpm();
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const r = lockedRepo();
+    const { w } = await boot({ gate, repo: r, yaml: `workspaces:\n  root: ${r.root}\nsubagents:\n  maxRunning: 1\n` });
+    await say(w, "spawn writer name=one: SLOW first");
+    await say(w, "spawn writer name=two: PWD second");
+    await vi.waitFor(async () => expect((await kids(w)).map((k) => k.state).sort()).toEqual(["queued", "running"]));
+    open();
+    await settled(w, 2);
+    const two = (await kids(w)).find((k) => k.title?.includes("two") || regOf(w).children.find((c) => c.id === k.id)?.name === "two")!;
+    expect((await w.client.getThread(two.id)).messages[0].text).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD second$/);
+  });
+
+  it("stopping the child during the install kills pnpm, and the child never gets its brief", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer name=w1: PWD please");
+    await vi.waitFor(() => expect(pnpm.started()).toBe(true));
+    const pid = pnpm.pid();
+    expect(alive(pid)).toBe(true);
+    await say(w, "stop w1");
+    await vi.waitFor(() => expect(alive(pid)).toBe(false));
+    pnpm.open();
+    await new Promise((r) => setTimeout(r, 300));
+    const [kid] = await kids(w);
+    expect(kid.state).toBe("stopped");
+    expect((await w.client.getThread(kid.id)).messages).toHaveLength(0);
+  });
+
+  it("a failed install is told to the child with the log tail; the child still runs and the worktree stays", async () => {
+    fakePnpm({ code: 1 });
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer: PWD please");
+    await settled(w, 1);
+    const [rec] = regOf(w).children;
+    const text = await firstText(w);
+    expect(text).toMatch(/^Dependencies: install failed \(exit 1, log: .*pnpm-install\.log\); run `pnpm install` yourself\nLast log lines:\nboom\n\nPWD please$/);
+    expect(existsSync(rec.workspace.path)).toBe(true);
+  });
+
+  it("without a pnpm-lock.yaml nothing is installed and the brief is unchanged", async () => {
+    const pnpm = fakePnpm();
+    const { w } = await boot();
+    await say(w, "spawn writer: PWD please");
+    await settled(w, 1);
+    expect(pnpm.started()).toBe(false);
+    expect(await firstText(w)).toBe("PWD please");
+  });
+
+  it("a reader gets no install", async () => {
+    const pnpm = fakePnpm();
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn reader: look");
+    await settled(w, 1);
+    expect(pnpm.started()).toBe(false);
+  });
+
+  it("a message sent during the install waits with the brief: ONE submit of line + brief + message, and the child is not failed", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer name=w1: PWD please");
+    await vi.waitFor(() => expect(pnpm.started()).toBe(true));
+    await say(w, "message w1: and also this");
+    expect((await w.client.getThread((await kids(w))[0].id)).messages).toHaveLength(0);
+    pnpm.open();
+    await settled(w, 1);
+    const msgs = (await w.client.getThread((await kids(w))[0].id)).messages.filter((m) => m.role === "user");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD please\n\nand also this$/);
+    expect(regOf(w).children[0].state).toBe("done");
+  });
+
+  it("recover re-runs the install a restart cut off: the child gets line + brief", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const root = mkdtempSync(join(tmpdir(), "iso-deps-restart-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const r = lockedRepo();
+    const first = await boot({ root, repo: r });
+    await say(first.w, "spawn writer: PWD please");
+    await vi.waitFor(() => expect(pnpm.started()).toBe(true));
+    const firstPid = pnpm.pid();
+    await first.w.stop();
+    tw = undefined;
+    await vi.waitFor(() => expect(alive(firstPid)).toBe(false)); // (closing the first wolfd killed its pnpm)
+    pnpm.open();
+    const second = await boot({ root, repo: r });
+    await settled(second.w, 1);
+    expect(await firstText(second.w)).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD please$/);
+    expect(readFileSync(pnpm.log, "utf8").trim().split("\n")).toHaveLength(2); // one install per process
+  });
+
+  it("a queued child whose install was cut off by a restart is installed when it starts", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const root = mkdtempSync(join(tmpdir(), "iso-deps-queued-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const r = lockedRepo();
+    const yaml = `workspaces:\n  root: ${r.root}\nsubagents:\n  maxRunning: 1\n`;
+    const first = await boot({ root, repo: r, yaml });
+    await say(first.w, "spawn writer name=one: PWD first");
+    await say(first.w, "spawn writer name=two: PWD second");
+    await vi.waitFor(async () => expect((await kids(first.w)).map((k) => k.state).sort()).toEqual(["queued", "running"]));
+    await first.w.stop();
+    tw = undefined;
+    pnpm.open();
+    const second = await boot({ root, repo: r, yaml });
+    await settled(second.w, 2);
+    for (const k of await kids(second.w)) {
+      expect((await second.w.client.getThread(k.id)).messages[0].text).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD (first|second)$/);
+    }
+  });
+
+  it("a child stopped during the install and then resumed gets a new install, then line + brief + message", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer name=w1: PWD please");
+    await vi.waitFor(() => expect(pnpm.started()).toBe(true));
+    await say(w, "stop w1");
+    await vi.waitFor(() => expect(regOf(w).children[0].state).toBe("stopped"));
+    pnpm.open(); // (the first install is already killed; the next one passes at once)
+    await say(w, "message w1: carry on");
+    await settled(w, 1);
+    const msgs = (await w.client.getThread((await kids(w))[0].id)).messages.filter((m) => m.role === "user");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD please\n\ncarry on$/);
+    expect(readFileSync(pnpm.log, "utf8").trim().split("\n")).toHaveLength(2);
+  });
+
+  /**
+   * Holds the submits to child conversations created from now on until opened (the wolf runs in this process, so its
+   * engine's createOwned is wrapped; restored after the test). `submits` records each child input.
+   */
+  function gateChildSubmits(w: TestWolf, opts: { swallow?: boolean } = {}) {
+    const convs = w.wolf.engine.conversations;
+    const orig = convs.createOwned.bind(convs);
+    let armed = true;
+    let entered = 0;
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const submits: string[] = [];
+    convs.createOwned = async (...args: Parameters<typeof orig>) => {
+      const swallow = opts.swallow;
+      const made = await orig(...args);
+      const submit = made.conversation.submit.bind(made.conversation);
+      made.conversation.submit = async (o): ReturnType<typeof submit> => {
+        submits.push(typeof o.input === "string" ? o.input : JSON.stringify(o.input));
+        if (swallow) return {} as never; // (acknowledged but never delivered: wolfd "goes down" before the brief lands)
+        if (armed) {
+          entered++;
+          await gate;
+        }
+        return submit(o);
+      };
+      return made;
+    };
+    cleanups.push(() => { convs.createOwned = orig; });
+    return { submits, entered: () => entered, open: () => { armed = false; open(); }, disarm: () => { armed = false; } };
+  }
+  const userTexts = async (w: TestWolf, i = 0) => (await w.client.getThread((await kids(w))[i].id)).messages.filter((m) => m.role === "user").map((m) => m.text);
+
+  it("a message while the brief submit is in flight (after the install) is neither lost nor turns into a second brief", async () => {
+    fakePnpm();
+    const { w } = await boot({ repo: lockedRepo() });
+    const g = gateChildSubmits(w);
+    void w.client.submit(w.home, "spawn writer name=w1: PWD please", { whenBusy: "reject" });
+    await vi.waitFor(() => expect(g.entered()).toBe(1), { timeout: 8000 });
+    const [kid] = await kids(w);
+    await w.client.submit(kid.id, "mid message", { whenBusy: "reject" });
+    g.open();
+    await vi.waitFor(async () => expect((await userTexts(w)).join("\n")).toContain("mid message"), { timeout: 8000 });
+    await settled(w, 1);
+    const texts = await userTexts(w);
+    expect(texts.filter((t) => t.includes("PWD please"))).toHaveLength(1); // one brief
+    expect(texts.filter((t) => t.includes("mid message"))).toHaveLength(1); // delivered once
+    expect(texts[0]).toMatch(/^Dependencies: installed with pnpm in [0-9.]+ s\n\nPWD please$/); // (the message was not in the input already built)
+    expect(regOf(w).children[0]).toMatchObject({ state: "done" });
+    expect(regOf(w).children[0].pending ?? []).toEqual([]);
+  });
+
+  it("the same on the no-lockfile path: a message while spawn's inline brief submit is in flight", async () => {
+    const pnpm = fakePnpm();
+    const { w } = await boot();
+    const g = gateChildSubmits(w);
+    void w.client.submit(w.home, "spawn writer name=w1: PWD please", { whenBusy: "reject" });
+    await vi.waitFor(() => expect(g.entered()).toBe(1), { timeout: 8000 });
+    const [kid] = await kids(w);
+    await w.client.submit(kid.id, "mid message", { whenBusy: "reject" });
+    g.open();
+    await vi.waitFor(async () => expect((await userTexts(w)).join("\n")).toContain("mid message"), { timeout: 8000 });
+    await settled(w, 1);
+    const texts = await userTexts(w);
+    expect(texts.filter((t) => t.includes("PWD please"))).toHaveLength(1);
+    expect(texts.filter((t) => t.includes("mid message"))).toHaveLength(1);
+    expect(texts[0]).toBe("PWD please");
+    expect(pnpm.started()).toBe(false);
+    expect(regOf(w).children[0]).toMatchObject({ state: "done" });
+  });
+
+  it("recover without a lockfile still submits the plain brief inline, as before", async () => {
+    const pnpm = fakePnpm();
+    const root = mkdtempSync(join(tmpdir(), "iso-deps-recover-plain-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    repo = makeTempRepo("demo");
+    const first = await boot({ root, repo });
+    const g = gateChildSubmits(first.w, { swallow: true }); // (the brief never lands: wolfd goes down first)
+    await say(first.w, "spawn writer: PWD please");
+    expect(g.submits).toEqual(["PWD please"]);
+    expect(regOf(first.w).children[0].state).toBe("running");
+    await first.w.stop();
+    tw = undefined;
+    const second = await boot({ root, repo });
+    await settled(second.w, 1);
+    expect(await userTexts(second.w)).toEqual(["PWD please"]);
+    expect(pnpm.started()).toBe(false);
+  });
+
+  it("a child whose thread is gone when the install finishes is settled as failed, not left running", async () => {
+    const pnpm = fakePnpm({ gated: true });
+    const { w } = await boot({ repo: lockedRepo() });
+    await say(w, "spawn writer name=w1: PWD please");
+    await vi.waitFor(() => expect(pnpm.started()).toBe(true));
+    const [kid] = await kids(w);
+    (w.wolf.server as unknown as { threads: Map<string, unknown> }).threads.delete(kid.id);
+    pnpm.open();
+    await vi.waitFor(() => expect(regOf(w).children[0].state).toBe("failed"));
   });
 });

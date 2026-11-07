@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 /**
- * npm run runtime:update [branch] [--dry-run]
+ * pnpm runtime:update [--dry-run]     (npm run runtime:update on a checkout that is still on npm)
  *
- * feature branch -> integration (wolf/1uk4) -> runtime (stable) -> build -> refresh den extensions -> push.
- * All branches are worktrees of one repo; located with `git worktree list`. Never rebases, never runs git in the
- * feature branch's worktree. Env: INTEGRATION_BRANCH (wolf/1uk4), RUNTIME_BRANCH (stable), WOLVES_DIR (~/wolves/local).
+ * origin/stable -> runtime (stable worktree) -> build -> refresh den extensions. Fetches, fast-forwards only (refuses if the
+ * runtime cannot fast-forward), never merges a branch, never rebases, never pushes. Merging into stable is the owner's job on
+ * GitHub (`wolfpack pr prepare` opens the PR). A branch argument is refused. All branches are worktrees of one repo; located
+ * with `git worktree list`. Env: RUNTIME_BRANCH (stable), WOLVES_DIR (~/wolves/local).
  * Build and extension refresh are injectable (`steps`) so tests can stub them.
+ * Package manager: when the commit being deployed has pnpm-lock.yaml AND pnpm is on the PATH, it installs with
+ * `pnpm install --frozen-lockfile --prefer-offline` and builds with `node scripts/turbo.mjs run build` (the shared turbo cache);
+ * otherwise the old npm path runs unchanged (`npx turbo run build`, no install). The runtime checkout moves npm -> pnpm
+ * when stable first carries pnpm-lock.yaml, so the choice is made on the target commit, not on the tree as it is now.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +27,34 @@ const tryGit = (cwd, ...args) => {
 		return { ok: false, out: `${e.stdout ?? ""}${e.stderr ?? ""}`.trim() };
 	}
 };
+
+/** Commands that install and build one checkout, per package manager. */
+export function buildCommands(pm) {
+	if (pm === "pnpm") {
+		return [
+			{ cmd: "pnpm", args: ["install", "--frozen-lockfile", "--prefer-offline"] },
+			{ cmd: "node", args: ["scripts/turbo.mjs", "run", "build"] },
+		];
+	}
+	return [{ cmd: "npx", args: ["turbo", "run", "build"] }];
+}
+
+/** Is pnpm usable from here? (A PATH lookup; corepack shims count when `corepack enable` was run.) */
+export const probePnpm = () => {
+	const r = spawnSync("pnpm", ["--version"], { stdio: "ignore", shell: process.platform === "win32" });
+	return !r.error && r.status === 0;
+};
+
+/**
+ * "pnpm" when the checkout has pnpm-lock.yaml (`ref`: look in that commit, else on disk) and pnpm is found; else "npm".
+ * `note` explains the one surprising case (lockfile but no pnpm).
+ */
+export function choosePm(wt, { ref, pnpmFound = probePnpm } = {}) {
+	const hasLock = ref ? tryGit(wt, "cat-file", "-e", `${ref}:pnpm-lock.yaml`).ok : fs.existsSync(path.join(wt, "pnpm-lock.yaml"));
+	if (!hasLock) return { pm: "npm" };
+	const found = typeof pnpmFound === "function" ? pnpmFound() : pnpmFound;
+	return found ? { pm: "pnpm" } : { pm: "npm", note: "pnpm-lock.yaml found but pnpm is not installed; falling back to npm (run `corepack enable` to get pnpm)" };
+}
 
 export class UpdateError extends Error {}
 
@@ -49,7 +82,7 @@ const isDoc = (f) => /^docs\//.test(f) || /\.mdx?$/.test(f);
 const isTest = (f) => /\.test\.[cm]?[tj]sx?$/.test(f) || /(^|\/)(__tests__|fixtures)\//.test(f);
 
 /** Classify changed paths. `refreshedExtensions`: names of rebuilt bundles. */
-export function classify(files, refreshedExtensions = []) {
+export function classify(files, refreshedExtensions = [], pm = "npm") {
 	const relevant = files.filter((f) => !isDoc(f) && !isTest(f));
 	const agent = relevant.some((f) => f.startsWith("packages/agent/"));
 	const console_ = relevant.filter((f) => f.startsWith("apps/console/"));
@@ -59,7 +92,7 @@ export function classify(files, refreshedExtensions = []) {
 	else if (console_.length) action = "reload";
 	else if (files.length) action = "none"; // docs/tests only
 	const lines = [];
-	if (action === "restart") lines.push("restart the stack: npm run stack -- restart");
+	if (action === "restart") lines.push(pm === "pnpm" ? "restart the stack: pnpm stack restart" : "restart the stack: npm run stack -- restart");
 	else if (action === "reload") lines.push("console only: reload the window (Cmd-R)");
 	else lines.push(files.length ? "docs/tests only: nothing to restart" : "already up to date");
 	if (agent) lines.push("sfo-01 runs packages/agent: redeploy needed");
@@ -124,17 +157,19 @@ export async function refreshDenExtensions({ repo, wolvesDir, dryRun, log, now =
 	return refreshed;
 }
 
-const defaultSteps = {
-	build: (wt) => execFileSync("npx", ["turbo", "run", "build"], { cwd: wt, stdio: "inherit" }),
+const defaultSteps = (pnpmFound) => ({
+	build: (wt) => {
+		const { pm } = choosePm(wt, { pnpmFound });
+		for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: "inherit", shell: process.platform === "win32" });
+	},
 	refreshExtensions: refreshDenExtensions,
-};
+});
 
 /** Returns {exitCode, classification, ...}; throws nothing for expected failures. */
-export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), steps = {}, log = console.log, warn = console.warn } = {}) {
-	const st = { ...defaultSteps, ...steps };
+export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), steps = {}, pnpmFound = probePnpm, log = console.log, warn = console.warn } = {}) {
+	const st = { ...defaultSteps(pnpmFound), ...steps };
 	const dryRun = argv.includes("--dry-run");
 	const branch = argv.find((a) => !a.startsWith("--"));
-	const integration = env.INTEGRATION_BRANCH || "wolf/1uk4";
 	const runtime = env.RUNTIME_BRANCH || "stable";
 	const wolvesDir = env.WOLVES_DIR || path.join(os.homedir(), "wolves", "local");
 	const tag = dryRun ? "[dry-run] " : "";
@@ -143,58 +178,53 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 		return { exitCode: 1 };
 	};
 
-	const wts = worktrees(cwd);
-	const intWt = wts.get(integration);
-	const rtWt = wts.get(runtime);
-	if (!intWt) return fail(`branch ${integration} is not checked out in any worktree`);
-	if (!rtWt) return fail(`branch ${runtime} is not checked out in any worktree`);
-	log(`${tag}integration ${integration} @ ${intWt}\n${tag}runtime ${runtime} @ ${rtWt}`);
-
-	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first`);
+	// Merging is the owner's job now, on GitHub. Refuse the old argument instead of silently ignoring it.
 	if (branch) {
-		if (isDirty(intWt)) return fail(`integration worktree ${intWt} has uncommitted changes; commit or stash them first`);
-		if (!tryGit(intWt, "rev-parse", "--verify", `${branch}^{commit}`).ok) return fail(`unknown branch ${branch}`);
+		return fail(
+			`this command no longer merges a branch (got "${branch}"): it only updates the ${runtime} runtime from origin/${runtime}. ` +
+				"Release work with `wolfpack pr prepare`; the owner merges the PR, then run `pnpm runtime:update` (`npm run runtime:update` on a checkout that is still on npm; or `wolfpack pr post-merge --apply`).",
+		);
 	}
+
+	const wts = worktrees(cwd);
+	const rtWt = wts.get(runtime);
+	if (!rtWt) return fail(`branch ${runtime} is not checked out in any worktree`);
+	log(`${tag}runtime ${runtime} @ ${rtWt}`);
+	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first`);
+
+	// Fetch only the remote-tracking ref; nothing is pushed or merged anywhere.
+	const remoteRef = `origin/${runtime}`;
+	if (dryRun) log(`${tag}not fetching; using the local ${remoteRef}`);
+	else {
+		const f = tryGit(rtWt, "fetch", "origin", `+refs/heads/${runtime}:refs/remotes/origin/${runtime}`);
+		if (!f.ok) return fail(`git fetch failed: ${f.out.split("\n")[0]}. Nothing was changed.`);
+	}
+	const target = tryGit(rtWt, "rev-parse", "--verify", `refs/remotes/origin/${runtime}^{commit}`);
+	if (!target.ok) return fail(`cannot read ${remoteRef}: ${target.out.split("\n")[0]}`);
 
 	const oldRuntime = git(rtWt, "rev-parse", "HEAD");
-	let target = git(intWt, "rev-parse", "HEAD"); // tip the runtime will be fast-forwarded to
-
-	if (branch) {
-		if (dryRun) {
-			log(`${tag}would merge ${branch} into ${integration}`);
-			target = branch; // approximation: diff the branch tip
-			const ancestor = tryGit(intWt, "merge-base", "--is-ancestor", runtime, branch).ok;
-			if (!ancestor) log(`${tag}note: ${branch} does not contain ${runtime}; classification is approximate`);
-		} else {
-			const m = tryGit(intWt, "merge", "--no-edit", branch);
-			if (!m.ok) {
-				const files = tryGit(intWt, "diff", "--name-only", "--diff-filter=U").out.split("\n").filter(Boolean);
-				tryGit(intWt, "merge", "--abort");
-				warn(`runtime:update: merge of ${branch} into ${integration} conflicted; aborted (tree is clean). Conflicting files:`);
-				for (const f of files) warn(`  ${f}`);
-				if (!files.length) warn(m.out);
-				return { exitCode: 1, conflicts: files };
-			}
-			log(`merged ${branch} into ${integration}`);
-			target = git(intWt, "rev-parse", "HEAD");
+	// Runtime must be able to fast-forward to origin/<runtime>.
+	if (!tryGit(rtWt, "merge-base", "--is-ancestor", oldRuntime, target.out).ok) {
+		if (tryGit(rtWt, "merge-base", "--is-ancestor", target.out, oldRuntime).ok) {
+			return fail(`${runtime} is ahead of ${remoteRef} (it has local commits that are not on the remote); there is nothing to fast-forward. Nothing was changed in ${rtWt}.`);
 		}
+		return fail(`${runtime} has diverged from ${remoteRef} (cannot fast-forward). Resolve by hand in ${rtWt}; nothing was changed there.`);
 	}
-
-	// Runtime must be able to fast-forward to the integration tip.
-	if (!tryGit(rtWt, "merge-base", "--is-ancestor", oldRuntime, target).ok) {
-		return fail(`${runtime} has diverged from ${integration} (cannot fast-forward). Resolve by hand in ${rtWt}; nothing was changed there.`);
-	}
-	const files = git(rtWt, "diff", "--name-only", oldRuntime, target).split("\n").filter(Boolean);
+	const files = git(rtWt, "diff", "--name-only", oldRuntime, target.out).split("\n").filter(Boolean);
 	if (dryRun) {
-		log(`${tag}would fast-forward ${runtime} to ${integration} (${files.length} changed files)`);
-		log(`${tag}would run: npx turbo run build`);
+		log(`${tag}would fast-forward ${runtime} to ${remoteRef} (${files.length} changed files)`);
+		const { pm, note } = choosePm(rtWt, { ref: target.out, pnpmFound });
+		if (note) log(`${tag}${note}`);
+		for (const { cmd, args } of buildCommands(pm)) log(`${tag}would run: ${cmd} ${args.join(" ")}`);
 	} else {
-		if (oldRuntime !== target) {
-			const ff = tryGit(rtWt, "merge", "--ff-only", integration);
-			if (!ff.ok) return fail(`${runtime} cannot fast-forward to ${integration}: ${ff.out}`);
+		if (oldRuntime !== target.out) {
+			const ff = tryGit(rtWt, "merge", "--ff-only", remoteRef);
+			if (!ff.ok) return fail(`${runtime} cannot fast-forward to ${remoteRef}: ${ff.out}`);
 			log(`fast-forwarded ${runtime} (${files.length} changed files)`);
 		}
-		log("building…");
+		const chosen = choosePm(rtWt, { pnpmFound });
+		if (chosen.note) log(chosen.note);
+		log(`building with ${chosen.pm}…`);
 		try {
 			st.build(rtWt);
 		} catch (err) {
@@ -203,19 +233,11 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	}
 	log(`${tag}checking den extensions in ${wolvesDir}`);
 	const refreshed = await st.refreshExtensions({ repo: rtWt, wolvesDir, dryRun, log });
-	const cls = classify(files, refreshed.map((r) => r.wolf));
+	const cls = classify(files, refreshed.map((r) => r.wolf), choosePm(rtWt, { ref: dryRun ? target.out : undefined, pnpmFound }).pm);
 	log("");
 	for (const l of cls.lines) log(`=> ${l}`);
-
-	let pushed = false;
-	if (dryRun) log(`${tag}would push origin ${integration} ${runtime}`);
-	else {
-		const p = tryGit(rtWt, "push", "origin", integration, runtime);
-		pushed = p.ok;
-		if (!p.ok) warn(`runtime:update: warning: push failed (${p.out.split("\n")[0]}); local update is complete`);
-	}
-	log(`\n${tag}summary: ${branch ? `merged ${branch}; ` : ""}${files.length} files changed, ${refreshed.length} den(s) refreshed, ${dryRun ? "nothing changed" : pushed ? "pushed" : "not pushed"}`);
-	return { exitCode: 0, classification: cls, files, refreshed, pushed };
+	log(`\n${tag}summary: ${files.length} files changed, ${refreshed.length} den(s) refreshed, ${dryRun ? "nothing changed" : "nothing pushed"}`);
+	return { exitCode: 0, classification: cls, files, refreshed };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

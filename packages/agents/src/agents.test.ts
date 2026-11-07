@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledAgentsDir, discoverAgents, isWriterProfile, loadAgent, parseAgentDefinition } from "./index.js";
 
 const roots: string[] = [];
@@ -111,5 +111,107 @@ describe("bundled visualizer", () => {
       expect(tools).toContain(t);
     }
     expect(def?.body).toMatch(/visual-tools/);
+  });
+});
+
+describe("standards", () => {
+  // A fixture standard: these tests check the loader, not the shipped text.
+  const MARK = "# Fixture testing standard";
+  const GIT_MARK = "# Fixture git standard";
+  const count = (body: string | undefined, text: string) => (body ?? "").split(text).length - 1;
+  const fixtureStandards = () => {
+    const dir = tmp();
+    put(dir, "testing.md", `${MARK}\nrules\n`);
+    put(dir, "git.md", `${GIT_MARK}\nrules\n`);
+    put(dir, "extra.md", "# Extra standard\n");
+    return dir;
+  };
+
+  it("gives worker, planner and reviewer the testing standard, and worker and reviewer the git standard, each exactly once, from any source, and not the scout or the planner's git", () => {
+    const standardsDir = fixtureStandards();
+    const agentDir = tmp();
+    const cwd = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    put(join(cwd, ".pi", "agents"), "planner.md", "---\nname: planner\nstandards: testing\n---\nmy planner");
+    const opts = { cwd, agentDir, standardsDir };
+    const expected = {
+      worker: { testing: 1, git: 1 },
+      reviewer: { testing: 1, git: 1 },
+      planner: { testing: 1, git: 0 },
+      scout: { testing: 0, git: 0 },
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      for (const body of [loadAgent(name, opts)?.body, discoverAgents(opts).find((a) => a.name === name)?.body]) {
+        expect({ name, testing: count(body, MARK), git: count(body, GIT_MARK) }).toEqual({ name, ...want });
+      }
+    }
+    expect(loadAgent("worker", opts)?.body).toMatch(/^my worker/);
+  });
+
+  it("matches the always-on names case-insensitively, by frontmatter name and by the requested name", () => {
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: Worker\n---\nbody");
+    put(join(agentDir, "agents"), "planner.md", "---\nname: Helper\n---\nbody");
+    const opts = { cwd: tmp(), agentDir, standardsDir: fixtureStandards() };
+    expect(count(loadAgent("worker", opts)?.body, MARK)).toBe(1);
+    expect(count(loadAgent("planner", opts)?.body, MARK)).toBe(1);
+  });
+
+  it("gives any other profile only the standards its frontmatter names", () => {
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "x.md", "---\nname: x\nstandards: extra\n---\nbody");
+    const body = loadAgent("x", { cwd: tmp(), agentDir, standardsDir: fixtureStandards() })?.body;
+    expect(body).toContain("# Extra standard");
+    expect(body).not.toContain(MARK);
+  });
+
+  it("loads an agent without a standard it cannot read, and logs an error naming the file, once per process", () => {
+    const standardsDir = tmp();
+    const agentDir = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const opts = { cwd: tmp(), agentDir, standardsDir };
+      const def = loadAgent("worker", opts);
+      expect(def?.body).toBe("my worker");
+      // Owner-decided contract: the loud error names the file that could not be read.
+      const logged = (file: string) => err.mock.calls.filter(([m]) => String(m).includes(join(standardsDir, file))).length;
+      expect(logged("testing.md")).toBe(1);
+      expect(logged("git.md")).toBe(1);
+      // A second load adds no further errors.
+      discoverAgents(opts);
+      loadAgent("worker", opts);
+      expect(logged("testing.md")).toBe(1);
+      expect(logged("git.md")).toBe(1);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("throws for a shipped profile whose standard name is invalid", () => {
+    const pkg = tmp();
+    put(pkg, "b.md", "---\nname: b\nstandards: ../x\n---\nbody");
+    const opts = { cwd: tmp(), agentDir: tmp(), packageDirs: [pkg], standardsDir: fixtureStandards() };
+    expect(() => loadAgent("b", opts)).toThrow(/Invalid standard name "\.\.\/x"/);
+  });
+
+  it("skips a user profile with an invalid standard name: the roster keeps the rest, and loadAgent falls through to the next directory", () => {
+    const agentDir = tmp();
+    const cwd = tmp();
+    put(join(cwd, ".pi", "agents"), "x.md", "---\nname: x\nstandards: ../nope\n---\nproject copy");
+    put(join(agentDir, "agents"), "x.md", "---\nname: x\n---\nglobal copy");
+    put(join(cwd, ".pi", "agents"), "y.md", "---\nname: y\nstandards: ../nope\n---\nonly copy");
+    const opts = { cwd, agentDir, standardsDir: fixtureStandards() };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const roster = discoverAgents(opts);
+      expect(roster.find((a) => a.name === "x")?.body).toBe("global copy");
+      expect(roster.map((a) => a.name)).toContain("worker");
+      expect(roster.map((a) => a.name)).not.toContain("y");
+      expect(loadAgent("x", opts)?.body).toBe("global copy");
+      expect(loadAgent("y", opts)).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * Dev stack from the CURRENT checkout against a throwaway sandbox wolves folder, alongside the live stack.
- *   npm run dev:stack [-- --app console|none]
+ *   pnpm run dev:stack [-- --app console|none]
  * Env: DEV_WOLVES_DIR (default ~/wolves/dev-sandbox), DEV_WORKERD_PORT (7151), DEV_CONSOLE_PORT (3220),
  *      DEV_STACK_SKIP_BUILD=1 (skip the turbo build), WOLFPACK_MODELS_FILE (override the scaffolded models.json).
  * Never touches ~/wolves/local: sandbox paths that are, contain or sit inside it are refused (symlink/case aliases too), as are the live ports.
  * The child env drops the WOLF_ and WOLFPACK_ vars and runs with HOME=<sandbox>/.home, so ~/.wolfpack (hub, sockets, slots) is not shared.
  * First run scaffolds one minimal wolf ("sandbox"): wolf.yaml, AGENTS.md, den/, agent/, and a copy of a models.json
  * (tier/provider config only, no secrets) taken from a live wolf. Secrets come from $WOLFPACK_HOME/.env (default
- * ~/.wolfpack/.env) and your Claude login (CLAUDE_CONFIG_DIR). HOME is the sandbox, so git identity, ~/.npmrc and the npm cache are not shared.
+ * ~/.wolfpack/.env) and your Claude login (CLAUDE_CONFIG_DIR). HOME is the sandbox, so git identity and ~/.npmrc are not shared. The pnpm store and corepack's pnpm download are: childEnv points PNPM_CONFIG_STORE_DIR and COREPACK_HOME at the real home, or the sandbox would install a second copy of everything.
  */
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -80,6 +80,16 @@ export function parseEnvFile(file) {
  * (hub link, run sockets, subagent slots) from, so nothing lands in the live pack dir. Claude's own config stays
  * reachable via CLAUDE_CONFIG_DIR (the subscription login).
  */
+/** Where pnpm keeps its package store and corepack its downloaded pnpm, for the REAL home (not the sandbox HOME). */
+export function sharedToolDirs(env, home) {
+	const xdgData = env.XDG_DATA_HOME || path.join(home, ".local/share");
+	const xdgCache = env.XDG_CACHE_HOME || path.join(home, ".cache");
+	return {
+		PNPM_CONFIG_STORE_DIR: env.PNPM_CONFIG_STORE_DIR || (process.platform === "darwin" ? path.join(home, "Library/pnpm/store") : path.join(xdgData, "pnpm/store")),
+		COREPACK_HOME: env.COREPACK_HOME || path.join(xdgCache, "node/corepack"),
+	};
+}
+
 export function childEnv(cfg, env, dotenv = {}, models) {
 	const keep = ([k]) => !/^(WOLF_|WOLFPACK_)/.test(k) || k === "WOLFPACK_MODELS_FILE";
 	const out = { ...Object.fromEntries(Object.entries(env).filter(keep)), ...Object.fromEntries(Object.entries(dotenv).filter(keep)) };
@@ -87,6 +97,7 @@ export function childEnv(cfg, env, dotenv = {}, models) {
 		...out,
 		...(models ? { WOLFPACK_MODELS_FILE: models } : {}),
 		HOME: cfg.sandboxHome,
+		...sharedToolDirs(env, cfg.home),
 		CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR || path.join(cfg.home, ".claude"),
 		WORKERD_CONFIG_DIR: path.join(cfg.sandboxHome, ".wolfpack/workerd"),
 		WOLFPACK_API_URL: `http://127.0.0.1:${cfg.workerdPort}`,
@@ -95,7 +106,7 @@ export function childEnv(cfg, env, dotenv = {}, models) {
 
 export function wolfYaml(name, dir) {
 	const id = crypto.randomBytes(5).toString("base64url").replace(/[-_]/g, "x").slice(0, 6);
-	return `# Scaffolded by \`npm run dev:stack\`: minimal sandbox wolf, no memory/KB, no secrets.
+	return `# Scaffolded by \`pnpm run dev:stack\`: minimal sandbox wolf, no memory/KB, no secrets.
 id: ${id}
 name: ${name}
 domains: []
@@ -144,7 +155,7 @@ export function main(argv, env = process.env) {
 	if (env.DEV_STACK_SKIP_BUILD === "1") {
 		if (!fs.existsSync(path.join(root, "packages/workerd/dist/bin/workerd.js"))) throw new Error("DEV_STACK_SKIP_BUILD=1 but workerd.js is not built");
 	} else {
-		const b = spawnSync("npx", ["turbo", "run", "build", "--filter=@wolfpack/harness", "--filter=@wolfpack/workerd", "--filter=@wolfpack/cli", "--output-logs=errors-only"], { cwd: root, stdio: "inherit" });
+		const b = spawnSync(process.execPath, ["scripts/turbo.mjs", "run", "build", "--filter=@wolfpack/harness", "--filter=@wolfpack/workerd", "--filter=@wolfpack/cli", "--output-logs=errors-only"], { cwd: root, stdio: "inherit" });
 		if (b.status !== 0) throw new Error("build failed");
 	}
 	const kids = [];
@@ -170,7 +181,7 @@ export function main(argv, env = process.env) {
 	process.on("SIGHUP", () => stop(0));
 
 	run("workerd", process.execPath, [path.join(root, "packages/workerd/dist/bin/workerd.js"), "--wolves", cfg.wolves, "--port", String(cfg.workerdPort)]);
-	if (app === "console") run("console", "npm", ["run", "dev", "-w", "@wolfpack/console", "--", "-p", String(cfg.consolePort)], { CONSOLE_PORT: String(cfg.consolePort) });
+	if (app === "console") run("console", "pnpm", ["--filter", "@wolfpack/console", "run", "dev", "-p", String(cfg.consolePort)], { CONSOLE_PORT: String(cfg.consolePort) });
 	console.log("dev-stack: Ctrl-C stops everything");
 }
 

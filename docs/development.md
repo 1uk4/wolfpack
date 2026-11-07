@@ -10,25 +10,35 @@ Run from the repo root (turbo):
 
 | Command | Does |
 |---|---|
-| `npm install` | Install all workspaces. |
-| `npm run dev` | Console dev server on http://localhost:3000 (mock-backed). No Electron. |
-| `npm run dev -w @wolfpack/desktop` | Console on :3210, then Electron. Run in your own terminal. |
-| `npm run verify` | `turbo run build typecheck lint test`, cached, all workspaces. Run before committing. |
-| `npm run build` | `tsc --build` (legacy root build). A bare root `tsc --build` leaves `packages/hubd/dist/cli.js` without its exec bit: run `npm run build -w @wolfpack/hubd` to restore it, or use `node dist/cli.js`. |
-| `npx vitest run` | Root vitest run for the packages. |
+| `pnpm install` | Install all workspaces (`--frozen-lockfile` to match the lock exactly). |
+| `pnpm dev` | Console dev server on http://localhost:3000 (mock-backed). No Electron. |
+| `pnpm --filter @wolfpack/desktop dev` | Console on :3210, then Electron. Run in your own terminal. |
+| `pnpm verify` | `turbo run build typecheck lint test`, cached, all workspaces. Run before committing. |
+| `pnpm build` | `tsc --build` (legacy root build). A bare root `tsc --build` leaves `packages/hubd/dist/cli.js` without its exec bit: run `pnpm --filter @wolfpack/hubd build` to restore it, or use `node dist/cli.js`. |
+| `pnpm exec vitest run` | Root vitest run for the packages. |
+| `wolfpack test related <files>` | How agents run tests: queued per host, capped, cached. See [testing](testing.md#the-test-runner-wolfpack-test). |
 
 Packages have no linter yet (`lint` is a no-op echo). The console lints with eslint, including its import-law rules.
+
+## Package manager: pnpm for dev and CI, npm for the release
+
+- **Dev and CI use pnpm** (`packageManager` in `package.json` pins the version). One content-addressed store (`~/Library/pnpm/store` on the Mac) is linked into every worktree, so a second worktree installs in seconds and costs tens of MB. Get pnpm with `corepack enable` (plain `corepack enable` only shims pnpm and yarn, so npm keeps working; `corepack enable npm` makes npm refuse this repo, so don't, or set `COREPACK_ENABLE_STRICT=0`).
+- **The release images still install with npm** from `package-lock.json` until work-wolfpack-hFNgvt7 moves them. So both lockfiles are committed and must agree. After changing any `package.json` run `npm install --package-lock-only --ignore-scripts` **and** `pnpm install --lockfile-only`. `pnpm check:lockfiles` (and CI) fails when `package-lock.json` is not what npm would write, or when the two locks resolve different versions. The one name difference is expected: the git dependency is `pi-claude-bridge-stateless` in npm and `pi-claude-bridge` in pnpm.
+- **Strict layout.** pnpm only lets a package import what it declares (`hoist: false`), so a missing dependency fails at install/build instead of working by accident. `pnpm check:deps` lists undeclared imports. `extensions/*` are not workspaces: the root `devDependencies` declare what they import.
+- **Turbo cache is shared.** Root scripts run turbo through `scripts/turbo.mjs`, which points every checkout at `~/.cache/wolfpack/turbo` (override with `TURBO_CACHE_DIR`; CI sets none). Use `pnpm turbo ...` or `node scripts/turbo.mjs ...`; a bare `turbo` or `npx turbo` uses the checkout's own cache.
+- **pnpm-only dev scripts:** `pnpm dev`, `pnpm verify`, `pnpm stack`, `pnpm dev:stack`, `pnpm runtime:update`, `pnpm check:deps`, `pnpm check:lockfiles`. `runtime:update` and `wolfpack pr` use pnpm only when the checkout being deployed has `pnpm-lock.yaml` and pnpm is installed; otherwise they run the old npm commands.
+- **Stale `extensions/*/node_modules` trap.** An old npm-era checkout can keep `extensions/*/node_modules` that mask a dependency the root no longer declares (this hid `tldts` and `typebox` once). Check in a fresh clone (or delete those folders) before trusting a green run.
 
 ## Run against a real wolf
 
 The console defaults to the mock. Set `WOLFPACK_API_URL` to point its server-side client at a wolf's `/v1` (an `HttpConsoleClient`):
 
 ```sh
-# 1. a wolf (needs `npm run build -w @wolfpack/harness`, ANTHROPIC_API_KEY for an api table, and WOLFPACK_MODELS_FILE)
+# 1. a wolf (needs `pnpm --filter @wolfpack/harness build`, ANTHROPIC_API_KEY for an api table, and WOLFPACK_MODELS_FILE)
 set -a; . ~/.wolfpack/.env; set +a
 WOLFPACK_MODELS_FILE=/path/to/models.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
 # 2. the console against it
-WOLFPACK_API_URL=http://127.0.0.1:3141 npm run dev
+WOLFPACK_API_URL=http://127.0.0.1:3141 pnpm dev
 ```
 
 A minimal `wolf.yaml` is `name: <wolf>` plus `workspace: <dir>`; use a scratch dir, not a real wolf's. Unset `WOLFPACK_API_URL` to go back to the mock. A stale-cursor snapshot from the wolf is logged server-side, not forwarded to the browser (full snapshot UX is planned).
@@ -41,7 +51,7 @@ Set `WOLFPACK_HUB_URL` (and `WOLFPACK_HUB_TOKEN`, a console token from `hubd pai
 WOLFPACK_MODELS_FILE=/path/to/models.subscription.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
 ```
 
-Live proof (tagged, never in CI): `WOLFD_LIVE=1 npm test -w @wolfpack/harness -- wolfd.subscription.live` runs a chat turn and a `read` tool turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
+Live proof (tagged, never in CI): `WOLFD_LIVE=1 pnpm --filter @wolfpack/harness test -- wolfd.subscription.live` runs a chat turn and a `read` tool turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
 
 ## Test seams
 

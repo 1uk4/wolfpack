@@ -12,7 +12,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { checkReadOnlyCommand } from "./command-guard.ts";
+import { checkReadOnlyCommand, routeTestCommand } from "./command-guard.ts";
 
 const DANGEROUS_PATTERNS = [
 	/\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(-[a-zA-Z]*r[a-zA-Z]*\s+)?(\/|~\/?\s|~\/?\b)/,
@@ -63,11 +63,13 @@ export default function (pi: ExtensionAPI) {
 				),
 			}),
 			async execute(toolCallId, params, signal, onUpdate, ctx) {
-				const danger = check(params.command);
+				// A direct vitest run becomes `wolfpack test …` in an agent shell (WOLFPACK_AGENT_RUN=1); then the check sees what will run.
+				const { command } = routeTestCommand(params.command);
+				const danger = check(command);
 				if (danger) {
 					throw new Error(danger);
 				}
-				return bashTool.execute(toolCallId, params, signal, onUpdate);
+				return bashTool.execute(toolCallId, { ...params, command }, signal, onUpdate);
 			},
 		});
 

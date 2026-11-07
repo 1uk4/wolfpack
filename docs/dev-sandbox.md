@@ -98,7 +98,7 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 
 ## Running it
 
-Run the sandbox with `npm run dev:stack [-- --app console|none]` (`scripts/dev-stack.mjs`). It builds this checkout (turbo;
+Run the sandbox with `pnpm dev:stack [--app console|none]` (`scripts/dev-stack.mjs`). It builds this checkout (turbo;
 `DEV_STACK_SKIP_BUILD=1` skips it), then starts workerd (`DEV_WORKERD_PORT`, default 7151) and, unless `--app none`, the
 console (`DEV_CONSOLE_PORT`, default 3220) against the wolves folder `DEV_WOLVES_DIR` (default `~/wolves/dev-sandbox`).
 If that folder holds no wolf it scaffolds one minimal wolf ("sandbox"); wolves already there (e.g. a snapshot taken above)
@@ -106,7 +106,7 @@ are used as they are. It refuses any path touching `~/wolves/local` and the live
 no inherited `WOLF_*`/`WOLFPACK_*` vars, and Ctrl-C stops every process. `WOLFPACK_MODELS_FILE` overrides the scaffolded
 `models.json`. It does not run the extension install below, the Ollama check or the api-key check. There is no
 attach mode and there are no `sandbox:stack*` or `dev:stack:desktop` scripts; the desktop app is started by hand
-(`npm run dev -w @wolfpack/desktop`).
+(`pnpm --filter @wolfpack/desktop dev`).
 
 A models file with transport `api` needs `ANTHROPIC_API_KEY` (e.g. in `~/.wolfpack/.env`); the dev `models.json` is
 `subscription`: the Claude Agent SDK uses your local login. `dewey-dev` embeds with local Ollama
@@ -121,7 +121,7 @@ its sources (one line per wolf: installed / up to date). Non-sandbox dens are on
 warned about, never written. Set `DEV_STACK_NO_EXT_INSTALL=1` to skip. Do not use a global `wolfpack` for this: the CLI
 bundles the checkout it lives in.
 
-**Desktop notifications.** The dev Electron app (`npm run dev -w @wolfpack/desktop`, by hand) is "Electron" in macOS: allow it under System Settings → Notifications →
+**Desktop notifications.** The dev Electron app (`pnpm --filter @wolfpack/desktop dev`, by hand) is "Electron" in macOS: allow it under System Settings → Notifications →
 "Electron" (it only appears there after the first notification attempt). Every notification decision (received, rejected
 with the reason, shown, clicked) is written to the desktop main log; the renderer logs why it skipped one via
 `console.debug` ("needs-you: no notification ...").
@@ -136,8 +136,9 @@ Off by default.
 
 ## Updating the runtime checkout
 
-`npm run runtime:update [feature-branch] [-- --dry-run]` promotes work into the live stack: it merges the branch into
-`wolf/1uk4` (never rebases; aborts cleanly on conflict), fast-forwards `stable` in the runtime checkout, runs
-`turbo run build`, rebuilds stale den extension bundles for non-sandbox wolves (old dir kept as `extensions.bak-<ts>`),
-pushes both branches (a failed push only warns), and says whether to reload the console (Cmd-R) or restart the stack.
-Branches are found via `git worktree list`; override with `INTEGRATION_BRANCH`, `RUNTIME_BRANCH`, `WOLVES_DIR`.
+`pnpm runtime:update [--dry-run]` brings the live stack up to `origin/stable` after the owner has merged a release PR:
+it fetches `stable`, fast-forwards the `stable` runtime checkout (and refuses if it cannot), runs `turbo run build`,
+rebuilds stale den extension bundles for non-sandbox wolves (old dir kept as `extensions.bak-<ts>`), and says whether to
+reload the console (Cmd-R) or restart the stack. It never merges a branch, never rebases and never pushes; a branch argument
+is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
+override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).

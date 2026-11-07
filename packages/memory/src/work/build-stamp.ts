@@ -51,7 +51,7 @@ export function staleBuildWarning(loaded = LOADED, dirs: { running?: string[]; s
   }
   if (runningRoot === "dist") {
     const src = buildStamp(dirs.src ?? codeDirs("src"));
-    if (src > current + 1000) return "the built code (dist) is older than the source; run `npm run build` and restart pi before graduating";
+    if (src > current + 1000) return "the built code (dist) is older than the source; run `pnpm run build` and restart pi before graduating";
   }
   return undefined;
 }

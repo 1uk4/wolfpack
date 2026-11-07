@@ -9,9 +9,9 @@ import { Worker } from "node:worker_threads";
 import { Type } from "typebox";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { getOrThrow, type ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { createBashTool } from "@earendil-works/pi-durable/tools";
+import { createBashTool, type BashExecution } from "@earendil-works/pi-durable/tools";
 import type { Extension } from "@earendil-works/pi-durable";
-import { checkReadOnlyCommand } from "@wolfpack/agents";
+import { checkReadOnlyCommand, routeTestCommand } from "@wolfpack/agents";
 
 export const READONLY_TOOL_NAMES = ["ls", "grep", "find", "guarded_bash"] as const;
 
@@ -256,14 +256,20 @@ const grepTool = defineTool({
   },
 });
 
+/**
+ * Runs before every `guarded_bash` command. This is an agent's shell, so it carries the agent-run marker and a direct
+ * test run becomes `wolfpack test …`; the read-only guard then checks what will actually run.
+ */
+export function prepareGuardedBash(execution: BashExecution): void {
+  execution.env.WOLFPACK_AGENT_RUN = "1";
+  execution.command = routeTestCommand(execution.command, { ...process.env, ...execution.env }).command;
+  const blocked = checkReadOnlyCommand(execution.command);
+  if (blocked) throw new Error(blocked);
+}
+
 /** The durable `bash` tool under another name, refusing any command the read-only guard blocks before it runs. */
 const guardedBash = (() => {
-  const bash = createBashTool({
-    prepare: (execution) => {
-      const blocked = checkReadOnlyCommand(execution.command);
-      if (blocked) throw new Error(blocked);
-    },
-  });
+  const bash = createBashTool({ prepare: prepareGuardedBash });
   return {
     ...bash,
     name: "guarded_bash",

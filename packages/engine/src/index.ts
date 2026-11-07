@@ -23,6 +23,8 @@ export {
 // Models — tiers, the resolver and the one loader every runtime calls
 export * from "./models.js";
 export * from "./registry-paths.js";
+// (pidAlive is exported as hostPidAlive: sandbox/work-writer already exports another pidAlive)
+export { LOCK_STALE_MS, errCode, startOf, sweepAway, breakStale, locked, pidAlive as hostPidAlive } from "./host-lock.js";
 
 // wolf.yaml v2 — schema, loader, discovery, tier resolution
 export * from "./wolfconfig/index.js";

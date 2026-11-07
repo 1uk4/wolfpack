@@ -7,6 +7,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import esbuild from "esbuild";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -171,10 +172,14 @@ printf '\\n\\033[32m  \\u2713 KB engine ready (ollama + ${KB_EMBED_MODEL} + /opt
  * unless TAILSCALE_AUTHKEY is provided.
  */
 /** Exact Agent SDK version this repo builds and tests against — the VPS gets the same one. */
-function claudeAgentSdkVersion(): string {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const pkg = path.join(repoRoot, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json");
-  return (JSON.parse(fs.readFileSync(pkg, "utf8")) as { version: string }).version;
+export function claudeAgentSdkVersion(
+  repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."),
+): string {
+  // Resolved from packages/engine, which declares the SDK: under pnpm (hoist false) nothing sits at <root>/node_modules/@anthropic-ai.
+  // The package's exports hide package.json, so resolve its entry and walk up to the package root.
+  let dir = path.dirname(createRequire(path.join(repoRoot, "packages/engine/package.json")).resolve("@anthropic-ai/claude-agent-sdk"));
+  while (path.basename(dir) !== "claude-agent-sdk" && path.dirname(dir) !== dir) dir = path.dirname(dir);
+  return (JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as { version: string }).version;
 }
 
 async function installPrereqs(host: HostEntry): Promise<void> {

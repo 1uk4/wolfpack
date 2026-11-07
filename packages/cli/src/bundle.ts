@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+import { parseAgentDefinition, standardsFor } from "@wolfpack/agents";
 import { wolfDenDir, writeModelTable, type ModelTable } from "@wolfpack/engine";
 import {
   getExtension,
@@ -105,6 +106,35 @@ export interface BuiltBundle {
   manifest: BundleManifest;
 }
 
+/** Feed an asset's contents into the hash: a file's bytes, or every file under a folder (sorted, with relative paths). */
+function hashAsset(hash: ReturnType<typeof createHash>, abs: string, rel = path.basename(abs)): void {
+  if (fs.statSync(abs).isDirectory()) {
+    for (const entry of fs.readdirSync(abs).sort()) hashAsset(hash, path.join(abs, entry), `${rel}/${entry}`);
+    return;
+  }
+  hash.update(rel);
+  hash.update(fs.readFileSync(abs));
+}
+
+/**
+ * Fail the build when a profile shipped in the extension names (or is always given) a standard that is not in the built
+ * extension's `standards` folder. At runtime a missing standard only degrades the agent, so this is where it must be caught.
+ */
+function assertStandardsShipped(dest: string, agentGlobs: string[] | undefined): void {
+  for (const glob of agentGlobs ?? []) {
+    const agentsDir = path.join(dest, path.basename(glob.replace(/\/[^/]*$/, "")));
+    if (!fs.existsSync(agentsDir)) continue;
+    for (const file of fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"))) {
+      const def = parseAgentDefinition(fs.readFileSync(path.join(agentsDir, file), "utf8"), file.replace(/\.md$/, ""));
+      if (!def) continue;
+      for (const name of standardsFor(def.name, def.standards, file.replace(/\.md$/, ""))) {
+        const shipped = path.join(dest, "standards", `${name}.md`);
+        if (!fs.existsSync(shipped)) throw new Error(`Agent profile ${file} needs standard "${name}" but ${shipped} is not in the built extension (add the standards folder to wolfpack.assets)`);
+      }
+    }
+  }
+}
+
 /**
  * Compute the stamp (version + content hash) an extension *would* get right now,
  * without building a full bundle. Used by `status`/`list` to detect drift.
@@ -136,7 +166,8 @@ export async function stampExtension(
   }
   // Must match bundleExtension's hash, which includes the asset folders.
   for (const asset of pkg.wolfpack?.assets ?? []) {
-    if (fs.existsSync(path.resolve(srcDir, asset))) hash.update(asset);
+    const abs = path.resolve(srcDir, asset);
+    if (fs.existsSync(abs)) hashAsset(hash, abs);
   }
   return {
     key,
@@ -150,7 +181,7 @@ export async function stampExtension(
  * Bundle one extension into `destDir/<dir>/`: esbuild its entry files and copy
  * declared resource dirs (agents/prompts/skills/themes) verbatim.
  */
-async function bundleExtension(
+export async function bundleExtension(
   ext: WolfExtension,
   srcDir: string,
   destRoot: string,
@@ -214,9 +245,10 @@ async function bundleExtension(
     const abs = path.resolve(srcDir, asset);
     if (fs.existsSync(abs)) {
       fs.cpSync(abs, path.join(dest, path.basename(asset)), { recursive: true });
-      hash.update(asset);
+      hashAsset(hash, abs);
     }
   }
+  assertStandardsShipped(dest, pi.agents);
 
   // 3. Write a slim package.json: inlined deps, Pi resources repointed to .js.
   const outPi: PiManifest = { extensions: outExtensions };
@@ -539,9 +571,10 @@ export async function installDevExtensions(
  * resolvable from harness.cjs on a VPS (global install, no node_modules above the bundle), so a plain external
  * require would throw when the bridge initialises. The harness always injects the query function it resolved
  * itself (engine loadQuery: harness tree, NODE_PATH, global install), so the bridge's own import is stubbed.
- * Both stubs apply to importers under pi-claude-bridge-stateless only (BRIDGE_IMPORTER).
+ * Both stubs apply to importers under pi-claude-bridge-stateless only (BRIDGE_IMPORTER). pnpm names the git dependency
+ * by its package.json name (pi-claude-bridge), npm by the dependency key (-stateless), so both directory names match.
  */
-const BRIDGE_IMPORTER = /[\\/]pi-claude-bridge-stateless[\\/]/;
+const BRIDGE_IMPORTER = /[\\/]pi-claude-bridge(-stateless)?[\\/]/;
 
 export function stubBridgeSdkPlugin(): esbuild.Plugin {
   return {

@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          package-manager-cache: false   # no npm install in this job: skip v6's automatic cache restore/save
+          package-manager-cache: false   # no install in this job: skip v6's automatic cache restore/save
       - id: a
         name: affected packages
         env:
@@ -52,11 +52,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: pnpm/action-setup@v4   # no `version:`: it reads packageManager from package.json, so CI and dev use the same pnpm
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --no-fund
+          cache: pnpm   # caches the pnpm store (not node_modules), keyed on pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: lockfile guard (package-lock.json is current, both locks agree)
+        # npm still builds the release from package-lock.json; this fails a PR that changed a package.json without regenerating both locks.
+        run: pnpm check:lockfiles
       - name: test environment (git identity + pack models block; no secrets)
         # Some suites commit in temp repos and resolve models from ~/.wolfpack/config.yaml, which a dev box has and a runner does not.
         run: |
@@ -68,21 +72,21 @@ jobs:
       - name: tsc --build (affected projects)
         run: |
           mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
-          [ ${#P[@]} -gt 0 ] && npx tsc --build "${P[@]}" || echo "no TS projects affected"
+          [ ${#P[@]} -gt 0 ] && pnpm exec tsc --build "${P[@]}" || echo "no TS projects affected"
       - name: vitest (affected packages)
         run: |
           ALL=$(node -p 'JSON.parse(process.env.A).all')
-          if [ "$ALL" = true ]; then npx vitest run; exit; fi
+          if [ "$ALL" = true ]; then pnpm exec vitest run; exit; fi
           mapfile -t F < <(node -e '
             const a=JSON.parse(process.env.A);
             const f=[...a.vitestPaths];
             if(a.extensionsTests)f.push("extensions/");
             if(a.scriptsTests)f.push("scripts/");
             console.log(f.join("\n"))')
-          [ -n "${F[0]:-}" ] && npx vitest run "${F[@]}" || echo "no vitest paths affected"
+          [ -n "${F[0]:-}" ] && pnpm exec vitest run "${F[@]}" || echo "no vitest paths affected"
       - name: console tests
         if: fromJSON(needs.detect.outputs.affected).consoleTests
-        run: npm test -w @wolfpack/console
+        run: pnpm --filter @wolfpack/console test
 
   tracer:
     needs: detect
@@ -108,7 +112,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          package-manager-cache: false   # no npm install in this job: skip v6's automatic cache restore/save
+          package-manager-cache: false   # no install in this job: skip v6's automatic cache restore/save
       - name: build wolfd release (x64, local only, not uploaded)
         run: scripts/build-wolfd-release.sh --arch x64 --out "$RUNNER_TEMP/rel"
       - name: smoke the tarball

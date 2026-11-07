@@ -18,7 +18,7 @@
     "./sync": "./dist/sync/index.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node -e \"import('node:fs').then(f=>{f.chmodSync('dist/cli.js',0o755);})\"",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"no lint configured for @wolfpack/kb\"",
     "test": "vitest run --root ../.. --config vitest.config.ts packages/kb/src"
@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vite-node": "^3.2.4"
   }
 }

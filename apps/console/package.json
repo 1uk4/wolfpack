@@ -66,6 +66,10 @@
 	"devDependencies": {
 		"@next/eslint-plugin-next": "^16.4.3",
 		"@tailwindcss/postcss": "^4.3.3",
+		"@types/d3-force": "^3.0.10",
+		"@types/d3-selection": "^3.0.12",
+		"@types/d3-shape": "^3.2.0",
+		"@types/d3-zoom": "^3.0.9",
 		"@types/node": "^24.0.0",
 		"@types/react": "^19.3.0",
 		"@types/react-dom": "^19.3.0",
@@ -73,6 +77,7 @@
 		"eslint": "^9.39.5",
 		"eslint-import-resolver-typescript": "^4.4.5",
 		"eslint-plugin-import": "^2.32.0",
+		"js-yaml": "^4.1.0",
 		"tailwindcss": "^4.3.3",
 		"tsx": "^4.19.0",
 		"typescript": "^5.6.0"

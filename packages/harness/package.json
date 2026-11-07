@@ -37,7 +37,7 @@
     "wolfd": "dist/bin/wolfd.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node -e \"import('node:fs').then(f=>{f.chmodSync('dist/bin/harness.js',0o755);})\"",
     "typecheck": "tsc --noEmit",
     "start": "node dist/bin/harness.js",
     "lint": "echo \"no lint configured for @wolfpack/harness\"",
@@ -56,7 +56,9 @@
     "@wolfpack/workspaces": "*",
     "grammy": "^1.21.0",
     "pi-claude-bridge-stateless": "git+https://github.com/1uk4/pi-claude-bridge.git#b2a40263e4c33d10ddf07d2fb9d8a3c96ae99b8c",
-    "yaml": "^2.6.0"
+    "yaml": "^2.6.0",
+    "@wolfpack/kb": "*",
+    "typebox": "^1.3.27"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -55,9 +55,10 @@ function isolate(harnessPath: string): { dir: string; harness: string; nodePath:
   const harness = path.join(agent, "harness.cjs");
   fs.copyFileSync(harnessPath, harness);
   try {
+    // Resolved from the package that declares it (harness): the repo root declares neither grammy nor the SDK, and pnpm only links declared packages.
     // grammy's own deps resolve from its real path, so a symlink stands in for the VPS install.
     // (grammy's package exports hide package.json, so find the package root from its entry file.)
-    let grammy = path.dirname(createRequire(path.join(repoRoot, "package.json")).resolve("grammy"));
+    let grammy = path.dirname(createRequire(path.join(repoRoot, "packages/harness/package.json")).resolve("grammy"));
     while (path.basename(grammy) !== "grammy" && path.dirname(grammy) !== grammy) grammy = path.dirname(grammy);
     fs.symlinkSync(grammy, path.join(nodePath, "grammy"), "dir");
   } catch { /* grammy not installed here: a bundle that needs it fails the smoke, as it would on a VPS without it */ }
@@ -71,7 +72,7 @@ function isolate(harnessPath: string): { dir: string; harness: string; nodePath:
  */
 function linkSdkForLoader(cwd: string): void {
   try {
-    let sdk = path.dirname(createRequire(path.join(repoRoot, "package.json")).resolve("@anthropic-ai/claude-agent-sdk"));
+    let sdk = path.dirname(createRequire(path.join(repoRoot, "packages/engine/package.json")).resolve("@anthropic-ai/claude-agent-sdk"));
     while (path.basename(sdk) !== "claude-agent-sdk" && path.dirname(sdk) !== sdk) sdk = path.dirname(sdk);
     const scope = path.join(cwd, "node_modules", "@anthropic-ai");
     fs.mkdirSync(scope, { recursive: true });

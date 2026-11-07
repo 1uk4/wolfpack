@@ -65,6 +65,8 @@ export interface CliConfig {
    * ONLY by kbReadBaseDir (read-only consumers), never by kbBaseDir or the wolf .env writers.
    */
   kbBase?: string;
+  /** `wolfpack test` limits (defaults 2 and 2; WOLFPACK_TEST_SLOTS / WOLFPACK_TEST_WORKERS override). */
+  tests?: { slots?: number; workersPerRun?: number };
   /** Extra directories searched for helper binaries (tailscale, …) and put on launchd PATH. */
   binDirs?: string[];
 }
@@ -111,6 +113,7 @@ export function loadConfig(): CliConfig {
       remote: parsed.remote,
       binDirs: parsed.binDirs,
       kbBase: parsed.kbBase,
+      tests: parsed.tests,
     };
   } catch {
     return { ...DEFAULT_CONFIG };

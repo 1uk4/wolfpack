@@ -651,9 +651,13 @@ d("browser extension (live): tab guard", () => {
     const s = mk();
     try {
       // Every phase is bounded and named, so a stall fails here saying which step it was, not at the 60 s test timeout.
+      // Click progress per opener, so a failure tells slow (counts still rising) from stuck (a count frozen).
+      const clicks: Record<string, number> = { b1: 0, b2: 0 };
+      let lastClick = Date.now();
+      const stats = () => `clicks b1=${clicks.b1} b2=${clicks.b2}, last click ${Date.now() - lastClick} ms ago`;
       const phase = <T,>(name: string, ms: number, p: Promise<T>): Promise<T> => {
         let timer: NodeJS.Timeout | undefined;
-        const limit = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`phase "${name}" still running after ${ms} ms (${s.pageCount()} pages)`)), ms); });
+        const limit = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`phase "${name}" still running after ${ms} ms (${s.pageCount()} pages, ${stats()})`)), ms); });
         return Promise.race([p, limit]).finally(() => clearTimeout(timer));
       };
       const url = `http://localhost:${port}/`;
@@ -665,10 +669,25 @@ d("browser extension (live): tab guard", () => {
           await o.run(() => o.evaluate(`(document.body.innerHTML = '<a id=l target=_blank rel=noopener href="/">x</a>', 1)`));
         }
       })());
-      const storm = openers.map(async (o) => { for (let i = 0; i < 60; i++) await o.run(() => o.click("#l")); });
+      // Each opener keeps clicking (one popup per click) for as long as the four tabs are opening, and at least 3 times,
+      // so popups really arrive while tabs open. The work follows the opens instead of being a fixed count.
+      let opensDone = false;
+      const storm = openers.map(async (o, i) => {
+        const id = i === 0 ? "b1" : "b2";
+        while (!opensDone || clicks[id] < 3) {
+          await o.run(() => o.click("#l"));
+          clicks[id]++;
+          lastClick = Date.now();
+        }
+      });
+      storm.forEach((p) => p.catch(() => undefined));
       await new Promise((r) => setTimeout(r, 100));
       const opening = [s.thread("a1"), s.thread("a2"), s.thread("a3"), s.thread("a4")];
-      await phase("open four tabs during the popup storm", 20000, (async () => { for (const t of opening) await t.run(() => t.goto(url)); })());
+      await phase("open four tabs during the popup storm", 20000, Promise.race([
+        (async () => { for (const t of opening) await t.run(() => t.goto(url)); })(),
+        Promise.all(storm).then(() => { throw new Error("popup storm ended before the tabs finished opening"); }),
+      ]));
+      opensDone = true;
       await phase("finish the popup storm", 20000, Promise.all(storm));
       const deadline = Date.now() + 5000;
       while (s.pageCount() > 6 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));

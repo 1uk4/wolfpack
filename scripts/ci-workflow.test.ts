@@ -1,5 +1,5 @@
 // Guards ci.yml's package-manager wiring: pnpm everywhere it installs or runs workspace scripts, store cached, no turbo remote cache.
-// release.yml is deliberately not checked here (it stays on npm until the release images move).
+// release.yml is deliberately not checked here (releases build with npm; pnpm is for development and CI only).
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";

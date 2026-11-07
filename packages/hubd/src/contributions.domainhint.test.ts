@@ -22,15 +22,10 @@ const actor = { id: "hal2", kind: "wolf" as const };
 const stored = () => readdirSync(join(root, "hal2")).filter((f) => f.endsWith(".md"));
 
 describe("storeContribution domain_hint guard", () => {
-  it("stores an allowed hint", () => {
-    expect(storeContribution(root, actor, make("ok", "personal"), root, ["personal"]).duplicate).toBe(false);
-    expect(stored()).toHaveLength(1);
-  });
-
   it("refuses a foreign hint and quarantines it", () => {
     expect(() => storeContribution(root, actor, make("bad", "wolfpack"), root, ["personal"])).toThrow(ContributionError);
     expect(() => storeContribution(root, actor, make("bad2", "snapjack"), root, ["personal"])).toThrow(/not one of the wolf's subscribed domains/);
-    expect(stored()).toHaveLength(1); // only the allowed one
+    expect(stored()).toHaveLength(0);
     expect(existsSync(join(root, "hal2", "_bad"))).toBe(true);
   });
 

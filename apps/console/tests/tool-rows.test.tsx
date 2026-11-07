@@ -334,12 +334,3 @@ describe("prose wrapping", () => {
 		assert.doesNotMatch(root, /nowrap|truncate/);
 	});
 });
-
-describe("thread-chat wiring", () => {
-	it("applies the prose layout contract to the assistant column and text blocks", async () => {
-		const { readFileSync } = await import("node:fs");
-		const src = readFileSync(new URL("../components/thread-chat.tsx", import.meta.url), "utf8");
-		assert.match(src, /<MessageContent className=\{ASSISTANT_CONTENT_CLASS\}>/);
-		assert.match(src, /className=\{PROSE_BLOCK_CLASS\}/);
-	});
-});

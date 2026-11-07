@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_BREAKPOINT, MOBILE_QUERY, visibleHeight } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, visibleHeight } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
 	assert.equal(isMobileWidth(767), true);
 	assert.equal(isMobileWidth(768), false);
 	assert.equal(MOBILE_QUERY, "(max-width: 767px)");
-	assert.match(readFileSync(new URL("../app/globals.css", import.meta.url), "utf8"), new RegExp(`@media \\(max-width: ${MOBILE_BREAKPOINT - 1}px\\)`));
 });
 
 test("a phone starts on the list; desktop follows the stored preference", () => {

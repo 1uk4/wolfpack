@@ -155,7 +155,16 @@ process.stdin.once("data", async () => { await q.release(t); process.exit(0); })
       const p = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", script, dir, wolf], { stdio: ["pipe", "pipe", "inherit"] });
       let out = "";
       p.stdout.on("data", (d) => (out += d));
-      return { p, out: () => out };
+      // resolves when the child has exited, so its release() cannot race the afterEach cleanup of `dir`
+      const exited = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`child ${wolf} did not exit`)), 10_000);
+        p.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      exited.catch(() => undefined);
+      return { p, out: () => out, exited };
     };
     // a holder fills the single slot so both children must wait, then both race
     const holder = openQueue({ dir, slots: 1 });
@@ -181,6 +190,7 @@ process.stdin.once("data", async () => { await q.release(t); process.exit(0); })
     for (let i = 0; i < 200 && !second.out().includes("admitted true"); i++) await realSleep(25);
     expect(second.out()).toContain("admitted true");
     second.p.stdin.write("go\n");
+    await Promise.all([first.exited, second.exited]);
     rmSync(script, { force: true });
   }, 30_000);
 });

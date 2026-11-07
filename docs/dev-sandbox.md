@@ -143,47 +143,56 @@ reload the console (Cmd-R) or restart the stack. It never merges a branch, never
 is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
 override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).
 
-### Live-edit the console from a worktree
+### Preview a worktree's console in a browser tab
 
-The fastest loop for UI work: every save shows in the desktop app within seconds, with no build and no wolf restart.
+The fastest loop for UI work: pick a worktree, its live console opens in a browser tab, every save shows within seconds. The
+desktop app's main window stays on your stable console, and **the wolves are not touched**: no build, no restart, no y/N.
 
 ```sh
-cd <worktree> && wolfpack preview dev     # or: wolfpack preview dev <dir>
+wolfpack preview                 # pick a worktree (arrow keys); its console opens in the browser
+wolfpack preview detach-chat     # or name it: a unique match on the worktree folder or the branch (a path works too)
+wolfpack preview status          # worktree, URL, console up or down, wolves on stable or moved
+wolfpack preview off             # stop the console
 ```
 
-Then reload the app with ⌘R (quit and reopen Wolfpack Console the first time), and run `wolfpack preview off` when done.
-
-`dev` serves `next dev` from `<dir>/apps/console` (default: the git worktree containing cwd; it needs `pnpm install` there first)
-on `127.0.0.1:3230` (`PREVIEW_CONSOLE_PORT`) against the local wolfd (`WOLFPACK_API_URL=http://127.0.0.1:7141`), under the same
-launchd agent as the ref preview (`com.wolfpack.preview-console`, log `~/.wolfpack/preview/console.log`), so only one preview
-console exists. It waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), then points the app's
-`console.json` with the same record-and-restore safety as below. It never checks out, builds or restarts the wolves, so it works
-with the wolves on stable or on a ref preview. If port 3230 is held by something else (a hand-started `next dev`), it refuses.
-
-- `wolfpack preview dev <other dir>` while one is active switches the source in place (apps are kept; the original consoleUrl is never overwritten). The same dir again is a restart.
-- `wolfpack preview <new ref>` while a ref preview is active switches in place too, keeping the first preview's previous ref and branch; a dev console is left running.
-- `wolfpack preview off` stops the dev console and restores the app. It touches the wolves only if a ref preview is also active.
-- `wolfpack preview status` (and `--json`) shows the mode and dir. A worker worktree is deleted when the worker finishes: status then says the dir no longer exists; run `wolfpack preview dev` from another worktree, or `off`.
+- **The picker** (the numbered list only when there is no terminal) has one line per worktree: the branch without `feat/` cut to its
+  id and two words (`yu741qH-floating-chat…`), then the folder name; a worker's copy shows as `detach-chat (worker)`. The
+  highlighted row's hint is the path. The current console's worktree is `active` and first, then the worktree you are in, then
+  the newest commit. `stable`, the main checkout, detached heads and branches already merged into `wolf/1uk4` or `stable` with no
+  edits are hidden; "Show all worktrees…" lists them. The runtime checkout (`~/wolves/local/runtime/wolfpack`) is never offered.
+- **A name** picks directly: an exact match on the folder or branch (with or without `feat/`) wins, else a substring. An ambiguous
+  name lists the matches and exits 1; no match says so (a git ref with no worktree still previews the old way, see below).
+- **What it does.** If `<worktree>/apps/console` has no `node_modules` it runs `pnpm install --frozen-lockfile --prefer-offline`
+  there first (one status line, output in `~/.wolfpack/preview/last-run.log`). Then it serves `next dev` from
+  `<worktree>/apps/console` on `127.0.0.1:3230` (`PREVIEW_CONSOLE_PORT`) against the local wolfd
+  (`WOLFPACK_API_URL=http://127.0.0.1:7141`) under the launchd agent `com.wolfpack.preview-console` (log
+  `~/.wolfpack/preview/console.log`), waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), and runs
+  `open http://127.0.0.1:3230`. The console reads its keys from `~/.wolfpack/preview/auth.json` (`WOLFPACK_AUTH_FILE`), so they
+  survive a switch. If port 3230 is held by something else (a hand-started `next dev`) it refuses.
+- **Another worktree while one runs** switches the console in place and opens the URL again.
+- **`preview dev [dir]`** is the same console for the worktree containing cwd (or `dir`), without opening the browser.
+- **`off`** stops the console and clears the state. If the state shows the **wolves were moved** (now, or by an older run) it then
+  asks y/N to put them back on stable. `--console` stops only the console; `--all` also restores the wolves without asking; with no
+  terminal and no flag the wolves are left and the output says how to restore them. `--dry-run` prints the plan.
+- A worker worktree is deleted when the worker finishes: `status` then says the dir no longer exists; pick another, or `off`.
 - A branch literally named `dev` cannot be previewed by that name (use `origin/dev`).
+- Older previews that pointed the app's `console.json` at the local console are still undone by `off`.
 
-### Preview a worktree: wolves and console straight from a built tree
+### Move the wolves onto a worktree (`--wolves`)
 
-`wolfpack preview` with no argument opens the CLI's arrow-key picker (the numbered list only when there is no terminal). One short
-line per worktree: the branch without `feat/` and cut to its id and two words (`yu741qH-floating-chat…`), a worker's copy by its
-worker name (`detach-chat (worker)`), then a mark: **● built, ◐ stale, ○ not built**, plus `active` and `edited`. The highlighted
-row's hint shows the path, and "builds first, ~3 min" for a stale or not-built row: picking one builds it (install plus build, output
-in `~/.wolfpack/preview/last-run.log`) and then starts the preview. Active comes first, then the worktree you are in, then the
-newest commit. `stable`, the main checkout, detached heads and branches already merged into `wolf/1uk4` or `stable` with no edits
-are hidden; "Show all worktrees…" at the bottom lists them (the runtime checkout is never offered, not even there). The preview console always reads its keys from `~/.wolfpack/preview/auth.json` (`WOLFPACK_AUTH_FILE`), so they survive a switch between worktrees. A worktree is built when a stamp
-(`~/.wolfpack/preview/builds/<hash>.json`, kept outside the worktree so it never looks dirty) says so, or, with no stamp, when its
-`workerd.js` and cli `dist` are newer than its HEAD commit.
+Only when the *backend* is under test: `wolfpack preview --wolves [name]` opens the picker (or takes a name, a path) and runs the
+wolves from the worktree. This is the old default and is unchanged. The picker here shows build state: one line per worktree with
+a mark **● built, ◐ stale, ○ not built** plus `active` and `edited`; "builds first, ~3 min" is in the hint of a stale or not-built
+row, and picking one builds it (install plus build, output in `~/.wolfpack/preview/last-run.log`) and then starts the preview. A
+worktree is built when a stamp (`~/.wolfpack/preview/builds/<hash>.json`, kept outside the worktree so it never looks dirty) says
+so, or, with no stamp, when its `workerd.js` and cli `dist` are newer than its HEAD commit.
 
-Picking a worktree runs the wolves **straight from it**: no copy and no rebuild. `~/Library/LaunchAgents/com.wolfpack.stack.plist`
+Moving the wolves runs them **straight from the worktree**: no copy and no rebuild. `~/Library/LaunchAgents/com.wolfpack.stack.plist`
 is rewritten so its working directory and `workerd.js` path point at the worktree (everything else is kept); the original bytes
 are recorded in the state file and in `~/.wolfpack/preview/stack.plist.orig`, and restored exactly by `off --all` and by an
-automatic rollback. The live console (`next dev`, as in `preview dev`) is served from the same worktree. The runtime checkout is
+automatic rollback. The live console (`next dev`, as above) is served from the same worktree. The runtime checkout is
 not touched. Because this restarts the wolves (and ends the wolf session running the command), it asks y/N first; with no terminal
-it needs `--yes`. Explicit forms: `wolfpack preview <worktree dir> [--build] [--yes]`; `wolfpack preview <ref>` still works for a
+it needs `--yes`. Explicit forms: `wolfpack preview --wolves <name or worktree dir> [--build] [--yes]`; `wolfpack preview <ref>` still works for a
 commit with no worktree (it asks y/N too).
 
 While a worktree preview runs:
@@ -194,9 +203,8 @@ While a worktree preview runs:
   `status --json`, field `restartNeeded`) says **restart needed** once a rebuild finished after the wolves started, and
   `wolfpack preview restart` asks y/N, runs `launchctl kickstart -k gui/<uid>/com.wolfpack.stack` and waits for `/healthz`. There
   is no automatic restart: it would cut off the wolf making the edits.
-- `wolfpack preview off` asks **Live console only** (the app goes back to its own console, the wolves stay) or **Wolves too**
-  (the plist is restored, the watcher stopped, everything back on stable). `--console` and `--all` skip the question; with no
-  terminal and no flag it prints the choices and exits 1.
+- `wolfpack preview off` stops the console, then asks y/N to put the wolves back on stable (the plist is restored, the watcher
+  stopped). `--console` stops only the console; `--all` skips the question.
 - **The `wolfpack` command follows the worktree.** The global `wolfpack` is a symlink (`.../lib/node_modules/@wolfpack/cli`) to the
   runtime's `packages/cli`, and stable's CLI has no `preview`. So starting a worktree preview records that link's target in the
   state file, then points it at `<worktree>/packages/cli` (which must be built); a switch repoints it, keeping the original, and

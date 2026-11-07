@@ -14,6 +14,7 @@ import { BrailleSpinner } from "@/components/braille-spinner";
 import { ChatBar } from "@/components/chat-bar";
 import { WorkReaderHost } from "@/components/work-reader";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
+import { shouldOpenInReader, useOpenWorkItem } from "@/components/work-reader-nav";
 import { WorkNavEntry } from "@/components/work-nav-link";
 import { CommandPalette } from "@/components/command-palette";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
@@ -25,7 +26,7 @@ import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVi
 import { ThreadColorPicker } from "@/components/thread-color-picker";
 import { settingsUrl } from "@/components/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { THREAD_COLORS, autoThreadColor, beginColorChange, onThreadColor, pendingColor, settleColorChange, threadColor, threadColorIndex, threadColorVersion, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
+import { THREAD_COLORS, autoThreadColor, beginColorChange, onThreadColor, pendingColor, settleColorChange, threadColor, threadColorIndex, threadColorVersion, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -378,6 +379,7 @@ export function SessionRow({
 	/** Right-click opens the context menu (wave 6: Rename / Delete). */
 	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
+	const openWorkItem = useOpenWorkItem();
 	// The thread you are looking at needs no mark: you are already there.
 	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
 	const home = chat.kind === "home";
@@ -417,7 +419,7 @@ export function SessionRow({
 					</span>
 				</button>
 				{chat.taskId && (
-					<Link href={`/kb/work/${encodeURIComponent(chat.taskId)}`} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
+					<Link href={workHref(chat.taskId)} onClick={(e) => { if (!shouldOpenInReader(e, chat.taskId)) return; e.preventDefault(); openWorkItem(chat.taskId); }} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
 						task
 					</Link>
 				)}

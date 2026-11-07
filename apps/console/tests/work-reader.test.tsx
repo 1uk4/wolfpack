@@ -26,9 +26,16 @@ Object.assign(globalThis, {
 	fetch: async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => "" }),
 });
 
+// linkedom has no focus model: track it so the reader's focus-on-open can be asserted.
+let focused: Element | null = null;
+(dom.window.Element.prototype as unknown as { focus: () => void }).focus = function (this: Element) {
+	focused = this;
+};
+Object.defineProperty(dom.document, "activeElement", { get: () => focused ?? dom.document.body, configurable: true });
+
 const { FakeNav, navLog, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
 const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../components/work-reader.tsx");
-const { useOpenWorkItem, openReaderLink, settleReaderOpen } = await import("../components/work-reader-nav.ts");
+const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../components/work-reader-nav.ts");
 const { WorkReaderHost } = await import("../components/work-reader.tsx");
 const { StatusSection } = await import("../components/memory-panel.tsx");
 const { nodeClickAction } = await import("../components/graph-view.tsx");
@@ -52,6 +59,71 @@ describe("the reader URL", () => {
 		assert.equal(readerUrl("/", "focus=work%3Aa", "f1"), "/?focus=work%3Aa&item=f1");
 		assert.equal(readerUrl("/work", "item=f1", null), "/work");
 		assert.equal(readerUrl("/", "focus=x&item=f1", null), "/?focus=x");
+	});
+});
+
+describe("isPlainClick", () => {
+	const ev = (o: Record<string, unknown> = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, ...o });
+	it("is true only for an unmodified primary click nobody else handled", () => {
+		assert.equal(isPlainClick(ev()), true);
+		for (const o of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }]) assert.equal(isPlainClick(ev(o)), false, JSON.stringify(o));
+	});
+});
+
+describe("shouldOpenInReader", () => {
+	const plain = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false };
+	it("table: an in-place link takes over only a plain click on a link that has a work id", () => {
+		const rows: [string, Record<string, unknown>, string | null | undefined, boolean][] = [
+			["plain click, id", {}, "w1", true],
+			["no id", {}, undefined, false],
+			["null id", {}, null, false],
+			["empty id", {}, "", false],
+			["cmd", { metaKey: true }, "w1", false],
+			["ctrl", { ctrlKey: true }, "w1", false],
+			["shift", { shiftKey: true }, "w1", false],
+			["alt", { altKey: true }, "w1", false],
+			["middle button", { button: 1 }, "w1", false],
+			["already handled", { defaultPrevented: true }, "w1", false],
+		];
+		for (const [name, o, id, want] of rows) assert.equal(shouldOpenInReader({ ...plain, ...o }, id), want, name);
+	});
+});
+
+describe("focus return", () => {
+	it("closing the reader gives focus back to the element that had it; a detached opener is skipped", async () => {
+		const opener = document.createElement("button");
+		document.body.appendChild(opener);
+		focused = opener;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => {}} /></FakeNav>));
+		assert.ok(focused !== opener, "reader took focus");
+		await act(async () => root!.unmount());
+		root = null;
+		assert.ok(focused === opener, "focus returned to the opener");
+		const gone = document.createElement("button");
+		focused = gone; // never attached
+		const host2 = document.createElement("div");
+		document.body.appendChild(host2);
+		root = createRoot(host2);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => {}} /></FakeNav>));
+		const readerFocus = focused;
+		await act(async () => root!.unmount());
+		root = null;
+		assert.ok(focused === readerFocus, "a detached opener is left alone");
+	});
+});
+
+describe("focus", () => {
+	it("the reader takes focus when it opens: the close button", async () => {
+		focused = null;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<FakeNav start="/work"><WorkReaderPanel id="f1" onClose={() => {}} /></FakeNav>));
+		// Booleans, not the nodes: a failing assert.equal on two DOM nodes tries to diff the whole tree and hangs.
+		assert.ok(focused === document.querySelector('[data-testid="work-reader-close"]'), "the close button has focus after open");
 	});
 });
 

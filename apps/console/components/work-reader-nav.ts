@@ -85,9 +85,19 @@ export function useOpenWorkItem(): (id: string) => void {
 	return useCallback((id: string) => openWorkItem(router as ReaderRouter | null, id), [router]);
 }
 
+/** True for an unmodified primary click nobody else handled: the only click an in-place link may take over (Cmd/Ctrl/Shift/Alt/middle-click keep the real href). */
+export function isPlainClick(e: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented: boolean }): boolean {
+	return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.defaultPrevented;
+}
+
+/** The one intercept rule for links that open the reader in place: a plain click on a link that has a work id. When true the caller does `e.preventDefault(); open(id)`; otherwise the link's own href is followed. */
+export function shouldOpenInReader(e: Parameters<typeof isPlainClick>[0], workId: string | null | undefined): workId is string {
+	return !!workId && isPlainClick(e);
+}
+
 /** onClick for an `<a href="/kb/work/<id>">`: plain clicks open the reader in place; modified clicks keep the link's normal behaviour (new tab, full page). */
-export function openReaderLink(e: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; preventDefault: () => void }, open: ((id: string) => void) | undefined, id: string): void {
-	if (!open || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+export function openReaderLink(e: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented?: boolean; preventDefault: () => void }, open: ((id: string) => void) | undefined, id: string): void {
+	if (!open || !isPlainClick({ ...e, defaultPrevented: e.defaultPrevented ?? false })) return;
 	e.preventDefault();
 	open(id);
 }

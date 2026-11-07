@@ -143,6 +143,29 @@ reload the console (Cmd-R) or restart the stack. It never merges a branch, never
 is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
 override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).
 
+### Live-edit the console from a worktree
+
+The fastest loop for UI work: every save shows in the desktop app within seconds, with no build and no wolf restart.
+
+```sh
+cd <worktree> && wolfpack preview dev     # or: wolfpack preview dev <dir>
+```
+
+Then reload the app with ⌘R (quit and reopen Wolfpack Console the first time), and run `wolfpack preview off` when done.
+
+`dev` serves `next dev` from `<dir>/apps/console` (default: the git worktree containing cwd; it needs `pnpm install` there first)
+on `127.0.0.1:3230` (`PREVIEW_CONSOLE_PORT`) against the local wolfd (`WOLFPACK_API_URL=http://127.0.0.1:7141`), under the same
+launchd agent as the ref preview (`com.wolfpack.preview-console`, log `~/.wolfpack/preview/console.log`), so only one preview
+console exists. It waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), then points the app's
+`console.json` with the same record-and-restore safety as below. It never checks out, builds or restarts the wolves, so it works
+with the wolves on stable or on a ref preview. If port 3230 is held by something else (a hand-started `next dev`), it refuses.
+
+- `wolfpack preview dev <other dir>` while one is active switches the source in place (apps are kept; the original consoleUrl is never overwritten). The same dir again is a restart.
+- `wolfpack preview <new ref>` while a ref preview is active switches in place too, keeping the first preview's previous ref and branch; a dev console is left running.
+- `wolfpack preview off` stops the dev console and restores the app. It touches the wolves only if a ref preview is also active.
+- `wolfpack preview status` (and `--json`) shows the mode and dir. A worker worktree is deleted when the worker finishes: status then says the dir no longer exists; run `wolfpack preview dev` from another worktree, or `off`.
+- A branch literally named `dev` cannot be previewed by that name (use `origin/dev`).
+
 ### Preview a branch on the live stack
 
 `wolfpack preview <ref>` runs a branch on the Mac, `wolfpack preview status` shows where you are, and `wolfpack preview off`

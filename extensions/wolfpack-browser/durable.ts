@@ -24,12 +24,18 @@ export default function createBrowserExtension(config: BrowserConfig | undefined
     const id = tc?.conversationId;
     return session.thread(typeof id === "number" && Number.isFinite(id) ? id : "default");
   };
+  // The single exit point: every text a tool returns (results and errors alike) is scrubbed of sign-in secrets.
+  const ok = (t: string) => text(session.scrub(t));
+  const failed = (err: unknown) => {
+    const r = fail(err);
+    return { ...r, content: [{ type: "text" as const, text: session.scrub(r.content[0].text) }] };
+  };
   const guarded = (fn: (tab: Tab, a: any) => Promise<string>) => async (args: unknown, tc?: { conversationId?: number }) => {
     const tab = tabOf(tc);
     try {
-      return text(await tab.run(() => fn(tab, args ?? {})));
+      return ok(await tab.run(() => fn(tab, args ?? {})));
     } catch (err) {
-      return fail(err);
+      return failed(err);
     }
   };
 
@@ -98,7 +104,7 @@ export default function createBrowserExtension(config: BrowserConfig | undefined
             await tabOf(tc).closeTab();
             return text("Browser tab closed.");
           } catch (err) {
-            return fail(err);
+            return failed(err);
           }
         },
       }),

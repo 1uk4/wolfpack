@@ -2,7 +2,7 @@
  * Launches the real browser against a local http server. Skipped when no browser binary is found.
  * 127.0.0.1 is allowlisted, which also proves the allowlist reaches the live navigation path.
  */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { createServer, type Server } from "node:http";
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import createBrowserExtension from "./durable.js";
-import { BrowserSession, findBrowser } from "./session.js";
+import { BrowserSession, defaultPairRunner, findBrowser, isSlotUrl } from "./session.js";
 
 const found = findBrowser({}, true);
 const d = found ? describe : describe.skip;
@@ -689,7 +689,208 @@ d("browser extension (live): tab guard", () => {
   }, 60000);
 });
 
+d("browser extension (live): preview slot sign-in", () => {
+  const TOKEN = "SECRETTOKEN1234567890";
+  let srv: Server;
+  let other: Server;
+  let port = 0;
+  let otherPort = 0;
+  let den = "";
+  beforeAll(async () => {
+    den = mkdtempSync(join(tmpdir(), "wolf-browser-den-"));
+    other = createServer((_q, res) => { res.writeHead(200, { "content-type": "text/html" }); res.end("<title>pair</title>"); });
+    await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
+    otherPort = (other.address() as AddressInfo).port;
+    srv = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/html" });
+      if (req.url === "/away") return res.end(`<title>away</title><script>location.replace("http://127.0.0.1:${otherPort}/pair")</script>`);
+      if (req.url?.startsWith("/pair")) {
+        // like the console's /pair page: store the fragment token, strip it, go home (and, badly, log it)
+        return res.end(`<title>pair</title><script>const t=new URLSearchParams(location.hash.slice(1)).get("token");if(t){localStorage.setItem("wolfpack.hub.token",t);console.log("paired with "+t);history.replaceState(null,"","/pair");location.replace("/")}</script>`);
+      }
+      if (req.url === "/plain") return res.end("<title>plain</title>");
+      res.end(`<title>console</title><script>if(!localStorage.getItem("wolfpack.hub.token"))location.replace("/pair")</script>`);
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    port = (srv.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    await new Promise((r) => srv.close(r));
+    await new Promise((r) => other.close(r));
+    rmSync(den, { recursive: true, force: true });
+  });
+  type Pair = { ok: true; url: string } | { ok: false; error: string };
+  const mk = (runPair: (p: number) => Promise<Pair>, slotPorts: [number, number] = [port, port]) =>
+    new BrowserSession(mkdtempSync(join(den, "p-")), { allowHosts: ["127.0.0.1", "localhost"], timeoutMs: 15000 }, { runPair, slotPorts });
+
+  it("signs the browser in on a slot port and the token never reaches any output", async () => {
+    const calls: number[] = [];
+    const s = mk(async (p) => { calls.push(p); return { ok: true, url: `http://127.0.0.1:${p}/pair#token=${TOKEN}` }; });
+    try {
+      const a = s.thread("1");
+      const out = [await a.run(() => a.goto(`http://127.0.0.1:${port}/`))];
+      expect(out[0]).toMatch(new RegExp(`^Loaded http://127\\.0\\.0\\.1:${port}/ \\(HTTP 200\\), signed in to the slot`));
+      out.push(await a.run(() => a.evaluate("document.title + ' ' + location.pathname")));
+      expect(out[1]).toBe("console /");
+      // a second navigation does not pair again, and another tab shares the stored sign-in (one profile)
+      out.push(await a.run(() => a.goto(`http://127.0.0.1:${port}/x`)));
+      const b = s.thread("2");
+      out.push(await b.run(() => b.goto(`http://127.0.0.1:${port}/`)));
+      expect(out[3]).not.toMatch(/sign-in|signed in/);
+      expect(calls).toEqual([port]);
+      await new Promise((r) => setTimeout(r, 300));
+      out.push(a.console({}), a.network({}), a.blockedRequests().join("\n"), s.strayBlocked().join("\n"));
+      out.push(await a.run(() => a.evaluate("localStorage.getItem('wolfpack.hub.token')")));
+      expect(out.join("\n")).not.toContain(TOKEN);
+      expect(out.join("\n")).not.toMatch(/#token=/);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("reports 'slot sign-in failed' once, leaves the page on /pair, and does not retry", async () => {
+    const calls: number[] = [];
+    const s = mk(async (p) => { calls.push(p); return { ok: false, error: `no hub token (see #token=${TOKEN})\nsecond line` }; });
+    try {
+      const a = s.thread("1");
+      const res = await a.run(() => a.goto(`http://127.0.0.1:${port}/`));
+      expect(res).toMatch(/slot sign-in failed: no hub token/);
+      expect(res).not.toContain("second line");
+      expect(res).not.toContain(TOKEN);
+      expect(await a.run(() => a.evaluate("location.pathname"))).toBe("/pair");
+      expect(await a.run(() => a.goto(`http://127.0.0.1:${port}/`))).toMatch(/slot sign-in already tried in this tab/);
+      expect(calls).toHaveLength(1);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("does not mint a token when the page does not land on /pair", async () => {
+    const calls: number[] = [];
+    const s = mk(async (p) => { calls.push(p); return { ok: true, url: `http://127.0.0.1:${p}/pair#token=${TOKEN}` }; });
+    try {
+      const a = s.thread("1");
+      // empty storage but the page stays where it is: nothing to sign in to, so no token is minted
+      expect(await a.run(() => a.goto(`http://127.0.0.1:${port}/plain`))).not.toMatch(/sign-in|signed in/);
+      expect(calls).toEqual([]);
+      // a page that lands on /pair is the trigger: exactly one call
+      expect(await a.run(() => a.goto(`http://127.0.0.1:${port}/`))).toMatch(/signed in to the slot/);
+      expect(calls).toHaveLength(1);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("signs in on localhost although the script prints a 127.0.0.1 URL", async () => {
+    const s = mk(async (p) => ({ ok: true, url: `http://127.0.0.1:${p}/pair#token=${TOKEN}` }));
+    try {
+      const a = s.thread("1");
+      const res = await a.run(() => a.goto(`http://localhost:${port}/`));
+      expect(res).toMatch(new RegExp(`^Loaded http://localhost:${port}/ \\(HTTP 200\\), signed in to the slot`));
+      expect(await a.run(() => a.evaluate("location.hostname + location.pathname"))).toBe("localhost/");
+      expect(res).not.toContain(TOKEN);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("does not pair when the page lands on a /pair of another origin", async () => {
+    const calls: number[] = [];
+    const s = mk(async (p) => { calls.push(p); return { ok: true, url: `http://127.0.0.1:${p}/pair#token=${TOKEN}` }; });
+    try {
+      const a = s.thread("1");
+      const res = await a.run(() => a.goto(`http://127.0.0.1:${port}/away`));
+      expect(res).not.toMatch(/sign-in|signed in/);
+      expect(calls).toEqual([]);
+    } finally {
+      await s.close();
+    }
+  }, 60000);
+
+  it("treats a pair URL that is not this slot's /pair#token= URL as a failure and never echoes it", async () => {
+    const bad = [
+      `http://127.0.0.1:${port}/other#token=${TOKEN}`, // wrong path
+      `http://127.0.0.1:${otherPort}/pair#token=${TOKEN}`, // another origin, requested via localhost
+    ];
+    for (const [n, url] of bad.entries()) {
+      const s = mk(async () => ({ ok: true, url }));
+      try {
+        const a = s.thread("1");
+        const host = n === 0 ? "127.0.0.1" : "localhost";
+        const res = await a.run(() => a.goto(`http://${host}:${port}/`));
+        expect(res).toMatch(/slot sign-in failed/);
+        expect(res).not.toContain(TOKEN);
+        expect(await a.run(() => a.evaluate("location.pathname"))).toBe("/pair");
+      } finally {
+        await s.close();
+      }
+    }
+  }, 60000);
+
+  it("tool errors are scrubbed at the single exit point (a thrown eval message carrying a token fragment)", async () => {
+    const ext = createBrowserExtension({ enabled: true, allowHosts: ["127.0.0.1"], timeoutMs: 15000 }, { wolfDen: mkdtempSync(join(den, "e-")), wolfName: "w", domains: [], wolfConfig: {} });
+    const tool = (n: string) => ext.tools!.find((x) => x.name === n)!;
+    const tc = { cwd: "/", wolfDen: den, wolfName: "w", conversationId: 1 };
+    try {
+      await tool("browser_goto").execute({ url: `http://127.0.0.1:${port}/plain` }, tc);
+      const res = await tool("browser_eval").execute({ expression: `(() => { throw new Error("saw http://127.0.0.1:1/pair#token=${TOKEN}"); })()` }, tc);
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toMatch(/saw /);
+      expect(res.content[0].text).not.toContain(TOKEN);
+    } finally {
+      await ext.lifecycle?.stop?.();
+    }
+  }, 60000);
+
+  describe("default runner", () => {
+    let home = "";
+    let bin = "";
+    const prev = process.env.HOME;
+    beforeAll(() => {
+      home = mkdtempSync(join(tmpdir(), "wolf-browser-home-"));
+      bin = join(home, ".wolfpack", "preview", "bin");
+      process.env.HOME = home;
+    });
+    afterAll(() => {
+      if (prev === undefined) delete process.env.HOME;
+      else process.env.HOME = prev;
+      rmSync(home, { recursive: true, force: true });
+    });
+    const script = (body: string) => { mkdirSync(bin, { recursive: true }); writeFileSync(join(bin, "runtime-preview.mjs"), body); };
+
+    it("runs exactly `slot pair <port> --print-url` and takes the URL from the last non-empty stdout line", async () => {
+      script(`const a = process.argv.slice(2); if (a.join(" ") !== "slot pair " + a[2] + " --print-url" || a.length !== 4) { console.error("bad argv " + a.join(" ")); process.exit(2); }
+console.log("note: minted"); console.log("http://127.0.0.1:" + a[2] + "/pair#token=${TOKEN}"); console.log("");`);
+      expect(await defaultPairRunner(3231)).toEqual({ ok: true, url: `http://127.0.0.1:3231/pair#token=${TOKEN}` });
+    });
+
+    it("fails with the first stderr line when the script exits non-zero", async () => {
+      script(`console.error("no hub token configured"); console.error("more"); console.log("http://127.0.0.1:3231/pair#token=${TOKEN}"); process.exit(1);`);
+      expect(await defaultPairRunner(3231)).toEqual({ ok: false, error: "no hub token configured" });
+    });
+
+    it("fails with an install hint when the deployed script is missing", async () => {
+      rmSync(join(bin, "runtime-preview.mjs"), { force: true });
+      expect(await defaultPairRunner(3231)).toEqual({ ok: false, error: "preview script not found: run `wolfpack preview` once to install it" });
+    });
+  });
+});
+
 describe("browser extension (no browser needed)", () => {
+  it("isSlotUrl accepts only http(s) loopback hosts on ports 3231-3234", () => {
+    const yes = ["http://127.0.0.1:3231/", "http://127.0.0.1:3234/x?y=1", "http://localhost:3232/", "https://localhost:3233/"];
+    const no = ["http://127.0.0.1:3230/", "http://127.0.0.1:3235/", "http://127.0.0.1.evil.com:3231/", "http://10.0.0.1:3231/", "http://127.0.0.1/", "http://127.0.0.1:/", "file:///x", "not a url"];
+    expect(yes.map((u) => isSlotUrl(u))).toEqual([true, true, true, true]);
+    expect(no.map((u) => isSlotUrl(u))).toEqual(no.map(() => false));
+  });
+
+  it("scrubs token fragments and long registered secrets, and ignores registered secrets shorter than 16 characters", () => {
+    const s = new BrowserSession("/nonexistent", {});
+    s.addSecretsFrom("http://127.0.0.1:3231/pair#token=short");
+    s.addSecretsFrom("http://127.0.0.1:3231/pair#token=LONGSECRETVALUE1234567");
+    expect(s.scrub("a short cat; LONGSECRETVALUE1234567 and x#token=zzz")).toBe("a short cat; [redacted] and x#token=[redacted]");
+  });
+
   it("registers no tools unless enabled", () => {
     const ctx = { wolfDen: "/nonexistent", wolfName: "w", domains: [], wolfConfig: {} };
     expect(createBrowserExtension(undefined, ctx).tools ?? []).toHaveLength(0);

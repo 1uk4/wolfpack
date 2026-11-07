@@ -3,9 +3,10 @@
  * page and logs; the browser, profile and cookies are shared.
  * Playwright is imported lazily so a wolf that never uses the browser (or a host without the binary) loads fine.
  */
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseSetCookie, selectCookies, fetchSite, worstSite, type FetchSite, type JarCookie } from "./cookies.js";
 import { guardedFetch, HOP_BY_HOP } from "./fetcher.js";
 import { capText, checkUrlResolved, guardedLookup, hostAllowed, lastN, redactHeaders, redactUrl, type Resolver } from "./policy.js";
@@ -30,6 +31,38 @@ export interface BrowserConfig {
   /** Close a thread's tab after this many ms without a call. Default 15 minutes. */
   tabIdleMs?: number;
 }
+
+/** Asks the preview CLI for a slot's one-time sign-in URL (`/pair#token=…`). The URL is a secret: it goes only to page.goto. */
+export type PairRunner = (port: number) => Promise<{ ok: true; url: string } | { ok: false; error: string }>;
+
+/** Preview agent slots (`wolfpack preview slot`): the consoles on these loopback ports keep a hub token per origin. */
+export const SLOT_PORTS: [number, number] = [3231, 3234];
+const TOKEN_KEY = "wolfpack.hub.token";
+const MIN_SECRET = 16;
+
+/** True for an http(s) URL on 127.0.0.1 or localhost whose port is a preview slot port (3231-3234 by default). */
+export function isSlotUrl(raw: string, ports: [number, number] = SLOT_PORTS): boolean {
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  if (!/^https?:$/.test(u.protocol) || !["127.0.0.1", "localhost"].includes(u.hostname) || !/^\d+$/.test(u.port)) return false;
+  const port = Number(u.port);
+  return port >= ports[0] && port <= ports[1];
+}
+
+/** The node that runs the preview script: this process's own binary when it is node (not bun/electron), else `node` from PATH. */
+const nodeBin = () => (/^node(\.exe)?$/i.test(basename(process.execPath)) ? process.execPath : "node");
+
+/** Runs the deployed preview script, the same one `wolfpack preview` runs. Stdout's last line is the URL; stderr's first line is the reason. */
+export const defaultPairRunner: PairRunner = (port) =>
+  new Promise((resolve) => {
+    const script = join(process.env.HOME || homedir(), ".wolfpack", "preview", "bin", "runtime-preview.mjs");
+    if (!existsSync(script)) return resolve({ ok: false, error: "preview script not found: run `wolfpack preview` once to install it" });
+    execFile(nodeBin(), [script, "slot", "pair", String(port), "--print-url"], { timeout: 20_000, maxBuffer: 64 * 1024, env: process.env }, (err, stdout, stderr) => {
+      const url = String(stdout).split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+      if (!err && url) return resolve({ ok: true, url });
+      resolve({ ok: false, error: String(stderr).trim().split("\n")[0] || (err ? err.message.split("\n")[0] : "no URL printed") });
+    });
+  });
 
 export const DEFAULTS = { timeoutMs: 30_000, maxOutputChars: 20_000, maxResponseBytes: 25 * 1024 * 1024, logCap: 500, maxTabs: 6, tabIdleMs: 15 * 60_000 };
 
@@ -116,9 +149,33 @@ export class BrowserSession {
   constructor(
     private readonly den: string,
     private readonly cfg: BrowserConfig,
-    opts: { resolver?: Resolver } = {},
+    opts: { resolver?: Resolver; runPair?: PairRunner; slotPorts?: [number, number] } = {},
   ) {
     this.resolver = opts.resolver;
+    this.runPair = opts.runPair ?? defaultPairRunner;
+    this.slotPorts = opts.slotPorts ?? SLOT_PORTS;
+  }
+
+  readonly runPair: PairRunner;
+  readonly slotPorts: [number, number];
+  /** Sign-in secrets seen this run (token values). Everything the extension reports is scrubbed of them. */
+  private readonly secrets = new Set<string>();
+
+  /** @internal Remember a pair URL's token and return a scrubber-ready state. */
+  addSecretsFrom(pairUrl: string) {
+    // Very short values would mangle ordinary text; `#token=…` fragments are scrubbed by pattern regardless.
+    if (pairUrl.length >= MIN_SECRET) this.secrets.add(pairUrl);
+    try {
+      const tok = new URLSearchParams(new URL(pairUrl).hash.slice(1)).get("token");
+      if (tok && tok.length >= MIN_SECRET) this.secrets.add(tok);
+    } catch { /* not a URL */ }
+  }
+
+  /** Remove sign-in secrets from text before it is reported: the known token values and any `#token=…` fragment. */
+  scrub(text: string): string {
+    let out = text.replace(/#token=[^\s"'<>)&]*/gi, "#token=[redacted]");
+    for (const sec of this.secrets) if (sec) out = out.split(sec).join("[redacted]");
+    return out;
   }
 
   get max(): number { return this.cfg.maxOutputChars ?? DEFAULTS.maxOutputChars; }
@@ -273,7 +330,7 @@ export class BrowserSession {
   }
 
   /** @internal Blocks (HTTP and WebSocket) on pages without a tab: popups, strays. */
-  strayBlocked(): string[] { return [...this.stray]; }
+  strayBlocked(): string[] { return this.stray.map((b) => this.scrub(b)); }
 
   /** @internal True when another Tab object now holds this thread's slot. */
   replaced(tab: Tab): boolean { const t = this.tabs.get(tab.id); return !!t && t !== tab; }
@@ -485,6 +542,8 @@ export class Tab {
   private pageOpening?: Promise<void>;
   /** Set while browser_goto navigates: that request is user-typed ("none"); redirect hops are judged against the chain. */
   gotoNav?: { url: string; prev: string; tainted: boolean };
+  /** Slot origins already given their one sign-in attempt in this tab. */
+  private pairTried = new Set<string>();
 
   constructor(private readonly sess: BrowserSession, readonly id: string) {
     this.lastUsed = sess.now();
@@ -528,6 +587,7 @@ export class Tab {
     this.netLog = [];
     this.blocked = [];
     this.shotFiles = [];
+    this.pairTried = new Set();
   }
 
   private push<T>(arr: T[], item: T) {
@@ -603,7 +663,68 @@ export class Tab {
       await page.goto("about:blank").catch(() => undefined);
       throw new Error(`Navigation ended on a blocked URL (${fv.reason}); page reset`);
     }
-    return `Loaded ${redactUrl(final)}${status ? ` (HTTP ${status})` : ""}\nTitle: ${await page.title()}`;
+    const signed = await this.slotSignIn(page, url, waitUntil, timeoutMs);
+    const now = signed.signedIn ? url : page.url();
+    return this.sess.scrub(`Loaded ${redactUrl(now)}${status ? ` (HTTP ${status})` : ""}${signed.note}\nTitle: ${await page.title()}`);
+  }
+
+  /** Slot consoles (loopback 3231-3234) keep their hub token in the origin's localStorage: pair once per origin per tab. */
+  private async slotSignIn(page: any, requested: string, waitUntil: "load" | "domcontentloaded" | "networkidle" | "commit", timeoutMs?: number): Promise<{ signedIn: boolean; note: string }> {
+    const none = { signedIn: false, note: "" };
+    if (!isSlotUrl(requested, this.sess.slotPorts)) return none;
+    const u = new URL(requested);
+    const port = Number(u.port);
+    const origin = u.origin;
+    const onPair = `location.pathname.startsWith("/pair")`;
+    // The page must be the slot itself, not somewhere it was redirected to.
+    const landedHere = () => { try { return new URL(page.url()).origin === origin; } catch { return false; } };
+    if (this.pairTried.has(origin)) {
+      const again = landedHere() && (await page.evaluate(onPair).catch(() => false));
+      return again ? { signedIn: false, note: "\nslot sign-in already tried in this tab" } : none;
+    }
+    // Pair ONLY when the page lands on /pair: every call mints a new browser token on the hub. The console redirects there
+    // from script, after load, so give a page without a stored token a short grace to get there (or to show it is signed in).
+    await page
+      .waitForFunction(`${onPair} || !!localStorage.getItem(${JSON.stringify(TOKEN_KEY)})`, undefined, { timeout: Math.min(2000, timeoutMs ?? this.sess.timeout) })
+      .catch(() => undefined);
+    if (!landedHere() || !(await page.evaluate(onPair).catch(() => false))) return none;
+    // The pair URL is http (slot consoles are plain dev servers); an https request cannot be its origin.
+    if (u.protocol !== "http:") return none;
+    this.pairTried.add(origin);
+    const fail = (why: string) => ({ signedIn: false, note: this.sess.scrub(`\nslot sign-in failed: ${why}`) });
+    const res = await this.sess.runPair(port).catch((e: Error) => ({ ok: false as const, error: e.message }));
+    if (!res.ok) return fail(res.error.split("\n")[0] ?? "");
+    this.sess.addSecretsFrom(res.url);
+    // Only this slot's own sign-in URL is accepted (scheme, port and path checked first); anything else is a failure and is
+    // never echoed. The script always prints 127.0.0.1: use the host the caller asked for so the token lands in THIS origin.
+    if (!new RegExp(`^http://(127\\.0\\.0\\.1|localhost):${port}/pair#token=`).test(res.url)) return fail("the command did not print a pair URL for this slot");
+    let pairUrl = res.url;
+    try {
+      const pu = new URL(res.url);
+      pu.hostname = u.hostname;
+      pairUrl = pu.toString();
+      this.sess.addSecretsFrom(pairUrl);
+      if (pu.origin !== origin) return fail("the pair URL is for another origin");
+      this.gotoNav = { url: pairUrl, prev: "", tainted: false };
+      try {
+        // Leave /pair first: a hash-only change on the same document would not reload the page, so the token would never be read.
+        await page.goto("about:blank");
+        await page.goto(pairUrl, { waitUntil: "load", timeout: timeoutMs ?? this.sess.timeout });
+      } finally {
+        this.gotoNav = undefined;
+      }
+      await page.waitForFunction(`!!localStorage.getItem(${JSON.stringify(TOKEN_KEY)}) && !location.pathname.startsWith("/pair")`, undefined, { timeout: timeoutMs ?? this.sess.timeout });
+      this.gotoNav = { url: new URL(requested).toString(), prev: "", tainted: false };
+      try {
+        await page.goto(requested, { waitUntil, timeout: timeoutMs ?? this.sess.timeout });
+      } finally {
+        this.gotoNav = undefined;
+      }
+    } catch (e) {
+      // The raw error may quote the pair URL: report only a scrubbed first line.
+      return fail(e instanceof Error ? e.message.split("\n")[0] : "pairing did not complete");
+    }
+    return { signedIn: true, note: ", signed in to the slot" };
   }
 
   async click(selector: string): Promise<string> {
@@ -638,7 +759,7 @@ export class Tab {
     } catch {
       text = String(result);
     }
-    return capText(text ?? "undefined", this.sess.max);
+    return this.sess.scrub(capText(text ?? "undefined", this.sess.max));
   }
 
   async screenshot(fullPage = false): Promise<string> {
@@ -654,17 +775,17 @@ export class Tab {
     const rows = this.consoleLog.filter((e) => !f || e.text.toLowerCase().includes(f) || e.type.includes(f));
     const out = lastN(rows, opts.limit, 200).map((e) => `${e.t} [${e.type}] ${e.text}`).join("\n");
     if (opts.clear) this.consoleLog = [];
-    return capText(out || "(no console messages)", this.sess.max);
+    return this.sess.scrub(capText(out || "(no console messages)", this.sess.max));
   }
 
   network(opts: { limit?: number; urlFilter?: string; status?: number; clear?: boolean }): string {
     const rows = this.netLog.filter((e) => (!opts.urlFilter || e.url.includes(opts.urlFilter)) && (opts.status === undefined || e.status === opts.status));
     const out = lastN(rows, opts.limit, 200).map((e) => JSON.stringify(e)).join("\n");
     if (opts.clear) this.netLog = [];
-    return capText(out || "(no network entries)", this.sess.max);
+    return this.sess.scrub(capText(out || "(no network entries)", this.sess.max));
   }
 
-  blockedRequests(): string[] { return [...this.blocked]; }
+  blockedRequests(): string[] { return this.blocked.map((b) => this.sess.scrub(b)); }
 
   /** Close only this thread's tab (its page, logs and screenshots). The browser closes with its last tab. */
   async closeTab(opts: { keepBrowser?: boolean } = {}): Promise<void> {

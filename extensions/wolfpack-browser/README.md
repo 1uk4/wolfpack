@@ -40,6 +40,25 @@ call's `conversationId` and created on that thread's first browser call. A call 
   is busy the call fails with "Too many browser tabs". A tab idle for `tabIdleMs` (default 900000 = 15 min) is closed.
 - Popups are closed. Chromium flags and the request guard are context-wide and unchanged.
 
+## Preview slot sign-in
+Preview agent slots are consoles on 127.0.0.1 / localhost ports 3231-3234 that keep a hub token in the origin's
+localStorage (`wolfpack.hub.token`). When `browser_goto` to such a port lands on `/pair`, the extension runs
+`node ~/.wolfpack/preview/bin/runtime-preview.mjs slot pair <port> --print-url` (once per origin per tab; every call
+mints a hub token, so never pre-emptively), takes the URL from the LAST non-empty stdout line, accepts it only if it is
+`http://(127.0.0.1|localhost):<same port>/pair#token=…`, opens it, waits for the console to store the token and leave
+`/pair`, then loads the requested URL (with the caller's `waitUntil`). The script always prints 127.0.0.1; the host is
+rewritten to the one requested (`localhost` works). It pairs only when the page landed on the slot's own origin at
+`/pair`; a second landing on `/pair` in the same tab reports "slot sign-in already tried in this tab". Result:
+`Loaded <url> (HTTP 200), signed in to the slot`. On failure: `slot sign-in failed: <first stderr line>` and the page
+stays on `/pair`. If the script is missing: "preview script not found: run `wolfpack preview` once to install it".
+Other ports (3230 included) are never touched.
+
+Secrecy. The URL goes only to the browser. Every text a tool returns (results, errors, `browser_console`,
+`browser_network`, blocked lists, eval output) is scrubbed of the token value (secrets shorter than 16 characters are
+ignored), the pair URL and any `#token=…` fragment. This is best-effort hygiene against accidental leakage into
+transcripts and logs, not protection from the agent: `browser_eval` can read `localStorage`, and the pair URL with its
+fragment is kept in the persistent profile's history alongside the stored token.
+
 ## Guards
 - Profile: `<den>/state/browser-profile` (0700), never the user's Chrome profile.
 - URLs: http(s) only; blocks file/chrome/data/non-blank about, loopback, RFC1918, link-local, CGNAT/tailnet, *.ts.net,

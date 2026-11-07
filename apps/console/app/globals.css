@@ -726,3 +726,9 @@ body {
 main {
 	padding-bottom: var(--chat-bar-reserve, 0px);
 }
+
+/* iOS Safari ignores user-scalable=no; manipulation still allows pan and pinch-free taps but stops double-tap zoom. */
+html,
+body {
+	touch-action: manipulation;
+}

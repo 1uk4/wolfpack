@@ -29,10 +29,13 @@ export const metadata: Metadata = {
 	appleWebApp: { capable: true, title: "Wolfpack", statusBarStyle: "black-translucent" },
 };
 
+// maximumScale/userScalable: fixed in place like an iOS app (no pinch or double-tap zoom; globals.css adds touch-action for iOS Safari, which ignores these).
 // viewportFit=cover: env(safe-area-inset-*) works (iOS notch/home bar). interactiveWidget: Android keyboards resize the layout.
 export const viewport: Viewport = {
 	width: "device-width",
 	initialScale: 1,
+	maximumScale: 1,
+	userScalable: false,
 	viewportFit: "cover",
 	themeColor: "#141414",
 	interactiveWidget: "resizes-content",

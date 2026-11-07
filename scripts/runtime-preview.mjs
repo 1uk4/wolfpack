@@ -30,7 +30,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 22;
+export const PREVIEW_VERSION = 23;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs", "runtime-preview-slots.mjs", "runtime-preview-slot-run.mjs"];
@@ -623,22 +623,23 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const SLOT_USAGE = "usage: wolfpack preview slot get <worktree> [--json] | list [--json] | release <worktree|port>. A slot stops after 20 min without a `get`: re-run `slot get` to keep it alive.";
 	/** The two copy-paste setup steps shown when a slot has no hub token. */
 	const tokenSetup = () => [
-		`1. on the hub host (sfo-01): umask 077; runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --label "preview ${os.hostname()}" --data-dir /var/lib/hubd`,
-		"2. here: wolfpack preview token   (paste the code it printed)",
+		`1. in the console: Settings → add device, copy the pairing code (or on the hub host: hubd pair --kind browser --label "preview ${os.hostname()}")`,
+		"2. here: wolfpack preview token (paste the code)",
 	];
 
 	if (sub === "token") {
-		// Redeem a single-use console pairing code and keep the token for the slots (~/.wolfpack/preview/hub-token). The token is never printed.
+		// Redeem a single-use pairing code (browser or console; a browser token is enough and preferred) and keep the token for the slots (~/.wolfpack/preview/hub-token). The token is never printed.
 		const hub = resolveHub({ home, env });
 		if (!hub) return fail("this Mac is not paired with a hub (no ~/.wolfpack/workerd/hub.json), so there is nothing to get a token from");
 		const fromStdin = argv.includes("--code-stdin");
 		if (fromStdin && st.stdinIsTTY()) return fail("--code-stdin reads the code from a pipe, but stdin is a terminal: pipe the code in, or run `wolfpack preview token` without the flag to be prompted (typing is hidden)");
 		const code = await st.readCode({ fromStdin });
-		if (!code) return fail("no pairing code given. Create one on the hub host with `hubd pair --kind console` (step 1 of the one-time setup), then paste it at the prompt");
+		if (!code) return fail("no pairing code given. Get one from the console (Settings → add device) or with `hubd pair --kind browser` on the hub host (step 1 of the one-time setup), then paste it at the prompt");
 		const label = `preview ${os.hostname()}`.slice(0, 64);
-		const r = await st.hubFetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, kind: "console", label }) });
+		const r = await st.hubFetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label }) /* no kind: the hub takes it from the code, so a browser and a console code both redeem */ });
 		if (r.status === 0) return fail(`could not reach the hub at ${hub.url}; nothing was saved`);
-		if (r.status !== 200 || typeof r.json?.token !== "string" || !r.json.token) return fail(`the hub answered ${r.status} to the pairing code: it is bad or expired (a code is single-use and lasts 10 minutes${r.status === 429 ? "; too many tries, wait a minute" : ""}). Create a new one on the hub host, then run \`wolfpack preview token\` again. Nothing was saved.`);
+		if (r.status !== 200 || typeof r.json?.token !== "string" || !r.json.token) return fail(`the hub answered ${r.status} to the pairing code: it is bad or expired (a code is single-use and lasts 10 minutes${r.status === 429 ? "; too many tries, wait a minute" : ""}). Get a new one (console: Settings → add device), then run \`wolfpack preview token\` again. Nothing was saved.`);
+		if (r.json.kind === "worker") return fail(`the hub issued a worker token (id ${r.json.tokenId ?? "unknown"}) for that code; slots need only a browser token, so nothing was saved. Revoke that token on the hub host (hubd tokens revoke ${r.json.tokenId ?? "<id>"}), then get a browser code from the console (Settings → add device)`);
 		const file = path.join(dir, "hub-token");
 		const tmp = `${file}.tmp-${process.pid}`;
 		const oldMask = process.umask(0o077);

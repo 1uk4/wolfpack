@@ -1043,9 +1043,11 @@ describe("agent slots through `wolfpack preview slot`", () => {
 			return { code: r.exitCode, text: [...out, ...err].join("\n"), err: err.join("\n"), out };
 		};
 		const none = await get("wt-a");
-		// Key parts only, not the whole wording: the token file, the hubd pair command for a console token, and the command to run here.
+		// Key parts only, not the whole wording: the console route, the hubd pair command for a browser token, and the command to run here.
 		for (const text of [none.err, JSON.parse(none.out[0]).tokenSetup.join("\n")]) {
-			expect(text).toMatch(/hubd\.mjs pair --kind console --label "preview [^"]+" --data-dir \/var\/lib\/hubd/);
+			expect(text).toMatch(/Settings.*add device/);
+			expect(text).toMatch(/hubd pair --kind browser --label "preview [^"]+"/);
+			expect(text).not.toContain("--kind console");
 			expect(text).toContain("wolfpack preview token");
 		}
 		expect(none.err).toMatch(/no hub token/);
@@ -1094,17 +1096,35 @@ describe("wolfpack preview token", () => {
 		return { code: r.exitCode, calls, out, err, asked };
 	};
 
-	it("redeems the code as a console pairing, saves the token owner-only, and prints the id but never the token", async () => {
+	it("redeems the code without naming a kind (so a browser or console code both work), saves the token owner-only, and prints the id but never the token", async () => {
 		withHub();
 		const r = await redeem({ argv: ["--code-stdin"] });
 		expect(r.code).toBe(0);
-		expect(r.calls).toEqual([{ url: "http://100.64.0.9:3150/v1/pair", method: "POST", body: { code: "ONE-TIME-CODE", kind: "console", label: `preview ${os.hostname()}` } }]);
+		expect(r.calls).toEqual([{ url: "http://100.64.0.9:3150/v1/pair", method: "POST", body: { code: "ONE-TIME-CODE", label: `preview ${os.hostname()}` } }]);
 		expect(r.asked).toEqual([true]);
 		expect(fs.readFileSync(tokenFile(), "utf8")).toBe("NEW-HUB-TOKEN");
 		expect(fs.statSync(tokenFile()).mode & 0o777).toBe(0o600);
 		expect(r.out).toEqual(["saved hub token for preview slots (id tok_42)"]);
 		expect([...r.out, ...r.err].join("\n")).not.toContain("NEW-HUB-TOKEN");
 		expect(fs.readdirSync(path.dirname(tokenFile())).filter((f) => f.startsWith("hub-token"))).toEqual(["hub-token"]); // no temp file left
+	});
+
+	it("refuses a worker token: saves nothing, and names the token to revoke", async () => {
+		withHub();
+		const r = await redeem({ json: { token: "WORKER-TOKEN-VALUE", tokenId: "tok_w1", kind: "worker" } });
+		expect(r.code).toBe(1);
+		expect(r.err.join("\n")).toMatch(/worker token.*tok_w1.*nothing was saved.*revoke.*tok_w1.*browser code/s);
+		expect(fs.existsSync(tokenFile())).toBe(false);
+		expect([...r.out, ...r.err].join("\n")).not.toContain("WORKER-TOKEN-VALUE");
+	});
+
+	it("accepts a browser or console token", async () => {
+		withHub();
+		for (const kind of ["browser", "console"]) {
+			fs.rmSync(tokenFile(), { force: true });
+			expect((await redeem({ json: { token: `T-${kind}`, tokenId: "tok_k", kind } })).code).toBe(0);
+			expect(fs.readFileSync(tokenFile(), "utf8")).toBe(`T-${kind}`);
+		}
 	});
 
 	it("names the hub's status for a bad or expired code and leaves an existing token file untouched", async () => {
@@ -1168,7 +1188,7 @@ describe("wolfpack preview token", () => {
 			const exit = await new Promise((r) => child.once("exit", r));
 			expect({ exit, errText }).toEqual({ exit: 0, errText: "" });
 			expect(out.trim()).toBe("saved hub token for preview slots (id tok_e2e)");
-			expect(JSON.parse(bodies[0].split(" ").slice(2).join(" "))).toMatchObject({ code: "PIPED-CODE", kind: "console" });
+			expect(JSON.parse(bodies[0].split(" ").slice(2).join(" "))).toEqual({ code: "PIPED-CODE", label: `preview ${os.hostname()}` });
 			expect(fs.readFileSync(tokenFile(), "utf8")).toBe("E2E-TOKEN");
 		} finally {
 			srv.close();

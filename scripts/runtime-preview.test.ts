@@ -218,6 +218,18 @@ describe("runtime-preview", () => {
 		expect(out).toMatchObject({ state: { previewRef: "feat/x", phase: "switching" }, consoleUrl: null, log: ["one", "two"] });
 	});
 
+	it("off works from the stable copy under ~/.wolfpack/preview/bin when the runtime tree has no preview script", async () => {
+		const h = harness();
+		const stableSha = g(rtWt, "rev-parse", "HEAD");
+		await h.run(["feat/x"]);
+		expect(fs.existsSync(path.join(rtWt, "scripts", "runtime-preview.mjs"))).toBe(false); // the previewed tree predates the command
+		const copy = path.join(home, ".wolfpack", "preview", "bin", "runtime-preview.mjs");
+		const mod = await import(`${copy}?copy`);
+		const r = await mod.runPreview({ argv: ["off"], env: { HOME: home }, cwd: rtWt, steps: h.steps, log: () => {}, warn: () => {} });
+		expect(r.exitCode).toBe(0);
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(stableSha);
+	});
+
 	it("status with no state says stable, no preview", async () => {
 		const h = harness();
 		await h.run(["status"]);

@@ -26,6 +26,15 @@ const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "ut
 // Read at load time: by the time the helper is spawned the checked-out tree may be a branch that has no such file.
 const HELPER_SRC = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime-preview-switch.mjs"), "utf8");
 
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs"];
+
+/** Copy this command and its imports out of the runtime tree, so `off` works after checking out a branch that lacks them. */
+function copyScripts(binDir) {
+	fs.mkdirSync(binDir, { recursive: true });
+	for (const f of COPIED_SCRIPTS) fs.copyFileSync(path.join(SCRIPT_DIR, f), path.join(binDir, f));
+}
+
 const defaultSteps = {
 	git: realGit,
 	build: (wt, { logFile } = {}) => {
@@ -186,6 +195,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	}
 	const priorStateText = fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : undefined;
 	writeState({ previousRef, previousBranch, previewRef: ref, previewSha: sha, startedAt: new Date().toISOString(), phase: "building", runtimeDir: rtWt });
+	copyScripts(path.join(dir, "bin"));
 	const co = tryGit(rtWt, "checkout", "--detach", sha);
 	if (!co.ok) {
 		if (priorStateText === undefined) fs.rmSync(stateFile, { force: true });

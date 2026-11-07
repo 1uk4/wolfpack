@@ -312,7 +312,13 @@ export class BrowserSession {
 
   /** Close every page of the context that no tab owns. */
   private async closeStrays(): Promise<void> {
-    for (const p of this.ctx?.pages() ?? []) if (!this.byPage.has(p)) await p.close().catch(() => undefined);
+    // Bounded: this runs inside the serialised open chain, so a page whose close never settles would stall every
+    // later tab open. A wedged stray is left for ctx.close() to reap.
+    const strays = (this.ctx?.pages() ?? []).filter((p: any) => !this.byPage.has(p));
+    await Promise.all(strays.map((p: any) => Promise.race([
+      p.close().catch(() => undefined),
+      new Promise((r) => { const t = setTimeout(r, 5_000); t.unref?.(); }),
+    ])));
   }
 
   /** @internal Live pages in the browser context (tests: every one should belong to a tab). */

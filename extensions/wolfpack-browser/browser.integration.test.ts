@@ -332,7 +332,7 @@ d("browser extension (live): per-thread tabs", () => {
     await new Promise((r) => srv.close(r));
     rmSync(den, { recursive: true, force: true });
   });
-  const mk = (extra: object = {}) => new BrowserSession(den, { allowHosts: ["127.0.0.1"], timeoutMs: 15000, ...extra });
+  const mk = (extra: object = {}) => new BrowserSession(mkdtempSync(join(den, "s-")), { allowHosts: ["127.0.0.1"], timeoutMs: 15000, ...extra });
 
   it("two threads navigate to different URLs and each keeps its own page, console and network log", async () => {
     const s = mk();
@@ -609,7 +609,7 @@ d("browser extension (live): tab guard", () => {
     rmSync(den, { recursive: true, force: true });
   });
   // page host localhost is allowlisted; the ws target 127.0.0.1 is NOT
-  const mk = (extra: object = {}) => new BrowserSession(den, { allowHosts: ["localhost"], timeoutMs: 15000, ...extra });
+  const mk = (extra: object = {}) => new BrowserSession(mkdtempSync(join(den, "s-")), { allowHosts: ["localhost"], timeoutMs: 15000, ...extra });
   const probe = (u: string) => `new Promise(r => { const w = new WebSocket(${JSON.stringify(u)}); w.onopen = () => r("open"); w.onclose = () => r("closed"); w.onerror = () => r("error"); setTimeout(() => r("timeout"), 3000); })`;
 
   it("blocks a WebSocket to a non-allowlisted host from a second tab and from a popup", async () => {

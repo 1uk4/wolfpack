@@ -102,6 +102,16 @@ describe("orchestrator work-id rule", () => {
   });
 });
 
+describe("orchestrator UI-check rule", () => {
+  it("points UI checks at the verify-ui standard and keeps 3230 off limits", async () => {
+    const { orchestratorRules } = await import("./orchestrator.js");
+    const rules = orchestratorRules({ opsRef: "x", surface: "wolfd" });
+    expect(rules).toContain("packages/agents/standards/verify-ui.md");
+    expect(rules).toContain("slot URL");
+    expect(rules).toContain("never touch port 3230");
+  });
+});
+
 describe("bundled visualizer", () => {
   it("is in the bundled roster with the visual-tools tool loadout", () => {
     const def = loadAgent("visualizer", { cwd: tmp(), agentDir: tmp() });

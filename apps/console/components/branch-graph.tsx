@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { WorkIdChip, lookupWorkItem } from "@/components/work-id-chip";
-import { agentName, branchShortId, buildMoments, candidateWorkIds, featureOfItem, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
+import { agentName, branchShortId, buildMoments, candidateWorkIds, featureOfItem, landedMoments, placeLabels, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
 
 const LANE_H = 22;
 const LABEL_W = 150;
@@ -55,39 +55,43 @@ function LaneLabel({ lane, y }: { lane: SwimLane; y: number }) {
 }
 
 /**
- * The work items behind the landed rings. Fast-forward merges leave no git trace, so a landing is the work item's ship
- * time: the item's `updated` date (the last event on a finished item). Candidates are the work IDs in the main lane's
- * commit subjects plus the ids of branches with nothing ahead. Cached lookups (the chips'); empty until they resolve.
+ * The landed rings. A landing's time is exact: the parent branch's reflog records every fast-forward to the second, and
+ * the commits it brought name the work items. Only landings the reflog lacks (older than it, or a clone without it)
+ * fall back to the work item's ship date, which is day-only. Lookups are the chips' cached ones; empty until they resolve.
  */
 export function useRings(overview: GitOverview | undefined, nowSec: number): Moment[] {
 	const [rings, setRings] = useState<Moment[]>([]);
 	const feature = overview?.main.kind === "feature" ? branchShortId(overview.main.name) : null;
-	const ids = overview ? [...new Set(overview.history.map((r) => r.workId).filter((x): x is string => x !== null))].slice(0, MAX_LOOKUPS) : [];
+	const landingIds = overview ? overview.landings.flatMap((l) => l.workIds) : [];
+	const ids = overview ? [...new Set([...landingIds, ...overview.history.map((r) => r.workId).filter((x): x is string => x !== null)])].slice(0, MAX_LOOKUPS) : [];
 	const shorts = overview ? [...overview.branches, ...overview.siblings].filter((b) => b.landed && b.shortId).map((b) => b.shortId!) : [];
 	const active = overview ? [...overview.branches, ...overview.siblings].filter((b) => !b.landed && b.shortId).map((b) => b.shortId!) : [];
-	const key = [overview?.main.name ?? "", ...ids, "|", ...shorts, "|", ...active].join(",");
+	const key = [overview?.main.name ?? "", ...ids, "|", ...shorts, "|", ...active, "|", ...(overview?.landings.map((l) => l.at) ?? [])].join(",");
 	useEffect(() => {
 		if (!overview) return;
 		let live = true;
 		void (async () => {
-			const subjects: ShipSubject[] = [];
-			const take = (v: Awaited<ReturnType<typeof lookupWorkItem>>) => {
+			const items: Record<string, ShipSubject> = {};
+			const take = (key: string, v: Awaited<ReturnType<typeof lookupWorkItem>>) => {
 				if (v.kind !== "ok") return;
-				// A feature thread rings child tasks; home rings the feature the item belongs to (itself, or its parent).
+				// A feature thread names child tasks; home names the feature the item belongs to (itself, or its parent).
 				const rec = feature ? v.item : featureOfItem(v.item, v.parent) === null ? null : v.item.kind === "feature" ? v.item : v.parent;
-				if (rec) subjects.push({ id: rec.id, title: rec.title, kind: rec.kind, stage: rec.stage, updated: rec.updated, partOf: rec.partOf ?? null });
+				if (rec) items[key] = { id: rec.id, title: rec.title, kind: rec.kind, stage: rec.stage, updated: rec.updated, partOf: rec.partOf ?? null };
 			};
-			for (const id of ids) take(await lookupWorkItem(id));
+			for (const id of ids) take(id, await lookupWorkItem(id));
 			for (const short of shorts) {
 				for (const id of candidateWorkIds(short)) {
 					const v = await lookupWorkItem(id);
 					if (v.kind === "ok") {
-						take(v);
+						take(id, v);
 						break;
 					}
 				}
 			}
-			if (live) setRings(shipMoments(subjects, { feature, nowSec, activeShortIds: active }));
+			const exact = landedMoments(overview.landings, items, { feature, activeShortIds: active });
+			const covered = exact.flatMap((m) => m.workIds ?? []);
+			const fallback = shipMoments(Object.values(items), { feature, nowSec, activeShortIds: active, covered });
+			if (live) setRings([...exact, ...fallback].sort((a, b) => a.at - b.at));
 		})();
 		return () => {
 			live = false;
@@ -123,7 +127,7 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 	const laneIndex = new Map(lanes.map((l, i) => [l.name, i]));
 	const y = (name: string) => TOP + (laneIndex.get(name) ?? 0) * LANE_H + LANE_H / 2;
 	const mainName = overview.main.name;
-	const laneOf = (m: Moment) => (m.lane === "main" ? mainName : m.lane);
+	const laneOf = (m: Moment) => (m.lane === "main" ? mainName : m.lane === "home" ? overview.home : m.lane);
 	const curve = (xa: number, ya: number, xb: number, yb: number) => {
 		const mid = (xa + xb) / 2;
 		return `M${xa} ${ya}C${mid} ${ya} ${mid} ${yb} ${xb} ${yb}`;
@@ -149,6 +153,17 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 			</g>
 		);
 	};
+	// Labels never draw over each other: the later of two overlapping labels on one side of a lane is dropped (the marker and its tooltip stay).
+	const CHAR_W = 6;
+	const labelSpec = (m: Moment, i: number) => {
+		const mx = x(m.at);
+		const text = m.kind === "landed" ? clip(m.label, 24) : m.label;
+		const left = m.kind === "pr" ? mx + 6 : m.kind === "release" ? mx + 13 : mx - 16;
+		const side = m.kind === "pr" ? "below" : "above";
+		return { i, key: `${laneOf(m)}-${side}`, x: left, w: text.length * CHAR_W };
+	};
+	const labelled = moments.map(labelSpec).filter((_, k) => moments[k]!.kind !== "split");
+	const kept = new Set(placeLabels(labelled).flatMap((ok, k) => (ok ? [labelled[k]!.i] : [])));
 	return (
 		<svg data-testid="branch-graph" role="img" aria-label="Git swimlanes" width={width} height={height} className="font-mono" style={{ minWidth: width }}>
 			<line x1={x1} x2={x1} y1={TOP - 6} y2={height - BOTTOM + 4} stroke="#9ca3af" strokeOpacity={0.5} strokeDasharray="3 3" />
@@ -184,7 +199,7 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 						<g key={i} data-testid="swimlane-pr">
 							<path d={curve(mx - 16, y(overview.home), mx, my)} fill="none" stroke={BLUE} strokeWidth={1.5} />
 							<rect x={mx - DOT} y={my - DOT} width={DOT * 2} height={DOT * 2} fill={BLUE} transform={`rotate(45 ${mx} ${my})`} />
-							<text x={mx + 6} y={my + 17} fontSize={10} fill={BLUE}>{m.label}</text>
+							{kept.has(i) && <text x={mx + 6} y={my + 17} fontSize={10} fill={BLUE}>{m.label}</text>}
 							<title>{tip}</title>
 						</g>
 					);
@@ -192,7 +207,7 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 					return (
 						<g key={i} data-testid="swimlane-release">
 							<polygon points={`${mx},${my} ${mx},${my - 11} ${mx + 11},${my - 11} ${mx + 8},${my - 7} ${mx + 11},${my - 3} ${mx + 11},${my}`} fill={YELLOW} />
-							<text x={mx + 13} y={my - 3} fontSize={10} fill={YELLOW}>{m.label}</text>
+							{kept.has(i) && <text x={mx + 13} y={my - 3} fontSize={10} fill={YELLOW}>{m.label}</text>}
 							<title>{tip}</title>
 						</g>
 					);
@@ -201,7 +216,7 @@ export function Swimlanes({ overview, rings, days, nowSec }: { overview: GitOver
 						<g key={i} data-testid="swimlane-landed">
 							<path d={`M${mx - 16} ${my}C${mx - 12} ${my - 12} ${mx - 4} ${my - 12} ${mx} ${my - DOT}`} fill="none" stroke="#9ca3af" strokeOpacity={0.6} />
 							<circle cx={mx} cy={my} r={DOT} fill="var(--popover, #111)" stroke={YELLOW} strokeWidth={2} />
-							<text x={mx - 16} y={my - 10} fontSize={10} fill="#d4b45a">{clip(m.label, 24)}</text>
+							{kept.has(i) && <text x={mx - 16} y={my - 10} fontSize={10} fill="#d4b45a">{clip(m.label, 24)}</text>}
 							<title>{tip}</title>
 						</g>
 					);

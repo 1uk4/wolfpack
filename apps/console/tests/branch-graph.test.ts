@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, agentName, featureOfItem, candidateWorkIds, buildMoments, headerStatus, branchShortId, groupRuns, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
+import { ageLabel, agentName, featureOfItem, candidateWorkIds, buildMoments, createdAt, headerStatus, branchShortId, groupRuns, isVersionTag, landedMoments, landingsFrom, parseReflog, placeLabels, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Landing, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
 import { parseLog, parsePrs, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
@@ -38,7 +38,7 @@ describe("groupRuns", () => {
 });
 
 const br = (name: string, ahead: number, behind = 0, splitAt: number | null = 1): OverviewBranch => ({ name, kind: "feature", ahead, behind, landed: ahead === 0, splitAt, lastAt: 1, dirty: false, shortId: null });
-const ov = (over: Partial<GitOverview>): GitOverview => ({ main: { name: "wolf/w", kind: "wolf" }, history: [], branches: [], siblings: [], home: "wolf/w", stable: "stable", parent: null, prs: [], tags: [], unreleased: null, unmerged: null, ...over });
+const ov = (over: Partial<GitOverview>): GitOverview => ({ main: { name: "wolf/w", kind: "wolf" }, history: [], branches: [], siblings: [], home: "wolf/w", stable: "stable", parent: null, prs: [], tags: [], landings: [], unreleased: null, unmerged: null, ...over });
 
 const DAY = 86400;
 const NOW = 100 * DAY;
@@ -111,6 +111,84 @@ describe("shipMoments", () => {
 		const ctx = { feature: null, nowSec: NOW, activeShortIds: ["Act1111"] };
 		const m = shipMoments([item("work-wolfpack-Fea2222", { kind: "feature" }), item("work-wolfpack-Fea2222", { kind: "feature" }), item("work-wolfpack-Act1111", { kind: "feature" }), item("work-wolfpack-Tsk3333", { kind: "task" })], ctx);
 		assert.deepEqual(m.map((x) => [x.lane, x.workId]), [["main", "work-wolfpack-Fea2222"]]);
+	});
+});
+
+describe("parseReflog", () => {
+	const out = [
+		"abc0009 wolf/w@{900} merge feat/Fea1111-x--worker-ab12cd34: Fast-forward",
+		"abc0008 wolf/w@{800} merge abc0007: Fast-forward",
+		"abc0007 wolf/w@{700} commit (merge): Merge branch 'feat/B' into wolf/w",
+		"abc0006 wolf/w@{600} commit: tweak",
+		"abc0005 wolf/w@{500} cherry-pick: x",
+		"abc0004 wolf/w@{400} rebase (finish): returning to refs/heads/wolf/w",
+		"abc0003 wolf/w@{300} reset: moving to HEAD~1",
+		"abc0002 wolf/w@{200} pull: Fast-forward",
+		"abc0001 wolf/w@{100} branch: Created from 9c569f1f",
+	].join("\n");
+	it("reads landings (fast-forward and real merges) with their source, a creation, and ignores other moves", () => {
+		const e = parseReflog(out);
+		assert.deepEqual(e.map((x) => [x.kind, x.at]), [["landing", 900], ["landing", 800], ["landing", 700], ["other", 600], ["other", 500], ["other", 400], ["other", 300], ["other", 200], ["created", 100]]);
+		assert.deepEqual(e.slice(0, 3).map((x) => x.source), ["feat/Fea1111-x--worker-ab12cd34", "abc0007", "feat/B"]);
+		assert.equal(e[0]!.sha, "abc0009");
+		assert.equal(createdAt(e), 100);
+		assert.equal(createdAt(parseReflog("abc0002 wolf/w@{200} commit: x")), null);
+	});
+});
+
+describe("landingsFrom", () => {
+	const commit = (sha: string, parent: string | null, subject: string): RawCommit => ({ sha, parents: parent ? [parent] : [], subject });
+	const log = [commit("abc0003", "abc0002", "b (work-wolfpack-T000002)"), commit("abc0002", "abc0001", "a (work-wolfpack-T000001)"), commit("abc0001", null, "base")];
+	it("names a landing by the commits it brought: the range from the previous reflog value to the new one", () => {
+		const entries = parseReflog("abc0003 wolf/w@{300} merge abc0003: Fast-forward\nabc0001 wolf/w@{100} branch: Created from HEAD");
+		const l = landingsFrom(entries, log, "main", 0);
+		assert.deepEqual(l, [{ at: 300, lane: "main", source: "abc0003", sha: "abc0003", commits: 2, workIds: ["work-wolfpack-T000001", "work-wolfpack-T000002"] }]);
+	});
+	it("only keeps landings inside the window, and uses just the tip when the range's start is unknown", () => {
+		const entries = parseReflog("abc0003 wolf/w@{300} merge feat/x: Fast-forward");
+		assert.deepEqual(landingsFrom(entries, log, "home", 400), []);
+		const only = landingsFrom(entries, log, "home", 0);
+		assert.deepEqual([only[0]!.commits, only[0]!.workIds, only[0]!.lane], [1, ["work-wolfpack-T000002"], "home"]);
+	});
+});
+
+describe("landedMoments", () => {
+	const task = (id: string, title: string) => ({ id, title, kind: "task", stage: "shipped", partOf: "work-wolfpack-Fea1111" });
+	const landing = (over: Partial<Landing>): Landing => ({ at: 500, lane: "main", source: null, sha: "x", commits: 1, workIds: [], ...over });
+	it("a feature thread rings each landing at its exact time, labelled by the tasks (or the agent when no work item is named)", () => {
+		const items = { "work-wolfpack-T000001": task("work-wolfpack-T000001", "Task one") };
+		const m = landedMoments(
+			[landing({ at: 500, workIds: ["work-wolfpack-T000001"], source: "feat/Fea1111-x--worker-ab12cd34" }), landing({ at: 600, source: "feat/Fea1111-x--helper-0a1b2c3d" })],
+			items,
+			{ feature: "Fea1111", activeShortIds: [] },
+		);
+		assert.deepEqual(m.map((x) => [x.at, x.kind, x.lane, x.label, x.workIds]), [[500, "landed", "main", "Task one ✓", ["work-wolfpack-T000001"]], [600, "landed", "main", "helper ✓", []]]);
+	});
+	it("home rings landed features that are not active lanes; the feature's own landing on home shows in its thread", () => {
+		const feat = (id: string, title: string) => ({ id, title, kind: "feature", stage: "shipped", partOf: null });
+		const items = { "work-wolfpack-Fea2222": feat("work-wolfpack-Fea2222", "Done feature"), "work-wolfpack-Act1111": feat("work-wolfpack-Act1111", "Active one") };
+		const home = landedMoments([landing({ workIds: ["work-wolfpack-Fea2222"] }), landing({ at: 600, workIds: ["work-wolfpack-Act1111"] })], items, { feature: null, activeShortIds: ["Act1111"] });
+		assert.deepEqual(home.map((x) => x.label), ["Done feature ✓"]);
+		const mine = landedMoments([landing({ lane: "home", workIds: ["work-wolfpack-Fea1111"] }), landing({ lane: "home", at: 700, workIds: ["work-wolfpack-Fea2222"] })], { "work-wolfpack-Fea1111": feat("work-wolfpack-Fea1111", "This one"), ...items }, { feature: "Fea1111", activeShortIds: [] });
+		assert.deepEqual(mine.map((x) => [x.lane, x.label]), [["home", "This one ✓"]]);
+	});
+	it("falls back to the work item's ship date only for items the reflog did not cover", () => {
+		const item = (id: string) => ({ id, title: `T ${id}`, kind: "task", stage: "shipped", updated: "1970-04-10", partOf: "work-wolfpack-Fea1111" });
+		const m = shipMoments([item("work-wolfpack-T000001"), item("work-wolfpack-T000002")], { feature: "Fea1111", nowSec: NOW, activeShortIds: [], covered: ["work-wolfpack-T000001"] });
+		assert.deepEqual(m.map((x) => x.workId), ["work-wolfpack-T000002"]);
+	});
+});
+
+describe("isVersionTag", () => {
+	it("keeps tags that look like versions and drops the rest", () => {
+		assert.deepEqual(["console/v0.1.14", "v2.0.0", "wolfd/v0.1.8", "main", "nightly", "release/candidate"].map(isVersionTag), [true, true, true, false, false, false]);
+	});
+});
+
+describe("placeLabels", () => {
+	it("drops the later label when two on the same side of a lane would overlap, keeps others", () => {
+		const keep = placeLabels([{ key: "stable-below", x: 90, w: 40 }, { key: "stable-below", x: 0, w: 40 }, { key: "stable-below", x: 30, w: 40 }, { key: "stable-above", x: 30, w: 40 }]);
+		assert.deepEqual(keep, [true, true, false, true]);
 	});
 });
 
@@ -256,15 +334,41 @@ describe("workspaceGraph (real repo)", () => {
 		g("checkout", "-q", "stable");
 		g("merge", "--no-ff", "-m", "Merge pull request #7 from 1uk4/wolf/w", "wolf/w");
 		g("tag", "-a", "console/v0.1.14", "-m", "release");
+		g("tag", "nightly");
 		g("checkout", "-q", "wolf/w");
 		commit(dir, "home 2");
 		commit(dir, "home 3");
 		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
 		assert.equal(o.stable, "stable");
 		assert.deepEqual(o.prs.map((p) => p.n), [7]);
-		assert.deepEqual(o.tags.map((t) => t.name), ["console/v0.1.14"]);
+		assert.deepEqual(o.tags.map((t) => t.name), ["console/v0.1.14"]); // the lightweight "nightly" tag is not a version
 		assert.equal(o.unreleased!.count, 2);
 		assert.equal(typeof o.unreleased!.since, "number");
+	});
+
+	it("split time is the branch's creation in the reflog (not the old merge-base); a fast-forward landing is read from the parent's reflog", async () => {
+		const { root, dir, g, run } = repo();
+		const old = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z", GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z" };
+		execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "root (work-wolfpack-AAAAAAA)"], { stdio: "pipe", env: old });
+		g("worktree", "add", "-b", "feat/Rfl1111-x", join(root, "x"));
+		run(join(root, "x"), "commit", "--allow-empty", "-m", "x1 (work-wolfpack-Rfl1111)");
+		g("merge", "--ff-only", "feat/Rfl1111-x");
+		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
+		const b = o.branches.find((x) => x.name === "feat/Rfl1111-x")!;
+		assert.ok(b.splitAt! > Date.parse("2024-01-01") / 1000, "created time, not the 2020 merge-base");
+		assert.deepEqual(o.landings.map((l) => [l.lane, l.source, l.workIds]), [["main", "feat/Rfl1111-x", ["work-wolfpack-Rfl1111"]]]);
+	});
+
+	it("with no reflog for a branch (fresh clone) it falls back to the merge-base time and has no landings", async () => {
+		const { root, dir, g, run } = repo();
+		const old = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z", GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z" };
+		execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "root"], { stdio: "pipe", env: old });
+		g("worktree", "add", "-b", "feat/Nrf1111-x", join(root, "x"));
+		run(join(root, "x"), "commit", "--allow-empty", "-m", "x1");
+		g("reflog", "expire", "--expire=all", "--all");
+		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
+		assert.equal(o.branches[0]!.splitAt, Date.parse("2020-01-01T00:00:00Z") / 1000);
+		assert.deepEqual(o.landings, []);
 	});
 
 	it("a branch with nothing ahead is landed", async () => {

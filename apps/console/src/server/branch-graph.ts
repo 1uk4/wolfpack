@@ -1,7 +1,7 @@
 /** Read-only git for the popover's overview: ref discovery, one bounded first-parent log and a few cheap counts per child branch. */
 import { execFile } from "node:child_process";
 import { dirname, sep } from "node:path";
-import { branchShortId, EMPTY_OVERVIEW, groupRuns, type GitOverview, type OverviewBranch, type PrMerge, type RawCommit, type ReleaseTag, type Span } from "../core/branch-graph.ts";
+import { branchShortId, createdAt, EMPTY_OVERVIEW, groupRuns, isVersionTag, landingsFrom, parseReflog, type GitOverview, type Landing, type OverviewBranch, type PrMerge, type RawCommit, type ReleaseTag, type Span } from "../core/branch-graph.ts";
 
 export type GitRunner = (cwd: string, args: string[]) => Promise<string>;
 
@@ -89,6 +89,17 @@ async function worktreePaths(cwd: string, git: GitRunner): Promise<Map<string, s
 	return out;
 }
 
+/** One branch's reflog, newest first, bounded. A branch with no reflog (a fresh clone, an expired log) reads as empty. */
+async function reflogOf(git: GitRunner, cwd: string, branch: string) {
+	try {
+		return parseReflog(await git(cwd, ["reflog", "show", "--date=unix", "--format=%H %gd %gs", "-n", "500", `refs/heads/${branch}`, "--"]));
+	} catch (err) {
+		const e = err as { killed?: boolean; signal?: string; code?: string };
+		if (e?.killed || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT") throw err;
+		return [];
+	}
+}
+
 /** `left...right` → [only in left, only in right]. */
 async function leftRight(git: GitRunner, cwd: string, left: string, right: string): Promise<[number, number]> {
 	const [l = "0", r = "0"] = (await git(cwd, ["rev-list", "--left-right", "--count", `${left}...${right}`])).trim().split(/\s+/);
@@ -117,8 +128,9 @@ async function overview(ws: GraphWorkspace, wolf: string, git: GitRunner, window
 	const since = `--since=${window.days}.days`;
 
 	// The main lane's recent history, grouped by work item: the work IDs in it feed the landed rings.
-	const log = parseLog(await git(cwd, ["log", "--first-parent", "--numstat", "-n", String(window.commits), since, "--format=%x01%H%x00%P%x00%s%x00%ct", ws.branch, "--"]));
-	const history = groupRuns(log);
+	const log = parseLog(await git(cwd, ["log", "--first-parent", "--numstat", "-n", String(window.commits), "--format=%x01%H%x00%P%x00%s%x00%ct", ws.branch, "--"]));
+	const startSec = Date.now() / 1000 - window.days * 86400;
+	const history = groupRuns(log.filter((c) => (c.time ?? Infinity) >= startSec));
 
 	// Children and siblings: worktree-folder ownership for features of this wolf, `<branch>--*` for subagents.
 	const folder = dirname(cwd);
@@ -141,7 +153,8 @@ async function overview(ws: GraphWorkspace, wolf: string, git: GitRunner, window
 		const shas = [...new Set(forkShas.values())];
 		const times = new Map<string, number>();
 		if (shas.length > 0) for (const c of parseLog(await git(cwd, ["show", "-s", "--format=%H%x00%P%x00%s%x00%ct", ...shas]))) if (c.time !== undefined) times.set(c.sha, c.time);
-		for (const b of out) b.splitAt = times.get(forkShas.get(b.name) ?? "") ?? null;
+		// Split time: the branch's creation in its reflog (exact); the merge-base commit's time when that entry is gone.
+		for (const b of out) b.splitAt = createdAt(await reflogOf(git, cwd, b.name)) ?? times.get(forkShas.get(b.name) ?? "") ?? null;
 		return out;
 	};
 	const branches = await measure(childNames, ws.branch, isFeature ? "subagent" : "feature");
@@ -156,6 +169,13 @@ async function overview(ws: GraphWorkspace, wolf: string, git: GitRunner, window
 		unmerged = await spanOf(git, cwd, home, ws.branch);
 	}
 
+	// Landings: what moved into the main lane (and, in a feature thread, into home), at the reflog's exact times.
+	let landings: Landing[] = landingsFrom(await reflogOf(git, cwd, ws.branch), log, "main", startSec);
+	if (isFeature && heads.has(home)) {
+		const homeLog = parseLog(await git(cwd, ["log", "--first-parent", "-n", String(window.commits), "--format=%x01%H%x00%P%x00%s%x00%ct", home, "--"]));
+		landings = [...landings, ...landingsFrom(await reflogOf(git, cwd, home), homeLog, "home", startSec)];
+	}
+
 	// Stable: its PR merges in the window, the release tags reachable from it, and the home commits not on it.
 	let prs: PrMerge[] = [];
 	let tags: ReleaseTag[] = [];
@@ -164,10 +184,10 @@ async function overview(ws: GraphWorkspace, wolf: string, git: GitRunner, window
 		prs = parsePrs(await git(cwd, ["log", stable, "--first-parent", "--merges", "-n", "100", since, "--format=%x01%H%x00%P%x00%s%x00%ct", "--"]));
 		for (const line of (await git(cwd, ["tag", "--merged", stable, "--format=%(refname:short)%00%(creatordate:unix)"])).split("\n")) {
 			const [name, at] = line.split("\0");
-			if (name && at) tags.push({ name, at: Number(at) });
+			if (name && at && isVersionTag(name)) tags.push({ name, at: Number(at) });
 		}
 		tags = tags.sort((a, b) => a.at - b.at).slice(-30);
 		if (heads.has(home)) unreleased = await spanOf(git, cwd, stable, home);
 	}
-	return { main: { name: ws.branch, kind: isFeature ? "feature" : "wolf" }, history, branches, siblings, home, stable, parent, prs, tags, unreleased, unmerged };
+	return { main: { name: ws.branch, kind: isFeature ? "feature" : "wolf" }, history, branches, siblings, home, stable, parent, prs, tags, landings, unreleased, unmerged };
 }

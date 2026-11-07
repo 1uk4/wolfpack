@@ -86,9 +86,11 @@ export interface GitOverview {
 	unreleased: Span | null;
 	/** A feature thread's commits not on its parent. */
 	unmerged: Span | null;
+	/** Exact landings on the main lane (and, in a feature thread, on the home lane), from the parents' reflogs. */
+	landings: Landing[];
 }
 
-export const EMPTY_OVERVIEW: GitOverview = { main: { name: "", kind: "wolf" }, history: [], branches: [], siblings: [], home: "", stable: null, parent: null, prs: [], tags: [], unreleased: null, unmerged: null };
+export const EMPTY_OVERVIEW: GitOverview = { main: { name: "", kind: "wolf" }, history: [], branches: [], siblings: [], home: "", stable: null, parent: null, prs: [], tags: [], landings: [], unreleased: null, unmerged: null };
 
 const WORK_ID_IN_SUBJECT = new RegExp(WORK_ID_SOURCE);
 
@@ -205,6 +207,8 @@ export interface Moment {
 	label: string;
 	workId?: string | null;
 	detail?: string;
+	/** Every work item a landing ring stands for (so the ship-date fallback skips them). */
+	workIds?: string[];
 }
 
 /** `console/v0.1.14` → `v0.1.14`. */
@@ -240,14 +244,15 @@ export interface ShipSubject {
 const COMPLETE = new Set(["shipped", "live", "archived"]);
 
 /**
- * Landed rings (fast-forwards leave no git trace) at the work item's ship time. Feature thread: the feature's child
+ * The fallback landed rings, for landings the reflog has no entry for (older than it, or on a clone without it): at the
+ * work item's ship date, which is day-only. Feature thread: the feature's child
  * tasks. Home: shipped features that no longer have a lane. An item with no ship date is skipped.
  */
-export function shipMoments(subjects: ShipSubject[], ctx: { feature: string | null; nowSec: number; activeShortIds: string[] }): Moment[] {
+export function shipMoments(subjects: ShipSubject[], ctx: { feature: string | null; nowSec: number; activeShortIds: string[]; covered?: string[] }): Moment[] {
 	const seen = new Set<string>();
 	const out: Moment[] = [];
 	for (const it of subjects) {
-		if (seen.has(it.id) || !COMPLETE.has(it.stage) || !it.updated) continue;
+		if (seen.has(it.id) || ctx.covered?.includes(it.id) || !COMPLETE.has(it.stage) || !it.updated) continue;
 		const short = it.id.slice(-7);
 		const wanted = ctx.feature === null ? it.kind === "feature" && !ctx.activeShortIds.includes(short) : it.kind !== "feature" && !!it.partOf && it.partOf.endsWith(ctx.feature);
 		if (!wanted) continue;
@@ -283,4 +288,154 @@ export function timeScale(times: number[], start: number, end: number): { x: (t:
 		return x0 + ((t - a0) / (a1 - a0)) * (x1 - x0);
 	};
 	return { x, width: xs[xs.length - 1]! };
+}
+
+// ---- reflog: exact times for splits and landings -------------------------------------------------------------------
+
+export interface ReflogEntry {
+	/** The value the ref moved to. */
+	sha: string;
+	/** Unix seconds. */
+	at: number;
+	kind: "created" | "landing" | "other";
+	/** A landing's merge source (a branch name, or a raw hash), when the entry names one. */
+	source: string | null;
+}
+
+const REFLOG_LINE = /^([0-9a-f]{7,40}) \S+@\{(\d+)\} (.*)$/;
+
+/** Parse `git reflog show --date=unix --format='%H %gd %gs'` (newest first). Only creations and landings are classified. */
+export function parseReflog(out: string): ReflogEntry[] {
+	const entries: ReflogEntry[] = [];
+	for (const line of out.split("\n")) {
+		const m = REFLOG_LINE.exec(line);
+		if (!m) continue;
+		const [, sha, at, msg = ""] = m;
+		let kind: ReflogEntry["kind"] = "other";
+		let source: string | null = null;
+		if (/^branch: Created/.test(msg)) kind = "created";
+		else if (/^merge \S+?(?::|$)/.test(msg)) {
+			kind = "landing";
+			source = /^merge (\S+?)(?::|$)/.exec(msg)![1]!;
+		} else if (/^commit \(merge\)/.test(msg)) {
+			kind = "landing";
+			source = /Merge (?:remote-tracking )?branch '([^']+)'/.exec(msg)?.[1] ?? null;
+		}
+		entries.push({ sha: sha!, at: Number(at), kind, source });
+	}
+	return entries;
+}
+
+/** When the branch was created, from its reflog (null: the entry is gone). */
+export function createdAt(entries: ReflogEntry[]): number | null {
+	const made = entries.filter((e) => e.kind === "created");
+	return made.length > 0 ? made[made.length - 1]!.at : null;
+}
+
+/** A landing on a lane: what moved in, named by the commits between the previous reflog value and the new one. */
+export interface Landing {
+	at: number;
+	/** `main`: the thread's own lane; `home`: the home branch while in a feature thread. */
+	lane: "main" | "home";
+	source: string | null;
+	sha: string;
+	commits: number;
+	/** Work IDs in those commits' subjects, oldest first. */
+	workIds: string[];
+}
+
+const RANGE_CAP = 100;
+
+/** The commits `prev..tip` along the first-parent chain of `log` (newest first); just the tip when the chain doesn't reach `prev`. */
+function rangeCommits(log: RawCommit[], tip: string, prev: string | undefined): RawCommit[] {
+	const by = new Map(log.map((c) => [c.sha, c]));
+	const first = by.get(tip);
+	if (!first) return [];
+	const out: RawCommit[] = [];
+	let cur: RawCommit | undefined = first;
+	while (cur && out.length < RANGE_CAP) {
+		if (cur.sha === prev) return out;
+		out.push(cur);
+		cur = by.get(cur.parents[0] ?? "");
+	}
+	return prev === undefined || !cur || cur.sha !== prev ? [first] : out;
+}
+
+/** Landings in the window from a lane's reflog (newest first), each with the work IDs of the commits it brought. */
+export function landingsFrom(entries: ReflogEntry[], log: RawCommit[], lane: Landing["lane"], startSec: number): Landing[] {
+	const out: Landing[] = [];
+	entries.forEach((e, i) => {
+		if (e.kind !== "landing" || e.at < startSec) return;
+		const commits = rangeCommits(log, e.sha, entries[i + 1]?.sha);
+		const workIds: string[] = [];
+		for (const c of [...commits].reverse()) {
+			const id = workIdOfSubject(c.subject);
+			if (id && !workIds.includes(id)) workIds.push(id);
+		}
+		out.push({ at: e.at, lane, source: e.source, sha: e.sha, commits: commits.length, workIds });
+	});
+	return out.reverse();
+}
+
+/**
+ * Landed rings from exact landings. `items` maps a work ID found in the landing's commits to the item the ring names (a
+ * feature thread: the item itself; home: the feature it belongs to). Feature thread: every landing on its lane is a
+ * child landing, labelled by its tasks or else the agent; a landing on home counts only when it carries this feature
+ * or its tasks. Home thread: landed features that no longer have a lane, or an unnamed landing labelled by its source.
+ */
+export function landedMoments(landings: Landing[], items: Record<string, ShipSubject>, ctx: { feature: string | null; activeShortIds: string[] }): Moment[] {
+	const out: Moment[] = [];
+	for (const l of landings) {
+		const subs: ShipSubject[] = [];
+		for (const id of l.workIds) {
+			const it = items[id];
+			if (it && !subs.some((x) => x.id === it.id)) subs.push(it);
+		}
+		let relevant: ShipSubject[];
+		if (ctx.feature !== null && l.lane === "home") relevant = subs.filter((s) => s.id.endsWith(ctx.feature!) || (s.partOf ?? "").endsWith(ctx.feature!));
+		else if (ctx.feature !== null) relevant = subs.filter((s) => s.kind !== "feature" && (s.partOf ?? "").endsWith(ctx.feature!));
+		else relevant = subs.filter((s) => s.kind === "feature" && !ctx.activeShortIds.includes(s.id.slice(-7)));
+		if (ctx.feature !== null && l.lane === "home" && relevant.length === 0) continue;
+		if (ctx.feature === null && l.workIds.length > 0 && relevant.length === 0) continue;
+		const who = l.source ? (l.source.includes("--") ? agentName(l.source) : /^[0-9a-f]{7,40}$/.test(l.source) ? l.source.slice(0, 7) : l.source) : "landed";
+		const shown = ctx.feature !== null && l.lane === "home" ? relevant.filter((s) => s.id.endsWith(ctx.feature!)) : relevant;
+		const label = (shown.length > 0 ? `${shown[0]!.title}${shown.length > 1 ? ` +${shown.length - 1}` : ""}` : who) + " ✓";
+		out.push({
+			at: l.at,
+			kind: "landed",
+			lane: l.lane,
+			label,
+			workId: relevant[0]?.id ?? null,
+			workIds: relevant.map((s) => s.id),
+			detail: `${l.source ? `from ${l.source} · ` : ""}${l.commits} ${l.commits === 1 ? "commit" : "commits"}`,
+		});
+	}
+	return out.sort((a, b) => a.at - b.at);
+}
+
+/** Release tags look like versions: `v1.2.3` or `<name>/v1.2.3`. */
+export function isVersionTag(name: string): boolean {
+	return /(?:^|\/)v\d[\w.+-]*$/.test(name);
+}
+
+/** A label to place: `key` names the lane side it sits on, `x` its left edge and `w` its width in px. */
+export interface LabelBox {
+	key: string;
+	x: number;
+	w: number;
+}
+
+/** Which labels to draw: left to right within a lane side, a label that would overlap the previous kept one is dropped. */
+export function placeLabels(labels: LabelBox[], gap = 4): boolean[] {
+	const keep = labels.map(() => true);
+	const lastEnd = new Map<string, number>();
+	labels
+		.map((l, i) => ({ l, i }))
+		.sort((a, b) => a.l.x - b.l.x)
+		.forEach(({ l, i }) => {
+			const end = lastEnd.get(l.key);
+			if (end !== undefined && l.x < end + gap) keep[i] = false;
+			else lastEnd.set(l.key, l.x + l.w);
+		});
+	return keep;
 }

@@ -8,7 +8,7 @@
 
 import { fuzzyScore } from "./fuzzy.ts";
 import { stageLabel } from "./kb-graph-model.ts";
-import { featureGraduateState, NO_GRADUATE, type GraduateState } from "./graduate.ts";
+import { graduateState, NO_GRADUATE, type GraduateState } from "./graduate.ts";
 import type { WorkListItem } from "./kb.ts";
 
 export type WorkSortCol = "name" | "stage" | "progress" | "assignee" | "created";
@@ -186,7 +186,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 			notes,
 			self: chipOf(it, blocked),
 			graduated: isGraduated(it),
-			graduate: kind === "feature" ? featureGraduateState({ kind: it.kind, stage: it.stage, graduated: isGraduated(it), container: it.container }, tasks) : NO_GRADUATE,
+			graduate: graduateState({ kind: it.kind, stage: it.stage, graduated: isGraduated(it), container: it.container }, kind === "feature" ? tasks.map((t) => ({ stage: t.stage })) : null, it.partOf ? byId.get(it.partOf) ?? null : null),
 			children: kids,
 			autoExpand: false,
 		};
@@ -200,7 +200,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 	const groups: TableRow[] = [];
 	for (const init of live.filter((it) => it.kind === "initiative")) {
 		const rows = featureRows(kidsOf.get(init.id) ?? []);
-		groups.push(groupOf(init, rows, init.title, init.id, init.id));
+		groups.push(groupOf(items, init, rows, init.title, init.id, init.id));
 	}
 	// Everything not under a live feature or initiative: loose features, and loose tasks/ideas as leaf rows.
 	const placed = (it: WorkListItem): boolean => {
@@ -208,7 +208,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		return !!p && liveIds.has(p.id) && (p.kind === "feature" || p.kind === "initiative");
 	};
 	const loose = live.filter((it) => it.kind !== "initiative" && !placed(it));
-	if (loose.length > 0) groups.push(groupOf(null, featureRows(loose), INBOX_TITLE, "", INBOX_KEY));
+	if (loose.length > 0) groups.push(groupOf(items, null, featureRows(loose), INBOX_TITLE, "", INBOX_KEY));
 
 	const filtered = searching ? groups.map((g) => prune(g, query)).filter((g): g is TableRow => g !== null) : groups;
 	sortRows(filtered, sort);
@@ -216,9 +216,13 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 	return { groups: filtered, count, searching };
 }
 
-function groupOf(init: WorkListItem | null, rows: TableRow[], title: string, id: string, key: string): TableRow {
+function groupOf(allItems: readonly WorkListItem[], init: WorkListItem | null, rows: TableRow[], title: string, id: string, key: string): TableRow {
 	const features = rows.filter((r) => r.kind === "feature");
 	const shipped = features.filter((r) => isShipped(r.stage) || r.graduated).length;
+	// Judged on ALL its features, graduated ones included (the list hides them unless the toggle is on).
+	const graduate = init
+		? graduateState({ kind: init.kind, stage: init.stage, graduated: isGraduated(init), container: init.container, standing: init.standing }, allItems.filter((it) => it.partOf === init.id).map((it) => ({ stage: it.stage, kind: it.kind, graduated: it.graduated !== undefined })))
+		: NO_GRADUATE;
 	return {
 		id,
 		key,
@@ -235,7 +239,7 @@ function groupOf(init: WorkListItem | null, rows: TableRow[], title: string, id:
 		notes: [],
 		self: null,
 		graduated: init ? isGraduated(init) : false,
-		graduate: NO_GRADUATE,
+		graduate,
 		children: rows,
 		autoExpand: false,
 	};

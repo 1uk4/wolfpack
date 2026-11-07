@@ -5,7 +5,7 @@
  */
 
 export interface GraduateState {
-	/** A graduate button belongs on this item at all (a live, non-container feature). */
+	/** A graduate button belongs on this item at all (feature, initiative or loose task/issue/spike). */
 	show: boolean;
 	ready: boolean;
 	/** Why it is disabled ("2 tasks open"); "" when ready. */
@@ -16,22 +16,41 @@ const COMPLETE = new Set(["shipped", "live", "archived"]);
 
 export const NO_GRADUATE: GraduateState = { show: false, ready: false, reason: "" };
 
+const STANDALONE = new Set(["task", "issue", "spike"]);
+
 /**
- * Mirrors the wolf's readiness check: a feature graduates once it has tasks and all of them are complete. With the
- * tasks unknown (a payload that did not carry them) a shipped feature counts as ready, which is what the Work API
- * moves such a feature to; the wolf re-checks anyway and refuses with its own reason.
+ * Mirrors the wolf's readiness rule (packages/memory/src/work/graduate.ts `readyToGraduate` / `readinessOf`; a console
+ * copy, because the console bundle cannot import @wolfpack/memory). `kids` are the item's children, `parent` its parent
+ * (null: none).
+ *  feature     has tasks and all are complete. With the tasks unknown (`kids` null) a shipped feature counts as ready,
+ *              which is what the Work API moves such a feature to; the wolf re-checks anyway.
+ *  initiative  not standing, has features and all graduated. Unknown children: no button.
+ *  task/issue/spike  complete and loose (no parent, or under a container such as the Inbox). Not complete, or inside a
+ *              feature (it graduates with its feature): no button at all.
  */
-export function featureGraduateState(
-	item: { kind: string; stage: string; graduated?: boolean; container?: boolean },
-	tasks: readonly { stage: string }[] | null,
+export function graduateState(
+	item: { kind: string; stage: string; graduated?: boolean; container?: boolean; standing?: boolean },
+	kids: readonly { stage: string; kind?: string; graduated?: boolean }[] | null,
+	parent: { container?: boolean } | null = null,
 ): GraduateState {
-	if (item.kind !== "feature" || item.container || item.graduated || item.stage === "archived") return NO_GRADUATE;
-	if (tasks === null) {
+	if (item.container || item.graduated || item.stage === "archived") return NO_GRADUATE;
+	if (STANDALONE.has(item.kind)) {
+		return COMPLETE.has(item.stage) && (!parent || parent.container) ? { show: true, ready: true, reason: "" } : NO_GRADUATE;
+	}
+	if (item.kind === "initiative") {
+		if (item.standing || kids === null) return NO_GRADUATE;
+		const features = kids.filter((k) => k.kind === "feature");
+		if (features.length === 0) return { show: true, ready: false, reason: "no features yet" };
+		const open = features.filter((f) => !f.graduated).length;
+		return open > 0 ? { show: true, ready: false, reason: `${open} feature${open === 1 ? "" : "s"} not graduated` } : { show: true, ready: true, reason: "" };
+	}
+	if (item.kind !== "feature") return NO_GRADUATE;
+	if (kids === null) {
 		const ready = item.stage === "shipped" || item.stage === "live";
 		return { show: true, ready, reason: ready ? "" : "not shipped yet" };
 	}
-	if (tasks.length === 0) return { show: true, ready: false, reason: "no tasks yet" };
-	const open = tasks.filter((t) => !COMPLETE.has(t.stage)).length;
+	if (kids.length === 0) return { show: true, ready: false, reason: "no tasks yet" };
+	const open = kids.filter((t) => !COMPLETE.has(t.stage)).length;
 	if (open > 0) return { show: true, ready: false, reason: `${open} task${open === 1 ? "" : "s"} open` };
 	return { show: true, ready: true, reason: "" };
 }

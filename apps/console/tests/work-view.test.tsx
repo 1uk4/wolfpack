@@ -220,7 +220,7 @@ describe("domain", () => {
 		const sel = q("work-domain") as HTMLSelectElement;
 		assert.equal(sel.value, "wolfpack");
 		assert.deepEqual(qa('[data-testid="work-domain"] option').map((o) => o.textContent), ["Wolfpack", "Snapjack"]);
-		assert.deepEqual(c.calls[0], { domain: "wolfpack", graduated: false });
+		assert.deepEqual(c.calls[0], { domain: "wolfpack", graduated: true });
 	});
 	it("remembers the choice in localStorage and starts there next time", async () => {
 		const c = fake();
@@ -366,13 +366,12 @@ describe("search", () => {
 });
 
 describe("graduated toggle, refresh and select", () => {
-	it("graduated items are hidden until the toggle refetches with them, then shown greyed", async () => {
+	it("graduated items are fetched always but hidden until the toggle shows them greyed", async () => {
 		const c = fake();
 		await open(c);
 		assert.ok(!document.body.textContent!.includes("Old one"));
 		await change(q("work-show-graduated")!, { checked: true });
 		await settle();
-		assert.equal(c.calls.at(-1)!.graduated, true);
 		await click(q("work-toggle-no-initiative")!);
 		assert.equal(q("work-row-old")!.getAttribute("data-graduated"), "true");
 		assert.equal(q("work-row-f3")!.getAttribute("data-graduated"), null);

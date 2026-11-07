@@ -61,16 +61,17 @@ function readDomain(): string {
 type Load = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; items: WorkListItem[] };
 
 /** Fetches the domain's items; refetches on focus, on a poll and on `reload`, keeping the last good list while it does. */
-function useWorkItems(client: WorkClient, domain: string, graduated: boolean): { load: Load; reload: () => void } {
+function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => void } {
 	const [load, setLoad] = useState<Load>({ state: "loading" });
 	const seq = useRef(0);
 	const refresh = useCallback(async () => {
 		const mine = ++seq.current;
-		const res = await client.list(domain, graduated);
+		// Always with the graduated ones: an initiative is ready when its features all graduated; the table hides them unless the toggle is on.
+		const res = await client.list(domain, true);
 		if (mine !== seq.current) return; // a newer request (another domain, the toggle) owns the answer
 		if (res.ok) setLoad({ state: "ready", items: res.data.items });
 		else setLoad((cur) => (cur.state === "ready" ? cur : { state: "error", message: res.message }));
-	}, [client, domain, graduated]);
+	}, [client, domain]);
 	useEffect(() => {
 		setLoad((cur) => (cur.state === "ready" ? cur : { state: "loading" }));
 		void refresh();
@@ -303,7 +304,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [query, setQuery] = useState("");
 	const [sort, setSort] = useState<WorkSort>(DEFAULT_WORK_SORT);
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-	const { load } = useWorkItems(client, domain, showGraduated);
+	const { load } = useWorkItems(client, domain);
 	const graduateClient = useMemo(() => injectedGraduate ?? createGraduateClient(), [injectedGraduate]);
 
 	useEffect(() => {

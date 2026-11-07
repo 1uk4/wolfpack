@@ -214,17 +214,25 @@ describe("test queue orphans", () => {
   // A "vitest" stand-in: its own process group that outlives its runner. `term` = ignores SIGTERM.
   const groups: number[] = [];
   afterEach(() => groups.splice(0).forEach((g) => { try { process.kill(-g, "SIGKILL"); } catch { /* gone */ } }));
-  const orphanGroup = (term = false) => {
-    const c = spawn(process.execPath, ["-e", `${term ? "process.on('SIGTERM',()=>{});" : ""}setInterval(()=>{},1000)`], { detached: true, stdio: "ignore" });
+  // Resolves once the stub is ready (its SIGTERM handler is installed), so a signal can never beat node's startup.
+  const orphanGroup = async (term = false) => {
+    const code = `${term ? "process.on('SIGTERM',()=>{});" : ""}process.stdout.write('r');setInterval(()=>{},1000)`;
+    const c = spawn(process.execPath, ["-e", code], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
     c.unref();
     groups.push(c.pid!);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("orphan stub was not ready within 10 s")), 10_000);
+      c.stdout!.once("data", () => { clearTimeout(timer); resolve(); });
+      c.once("exit", () => { clearTimeout(timer); reject(new Error("orphan stub exited before it was ready")); });
+    });
+    c.stdout!.destroy();
     return c.pid!;
   };
   const deadPid = () => Number(spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout);
   const alive = (g: number) => { try { process.kill(-g, 0); return true; } catch { return false; } };
 
   it("never kills a live group whose recorded start differs from its leader's (pid reuse)", async () => {
-    const g = orphanGroup();
+    const g = await orphanGroup();
     const runner = openQueue({ dir, slots: 1, identity: { pid: deadPid(), start: "x" } });
     const t = await runner.enqueue(run("crashed"));
     await runner.setChild(t, { pgid: g, start: "recorded-long-ago" });
@@ -236,7 +244,7 @@ describe("test queue orphans", () => {
   });
 
   it("does not kill when ps fails, and tries again on the next poll", async () => {
-    const g = orphanGroup();
+    const g = await orphanGroup();
     const runner = openQueue({ dir, slots: 1, identity: { pid: deadPid(), start: "x" } });
     const t = await runner.enqueue(run("crashed"));
     await runner.setChild(t, { pgid: g, start: "S" });
@@ -251,7 +259,7 @@ describe("test queue orphans", () => {
   });
 
   it("never kills a group whose start time was not recorded", async () => {
-    const g = orphanGroup();
+    const g = await orphanGroup();
     const runner = openQueue({ dir, slots: 1, identity: { pid: deadPid(), start: "x" }, probe: () => undefined });
     const t = await runner.enqueue(run("crashed"));
     await runner.setChild(t, { pgid: g }); // ps failed when recording
@@ -263,7 +271,7 @@ describe("test queue orphans", () => {
   });
 
   it("times the SIGKILL grace (10 s) from a timestamp in the ticket, not from the next poll", async () => {
-    const g = orphanGroup(true);
+    const g = await orphanGroup(true);
     const runner = openQueue({ dir, slots: 1, identity: { pid: deadPid(), start: "x" }, probe: () => "S" });
     const t = await runner.enqueue(run("crashed"));
     await runner.setChild(t, { pgid: g });

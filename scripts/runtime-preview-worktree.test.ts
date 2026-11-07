@@ -80,7 +80,8 @@ type Item = { label: string; value: unknown };
 const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown; realHealth?: boolean } = {}) => {
 	const builds: { dir: string; logFile?: string }[] = [];
 	const menus: Item[][] = [];
-	const flags = { portBusy: false, consoleDown: false, probeStatus: 401 as number, unpaired: false, mintStatus: 200 as number };
+	const flags = { portBusy: false, consoleDown: false, probeStatus: 401 as number, unpaired: false, mintStatus: 200 as number, stray: null as null | { pid: number; command: string; cwd: string }, stubborn: false };
+	const signals: string[] = [];
 	const hubCalls: { url: string; method: string; auth?: string; body?: Record<string, unknown> }[] = [];
 	const lc: string[][] = [];
 	const helper: string[] = [];
@@ -94,6 +95,12 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		cliLink: () => cliLink(),
 		cliFallbackDir: () => fallbackDir(),
 		portFree: async () => !flags.portBusy,
+		listeners: async () => (flags.stray ? [flags.stray.pid] : []),
+		procInfo: async (pid: number) => (flags.stray && flags.stray.pid === pid ? { command: flags.stray.command, cwd: flags.stray.cwd } : null),
+		kill: (pid: number, sig: string) => {
+			signals.push(`${sig} ${pid}`);
+			if (sig === "SIGKILL" || (sig === "SIGTERM" && !flags.stubborn)) flags.stray = null;
+		},
 		probe: async () => (flags.consoleDown ? 0 : flags.probeStatus),
 		hubFetch: async (url: string, init: { method: string; headers?: Record<string, string>; body?: string }) => {
 			hubCalls.push({ url, method: init.method, auth: init.headers?.Authorization, body: init.body ? JSON.parse(init.body) : undefined });
@@ -120,7 +127,7 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	if (o.confirm !== "none") steps.confirm = async (q: string) => (asked.push(q), o.confirm ?? true);
 	const run = (argv: string[], cwd = main, extraEnv: Record<string, string> = {}) =>
 		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud(), ...extraEnv }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs, hubCalls };
+	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs, hubCalls, signals };
 };
 
 const pairHub = () => {
@@ -835,6 +842,72 @@ describe("worktrees are found from any directory", () => {
 		const p = harness({ pick: (items) => items.find((i) => String(i.label).includes("wt-a"))?.value });
 		expect((await p.run([], away, { WOLVES_DIR: wl })).exitCode).toBe(0);
 		expect(p.menus[0].some((i) => String(i.label).includes("wt-a"))).toBe(true);
+	});
+});
+
+describe("worktrees from inside an unrelated git repo", () => {
+	it("a cwd in another repo (the home dir is one) does not hide the wolfpack worktrees", async () => {
+		const wl = path.join(tmp, "wl");
+		fs.mkdirSync(path.join(wl, "runtime"), { recursive: true });
+		g(main, "worktree", "move", rt, path.join(wl, "runtime", "wolfpack"));
+		const homeRepo = path.join(tmp, "homerepo");
+		fs.mkdirSync(homeRepo);
+		g(homeRepo, "init", "-q", "-b", "master"); // empty, no commits
+		const h = harness();
+		const r = await h.run(["feat/a"], homeRepo, { WOLVES_DIR: wl });
+		expect(r.exitCode).toBe(0);
+		expect(readState().console.dir).toBe(fs.realpathSync(wtA));
+	});
+
+	it("a cwd inside a wolfpack worktree still lists that repo's worktrees", async () => {
+		const h = harness();
+		expect((await h.run(["feat/b"], wtA)).exitCode).toBe(0);
+		expect(readState().console.dir).toBe(fs.realpathSync(wtB));
+	});
+});
+
+describe("a stray next dev on the preview port", () => {
+	const strayOf = (cwd: string) => ({ pid: 4242, command: "next-server (v15.0.0)", cwd });
+	const consoleDir = () => path.join(wtA, "apps", "console");
+
+	it("off frees the port from a next dev that no launchd agent owns: SIGTERM, one line naming it", async () => {
+		const h = harness();
+		await h.run(["dev", wtA]);
+		h.flags.stray = strayOf(consoleDir());
+		expect((await h.run(["off"])).exitCode).toBe(0);
+		expect(h.signals).toEqual(["SIGTERM 4242"]);
+		expect(h.logs.join("\n")).toContain("stopped next dev (pid 4242) on port 3230");
+	});
+
+	it("off with no state at all still frees the port", async () => {
+		const h = harness();
+		h.flags.stray = strayOf(consoleDir());
+		await h.run(["off"]);
+		expect(h.signals).toEqual(["SIGTERM 4242"]);
+	});
+
+	it("a listener that ignores SIGTERM is killed with SIGKILL after 5 s", async () => {
+		const h = harness();
+		h.flags.stray = strayOf(consoleDir());
+		h.flags.stubborn = true;
+		await h.run(["off"]);
+		expect(h.signals).toEqual(["SIGTERM 4242", "SIGKILL 4242"]);
+	});
+
+	it("never kills anything else: not a next process, or a next whose cwd is not a checkout's apps/console", async () => {
+		const h = harness();
+		h.flags.stray = { pid: 77, command: "node server.js", cwd: consoleDir() };
+		await h.run(["off"]);
+		h.flags.stray = { pid: 78, command: "next-server (v15.0.0)", cwd: os.tmpdir() };
+		await h.run(["off"]);
+		expect(h.signals).toEqual([]);
+	});
+
+	it("status says a stray console runs outside preview and how to stop it", async () => {
+		const h = harness();
+		h.flags.stray = strayOf(consoleDir()); // no state: nothing recorded it
+		await h.run(["status"]);
+		expect(h.logs.join("\n")).toContain("console: http://127.0.0.1:3230 (running outside preview; `wolfpack preview off` stops it)");
 	});
 });
 

@@ -3,6 +3,7 @@
  * (com.wolfpack.preview-console, so it outlives the wolf session and the CLI, and survives a reboot), and point the desktop app's
  * console.json at it. Node builtins only: copied next to the switch helper under ~/.wolfpack/preview/bin/.
  */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -39,6 +40,17 @@ export function resolveHub({ home, env = {} }) {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * The real launchctl: output is shown, except that unloading an agent that is not loaded (`bootout` exit 3, "No such process")
+ * is a normal case here and prints nothing. The exit status is returned either way. `spawn` and `write` are injectable for tests.
+ */
+export function runLaunchctl(args, { spawn = spawnSync, write = (t) => process.stderr.write(t) } = {}) {
+	const r = spawn("launchctl", args, { stdio: ["inherit", "inherit", "pipe"] });
+	const err = r.stderr ? r.stderr.toString() : "";
+	if (!(args[0] === "bootout" && r.status === 3 && /No such process/i.test(err)) && err) write(err);
+	return r.status;
 }
 
 /** Write the agent's plist and (re)load it. `args` is the full program (node + script); never a shell wrapper. */

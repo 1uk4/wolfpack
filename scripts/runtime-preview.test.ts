@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
 import { runPreview } from "./runtime-preview.mjs";
 // @ts-expect-error plain .mjs script
+import { runLaunchctl } from "./runtime-preview-console.mjs";
+// @ts-expect-error plain .mjs script
 import { runSwitch } from "./runtime-preview-switch.mjs";
 
 let tmp: string, home: string, main: string, rtWt: string, origin: string, featSha: string;
@@ -493,5 +495,25 @@ describe("runtime-preview", () => {
 			expect(h.logs.join("\n")).toContain("3230");
 			expect(h.lc.some((a) => a[0] === "bootstrap")).toBe(false);
 		});
+	});
+});
+
+describe("real launchctl step", () => {
+	const fake = (status: number, stderr: string) => {
+		const shown: string[] = [];
+		const spawn = () => ({ status, stderr: Buffer.from(stderr) });
+		return { shown, run: (...a: string[]) => runLaunchctl(a, { spawn, write: (t: string) => shown.push(t) }) };
+	};
+
+	it("unloading an agent that is not loaded (bootout exit 3, No such process) is silent and still returns 3", () => {
+		const f = fake(3, "Boot-out failed: 3: No such process\n");
+		expect(f.run("bootout", "gui/501/com.wolfpack.preview-console")).toBe(3);
+		expect(f.shown).toEqual([]);
+	});
+
+	it("any other launchctl failure is still shown", () => {
+		const f = fake(5, "Bootstrap failed: 5: Input/output error\n");
+		expect(f.run("bootstrap", "gui/501", "/x.plist")).toBe(5);
+		expect(f.shown.join("")).toContain("Input/output error");
 	});
 });

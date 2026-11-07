@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import { CONSOLE_LABEL, recoverApps, restoreApps, startConsole, stopConsole } from "./runtime-preview-console.mjs";
+import { runLaunchctl, CONSOLE_LABEL, recoverApps, restoreApps, startConsole, stopConsole } from "./runtime-preview-console.mjs";
 
 const BOOTSTRAP_TRIES = 5;
 
@@ -201,7 +201,7 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(file
 	const here = path.dirname(fileURLToPath(import.meta.url));
 	const code = await runSwitch({
 		stateFile, plist, label, port, okPhase, clear: clear === "1", uid: process.getuid?.() ?? 501,
-		launchctl: (...args) => spawnSync("launchctl", args, { stdio: "inherit" }).status,
+		launchctl: (...args) => runLaunchctl(args),
 		sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 		health: async (p) => {
 			try {

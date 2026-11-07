@@ -21,7 +21,7 @@ import os from "node:os";
 import readline from "node:readline";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { runLaunchctl, resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
 import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, resetCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 12;
+export const PREVIEW_VERSION = 13;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -66,7 +66,7 @@ async function loadPrompts() {
 
 const defaultSteps = {
 	git: realGit,
-	launchctl: (...args) => spawnSync("launchctl", args, { stdio: "inherit" }).status,
+	launchctl: (...args) => runLaunchctl(args),
 	sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 	portFree: probePortFree,
 	health: async (port) => {

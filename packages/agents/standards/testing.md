@@ -51,6 +51,8 @@ Leanness comes from these rules (seams, one test per behaviour, no duplicates, r
 - No parameterised copies that walk the same branch.
 - Before adding a test, grep for existing tests of the behaviour (function, route,
   error text). Extend the existing test instead of adding a new file.
+- Every new test names the behaviour it protects that no existing test already
+  covers. If you can't, extend an existing test or add none.
 - Replace, don't layer: when a seam test covers a module, delete the older shallow
   tests that only re-prove it.
 

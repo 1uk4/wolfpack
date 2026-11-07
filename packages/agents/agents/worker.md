@@ -24,7 +24,7 @@ Follow the testing standard appended below.
 - Test only at the seams listed in the plan; a new seam goes back to the orchestrator first. With no plan, list your seams in the report before writing tests.
 - One test, watch it fail for the right reason, then the code; repeat. Keep the failing run as red evidence.
 - Never edit, loosen, skip or delete a test to get green. Change one only when the required behaviour changed, and say so in the commit message.
-- The final report includes the verify report: commands with pass/fail counts, red evidence, tests changed or removed with reasons, and what was not run.
+- The final report includes the verify report: commands with pass/fail counts, red evidence, tests changed or removed with reasons, and what was not run. For each new test, name the behaviour it protects.
 
 ## Git
 Follow the git standard appended below; report the final `git log --oneline <base>..HEAD`.

@@ -11,8 +11,8 @@
  *   on their own Esc — usePopoverDismiss + ModelControl), then dictation
  *   CANCEL (discard the transcript, owner 2026-09-17 round 3), then abort of
  *   an in-flight turn.
- * - Global actions dispatch lh:kbd-<action> window events; surfaces that are
- *   mounted listen (the lh:chat-renamed pattern). A surface that isn't
+ * - Global actions dispatch wolfpack:kbd-<action> window events; surfaces that are
+ *   mounted listen (the wolfpack:chat-renamed pattern). A surface that isn't
  *   mounted simply doesn't listen — an F2 on the graph view is a no-op, not
  *   an error. Actions live in src/core/keyboard.ts (registry + persisted
  *   overrides), the ONE table the settings milestone will render as its
@@ -65,14 +65,14 @@ export function KeyboardShortcuts() {
 			// works from any focus.
 			if (e.key === "Tab") {
 				e.preventDefault();
-				if (e.shiftKey) window.dispatchEvent(new CustomEvent("lh:kbd-cycle-thinking"));
+				if (e.shiftKey) window.dispatchEvent(new CustomEvent("wolfpack:kbd-cycle-thinking"));
 				// Plain Tab cycles the active surface's text fields (owner,
 				// keyboard round 2026-10-06) — forward-only, wrapping; each
 				// composer-bearing page answers with its own chain. The quiz
 				// dock's rows↔thinking claim stops propagation at document
 				// level, so a claimed Tab never reaches this dispatch.
 				else if (!e.metaKey && !e.ctrlKey && !e.altKey)
-					window.dispatchEvent(new CustomEvent("lh:kbd-cycle-fields"));
+					window.dispatchEvent(new CustomEvent("wolfpack:kbd-cycle-fields"));
 				return;
 			}
 
@@ -97,10 +97,10 @@ export function KeyboardShortcuts() {
 				// honestly stoppable).
 				if (isDictationActive()) {
 					e.preventDefault();
-					window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));
+					window.dispatchEvent(new CustomEvent("wolfpack:kbd-cancel-dictation"));
 					return;
 				}
-				window.dispatchEvent(new CustomEvent("lh:kbd-abort-turn"));
+				window.dispatchEvent(new CustomEvent("wolfpack:kbd-abort-turn"));
 				return;
 			}
 

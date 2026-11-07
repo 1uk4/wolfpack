@@ -45,8 +45,7 @@ Service/user/home names use the **id**, not the name: `wolf-<id>`.
   `sudo -u wolf-def456 bash -c 'node /opt/wolfpack-kb/cli.cjs status'` **[RO]** (health dashboard, lists parked items; needs the wolf's env vars exported from its `.env` — the local `wolfpack kb status` does this for you and is preferred).
   `... cli.cjs unpark --list` **[RO]**; `unpark <wolf>/<file>|--all` moves parked items back to the inbox (state change — don't). `sweep`, `reorg`, `rebuild`, `reindex`, `retire` change state — don't.
 
-## Agent API (port 3141, `X-API-Key` header required except dashboard)
-- `GET /dashboard` (no auth), `GET /dashboard/api/kb-graph`
+## Agent API (port 3141, `X-API-Key` header required)
 - `GET /health` (host + service check); `POST /health/fix-kb-permissions` (changes state)
 - `GET /wolves`, `GET /wolves/:nameOrId`; `POST /wolves`, `PUT /wolves/:id/bundle`, `PATCH /wolves/:id/config`, `POST /wolves/:id/restart|stop`, `DELETE /wolves/:id` — only the GETs are **[RO]**
 - `GET /logs/:nameOrId?lines=N[&follow=1]` — journalctl of `wolf-<id>` **[RO]**

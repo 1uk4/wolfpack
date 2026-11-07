@@ -247,12 +247,12 @@ export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () 
 										: "transform 180ms ease-out, opacity 160ms ease-out",
 							}}
 						>
-							{/* data-lh-overlay-chart: globals.css pins the svg to the
+							{/* data-wp-overlay-chart: globals.css pins the svg to the
 							    wrapper's width (kills mermaid's inline max-width cap)
 							    so the wrapper IS the natural-size box the fit math
 							    centers. */}
 							<div
-								data-lh-overlay-chart
+								data-wp-overlay-chart
 								className="[&_svg]:h-auto [&_svg]:w-full"
 								dangerouslySetInnerHTML={{ __html: svg }}
 							/>

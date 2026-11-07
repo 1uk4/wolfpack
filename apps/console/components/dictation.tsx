@@ -172,8 +172,18 @@ const warmTokens = createWarmMinter(mintFreshToken);
 /* Persistent capture graph (mitigation C, owner 2026-09-27): one
  * app-lifetime AudioContext + a module-load memo. Created under the
  * click gesture (autoplay policy) and NEVER closed — per-run nodes
- * (source, worklet) disconnect at teardown instead. */
+ * (source, worklet) disconnect at teardown instead. It is SUSPENDED between
+ * runs (a running context keeps the browser's audio service and an output
+ * stream alive while idle) and resumed by the next start. */
 let sharedCtx: AudioContext | null = null;
+/** The suspend a run's end started; the next start awaits it before resuming, so a late suspend can never land on a new run. */
+let pendingSuspend: Promise<unknown> | null = null;
+
+function suspendShared(): void {
+	const ctx = sharedCtx;
+	if (!ctx || ctx.state === "suspended") return;
+	pendingSuspend = ctx.suspend().catch(() => {});
+}
 let workletModule: Promise<void> | null = null;
 
 function ensureAudioGraph(): { ctx: AudioContext; module: Promise<void> } {
@@ -466,7 +476,8 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		sourceRef.current = null;
 		workletRef.current?.disconnect();
 		workletRef.current = null;
-		// The AudioContext is app-lifetime (mitigation C) — nodes die, it stays.
+		// The AudioContext is app-lifetime (mitigation C) — nodes die, it stays, suspended until the next start.
+		suspendShared();
 		const ws = wsRef.current;
 		wsRef.current = null;
 		if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
@@ -583,6 +594,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 			// per-run costs (context creation, module fetch) are gone.
 			const { ctx, module } = ensureAudioGraph();
 			await module;
+			if (pendingSuspend) await pendingSuspend; // a suspend from the last run's end must land before we look at the state
 			if (ctx.state === "suspended") await ctx.resume();
 			if (gen !== genRef.current) return;
 
@@ -760,12 +772,12 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		const onToggle = () => {
 			if (shortcutHook() === idRef.current) toggle();
 		};
-		window.addEventListener("lh:kbd-toggle-dictation", onToggle);
-		return () => window.removeEventListener("lh:kbd-toggle-dictation", onToggle);
+		window.addEventListener("wolfpack:kbd-toggle-dictation", onToggle);
+		return () => window.removeEventListener("wolfpack:kbd-toggle-dictation", onToggle);
 	}, [toggle]);
 	useEffect(() => {
-		window.addEventListener("lh:kbd-cancel-dictation", cancel);
-		return () => window.removeEventListener("lh:kbd-cancel-dictation", cancel);
+		window.addEventListener("wolfpack:kbd-cancel-dictation", cancel);
+		return () => window.removeEventListener("wolfpack:kbd-cancel-dictation", cancel);
 	}, [cancel]);
 
 	return {
@@ -953,11 +965,11 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 			return;
 		}
 		if (listening) {
-			window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation"));
+			window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation"));
 			return;
 		}
 		onClaim();
-		if (!running) window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation"));
+		if (!running) window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation"));
 	};
 	return (
 		<>

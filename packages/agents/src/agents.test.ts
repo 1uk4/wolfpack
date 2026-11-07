@@ -102,6 +102,16 @@ describe("orchestrator work-id rule", () => {
   });
 });
 
+describe("orchestrator UI-check rule", () => {
+  it("points UI checks at the verify-ui standard and keeps 3230 off limits", async () => {
+    const { orchestratorRules } = await import("./orchestrator.js");
+    const rules = orchestratorRules({ opsRef: "x", surface: "wolfd" });
+    expect(rules).toContain("packages/agents/standards/verify-ui.md");
+    expect(rules).toContain("slot URL");
+    expect(rules).toContain("never touch port 3230");
+  });
+});
+
 describe("bundled visualizer", () => {
   it("is in the bundled roster with the visual-tools tool loadout", () => {
     const def = loadAgent("visualizer", { cwd: tmp(), agentDir: tmp() });
@@ -213,5 +223,18 @@ describe("standards", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("orchestrator worker-reuse rule", () => {
+  it("starts a fresh worker in the existing worktree once a commit has landed, and reuses only mid-work", async () => {
+    const { orchestratorRules } = await import("./orchestrator.js");
+    const rules = orchestratorRules({ opsRef: "x", surface: "wolfd" });
+    expect(rules).toContain("once a worker's commit has landed, start a fresh worker");
+    expect(rules).toContain('isolation "none"');
+    expect(rules).toContain("what's done, what's left");
+    expect(rules).toContain("subagent_message");
+    expect(rules).toContain("packages/agents/standards/");
+    expect(rules).not.toContain("spawn fresh only for independent tasks");
   });
 });

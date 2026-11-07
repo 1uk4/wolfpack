@@ -25,6 +25,15 @@
     },
     {
       "path": "../memory"
+    },
+    {
+      "path": "../client"
+    },
+    {
+      "path": "../engine"
+    },
+    {
+      "path": "../kb"
     }
   ]
 }

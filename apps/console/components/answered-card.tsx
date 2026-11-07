@@ -121,7 +121,7 @@ export function AnsweredCard({ answer, input }: { answer: QuestionAnswerData; in
 										// Ask-option subtext (owner, 2026-10-12): same markdown path
 										// as the pending dock — LaTeX included. Quiz options carry
 										// none (owner ruling 2026-09-26); the map stays empty for them.
-										<MessageResponse className="lh-prose block text-xs text-muted-foreground">
+										<MessageResponse className="wp-prose block text-xs text-muted-foreground">
 											{escapeRawHtml(descByIndex.get(opt.index) ?? "")}
 										</MessageResponse>
 									)}
@@ -143,7 +143,7 @@ export function AnsweredCard({ answer, input }: { answer: QuestionAnswerData; in
 				</div>
 			)}
 
-			{answer.text && <div className="lh-prose mt-2 whitespace-pre-wrap">“{answer.text}”</div>}
+			{answer.text && <div className="wp-prose mt-2 whitespace-pre-wrap">“{answer.text}”</div>}
 
 			{/* The confidence record (owner round 6): the slider's rail, disc
 			    removed — the missing handle itself says "this is a record, not a

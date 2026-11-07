@@ -10,7 +10,7 @@
  *   does nothing; Shift+Tab alone cycles the thinking level.
  * - Esc is a layered dismiss: topmost popover (each popover stopPropagation's
  *   its own Esc) → dictation stop → abort in-flight turn.
- * - The key map persists overrides in localStorage (`lh:keymap`, overrides
+ * - The key map persists overrides in localStorage (`wolfpack:keymap`, overrides
  *   only) merged over DEFAULT_BINDINGS — the settings wave adds the editor.
  *
  * Binding strings are normalized, cross-platform:
@@ -19,6 +19,8 @@
  * Order is fixed: mod, alt, shift, then the key.
  */
 
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "./legacy-storage-boot.ts";
 export type KeyAction =
 	| "toggle-dictation"
 	| "open-palette"
@@ -94,7 +96,7 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "question-submit", label: "Question · submit", scope: "chat", binding: "enter", displayOnly: true },
 ];
 
-const STORAGE_KEY = "lh:keymap";
+const STORAGE_KEY = "wolfpack:keymap";
 
 /** localStorage overrides ({actionId: binding}) — read once per module
  *  instance; the settings editor will write this key. Guarded: SSR and a
@@ -173,12 +175,12 @@ export function eventBinding(e: KeyboardEvent): string {
  *  the ONE spelling shared by the dispatcher (keyboard-shortcuts) and
  *  every surface listener. Born from the ⌘B bug (owner interlude
  *  2026-09-25): the sidebar listened on the pre-convention name
- *  "lh:toggle-sidebar" while the dispatcher sent "lh:kbd-toggle-sidebar",
+ *  "wolfpack:toggle-sidebar" while the dispatcher sent "wolfpack:kbd-toggle-sidebar",
  *  so ⌘B silently did nothing. With both sides composing through this
  *  helper the mismatch is structurally impossible.
  */
 export function kbdEventForAction(action: KeyAction): string {
-	return `lh:kbd-${action}`;
+	return `wolfpack:kbd-${action}`;
 }
 
 /** True when the event lands in a typing surface (input, textarea, or a

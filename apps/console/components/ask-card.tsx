@@ -242,7 +242,7 @@ function stopDictationOnEscape(e: React.KeyboardEvent) {
 	if (e.key !== "Escape" || !isDictationActive()) return;
 	e.preventDefault();
 	e.stopPropagation();
-	window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));
+	window.dispatchEvent(new CustomEvent("wolfpack:kbd-cancel-dictation"));
 }
 
 /**

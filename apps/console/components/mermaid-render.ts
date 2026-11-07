@@ -36,7 +36,7 @@ const plugin = createMermaidPlugin();
  *  mermaid caches rendered ids, and a repeated id across charts/renders
  *  returns the stale svg (the bug streamdown's own id minting avoids). */
 export async function renderMermaid(chart: string): Promise<string> {
-	const id = `lh-mermaid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+	const id = `wp-mermaid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 	const { svg } = await plugin.getMermaid(mermaidTheme).render(id, chart);
 	return svg;
 }

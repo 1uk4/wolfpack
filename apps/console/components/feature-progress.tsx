@@ -5,7 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDownIcon, Maximize2Icon } from "lucide-react";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import { useOptionalMemoryEvents } from "@/components/memory-events";
-import { usePanelHost } from "@/components/panel-host";
+import { useOpenWorkItem } from "@/components/work-reader-nav";
 import { PlanGraphView } from "@/components/plan-graph-view";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { cn } from "@/lib/utils";
@@ -182,16 +182,15 @@ export interface FeatureProgressPanelProps {
 export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressPanelProps) {
 	const [open, setOpenState] = useState(() => isProgressOpen(threadId));
 	const panelId = useId();
-	const panels = usePanelHost();
+	const openWork = useOpenWorkItem();
 	const [full, setFull] = useState(false);
 	const setOpen = (v: boolean) => {
 		setProgressOpen(threadId, v);
 		setOpenState(v);
 	};
 	const openTask = (id: string) => {
-		setFull(false); // the modal covers the page: close it so the Status panel is visible
-		// next tick: the shell's focus restore (to the full-screen button) runs on unmount and must not steal the panel's focus
-		setTimeout(() => void panels.openPanel("memory", { taskId: id, nonce: Date.now() }), 0);
+		setFull(false); // the modal covers the page: close it so the task view is visible
+		openWork(id);
 	};
 	const titleId = `${panelId}-full`;
 	return (

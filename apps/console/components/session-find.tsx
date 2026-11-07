@@ -8,14 +8,14 @@ import {
 } from "@/components/session-find-dom";
 import { scrollSessionTarget, type SessionScrollContext } from "@/components/session-navigation";
 
-export const SESSION_FIND_HIGHLIGHT = "lh-session-find";
-export const SESSION_FIND_ACTIVE_HIGHLIGHT = "lh-session-find-active";
+export const SESSION_FIND_HIGHLIGHT = "wp-session-find";
+export const SESSION_FIND_ACTIVE_HIGHLIGHT = "wp-session-find-active";
 
 /** ::highlight() rules live OUTSIDE globals.css on purpose: the PostCSS/
  *  Tailwind v4 pipeline rejects the Custom Highlight pseudo-element as a
  *  parse error, which downed the whole stylesheet. A tiny <style> element,
  *  injected once on first client mount, ships them verbatim. */
-const FIND_STYLE_ID = "lh-session-find-style";
+const FIND_STYLE_ID = "wp-session-find-style";
 export function injectFindStyles(): void {
 	if (document.getElementById(FIND_STYLE_ID)) return;
 	const style = document.createElement("style");
@@ -49,7 +49,7 @@ function publishHighlights(ranges: readonly Range[], index: number): void {
  * must not block Find once they have stopped being a surfaced layer. */
 export function sessionFindHasForegroundLayer(doc: Document): boolean {
 	return Array.from(doc.querySelectorAll(
-		'[data-lh-menu], [data-radix-popper-content-wrapper], [role="menu"], [role="dialog"], [data-testid="cheat-sheet"]',
+		'[data-wp-menu], [data-radix-popper-content-wrapper], [role="menu"], [role="dialog"], [data-testid="cheat-sheet"]',
 	)).some((element) => {
 		if (element.getAttribute("data-state") === "closed" || element.hasAttribute("hidden")) return false;
 		const view = doc.defaultView;
@@ -165,7 +165,7 @@ export function SessionFind({ scopeRef, scrollContextRef }: {
 			role="search"
 			aria-label="Session Find"
 			data-testid="session-find"
-			className="lh-no-drag flex h-10 shrink-0 items-center gap-2 border-b border-border px-6 font-ui text-sm"
+			className="wp-no-drag flex h-10 shrink-0 items-center gap-2 border-b border-border px-6 font-ui text-sm"
 			onKeyDown={(event) => {
 				if (event.key === "Enter") {
 					event.stopPropagation(); // NEVER reach question/global Enter submits.
@@ -187,7 +187,7 @@ export function SessionFind({ scopeRef, scrollContextRef }: {
 				value={query}
 				onChange={(event) => setQuery(event.target.value)}
 				spellCheck={false}
-				className="lh-input min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+				className="wp-input min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
 			/>
 			<output aria-live="polite" data-testid="session-find-count" className="shrink-0 text-xs tabular-nums text-muted-foreground">
 				{query ? `${result.index + 1}/${result.count}` : ""}

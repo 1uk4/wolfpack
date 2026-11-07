@@ -90,10 +90,6 @@ import { runCrawlInterview, withPause } from "./crawl-tui.js";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { fileURLToPath } from "node:url";
-
-/** This extension's folder (bundled assets such as kb-graph/ live here). */
-const EXT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Custom entry types ──────────────────────────────────────────────────────
 
@@ -1744,70 +1740,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       orchestrator?.setDefaultDomain(currentDomain);
       if (ctx.hasUI) ctx.ui.notify(`Domain switched: \x1b[36m${prev}\x1b[0m → \x1b[36m${currentDomain}\x1b[0m`, "info");
       refreshStatus(ctx);
-    },
-  });
-
-  pi.registerCommand("kb", {
-    description:
-      "Open the KB knowledge-graph in your browser (/kb [kb-root])",
-    handler: async (args: string, ctx: any) => {
-      const { execFile } = require("node:child_process");
-      const home = process.env.HOME ?? "";
-      // The generator ships with this extension (kb-graph/build_graph.py).
-      const script = path.join(EXT_DIR, "kb-graph", "build_graph.py");
-      if (!fs.existsSync(script)) {
-        if (ctx.hasUI) ctx.ui.notify(`🐺 kb-graph generator missing at ${script}`, "error");
-        return;
-      }
-
-      // Prefer an explicit arg, then the wolf's KB_BASE; otherwise let the
-      // generator fall back to its own default (~/wolves/knowledge/base).
-      const scriptArgs = ["-I", script, "--no-open"];
-      const kbRoot = (args ?? "").trim() || kbRoots.kbBase;
-      if (kbRoot) scriptArgs.push("--kb-root", kbRoot);
-
-      if (ctx.hasUI) ctx.ui.notify("🐺 building KB graph…", "info");
-      try {
-        const out: string = await new Promise((resolve, reject) => {
-          execFile(
-            "python3",
-            scriptArgs,
-            { timeout: 60_000 },
-            (err: any, stdout: string, stderr: string) => {
-              if (err) reject(new Error(stderr || err.message));
-              else resolve(stdout);
-            },
-          );
-        });
-        const m = out.match(/Wrote (.+)/);
-        const outPath = m ? m[1].trim() : path.join(home, ".cache", "kb-graph", "kb-graph.html");
-
-        // On an interactive wolf (laptop), launch the browser — pi's notify
-        // renders plain text, so a file:// line isn't clickable. On headless
-        // wolves (e.g. Dewey) there's no browser: just print the path.
-        const opener =
-          process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-        let opened = false;
-        if (ctx.mode === "tui" && ctx.hasUI) {
-          try {
-            await new Promise<void>((resolve) => {
-              execFile(opener, [outPath], { timeout: 10_000 }, () => resolve());
-            });
-            opened = true;
-          } catch {
-            opened = false;
-          }
-        }
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            opened
-              ? `🐺 KB graph opened in your browser\n   ${outPath}`
-              : `🐺 KB graph ready — open it:\n   file://${outPath}`,
-            "info",
-          );
-      } catch (e) {
-        if (ctx.hasUI) ctx.ui.notify(`🐺 KB graph build failed: ${String(e)}`, "error");
-      }
     },
   });
 

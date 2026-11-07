@@ -11,6 +11,8 @@
  * src/server/graph-positions.ts and graph-view.tsx.
  */
 
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "./legacy-storage-boot.ts";
 import type { Position } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
 
@@ -21,7 +23,7 @@ export const MAX_STORED_POSITIONS = 20000;
 const MAX_ID_LENGTH = 512;
 
 /** localStorage key of the persisted camera (the renderer's d3 transform). */
-export const GRAPH_CAMERA_KEY = "lh.graph.camera.v1";
+export const GRAPH_CAMERA_KEY = "wolfpack.graph.camera.v1";
 
 export type PositionMap = Record<string, Position>;
 

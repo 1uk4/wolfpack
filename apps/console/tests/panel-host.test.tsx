@@ -9,6 +9,8 @@ import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
+// A selection saved by the pre-rename build, present before the console modules load (the boot-time key copy).
+store.set("lh" + ".right-panel.v1", JSON.stringify({ t1: "a" }));
 Object.assign(globalThis, {
 	window: dom.window,
 	self: globalThis, // next/link (the Status panel's item link) reads `self` when it mounts
@@ -32,10 +34,11 @@ let boundMode = false;
 const workRecord = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "", record: "", dependsOn: [], children: [] };
 const boundStatus = { state: "on", bound: { workId: "work-1", title: "Item" }, pool: { count: 1, tokens: 10, consolidateAtTokens: 100, poolTarget: 50, trigger: "tokens" } };
 
-const { PanelFloatingHandle, PanelHostProvider, RightPanelHost, usePanelHost, usePanelState, PANELS } = await import("../components/panel-host.tsx");
+const { PanelHostProvider, RightPanelHost, usePanelHost, usePanelState, PANELS } = await import("../components/panel-host.tsx");
 const { MemoryPanel } = await import("../components/memory-panel.tsx");
 const { parseSelections, resolveSelected, withSelection, RIGHT_PANEL_KEY } = await import("../src/core/index.ts");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const migratedAtBoot = store.get("wolfpack.right-panel.v1"); // beforeEach clears the store, so read it now
 type PanelDef = (typeof PANELS)[number];
 
 let emit: (frame: unknown) => void = () => {};
@@ -82,7 +85,6 @@ async function mount(panels: readonly PanelDef[], threadId = "t1", actionsOnly =
 				<PanelHostProvider wolf="w" threadId={threadId} panels={panels}>
 					{actionsOnly ? <ActionsOnly /> : <Probe />}
 					<div data-testid="chat-area" className="relative">
-						<PanelFloatingHandle />
 						<div data-testid="scroller" />
 					</div>
 					<RightPanelHost />
@@ -135,16 +137,14 @@ describe("panel host", () => {
 		assert.equal(q('[data-testid="panel-tab-a"]')!.getAttribute("aria-selected"), "true");
 	});
 
-	it("the closed-panel handle lives in the chat area (not the scroller) and reopens the panel", async () => {
+	it("a collapsed panel leaves no open handle; only openPanel (the context chip) brings it back", async () => {
 		await mount([note("memory")]);
-		assert.equal(q('[data-testid="panel-handle"]'), null, "open: no handle");
 		await click(q('[aria-label="Collapse side panel"]')!);
-		const h = q('[data-testid="panel-handle"]')!;
-		assert.equal(h.parentElement, q('[data-testid="chat-area"]'));
-		assert.ok(!q('[data-testid="scroller"]')!.contains(h));
-		await click(h);
-		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-open"), "true");
+		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-open"), "false");
+		assert.equal(q('[aria-label="Open side panel"]'), null);
 		assert.equal(q('[data-testid="panel-handle"]'), null);
+		await act(async () => void api.openPanel("memory"));
+		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-open"), "true");
 	});
 
 	it("openPanel selects the panel with its props and opens a collapsed host", async () => {
@@ -226,7 +226,7 @@ describe("panel host", () => {
 	it("the collapse state persists under the Memory panel's open key", async () => {
 		await mount([note("memory")]);
 		await click(q('[aria-label="Collapse side panel"]')!);
-		assert.equal(store.get("lh.memory-panel.open.v1"), "0");
+		assert.equal(store.get("wolfpack.memory-panel.open.v1"), "0");
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		await mount([note("memory")]);
@@ -240,6 +240,12 @@ describe("panel host", () => {
 		assert.ok(q('[data-testid="body-memory"]'));
 	});
 
+	it("restores the selection saved under the pre-rename storage key", async () => {
+		store.set(RIGHT_PANEL_KEY, migratedAtBoot!); // what the boot-time copy wrote
+		await mount([note("memory"), note("a")], "t1");
+		assert.equal(state.selected, "a");
+	});
+
 	it("only non-default selections are stored, merged with what storage already holds", async () => {
 		await mount([note("memory"), note("a")], "t1");
 		store.set(RIGHT_PANEL_KEY, JSON.stringify({ other: "a" }));
@@ -249,7 +255,7 @@ describe("panel host", () => {
 		assert.deepEqual(JSON.parse(store.get(RIGHT_PANEL_KEY)!), { other: "a" });
 	});
 
-	it("Memory keeps its subscription, feed and unread across collapse, reopen and switching tabs", async () => {
+	it("Memory keeps its subscription and feed across collapse, reopen and switching tabs", async () => {
 		boundMode = true;
 		await mount([PANELS[0]!, note("a")]);
 		await settle();
@@ -257,15 +263,13 @@ describe("panel host", () => {
 		const node = q('[data-testid="memory-panel"]')!;
 		const obs = (summary: string) => emit({ type: "observation_captured", wolf: "w", threadId: "t1", summary, count: 1, target: { kind: "den", topicId: "x" } });
 		await act(async () => obs("one"));
-		assert.equal(q('[data-testid="memory-unread"]')!.textContent, "1");
 
 		await click(q('[aria-label="Collapse side panel"]')!);
 		assert.ok(q('[data-testid="memory-panel"]') === node, "same element, not remounted");
 		assert.equal(node.getAttribute("data-open"), "false");
 		assert.equal(open, 1);
 		await act(async () => obs("two"));
-		await click(q('[aria-label="Open side panel"]')!);
-		assert.equal(q('[data-testid="memory-unread"]')!.textContent, "2");
+		await act(async () => void api.openPanel("memory"));
 
 		await click(q('[data-testid="panel-tab-a"]')!);
 		assert.ok(q('[data-testid="body-a"]'));
@@ -273,8 +277,6 @@ describe("panel host", () => {
 		await act(async () => obs("three"));
 		await click(q('[data-testid="panel-tab-memory"]')!);
 		assert.ok(q('[data-testid="memory-panel"]') === node);
-		assert.equal(q('[data-testid="memory-unread"]')!.textContent, "3");
-		await click(q('[data-testid="memory-observations"]')!);
 		assert.ok(q('[data-testid="memory-feed"]'));
 	});
 });
@@ -304,7 +306,7 @@ describe("panel host model", () => {
 
 describe("embedded MemoryPanel", () => {
 	it("renders the body only: no aside, no collapse control, and it ignores the stored open flag", async () => {
-		store.set("lh.memory-panel.open.v1", "0");
+		store.set("wolfpack.memory-panel.open.v1", "0");
 		const host = document.createElement("div");
 		document.body.appendChild(host);
 		root = createRoot(host);

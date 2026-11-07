@@ -131,7 +131,7 @@ describe("AppearanceSection (thin SSR)", () => {
 
 	it("hex inputs carry the factory placeholders; prose size resolves against the factory", () => {
 		const html = renderToStaticMarkup(<AppearanceSection appearance={undefined} onSectionChange={() => {}} />);
-		assert.ok(html.includes(`placeholder="#141414"`));
+		assert.ok(html.includes(`placeholder="#0f141a"`));
 		// The reading font is the searchable dropdown now (font-menu
 		// wave): its trigger shows the factory family; the emphasis
 		// inks' empty state is "same as text" (the old hexes died with

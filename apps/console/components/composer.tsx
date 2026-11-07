@@ -176,7 +176,7 @@ export function Composer({
 					placeholder={placeholder}
 					autoFocus={autoFocus}
 					rows={1}
-					className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
+					className="field-sizing-content wp-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 				/>
 				{controls}
 				{/* The button follows the text (owner report 2026-10-03): while
@@ -194,8 +194,8 @@ export function Composer({
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
 						labelled && "w-auto px-3 font-ui text-xs",
 						busy && !canSend
-							? "bg-secondary text-foreground hover:bg-accent max-md:bg-primary max-md:text-primary-foreground"
-							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
+							? "bg-secondary text-foreground hover:bg-accent max-md:bg-(color:--thread-accent) max-md:text-(color:--thread-accent-foreground)"
+							: "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
 					)}
 				>
 					{labelled ? (

@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-auth-store-"));
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "wp-auth-store-"));
 process.env.WOLFPACK_AUTH_FILE = path.join(TMP, "auth.json");
 
 // Import AFTER the env redirect — module-load-bound seam.

@@ -38,7 +38,7 @@ describe("memory panel model", () => {
 		assert.equal(parseOpen(serializeOpen(true)), true);
 	});
 	it("view key helper: defaults to item, round-trips both, reads the legacy record and the retired graph as item", () => {
-		assert.equal(MEMORY_PANEL_VIEW_KEY, "lh.memory-panel.view.v1");
+		assert.equal(MEMORY_PANEL_VIEW_KEY, "wolfpack.memory-panel.view.v1");
 		assert.equal(parseView(null), "item");
 		assert.equal(parseView("junk"), "item");
 		assert.equal(parseView(serializeView("feed")), "feed");

@@ -1,21 +1,13 @@
 {
   "fill" : {
-    "automatic-gradient" : "srgb:0.07843,0.07843,0.07843,1.00000"
+    "automatic-gradient" : "srgb:0.05882,0.07843,0.10196,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "wolfpack_2.svg",
-          "name" : "wolfpack_2"
-        },
-        {
-          "image-name" : "wolfpack_1.svg",
-          "name" : "wolfpack_1"
-        },
-        {
-          "image-name" : "wolfpack_0.svg",
-          "name" : "wolfpack_0"
+          "image-name" : "wolfhead.svg",
+          "name" : "wolfhead"
         }
       ],
       "shadow" : {

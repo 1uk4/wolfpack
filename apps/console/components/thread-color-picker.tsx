@@ -3,6 +3,9 @@
 import { cn } from "@/lib/utils";
 import { THREAD_COLORS, THREAD_COLOR_KEYS } from "@/src/core";
 
+/** Display names: the stored `teal` key is lime now (see THREAD_COLORS), so label it so. */
+const THREAD_COLOR_NAMES: Record<string, string> = { teal: "lime" };
+
 /** The 8 palette colors plus "Automatic" (reset). `value` is the override key; absent = automatic. */
 export function ThreadColorPicker({ value, autoHex, onPick }: { value?: string; autoHex?: string; onPick: (key: string | null) => void }) {
 	return (
@@ -13,8 +16,8 @@ export function ThreadColorPicker({ value, autoHex, onPick }: { value?: string; 
 					type="button"
 					role="menuitemradio"
 					aria-checked={value === key}
-					aria-label={key}
-					title={key}
+					aria-label={THREAD_COLOR_NAMES[key] ?? key}
+					title={THREAD_COLOR_NAMES[key] ?? key}
 					data-testid={`thread-color-${key}`}
 					onClick={() => onPick(key)}
 					className={cn("size-4 rounded-full ring-offset-1 ring-offset-card transition-transform hover:scale-110", value === key && "ring-2 ring-foreground")}

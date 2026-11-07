@@ -15,6 +15,8 @@ browser:
   timeoutMs: 30000
   maxOutputChars: 20000
   maxResponseBytes: 26214400   # largest response body the page may receive
+  maxTabs: 6               # live tabs at once (one per thread)
+  tabIdleMs: 900000        # close a thread's tab after this idle time
 ```
 
 ## Install into a den
@@ -25,7 +27,37 @@ browser:
 
 ## Tools
 browser_goto, browser_click, browser_fill, browser_eval, browser_screenshot (returns a file path: the tool API is
-text-only), browser_console, browser_network, browser_close. One page, calls serialized.
+text-only), browser_console, browser_network, browser_close.
+
+## Tabs (one per thread)
+One Chromium context (one profile, shared sign-in and cookies), one tab per thread (conversation), keyed by the tool
+call's `conversationId` and created on that thread's first browser call. A call with no id uses the `default` tab.
+- Each thread has its own queue: calls inside a thread run in order, threads run in parallel.
+- Console, network log, blocked-request list and screenshots are per tab. `browser_close` closes only the calling
+  thread's tab (and its screenshots); the browser exits with its last tab. A closed or crashed tab is recreated by the
+  thread's next call.
+- At most `maxTabs` (default 6) tabs are live. Opening one more closes the least recently used idle tab; if every tab
+  is busy the call fails with "Too many browser tabs". A tab idle for `tabIdleMs` (default 900000 = 15 min) is closed.
+- Popups are closed. Chromium flags and the request guard are context-wide and unchanged.
+
+## Preview slot sign-in
+Preview agent slots are consoles on 127.0.0.1 / localhost ports 3231-3234 that keep a hub token in the origin's
+localStorage (`wolfpack.hub.token`). When `browser_goto` to such a port lands on `/pair`, the extension runs
+`node ~/.wolfpack/preview/bin/runtime-preview.mjs slot pair <port> --print-url` (once per origin per tab; every call
+mints a hub token, so never pre-emptively), takes the URL from the LAST non-empty stdout line, accepts it only if it is
+`http://(127.0.0.1|localhost):<same port>/pair#token=…`, opens it, waits for the console to store the token and leave
+`/pair`, then loads the requested URL (with the caller's `waitUntil`). The script always prints 127.0.0.1; the host is
+rewritten to the one requested (`localhost` works). It pairs only when the page landed on the slot's own origin at
+`/pair`; a second landing on `/pair` in the same tab reports "slot sign-in already tried in this tab". Result:
+`Loaded <url> (HTTP 200), signed in to the slot`. On failure: `slot sign-in failed: <first stderr line>` and the page
+stays on `/pair`. If the script is missing: "preview script not found: run `wolfpack preview` once to install it".
+Other ports (3230 included) are never touched.
+
+Secrecy. The URL goes only to the browser. Every text a tool returns (results, errors, `browser_console`,
+`browser_network`, blocked lists, eval output) is scrubbed of the token value (secrets shorter than 16 characters are
+ignored), the pair URL and any `#token=…` fragment. This is best-effort hygiene against accidental leakage into
+transcripts and logs, not protection from the agent: `browser_eval` can read `localStorage`, and the pair URL with its
+fragment is kept in the persistent profile's history alongside the stored token.
 
 ## Guards
 - Profile: `<den>/state/browser-profile` (0700), never the user's Chrome profile.
@@ -37,6 +69,12 @@ text-only), browser_console, browser_network, browser_close. One page, calls ser
   closed. Redirects are never followed by the network stack: each hop's `Location` is vetted, then the 3xx is handed to
   the browser. Responses are capped by size (`maxResponseBytes`) and time (`timeoutMs`). Cookies are bridged through
   the browser context's jar.
+- `allowHosts` bypass: an EventSource (browser resource type `eventsource`, not the Accept header) to an allowlisted
+  host that is also the page's own host is served by Chromium's own network stack, because the Node fetcher cannot
+  stream. Redirects on that path are NOT vetted: Playwright does not show the hop to the guard, so an allowlisted host
+  that redirects an EventSource to a private host is followed. Keep `allowHosts` to hosts you trust.
+- The Chromium flag `--disable-features=LocalNetworkAccessChecks` is global to the browser: it lets WebSockets to
+  allowlisted loopback hosts open. Non-allowlisted private hosts are still refused by the request/WebSocket policy.
 - WebSockets go through `routeWebSocket` with the same policy (resolved before connecting; the browser then opens that
   socket itself, so a rebinding race remains for ws only). WebRTC is limited with
   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.
@@ -44,7 +82,7 @@ text-only), browser_console, browser_network, browser_close. One page, calls ser
   query values and fragments.
 - eval/console/network output capped at `maxOutputChars`; logs keep the last 500 entries.
 - Screenshots live in a per-session temp dir (`wolf-browser-<pid>-*`), removed when the browser closes; dirs of dead
-  processes are swept at launch. Popups are closed; there is one page.
+  processes are swept at launch. Popups are closed.
 
 ## Limits (read this)
 - An allowlisted host can redirect anywhere the policy allows, and anything it serves is trusted as far as the page

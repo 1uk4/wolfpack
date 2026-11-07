@@ -6,11 +6,13 @@
  * the off/inert banner.
  */
 
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "./legacy-storage-boot.ts";
 import type { MemoryEventFrame, MemoryPoolStatus, MemoryStatus, WorkRecordResponse } from "./kb.ts";
 
 export const FEED_CAP = 100;
-export const MEMORY_PANEL_OPEN_KEY = "lh.memory-panel.open.v1";
-export const MEMORY_PANEL_VIEW_KEY = "lh.memory-panel.view.v1";
+export const MEMORY_PANEL_OPEN_KEY = "wolfpack.memory-panel.open.v1";
+export const MEMORY_PANEL_VIEW_KEY = "wolfpack.memory-panel.view.v1";
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);

@@ -21,7 +21,21 @@ const ROOT_CONFIG = [/^package-lock\.json$/, /^pnpm-lock\.yaml$/, /^pnpm-workspa
 const DOC = [/\.md$/i, /^docs\//, /^LICENSE/, /^ATTRIBUTION/];
 const ZERO = /^0+$/;
 
+/** Workspace dirs whose `packages/<x>/dist` a workspace's source/tests import by relative path (not declared as a dependency). */
+function distImports(root, dir) {
+  const found = new Set();
+  const walk = (d) => {
+    for (const e of readdirSync(join(root, d), { withFileTypes: true })) {
+      if (e.isDirectory()) { if (!["node_modules", ".next", "dist", ".turbo"].includes(e.name)) walk(`${d}/${e.name}`); }
+      else if (/\.[cm]?[jt]sx?$/.test(e.name)) for (const m of readFileSync(join(root, d, e.name), "utf8").matchAll(/packages\/([\w-]+)\/dist\b/g)) found.add(`packages/${m[1]}`);
+    }
+  };
+  walk(dir);
+  return [...found];
+}
+
 /** Workspaces: [{name, dir, deps:[workspace names], inTsRoot}] from the root package.json globs. */
+const name_is_console = (n) => n === COMPONENTS.console;
 export function loadWorkspaces(root) {
   const rootPkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const dirs = [];
@@ -40,6 +54,8 @@ export function loadWorkspaces(root) {
     deps: [...new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((k) => Object.keys(pkg[k] ?? {})))].filter((d) => names.has(d)),
     inTsRoot: tsRoot.includes(dir),
     hasTest: !!pkg.scripts?.test,
+    // only the console's tests load other packages' dist at runtime
+    distImports: name_is_console(pkg.name) ? distImports(root, dir) : [],
   }));
 }
 
@@ -62,7 +78,9 @@ export function computeAffected(changed, workspaces) {
   const dirs = (f) => packages.map((n) => byName.get(n)).filter(f).map((w) => w.dir);
   // console tests import @wolfpack/* deps from dist, so build them too (tsc --build follows their references)
   const consoleTests = hit.has("@wolfpack/console");
-  const consoleDeps = !all && consoleTests ? (byName.get("@wolfpack/console")?.deps ?? []).map((n) => byName.get(n)).filter((w) => w?.inTsRoot).map((w) => w.dir) : [];
+  // ...plus packages imported from dist by relative path (e.g. packages/harness/dist/wolfd/scripted-model.js), derived by scanning console sources
+  const con = byName.get("@wolfpack/console");
+  const consoleDeps = !all && consoleTests ? [...(con?.deps ?? []).map((n) => byName.get(n)?.dir), ...(con?.distImports ?? [])].filter((d) => workspaces.some((w) => w.dir === d && w.inTsRoot)) : [];
   const tsProjects = all ? ["."] : [...new Set([...dirs((w) => w.inTsRoot), ...consoleDeps])];
   const tracerPk = ["@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/harness"];
   return {

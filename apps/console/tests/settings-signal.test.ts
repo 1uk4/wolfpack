@@ -1,6 +1,6 @@
 /**
  * The cross-surface settings signal (fix wave, owner ruling 2026-09-22):
- * writers dispatch lh:settings-saved {section} after a successful PUT,
+ * writers dispatch wolfpack:settings-saved {section} after a successful PUT,
  * readers re-read. These tests pin the SEAM's contract — delivery,
  * section detail, unsubscribe, and junk-event tolerance — against a bare
  * EventTarget standing in for window (Node has no DOM; the reader WIRING

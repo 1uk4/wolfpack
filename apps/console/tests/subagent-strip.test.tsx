@@ -31,6 +31,7 @@ const { createThreadApi } = await import("../src/server/thread-api.ts");
 const { createActivityBridge } = await import("../src/server/needs-you-api.ts");
 const { SubagentModalProvider } = await import("../components/subagent-modal.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
+const strip = await import("../components/subagent-strip.tsx");
 const { ActivitySection } = await import("../components/activity-dock.tsx");
 const { SessionRow, SessionsSidebar } = await import("../components/sidebar.tsx");
 const { SidebarProvider } = await import("../components/sidebar.tsx");
@@ -227,6 +228,25 @@ describe("the strip's done rows", () => {
 		child(4),
 	];
 	const view = () => renderToStaticMarkup(<SubagentStripView items={kids} now={NOW} onOpen={() => {}} onStop={() => {}} />);
+
+	it("with an attached chat the strip shows its row (dot, title, state) even with no subagents; listening wins over busy", () => {
+		const row = { title: "Home", color: "#123456", state: "busy" as const, listening: false, onOpen: () => {} };
+		const html = renderToStaticMarkup(<SubagentStripView items={[]} now={NOW} onOpen={() => {}} onStop={() => {}} attached={row} />);
+		assert.match(html, /data-testid="attached-row" data-state="busy"/);
+		assert.match(html, /background-color:#123456/);
+		assert.match(html, />Home</);
+		assert.match(html, />working</);
+		const listening = renderToStaticMarkup(<SubagentStripView items={[]} now={NOW} onOpen={() => {}} onStop={() => {}} attached={{ ...row, listening: true }} />);
+		assert.match(listening, />listening</);
+	});
+
+	it("the attached row shows the live dictation meter while listening and drops it after Stop", () => {
+		const dictation = { active: true, levelRef: { current: 0 } } as never;
+		const row = { title: "Home", color: "#123456", state: "idle" as const, listening: true, onStop: () => {}, dictation, onOpen: () => {} };
+		const render = (r: typeof row) => renderToStaticMarkup(<SubagentStripView items={[]} now={NOW} onOpen={() => {}} onStop={() => {}} attached={r} />);
+		assert.match(render(row), /data-testid="dictation-meter"/);
+		assert.doesNotMatch(render({ ...row, listening: false, dictation: { active: false, levelRef: { current: 0 } } as never }), /dictation-meter/);
+	});
 
 	it("a settled row leaves at once (no linger, no N done row); only live ones show", () => {
 		const html = view();
@@ -636,5 +656,21 @@ describe("subagent openers: the modal opens over the page, with the wolf the cal
 		await settle(30);
 		assert.match(scrolled.at(-1) ?? "", /Live feature/);
 		(dom.window.Element.prototype as unknown as Record<string, unknown>).scrollIntoView = () => {};
+	});
+});
+
+describe("the room the thread reserves above the strip", () => {
+	const { stripReservePx, STRIP_ROW_PX } = strip;
+	const finished = Array.from({ length: 30 }, (_, i) => child(i + 10, { state: "done", finishedAt: ago(60_000) }));
+	const row = { title: "t", color: "#000", state: "idle" as const, listening: false, onOpen() {} };
+
+	it("counts only the rows the strip draws, not every child the thread ever had", () => {
+		assert.equal(stripReservePx([...finished, child(1)] as never, NOW, null), 1 * STRIP_ROW_PX + 8);
+	});
+	it("counts the attached row too", () => {
+		assert.equal(stripReservePx([...finished, child(1)] as never, NOW, row), 2 * STRIP_ROW_PX + 8);
+	});
+	it("is zero with no rows, finished children alone included", () => {
+		assert.equal(stripReservePx(finished as never, NOW, null), 0);
 	});
 });

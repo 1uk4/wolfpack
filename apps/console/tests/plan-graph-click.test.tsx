@@ -1,5 +1,5 @@
 /**
- * The shared graph view's node click: the show_graph chat card opens the Status panel only for a work item id; the draggable
+ * The shared graph view's node click: the show_graph chat card opens the work item in the task view only for a work item id; the draggable
  * view (pinned feature graph) pans on a drag and never counts a drag as a click.
  */
 import React, { act } from "react";
@@ -27,8 +27,7 @@ Object.assign(globalThis, {
 
 const { PlanGraphCard } = await import("../components/plan-graph-card.tsx");
 const { PlanGraphView } = await import("../components/plan-graph-view.tsx");
-const { PanelHostProvider, RightPanelHost } = await import("../components/panel-host.tsx");
-const { ActivityIcon } = await import("lucide-react");
+const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 
 const WORK = "work-wolfpack-ASNQgEf";
 const data = {
@@ -56,35 +55,24 @@ async function mount(node: React.ReactNode) {
 	await act(async () => root!.render(node));
 }
 
-const task = () => q('[data-testid="stub-status"]')?.getAttribute("data-task");
-const stub = {
-	id: "memory",
-	label: "Status",
-	icon: ActivityIcon,
-	available: () => true,
-	render: ({ props }: { props: Record<string, unknown> }) => <div data-testid="stub-status" data-task={String(props.taskId ?? "")} />,
-};
-
-const PANELS = [stub as never];
+Object.defineProperty(window, "location", { configurable: true, value: { pathname: "/wolf/hal/thread/t1", search: "", assign: () => {} } });
+const pushed: string[] = [];
+const router = { push: (u: string) => void pushed.push(u), replace: (u: string) => void pushed.push(u) };
 
 describe("show_graph chat card click", () => {
-	const mountCard = () =>
-		mount(
-			<PanelHostProvider wolf="w" threadId="w/t" panels={PANELS}>
-				<PlanGraphCard objectId="o" type="graph" rev={1} data={data} />
-				<RightPanelHost />
-			</PanelHostProvider>,
-		);
-	it("a node whose id is a work item id opens the Status panel on it", async () => {
+	const mountCard = () => mount(<AppRouterContext.Provider value={router as never}><PlanGraphCard objectId="o" type="graph" rev={1} data={data} /></AppRouterContext.Provider>);
+	it("a node whose id is a work item id opens the work item in the task view (the reader), not the side panel", async () => {
+		pushed.length = 0;
 		await mountCard();
-		assert.equal(task(), "");
 		await click(q(`[data-node-id="${WORK}"] [data-testid="graph-node-hit"]`)!);
-		assert.equal(task(), WORK);
+		assert.equal(pushed.length, 1);
+		assert.match(pushed[0]!, new RegExp(`item=${WORK}`));
 	});
 	it("a free-form step id does nothing", async () => {
+		pushed.length = 0;
 		await mountCard();
 		await click(q('[data-node-id="step-2"] [data-testid="graph-node-hit"]')!);
-		assert.equal(task(), "");
+		assert.deepEqual(pushed, []);
 	});
 	it("the card is not draggable", async () => {
 		await mountCard();

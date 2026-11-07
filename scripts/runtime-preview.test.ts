@@ -53,15 +53,23 @@ beforeEach(() => {
 	rtWt = path.join(tmp, "rt");
 	g(main, "worktree", "add", "-q", rtWt, "stable");
 });
-afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+/** Attempts by the code under test to touch port 3230 or an unregistered pid through the harness stubs; every test must end with none. */
+const violations: string[] = [];
+afterEach(() => {
+	fs.rmSync(tmp, { recursive: true, force: true });
+	expect(violations.splice(0)).toEqual([]);
+});
 
 /** Stubbed steps record into `calls`; the git runner is real but spied on. */
-const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves?: boolean; portBusy?: boolean } = {}) => {
+const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves?: boolean; portBusy?: boolean; strays?: { pid: number; port: number }[] } = {}) => {
+	// next dev processes the test registers on purpose; anything else is refused (see the stubs below)
+	const strays = new Map((opts.strays ?? []).map((x) => [x.pid, x]));
 	const lc: string[][] = [];
 	const calls: string[] = [];
 	const gitCalls: string[][] = [];
 	const logs: string[] = [];
 	const builds: (string | undefined)[] = [];
+	const kills: string[] = [];
 	const steps = {
 		git: (cwd: string, ...args: string[]) => {
 			gitCalls.push(args);
@@ -80,12 +88,31 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves
 		pick: async () => "all",
 		sleep: async () => {},
 		portFree: async () => !opts.portBusy,
+		// Fail closed, never the real lsof or process.kill: `off` and `status` look for a stray next dev on the console port, and the real steps
+		// found (and SIGTERMed) the owner's console on 3230. Any pid the test did not register in `strays` throws (and is recorded).
+		// A lookup of 3230 is answered from the registered strays (none there), so it can never reach the real lsof.
+		listeners: async (port: number | string) => [...strays.values()].filter((x) => x.port === Number(port)).map((x) => x.pid),
+		procInfo: async (pid: number) => {
+			if (!strays.has(pid)) {
+				violations.push(`procInfo ${pid}`);
+				throw new Error(`test harness: refusing to inspect pid ${pid}, which the test did not register`);
+			}
+			return { command: "node /x/apps/console/node_modules/next/dist/bin/next dev", cwd: "/x/apps/console" };
+		},
+		kill: (pid: number, sig: string) => {
+			if (!strays.has(pid)) {
+				violations.push(`kill ${sig} ${pid}`);
+				throw new Error(`test harness: refusing to signal pid ${pid}, which the test did not register`);
+			}
+			kills.push(`${sig} ${pid}`);
+			strays.delete(pid);
+		},
 		probe: async () => 401, // hub mode: compiled, not paired yet
 		fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: opts.noWolves ? [] : [{ id: "ddkyhT", name: "1uk4", host: "local", status: "busy", librarian: false, kbReadable: true }] } : { chats: [] }),
 	};
 	const run = (argv: string[]) =>
 		runPreview({ argv, env: { HOME: home, WOLVES_DIR: path.join(tmp, "wolves"), PREVIEW_USERDATA_ROOT: ud() }, cwd: rtWt, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { calls, gitCalls, logs, run, steps, builds, lc };
+	return { calls, gitCalls, logs, run, steps, builds, lc, kills };
 };
 
 describe("runtime-preview", () => {
@@ -496,6 +523,27 @@ describe("runtime-preview", () => {
 			expect(h.logs.join("\n")).toContain("3230");
 			expect(h.lc.some((a) => a[0] === "bootstrap")).toBe(false);
 		});
+	});
+});
+
+describe("the harness is fail-closed about real processes", () => {
+	// `off` and `status` look for a stray next dev on the console port; unstubbed, the real lsof and kill found (and SIGTERMed) the owner's
+	// console on 3230. The harness stubs throw for port 3230 and any pid the test did not register, and record each attempt in `violations`
+	// (which afterEach requires to be empty, so a throw that the code under test swallows still fails the test).
+	it("records an inspect or signal of an unregistered pid as a violation, and still throws", async () => {
+		const h = harness({ strays: [{ pid: 4242, port: 3999 }] });
+		await expect(h.steps.procInfo(99106)).rejects.toThrow(/99106/);
+		expect(() => h.steps.kill(99106, "SIGTERM")).toThrow(/99106/);
+		expect(violations.splice(0)).toEqual(["procInfo 99106", "kill SIGTERM 99106"]); // taken out so afterEach does not fail this test
+		expect(await h.steps.listeners(3999)).toEqual([4242]); // a registered stray is allowed
+		expect(violations).toEqual([]);
+	});
+
+	it("off whose lookup finds a pid the test never registered still ends with a recorded violation, even though off swallows the throw", async () => {
+		const h = harness();
+		h.steps.listeners = async () => [99106]; // a lookup that finds a process the test did not register
+		await runPreview({ argv: ["off"], env: { HOME: home }, cwd: rtWt, steps: h.steps, log: () => {}, warn: () => {} });
+		expect(violations.splice(0)).toContain("procInfo 99106");
 	});
 });
 

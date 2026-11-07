@@ -14,9 +14,9 @@ second pillar of input).
 - **Provider**: `components/keyboard-shortcuts.tsx` — one window-level
   keydown listener (bubble phase, mounted once in AppShell). Normalizes
   keys to `mod+d`-style strings, resolves overrides, dispatches
-  `lh:kbd-<action-id>` window CustomEvents. Surfaces listen for their
-  own events (matching the pre-existing `lh:chat-renamed` seam style).
-- **Persistence**: overrides live under localStorage `lh:keymap` as
+  `wolfpack:kbd-<action-id>` window CustomEvents. Surfaces listen for their
+  own events (matching the pre-existing `wolfpack:chat-renamed` seam style).
+- **Persistence**: overrides live under localStorage `wolfpack:keymap` as
   `{actionId: binding}` merged over defaults. No editor yet — the
   settings milestone owns key map editing.
 - **displayOnly entries**: the registry also lists SURFACE-owned keys
@@ -44,21 +44,21 @@ second pillar of input).
 
 | Action | Binding | Seam |
 |---|---|---|
-| Toggle dictation | ⌘D | `lh:kbd-toggle-dictation` (dictation.tsx) |
-| Command palette | ⌘K | `lh:kbd-open-palette` (command-palette.tsx) |
-| Model selector | ⌘⇧M | `lh:kbd-open-model-picker` (model-picker.tsx); also the palette's "Switch model" command |
-| Cycle thinking level | Shift+Tab | `lh:kbd-cycle-thinking` (model-picker.tsx) |
-| Toggle sidebar | ⌘B | `lh:toggle-sidebar` (sidebar.tsx) |
-| Sessions search | ⌘⇧F | `lh:kbd-sessions-search` (sidebar.tsx) |
+| Toggle dictation | ⌘D | `wolfpack:kbd-toggle-dictation` (dictation.tsx) |
+| Command palette | ⌘K | `wolfpack:kbd-open-palette` (command-palette.tsx) |
+| Model selector | ⌘⇧M | `wolfpack:kbd-open-model-picker` (model-picker.tsx); also the palette's "Switch model" command |
+| Cycle thinking level | Shift+Tab | `wolfpack:kbd-cycle-thinking` (model-picker.tsx) |
+| Toggle sidebar | ⌘B | `wolfpack:toggle-sidebar` (sidebar.tsx) |
+| Sessions search | ⌘⇧F | `wolfpack:kbd-sessions-search` (sidebar.tsx) |
 | Walk search results | ↑ / ↓ *in the search field* | sidebar.tsx (cycles the filtered rows, wraps) |
 | Open search result | Enter *in the search field* | sidebar.tsx (walked row, else the first match) |
 | ~~Cycle session~~ | ~~⌥↑ / ⌥↓~~ | RETIRED (owner, 2026-10-10) — the search walk above replaces it |
 | ~~Open selected session~~ | ~~⌥Enter~~ | RETIRED (owner, 2026-10-10) — the search Enter above replaces it |
 | Jump to graph (home) | ⌘G | router.push in keyboard-shortcuts.tsx |
 | New session | ⌘N | router.push in keyboard-shortcuts.tsx |
-| Rename session | F2 | `lh:kbd-rename-session` (chat.tsx) |
+| Rename session | F2 | `wolfpack:kbd-rename-session` (chat.tsx) |
 | Cheat sheet | ? | keyboard-shortcuts.tsx |
-| Find (graph: node search) | ⌘F | `lh:kbd-find` (graph-view.tsx; chat transcript search rides the same event when that feature lands) |
+| Find (graph: node search) | ⌘F | `wolfpack:kbd-find` (graph-view.tsx; chat transcript search rides the same event when that feature lands) |
 
 ## Model menu keyboard machine (owner polish, 2026-09-17)
 

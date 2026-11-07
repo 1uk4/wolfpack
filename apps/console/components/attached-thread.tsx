@@ -48,6 +48,9 @@ export interface AttachedThreadApi {
 	markSent: () => void;
 	/** A send failed: drop the optimistic "working". */
 	clearSent: () => void;
+	/** Phone: a thread page's strip row asked for the floating chat as a full-screen sheet (the dock is off on thread pages). */
+	phoneSheet: boolean;
+	setPhoneSheet: (v: boolean) => void;
 	attach: (ref: { wolf: string; threadId: string; slug?: string }) => void;
 	/** Dock the floating chat: clears the popped-out thread (its draft stays in the draft store). */
 	dock: () => void;
@@ -93,6 +96,7 @@ export function AttachedThreadProvider({
 	const attachedRef = useRef<AttachedRef | null>(null);
 	const [ready, setReady] = useState(false);
 	const [minimized, setMinimizedState] = useState(false);
+	const [phoneSheet, setPhoneSheet] = useState(false);
 	const [pageAttachments, setPageAttachmentsState] = useState<{ threadId: string; count: number } | null>(null);
 	const setPageAttachments = useCallback(
 		(threadId: string, count: number) => setPageAttachmentsState((prev) => (count === 0 ? (prev?.threadId === threadId ? null : prev) : prev?.threadId === threadId && prev.count === count ? prev : { threadId, count })),
@@ -246,8 +250,8 @@ export function AttachedThreadProvider({
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh }),
-		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh],
+		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, setPhoneSheet, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh }),
+		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { createEarlierScroll } from "@/components/earlier-scroll";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
@@ -16,8 +16,9 @@ import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { TurnTimer, useTurnStart } from "@/components/turn-timer";
-import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/subagent-strip";
-import { PanelFloatingHandle, PanelHostProvider, RightPanelHost } from "@/components/panel-host";
+import { useAttachedStripRow } from "@/components/attached-strip-row";
+import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/subagent-strip";
+import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { useAttachedThread } from "@/components/attached-thread";
@@ -54,6 +55,7 @@ import {
 	type ToolItem,
 	ATTACHMENTS_PART,
 	threadTint,
+	threadAccentStyle,
 	threadTintSolid,
 	type ThreadColorSource,
 } from "@/src/core";
@@ -405,10 +407,11 @@ function ThreadChatInner({
 	// Unsent text survives leaving the thread, switching wolves and reloads (localStorage, text only).
 	// Restore callback: deliberately skips applyText, so a restored draft is not re-scheduled for writing, does not
 	// focus the composer and does not touch the dictation state.
-	// The floating chat REPLACES this composer while it is popped out and shown here (dictating, desktop): ONE input owns the
-	// text. The card unmounts (attachments live up here in ThreadChat, so pending ones survive and are back when it
-	// returns); `ownedByBar` makes the draft hook inert meanwhile (a stale text must not overwrite or absorb the chat's);
-	// when it docks, the composer re-reads the draft (typed plus dictated) via useRereadDraftWhenShown below.
+	// While the floating chat is shown for this thread (a live run followed the owner away and back through a route where the
+	// bar still shows, or a phone sheet), it owns the text: the composer card unmounts (attachments live up here in
+	// ThreadChat, so pending ones survive); `ownedByBar` makes the draft hook inert meanwhile (a stale text must not
+	// overwrite or absorb the chat's); when it docks, the composer re-reads the draft via useRereadDraftWhenShown below.
+	// Dictating on this thread's own page does NOT do this: the composer stays and highlights itself.
 	const attachedApi = useAttachedThread();
 	const barShown = useBarShown();
 	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
@@ -463,6 +466,8 @@ function ThreadChatInner({
 	const busy = status === "submitted" || status === "streaming";
 	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
+	const attachedRow = useAttachedStripRow(wolf, threadId);
+	const stripReserve = stripReservePx(subagents, Date.now(), attachedRow);
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
 		[messages],
@@ -575,6 +580,7 @@ function ThreadChatInner({
 			data-testid="thread-chat"
 			data-thread={threadId}
 			data-dragging={dragging || undefined}
+			style={threadAccentStyle(tintHex) as CSSProperties}
 			onDragOver={(e) => {
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault(); // take the drop instead of the browser opening the file
@@ -600,7 +606,6 @@ function ThreadChatInner({
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
 				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex} style={{ backgroundColor: tint }}>
-					<PanelFloatingHandle />
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
 							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>
@@ -631,7 +636,7 @@ function ThreadChatInner({
 												className="my-2 w-full border-l-[calc(3ch-14px)] border-muted-foreground/30 bg-card py-1 pl-[14px] pr-4 font-ui text-xs"
 											>
 												<div className="font-medium uppercase tracking-wide text-muted-foreground">You</div>
-												<div className="lh-prose whitespace-pre-wrap text-foreground">
+												<div className="wp-prose whitespace-pre-wrap text-foreground">
 													{m.parts
 														.filter((p) => p.type === "text")
 														.map((p) => p.text)
@@ -738,20 +743,25 @@ function ThreadChatInner({
 								)}
 							</div>
 							{/* Reserve the composer's height so the tail scrolls clear of it. */}
-							<div aria-hidden className="h-40" style={subagents.length ? { marginTop: Math.min(subagents.length, 4) * STRIP_ROW_PX + 8 } : undefined} />
+							<div aria-hidden className="h-40" style={stripReserve ? { marginTop: stripReserve } : undefined} />
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
 							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
-									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
+									<SubagentStrip wolf={wolf} slug={slug} items={subagents} attached={attachedRow} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
 											<div className="font-medium">Feature graduated</div>
 											<div className="text-muted-foreground">{closedReason}</div>
 										</div>
 									) : barOwnsInput ? null : (
-									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
+									<div
+										data-testid="thread-composer-card"
+										{...(dictation.active ? { "data-listening": "true" } : {})}
+										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dictation.active ? " border-transparent ring-2" : dragging ? " ring-2 ring-(color:--thread-accent)" : " focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)"}`}
+										style={dictation.active ? ({ "--tw-ring-color": tintHex, boxShadow: `0 0 24px ${tintHex}66` } as CSSProperties) : undefined}
+									>
 										<Composer
 											busy={busy}
 											value={text}

@@ -191,7 +191,7 @@ export async function bundleExtension(
     name?: string;
     version?: string;
     pi?: PiManifest;
-    /** Extra folders the extension reads at runtime (e.g. "kb-graph"), copied as-is. */
+    /** Extra folders the extension reads at runtime (e.g. "assets"), copied as-is. */
     wolfpack?: { assets?: string[] };
   };
   const pi = pkg.pi ?? {};

@@ -32,7 +32,7 @@ import { createFauxCore } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-prompt-overrides-"));
+const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "wp-prompt-overrides-"));
 process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { PROMPTS_OVERRIDE_DIR } = await import("../config.ts");

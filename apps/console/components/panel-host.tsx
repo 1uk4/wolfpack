@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { ActivityIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ActivityIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory-panel";
 import { MOBILE_QUERY, MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
@@ -36,8 +36,8 @@ export const PANELS: readonly PanelDef[] = [
 		icon: ActivityIcon,
 		testId: "memory-panel",
 		available: () => true,
-		render: ({ wolf, threadId, slug, props }) => (
-			<MemoryPanel embedded wolf={wolf} threadId={threadId} slug={slug} selectTaskId={typeof props.taskId === "string" ? props.taskId : undefined} selectNonce={typeof props.nonce === "number" ? props.nonce : undefined} />
+		render: ({ wolf, threadId, slug }) => (
+			<MemoryPanel embedded wolf={wolf} threadId={threadId} slug={slug} />
 		),
 	},
 ];
@@ -108,8 +108,8 @@ const persistSelection = (threadId: string, id: string) => {
 
 /**
  * Holds the right-panel state for one thread view. Selection is remembered per thread (localStorage
- * `lh.right-panel.v1`, non-default entries only); open/closed is global (the Memory panel's existing
- * `lh.memory-panel.open.v1`).
+ * `wolfpack.right-panel.v1`, non-default entries only); open/closed is global (the Memory panel's existing
+ * `wolfpack.memory-panel.open.v1`).
  */
 export function PanelHostProvider({ wolf, slug, threadId, panels = PANELS, children }: { wolf: string; slug?: string; threadId: string; panels?: readonly PanelDef[]; children: ReactNode }) {
 	const [st, setSt] = useState<HostState>({ selections: {}, props: {}, open: true });
@@ -223,11 +223,7 @@ export function RightPanelHost() {
 						<ChevronsRightIcon />
 					</Button>
 				</div>
-			) : (
-				<Button variant="ghost" size="icon" aria-label="Open side panel" onClick={actions.toggle}>
-					<ChevronsLeftIcon />
-				</Button>
-			)}
+			) : null}
 			{mounted.map((p) => {
 				const shown = open && p.id === selected;
 				return (
@@ -237,28 +233,5 @@ export function RightPanelHost() {
 				);
 			})}
 		</aside>
-	);
-}
-
-/**
- * The closed-panel handle: a floating button anchored to the top-right of the chat area (render it inside the
- * conversation wrapper, a sibling of the scroller, so it stays put while the list scrolls). Hidden while the panel
- * is open or when no panel is available. 44px tap target on the phone, 32px from md up.
- */
-export function PanelFloatingHandle() {
-	const actions = useContext(ActionsContext);
-	const state = useContext(StateContext);
-	if (!actions || !state || !state.selected || state.open) return null;
-	return (
-		<Button
-			variant="ghost"
-			size="icon"
-			aria-label="Open side panel"
-			data-testid="panel-handle"
-			className="absolute right-2 top-2 z-20 size-11 rounded-full border border-border bg-card/90 shadow-md backdrop-blur md:size-8 md:right-3 md:top-3"
-			onClick={actions.toggle}
-		>
-			<ChevronsLeftIcon />
-		</Button>
 	);
 }

@@ -26,7 +26,10 @@ export interface BuildKbGraphOptions {
   domain?: string;
   /** Restrict the graph to these domains (a reader's grants): others are neither built nor listed in `domains`. Unset: all. */
   onlyDomains?: readonly string[];
-  /** Include work items whose stage is `archived`. Default false. */
+  /**
+   * Include archived and graduated work items. Default false: those, and everything beneath them (up to a
+   * `container` such as the Inbox), are hidden, so nothing hangs loose on the Factory.
+   */
   archivedWork?: boolean;
   /** Add den-topic nodes (needs `den`). Default false. */
   denTopics?: boolean;
@@ -47,6 +50,10 @@ export interface KbWorkSource {
   title?: string;
   kind?: string;
   stage?: string;
+  /** A graduated item (the Work API's `graduated`: a date string or true). Treated like archived. */
+  graduated?: boolean | string | null;
+  /** A container (the Inbox) is never hidden and ends the ancestor walk. */
+  container?: boolean;
   partOf?: string | null;
   dependsOn?: string[];
   assignee?: string;
@@ -167,7 +174,18 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
             assignee: str(w.meta.assignee),
             updated: str(w.meta.updated),
           }));
-    const live = source.filter((w) => typeof w.id === "string" && w.id !== "" && (layers.archivedWork || w.stage !== "archived") && !nodes.has(`work:${w.id}`));
+    const byId = new Map(source.map((w) => [w.id, w]));
+    const retired = (w: KbWorkSource) => w.stage === "archived" || (w.graduated !== undefined && w.graduated !== null && w.graduated !== false && w.graduated !== "");
+    // Hidden when the item or any ancestor (walking partOf, stopping at a container) is archived or graduated.
+    const hidden = (w: KbWorkSource) => {
+      const walked = new Set<string>();
+      for (let c: KbWorkSource | undefined = w; c && !c.container && !walked.has(c.id); c = c.partOf ? byId.get(c.partOf) : undefined) {
+        if (retired(c)) return true;
+        walked.add(c.id);
+      }
+      return false;
+    };
+    const live = source.filter((w) => typeof w.id === "string" && w.id !== "" && (layers.archivedWork || !hidden(w)) && !nodes.has(`work:${w.id}`));
     if (live.length === 0) continue;
     const facNode = `fac:${domain}`;
     addNode({ id: facNode, kind: "factory", label: "Factory", domain });

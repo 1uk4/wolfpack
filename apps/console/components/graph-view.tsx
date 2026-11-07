@@ -192,14 +192,14 @@ export function GraphView({
 	openWorkRef.current = reader.open;
 
 	// Search: the query text; ⌘F (shortcut wave C) focuses it — the find
-	// event is surface-scoped, dispatched as lh:kbd-find (only this page
+	// event is surface-scoped, dispatched as wolfpack:kbd-find (only this page
 	// listens).
 	const [query, setQuery] = useState("");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		const onFind = () => searchInputRef.current?.focus();
-		window.addEventListener("lh:kbd-find", onFind);
-		return () => window.removeEventListener("lh:kbd-find", onFind);
+		window.addEventListener("wolfpack:kbd-find", onFind);
+		return () => window.removeEventListener("wolfpack:kbd-find", onFind);
 	}, []);
 
 	const canvasData = useMemo(() => toCanvasData(graph, { groupBy: settings.groupBy }), [graph, settings.groupBy]);
@@ -518,12 +518,12 @@ export function GraphView({
 					</div>
 				)}
 
-				{/* Top-right controls — floating containers. lh-no-drag: home's
+				{/* Top-right controls — floating containers. wp-no-drag: home's
 				    floating drag strip underlays this row — Electron's drag mask
 				    ignores z-index, so without an explicit carve-out the controls
 				    were unclickable in the desktop app. The row NEVER wraps; in
 				    narrow windows the search shrinks. */}
-				<div className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+				<div className="wp-no-drag wp-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
 					<div className="relative z-20 flex min-w-0 items-start gap-2">
 						<GraphChromeRow
 							isEmpty={isEmpty}

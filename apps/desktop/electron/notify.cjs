@@ -5,7 +5,7 @@
  *   - the window must be unfocused (the operator is not looking at it);
  *   - once per key (bounded set);
  *   - the href must resolve to the app's own origin (rejects "https://evil", "//evil", "/\evil.com", "javascript:").
- * Clicking restores + focuses the window and sends the normalized path back ("lh:navigate").
+ * Clicking restores + focuses the window and sends the normalized path back ("wolfpack:navigate").
  */
 
 const NOTIFIED_MAX = 200;
@@ -54,7 +54,7 @@ function createNeedsYouNotifier({ Notification, appOrigin, log = () => {} }) {
 			if (win.isMinimized()) win.restore();
 			win.show();
 			win.focus();
-			win.webContents.send("lh:navigate", href);
+			win.webContents.send("wolfpack:navigate", href);
 		});
 		// Electron reports an OS-level refusal (e.g. no Notification Center permission) here, when it reports it at all.
 		note.on("failed", (_e, error) => log(`notify: failed key=${key} (${error})`));

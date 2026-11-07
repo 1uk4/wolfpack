@@ -47,7 +47,7 @@ export function SessionMessageNavigation() {
 	const clearFlash = useCallback(() => {
 		if (!flash.current) return;
 		window.clearTimeout(flash.current.timer);
-		flash.current.target.classList.remove("lh-source-highlight");
+		flash.current.target.classList.remove("wp-source-highlight");
 		flash.current = null;
 	}, []);
 	/** Synchronous arrival: release the bottom-follow lock, scroll every
@@ -64,7 +64,7 @@ export function SessionMessageNavigation() {
 		stopScroll();
 		scrollSessionTarget(target, main, { scrollRef, stopScroll });
 		clearFlash();
-		target.classList.add("lh-source-highlight");
+		target.classList.add("wp-source-highlight");
 		flash.current = { target, timer: window.setTimeout(clearFlash, 2_000) };
 		lastJump.current = { hash, target };
 		return true;

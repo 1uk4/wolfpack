@@ -220,7 +220,7 @@ describe("domain", () => {
 		const sel = q("work-domain") as HTMLSelectElement;
 		assert.equal(sel.value, "wolfpack");
 		assert.deepEqual(qa('[data-testid="work-domain"] option').map((o) => o.textContent), ["Wolfpack", "Snapjack"]);
-		assert.deepEqual(c.calls[0], { domain: "wolfpack", graduated: false });
+		assert.deepEqual(c.calls[0], { domain: "wolfpack", graduated: true });
 	});
 	it("remembers the choice in localStorage and starts there next time", async () => {
 		const c = fake();
@@ -254,6 +254,15 @@ describe("rows", () => {
 		assert.deepEqual(rows(), ["i1", "no-initiative"]);
 		await click(q("work-toggle-i1")!);
 		assert.ok(rows().includes("t3"), "a reopened group remembers its feature was open");
+	});
+	it("has the columns Name, Status, Created and, last, Open; no Assignee, no separate Progress", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
+		assert.deepEqual(qa('[data-testid^="work-sort-"]').map((b) => b.textContent!.trim()), ["Name", "Status", "Created"]);
+		const cells = [...q("work-row-f1")!.querySelectorAll('[data-testid]')].map((e) => e.getAttribute("data-testid")!);
+		assert.ok(cells.indexOf("work-stage-f1") < cells.indexOf("work-open-f1"), "Open comes after Status");
+		assert.equal(q("work-open-f1")!.parentElement!.nextElementSibling, null, "Open is the rightmost cell");
+		assert.ok(q("work-stage-f1")!.parentElement!.contains(q("work-progress-f1")), "progress sits in the Status cell");
 	});
 	it("shows stage text via stageLabel, progress and created", async () => {
 		await open();
@@ -366,13 +375,12 @@ describe("search", () => {
 });
 
 describe("graduated toggle, refresh and select", () => {
-	it("graduated items are hidden until the toggle refetches with them, then shown greyed", async () => {
+	it("graduated items are fetched always but hidden until the toggle shows them greyed", async () => {
 		const c = fake();
 		await open(c);
 		assert.ok(!document.body.textContent!.includes("Old one"));
 		await change(q("work-show-graduated")!, { checked: true });
 		await settle();
-		assert.equal(c.calls.at(-1)!.graduated, true);
 		await click(q("work-toggle-no-initiative")!);
 		assert.equal(q("work-row-old")!.getAttribute("data-graduated"), "true");
 		assert.equal(q("work-row-f3")!.getAttribute("data-graduated"), null);

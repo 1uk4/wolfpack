@@ -78,12 +78,12 @@ const sameOrigin = (target, origin) => {
 
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-/** Static, script-free-of-remote-content page; Retry navigates to lh-retry:// (intercepted) via a link. */
+/** Static, script-free-of-remote-content page; Retry navigates to wolfpack-retry:// (intercepted) via a link. */
 function errorPageHtml(url) {
 	return `<!doctype html><meta charset="utf-8"><title>Wolfpack Console</title>
 <style>body{background:#141414;color:#e5e5e5;font:15px -apple-system,system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0}
 div{max-width:460px;text-align:center}a{display:inline-block;margin-top:16px;padding:8px 18px;border:1px solid #555;border-radius:8px;color:inherit;text-decoration:none}</style>
-<div><p>Can't reach <b>${escapeHtml(url)}</b>.<br>Is Tailscale connected?</p><a href="lh-retry://now">Retry</a></div>`;
+<div><p>Can't reach <b>${escapeHtml(url)}</b>.<br>Is Tailscale connected?</p><a href="wolfpack-retry://now">Retry</a></div>`;
 }
 
 /** hubd's pairing page lives at <origin>/hub/pair (same origin as the console, never under the console's path prefix). */

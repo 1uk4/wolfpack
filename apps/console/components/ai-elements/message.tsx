@@ -374,7 +374,7 @@ export const MessageResponse = memo(
         className={cn(
           // Source Sans 3 + emphasis-color tokens on every markdown surface
           // (labels stay JetBrains Mono). Unlayered plain CSS wins over text-sm.
-          "lh-prose size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          "wp-prose size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className
         )}
         components={mdComponents}
@@ -403,7 +403,7 @@ const INLINE_REMARK = [...Object.values(defaultRemarkPlugins), mathPlugin.remark
 const INLINE_REHYPE = [...Object.values(defaultRehypePlugins), mathPlugin.rehypePlugin];
 
 export const InlineMarkdown = memo(({ children, className }: { children: string; className?: string }) => (
-  <span className={cn("lh-prose", className)} data-testid="inline-md">
+  <span className={cn("wp-prose", className)} data-testid="inline-md">
     <Block
       content={linkifyWorkIds(transformMathDelimiters(escapeRawHtml(children)))}
       index={0}

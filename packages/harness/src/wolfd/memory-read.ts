@@ -200,6 +200,8 @@ export async function fetchWorkSources(endpoint: string | undefined, token: stri
         ...(w.title ? { title: w.title } : {}),
         ...(w.kind ? { kind: w.kind } : {}),
         ...(w.stage ? { stage: w.stage } : {}),
+        ...(w.graduated ? { graduated: w.graduated } : {}),
+        ...(w.container ? { container: true } : {}),
         ...(w.partOf ? { partOf: w.partOf } : {}),
         ...(Array.isArray(w.dependsOn) ? { dependsOn: w.dependsOn } : {}),
         ...(w.assignee ? { assignee: w.assignee } : {}),

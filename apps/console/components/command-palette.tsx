@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The ⌘K command palette. Opens on `lh:kbd-open-palette` (the registry's
+ * The ⌘K command palette. Opens on `wolfpack:kbd-open-palette` (the registry's
  * dispatcher). Ranking and item building are pure (src/core/palette.ts);
  * this file only gathers sources and renders. cmdk's dialog provides the
  * a11y: Escape closes, focus is trapped and restored to the opener.

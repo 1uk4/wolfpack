@@ -26,7 +26,7 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.fontFamily, null);
 		assert.equal(eff.appearance.proseFontSize, 16);
 		assert.equal(eff.appearance.sessionNameSerif, true);
-		assert.equal(eff.appearance.mdRendering.headingWeight, 900);
+		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
 		assert.deepEqual(eff.compaction, { thresholdTokens: 150_000 });
 	});
 
@@ -35,7 +35,7 @@ describe("resolveSettings", () => {
 			version: 1,
 			general: { autoUpdate: false },
 			agent: { prompts: { "system-prompt.md": true } },
-			appearance: { mode: "light", proseFontSize: 20, mdRendering: { headingWeight: 600 } },
+			appearance: { mode: "light", proseFontSize: 20, mdRendering: { headingWeight: 700 } },
 			compaction: { thresholdTokens: 64_000 },
 		};
 		const eff = resolveSettings(record);
@@ -43,7 +43,7 @@ describe("resolveSettings", () => {
 		assert.deepEqual(eff.agent.prompts, { "system-prompt.md": true });
 		assert.equal(eff.appearance.mode, "light");
 		assert.equal(eff.appearance.proseFontSize, 20);
-		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
+		assert.equal(eff.appearance.mdRendering.headingWeight, 700);
 		assert.deepEqual(eff.compaction, { thresholdTokens: 64_000 });
 	});
 });

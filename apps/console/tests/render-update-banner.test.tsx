@@ -1,7 +1,7 @@
 /**
  * Update-banner render tests (Wave C, 2026-10-10): the banner is a pure
- * function of the last lh:update-status push — hidden without one (the
- * browser/dev world: no window.lh at all), visible with the downloaded
+ * function of the last wolfpack:update-status push — hidden without one (the
+ * browser/dev world: no desktop bridge at all), visible with the downloaded
  * status, Restart wired to the bridge. The subscribe effect only runs
  * client-side, so the SSR pass pins the hidden state; the pushed state is
  * exercised by mounting with the bridge stubbed (classic-JSX shim as in
@@ -20,7 +20,7 @@ import UpdateBanner from "../components/update-banner.tsx";
 
 // linkedom as the DOM for the interactive pass (first createRoot test in
 // the repo — the banner's push→render→click flow needs real effects).
-// The window.lh bridge type is declared globally by components/sidebar.tsx.
+// The window.wolfpack bridge type is declared globally by components/sidebar.tsx.
 const dom = parseHTML("<html><body></body></html>");
 (globalThis as Record<string, unknown>).window = dom.window;
 (globalThis as Record<string, unknown>).document = dom.document;

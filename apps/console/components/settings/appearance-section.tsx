@@ -155,7 +155,7 @@ export function AppearanceSection({
 		const onPointerDown = (e: PointerEvent) => {
 			const target = e.target as Node;
 			if (menuAnchorRef.current?.contains(target)) return;
-			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
+			if (target instanceof Element && target.closest("[data-wp-menu]")) return;
 			if (target instanceof Element && target.closest('[role="dialog"]')) {
 				setFontMenuOpen(false);
 			}
@@ -184,12 +184,12 @@ export function AppearanceSection({
 			</SettingsRow>
 			<SettingsRow
 				label="Background"
-				hint={`Empty = ${resolved.background ?? "#141414"}`}
+				hint={`Empty = ${resolved.background ?? "#0f141a"}`}
 				testid="row-background"
 			>
 				<CommitInput
 					value={appearance?.background ?? ""}
-					placeholder="#141414"
+					placeholder="#0f141a"
 					ariaLabel="background hex"
 					testid="input-background"
 					onCommit={(v) => onSectionChange({ ...appearance, background: v === "" ? null : v })}
@@ -290,7 +290,7 @@ export function AppearanceSection({
 				<CommitInput
 					type="number"
 					value={String(md?.headingWeight ?? "")}
-					placeholder="900"
+					placeholder="600"
 					ariaLabel="heading weight"
 					testid="input-heading-weight"
 					onCommit={(v) => {

@@ -41,7 +41,7 @@ const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { GraphPane, clearPaneCache } = await import("../components/graph-pane.tsx");
 const { GraduateStartDialog, GraduateToasts } = await import("../components/graduate-dialog.tsx");
 const { graduateStore } = await import("../components/graduate-store.ts");
-const { featureGraduateState, graduationWolf } = await import("../src/core/graduate.ts");
+const { graduateState, graduationWolf } = await import("../src/core/graduate.ts");
 const { buildWorkTable } = await import("../src/core/work-table.ts");
 const { describeNode } = await import("../src/core/kb-graph-model.ts");
 import type { GraduateClient } from "../components/graduate-client.ts";
@@ -52,26 +52,48 @@ import type { NodeCard } from "../src/core/kb-graph-model.ts";
 
 // ---- pure -----------------------------------------------------------------------
 
-describe("featureGraduateState", () => {
+describe("graduateState", () => {
 	const f = { kind: "feature", stage: "shipped" };
 	it("is ready when it has tasks and all are complete", () => {
-		assert.deepEqual(featureGraduateState(f, [{ stage: "shipped" }, { stage: "live" }]), { show: true, ready: true, reason: "" });
+		assert.deepEqual(graduateState(f, [{ stage: "shipped" }, { stage: "live" }]), { show: true, ready: true, reason: "" });
 	});
 	it("counts the open tasks as the reason", () => {
-		assert.deepEqual(featureGraduateState({ kind: "feature", stage: "in_build" }, [{ stage: "shipped" }, { stage: "plan" }, { stage: "in_build" }]), { show: true, ready: false, reason: "2 tasks open" });
-		assert.equal(featureGraduateState(f, [{ stage: "plan" }]).reason, "1 task open");
+		assert.deepEqual(graduateState({ kind: "feature", stage: "in_build" }, [{ stage: "shipped" }, { stage: "plan" }, { stage: "in_build" }]), { show: true, ready: false, reason: "2 tasks open" });
+		assert.equal(graduateState(f, [{ stage: "plan" }]).reason, "1 task open");
 	});
 	it("a feature without tasks is not ready", () => {
-		assert.deepEqual(featureGraduateState(f, []), { show: true, ready: false, reason: "no tasks yet" });
+		assert.deepEqual(graduateState(f, []), { show: true, ready: false, reason: "no tasks yet" });
 	});
 	it("without the tasks, shipped counts as ready and anything else is not shipped yet", () => {
-		assert.equal(featureGraduateState(f, null).ready, true);
-		assert.deepEqual(featureGraduateState({ kind: "feature", stage: "plan" }, null), { show: true, ready: false, reason: "not shipped yet" });
+		assert.equal(graduateState(f, null).ready, true);
+		assert.deepEqual(graduateState({ kind: "feature", stage: "plan" }, null), { show: true, ready: false, reason: "not shipped yet" });
 	});
-	it("only live, non-container features carry a button", () => {
-		for (const it of [{ kind: "task", stage: "shipped" }, { kind: "initiative", stage: "plan" }, { kind: "feature", stage: "archived" }, { kind: "feature", stage: "shipped", graduated: true }, { kind: "feature", stage: "shipped", container: true }]) {
-			assert.equal(featureGraduateState(it, [{ stage: "shipped" }]).show, false, JSON.stringify(it));
+	it("archived, graduated and container items carry no button", () => {
+		for (const it of [{ kind: "feature", stage: "archived" }, { kind: "feature", stage: "shipped", graduated: true }, { kind: "feature", stage: "shipped", container: true }, { kind: "task", stage: "shipped", graduated: true }, { kind: "idea", stage: "shipped" }]) {
+			assert.equal(graduateState(it, [{ stage: "shipped" }]).show, false, JSON.stringify(it));
 		}
+	});
+	const inbox = { container: true };
+	it("a done task, issue or spike under the Inbox or with no parent is ready", () => {
+		for (const kind of ["task", "issue", "spike"]) {
+			assert.deepEqual(graduateState({ kind, stage: "shipped" }, null, inbox), { show: true, ready: true, reason: "" }, `${kind} in the Inbox`);
+			assert.deepEqual(graduateState({ kind, stage: "live" }, null, null), { show: true, ready: true, reason: "" }, `${kind} loose`);
+		}
+	});
+	it("a task still open shows no button: the server reads 'not shipped yet' and a button on every open Inbox task is noise", () => {
+		assert.deepEqual(graduateState({ kind: "task", stage: "in_build" }, null, inbox), { show: false, ready: false, reason: "" });
+	});
+	it("a done task inside a normal feature shows no button: it graduates with its feature", () => {
+		assert.equal(graduateState({ kind: "task", stage: "shipped" }, null, { container: false }).show, false);
+	});
+	it("an initiative is ready when all its features graduated, and counts the ones that did not", () => {
+		const i = { kind: "initiative", stage: "in_build" };
+		assert.deepEqual(graduateState(i, [{ kind: "feature", stage: "archived", graduated: true }, { kind: "feature", stage: "archived", graduated: true }]), { show: true, ready: true, reason: "" });
+		assert.deepEqual(graduateState(i, [{ kind: "feature", stage: "archived", graduated: true }, { kind: "feature", stage: "shipped" }]), { show: true, ready: false, reason: "1 feature not graduated" });
+		assert.deepEqual(graduateState(i, []), { show: true, ready: false, reason: "no features yet" });
+	});
+	it("a standing initiative shows no button", () => {
+		assert.equal(graduateState({ kind: "initiative", stage: "in_build", standing: true }, [{ kind: "feature", stage: "archived", graduated: true }]).show, false);
 	});
 });
 
@@ -95,6 +117,30 @@ describe("work table rows", () => {
 		const t = buildWorkTable(items, { query: "a" });
 		const row = t.groups[0]!.children[0]!;
 		assert.deepEqual(row.graduate, { show: true, ready: false, reason: "1 task open" });
+	});
+	it("shows Graduate on a done Inbox task, a done loose task and a fully graduated initiative, not on a task inside a feature", () => {
+		const items = [
+			wi("inbox", "feature", { container: true, title: "Inbox" }),
+			wi("t1", "task", { partOf: "inbox", stage: "shipped" }),
+			wi("t2", "task", { partOf: "inbox", stage: "plan" }),
+			wi("t3", "task", { stage: "shipped" }),
+			wi("f", "feature", { stage: "in_build" }),
+			wi("t4", "task", { partOf: "f", stage: "shipped" }),
+			wi("i1", "initiative", { stage: "in_build" }),
+			wi("i1f", "feature", { partOf: "i1", stage: "archived", graduated: "2026-11-01" }),
+			wi("i2", "initiative", { stage: "in_build" }),
+			wi("i2f", "feature", { partOf: "i2", stage: "shipped" }),
+		];
+		const rows = new Map<string, { graduate: unknown }>();
+		const walk = (r: { key: string; graduate: unknown; children: never[] }) => (rows.set(r.key, r), r.children.forEach(walk));
+		buildWorkTable(items).groups.forEach((g) => walk(g as never));
+		assert.deepEqual(rows.get("t1")!.graduate, { show: true, ready: true, reason: "" });
+		assert.equal((rows.get("t2")!.graduate as { show: boolean }).show, false);
+		assert.deepEqual(rows.get("t3")!.graduate, { show: true, ready: true, reason: "" });
+		assert.equal((rows.get("t4")!.graduate as { show: boolean }).show, false);
+		assert.deepEqual(rows.get("i1")!.graduate, { show: true, ready: true, reason: "" });
+		assert.deepEqual(rows.get("i2")!.graduate, { show: true, ready: false, reason: "1 feature not graduated" });
+		assert.equal((rows.get("no-initiative")!.graduate as { show: boolean }).show, false, "the Inbox group itself has no button");
 	});
 });
 
@@ -529,7 +575,7 @@ describe("graduate flow from the Work list", () => {
 
 const w = (id: string, workKind: string, stage: string, label = id) => ({ id: `work:${id}`, kind: "work" as const, label, depth: 3, domain: "d", workKind, stage, assignee: "hal", updated: "2026-10-27" });
 const graph: KbGraph = {
-	nodes: [{ id: "dom:d", kind: "domain", label: "D", depth: 0, domain: "d" }, { id: "fac:d", kind: "factory", label: "Factory", depth: 1, domain: "d" }, w("RDY", "feature", "shipped", "Ready one"), w("OPN", "feature", "in_build", "Open one"), w("tk", "task", "shipped")],
+	nodes: [{ id: "dom:d", kind: "domain", label: "D", depth: 0, domain: "d" }, { id: "fac:d", kind: "factory", label: "Factory", depth: 1, domain: "d" }, w("RDY", "feature", "shipped", "Ready one"), w("OPN", "feature", "in_build", "Open one"), w("tk", "task", "shipped"), w("lt", "task", "shipped"), w("it", "task", "shipped")],
 	edges: [],
 	layers: { archivedWork: false, denTopics: false },
 	domain: null,
@@ -539,7 +585,10 @@ const graph: KbGraph = {
 const records: Record<string, unknown> = {
 	RDY: { id: "RDY", title: "Ready one", kind: "feature", stage: "shipped", domain: "d", plan: "# R", record: "", children: [{ id: "a", title: "A", kind: "task", stage: "shipped", dependsOn: [] }, { id: "b", title: "B", kind: "task", stage: "shipped", dependsOn: [] }] },
 	OPN: { id: "OPN", title: "Open one", kind: "feature", stage: "in_build", domain: "d", plan: "# O", record: "", children: [{ id: "a", title: "A", kind: "task", stage: "shipped", dependsOn: [] }, { id: "b", title: "B", kind: "task", stage: "plan", dependsOn: [] }, { id: "c", title: "C", kind: "task", stage: "plan", dependsOn: [] }] },
-	tk: { id: "tk", title: "tk", kind: "task", stage: "shipped", domain: "d", plan: "# T", record: "" },
+	tk: { id: "tk", title: "tk", kind: "task", stage: "shipped", domain: "d", partOf: "OPN", plan: "# T", record: "" },
+	lt: { id: "lt", title: "lt", kind: "task", stage: "shipped", domain: "d", plan: "# T", record: "" },
+	it: { id: "it", title: "it", kind: "task", stage: "shipped", domain: "d", partOf: "INBOX", plan: "# T", record: "" },
+	INBOX: { id: "INBOX", title: "Inbox", kind: "feature", stage: "plan", domain: "d", container: true, plan: "", record: "" },
 };
 let recordReads = 0;
 const json = (status: number, body: unknown) => ({ ok: status < 300, status, json: async () => body });
@@ -605,9 +654,15 @@ describe("graph pane: the Graduate button", () => {
 		await click(btn);
 		assert.equal(q("graduate-dialog"), null);
 	});
-	it("a task has no Graduate button", async () => {
+	it("a done task inside a feature has no Graduate button; a done loose task or Inbox task does", async () => {
 		await mountPane("tk", fakeGraduate());
 		assert.equal(q("pane-graduate"), null);
+		for (const id of ["lt", "it"]) {
+			document.body.innerHTML = "";
+			await act(async () => root?.unmount());
+			await mountPane(id, fakeGraduate());
+			assert.equal((q("pane-graduate") as HTMLButtonElement).disabled, false, id);
+		}
 	});
 	it("Cancel leaves the pane as it was and starts nothing", async () => {
 		const g = fakeGraduate();

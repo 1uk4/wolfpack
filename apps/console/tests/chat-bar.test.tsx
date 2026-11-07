@@ -217,12 +217,12 @@ describe("ChatBar", () => {
 				page()!.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
 			});
 			await wait();
-			assert.ok(q('[data-testid="chat-bar"]'));
+			assert.equal(q('[data-testid="chat-bar"]'), null, "wide: B's page shows the chat as a strip row, no bar over its composer");
 			assert.equal(popped(), true);
 		});
 
 		it("clicking B's composer docks, keeping the draft", async () => {
-			await mount("/wolf/w/thread/b", A, pageComposer);
+			await mount("/graph", A, pageComposer);
 			await type("for a");
 			await fire(page(), "pointerdown");
 			await wait();
@@ -322,7 +322,7 @@ describe("ChatBar behaviours", () => {
 		};
 		await mount("/kb", A);
 		await click(q('[data-testid="chat-bar-minimize"]'));
-		assert.equal(press("lh:kbd-focus-chat-bar"), true);
+		assert.equal(press("wolfpack:kbd-focus-chat-bar"), true);
 		await wait();
 		assert.equal(mem.get("wolfpack:chatbar:minimized"), undefined, "expanded again");
 		await act(async () => root?.unmount());
@@ -330,7 +330,7 @@ describe("ChatBar behaviours", () => {
 		mem.clear();
 		await mount("/kb"); // nothing popped out: no bar, Cmd+J does nothing
 		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(press("lh:kbd-focus-chat-bar"), false);
+		assert.equal(press("wolfpack:kbd-focus-chat-bar"), false);
 	});
 
 	it("Cmd+J on the popped-out thread's own page focuses the page composer", async () => {
@@ -343,7 +343,7 @@ describe("ChatBar behaviours", () => {
 		await mount("/wolf/w/thread/a", undefined, <>{page}<AttachHere /></>);
 		await click(q('[data-testid="test-attach"]')); // attached while still on its own page
 		let prevented = false;
-		window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-focus-chat-bar", { detail: { event: { preventDefault: () => void (prevented = true) } } }));
+		window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-focus-chat-bar", { detail: { event: { preventDefault: () => void (prevented = true) } } }));
 		assert.ok(focused && prevented);
 	});
 

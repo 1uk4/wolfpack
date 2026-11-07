@@ -34,7 +34,7 @@ for (const varName of [
 	delete process.env[varName];
 }
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-server-keys-"));
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "wp-server-keys-"));
 const AUTH = path.join(TMP, "auth.json");
 process.env.WOLFPACK_AUTH_FILE = AUTH;
 

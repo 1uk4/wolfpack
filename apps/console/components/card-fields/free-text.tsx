@@ -8,7 +8,7 @@ export function FreeTextRenderer({ value, readOnly, onChange, compact, dictation
 	const text = typeof value?.value === "string" ? value.value : "";
 	if (readOnly) {
 		return (
-			<div className="lh-prose whitespace-pre-wrap" data-testid="card-answer-text">
+			<div className="wp-prose whitespace-pre-wrap" data-testid="card-answer-text">
 				“{text}”
 			</div>
 		);

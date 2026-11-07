@@ -18,7 +18,7 @@ export default async function WolfPage({ params }: { params: Promise<{ name: str
 	if (!threads) notFound();
 	return (
 		<div className="min-h-dvh">
-			<header className="lh-drag lh-wco-gutter flex h-15 items-center gap-3 border-b border-border px-3">
+			<header className="wp-drag wp-wco-gutter flex h-15 items-center gap-3 border-b border-border px-3">
 				<SidebarToggle />
 				<h1 className="font-title text-3xl tracking-tight">{name}</h1>
 			</header>

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Source_Sans_3 } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
@@ -16,25 +16,28 @@ import HubAuth from "@/components/hub-auth";
 import UpdateBanner from "@/components/update-banner";
 import { ViewportVars } from "@/components/viewport-vars";
 
-// Chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
-// Serif (the bundled lh-cmu @font-face in globals.css — no CDN).
-const ui = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
-const prose = Source_Sans_3({ subsets: ["latin"], variable: "--font-sans3" });
+// Chrome, prose and titles = Inter; code = Geist Mono.
+const ui = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
+const prose = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
 	title: "Wolfpack Console",
 	description: "The control plane for wolfpack agents.",
 	// manifest.webmanifest is emitted from app/manifest.ts; iOS ignores manifest icons, so the touch icon is explicit.
-	icons: { apple: "/icons/apple-touch-icon.png" },
+	// An explicit `icons` object stops Next adding the app/icon.png file-convention link, so the favicon is listed here too.
+	icons: { icon: { url: "/icon.png", type: "image/png", sizes: "64x64" }, apple: "/icons/apple-touch-icon.png" },
 	appleWebApp: { capable: true, title: "Wolfpack", statusBarStyle: "black-translucent" },
 };
 
+// maximumScale/userScalable: fixed in place like an iOS app (no pinch or double-tap zoom; globals.css adds touch-action for iOS Safari, which ignores these).
 // viewportFit=cover: env(safe-area-inset-*) works (iOS notch/home bar). interactiveWidget: Android keyboards resize the layout.
 export const viewport: Viewport = {
 	width: "device-width",
 	initialScale: 1,
+	maximumScale: 1,
+	userScalable: false,
 	viewportFit: "cover",
-	themeColor: "#141414",
+	themeColor: "#0f141a",
 	interactiveWidget: "resizes-content",
 };
 

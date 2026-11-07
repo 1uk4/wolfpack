@@ -214,7 +214,7 @@ export interface AgentSettings {
 
 /** Markdown-rendering knobs — the bare-bones set (owner decision). */
 export interface MdRenderingSettings {
-	/** Heading font weight (100–900, default 900). CSS resolves the nearest
+	/** Heading font weight (100–900, default 600). CSS resolves the nearest
 	 *  available weight of the chosen font — no font introspection needed. */
 	headingWeight?: number;
 	/** Color for **bold** spans (default #ffffff). */
@@ -304,7 +304,7 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		fontFamily: null, // Source Sans 3
 		proseFontSize: 16,
 		sessionNameSerif: true,
-		mdRendering: { headingWeight: 900, boldColor: null, italicColor: null },
+		mdRendering: { headingWeight: 600, boldColor: null, italicColor: null },
 	},
 	compaction: { thresholdTokens: 150_000 },
 };

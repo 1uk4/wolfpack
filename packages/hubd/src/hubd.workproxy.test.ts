@@ -64,6 +64,20 @@ describe("hub work proxy", () => {
     expect((await call(A, "POST", `/${id}/graduate`)).status).toBe(200);
   });
 
+  it("answers 409 parent_closed (create and move) for a graduated parent, with the message", async () => {
+    const { call, A } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const t = await call(A, "POST", "", { kind: "task", domain: "personal", title: "T", assignee: "wa" }); // parentless: lands in the Inbox
+    const tid = ((await t.json()) as { id: string }).id;
+    expect((await call(A, "POST", `/${id}/graduate`)).status).toBe(200);
+    const c = await call(A, "POST", "", { kind: "task", domain: "personal", title: "late", assignee: "wa", partOf: id });
+    expect(c.status).toBe(409);
+    expect(await c.json()).toMatchObject({ code: "parent_closed", error: expect.stringContaining(`${id} "`) });
+    const mv = await call(A, "PATCH", `/${tid}`, { moveTo: id });
+    expect(mv.status).toBe(409);
+    expect(((await mv.json()) as { error: string }).error).toContain("has graduated");
+  });
+
   it("a worker token cannot see, change or graduate another host's work, nor create for a foreign wolf/domain", async () => {
     const { call, A, B } = await rig();
     const mine = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;

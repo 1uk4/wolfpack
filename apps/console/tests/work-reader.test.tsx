@@ -37,7 +37,7 @@ const { FakeNav, navLog, currentUrl, historyBack, historyForward } = await impor
 const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../components/work-reader.tsx");
 const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../components/work-reader-nav.ts");
 const { WorkReaderHost } = await import("../components/work-reader.tsx");
-const { StatusSection } = await import("../components/memory-panel.tsx");
+const { PlanGraphCard } = await import("../components/plan-graph-card.tsx");
 const { nodeClickAction } = await import("../components/graph-view.tsx");
 const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
@@ -478,23 +478,21 @@ describe("opening a work item from any page", () => {
 		for (const o of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) assert.deepEqual(click(o), { prevented: false, opened: [] }, JSON.stringify(o));
 	});
 
-	it("the memory panel's item link opens the reader on the current page", async () => {
+	it("a graph node click opens the work item in the reader on the current page", async () => {
 		settleReaderOpen();
 		useLocation();
-		const item = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "p", successCriteria: "", record: "", children: [] } as never;
-		const shown = { item, rec: { record: "", inheritedFrom: null } } as never;
+		const data = { nodes: [{ id: "work-wolfpack-ASNQgEf", label: "A work item", kind: "task", status: "doing" }], edges: [] };
 		const host = document.createElement("div");
 		document.body.appendChild(host);
 		root = createRoot(host);
 		await act(async () => root!.render(
 			<FakeNav start="/wolf/hal/thread/t1">
-				<StatusSection view="item" bound={{ workId: "work-1", title: "Item" } as never} shown={shown} observations={{ list: [], error: null, info: {}, open: null, onOpen: () => {} }} onToggleFeed={() => {}} onSelect={() => {}} onBack={() => {}} />
+				<PlanGraphCard objectId="o" type="graph" rev={1} data={data} />
 			</FakeNav>,
 		));
-		const a = document.querySelector('[data-testid="memory-work-link"]') as HTMLElement;
-		assert.equal(a.getAttribute("href"), "/kb/work/work-1");
-		await act(async () => void a.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
-		assert.equal(currentUrl(), "/wolf/hal/thread/t1?item=work-1");
+		const hit = document.querySelector('[data-node-id="work-wolfpack-ASNQgEf"] [data-testid="graph-node-hit"]') as HTMLElement;
+		await act(async () => void hit.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true })));
+		assert.equal(currentUrl(), "/wolf/hal/thread/t1?item=work-wolfpack-ASNQgEf");
 		settleReaderOpen();
 	});
 

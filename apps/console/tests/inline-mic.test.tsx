@@ -72,7 +72,12 @@ class FakeCtx {
 	createMediaStreamSource() {
 		return new FakeNode();
 	}
-	async resume() {}
+	async resume() {
+		this.state = "running";
+	}
+	async suspend() {
+		this.state = "suspended";
+	}
 }
 let tokenStatus = 200;
 Object.assign(globalThis, { WebSocket: FakeWS, AudioContext: FakeCtx, AudioWorkletNode: FakeNode });
@@ -132,8 +137,8 @@ const click = (el: Element) =>
 	});
 const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 const mics = () => [...document.querySelectorAll('[data-testid="inline-mic"]')] as HTMLElement[];
-const cancel = () => act(async () => void window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation")));
-const kbdToggle = () => act(async () => void window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation")));
+const cancel = () => act(async () => void window.dispatchEvent(new CustomEvent("wolfpack:kbd-cancel-dictation")));
+const kbdToggle = () => act(async () => void window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation")));
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
 /** Open the socket and deliver finals; the run stays live. */

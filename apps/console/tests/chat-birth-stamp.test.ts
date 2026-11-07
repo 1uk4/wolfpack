@@ -19,7 +19,7 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-birth-stamp-"));
+const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "wp-birth-stamp-"));
 process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { POST } = await import("../app/api/chats/route.ts");

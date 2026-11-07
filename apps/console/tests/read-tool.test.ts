@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { readTool } from "../src/agent/tools/read.ts";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lh-read-test-"));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wp-read-test-"));
 
 function write(name: string, content: string): string {
 	const file = path.join(tmp, name);
@@ -42,7 +42,7 @@ describe("read tool — text semantics", () => {
 		// sources v1: the harness has no meaningful cwd — "find my notes" must
 		// work from a bare relative path, so the home directory is the anchor
 		// (fs-shared resolveSourcePath). Scratch file in home, cleaned up.
-		const rel = `lh-read-rel-test-${process.pid}.txt`;
+		const rel = `wp-read-rel-test-${process.pid}.txt`;
 		const homeFile = path.join(os.homedir(), rel);
 		fs.writeFileSync(homeFile, "rel", "utf-8");
 		try {

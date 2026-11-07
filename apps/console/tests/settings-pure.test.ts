@@ -28,7 +28,7 @@ describe("resolveAppearance — delta over factory", () => {
 		assert.equal(a.fontFamily, null);
 		assert.equal(a.proseFontSize, 16);
 		assert.equal(a.sessionNameSerif, true);
-		assert.deepEqual(a.mdRendering, { headingWeight: 900, boldColor: null, italicColor: null });
+		assert.deepEqual(a.mdRendering, { headingWeight: 600, boldColor: null, italicColor: null });
 	});
 
 	it("explicit deltas win field-by-field", () => {
@@ -69,12 +69,12 @@ describe("derivedPalette — the dark curve keeps today's relationships", () => 
 describe("appearanceVars — the mapping the provider applies", () => {
 	it("factory appearance: only the always-applied tokens move", () => {
 		const vars = appearanceVars(resolveAppearance(undefined));
-		assert.equal(vars["--lh-prose-size"], "16px");
-		assert.equal(vars["--lh-heading-weight"], "900");
+		assert.equal(vars["--wp-prose-size"], "16px");
+		assert.equal(vars["--wp-heading-weight"], "600");
 		assert.equal(vars["--font-prose"], undefined, "no font override at factory");
 		assert.equal(vars["--font-title"], undefined, "CMU stays");
 		assert.equal(vars["--background"], undefined, "factory palette untouched");
-		assert.equal(vars["--lh-ink-strong"], undefined, "default ink");
+		assert.equal(vars["--wp-ink-strong"], undefined, "default ink");
 	});
 
 	it("full delta: every knob lands on its token", () => {
@@ -89,12 +89,12 @@ describe("appearanceVars — the mapping the provider applies", () => {
 		);
 		assert.equal(vars["--background"], "#101820");
 		assert.equal(vars["--card"], "#182028", "raised +8 per channel: 10→18, 18→20, 20→28");
-		assert.equal(vars["--font-prose"], `"Georgia", var(--font-sans3), ui-sans-serif, system-ui, sans-serif`);
-		assert.equal(vars["--lh-prose-size"], "18px");
+		assert.equal(vars["--font-prose"], `"Georgia", var(--font-inter), ui-sans-serif, system-ui, sans-serif`);
+		assert.equal(vars["--wp-prose-size"], "18px");
 		assert.equal(vars["--font-title"], "var(--font-prose)", "serif off → titles follow the prose font");
-		assert.equal(vars["--lh-heading-weight"], "700");
-		assert.equal(vars["--lh-ink-strong"], "#ff0000");
-		assert.equal(vars["--lh-ink-italic"], "#00ff00");
+		assert.equal(vars["--wp-heading-weight"], "700");
+		assert.equal(vars["--wp-ink-strong"], "#ff0000");
+		assert.equal(vars["--wp-ink-italic"], "#00ff00");
 	});
 
 	it("sessionNameSerif false alone: titles move, nothing else does", () => {
@@ -120,10 +120,10 @@ describe("staleVarNames — the removal half of application (owner repro: resets
 		assert.ok(stale.includes("--background"));
 		assert.ok(stale.includes("--font-prose"));
 		assert.ok(stale.includes("--font-title"), "serif toggle back ON must clear the title override");
-		assert.ok(stale.includes("--lh-ink-strong"));
-		assert.ok(stale.includes("--lh-ink-italic"));
-		assert.ok(!stale.includes("--lh-prose-size"), "always-applied tokens never go stale");
-		assert.ok(!stale.includes("--lh-heading-weight"), "always-applied tokens never go stale");
+		assert.ok(stale.includes("--wp-ink-strong"));
+		assert.ok(stale.includes("--wp-ink-italic"));
+		assert.ok(!stale.includes("--wp-prose-size"), "always-applied tokens never go stale");
+		assert.ok(!stale.includes("--wp-heading-weight"), "always-applied tokens never go stale");
 	});
 
 	it("an empty background commit (null = factory) frees the palette vars", () => {

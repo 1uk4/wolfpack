@@ -185,6 +185,14 @@ describe("ChatBar on a phone", () => {
 		assert.match(q('[data-testid="bar-sheet-close"]')!.className, /min-h-11/);
 	});
 
+	it("puts attach before the input and send after it, in the dock and the wide panel", async () => {
+		const order = () => qa('[data-testid="composer"] button[aria-label="Attach images"], [data-testid="composer"] textarea, [data-testid="composer"] button[type="submit"]').map((e) => (e.tagName === "TEXTAREA" ? "input" : e.getAttribute("aria-label") === "Attach images" ? "attach" : "send"));
+		await mount();
+		assert.deepEqual(order(), ["attach", "input", "send"]);
+		await resize(false);
+		assert.deepEqual(order(), ["attach", "input", "send"]);
+	});
+
 	it("a pending card shows as a strip; tapping it opens the sheet with the card above the composer", async () => {
 		raise("a", "c1", "c2");
 		await mount();
@@ -316,7 +324,7 @@ describe("ChatBar on a phone", () => {
 		assert.equal(reserve(), "");
 	});
 
-	it("hides the dock on the attached thread's own page and on other thread pages (their composer is at the bottom), but not the desktop pill", async () => {
+	it("hides the dock on the attached thread's own page and on other thread pages (their composer is at the bottom); the desktop pill hides there too but shows on other pages", async () => {
 		startPath = "/wolf/w/thread/a";
 		await mount(A, undefined, false);
 		assert.equal(q('[data-testid="chat-bar"]'), null, "own page");
@@ -330,8 +338,14 @@ describe("ChatBar on a phone", () => {
 		root = null;
 		document.body.innerHTML = "";
 		phone = false;
+		await mount(A, undefined, false);
+		assert.equal(q('[data-testid="chat-bar"]'), null, "desktop: another thread page shows a strip row instead");
+		await act(async () => root?.unmount());
+		root = null;
+		document.body.innerHTML = "";
+		startPath = "/kb";
 		await mount();
-		assert.equal(bar().getAttribute("data-state"), "open", "desktop pill on another thread page");
+		assert.equal(bar().getAttribute("data-state"), "open", "desktop pill on a page with no composer");
 	});
 
 	it("shows no dock and reserves nothing until something is popped out", async () => {

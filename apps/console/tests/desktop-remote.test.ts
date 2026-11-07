@@ -25,7 +25,7 @@ describe("parseConsoleUrl", () => {
 });
 
 describe("resolveConsoleTarget", () => {
-	const dir = mkdtempSync(join(tmpdir(), "lh-remote-"));
+	const dir = mkdtempSync(join(tmpdir(), "wp-remote-"));
 	it("local when nothing is configured", () => assert.deepEqual(resolveConsoleTarget({ env: {}, userDataDir: dir }), { mode: "local" }));
 	it("reads console.json, env overrides it", () => {
 		writeFileSync(join(dir, "console.json"), JSON.stringify({ consoleUrl: "https://file.ts.net" }));
@@ -38,7 +38,7 @@ describe("resolveConsoleTarget", () => {
 		assert.equal(logs.length, 1);
 	});
 	it("broken json falls back to local", () => {
-		const d = mkdtempSync(join(tmpdir(), "lh-remote-"));
+		const d = mkdtempSync(join(tmpdir(), "wp-remote-"));
 		writeFileSync(join(d, "console.json"), "{oops");
 		assert.deepEqual(resolveConsoleTarget({ env: {}, userDataDir: d }), { mode: "local" });
 	});

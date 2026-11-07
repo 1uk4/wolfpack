@@ -85,7 +85,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 	// (submitted: send, answer, session start, reattach, wake attach) the
 	// sidebar learns it without waiting for its 2.5s poll; at settle the
 	// event clears the row and triggers one immediate refetch. The model
-	// stays pure; this adapter owns the window seam (the lh:chat-renamed
+	// stays pure; this adapter owns the window seam (the wolfpack:chat-renamed
 	// pattern).
 	const prevStatusRef = useRef(state.status);
 	useEffect(() => {
@@ -95,7 +95,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 		const running = state.status === "submitted" || state.status === "streaming";
 		const wasRunning = was === "submitted" || was === "streaming";
 		if (running === wasRunning) return; // submitted→streaming: still running; error↔ready: not
-		window.dispatchEvent(new CustomEvent("lh:turn-state", { detail: { id: chatId, running } }));
+		window.dispatchEvent(new CustomEvent("wolfpack:turn-state", { detail: { id: chatId, running } }));
 	}, [state.status, chatId]);
 
 	// The reattach settled terminal → the sync-and-continue seam (chat.tsx).

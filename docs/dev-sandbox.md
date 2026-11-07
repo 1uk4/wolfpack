@@ -189,6 +189,36 @@ wolfpack preview off             # stop the console
 - A branch literally named `dev` cannot be previewed by that name (use `origin/dev`).
 - Older previews that pointed the app's `console.json` at the local console are still undone by `off`.
 
+### Agent slots: a thread checks its own worktree's console
+
+An agent that needs to look at its own worktree gets a private `next dev` console, so the owner's preview on 3230 is never touched.
+
+```sh
+wolfpack preview slot get detach-chat [--json]   # prints http://127.0.0.1:3231 (3231 and up), starting it if needed
+wolfpack preview slot list [--json]              # port, worktree, pid, start, last use
+wolfpack preview slot release <worktree|port>    # stop it
+```
+
+- `get` takes a worktree name or directory (same matching as `wolfpack preview <name>`) and returns once the slot answers HTTP (the first page compiles on its first request). Asking again reuses the slot and resets its idle timer. `release` takes the port, the directory or the folder name (matched against running slots, so a slot whose worktree was deleted can still be released).
+- **Keep it alive:** a slot stops after 20 minutes without a `get` (`PREVIEW_SLOT_IDLE_MS`). A thread that keeps using its slot re-runs `slot get` now and then; there is no separate `touch`.
+- **At most 2 slots** (`PREVIEW_SLOT_MAX`, never more than 4). A third worktree is refused at once with the busy slots and the `release` command; it does not wait.
+- Each slot is a detached process group (a small runner plus `next dev` and its workers), log `~/.wolfpack/preview/slots/<port>.log`, state in `~/.wolfpack/preview/slots.json` under a lock file (two simultaneous `get`s never share a port; ports something else listens on are skipped). No launchd job per slot. A dead runner is dropped, and what it left behind stopped, on the next slot command. Only a pid that `ps` shows is a slot runner is ever signalled.
+- **Idle stop:** the runner exits (stopping `next` and its workers) when its slot is idle or gone from `slots.json`, with no command needed.
+- **Hub token:** a slot gets `WOLFPACK_HUB_TOKEN` from the caller's environment, else from the file `~/.wolfpack/preview/hub-token` (trimmed), so its pages load without `/pair`. One-time setup, in two steps (the token is never typed into a chat or printed):
+  1. get a pairing code. A **browser token is enough and is preferred** (no ssh, fewer rights than a console or worker token): in the console open Settings → add device and copy the code, or on the hub host run `hubd pair --kind browser --label "preview <hostname>"` (the form in `deploy/hubd/RUNBOOK.md` §5, with `--kind browser`). The code is single-use and lasts 10 minutes;
+  2. here: `wolfpack preview token`, then paste the code at the hidden prompt. Use the prompt rather than `echo <code> | …`: an echoed code lands in your shell history and the process list (`--code-stdin` exists for scripts and tests, and refuses to run on a terminal). It redeems the code (`POST <hub>/v1/pair` with no `kind`, so the hub takes it from the code and a browser or console code both work; a code that turns out to be a worker code is refused, nothing is saved, and the message names the token id to revoke), writes the token to `~/.wolfpack/preview/hub-token` (mode 600, atomically) and prints only `saved hub token for preview slots (id …)`. A bad or expired code prints the hub's status and leaves any existing file alone. Saving a new token does **not** revoke the old one: the id it prints is the new token's; revoke an old token on the hub host with `hubd tokens revoke <id>` (find ids with `hubd tokens list`).
+
+  `slot get` prints these two steps (and `--json` carries them as `tokenSetup`, next to `noToken: true`) when it finds no token. It warns if the file is readable by group or other (and still uses it). The value goes only into the slot's environment: never into `slots.json`, the runner's command line, the logs or `--json`.
+- **Each browser pairs each slot port once.** The console keeps its hub token in the browser (localStorage, per origin), and `http://127.0.0.1:3231` is a different origin from 3232 and from 3230, so the server-side `hub-token` does not sign a page in; an unpaired slot page redirects to `/pair`. For your own browser run `wolfpack preview slot pair <port>`: it mints a browser code with the hub token (`WOLFPACK_HUB_TOKEN`, else `~/.wolfpack/preview/hub-token`), redeems it as a browser token labelled `preview slot <port> <hostname>`, opens `/pair#token=…` in your default browser and prints only `signed in your browser on :<port> (token id …)`. The port must be a running slot (never 3230, which `wolfpack preview` pairs itself). `--print-url` is the machine interface for the wolf browser extension: stdout is only the URL (one line), nothing is opened, messages go to stderr; **that URL is a secret**, so only a reader that never shows it should use it. Agents' browsers do this automatically. With no token able to mint (none saved, or the hub answers 401/403) it exits 1 and prints the same two setup steps as `slot get`. The token never goes into `slots.json`, logs or errors. Details of `pair`:
+  - **Call it only when the page is on `/pair`.** Every call mints a new browser token on the hub, and nothing revokes old ones yet (revocation is a separate item, `work-wolfpack-O3U4Et5`), so do not call it on every page load or in a loop.
+  - It tries the `hub-token` file first, then `WOLFPACK_HUB_TOKEN`, so a wolf shell's worker token (which the hub refuses to mint with) is not sent first. This differs on purpose from `slot get`, which hands a slot's server env `WOLFPACK_HUB_TOKEN` first.
+  - It sends no `kind` when redeeming, like `token`: a code from `/v1/tokens/pairing-codes` is a browser code and redeems as one.
+  - If the browser cannot be opened it exits 1 with a message that does not contain the URL.
+  - It does not refresh the slot's `lastUsed`: only `slot get` keeps a slot alive against the 20-minute idle stop.
+- **`get` only succeeds when the slot answers HTTP** (up to 90 s, `PREVIEW_SLOT_WAIT_MS`). If next exits first (for example "Another next dev server is already running") or never answers, the slot is released and `get` fails quoting the last useful log line. A worktree whose `apps/console` is already served by a `next dev` that is not a slot (such as the 3230 preview) is refused up front, found by a read-only `lsof` lookup of listeners' working directories, and that process is never signalled.
+- The worktree needs `apps/console/node_modules` and built workspace packages; otherwise `get` refuses and says to run `pnpm install` / `pnpm build` there. Nothing is built for you.
+- `wolfpack preview status` adds a read-only `slots:` line when any are running. Port 3230 and the other commands are unchanged.
+
 ### Move the wolves onto a worktree (`--wolves`)
 
 Only when the *backend* is under test: `wolfpack preview --wolves [name]` opens the picker (or takes a name, a path) and runs the

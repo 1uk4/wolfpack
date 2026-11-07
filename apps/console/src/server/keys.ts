@@ -1,4 +1,3 @@
-import { readEnv } from "../../env-compat.ts";
 /**
  * The auth/keys composition (auth-keys wave, 2026-09-19): the server-side
  * key manager behind GET/PUT/DELETE /api/keys.
@@ -64,7 +63,7 @@ interface AuthBoot {
 	/** Vars WE put into process.env (the file's reflection) — deletable. */
 	fillGap: Set<string>;
 }
-const BOOT_KEY = Symbol.for("lh.authBoot");
+const BOOT_KEY = Symbol.for("wolfpack.authBoot");
 
 function boot(): AuthBoot {
 	const g = globalThis as Record<symbol, AuthBoot | undefined>;
@@ -90,7 +89,7 @@ export function providerKeyList() {
  *  invisible app-wide — deleted from the process at boot, file keys only.
  *  Read live per call (the launcher exports it before boot). */
 export function envKeysIgnored(): boolean {
-	return readEnv("WOLFPACK_IGNORE_ENV_KEYS", "LH_IGNORE_ENV_KEYS") === "1";
+	return process.env.WOLFPACK_IGNORE_ENV_KEYS === "1";
 }
 
 /**

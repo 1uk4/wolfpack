@@ -19,7 +19,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type Actor } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
-import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, WORK_STORE_PERMISSION_DENIED, WORK_STORE_READ_ONLY } from "./work-writes.js";
+import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
@@ -47,7 +47,7 @@ const respond = (res: ServerResponse, status: number, body: unknown): void => {
 };
 const STATUS: Record<string, number> = { invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503 };
 /** Typed write failures (HubError details.code, see ERRNO_TABLE in work-writes.ts): the status is decided by the typed code, not the protocol code. */
-const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500 };
+const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500, [PARENT_CLOSED]: 409 };
 
 /** Is this request under the proxy prefix? */
 export const isWorkProxyPath = (pathname: string): boolean => pathname === `${WORK_PROXY_PREFIX}/work` || pathname.startsWith(`${WORK_PROXY_PREFIX}/work/`);

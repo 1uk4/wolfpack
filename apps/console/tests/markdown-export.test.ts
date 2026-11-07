@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-md-export-"));
+const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "wp-md-export-"));
 process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 /** The route handler + the store seam, loaded AFTER the env is set. */

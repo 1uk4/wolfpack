@@ -26,7 +26,8 @@ import {
 	GRAPH_PANE_WIDTH_KEY,
 	PaneCache,
 	clampPaneWidth,
-	featureGraduateState,
+	graduateState,
+	NO_GRADUATE,
 	featureThreadWolves,
 	findLibrarian,
 	paneWork,
@@ -54,7 +55,7 @@ export type PaneData =
 	| { kind: "none" }
 	| { kind: "loading" }
 	| { kind: "error"; message: string }
-	| { kind: "work"; item: WorkRecordResponse; work: PaneWork; threadWolves: string[] }
+	| { kind: "work"; item: WorkRecordResponse; work: PaneWork; threadWolves: string[]; parent: { container?: boolean } | null }
 	| { kind: "entry"; entry: KbEntryDetail };
 
 const dataCache = new PaneCache<PaneData>();
@@ -84,7 +85,13 @@ async function loadPaneData(card: NodeCard): Promise<PaneData> {
 		if (hit.kind === "none") return { kind: "error", message: "No wolf is online to serve this work item." };
 		if (!hit.result.ok) return { kind: "error", message: hit.result.reason === "not_found" ? "No such work item." : hit.result.message };
 		const item = hit.result.data;
-		return { kind: "work", item, work: paneWork(item), threadWolves: item.kind === "feature" && !item.container ? featureThreadWolves(wolves) : [] };
+		// A loose task/issue/spike graduates only under a container (the Inbox): read the parent to know which it is.
+		let parent: { container?: boolean } | null = null;
+		if (item.partOf && ["task", "issue", "spike"].includes(item.kind)) {
+			const p = await resolveWork(workWolfCandidates(librarian, wolves), item.partOf, fetchWorkRecord);
+			parent = { container: p.kind === "hit" && p.result.ok ? p.result.data.container : false };
+		}
+		return { kind: "work", item, work: paneWork(item), threadWolves: item.kind === "feature" && !item.container ? featureThreadWolves(wolves) : [], parent };
 	}
 	if (card.kind === "entry") {
 		const res = await fetchKbEntry(card.id.slice("ent:".length));
@@ -293,18 +300,22 @@ export function GraphPane({
 	};
 
 	const threadWolves = data.kind === "work" ? data.threadWolves : [];
-	// A feature's tasks come with its record; without them (older server) a shipped feature counts as ready.
-	const graduateState =
+	// A feature's (or initiative's) children come with its record; without them (older server) a shipped feature counts as ready.
+	const graduateState_ =
 		data.kind === "work"
-			? featureGraduateState({ kind: data.item.kind, stage: data.item.stage, container: data.item.container }, data.item.children ? data.item.children.filter((c) => c.kind !== "feature") : null)
-			: featureGraduateState({ kind: "", stage: "" }, null);
+			? graduateState(
+					{ kind: data.item.kind, stage: data.item.stage, container: data.item.container },
+					data.item.children ? (data.item.kind === "feature" ? data.item.children.filter((c) => c.kind !== "feature") : data.item.children.map((c) => ({ ...c, graduated: c.stage === "archived" }))) : null,
+					data.parent,
+				)
+			: NO_GRADUATE;
 	return (
 		<aside
 			data-testid="graph-pane"
 			data-kind={card.kind}
 			data-node={card.id}
 			style={{ width }}
-			className="lh-no-drag relative flex h-full shrink-0 flex-col border-l bg-card text-left"
+			className="wp-no-drag relative flex h-full shrink-0 flex-col border-l bg-card text-left"
 		>
 			<div
 				role="separator"
@@ -373,7 +384,7 @@ export function GraphPane({
 				)}
 				{card.kind === "work" && (
 					<div className="mt-3 empty:hidden">
-						<GraduateControl key={card.id} target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} state={graduateState} client={graduateClient} showReason testid="pane-graduate" />
+						<GraduateControl key={card.id} target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} state={graduateState_} client={graduateClient} showReason testid="pane-graduate" />
 					</div>
 				)}
 				{threadError && (

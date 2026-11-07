@@ -11,7 +11,7 @@ import { stageLabel } from "./kb-graph-model.ts";
 import { graduateState, NO_GRADUATE, type GraduateState } from "./graduate.ts";
 import type { WorkListItem } from "./kb.ts";
 
-export type WorkSortCol = "name" | "stage" | "progress" | "assignee" | "created";
+export type WorkSortCol = "name" | "stage" | "created";
 export interface WorkSort {
 	col: WorkSortCol;
 	/** 1 = ascending (A→Z, stage order, oldest first, least done first), -1 = descending. */
@@ -22,7 +22,7 @@ export interface WorkSort {
 export const DEFAULT_WORK_SORT: WorkSort = { col: "stage", dir: 1 };
 
 /** The direction a column starts in when first clicked. */
-export const firstSortDir = (col: WorkSortCol): 1 | -1 => (col === "created" || col === "progress" ? -1 : 1);
+export const firstSortDir = (col: WorkSortCol): 1 | -1 => (col === "created" ? -1 : 1);
 
 /** A header click: the active column flips its direction, another column starts in its own first direction. */
 export const nextWorkSort = (cur: WorkSort, col: WorkSortCol): WorkSort =>
@@ -269,11 +269,8 @@ function compareBy(col: WorkSortCol, a: TableRow, b: TableRow): number {
 		case "name":
 			return collator.compare(a.title, b.title);
 		case "stage":
-			return rankOf(a) - rankOf(b);
-		case "progress":
-			return ratio(a) - ratio(b);
-		case "assignee":
-			return collator.compare(a.assignee || "\uffff", b.assignee || "\uffff");
+			// The Status column holds the stage and the progress: stage first, then the less-done first.
+			return rankOf(a) - rankOf(b) || ratio(a) - ratio(b);
 		case "created":
 			return (a.created || "9999").localeCompare(b.created || "9999");
 	}

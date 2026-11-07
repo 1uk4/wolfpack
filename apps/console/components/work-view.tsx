@@ -5,8 +5,8 @@
  * Initiative groups hold feature rows, which hold task rows, all collapsed to begin with; indentation carries the
  * structure. Dependencies among siblings are lanes in a narrow left gutter (one SVG per group, work-connectors.ts):
  * a line down from the prerequisite ending in an elbow arrow at the dependent; a dependency outside the parent is a
- * "↖ title" note on the row. Rows have a fixed height so the lanes align. A row's title is a chip styled by stage. Columns: Name, Stage, Progress,
- * Assignee, Created; all sort on click (chevron on the active one); the fuzzy search expands matching groups.
+ * "↖ title" note on the row. Rows have a fixed height so the lanes align. A row's title is a chip styled by stage. Columns: Name, Status (stage + progress), Created,
+ * Open; the first three sort on click (chevron on the active one); the fuzzy search expands matching groups.
  *
  * Data: the injected `WorkClient` (default: console → wolfd → the Work API), fetched when the view opens, on window
  * focus and on a light poll while open. The domain is remembered in localStorage and starts on wolfpack.
@@ -130,10 +130,9 @@ function RowLinks({ row }: { row: TableRow }) {
 }
 
 const COLS = {
-	stage: "w-20 shrink-0 md:w-48",
-	progress: "w-28 shrink-0 max-md:hidden",
-	assignee: "w-24 shrink-0 max-md:hidden",
+	status: "w-24 shrink-0 md:w-56",
 	created: "w-24 shrink-0 max-md:hidden",
+	open: "flex w-6 shrink-0 justify-end md:w-16",
 };
 const INDENT_PX = [8, 20, 32] as const;
 
@@ -210,7 +209,23 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
 					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
 					</span>
-					{row.id && (
+					<span className={`${COLS.status} flex min-w-0 flex-col md:flex-row md:items-center md:gap-2`}>
+						<span
+							data-testid={`work-stage-${row.key}`}
+							title={row.graduate.show && !row.graduate.ready ? `${row.stageLabel} (not ready to graduate: ${row.graduate.reason})` : row.stageLabel}
+							className="truncate text-xs text-muted-foreground"
+						>
+							{row.stageLabel}
+						</span>
+						{row.progress && (
+							<span data-testid={`work-progress-${row.key}`} className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-muted-foreground/80">
+								{row.progress.label}
+							</span>
+						)}
+					</span>
+					<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
+					<span className={COLS.open}>
+{row.id && (
 						<button
 							type="button"
 							data-testid={`work-open-${row.key}`}
@@ -226,18 +241,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 							<span className="max-md:hidden">Open</span>
 						</button>
 					)}
-					<span
-						data-testid={`work-stage-${row.key}`}
-						title={row.graduate.show && !row.graduate.ready ? `${row.stageLabel} (not ready to graduate: ${row.graduate.reason})` : row.stageLabel}
-						className={`${COLS.stage} truncate text-xs text-muted-foreground`}
-					>
-						{row.stageLabel}
-					</span>
-					<span data-testid={`work-progress-${row.key}`} className={`${COLS.progress} text-xs tabular-nums text-muted-foreground`}>
-						{row.progress?.label ?? ""}
-					</span>
-					<span className={`${COLS.assignee} truncate text-xs text-muted-foreground`}>{row.assignee}</span>
-					<span className={`${COLS.created} text-right text-xs tabular-nums text-muted-foreground`}>{row.created}</span>
+</span>
 				</div>
 				{row.notes.length > 0 && (
 					<div className="min-w-0 pl-[1.125rem]">
@@ -289,9 +293,7 @@ function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 
 const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 	{ col: "name", label: "Name", cls: "flex-1 pl-[1.125rem]" },
-	{ col: "stage", label: "Stage", cls: COLS.stage },
-	{ col: "progress", label: "Progress", cls: COLS.progress },
-	{ col: "assignee", label: "Assignee", cls: COLS.assignee },
+	{ col: "stage", label: "Status", cls: COLS.status },
 	{ col: "created", label: "Created", cls: `${COLS.created} justify-end` },
 ];
 
@@ -397,6 +399,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 									{h.label} {chevron(h.col)}
 								</button>
 							))}
+							<span aria-hidden className={COLS.open} />
 						</div>
 						{load.state === "loading" && (
 							<div data-testid="work-loading" className="px-4 pt-3 text-xs text-muted-foreground">

@@ -255,6 +255,15 @@ describe("rows", () => {
 		await click(q("work-toggle-i1")!);
 		assert.ok(rows().includes("t3"), "a reopened group remembers its feature was open");
 	});
+	it("has the columns Name, Status, Created and, last, Open; no Assignee, no separate Progress", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
+		assert.deepEqual(qa('[data-testid^="work-sort-"]').map((b) => b.textContent!.trim()), ["Name", "Status", "Created"]);
+		const cells = [...q("work-row-f1")!.querySelectorAll('[data-testid]')].map((e) => e.getAttribute("data-testid")!);
+		assert.ok(cells.indexOf("work-stage-f1") < cells.indexOf("work-open-f1"), "Open comes after Status");
+		assert.equal(q("work-open-f1")!.parentElement!.nextElementSibling, null, "Open is the rightmost cell");
+		assert.ok(q("work-stage-f1")!.parentElement!.contains(q("work-progress-f1")), "progress sits in the Status cell");
+	});
 	it("shows stage text via stageLabel, progress and created", async () => {
 		await open();
 		await click(q("work-toggle-i1")!);

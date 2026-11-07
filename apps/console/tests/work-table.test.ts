@@ -218,16 +218,14 @@ describe("buildWorkTable: sorting", () => {
 		assert.deepEqual(order({ col: "created", dir: 1 }), ["f1", "f2"]);
 		assert.deepEqual(order({ col: "created", dir: -1 }), ["f1", "f2"]);
 	});
-	it("sorts by progress, rows without progress last when descending is reversed", () => {
-		const t = buildWorkTable(items, { sort: { col: "progress", dir: -1 } });
-		const none = t.groups.find((g) => g.key === "i1")!;
-		assert.deepEqual(ids(none.children), ["f1", "f2"]); // 1/3 beats none
-		const asc = buildWorkTable(items, { sort: { col: "progress", dir: 1 } }).groups[0]!;
-		assert.deepEqual(ids(asc.children), ["f1", "f2"]);
-	});
-	it("sorts by assignee, unassigned last", () => {
-		assert.deepEqual(order({ col: "assignee", dir: 1 }, NO_INITIATIVE_KEY), ["f3", "f4"]);
-		assert.deepEqual(ids(buildWorkTable(items, { sort: { col: "assignee", dir: 1 } }).groups[0]!.children), ["f1", "f2"]);
+	it("sorts the Status column by stage, then by progress (less done first)", () => {
+		const rows = [
+			item("p", "feature", { stage: "in_build", title: "P" }), item("p1", "task", { partOf: "p", stage: "shipped" }), item("p2", "task", { partOf: "p", stage: "plan" }),
+			item("q", "feature", { stage: "in_build", title: "Q" }), item("q1", "task", { partOf: "q", stage: "plan" }), item("q2", "task", { partOf: "q", stage: "plan" }),
+			item("r", "feature", { stage: "plan", title: "R" }),
+		];
+		assert.deepEqual(ids(buildWorkTable(rows, { sort: { col: "stage", dir: 1 } }).groups[0]!.children), ["q", "p", "r"]);
+		assert.deepEqual(ids(buildWorkTable(rows, { sort: { col: "stage", dir: -1 } }).groups[0]!.children), ["r", "p", "q"]);
 	});
 	it("orders the groups too, with Inbox always last", () => {
 		const t = buildWorkTable([...items, item("i0", "initiative", { title: "Alpha", created: "2026-10-04" })], { sort: { col: "name", dir: -1 } });

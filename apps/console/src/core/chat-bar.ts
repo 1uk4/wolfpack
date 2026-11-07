@@ -1,6 +1,5 @@
 /**
- * THE FLOATING CHAT BAR's pure model: which thread the bar is attached to, how that falls back to the owner's home
- * thread, and the switcher's list. PURE: no React, no IO (storage is injected).
+ * THE FLOATING CHAT BAR's pure model: the popped-out thread (persisted) and the switcher's list. PURE: no React, no IO (storage is injected).
  */
 
 import { threadHref, threadSlug } from "./thread-adapter.ts";
@@ -15,34 +14,16 @@ export interface AttachedRef {
 export interface ChatBarState {
 	attached: AttachedRef | null;
 	minimized: boolean;
-	/** A one-line note after a fallback ("<title> is gone; back on <wolf>'s home thread"). Cleared by the next attach. */
-	note: string | null;
 }
 
-export const ATTACHED_KEY = "wolfpack:chatbar:attached";
+/** The popped-out thread (the detached chat). A new key: the old "attached" value was the home-wolf default and must not resurrect a bar. */
+export const ATTACHED_KEY = "wolfpack:chatbar:popped-out";
+/** Pre-detached-chat keys, removed on load so nothing is popped out until the owner pops something out. */
+export const LEGACY_KEYS = ["wolfpack:chatbar:attached", "wolfpack:chatbar:home-wolf"] as const; // the second is the removed "Home wolf" setting
+
+/** The floating chat is just the thread chip, the composer and Dock. Each extra is off; flip one to bring it back (the code is kept). */
+export const BAR_EXTRAS: { cards: boolean; peek: boolean; badge: boolean; switcher: boolean } = { cards: false, peek: false, badge: false, switcher: false };
 export const MINIMIZED_KEY = "wolfpack:chatbar:minimized";
-/** The owner's "Home wolf" setting (a wolf name); absent = the guess in {@link pickOwnerWolf}. Stored on this device, like the shortcut overrides. */
-export const HOME_WOLF_KEY = "wolfpack:chatbar:home-wolf";
-
-export function loadHomeWolf(s: KeyValueStore | null): string | null {
-	try {
-		return s?.getItem(HOME_WOLF_KEY)?.trim() || null;
-	} catch {
-		return null;
-	}
-}
-
-/** null (or empty) resets to the default. */
-export function saveHomeWolf(s: KeyValueStore | null, wolf: string | null): void {
-	try {
-		if (!s) return;
-		if (wolf?.trim()) s.setItem(HOME_WOLF_KEY, wolf.trim());
-		else s.removeItem(HOME_WOLF_KEY);
-	} catch {
-		/* best effort */
-	}
-}
-
 export interface KeyValueStore {
 	getItem(k: string): string | null;
 	setItem(k: string, v: string): void;
@@ -115,50 +96,10 @@ export function pickOwnerWolf(wolves: readonly WolfLite[]): string | null {
 	return (online.find((w) => !w.librarian) ?? online[0])?.name ?? null;
 }
 
-/**
- * The wolf whose home thread the bar falls back to. The console has NO reliable signal for the wolf it runs as (a wolf
- * summary carries only id/name/host/status/librarian; WOLFPACK_API_URL names no wolf), so the default stays the
- * {@link pickOwnerWolf} guess. The owner's setting, when present, wins even if that wolf is offline or unknown.
- */
-export function resolveHomeWolf(setting: string | null | undefined, wolves: readonly WolfLite[]): string | null {
-	return setting?.trim() || pickOwnerWolf(wolves);
-}
-
-/** A wolf's home thread (kind "home", not archived). */
-export function homeThread(threads: readonly BarThread[]): BarThread | undefined {
-	return threads.find((t) => t.kind === "home" && !t.closed);
-}
-
 /** Can the bar attach to this thread? Subagent/process threads, children and archived threads cannot. */
 export const attachable = (t: BarThread): boolean => (t.kind === "home" || t.kind === "feature") && !t.parentThreadId && !t.closed;
 
 export type ThreadsByWolf = Record<string, readonly BarThread[] | undefined>;
-
-export interface Resolution {
-	attached: AttachedRef | null;
-	note: string | null;
-}
-
-/**
- * Settle the stored target against what exists. A wolf whose list is unknown (offline, fetch failed) is not "gone":
- * the stored target stands. A target that is missing or archived on a wolf whose list is known falls back to the owner
- * wolf's home thread with a note; with no stored target at all it is the home thread, no note.
- */
-export function resolveAttached(stored: AttachedRef | null, wolves: readonly WolfLite[], threads: ThreadsByWolf, homeWolfSetting: string | null = null): Resolution {
-	if (stored) {
-		const list = threads[stored.wolf];
-		if (!list) return { attached: stored, note: null };
-		const hit = list.find((t) => t.id === stored.threadId);
-		if (hit && !hit.closed) return { attached: stored, note: null };
-	}
-	// A home wolf that is offline or unknown has no thread list: nothing to jump to, the stored target stays.
-	const owner = resolveHomeWolf(homeWolfSetting, wolves);
-	const ownerList = owner ? threads[owner] : undefined;
-	const home = owner && ownerList ? homeThread(ownerList) : undefined;
-	if (!owner || !home) return { attached: stored, note: null };
-	const fallback: AttachedRef = { wolf: owner, slug: threadSlug(owner, home.id), threadId: home.id };
-	return { attached: fallback, note: stored ? "The attached thread is gone or archived; back on the home thread." : null };
-}
 
 export interface SwitcherEntry {
 	wolf: string;

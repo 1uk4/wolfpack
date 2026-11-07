@@ -2,7 +2,7 @@
 
 /**
  * AttachedThreadProvider: the ONE thread the floating chat bar talks to (`{wolf, slug, threadId}`), persisted in
- * localStorage. Navigation never touches it; only `attach()` does ("Attach bar here", the switcher).
+ * localStorage. Navigation never touches it; `attach()` sets it and `dock()` clears it (the chat-bar docks it on landing on the thread or using another composer).
  *
  * It also holds what the bar and its switcher read: the wolf roster and each wolf's thread list, kept live from the
  * /api/events channel (thread-updated patches a row in place, needs-you-changed patches the status and refetches that
@@ -13,10 +13,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
 	buildSwitcher,
 	loadAttached,
-	loadHomeWolf,
-	saveHomeWolf,
+	LEGACY_KEYS,
 	loadMinimized,
-	resolveAttached,
 	saveAttached,
 	saveMinimized,
 	threadSlug,
@@ -28,16 +26,13 @@ import {
 	type WolfLite,
 } from "@/src/core";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
-import { openFeatureThread, type KbResult } from "@/components/kb-client";
 
 export interface AttachedThreadApi {
 	attached: AttachedRef | null;
+	/** The stored popped-out thread has been read (post-mount). */
+	ready: boolean;
 	/** The quiet one-liner after a fallback to the home thread. */
-	note: string | null;
 	minimized: boolean;
-	/** The owner's "Home wolf" setting (null = default guess). */
-	homeWolf: string | null;
-	setHomeWolf: (wolf: string | null) => void;
 	setMinimized: (v: boolean) => void;
 	wolves: readonly WolfLite[];
 	threads: ThreadsByWolf;
@@ -51,8 +46,8 @@ export interface AttachedThreadApi {
 	/** A send failed: drop the optimistic "working". */
 	clearSent: () => void;
 	attach: (ref: { wolf: string; threadId: string; slug?: string }) => void;
-	/** Open (or create) the work item's feature thread on `wolf`, then attach. Resolves to an error message or null. */
-	attachWorkItem: (wolf: string, workItemId: string) => Promise<string | null>;
+	/** Dock the floating chat: clears the popped-out thread (its draft stays in the draft store). */
+	dock: () => void;
 	refresh: () => void;
 }
 
@@ -71,19 +66,6 @@ function browserStore(): KeyValueStore | null {
 	}
 }
 
-/** "Attach bar here" on a work item: open (create when it has none) the item's thread, then attach. Pure over its seams. */
-export async function attachToWorkItem(
-	wolf: string,
-	workItemId: string,
-	open: (wolf: string, id: string) => Promise<KbResult<{ id: string; title: string }>>,
-	attach: (ref: { wolf: string; threadId: string }) => void,
-): Promise<string | null> {
-	const r = await open(wolf, workItemId);
-	if (!r.ok) return r.message;
-	attach({ wolf, threadId: r.data.id });
-	return null;
-}
-
 async function getJson<T>(url: string): Promise<T | undefined> {
 	try {
 		const res = await fetch(url, { cache: "no-store" });
@@ -96,22 +78,18 @@ async function getJson<T>(url: string): Promise<T | undefined> {
 export function AttachedThreadProvider({
 	children,
 	storage,
-	openThread = openFeatureThread,
 }: {
 	children: ReactNode;
 	/** Test seam; defaults to localStorage. */
 	storage?: KeyValueStore | null;
-	openThread?: typeof openFeatureThread;
 }) {
 	const store = storage === undefined ? browserStore() : storage;
 	const storeRef = useRef(store);
 	storeRef.current = store;
 	const [attached, setAttachedState] = useState<AttachedRef | null>(null);
 	const attachedRef = useRef<AttachedRef | null>(null);
-	const [note, setNote] = useState<string | null>(null);
+	const [ready, setReady] = useState(false);
 	const [minimized, setMinimizedState] = useState(false);
-	const [homeWolf, setHomeWolfState] = useState<string | null>(null);
-	const homeWolfRef = useRef<string | null>(null);
 	const [wolves, setWolves] = useState<readonly WolfLite[]>([]);
 	const [threads, setThreads] = useState<ThreadsByWolf>({});
 	const [sent, setSent] = useState(false);
@@ -119,15 +97,13 @@ export function AttachedThreadProvider({
 	const threadsRef = useRef<ThreadsByWolf>({});
 	/** Bumped by every deliberate attach: a list fetch that started before it must not re-settle the target. */
 	const gen = useRef(0);
-	const inFlight = useRef(new Set<string>());
 	/** Fetch sequence numbers: a list fetched before a wolf's fresher per-wolf refresh must not overwrite it. */
 	const seq = useRef(0);
 	const wolfSeq = useRef<Record<string, number>>({});
 
-	const setAttached = useCallback((ref: AttachedRef | null, n: string | null) => {
+	const setAttached = useCallback((ref: AttachedRef | null) => {
 		attachedRef.current = ref;
 		setAttachedState(ref);
-		setNote(n);
 		saveAttached(storeRef.current, ref);
 	}, []);
 
@@ -136,14 +112,23 @@ export function AttachedThreadProvider({
 		attachedRef.current = loadAttached(storeRef.current);
 		setAttachedState(attachedRef.current);
 		setMinimizedState(loadMinimized(storeRef.current));
-		homeWolfRef.current = loadHomeWolf(storeRef.current);
-		setHomeWolfState(homeWolfRef.current);
+		setReady(true);
+		for (const k of LEGACY_KEYS) {
+			try {
+				storeRef.current?.removeItem(k);
+			} catch {
+				/* best effort */
+			}
+		}
 	}, []);
 
-	const settle = useCallback((ws: readonly WolfLite[], ts: ThreadsByWolf) => {
-		const res = resolveAttached(attachedRef.current, ws, ts, homeWolfRef.current);
+	// A popped-out thread that is gone or archived (on a wolf whose list is known) docks; there is no fallback thread.
+	const settle = useCallback((_ws: readonly WolfLite[], ts: ThreadsByWolf) => {
 		const cur = attachedRef.current;
-		if (res.attached && (res.attached.threadId !== cur?.threadId || res.attached.wolf !== cur?.wolf)) setAttached(res.attached, res.note);
+		const list = cur ? ts[cur.wolf] : undefined;
+		if (!cur || !list) return;
+		const hit = list.find((t) => t.id === cur.threadId);
+		if (!hit || hit.closed) setAttached(null);
 	}, [setAttached]);
 
 	const commit = useCallback((ws: readonly WolfLite[], ts: ThreadsByWolf) => {
@@ -224,27 +209,14 @@ export function AttachedThreadProvider({
 	const attach = useCallback<AttachedThreadApi["attach"]>((ref) => {
 		gen.current++;
 		setSent(false);
-		setAttached({ wolf: ref.wolf, threadId: ref.threadId, slug: ref.slug ?? threadSlug(ref.wolf, ref.threadId) }, null);
+		setAttached({ wolf: ref.wolf, threadId: ref.threadId, slug: ref.slug ?? threadSlug(ref.wolf, ref.threadId) });
 		refreshWolf(ref.wolf);
 	}, [setAttached, refreshWolf]);
 
-	// One open per item at a time: a double click must not create the thread twice.
-	const attachWorkItem = useCallback(async (wolf: string, id: string) => {
-		const k = `${wolf}\n${id}`;
-		if (inFlight.current.has(k)) return null;
-		inFlight.current.add(k);
-		try {
-			return await attachToWorkItem(wolf, id, openThread, attach);
-		} finally {
-			inFlight.current.delete(k);
-		}
-	}, [openThread, attach]);
-
-	const setHomeWolf = useCallback((wolf: string | null) => {
-		homeWolfRef.current = wolf?.trim() || null;
-		setHomeWolfState(homeWolfRef.current);
-		saveHomeWolf(storeRef.current, homeWolfRef.current);
-	}, []);
+	const dock = useCallback(() => {
+		setSent(false);
+		setAttached(null);
+	}, [setAttached]);
 
 	const setMinimized = useCallback((v: boolean) => {
 		setMinimizedState(v);
@@ -266,48 +238,8 @@ export function AttachedThreadProvider({
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, attachWorkItem, refresh }),
-		[attached, note, minimized, homeWolf, setHomeWolf, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, attachWorkItem, refresh],
+		() => ({ attached, ready, minimized, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh }),
+		[attached, ready, minimized, setMinimized, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
-}
-
-/** "Attach bar here" on a thread page: a quiet header button; absent outside the provider. */
-export function AttachBarButton({ wolf, slug, threadId }: { wolf: string; slug: string; threadId: string }) {
-	const api = useAttachedThread();
-	if (!api) return null;
-	const here = api.attached?.wolf === wolf && api.attached.threadId === threadId;
-	return (
-		<button
-			type="button"
-			data-testid="attach-bar-here"
-			disabled={here}
-			onClick={() => api.attach({ wolf, threadId, slug })}
-			className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 max-md:relative max-md:before:absolute max-md:before:inset-x-0 max-md:before:-inset-y-2 max-md:before:content-['']"
-		>
-			{here ? "Bar attached" : "Attach bar here"}
-		</button>
-	);
-}
-
-/** "Attach bar here" on a work item: opens (creating when there is none) the item's thread on `wolf`, then attaches. */
-export function AttachBarWorkButton({ wolf, workItemId, label = "Attach bar here", onError }: { wolf: string; workItemId: string; label?: string; onError?: (m: string | null) => void }) {
-	const api = useAttachedThread();
-	const [busy, setBusy] = useState(false);
-	if (!api) return null;
-	return (
-		<button
-			type="button"
-			data-testid="attach-bar-work"
-			data-wolf={wolf}
-			disabled={busy}
-			onClick={() => {
-				setBusy(true);
-				void api.attachWorkItem(wolf, workItemId).then((m) => onError?.(m)).finally(() => setBusy(false));
-			}}
-			className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent disabled:opacity-50 max-md:min-h-11 max-md:px-3"
-		>
-			{label}
-		</button>
-	);
 }

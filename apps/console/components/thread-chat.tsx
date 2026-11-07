@@ -29,7 +29,6 @@ import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
-import { AttachBarButton } from "@/components/attached-thread";
 import { TopBar } from "@/components/top-bar";
 import { ThreadGitRow } from "@/components/thread-git-tree";
 import { ThreadContextChip } from "@/components/thread-context";
@@ -558,7 +557,6 @@ function ThreadChatInner({
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
-					<AttachBarButton wolf={wolf} slug={slug} threadId={threadId} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
@@ -732,7 +730,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : undefined}
+											controls={<>{threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}</>}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

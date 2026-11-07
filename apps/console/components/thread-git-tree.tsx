@@ -273,7 +273,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 						closeTestId="git-large-modal-close"
 						onClose={() => setFull(false)}
 						header={(close) => (
-							<OverlayHeader className="flex items-center gap-2 pb-3">
+							<OverlayHeader className="flex items-center gap-2 pl-7 pb-3">
 								<h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium">
 									{graph.main.kind === "wolf" ? `Home · ${graph.main.name}` : (title ?? graph.main.name)} · last 30 days
 								</h2>

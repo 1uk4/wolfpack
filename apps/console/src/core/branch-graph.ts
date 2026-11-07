@@ -3,7 +3,7 @@
  * releases, landed work). The thread's branch is the bold lane; children, sibling features, the home branch and stable
  * are the others. Pure; src/server/branch-graph.ts feeds it from read-only git.
  */
-import { WORK_DOMAINS, WORK_ID_SOURCE } from "./work-id-link.ts";
+import { WORK_DOMAINS, WORK_ID_SOURCE, workIdDomain } from "./work-id-link.ts";
 
 /** One `git log` row (newest first). */
 export interface RawCommit {
@@ -156,8 +156,16 @@ export function headerStatus(overview: GitOverview, dirty: boolean): string {
 }
 
 /** Every full work ID a 7-char branch id could be: one per work domain. */
-export function candidateWorkIds(shortId: string): string[] {
-	return WORK_DOMAINS.map((d) => `work-${d}-${shortId}`);
+export function candidateWorkIds(shortId: string, preferred?: string): string[] {
+	const domains = preferred && (WORK_DOMAINS as readonly string[]).includes(preferred) ? [preferred, ...WORK_DOMAINS.filter((d) => d !== preferred)] : [...WORK_DOMAINS];
+	return domains.map((d) => `work-${d}-${shortId}`);
+}
+
+/** The work domain most of the given full work IDs belong to (the thread's own), or undefined. */
+export function preferredDomain(ids: string[]): string | undefined {
+	const n = new Map<string, number>();
+	for (const id of ids) n.set(workIdDomain(id), (n.get(workIdDomain(id)) ?? 0) + 1);
+	return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
 /** The feature an item belongs to: itself for a feature, its parent when that is a feature, else null (loose work). */
@@ -207,13 +215,18 @@ export interface Moment {
 	label: string;
 	workId?: string | null;
 	detail?: string;
+	/** A release's full tag (`console/v0.1.14`). */
+	tag?: string;
+	/** The work item title(s) a landing stands for: the list row's text (the ring itself may go unlabelled). */
+	title?: string;
 	/** Every work item a landing ring stands for (so the ship-date fallback skips them). */
 	workIds?: string[];
 }
 
-/** `console/v0.1.14` → `v0.1.14`. */
+/** `console/v0.1.14` → `console 0.1.14`; a tag with no package prefix stays `v2.0.0`. */
 export function tagLabel(tag: string): string {
-	return tag.slice(tag.lastIndexOf("/") + 1);
+	const i = tag.lastIndexOf("/");
+	return i < 0 ? tag : `${tag.slice(0, i)} ${tag.slice(i + 1).replace(/^v/, "")}`;
 }
 
 /** Splits, PRs and releases inside the last `days`, plus the given landed rings, oldest first. */
@@ -225,7 +238,7 @@ export function buildMoments(o: GitOverview, rings: Moment[], nowSec: number, da
 	}
 	if (o.stable) {
 		for (const p of o.prs) out.push({ at: p.at, kind: "pr", lane: o.stable, label: `PR #${p.n}` });
-		for (const t of o.tags) out.push({ at: t.at, kind: "release", lane: o.stable, label: tagLabel(t.name) });
+		for (const t of o.tags) out.push({ at: t.at, kind: "release", lane: o.stable, label: tagLabel(t.name), tag: t.name });
 	}
 	return out.filter((m) => m.at >= start && m.at <= nowSec).sort((a, b) => a.at - b.at);
 }
@@ -279,11 +292,21 @@ export function timeScale(times: number[], start: number, end: number, fit?: { w
 		const px = ((anchors[i]! - anchors[i - 1]!) / 3600) * PX_PER_HOUR;
 		xs.push(xs[i - 1]! + Math.min(MAX_GAP_PX, Math.max(MIN_GAP_PX, px)));
 	}
-	// Fit a target width: shrink when too wide; grow only when asked (the large view).
+	// Fit a target width. Too wide: squeeze the quiet gaps toward MIN_GAP_PX first (busy stretches keep their width),
+	// and scale everything evenly only if the minimums alone overflow. Grow (the large view) stretches evenly.
 	const natural = xs[xs.length - 1]!;
 	if (fit && natural > 0 && (natural > fit.width || fit.grow)) {
-		const k = fit.width / natural;
-		for (let i = 0; i < xs.length; i++) xs[i] = xs[i]! * k;
+		const gaps = xs.slice(1).map((v, i) => v - xs[i]!);
+		const minTotal = gaps.length * MIN_GAP_PX;
+		let out: number[];
+		if (natural > fit.width && fit.width > minTotal) {
+			const k = (fit.width - minTotal) / (natural - minTotal);
+			out = gaps.map((g) => MIN_GAP_PX + (g - MIN_GAP_PX) * k);
+		} else {
+			const k = fit.width / natural;
+			out = gaps.map((g) => g * k);
+		}
+		for (let i = 1; i < xs.length; i++) xs[i] = xs[i - 1]! + out[i - 1]!;
 	}
 	const x = (t: number): number => {
 		if (t <= start) return 0;
@@ -317,12 +340,38 @@ export function mergeNear(moments: Moment[], kind: MomentKind, xOf: (t: number) 
 	const merged = groups.map((g): Moment => {
 		const newest = g[g.length - 1]!;
 		if (g.length === 1) return newest;
-		if (kind === "release") return { ...newest, label: `${newest.label} +${g.length - 1}`, detail: g.map((m) => m.label).join(", ") };
+		if (kind === "release") {
+			// Newest by tag time (not list order); each full tag once, newest first.
+			const byTime = [...g].sort((a, b) => b.at - a.at);
+			const tags = [...new Set(byTime.map((m) => m.tag ?? m.label))];
+			const top = byTime[0]!;
+			return { ...top, label: tags.length > 1 ? `${top.label} +${tags.length - 1}` : top.label, detail: tags.join(", ") };
+		}
 		const labelled = [...g].reverse().find((m) => m.label !== "");
 		const ids = [...new Set(g.flatMap((m) => m.workIds ?? []))];
 		return { ...newest, label: labelled?.label ?? "", workId: ids[0] ?? null, workIds: ids, detail: [`${g.length} landings`, ...g.map((m) => m.detail).filter(Boolean)].join(" · ") };
 	});
 	return [...rest, ...merged].sort((a, b) => a.at - b.at);
+}
+
+/** One row of the moments list: the newest moment of a run, and how many identical ones it stands for. */
+export interface MomentRow {
+	moment: Moment;
+	count: number;
+}
+
+/** Collapse consecutive identical rows (same kind and work item, or label when none; within an hour) of a newest-first list. */
+export function collapseRows(moments: Moment[]): MomentRow[] {
+	const rows: MomentRow[] = [];
+	let prev: Moment | null = null;
+	for (const m of moments) {
+		const last = rows[rows.length - 1];
+		const same = (a: Moment) => a.kind === m.kind && (a.workId ?? `label:${a.label}`) === (m.workId ?? `label:${m.label}`);
+		if (last && prev && same(prev) && prev.at - m.at <= 3600) last.count++;
+		else rows.push({ moment: m, count: 1 });
+		prev = m;
+	}
+	return rows;
 }
 
 /** A label already placed (or to place) on one side of a lane: `key` names the region, `x` its left edge, `w` its width. */
@@ -466,6 +515,7 @@ export function landedMoments(landings: Landing[], items: Record<string, ShipSub
 			kind: "landed",
 			lane: l.lane,
 			label,
+			title: shown.length > 0 ? `${shown[0]!.title}${shown.length > 1 ? ` +${shown.length - 1}` : ""}` : undefined,
 			workId: relevant[0]?.id ?? null,
 			workIds: relevant.map((s) => s.id),
 			detail: `${l.source ? `from ${l.source} · ` : ""}${l.commits} ${l.commits === 1 ? "commit" : "commits"}`,

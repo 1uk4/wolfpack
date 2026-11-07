@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, agentName, featureOfItem, candidateWorkIds, buildMoments, createdAt, headerStatus, branchShortId, groupRuns, isVersionTag, landedMoments, landingsFrom, mergeNear, middleClip, placeBandLabel, parseReflog, placeLabels, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Landing, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
+import { ageLabel, agentName, featureOfItem, candidateWorkIds, collapseRows, preferredDomain, buildMoments, createdAt, headerStatus, branchShortId, groupRuns, isVersionTag, landedMoments, landingsFrom, mergeNear, middleClip, placeBandLabel, parseReflog, placeLabels, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Landing, type Moment, type OverviewBranch, type RawCommit } from "../src/core/branch-graph.ts";
 import { parseLog, parsePrs, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
@@ -29,6 +29,10 @@ describe("groupRuns", () => {
 	});
 	it("looks a branch's short id up in every work domain", () => {
 		assert.deepEqual(candidateWorkIds("0HuY8Al"), ["work-personal-0HuY8Al", "work-snapjack-0HuY8Al", "work-wolfpack-0HuY8Al"]);
+		// the thread's own domain goes first, so the other domains are not asked (and do not 404) once it hits
+		assert.deepEqual(candidateWorkIds("0HuY8Al", "wolfpack"), ["work-wolfpack-0HuY8Al", "work-personal-0HuY8Al", "work-snapjack-0HuY8Al"]);
+		assert.equal(preferredDomain(["work-wolfpack-AAAAAAA", "work-snapjack-BBBBBBB", "work-wolfpack-CCCCCCC"]), "wolfpack");
+		assert.equal(preferredDomain([]), undefined);
 	});
 	it("labels ages", () => {
 		assert.equal(ageLabel(1000, 1000 + 4 * 86400 + 5), "4d ago");
@@ -78,7 +82,7 @@ describe("buildMoments", () => {
 			tags: [{ name: "console/v0.1.14", at: NOW - DAY }, { name: "console/v0.1.0", at: NOW - 50 * DAY }],
 		});
 		const m = buildMoments(o, [], NOW, 7);
-		assert.deepEqual(m.map((x) => [x.kind, x.lane, x.label]), [["pr", "stable", "PR #7"], ["split", "feat/A", "split · feat/A"], ["release", "stable", "v0.1.14"]]);
+		assert.deepEqual(m.map((x) => [x.kind, x.lane, x.label]), [["pr", "stable", "PR #7"], ["split", "feat/A", "split · feat/A"], ["release", "stable", "console 0.1.14"]]);
 		assert.deepEqual(m.map((x) => x.at), [NOW - 3 * DAY, NOW - 2 * DAY, NOW - DAY]);
 		assert.equal(buildMoments(o, [], NOW, 30).filter((x) => x.kind === "split").length, 2);
 	});
@@ -87,7 +91,7 @@ describe("buildMoments", () => {
 		assert.deepEqual(buildMoments(ov({ tags: [{ name: "v1", at: NOW - DAY }] }), [ring], NOW, 7).map((x) => x.kind), ["landed", "release"]);
 	});
 	it("labels a release by its short version", () => {
-		assert.equal(tagLabel("console/v0.1.14"), "v0.1.14");
+		assert.equal(tagLabel("console/v0.1.14"), "console 0.1.14");
 		assert.equal(tagLabel("v2.0.0"), "v2.0.0");
 	});
 });
@@ -195,10 +199,12 @@ describe("placeLabels", () => {
 describe("mergeNear", () => {
 	const at = (t: number, kind: Moment["kind"], label: string, lane = "stable", detail?: string): Moment => ({ at: t, kind, lane, label, detail });
 	const xOf = (t: number) => t;
-	it("merges release flags closer than the gap into one flag labelled with the newest version and +N; the detail lists them all", () => {
-		const m = mergeNear([at(0, "release", "v0.1.1"), at(10, "release", "v0.1.2"), at(20, "release", "v0.1.3"), at(100, "release", "v0.1.4"), at(5, "pr", "PR #1")], "release", xOf, 40);
-		assert.deepEqual(m.filter((x) => x.kind === "release").map((x) => [x.at, x.label]), [[20, "v0.1.3 +2"], [100, "v0.1.4"]]);
-		assert.equal(m.find((x) => x.label === "v0.1.3 +2")!.detail, "v0.1.1, v0.1.2, v0.1.3");
+	it("merges release flags closer than the gap: newest BY TIME labelled with its package and +N; the detail lists each full tag newest first, once", () => {
+		const rel = (t: number, tag: string): Moment => ({ ...at(t, "release", tagLabel(tag)), tag });
+		// listed out of time order, with one tag repeated
+		const m = mergeNear([rel(20, "hubd/v0.1.3"), rel(0, "console/v0.1.1"), rel(10, "console/v0.1.2"), rel(10, "console/v0.1.2"), rel(100, "console/v0.1.4"), at(5, "pr", "PR #1")], "release", xOf, 40);
+		assert.deepEqual(m.filter((x) => x.kind === "release").map((x) => [x.at, x.label]), [[20, "hubd 0.1.3 +2"], [100, "console 0.1.4"]]);
+		assert.equal(m.find((x) => x.at === 20)!.detail, "hubd/v0.1.3, console/v0.1.2, console/v0.1.1");
 		assert.equal(m.filter((x) => x.kind === "pr").length, 1);
 	});
 	it("merges landed rings closer than the gap on one lane into one ring with the count in the tooltip; other lanes stay apart", () => {
@@ -207,6 +213,18 @@ describe("mergeNear", () => {
 		assert.deepEqual(m.map((x) => [x.lane, x.at, x.label]), [["home", 8, "D ✓"], ["main", 9, "C ✓"], ["main", 60, "E ✓"]]);
 		assert.match(m[1]!.detail!, /3 landings/);
 		assert.deepEqual(m[1]!.workIds, ["a", "b"]);
+	});
+});
+
+describe("collapseRows", () => {
+	const row = (at: number, kind: Moment["kind"], workId: string | null, label = "x"): Moment => ({ at, kind, lane: "main", label, workId });
+	it("collapses consecutive identical rows (same kind and work item, within an hour) into one with a count, newest first", () => {
+		const rows = collapseRows([row(9000, "landed", "w1"), row(8000, "landed", "w1"), row(7000, "landed", "w1"), row(6000, "landed", "w2"), row(5000, "landed", "w1"), row(900000, "landed", "w1")].sort((a, b) => b.at - a.at));
+		assert.deepEqual(rows.map((r) => [r.moment.at, r.moment.workId, r.count]), [[900000, "w1", 1], [9000, "w1", 3], [6000, "w2", 1], [5000, "w1", 1]]);
+	});
+	it("rows with no work item collapse only when their label matches; different kinds never collapse", () => {
+		const rows = collapseRows([row(300, "pr", null, "PR #1"), row(200, "pr", null, "PR #2"), row(100, "release", null, "PR #2")]);
+		assert.deepEqual(rows.map((r) => r.count), [1, 1, 1]);
 	});
 });
 
@@ -238,6 +256,27 @@ describe("timeScale fit", () => {
 		const xs = times.map(fit.x);
 		assert.deepEqual([...xs].sort((a, b) => a - b), xs);
 		assert.ok(xs[0]! > 0);
+	});
+	it("fitting squeezes the quiet stretches to the minimum first, so a busy stretch keeps its width", () => {
+		// 4 moments within 2h of each other (busy, 16px each), then quiet days before them
+		const busy = [NOW - 3 * 3600, NOW - 2.9 * 3600, NOW - 2.8 * 3600, NOW - 2.7 * 3600];
+		const quiet = [NOW - 6 * DAY, NOW - 4 * DAY, NOW - 2 * DAY];
+		const all = [...quiet, ...busy];
+		const natural = timeScale(all, NOW - 7 * DAY, NOW);
+		const target = natural.width - 100;
+		const fit = timeScale(all, NOW - 7 * DAY, NOW, { width: target, grow: false });
+		assert.ok(Math.abs(fit.width - target) < 0.001);
+		const nat = timeScale(all, NOW - 7 * DAY, NOW);
+		for (let i = 1; i < busy.length; i++) assert.ok(Math.abs(fit.x(busy[i]!) - fit.x(busy[i - 1]!) - (nat.x(busy[i]!) - nat.x(busy[i - 1]!))) < 0.001, "busy stretch unchanged");
+		assert.ok(fit.x(quiet[1]!) - fit.x(quiet[0]!) >= 16 - 0.001, "quiet stretch not below the minimum while room remains");
+		assert.ok(fit.x(quiet[1]!) - fit.x(quiet[0]!) < nat.x(quiet[1]!) - nat.x(quiet[0]!), "quiet stretch squeezed");
+	});
+	it("only when the minimums alone overflow does it scale everything evenly", () => {
+		const times = Array.from({ length: 20 }, (_, i) => NOW - 3600 + i * 60);
+		const fit = timeScale(times, NOW - DAY, NOW, { width: 100, grow: false });
+		assert.ok(Math.abs(fit.width - 100) < 0.001);
+		const xs = times.map(fit.x);
+		assert.deepEqual([...xs].sort((a, b) => a - b), xs);
 	});
 	it("a card does not stretch a short axis, but the large view grows it to exactly the width", () => {
 		const natural = timeScale(times, NOW - 7 * DAY, NOW);

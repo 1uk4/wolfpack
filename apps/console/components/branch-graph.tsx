@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { WorkIdChip, lookupWorkItem } from "@/components/work-id-chip";
-import { agentName, branchShortId, buildMoments, candidateWorkIds, featureOfItem, landedMoments, mergeNear, middleClip, placeBandLabel, placeLabels, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
+import { agentName, branchShortId, buildMoments, candidateWorkIds, collapseRows, featureOfItem, landedMoments, mergeNear, middleClip, placeBandLabel, placeLabels, preferredDomain, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
 
 const LANE_H = 22;
 /** Lane-label column widths: the card, and the large view. */
@@ -27,13 +27,13 @@ const DAY = 86400;
 const clip = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1)}…`);
 
 /** The work item a feature branch's 7-char id names: tried in every work domain, first hit wins. */
-function useBranchTitle(shortId: string | null): string | undefined {
+function useBranchTitle(shortId: string | null, domain?: string): string | undefined {
 	const [title, setTitle] = useState<string>();
 	useEffect(() => {
 		if (!shortId) return;
 		let live = true;
 		void (async () => {
-			for (const id of candidateWorkIds(shortId)) {
+			for (const id of candidateWorkIds(shortId, domain)) {
 				const v = await lookupWorkItem(id);
 				if (v.kind === "ok") {
 					if (live) setTitle(v.item.title);
@@ -44,14 +44,14 @@ function useBranchTitle(shortId: string | null): string | undefined {
 		return () => {
 			live = false;
 		};
-	}, [shortId]);
+	}, [shortId, domain]);
 	return title;
 }
 
 /** A lane's label: the agent name for a subagent, the work item title for a feature, else the branch name. The full text is the tooltip. */
-function LaneLabel({ lane, y, labelW }: { lane: SwimLane; y: number; labelW: number }) {
+function LaneLabel({ lane, y, labelW, domain }: { lane: SwimLane; y: number; labelW: number; domain?: string }) {
 	const subagent = lane.role === "child";
-	const title = useBranchTitle(!subagent && (lane.role === "main" || lane.role === "sibling" || lane.role === "feature") ? branchShortId(lane.name) : null);
+	const title = useBranchTitle(!subagent && (lane.role === "main" || lane.role === "sibling" || lane.role === "feature") ? branchShortId(lane.name) : null, domain);
 	const max = Math.max(8, Math.floor((labelW - PAD_L - 6) / CHAR_PX));
 	const text = subagent ? clip(agentName(lane.name), max) : title ? clip(title, max) : middleClip(lane.name, max);
 	return (
@@ -122,7 +122,7 @@ export function useRings(overview: GitOverview | undefined, nowSec: number): Mom
 			};
 			for (const id of ids) take(id, await lookupWorkItem(id));
 			for (const short of shorts) {
-				for (const id of candidateWorkIds(short)) {
+				for (const id of candidateWorkIds(short, domainOf(overview))) {
 					const v = await lookupWorkItem(id);
 					if (v.kind === "ok") {
 						take(id, v);
@@ -142,6 +142,9 @@ export function useRings(overview: GitOverview | undefined, nowSec: number): Mom
 	}, [key]);
 	return rings;
 }
+
+/** The work domain of the thread's own items (from the work IDs its commits and landings name), asked first on lookups. */
+const domainOf = (o: GitOverview): string | undefined => preferredDomain([...o.landings.flatMap((l) => l.workIds), ...o.history.map((r) => r.workId).filter((x): x is string => x !== null)]);
 
 const dayLabel = (t: number, days: number): string => {
 	const d = new Date(t * 1000);
@@ -228,7 +231,7 @@ export function Swimlanes({ overview, rings, days, nowSec, labelW = CARD_LABEL_W
 				const fx = enters ? x0 : x(l.forkAt!);
 				return (
 					<g key={l.name} data-testid="branch-graph-lane" data-kind={l.role}>
-						<LaneLabel lane={l} y={ly} labelW={labelW} />
+						<LaneLabel lane={l} y={ly} labelW={labelW} domain={domainOf(overview)} />
 						{l.parent && !enters && (
 							<>
 								<circle cx={fx} cy={y(l.parent)} r={DOT} fill={color} />
@@ -297,12 +300,13 @@ export function MomentList({ overview, rings, days, nowSec }: { overview: GitOve
 	if (moments.length === 0) return <p className="text-muted-foreground">No moments in the last {days} days.</p>;
 	return (
 		<ul data-testid="git-moments" className="divide-y divide-border/50 font-mono text-[11px]">
-			{moments.map((m, i) => (
+			{collapseRows(moments).map(({ moment: m, count }, i) => (
 				<li key={i} className="flex items-center gap-3 py-1">
 					<span className="w-28 shrink-0 text-muted-foreground">{new Date(m.at * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
 					<span className="w-20 shrink-0 text-muted-foreground">{KIND_LABEL[m.kind]}</span>
 					{m.workId && <WorkIdChip id={m.workId} />}
-					<span className="min-w-0 truncate">{m.label}</span>
+					<span className="min-w-0 truncate" title={m.detail}>{m.title ?? m.label}</span>
+					{count > 1 && <span className="shrink-0 text-muted-foreground">×{count}</span>}
 				</li>
 			))}
 		</ul>

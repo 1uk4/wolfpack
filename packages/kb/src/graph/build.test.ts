@@ -196,6 +196,32 @@ describe("id consistency and edge cases", () => {
     // an empty API answer means no work (not the files)
     expect(ids(buildKbGraph({ kbBase: kb }, { work: [] }), "factory")).toEqual([]);
   });
+  describe("children of an archived or graduated parent", () => {
+    const work = [
+      { id: "inbox", domain: "alpha", kind: "feature", container: true, stage: "in_build" },
+      { id: "inbox-task", domain: "alpha", kind: "task", stage: "shipped", partOf: "inbox" },
+      { id: "arch", domain: "alpha", kind: "feature", stage: "archived" },
+      { id: "arch-task", domain: "alpha", kind: "task", stage: "shipped", partOf: "arch" },
+      { id: "grad", domain: "alpha", kind: "feature", stage: "shipped", graduated: "2026-01-01" },
+      { id: "grad-sub", domain: "alpha", kind: "feature", stage: "shipped", partOf: "grad" },
+      { id: "grad-leaf", domain: "alpha", kind: "task", stage: "shipped", partOf: "grad-sub" },
+    ];
+    it("hides them with the archived layer off, leaving nothing loose on the Factory", () => {
+      const g = buildKbGraph({ kbBase: makeFixtureKb() }, { work });
+      expect(ids(g, "work")).toEqual(["work:inbox", "work:inbox-task"]);
+      expect(edgeSet(g, "hierarchy").filter((e) => e.startsWith("fac:alpha>"))).toEqual(["fac:alpha>work:inbox"]);
+    });
+    it("nests them under their parent with the archived layer on", () => {
+      const g = buildKbGraph({ kbBase: makeFixtureKb() }, { work, archivedWork: true });
+      expect(edgeSet(g, "hierarchy").filter((e) => e.startsWith("fac:alpha>")).sort()).toEqual(["fac:alpha>work:arch", "fac:alpha>work:grad", "fac:alpha>work:inbox"]);
+      expect(edgeSet(g, "partOf")).toContain("work:arch-task>work:arch");
+      expect(edgeSet(g, "partOf")).toContain("work:grad-leaf>work:grad-sub");
+    });
+    it("keeps an Inbox (container) child on the Factory chain, not hidden", () => {
+      const g = buildKbGraph({ kbBase: makeFixtureKb() }, { work: work.filter((w) => w.id.startsWith("inbox")) });
+      expect(edgeSet(g, "hierarchy")).toContain("work:inbox>work:inbox-task");
+    });
+  });
   it("work nodes carry stage, kind, parent (partOf) and dependsOn as typed edges, feature to feature included", () => {
     const work = [
       { id: "f1", domain: "alpha", kind: "feature", stage: "shipped" },

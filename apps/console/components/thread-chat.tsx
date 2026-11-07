@@ -18,7 +18,7 @@ import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { TurnTimer, useTurnStart } from "@/components/turn-timer";
 import { useAttachedStripRow } from "@/components/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/subagent-strip";
-import { PanelFloatingHandle, PanelHostProvider, RightPanelHost } from "@/components/panel-host";
+import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { useAttachedThread } from "@/components/attached-thread";
@@ -604,7 +604,6 @@ function ThreadChatInner({
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
 				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex} style={{ backgroundColor: tint }}>
-					<PanelFloatingHandle />
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
 							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>

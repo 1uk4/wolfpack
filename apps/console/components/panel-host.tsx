@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { ActivityIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ActivityIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory-panel";
 import { MOBILE_QUERY, MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
@@ -223,11 +223,7 @@ export function RightPanelHost() {
 						<ChevronsRightIcon />
 					</Button>
 				</div>
-			) : (
-				<Button variant="ghost" size="icon" aria-label="Open side panel" onClick={actions.toggle}>
-					<ChevronsLeftIcon />
-				</Button>
-			)}
+			) : null}
 			{mounted.map((p) => {
 				const shown = open && p.id === selected;
 				return (
@@ -237,28 +233,5 @@ export function RightPanelHost() {
 				);
 			})}
 		</aside>
-	);
-}
-
-/**
- * The closed-panel handle: a floating button anchored to the top-right of the chat area (render it inside the
- * conversation wrapper, a sibling of the scroller, so it stays put while the list scrolls). Hidden while the panel
- * is open or when no panel is available. 44px tap target on the phone, 32px from md up.
- */
-export function PanelFloatingHandle() {
-	const actions = useContext(ActionsContext);
-	const state = useContext(StateContext);
-	if (!actions || !state || !state.selected || state.open) return null;
-	return (
-		<Button
-			variant="ghost"
-			size="icon"
-			aria-label="Open side panel"
-			data-testid="panel-handle"
-			className="absolute right-2 top-2 z-20 size-11 rounded-full border border-border bg-card/90 shadow-md backdrop-blur md:size-8 md:right-3 md:top-3"
-			onClick={actions.toggle}
-		>
-			<ChevronsLeftIcon />
-		</Button>
 	);
 }

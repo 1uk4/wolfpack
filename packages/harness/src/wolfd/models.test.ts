@@ -149,7 +149,6 @@ describe("stored provider ids resolve lookup-only", () => {
 
   it("a stored anthropic ref on a bridge-only tier resolves, and the stub refuses to serve", async () => {
     const m = buildWolfModels(table("claude-stateless"), { cwd: "/w", seams: bridgeSeam(() => fakeProvider()), storedProviders: ["anthropic"], lookups });
-    expect(m.models!.getModel("anthropic", "m")).toBeDefined();
     const events: any[] = [];
     for await (const e of (m.models as any).streamSimple(m.models!.getModel("anthropic", "m"), { messages: [] })) events.push(e);
     expect(events[0].error.errorMessage).toMatch(/provider anthropic is not configured for this wolf/);

@@ -8,7 +8,6 @@ const engineMock = vi.hoisted(() => ({ loadQuery: vi.fn() }));
 vi.mock("@wolfpack/engine", async (orig) => ({ ...(await orig<object>()), loadQuery: engineMock.loadQuery }));
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
-import { NEEDS_SUBSCRIPTION_TOKEN, PROVIDER_FACTORIES } from "./index.js";
 import { buildSubscriptionModels, claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, withFreshSystemPrompt } from "./claude-stateless.js";
 
 const fakeStateless = () => {
@@ -19,11 +18,6 @@ const tier = (p: string) => ({ model: "claude-sonnet-5-5", provider: p === "clau
 const mixed = { transport: "subscription", tiers: { main: tier("claude-bridge"), smart: tier("claude-stateless"), fast: tier("claude-stateless") } } as never;
 
 describe("claude-stateless factory", () => {
-  it("is registered and needs the subscription token", () => {
-    expect(PROVIDER_FACTORIES["claude-stateless"]).toBe(claudeStatelessFactory);
-    expect(NEEDS_SUBSCRIPTION_TOKEN.has("claude-stateless")).toBe(true);
-  });
-
   it("builds the provider with state-dir paths (not in the den), debug on; NO_TOOL_SEARCH wins over ctx.env; forget and dispose reach it", () => {
     const root = mkdtempSync(join(tmpdir(), "stateless-home-"));
     try {

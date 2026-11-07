@@ -50,6 +50,8 @@ interface Over {
   me?: string;
   /** Make the comment writes (`gh api -X POST|PATCH|DELETE`) fail. */
   commentFail?: boolean;
+  /** Check runs GitHub reports for the head commit. Default: `ci` completed with success. */
+  checks?: { name: string; status: string; conclusion: string | null; url?: string }[];
 }
 
 /** Fakes for git/gh/work/build. `git` answers by command; anything not listed succeeds with empty output. */
@@ -90,6 +92,11 @@ function fakes(over: Over = {}) {
         const method = args.includes("-X") ? args[args.indexOf("-X") + 1]! : "GET";
         const path = args.find((a) => a.startsWith("repos/"))!;
         if (args[1] === "user") return ok(`${over.me ?? "wolfbot"}\n`);
+        if (path.includes("/check-runs")) {
+          calls.push("check-runs");
+          const runs = over.checks ?? [{ name: "ci", status: "completed", conclusion: "success" }];
+          return ok(runs.map((c) => JSON.stringify([c.name, c.status, c.conclusion, c.url ?? `https://github.com/1uk4/wolfpack/actions/runs/1/job/${c.name}`])).join("\n"));
+        }
         if (method === "GET") {
           // What gh prints for the two jq filters this code has used: one JSON array per comment, or tab-separated.
           const jq = args[args.indexOf("--jq") + 1] ?? "";
@@ -302,7 +309,7 @@ describe("wolfpack pr prepare: opening the PR", () => {
     expect(create.input).toContain("- CI: see the checks on this PR");
     expect(create.input).toContain("- live/eval: live tests passed on this machine; eval tests run on the release PR's CI");
     expect(c.filter((x) => /^gh pr merge|--force|--force-with-lease| -f /.test(x))).toEqual([]);
-    expect(c.filter((x) => x.startsWith("gh api"))).toEqual([]);
+    expect(c.filter((x) => x.startsWith("gh api")).map((x) => x.split(" ")[2])).toEqual(["repos/1uk4/wolfpack/commits/headsha99/check-runs?per_page=100"]);
     expect(c.filter((x) => x.startsWith("git push") && x.includes("stable"))).toEqual([]);
   });
 
@@ -580,6 +587,71 @@ describe("wolfpack pr prepare: dry run", () => {
     expect(cmds(f).filter((c) => c.startsWith("git fetch"))).toEqual([]);
     expect(f.verifyCalls()).toBe(0);
     expect(writes(f)).toEqual([]);
+  });
+});
+
+describe("wolfpack pr prepare: CI gate", () => {
+  const FAILED = [
+    { name: "build", status: "completed", conclusion: "failure", url: "https://github.com/1uk4/wolfpack/actions/runs/7/job/1" },
+    { name: "lint", status: "completed", conclusion: "success" },
+    { name: "ci", status: "completed", conclusion: "failure", url: "https://github.com/1uk4/wolfpack/actions/runs/7/job/9" },
+  ];
+
+  it("opens the PR when the ci check passed", async () => {
+    const f = fakes();
+    await run({}, f);
+    expect(f.ghCalls.some((g) => g.args[1] === "create")).toBe(true);
+  });
+
+  it("refuses to open the PR when ci failed, naming the sha, the failed checks and the run URL", async () => {
+    const f = fakes({ checks: FAILED });
+    const err = await failure(run({}, f));
+    expect(err).toBeInstanceOf(PrRefusal);
+    expect(err!.message).toContain("CI failed on headsha99: build, ci");
+    expect(err!.message).toContain("https://github.com/1uk4/wolfpack/actions/runs/7/job/9");
+    expect(f.ghCalls.filter((g) => g.args[0] === "pr" && g.args[1] !== "list")).toEqual([]);
+  });
+
+  it("refuses when one ci check is green and another (push vs pull_request run) is red, in either order", async () => {
+    const green = { name: "ci", status: "completed", conclusion: "success", url: "https://github.com/1uk4/wolfpack/actions/runs/1/job/1" };
+    const red = { name: "ci", status: "completed", conclusion: "failure", url: "https://github.com/1uk4/wolfpack/actions/runs/2/job/2" };
+    for (const checks of [[green, red], [red, green]]) {
+      const err = await failure(run({}, fakes({ checks })));
+      expect(err!.message).toContain("CI failed on headsha99");
+      expect(err!.message).toContain("runs/2/job/2");
+    }
+  });
+
+  it("says to wait when one ci check passed and another is still running", async () => {
+    const checks = [
+      { name: "ci", status: "completed", conclusion: "success" },
+      { name: "ci", status: "queued", conclusion: null },
+    ];
+    expect((await failure(run({}, fakes({ checks }))))!.message).toContain("CI is still running on headsha99");
+  });
+
+  it("refuses when ci was cancelled", async () => {
+    const f = fakes({ checks: [{ name: "ci", status: "completed", conclusion: "cancelled" }] });
+    expect((await failure(run({}, f)))!.message).toContain("CI failed on headsha99: ci");
+  });
+
+  it("refuses and says to wait and re-run while ci is still running", async () => {
+    const f = fakes({ checks: [{ name: "ci", status: "in_progress", conclusion: null }] });
+    const err = await failure(run({}, f));
+    expect(err!.message).toContain("CI is still running on headsha99: wait for CI to finish, then run prepare again.");
+    expect(f.ghCalls.filter((g) => g.args[0] === "pr" && g.args[1] !== "list")).toEqual([]);
+  });
+
+  it("refuses and says to wait and re-run when there is no ci check yet", async () => {
+    const f = fakes({ checks: [] });
+    const err = await failure(run({}, f));
+    expect(err!.message).toContain("No ci check found on headsha99: wait for CI to start and finish, then run prepare again.");
+  });
+
+  it("dry run reports the CI state and never refuses because of it", async () => {
+    const f = fakes({ checks: FAILED });
+    await run({ dryRun: true }, f);
+    expect(f.out.join("\n")).toContain("dry run: CI failed on headsha99: build, ci");
   });
 });
 

@@ -23,13 +23,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
+import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 9;
+export const PREVIEW_VERSION = 10;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -225,18 +225,24 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			log("stable, no preview");
 			return { exitCode: 0 };
 		}
-		if (state.previewRef) {
-			log(`preview ${state.previewRef} @ ${state.previewSha}`);
-			log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
+		const wtDir = state.console?.dir ?? state.worktree;
+		if (wtDir) {
+			const b = fs.existsSync(wtDir) ? tryGit(wtDir, "rev-parse", "--abbrev-ref", "HEAD") : { ok: false };
+			log(`worktree: ${shortName(b.ok && b.out !== "HEAD" ? b.out : null, wtDir)} (${wtDir})`);
 		}
+		if (cons) {
+			let up = false;
+			try {
+				const w = (await st.fetchJson(`${consoleUrl}/api/wolves`))?.wolves;
+				up = Array.isArray(w);
+			} catch {}
+			log(`console: ${consoleUrl} (${up ? "up" : "down"})`);
+		} else log("console: not running");
+		log(state.previewRef ? `wolves: moved to ${state.previewRef}${state.mode === "worktree" ? ` (${state.worktree})` : ""}; \`wolfpack preview off --all\` puts them back on stable` : "wolves: on stable");
 		if (needsRestart) log("restart needed: backend files were rebuilt after the wolves started. Run `wolfpack preview restart`.");
 		if (worktreeMissing) log(`  the worktree ${state.worktree} no longer exists (a worker's copy is deleted when it finishes). The wolves cannot run from it: \`wolfpack preview off --all\` restores stable. If the \`wolfpack\` command fails, its cli link pointed into that worktree: run \`node ~/.wolfpack/preview/bin/runtime-preview.mjs off --all\` (the bin copy does not need the worktree).`);
-		if (cons) {
-			log(`${cons.mode} console from ${cons.dir} on ${consoleUrl}${state.previewRef ? "" : " (the wolves are on stable)"}`);
-			if (cons.missing) log(`  ${cons.dir} no longer exists (a worker worktree is deleted when it finishes). Fix: cd <another worktree> && wolfpack preview dev, or wolfpack preview off`);
-		}
+		if (cons?.missing) log(`  ${cons.dir} no longer exists (a worker worktree is deleted when it finishes). Fix: pick another with \`wolfpack preview\`, or \`wolfpack preview off\``);
 		if (state.reason) log(`reason: ${state.reason}`);
-		for (const l of tail) log(`  ${l}`);
 		return { exitCode: 0, state };
 	}
 

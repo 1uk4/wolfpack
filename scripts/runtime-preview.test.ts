@@ -435,14 +435,14 @@ describe("runtime-preview", () => {
 			await h.run(["dev", d]);
 			h.logs.length = 0;
 			await h.run(["status"]);
-			expect(h.logs.join("\n")).toContain(`dev console from ${fs.realpathSync(d)}`);
+			expect(h.logs.join("\n")).toContain(`(${fs.realpathSync(d)})`);
 			fs.rmSync(d, { recursive: true });
 			h.logs.length = 0;
 			await h.run(["status", "--json"]);
 			expect(JSON.parse(h.logs.join("\n"))).toMatchObject({ consoleUrl: "http://127.0.0.1:3230", console: { mode: "dev", dir: fs.realpathSync(tmp) + "/wt1", missing: true } });
 			h.logs.length = 0;
 			await h.run(["status"]);
-			expect(h.logs.join("\n")).toMatch(/no longer exists[\s\S]*wolfpack preview dev/);
+			expect(h.logs.join("\n")).toMatch(/no longer exists[\s\S]*pick another with `wolfpack preview`/);
 		});
 
 		it("off --dry-run of a dev console prints the plan and changes nothing", async () => {

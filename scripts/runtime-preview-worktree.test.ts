@@ -73,7 +73,7 @@ type Item = { label: string; value: unknown };
 const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown; realHealth?: boolean } = {}) => {
 	const builds: { dir: string; logFile?: string }[] = [];
 	const menus: Item[][] = [];
-	const flags = { portBusy: false };
+	const flags = { portBusy: false, consoleDown: false };
 	const lc: string[][] = [];
 	const helper: string[] = [];
 	const asked: string[] = [];
@@ -86,7 +86,10 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		cliLink: () => cliLink(),
 		cliFallbackDir: () => fallbackDir(),
 		portFree: async () => !flags.portBusy,
-		fetchJson: async () => ({ wolves: [{ id: "x", name: "1uk4" }], chats: [] }),
+		fetchJson: async () => {
+			if (flags.consoleDown) throw new Error("connection refused");
+			return { wolves: [{ id: "x", name: "1uk4" }], chats: [] };
+		},
 		build: (dir: string, b?: { logFile?: string }) => (builds.push({ dir, logFile: b?.logFile }), markBuilt(dir)),
 		health: async () => true,
 		open: (url: string) => void opened.push(url),
@@ -186,6 +189,25 @@ describe("console preview: pick a worktree, its live console opens in a browser 
 		expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA });
 		expect(h.opened).toEqual([]);
 		expect(h.asked.length).toBe(1);
+	});
+});
+
+describe("status is one short block", () => {
+	it("names the worktree, the URL and whether the console is up, and says the wolves are on stable", async () => {
+		const h = harness();
+		await h.run(["wt-a"]);
+		h.logs.length = 0;
+		await h.run(["status"]);
+		expect(h.logs).toEqual([`worktree: a (${wtA})`, "console: http://127.0.0.1:3230 (up)", "wolves: on stable"]);
+	});
+
+	it("says when the console is down and when the wolves were moved", async () => {
+		const h = harness();
+		await h.run(["--wolves", "wt-a"]);
+		h.flags.consoleDown = true;
+		h.logs.length = 0;
+		await h.run(["status"]);
+		expect(h.logs).toEqual([`worktree: a (${wtA})`, "console: http://127.0.0.1:3230 (down)", `wolves: moved to feat/a (${wtA}); \`wolfpack preview off --all\` puts them back on stable`]);
 	});
 });
 

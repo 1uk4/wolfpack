@@ -228,6 +228,17 @@ describe("the strip's done rows", () => {
 	];
 	const view = () => renderToStaticMarkup(<SubagentStripView items={kids} now={NOW} onOpen={() => {}} onStop={() => {}} />);
 
+	it("with an attached chat the strip shows its row (dot, title, state) even with no subagents; listening wins over busy", () => {
+		const row = { title: "Home", color: "#123456", state: "busy" as const, listening: false, onOpen: () => {} };
+		const html = renderToStaticMarkup(<SubagentStripView items={[]} now={NOW} onOpen={() => {}} onStop={() => {}} attached={row} />);
+		assert.match(html, /data-testid="attached-row" data-state="busy"/);
+		assert.match(html, /background-color:#123456/);
+		assert.match(html, />Home</);
+		assert.match(html, />working</);
+		const listening = renderToStaticMarkup(<SubagentStripView items={[]} now={NOW} onOpen={() => {}} onStop={() => {}} attached={{ ...row, listening: true }} />);
+		assert.match(listening, />listening</);
+	});
+
 	it("a settled row leaves at once (no linger, no N done row); only live ones show", () => {
 		const html = view();
 		assert.equal((html.match(/data-testid="subagent-row"/g) ?? []).length, 1); // the running one

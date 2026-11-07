@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BotIcon, SquareIcon } from "lucide-react";
+import { BotIcon, MicIcon, SquareIcon } from "lucide-react";
+import type { AttachedRow } from "@/components/attached-strip-row";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useSubagentModal } from "@/components/subagent-modal";
@@ -73,17 +74,36 @@ export function SubagentStripView({
 	now,
 	onOpen,
 	onStop,
+	attached,
 }: {
 	items: readonly ChildThread[];
 	now: number;
 	onOpen: (child: ChildThread) => void;
 	onStop: (child: ChildThread) => void;
+	/** Phone: the floating chat's thread, as one more row (see useAttachedStripRow). */
+	attached?: AttachedRow | null;
 }) {
-	if (items.length === 0) return null;
+	if (items.length === 0 && !attached) return null;
 	// Only active subagents are visible: a settled one leaves at once (DONE_LINGER_MS is 0) and is not listed anywhere.
 	const { shown } = partitionChildren(items, now, false);
 	return (
 		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border bg-card text-xs shadow-sm">
+			{attached && (
+				<div data-testid="attached-row" data-state={attached.state} data-listening={attached.listening ? "true" : undefined} className="flex items-center gap-2 px-3 hover:bg-accent" style={{ minHeight: STRIP_ROW_PX }}>
+					<button type="button" data-testid="attached-open" aria-label={`Open chat with ${attached.title}`} onClick={attached.onOpen} className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">
+						<span data-testid="attached-dot" aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: attached.color }} />
+						<span data-testid="attached-title" className="min-w-0 flex-1 truncate font-prose">{attached.title}</span>
+						{attached.listening && <MicIcon data-testid="attached-listening" className="size-3 shrink-0 text-red-500" />}
+						<span data-testid="attached-state" className="shrink-0 text-muted-foreground">{attached.listening ? "listening" : attached.state === "busy" ? "working" : attached.state === "needs-you" ? "needs you" : "chat"}</span>
+					</button>
+					{attached.listening && attached.onStop && (
+						<button type="button" data-testid="attached-stop" aria-label="Stop dictation" onClick={attached.onStop} className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-background hover:text-foreground">
+							<SquareIcon className="size-3" />
+							Stop
+						</button>
+					)}
+				</div>
+			)}
 			{shown.map((c) => (
 				<div key={c.id} data-testid="subagent-row" data-child={c.id} data-state={c.state ?? ""} className="flex items-center gap-2 px-3 hover:bg-accent" style={{ minHeight: STRIP_ROW_PX }}>
 					<button type="button" data-testid="subagent-open" onClick={() => onOpen(c)} className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">
@@ -111,7 +131,7 @@ export function SubagentStripView({
  * The status strip pinned above the composer: one row per child of this thread. Clicking a row opens the subagent
  * modal over the current page. Stop aborts the child's thread.
  */
-export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: string; slug: string; items: readonly ChildThread[]; now?: number }) {
+export function SubagentStrip({ wolf, slug, items, now: nowProp, attached }: { wolf: string; slug: string; items: readonly ChildThread[]; now?: number; attached?: AttachedRow | null }) {
 	const { openSubagent } = useSubagentModal();
 	const now = useNow(items, nowProp);
 	const open = useCallback((c: ChildThread) => openSubagent(c.id, wolf), [openSubagent, wolf]);
@@ -133,7 +153,7 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: strin
 	);
 	return (
 		<>
-			<SubagentStripView items={items} now={now} onOpen={open} onStop={(c) => void stop(c)} />
+			<SubagentStripView items={items} now={now} onOpen={open} onStop={(c) => void stop(c)} attached={attached} />
 			{stopError && (
 				<div data-testid="subagent-stop-error" className="pointer-events-auto mb-2 text-xs text-destructive">
 					{stopError}

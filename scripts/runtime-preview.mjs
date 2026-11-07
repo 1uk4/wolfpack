@@ -114,18 +114,40 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 
 	if (sub === "status") {
 		const tail = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5) : [];
+		const cons = state?.console ? { ...state.console, missing: !fs.existsSync(state.console.dir) } : undefined;
+		const consoleUrl = state?.console ? `http://127.0.0.1:${state.consolePort ?? 3230}` : null;
 		if (argv.includes("--json")) {
-			log(JSON.stringify({ state: state ?? null, consoleUrl: state?.previewConsoleUrl ?? null, log: tail }, null, 2));
+			log(JSON.stringify({ state: state ?? null, consoleUrl, console: cons ?? null, log: tail }, null, 2));
 			return { exitCode: 0, state };
 		}
 		if (!state) {
 			log("stable, no preview");
 			return { exitCode: 0 };
 		}
-		log(`preview ${state.previewRef} @ ${state.previewSha}`);
-		log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
+		if (state.previewRef) {
+			log(`preview ${state.previewRef} @ ${state.previewSha}`);
+			log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
+		}
+		if (cons) {
+			log(`${cons.mode} console from ${cons.dir} on ${consoleUrl}${state.previewRef ? "" : " (the wolves are on stable)"}`);
+			if (cons.missing) log(`  ${cons.dir} no longer exists (a worker worktree is deleted when it finishes). Fix: cd <another worktree> && wolfpack preview dev, or wolfpack preview off`);
+		}
+		if (state.reason) log(`reason: ${state.reason}`);
 		for (const l of tail) log(`  ${l}`);
 		return { exitCode: 0, state };
+	}
+
+	// off with only a dev console: nothing about the wolves is touched.
+	if (sub === "off" && state && !state.previewRef) {
+		if (dryRun) {
+			log(`${tag}would stop com.wolfpack.preview-console, restore the app's console.json and clear ${stateFile}; the wolves are not touched`);
+			return { exitCode: 0 };
+		}
+		stopConsole({ home, uid, launchctl: st.launchctl });
+		restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
+		fs.rmSync(stateFile, { force: true });
+		log("dev console stopped and the app's console.json restored. Quit and reopen Wolfpack Console.");
+		return { exitCode: 0 };
 	}
 
 	if (sub === "dev") {

@@ -228,7 +228,7 @@ describe("runtime-preview", () => {
 		h.logs.length = 0;
 		await h.run(["status", "--json"]);
 		const out = JSON.parse(h.logs.join("\n"));
-		expect(out).toMatchObject({ state: { previewRef: "feat/x", phase: "switching" }, consoleUrl: null, log: ["one", "two"] });
+		expect(out).toMatchObject({ state: { previewRef: "feat/x", phase: "switching" }, consoleUrl: "http://127.0.0.1:3230", console: { mode: "build", missing: false }, log: ["one", "two"] });
 	});
 
 	it("off works from the stable copy under ~/.wolfpack/preview/bin when the runtime tree has no preview script", async () => {
@@ -398,6 +398,55 @@ describe("runtime-preview", () => {
 			const apps = readState().apps;
 			expect((await h.run(["feat/x"])).exitCode).toBe(0);
 			expect(readState()).toMatchObject({ previousRef: stableSha, previousBranch: "stable", previewRef: "feat/x", console: { mode: "dev" }, apps });
+		});
+
+		it("off with only a dev console stops the agent, restores the app and clears the state, never touching the wolves", async () => {
+			const h = harness();
+			await h.run(["dev", devDir("wt1")]);
+			h.lc.length = 0;
+			h.gitCalls.length = 0;
+			expect((await h.run(["off"])).exitCode).toBe(0);
+			expect(h.lc.map((a) => a.join(" ").replace(/gui\/\d+/, "gui/U"))).toEqual(["bootout gui/U/com.wolfpack.preview-console"]);
+			expect(h.gitCalls.filter((a) => a[0] === "checkout" || a[0] === "merge")).toEqual([]);
+			expect(h.calls).toEqual([]);
+			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(fs.existsSync(stateFile())).toBe(false);
+			expect(fs.existsSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"))).toBe(false);
+		});
+
+		it("off with a ref preview and a dev console restores the ref via the helper, which also stops the console", async () => {
+			const h = harness();
+			await h.run(["dev", devDir("wt1")]);
+			await h.run(["feat/x"]);
+			h.calls.length = 0;
+			expect((await h.run(["off"])).exitCode).toBe(0);
+			expect(h.calls).toEqual(["git checkout stable", expect.stringMatching(/^build@/), "helper stable 1"]);
+		});
+
+		it("status and status --json show the dev mode and dir, and flag a deleted dir with the fix command", async () => {
+			const h = harness();
+			const d = devDir("wt1");
+			await h.run(["dev", d]);
+			h.logs.length = 0;
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toContain(`dev console from ${fs.realpathSync(d)}`);
+			fs.rmSync(d, { recursive: true });
+			h.logs.length = 0;
+			await h.run(["status", "--json"]);
+			expect(JSON.parse(h.logs.join("\n"))).toMatchObject({ consoleUrl: "http://127.0.0.1:3230", console: { mode: "dev", dir: fs.realpathSync(tmp) + "/wt1", missing: true } });
+			h.logs.length = 0;
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toMatch(/no longer exists[\s\S]*wolfpack preview dev/);
+		});
+
+		it("off --dry-run of a dev console prints the plan and changes nothing", async () => {
+			const h = harness();
+			await h.run(["dev", devDir("wt1")]);
+			h.lc.length = 0;
+			const before = fs.readFileSync(stateFile(), "utf8");
+			expect((await h.run(["off", "--dry-run"])).exitCode).toBe(0);
+			expect(h.lc).toEqual([]);
+			expect(fs.readFileSync(stateFile(), "utf8")).toBe(before);
 		});
 
 		it("fails with the reason when the port is held by something else, starting nothing", async () => {

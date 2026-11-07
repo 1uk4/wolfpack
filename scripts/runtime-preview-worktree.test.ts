@@ -54,7 +54,10 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-const harness = (o: { confirm?: boolean | "none" } = {}) => {
+type Item = { label: string; value: unknown };
+const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unknown } = {}) => {
+	const builds: { dir: string; logFile?: string }[] = [];
+	const menus: Item[][] = [];
 	const flags = { portBusy: false };
 	const lc: string[][] = [];
 	const helper: string[] = [];
@@ -65,12 +68,14 @@ const harness = (o: { confirm?: boolean | "none" } = {}) => {
 		sleep: async () => {},
 		portFree: async () => !flags.portBusy,
 		fetchJson: async () => ({ wolves: [{ id: "x", name: "1uk4" }], chats: [] }),
+		build: (dir: string, b?: { logFile?: string }) => (builds.push({ dir, logFile: b?.logFile }), markBuilt(dir)),
+		pick: async (_title: string, items: Item[]) => (menus.push(items), o.pick ? o.pick(items) : null),
 		spawnHelper: (a: { args: string[] }) => helper.push(a.args.slice(4).join(" ")),
 	};
 	if (o.confirm !== "none") steps.confirm = async (q: string) => (asked.push(q), o.confirm ?? true);
 	const run = (argv: string[], cwd = main) =>
 		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud() }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { run, lc, helper, asked, logs, flags };
+	return { run, lc, helper, asked, logs, builds, menus, flags };
 };
 
 describe("worktree preview: the wolves run straight from a built worktree", () => {
@@ -158,5 +163,75 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect((await h.run([wtA])).exitCode).toBe(1);
 		expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(rt));
 		expect(fs.existsSync(stateFile())).toBe(false);
+	});
+
+	describe("picker", () => {
+		const worker = () => path.join(tmp, "wt-c--fix-12ab34cd");
+		/** A: built and active with a tracked edit. B: built, then a new commit. C: never built. W: a worker's copy. */
+		const setup = async () => {
+			g(main, "worktree", "add", "-q", "-b", "feat/c", path.join(tmp, "wt-c"));
+			g(main, "worktree", "add", "-q", "-b", "feat/w", worker());
+			const h = harness();
+			await h.run([wtB, "--build"]);
+			await h.run(["off", "--all"]);
+			fs.writeFileSync(path.join(wtB, "b.txt"), "b");
+			g(wtB, "add", "b.txt");
+			g(wtB, "commit", "-q", "-m", "b");
+			await h.run([wtA, "--build"]);
+			fs.writeFileSync(path.join(wtA, "a.txt"), "edited");
+			return h;
+		};
+
+		it("lists every worktree with built, stale or not built, uncommitted edits, the active one and a worker's copy, then the build options", async () => {
+			const h = await setup();
+			h.menus.length = 0;
+			await h.run([], wtB);
+			const labels = h.menus[0].map((i) => i.label);
+			const row = (needle: string) => labels.find((l) => l.includes(needle)) ?? "";
+			expect(row("feat/a")).toMatch(/\bbuilt\b/);
+			expect(row("feat/a")).toContain("uncommitted edits");
+			expect(row("feat/a")).toContain("active");
+			expect(row("feat/b")).toContain("stale");
+			expect(row("feat/c")).toContain("not built");
+			expect(row("wt-c--fix-12ab34cd")).toContain("worker's copy");
+			expect(labels.slice(-2)).toEqual(["Build this worktree", "Build another worktree…"]);
+			h.menus.length = 0;
+			await h.run([], wtA);
+			expect(h.menus[0].map((i) => i.label).slice(-1)).toEqual(["Build another worktree…"]); // A is built: no "build this"
+		});
+
+		it("without a terminal prints the list and exits 1", async () => {
+			const h = await setup();
+			h.logs.length = 0;
+			expect((await h.run([])).exitCode).toBe(1);
+			expect(h.logs.join("\n")).toMatch(/feat\/b.*stale/);
+		});
+
+		it("build this worktree installs and builds it with output in last-run.log, then starts its preview", async () => {
+			const h = await setup();
+			await h.run(["off", "--all"]);
+			h.builds.length = 0;
+			h.helper.length = 0;
+			const r = await h.run([], wtB);
+			expect(r.exitCode).toBe(1);
+			const h2 = harness({ pick: (items) => items.find((i) => i.label === "Build this worktree")?.value });
+			expect((await h2.run([], wtB)).exitCode).toBe(0);
+			expect(h2.builds).toEqual([{ dir: wtB, logFile: path.join(home, ".wolfpack", "preview", "last-run.log") }]);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtB));
+			expect(h2.helper).toEqual(["running 0"]);
+			h2.menus.length = 0;
+			await h2.run(["off", "--all"]);
+			await h2.run([], wtA);
+			expect(h2.menus[0].find((i) => i.label.includes("feat/b"))?.label).toMatch(/\bbuilt\b/); // the build left a stamp
+		});
+
+		it("picking a built worktree starts it without building", async () => {
+			const h = await setup();
+			await h.run(["off", "--all"]);
+			const h2 = harness({ pick: (items) => items.find((i) => i.label.includes("feat/a"))?.value });
+			expect((await h2.run([], wtB)).exitCode).toBe(0);
+			expect(h2.builds).toEqual([]);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
+		});
 	});
 });

@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyApps, planApps, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { listWorktrees, pointPlist, recordPlist, restorePlist, workerdEntry } from "./runtime-preview-worktree.mjs";
+import { buildStatus, listWorktrees, pickerRows, pointPlist, recordPlist, restorePlist, rowLabel, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -54,6 +54,16 @@ const defaultSteps = {
 		const answer = await new Promise((resolve) => rl.question(`${question} [y/N] `, resolve));
 		rl.close();
 		return /^y(es)?$/i.test(String(answer).trim());
+	},
+	/** Pick one of `items` ([{label, value}]) on the terminal; null when there is no terminal or the answer is not a number. */
+	pick: async (title, items) => {
+		if (!process.stdin.isTTY) return null;
+		console.log(`\n${title}`);
+		items.forEach((it, i) => console.log(`  ${i + 1}) ${it.label}`));
+		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+		const answer = await new Promise((resolve) => rl.question("number: ", resolve));
+		rl.close();
+		return items[Number(String(answer).trim()) - 1]?.value ?? null;
 	},
 	build: (wt, { logFile } = {}) => {
 		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
@@ -131,8 +141,6 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 
 	const uid = process.getuid?.() ?? 501;
 	const userDataRoot = env.PREVIEW_USERDATA_ROOT || path.join(home, "Library", "Application Support");
-
-	if (!sub) return fail("usage: wolfpack preview <ref> | status | off [--dry-run]");
 
 	if (sub === "status") {
 		const tail = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5) : [];
@@ -241,23 +249,66 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return serveDev(wtDir, state);
 	}
 
-	/** Run the wolves (and the live console) straight from a built worktree: no copy, no rebuild. */
-	const startWorktree = async (wtDir) => {
-		if (state?.previewRef && state.mode !== "worktree") return fail(`a ref preview of ${state.previewRef} is active; run \`wolfpack preview off --all\` first. Nothing was changed.`);
-		if (!fs.existsSync(workerdEntry(wtDir))) return fail(`${wtDir} is not built (no ${workerdEntry(wtDir)}); build it first. Nothing was changed.`);
+	/** Plain `wolfpack preview`: list the worktrees, pick one (building it first when needed) and start its preview. */
+	const picker = async () => {
+		let rows;
 		try {
-			devConsoleApp(wtDir);
-		} catch (err) {
-			return fail(`${err.message}. Nothing was changed.`);
+			rows = pickerRows({ home, cwd, git, activeDir: state?.mode === "worktree" ? state.worktree : undefined });
+		} catch {
+			return fail("usage: wolfpack preview <ref> | <worktree dir> | status | off [--dry-run]. (Not inside a wolfpack checkout, so there is no worktree list.)");
+		}
+		const here = (() => {
+			try {
+				return fs.realpathSync(git(cwd, "rev-parse", "--show-toplevel"));
+			} catch {}
+		})();
+		const items = rows.map((r) => ({ label: rowLabel(r), value: { dir: r.dir, build: r.status !== "built" } }));
+		const mine = rows.find((r) => r.dir === here);
+		if (mine && mine.status !== "built") items.push({ label: "Build this worktree", value: { dir: mine.dir, build: true } });
+		items.push({ label: "Build another worktree…", value: "other" });
+		let choice = await st.pick("Preview which worktree?", items);
+		if (choice === "other") choice = await st.pick("Build which worktree?", rows.map((r) => ({ label: rowLabel(r), value: { dir: r.dir, build: true } })));
+		if (!choice) {
+			for (const it of items) log(it.label);
+			return fail("pick a worktree on a terminal, or pass its directory: `wolfpack preview <dir> [--build] --yes`.");
+		}
+		return startWorktree(choice.dir, { build: choice.build });
+	};
+
+	/** Run the wolves (and the live console) straight from a built worktree: no copy, no rebuild. */
+	const startWorktree = async (wtDir, { build = false } = {}) => {
+		if (state?.previewRef && state.mode !== "worktree") return fail(`a ref preview of ${state.previewRef} is active; run \`wolfpack preview off --all\` first. Nothing was changed.`);
+		if (!build && !fs.existsSync(workerdEntry(wtDir))) return fail(`${wtDir} is not built (no ${workerdEntry(wtDir)}); add --build or pick it from \`wolfpack preview\`. Nothing was changed.`);
+		if (!build) {
+			try {
+				devConsoleApp(wtDir);
+			} catch (err) {
+				return fail(`${err.message}. Nothing was changed.`);
+			}
 		}
 		if (!fs.existsSync(plist)) return fail(`${plist} does not exist. Nothing was changed.`);
 		if (dryRun) {
+			if (build) log(`${tag}would install and build ${wtDir} (output in ${logFile})`);
 			log(`${tag}would point ${plist} at ${workerdEntry(wtDir)} (working directory ${wtDir}), keeping the original bytes in ${stateFile} and ${dir}`);
 			log(`${tag}would serve \`next dev\` from ${wtDir}/apps/console, then restart ${label} and wait for /healthz on ${port}`);
 			return { exitCode: 0 };
 		}
-		const refused = await gate(`This restarts the wolves from ${wtDir}.`);
+		const refused = await gate(`${build ? `This builds ${wtDir}, then restarts` : "This restarts"} the wolves from ${wtDir}.`);
 		if (refused) return refused;
+		if (build) {
+			log(`building ${wtDir} (output in ${logFile})`);
+			try {
+				st.build(wtDir, { logFile });
+			} catch (err) {
+				return fail(`build of ${wtDir} failed: ${err.message}. Nothing else was changed.`);
+			}
+			writeStamp({ home, dir: wtDir, head: git(wtDir, "rev-parse", "HEAD") });
+			try {
+				devConsoleApp(wtDir);
+			} catch (err) {
+				return fail(`${err.message}. Nothing else was changed.`);
+			}
+		}
 		const priorText = fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : undefined;
 		const rec = recordPlist({ plist, dir, existing: state?.plist });
 		const branch = (() => {
@@ -331,9 +382,11 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	if (sub && (sub.includes("/") || sub === ".")) {
 		try {
 			const asDir = fs.realpathSync(path.resolve(cwd, sub));
-			if (listWorktrees(cwd, git).some((w) => w.dir === asDir)) return startWorktree(asDir);
+			if (listWorktrees(cwd, git).some((w) => w.dir === asDir)) return startWorktree(asDir, { build: argv.includes("--build") });
 		} catch {} // not a directory, or not in a repo: treat it as a ref below
 	}
+
+	if (!sub) return picker();
 
 		// A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path.
 	const knownDirs = [path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack")];

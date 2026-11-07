@@ -27,6 +27,9 @@ const markBuilt = (d: string) => {
 	fs.writeFileSync(path.join(d, "packages", "workerd", "dist", "bin", "workerd.js"), "//");
 	fs.mkdirSync(path.join(d, "apps", "console", "node_modules", "next", "dist", "bin"), { recursive: true });
 	fs.writeFileSync(path.join(d, "apps", "console", "node_modules", "next", "dist", "bin", "next"), "//");
+	fs.mkdirSync(path.join(d, "node_modules", "typescript", "bin"), { recursive: true });
+	fs.writeFileSync(path.join(d, "node_modules", "typescript", "bin", "tsc"), "//");
+	fs.writeFileSync(path.join(d, "tsconfig.json"), JSON.stringify({ files: [], references: [{ path: "packages/a" }] }));
 };
 
 beforeEach(() => {
@@ -69,6 +72,7 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		portFree: async () => !flags.portBusy,
 		fetchJson: async () => ({ wolves: [{ id: "x", name: "1uk4" }], chats: [] }),
 		build: (dir: string, b?: { logFile?: string }) => (builds.push({ dir, logFile: b?.logFile }), markBuilt(dir)),
+		health: async () => true,
 		pick: async (_title: string, items: Item[]) => (menus.push(items), o.pick ? o.pick(items) : null),
 		spawnHelper: (a: { args: string[] }) => helper.push(a.args.slice(4).join(" ")),
 	};
@@ -234,4 +238,108 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
 		});
 	});
-});
+
+	describe("backend rebuilds while a preview runs", () => {
+		const watchPlist = () => path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-watch.plist");
+		const watchJson = () => path.join(home, ".wolfpack", "preview", "watch.json");
+		const status = async (h: ReturnType<typeof harness>) => {
+			h.logs.length = 0;
+			await h.run(["status", "--json"]);
+			return JSON.parse(h.logs.join("\n"));
+		};
+
+		it("starts a watch agent that rebuilds the worktree and logs to watch.log, and off stops it", async () => {
+			const h = harness();
+			await h.run([wtA]);
+			const text = fs.readFileSync(watchPlist(), "utf8");
+			expect(text).toContain(wtA);
+			expect(text).toContain(path.join(home, ".wolfpack", "preview", "watch.log"));
+			expect(h.lc.some((a) => a[0] === "bootstrap" && a[2] === watchPlist())).toBe(true);
+			await h.run(["off", "--all"]);
+			expect(h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-watch"))).toBe(true);
+			expect(fs.existsSync(watchPlist())).toBe(false);
+		});
+
+		it("status shows restart needed once a rebuild finished after the stack started", async () => {
+			const h = harness();
+			await h.run([wtA]);
+			const started = readState().startedAt as string;
+			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.parse(started) - 60_000).toISOString() }));
+			expect((await status(h)).restartNeeded).toBe(false);
+			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.parse(started) + 60_000).toISOString() }));
+			expect((await status(h)).restartNeeded).toBe(true);
+			h.logs.length = 0;
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toContain("restart needed");
+		});
+
+		it("restart asks, then kickstarts only the stack and clears restart needed", async () => {
+			await harness().run([wtA]);
+			const no = harness({ confirm: false });
+			fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), startedAt: new Date(Date.now() - 3_600_000).toISOString() }));
+			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.now() - 1_800_000).toISOString() }));
+			no.lc.length = 0;
+			expect((await no.run(["restart"])).exitCode).toBe(1);
+			expect(no.lc).toEqual([]);
+			const h = harness();
+			expect((await h.run(["restart"])).exitCode).toBe(0);
+			expect(h.lc).toEqual([["kickstart", "-k", `gui/${process.getuid?.() ?? 501}/com.wolfpack.stack`]]);
+			expect((await status(h)).restartNeeded).toBe(false);
+		});
+
+		it("off --rollback (used by the helper) stops the watcher too", async () => {
+			const h = harness();
+			await h.run([wtA]);
+			h.lc.length = 0;
+			expect((await h.run(["off", "--rollback"])).exitCode).toBe(0);
+			expect(h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-watch"))).toBe(true);
+			expect(fs.existsSync(watchPlist())).toBe(false);
+		});
+
+		it("a worktree without typescript or a root tsconfig with references warns and starts no watcher, the preview still starts", async () => {
+			fs.rmSync(path.join(wtA, "node_modules", "typescript"), { recursive: true });
+			const h = harness();
+			expect((await h.run([wtA])).exitCode).toBe(0);
+			expect(fs.existsSync(watchPlist())).toBe(false);
+			expect(h.logs.join("\n")).toMatch(/background rebuild did not start/);
+			fs.writeFileSync(path.join(wtB, "tsconfig.json"), JSON.stringify({ files: [] }));
+			const h2 = harness();
+			await h2.run(["off", "--all"]);
+			h2.logs.length = 0;
+			await h2.run([wtB]);
+			expect(fs.existsSync(watchPlist())).toBe(false);
+			expect(h2.logs.join("\n")).toMatch(/background rebuild did not start/);
+		});
+
+		it("the watch and console agents are throttled so a crash loop cannot spin", async () => {
+			await harness().run([wtA]);
+			for (const f of [watchPlist(), path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist")]) {
+				expect(fs.readFileSync(f, "utf8")).toMatch(/<key>ThrottleInterval<\/key><integer>30<\/integer>/);
+			}
+		});
+
+		it("restart with no preview active changes nothing", async () => {
+			const h = harness();
+			expect((await h.run(["restart"])).exitCode).toBe(1);
+			expect(h.lc).toEqual([]);
+		});
+	});
+	describe("watch script", () => {
+		/** Run runtime-preview-watch.mjs against a fake tsc that prints `lines`; returns the watch file's content or undefined. */
+		const watchWith = (lines: string[]) => {
+			const wt = path.join(tmp, "wt-watch");
+			fs.mkdirSync(path.join(wt, "node_modules", "typescript", "bin"), { recursive: true });
+			fs.writeFileSync(path.join(wt, "node_modules", "typescript", "bin", "tsc"), `${lines.map((l) => `console.log(${JSON.stringify(l)});`).join("\n")}\n`);
+			const wf = path.join(tmp, "watch.json");
+			fs.rmSync(wf, { force: true });
+			execFileSync(process.execPath, [path.join(__dirname, "runtime-preview-watch.mjs"), wt, wf, path.join(tmp, "watch.log")]);
+			return fs.existsSync(wf) ? JSON.parse(fs.readFileSync(wf, "utf8")) : undefined;
+		};
+
+		it("the first completed build is the baseline even with errors; every later error-free completion counts as a rebuild", () => {
+			expect(watchWith(["Found 3 errors. Watching for file changes."])).toBeUndefined();
+			expect(watchWith(["Found 0 errors. Watching for file changes."])).toBeUndefined();
+			expect(watchWith(["Found 3 errors. Watching for file changes.", "Found 0 errors. Watching for file changes."])).toMatchObject({ lastRebuildOk: expect.any(String) });
+			expect(watchWith(["Found 0 errors. Watching for file changes.", "Found 2 errors. Watching for file changes."])).toBeUndefined();
+		});
+	});

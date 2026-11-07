@@ -169,13 +169,13 @@ export async function runSwitch({ stateFile, plist, label, port, okPhase, clear,
 				const url = `http://127.0.0.1:${lc.port}`;
 				try {
 					const apps = planApps({ root: lc.userDataRoot, url, existing: readState().apps });
-					setPhase(okPhase, { apps }); // state first: if this throws, no console.json was touched
+					setPhase(okPhase, { apps, stackStartedAt: new Date().toISOString() }); // state first: if this throws, no console.json was touched
 					applyApps(apps, url);
 				} catch (err) {
 					stopConsole({ home: lc.home, uid, launchctl });
 					throw err;
 				}
-			} else setPhase(okPhase);
+			} else setPhase(okPhase, { stackStartedAt: new Date().toISOString() });
 			if (lc) say(`quit and reopen Wolfpack Console: it now loads http://127.0.0.1:${lc.port}`);
 		}
 		return 0;

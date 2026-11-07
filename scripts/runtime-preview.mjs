@@ -22,13 +22,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyApps, planApps, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { buildStatus, listWorktrees, pickerRows, pointPlist, recordPlist, restorePlist, rowLabel, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
+import { buildStatus, listWorktrees, pickerRows, pointPlist, recordPlist, restorePlist, restartNeeded, rowLabel, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs"];
+const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
 
 /** Copy this command and its imports out of the runtime tree, so `off` works after checking out a branch that lacks them. */
 function copyScripts(binDir) {
@@ -64,6 +64,13 @@ const defaultSteps = {
 		const answer = await new Promise((resolve) => rl.question("number: ", resolve));
 		rl.close();
 		return items[Number(String(answer).trim()) - 1]?.value ?? null;
+	},
+	health: async (p) => {
+		try {
+			return (await fetch(`http://127.0.0.1:${p}/healthz`, { signal: AbortSignal.timeout(2000) })).ok;
+		} catch {
+			return false;
+		}
 	},
 	build: (wt, { logFile } = {}) => {
 		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
@@ -146,9 +153,10 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		const tail = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").slice(-5) : [];
 		const cons = state?.console ? { ...state.console, missing: !fs.existsSync(state.console.dir) } : undefined;
 		const worktreeMissing = state?.mode === "worktree" && !fs.existsSync(state.worktree);
+		const needsRestart = !!state && restartNeeded({ home, state });
 		const consoleUrl = state?.console ? `http://127.0.0.1:${state.consolePort ?? 3230}` : null;
 		if (argv.includes("--json")) {
-			log(JSON.stringify({ state: state ?? null, consoleUrl, console: cons ?? null, worktreeMissing, log: tail }, null, 2));
+			log(JSON.stringify({ state: state ?? null, consoleUrl, console: cons ?? null, worktreeMissing, restartNeeded: needsRestart, log: tail }, null, 2));
 			return { exitCode: 0, state };
 		}
 		if (!state) {
@@ -159,6 +167,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			log(`preview ${state.previewRef} @ ${state.previewSha}`);
 			log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
 		}
+		if (needsRestart) log("restart needed: backend files were rebuilt after the wolves started. Run `wolfpack preview restart`.");
 		if (worktreeMissing) log(`  the worktree ${state.worktree} no longer exists (a worker's copy is deleted when it finishes). The wolves cannot run from it: \`wolfpack preview off --all\` restores stable.`);
 		if (cons) {
 			log(`${cons.mode} console from ${cons.dir} on ${consoleUrl}${state.previewRef ? "" : " (the wolves are on stable)"}`);
@@ -352,8 +361,13 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			}
 			return r;
 		}
-		writeState({ ...readState(), phase: "switching" });
 		copyScripts(path.join(dir, "bin"));
+		try {
+			startWatch({ home, wt: wtDir, node: process.execPath, script: path.join(dir, "bin", "runtime-preview-watch.mjs"), uid, launchctl: st.launchctl });
+		} catch (err) {
+			warn(`preview: the background rebuild did not start (${err.message}); backend edits will not rebuild.`);
+		}
+		writeState({ ...readState(), phase: "switching", stackStartedAt: undefined });
 		helper("running", false);
 		log(`previewing ${branch ?? wtDir} from ${wtDir}: the stack is restarting, so the wolf session running this command will end.`);
 		log("Run `wolfpack preview status` from Terminal; `wolfpack preview off` returns to stable. If the deep health check fails, the switch rolls back by itself.");
@@ -367,11 +381,13 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		if (argv.includes("--rollback")) {
 			restorePlist(state.plist); // the switch helper restarts the stack itself
+			stopWatch({ home, uid, launchctl: st.launchctl });
 			return { exitCode: 0 };
 		}
 		const refused = await gate("This restarts the wolves back on stable.");
 		if (refused) return refused;
 		restorePlist(state.plist);
+		stopWatch({ home, uid, launchctl: st.launchctl });
 		writeState({ ...state, phase: "restoring" });
 		copyScripts(path.join(dir, "bin"));
 		helper("stable", true);
@@ -384,6 +400,26 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			const asDir = fs.realpathSync(path.resolve(cwd, sub));
 			if (listWorktrees(cwd, git).some((w) => w.dir === asDir)) return startWorktree(asDir, { build: argv.includes("--build") });
 		} catch {} // not a directory, or not in a repo: treat it as a ref below
+	}
+
+	if (sub === "restart") {
+		if (!state?.previewRef) return fail("no preview is running the wolves, so there is nothing to restart. Nothing was changed.");
+		if (dryRun) {
+			log(`${tag}would run launchctl kickstart -k gui/${uid}/${label} and wait for /healthz on ${port}`);
+			return { exitCode: 0 };
+		}
+		const refused = await gate("This restarts the wolves (it ends the wolf session running this command).");
+		if (refused) return refused;
+		st.launchctl("kickstart", "-k", `gui/${uid}/${label}`);
+		let up = false;
+		for (let i = 0; i < 30 && !up; i++) {
+			up = await st.health(port);
+			if (!up) await st.sleep(2000);
+		}
+		writeState({ ...readState(), stackStartedAt: new Date().toISOString() });
+		if (!up) return fail(`healthz on ${port} did not answer within 60 s; check \`wolfpack preview status\`.`);
+		log("the wolves restarted and /healthz answers.");
+		return { exitCode: 0 };
 	}
 
 	if (!sub) return picker();

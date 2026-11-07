@@ -42,6 +42,7 @@ function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) 
 	<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join("")}</dict>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>30</integer>
 	<key>StandardOutPath</key><string>${xml(logFile)}</string>
 	<key>StandardErrorPath</key><string>${xml(logFile)}</string>
 </dict>

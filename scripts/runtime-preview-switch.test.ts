@@ -59,6 +59,7 @@ describe("runtime-preview-switch", () => {
 		expect(await s.run()).toBe(0);
 		expect(s.calls).toEqual(["bootout", "bootstrap", "bootstrap", "bootstrap"]);
 		expect(phase()).toBe("running");
+		expect(typeof state().stackStartedAt).toBe("string"); // `status` compares it with the last backend rebuild
 	});
 
 	it("when bootstrap never works it records stack-down and logs the recovery command", async () => {

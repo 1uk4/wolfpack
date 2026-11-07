@@ -106,3 +106,60 @@ export function pickerRows({ home, cwd, git, activeDir }) {
 
 export const rowLabel = (r) =>
 	[`${r.name}  ${r.dir}`, `[${r.status}]`, r.active ? "active" : "", r.dirty ? "uncommitted edits" : "", r.worker ? "worker's copy (vanishes when the worker finishes)" : ""].filter(Boolean).join("  ");
+
+export const WATCH_LABEL = "com.wolfpack.preview-watch";
+const watchPlist = (home) => path.join(home, "Library", "LaunchAgents", `${WATCH_LABEL}.plist`);
+export const watchFile = (home) => path.join(home, ".wolfpack", "preview", "watch.json");
+
+/** (Re)load the agent that rebuilds the backend packages of `wt` as files save. `script` is the copy under bin/. */
+export function startWatch({ home, wt, node, script, uid, launchctl }) {
+	if (!fs.existsSync(path.join(wt, "node_modules", "typescript", "bin", "tsc"))) throw new Error(`${wt} has no node_modules/typescript (run \`pnpm install\` there)`);
+	let refs;
+	try {
+		refs = JSON.parse(fs.readFileSync(path.join(wt, "tsconfig.json"), "utf8")).references;
+	} catch {}
+	if (!Array.isArray(refs) || refs.length === 0) throw new Error(`${wt}/tsconfig.json has no project references to build`);
+	const logFile = path.join(home, ".wolfpack", "preview", "watch.log");
+	fs.mkdirSync(path.dirname(logFile), { recursive: true });
+	fs.rmSync(watchFile(home), { force: true });
+	const file = watchPlist(home);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const args = [node, script, wt, watchFile(home), logFile];
+	fs.writeFileSync(
+		file,
+		`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>${WATCH_LABEL}</string>
+	<key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join("")}</array>
+	<key>WorkingDirectory</key><string>${xml(wt)}</string>
+	<key>EnvironmentVariables</key><dict><key>HOME</key><string>${xml(home)}</string><key>PATH</key><string>${xml(process.env.PATH ?? "/usr/bin:/bin")}</string></dict>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>30</integer>
+	<key>StandardOutPath</key><string>${xml(logFile)}</string>
+	<key>StandardErrorPath</key><string>${xml(logFile)}</string>
+</dict>
+</plist>
+`,
+	);
+	launchctl("bootout", `gui/${uid}/${WATCH_LABEL}`);
+	if (launchctl("bootstrap", `gui/${uid}`, file) !== 0) throw new Error(`launchctl bootstrap of ${file} failed`);
+}
+
+export function stopWatch({ home, uid, launchctl }) {
+	launchctl("bootout", `gui/${uid}/${WATCH_LABEL}`);
+	fs.rmSync(watchPlist(home), { force: true });
+	fs.rmSync(watchFile(home), { force: true });
+}
+
+/** True when a backend rebuild finished after the stack last started. */
+export function restartNeeded({ home, state }) {
+	try {
+		const rebuilt = Date.parse(JSON.parse(fs.readFileSync(watchFile(home), "utf8")).lastRebuildOk);
+		return rebuilt > Date.parse(state.stackStartedAt ?? state.startedAt);
+	} catch {
+		return false;
+	}
+}

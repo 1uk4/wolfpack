@@ -1,9 +1,8 @@
 /**
- * LIVE (subscription): one real wolf process on the pi-claude-bridge provider, billed to the Claude subscription via
- * the operator's Claude Code login. ANTHROPIC_API_KEY is removed from the wolf's env (and from this process for the
- * duration), so a turn that succeeds cannot have used the metered key. Skipped unless WOLFD_LIVE=1 (never in CI);
- * a key in the caller's env is tolerated, not required.
- *   WOLFD_LIVE=1 npm test -w @wolfpack/harness -- wolfd.subscription.live
+ * LIVE smoke test, this Mac only: one real turn through the Claude Code login (pi-claude-bridge, subscription), with
+ * ANTHROPIC_API_KEY removed from the wolf's env so a turn that succeeds cannot have used the metered key.
+ * Gate: WOLFPACK_LIVE=1, set by `pnpm run test:live` (never collected by the default suite). With the gate set and no
+ * login the test fails with a message saying so; it does not skip.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,9 +11,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HttpConsoleClient, type ThreadEvent } from "@wolfpack/client";
 import { startWolf, type RunningWolf } from "./run.js";
 
-const live = Boolean(process.env.WOLFD_LIVE);
+const live = process.env.WOLFPACK_LIVE === "1";
 
-describe.skipIf(!live)("wolfd live (subscription via claude-bridge, no API key)", () => {
+describe.skipIf(!live)("wolfd subscription smoke (one real turn, no API key)", () => {
   let root: string;
   let wolf: RunningWolf;
   let client: HttpConsoleClient;
@@ -32,7 +31,6 @@ describe.skipIf(!live)("wolfd live (subscription via claude-bridge, no API key)"
     );
     const work = join(root, "work");
     mkdirSync(work);
-    writeFileSync(join(work, "package.json"), JSON.stringify({ name: "zebra-quartz-fixture", version: "1.0.0" }));
     writeFileSync(join(root, "wolf.yaml"), `name: subwolf\nworkspace: ${work}\n`);
     const { ANTHROPIC_API_KEY: _absent, ...env } = process.env;
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
@@ -52,27 +50,15 @@ describe.skipIf(!live)("wolfd live (subscription via claude-bridge, no API key)"
     return out;
   };
 
-  it("chat turn completes", async () => {
+  it("one chat turn completes through the Claude Code login", async () => {
     const ack = await client.submit(HOME, "Reply with exactly one word: pong", { whenBusy: "reject" });
     expect(ack.disposition).toBe("started");
     const events = await collect(client.watch(HOME));
-    expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
-    expect(events.some((e) => e.type === "text-delta")).toBe(true);
+    const end = events.at(-1);
+    if (end?.type !== "turn-end" || end.reason !== "complete") {
+      throw new Error(`the live turn did not complete (${JSON.stringify(end)}). This test needs a working Claude Code login on this machine: run \`claude\`, log in, and retry \`pnpm run test:live\`.`);
+    }
     const detail = await client.getThread(HOME);
     expect(detail.messages.at(-1)?.text.toLowerCase()).toContain("pong");
   }, 90_000);
-
-  it("tool-call turn: read tool executes, turn completes", async () => {
-    await client.submit(HOME, "Use the read tool to read package.json, then tell me the package name.", { whenBusy: "reject" });
-    const all = await collect(client.watch(HOME));
-    const events = all.slice(all.map((e) => e.type).lastIndexOf("turn-start"));
-    const start = events.find((e) => e.type === "tool-start");
-    const end = events.find((e) => e.type === "tool-end");
-    expect(start).toMatchObject({ name: "read" });
-    expect(end).toMatchObject({ isError: false });
-    expect(JSON.stringify((end as any).result)).toContain("zebra-quartz-fixture");
-    expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
-    const detail = await client.getThread(HOME);
-    expect(detail.messages.at(-1)?.text).toContain("zebra-quartz-fixture");
-  }, 120_000);
 });

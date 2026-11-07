@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ageLabel, agentName, candidateWorkIds, buildCard, headerStatus, branchShortId, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit, type RunNode } from "../src/core/branch-graph.ts";
+import { ageLabel, agentName, filterRecent, featureOfItem, candidateWorkIds, buildCard, headerStatus, branchShortId, groupRuns, workIdOfSubject, type GitOverview, type OverviewBranch, type RawCommit, type RunNode } from "../src/core/branch-graph.ts";
 import { parseLog, workspaceGraph } from "../src/server/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
@@ -52,6 +52,26 @@ describe("buildCard", () => {
 	});
 	it("has no 'more' when the history fits in 3 runs", () => {
 		assert.deepEqual(buildCard(ov({ history: [run(null, 1)] })).more, { items: 0, commits: 0 });
+	});
+});
+
+describe("filterRecent", () => {
+	const hist = [run("work-wolfpack-AAAAAAA", 1), run(null, 2), run("work-wolfpack-BBBBBBB", 3), run("work-wolfpack-CCCCCCC", 4)];
+	// A: a task under feature F1; B: a loose Inbox task; C: a task under another feature F2
+	const features = { "work-wolfpack-AAAAAAA": "work-wolfpack-F1F1F1F", "work-wolfpack-BBBBBBB": null, "work-wolfpack-CCCCCCC": "work-wolfpack-F2F2F2F" };
+	it("a feature thread keeps runs of its feature or its children; drops no-ID and other items", () => {
+		assert.deepEqual(filterRecent(hist, "F1F1F1F", features).map((r) => r.workId), ["work-wolfpack-AAAAAAA"]);
+		assert.deepEqual(filterRecent([run("work-wolfpack-F1F1F1F", 1)], "F1F1F1F", { "work-wolfpack-F1F1F1F": "work-wolfpack-F1F1F1F" }).length, 1);
+	});
+	it("home keeps loose work and runs without an ID; drops anything under a feature or unresolved", () => {
+		assert.deepEqual(filterRecent(hist, null, features).map((r) => r.workId), [null, "work-wolfpack-BBBBBBB"]);
+		assert.deepEqual(filterRecent([run("work-wolfpack-ZZZZZZZ", 1)], null, {}).length, 0);
+	});
+	it("finds an item's feature: itself for a feature, its parent when that is a feature, none for loose work", () => {
+		assert.equal(featureOfItem({ id: "f", kind: "feature" }, null), "f");
+		assert.equal(featureOfItem({ id: "t", kind: "task" }, { id: "f", kind: "feature" }), "f");
+		assert.equal(featureOfItem({ id: "t", kind: "task" }, { id: "inbox", kind: "initiative", container: true }), null);
+		assert.equal(featureOfItem({ id: "t", kind: "task" }, null), null);
 	});
 });
 

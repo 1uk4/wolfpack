@@ -154,3 +154,23 @@ export function headerStatus(overview: GitOverview, dirty: boolean): string {
 export function candidateWorkIds(shortId: string): string[] {
 	return WORK_DOMAINS.map((d) => `work-${d}-${shortId}`);
 }
+
+/** The feature an item belongs to: itself for a feature, its parent when that is a feature, else null (loose work). */
+export function featureOfItem(item: { id: string; kind: string }, parent: { id: string; kind: string; container?: boolean } | null): string | null {
+	if (item.kind === "feature") return item.id;
+	return parent && parent.kind === "feature" ? parent.id : null;
+}
+
+/**
+ * Keep only the runs that belong to the thread. `feature` is the feature thread's 7-char id (null: a home thread).
+ * `featureOf` maps a run's full work ID to the feature it belongs to (null: loose work; missing: not resolved).
+ * Feature thread: runs whose item is that feature or under it. Home: runs with no ID and runs of loose work.
+ */
+export function filterRecent(history: RunNode[], feature: string | null, featureOf: Record<string, string | null | undefined>): RunNode[] {
+	return history.filter((r) => {
+		if (r.workId === null) return feature === null;
+		const f = featureOf[r.workId];
+		if (f === undefined) return false;
+		return feature === null ? f === null : f !== null && f.endsWith(feature);
+	});
+}

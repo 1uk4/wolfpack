@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { WorkIdChip, lookupWorkItem } from "@/components/work-id-chip";
-import { ageLabel, agentName, buildCard, candidateWorkIds, type GitOverview, type OverviewBranch, type RunNode } from "@/src/core";
+import { ageLabel, agentName, branchShortId, buildCard, candidateWorkIds, featureOfItem, filterRecent, type GitOverview, type OverviewBranch, type RunNode } from "@/src/core";
 
 const ROW_H = 20;
 const LANE_W = 16;
@@ -54,6 +54,29 @@ function useBranchWork(shortId: string | null): { id: string; title: string } | 
 	return found;
 }
 
+/** Each run's feature (null: loose work), looked up like the chips do (cached). undefined until every lookup is back. */
+function useRunFeatures(history: RunNode[]): Record<string, string | null | undefined> | undefined {
+	const ids = [...new Set(history.map((r) => r.workId).filter((x): x is string => x !== null))].sort();
+	const key = ids.join(",");
+	const [done, setDone] = useState<{ key: string; map: Record<string, string | null | undefined> }>();
+	useEffect(() => {
+		let live = true;
+		void Promise.all(ids.map((id) => lookupWorkItem(id))).then((vs) => {
+			const map: Record<string, string | null | undefined> = {};
+			ids.forEach((id, i) => {
+				const v = vs[i]!;
+				if (v.kind === "ok") map[id] = featureOfItem(v.item, v.parent);
+			});
+			if (live) setDone({ key, map });
+		});
+		return () => {
+			live = false;
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [key]);
+	return done?.key === key ? done.map : undefined;
+}
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** A branch's label: the agent name for a subagent, else its work item title, else the branch name. */
@@ -85,7 +108,10 @@ function RunLabel({ run }: { run: RunNode }) {
  * its row. Fixed pixel sizes: the card never scales with its width.
  */
 export function BranchOverview({ overview }: { overview: GitOverview }) {
-	const card = buildCard(overview);
+	const features = useRunFeatures(overview.history);
+	const feature = overview.main.kind === "feature" ? branchShortId(overview.main.name) : null;
+	// The recent section shows only this thread's own work; it stays out until the lookups are back (no unfiltered flash).
+	const card = buildCard({ ...overview, history: features ? filterRecent(overview.history, feature, features) : [] });
 	const rows: Row[] = [];
 	card.active.forEach((branch, lane) => rows.push({ type: "active", branch, lane }));
 	const activeEnd = rows.length;
@@ -94,7 +120,7 @@ export function BranchOverview({ overview }: { overview: GitOverview }) {
 		for (const branch of card.landed) rows.push({ type: "landed", branch });
 	}
 	if (card.recent.length > 0) {
-		rows.push({ type: "heading", text: `Recent on ${overview.main.name}` });
+		rows.push({ type: "heading", text: overview.main.kind === "feature" ? "Recent in this feature" : "Recent in home" });
 		for (const run of card.recent) rows.push({ type: "run", run });
 		if (card.more.items > 0) rows.push({ type: "more", ...card.more });
 	}

@@ -23,11 +23,36 @@ export function prepareConsole(runtimeDir) {
 
 const plistPath = (home) => path.join(home, "Library", "LaunchAgents", `${CONSOLE_LABEL}.plist`);
 
+/**
+ * The hub this Mac's stack is paired with: `hubUrl` from workerd's hub.json (`$WORKERD_CONFIG_DIR` or ~/.wolfpack/workerd), the same
+ * file workerd links with. Only the url is read (the file also holds a token, which is never returned, logged or written to a plist).
+ * → {url} or undefined when unpaired. `HUBD_PUBLIC_URL` in `env` overrides the public url used for the console's pairing link.
+ */
+export function resolveHub({ home, env = {} }) {
+	const dir = env.WORKERD_CONFIG_DIR || path.join(home, ".wolfpack", "workerd");
+	try {
+		const url = JSON.parse(fs.readFileSync(path.join(dir, "hub.json"), "utf8")).hubUrl;
+		if (typeof url !== "string" || !/^https?:\/\//.test(url)) return undefined;
+		const clean = url.trim().replace(/\/+$/, "");
+		const pub = env.HUBD_PUBLIC_URL?.trim().replace(/\/+$/, "");
+		return { url: clean, publicUrl: pub || clean };
+	} catch {
+		return undefined;
+	}
+}
+
 /** Write the agent's plist and (re)load it. `args` is the full program (node + script); never a shell wrapper. */
-function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) {
+function loadAgent({ home, env: hostEnv = {}, args, workingDir, port, stackPort, uid, launchctl }) {
 	const logFile = path.join(home, ".wolfpack", "preview", "console.log");
 	fs.mkdirSync(path.dirname(logFile), { recursive: true });
-	const env = { PORT: port, HOSTNAME: "127.0.0.1", WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}`, HOME: home, WOLFPACK_AUTH_FILE: path.join(home, ".wolfpack", "preview", "auth.json"), PATH: process.env.PATH ?? "/usr/bin:/bin" };
+	// With a hub the console runs in RELAY mode like stable (the browser pairs once, then every call goes through the hub, so every wolf is
+	// listed, Hal included). The origin is the loopback address: http, so the cookie mirror uses the plain (non-Secure) name. Without a
+	// hub: today's local-only env, which lists only the wolves on this stack.
+	const hub = resolveHub({ home, env: hostEnv });
+	const access = hub
+		? { WOLFPACK_HUB_URL: hub.url, HUBD_PUBLIC_URL: hub.publicUrl, WOLFPACK_CONSOLE_PUBLIC_ORIGIN: `http://127.0.0.1:${port}` }
+		: { WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}` };
+	const env = { PORT: port, HOSTNAME: "127.0.0.1", ...access, HOME: home, WOLFPACK_AUTH_FILE: path.join(home, ".wolfpack", "preview", "auth.json"), PATH: process.env.PATH ?? "/usr/bin:/bin" };
 	const file = plistPath(home);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(
@@ -53,9 +78,9 @@ function loadAgent({ home, args, workingDir, port, stackPort, uid, launchctl }) 
 	if (launchctl("bootstrap", `gui/${uid}`, file) !== 0) throw new Error(`launchctl bootstrap of ${file} failed`);
 }
 
-export function startConsole({ home, runtimeDir, port, stackPort, node, uid, launchctl }) {
+export function startConsole({ home, env, runtimeDir, port, stackPort, node, uid, launchctl }) {
 	const dir = prepareConsole(runtimeDir);
-	loadAgent({ home, args: [node, path.join(dir, "server.js")], workingDir: dir, port, stackPort, uid, launchctl });
+	loadAgent({ home, env, args: [node, path.join(dir, "server.js")], workingDir: dir, port, stackPort, uid, launchctl });
 }
 
 /** `next dev` from a worktree's apps/console (hot reload), under the same agent. Returns the app dir; throws with a hint when it can't run. */
@@ -67,9 +92,9 @@ export function devConsoleApp(dir) {
 	return { app, next };
 }
 
-export function startDevConsole({ home, dir, port, stackPort, node, uid, launchctl }) {
+export function startDevConsole({ home, env, dir, port, stackPort, node, uid, launchctl }) {
 	const { app, next } = devConsoleApp(dir);
-	loadAgent({ home, args: [node, next, "dev", "--hostname", "127.0.0.1", "--port", port], workingDir: app, port, stackPort, uid, launchctl });
+	loadAgent({ home, env, args: [node, next, "dev", "--hostname", "127.0.0.1", "--port", port], workingDir: app, port, stackPort, uid, launchctl });
 }
 
 export function stopConsole({ home, uid, launchctl }) {

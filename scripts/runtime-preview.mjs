@@ -21,7 +21,7 @@ import os from "node:os";
 import readline from "node:readline";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
+import { resolveHub, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
 import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, shortName, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 10;
+export const PREVIEW_VERSION = 11;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -237,6 +237,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				up = Array.isArray(w);
 			} catch {}
 			log(`console: ${consoleUrl} (${up ? "up" : "down"})`);
+			const hub = resolveHub({ home, env });
+			log(hub ? `hub: ${hub.url}` : "hub: none (local wolves only)");
 		} else log("console: not running");
 		log(state.previewRef ? `wolves: moved to ${state.previewRef}${state.mode === "worktree" ? ` (${state.worktree})` : ""}; \`wolfpack preview off --all\` puts them back on stable` : "wolves: on stable");
 		if (needsRestart) log("restart needed: backend files were rebuilt after the wolves started. Run `wolfpack preview restart`.");
@@ -295,11 +297,14 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			if (cur && !cur.previewRef) fs.rmSync(stateFile, { force: true });
 		};
 		try {
-			startDevConsole({ home, dir: wtDir, port: consolePort, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
+			startDevConsole({ home, env, dir: wtDir, port: consolePort, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
 		} catch (err) {
 			tearDown();
 			return fail(`cannot start the dev console: ${err.message}`);
 		}
+		const hub = resolveHub({ home, env });
+		if (hub) log(`console in hub mode (${hub.url}): all wolves are listed. The first open asks you to pair this browser once.`);
+		else log("no hub configured: the console lists the local wolves only (pair this Mac with `workerd pair <hub url> <code>` to see all of them).");
 		log(`compiling the console from ${wtDir}/apps/console (the first request can take a minute)`);
 		let up = false;
 		for (let i = 0; i < 45 && !up; i++) {
@@ -507,8 +512,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			if (prev && fs.existsSync(prev.dir)) {
 				const cp = String(state.consolePort ?? 3230);
 				try {
-					if (prev.mode === "dev") startDevConsole({ home, dir: prev.dir, port: cp, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
-					else startConsole({ home, runtimeDir: prev.dir, port: cp, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
+					if (prev.mode === "dev") startDevConsole({ home, env, dir: prev.dir, port: cp, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
+					else startConsole({ home, env, runtimeDir: prev.dir, port: cp, stackPort: port, node: process.execPath, uid, launchctl: st.launchctl });
 				} catch (err) {
 					warn(`preview: could not restart the previous console (${err.message}); run \`wolfpack preview dev\` again.`);
 				}

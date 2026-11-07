@@ -346,6 +346,38 @@ describe("runtime-preview", () => {
 			expect(h.calls).toEqual([]);
 		});
 
+		const pairHub = (url = "http://100.64.0.9:3150") => {
+			fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+			fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: url, token: "SECRET-TOKEN", hostId: "h" }));
+		};
+
+		it("with this Mac paired to a hub the console runs in relay mode like stable: hub env, a loopback origin, no direct API url, and no secret in the plist or the output", async () => {
+			pairHub();
+			const h = harness();
+			expect((await h.run(["dev", devDir("wt")])).exitCode).toBe(0);
+			const t = plistText();
+			expect(t).toContain("<key>WOLFPACK_HUB_URL</key><string>http://100.64.0.9:3150</string>");
+			expect(t).toContain("<key>HUBD_PUBLIC_URL</key><string>http://100.64.0.9:3150</string>");
+			expect(t).toContain("<key>WOLFPACK_CONSOLE_PUBLIC_ORIGIN</key><string>http://127.0.0.1:3230</string>");
+			expect(t).not.toContain("WOLFPACK_API_URL");
+			expect(t + h.logs.join("\n")).not.toContain("SECRET-TOKEN");
+			expect(h.logs.join("\n")).not.toContain("local wolves only");
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toContain("hub: http://100.64.0.9:3150");
+		});
+
+		it("with no hub paired it keeps today's local-only env and says so in the output and in status", async () => {
+			const h = harness();
+			await h.run(["dev", devDir("wt")]);
+			const t = plistText();
+			expect(t).toContain("<key>WOLFPACK_API_URL</key><string>http://127.0.0.1:7141</string>");
+			expect(t).not.toContain("WOLFPACK_HUB_URL");
+			expect(h.logs.join("\n")).toContain("no hub configured: the console lists the local wolves only");
+			h.logs.length = 0;
+			await h.run(["status"]);
+			expect(h.logs.join("\n")).toContain("hub: none (local wolves only)");
+		});
+
 		it("defaults to the git worktree containing cwd", async () => {
 			const h = harness();
 			fs.mkdirSync(path.join(rtWt, "apps", "console", "node_modules", "next", "dist", "bin"), { recursive: true });

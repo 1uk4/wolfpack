@@ -169,6 +169,15 @@ wolfpack preview off             # stop the console
   `~/.wolfpack/preview/console.log`), waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), and runs
   `open http://127.0.0.1:3230`. The console reads its keys from `~/.wolfpack/preview/auth.json` (`WOLFPACK_AUTH_FILE`), so they
   survive a switch. If port 3230 is held by something else (a hand-started `next dev`) it refuses.
+- **All wolves, like stable.** If this Mac is paired with a hub (`~/.wolfpack/workerd/hub.json`, the file workerd links with; only its
+  `hubUrl` is read, never the token), the preview console runs in hub relay mode: `WOLFPACK_HUB_URL` and `HUBD_PUBLIC_URL` are the
+  paired hub, `WOLFPACK_CONSOLE_PUBLIC_ORIGIN=http://127.0.0.1:3230`, and no `WOLFPACK_API_URL`. `status` prints `hub: <url>`. With no
+  hub it keeps the local-only env (only this stack's wolves), says so, and `status` prints `hub: none (local wolves only)`.
+  **One-time pairing in the preview tab.** The tab is a new origin, so it has no hub token. The hub's `/pair` page redirects to the
+  *stable* console, so it cannot pair this tab. Copy the token across instead: in the stable console's browser tab run
+  `copy(localStorage.getItem("wolfpack.hub.token"))` in the devtools console, then open
+  `http://127.0.0.1:3230/pair#token=<paste>`. The token is stored for 127.0.0.1:3230 (the fragment is never sent to a server) and the
+  tab opens signed in. It survives restarts of the preview, since localStorage belongs to the browser.
 - **Another worktree while one runs** switches the console in place and opens the URL again.
 - **`preview dev [dir]`** is the same console for the worktree containing cwd (or `dir`), without opening the browser.
 - **`off`** stops the console and clears the state. If the state shows the **wolves were moved** (now, or by an older run) it then

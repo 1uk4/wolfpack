@@ -198,7 +198,7 @@ describe("status is one short block", () => {
 		await h.run(["wt-a"]);
 		h.logs.length = 0;
 		await h.run(["status"]);
-		expect(h.logs).toEqual([`worktree: a (${wtA})`, "console: http://127.0.0.1:3230 (up)", "wolves: on stable"]);
+		expect(h.logs).toEqual([`worktree: a (${wtA})`, "console: http://127.0.0.1:3230 (up)", "hub: none (local wolves only)", "wolves: on stable"]);
 	});
 
 	it("says when the console is down and when the wolves were moved", async () => {
@@ -207,7 +207,7 @@ describe("status is one short block", () => {
 		h.flags.consoleDown = true;
 		h.logs.length = 0;
 		await h.run(["status"]);
-		expect(h.logs).toEqual([`worktree: a (${wtA})`, "console: http://127.0.0.1:3230 (down)", `wolves: moved to feat/a (${wtA}); \`wolfpack preview off --all\` puts them back on stable`]);
+		expect(h.logs).toEqual([`worktree: a (${wtA})`, "console: http://127.0.0.1:3230 (down)", "hub: none (local wolves only)", `wolves: moved to feat/a (${wtA}); \`wolfpack preview off --all\` puts them back on stable`]);
 	});
 });
 

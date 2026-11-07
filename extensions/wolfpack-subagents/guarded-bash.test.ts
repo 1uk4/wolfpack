@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bashExecute = vi.fn(async () => ({ content: [{ type: "text", text: "ran" }] }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({
@@ -9,8 +12,16 @@ vi.mock("typebox", () => {
   return { Type: t };
 });
 
-import { checkReadOnlyCommand } from "./tools/command-guard.ts";
+import { routeTestCommand as agentsRoute, checkReadOnlyCommand as agentsCheck } from "@wolfpack/agents";
+import { checkReadOnlyCommand, routeTestCommand } from "./tools/command-guard.ts";
 import registerBashTools from "./tools/safe-bash.ts";
+
+/** A `wolfpack` on PATH that supports `test` (a temp dir; the real PATH is never consulted). */
+beforeAll(() => {
+  const dir = mkdtempSync(join(tmpdir(), "wolfpack-shim-"));
+  writeFileSync(join(dir, "wolfpack"), "#!/bin/sh\n[ \"$1 $2\" = \"test --help\" ] && exit 0\nexit 1\n", { mode: 0o755 });
+  process.env.PATH = `${dir}:${process.env.PATH}`;
+});
 
 const blocked = (cmd: string) => checkReadOnlyCommand(cmd);
 
@@ -192,5 +203,40 @@ describe("guarded_bash tool wiring", () => {
     const t = tools.get("guarded_bash");
     await t.execute("id", { command: "journalctl -u x | tail" });
     expect(bashExecute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("wolfpack test under the read-only guard", () => {
+  it("is allowed on purpose, although it writes queue and cache files", () => {
+    expect(blocked("wolfpack test run x")).toBeNull();
+  });
+});
+
+describe("test runs through the queue", () => {
+  it("the extension's command guard is the one in @wolfpack/agents (one rule, two entry points)", () => {
+    expect(routeTestCommand).toBe(agentsRoute);
+    expect(checkReadOnlyCommand).toBe(agentsCheck);
+  });
+
+  it("guarded_bash and safe_bash run `wolfpack test` in place of a direct vitest run when WOLFPACK_AGENT_RUN=1, and the original otherwise", async () => {
+    const tools = new Map<string, any>();
+    registerBashTools({ registerTool: (t: any) => tools.set(t.name, t) } as any);
+    const before = process.env.WOLFPACK_AGENT_RUN;
+    try {
+      process.env.WOLFPACK_AGENT_RUN = "1";
+      for (const name of ["guarded_bash", "safe_bash"]) {
+        bashExecute.mockClear();
+        await tools.get(name).execute("id", { command: "pnpm exec vitest run packages/cli/src/pm.test.ts" });
+        const sent = (bashExecute.mock.calls[0] as any[])[1].command as string;
+        expect(sent).toMatch(/routed through the test queue.*; wolfpack test run packages\/cli\/src\/pm\.test\.ts$/);
+      }
+      delete process.env.WOLFPACK_AGENT_RUN;
+      bashExecute.mockClear();
+      await tools.get("guarded_bash").execute("id", { command: "pnpm exec vitest run packages/cli/src/pm.test.ts" });
+      expect((bashExecute.mock.calls[0] as any[])[1].command).toBe("pnpm exec vitest run packages/cli/src/pm.test.ts");
+    } finally {
+      if (before === undefined) delete process.env.WOLFPACK_AGENT_RUN;
+      else process.env.WOLFPACK_AGENT_RUN = before;
+    }
   });
 });

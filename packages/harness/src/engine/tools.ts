@@ -2,6 +2,7 @@
 import { createBashTool, createEditTool, type BashExecution, createReadTool, createWriteTool, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
+import { routeTestCommand } from "@wolfpack/agents";
 import { bashViolation, fenceWriteTool } from "./fence.js";
 import { READONLY_TOOL_NAMES, ReadOnlyTools } from "./readonly-tools.js";
 
@@ -121,6 +122,8 @@ export function prepareCodingBash(execution: BashExecution): void {
   const refused = bashViolation(execution.cwd, execution.command);
   if (refused) throw new Error(refused);
   execution.env.WOLFPACK_AGENT_RUN = "1";
+  // a direct vitest run becomes `wolfpack test …` (queued, capped, cached); rewrite only, never a refusal
+  execution.command = routeTestCommand(execution.command, { ...process.env, ...execution.env }).command;
 }
 
 // (the same four tools as createCodingTools, with write and edit held to a worktree child's root: see fence.ts)

@@ -44,7 +44,7 @@ export function isAgentRun(env: NodeJS.ProcessEnv): boolean {
   return env.WOLFPACK_AGENT_RUN === "1" || Boolean(env.PI_SUBAGENT_AGENT);
 }
 
-const USAGE = "Usage: wolfpack test [run|related] [paths…] [-t <name>] [--no-cache]";
+export const USAGE = "Usage: wolfpack test [run|related] [paths…] [-t <name>] [--no-cache]";
 
 /**
  * Allow-list parsing of `wolfpack test …` (argv may still start with "test").

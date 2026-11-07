@@ -5,8 +5,8 @@ import { CheckIcon, CopyIcon, GitBranchIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
-import { BranchGraphView } from "@/components/branch-graph";
-import type { BranchGraph } from "@/src/core";
+import { BranchGraphView, BranchRows, HistoryRuns } from "@/components/branch-graph";
+import type { GitOverview } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
 
 /** The header's repo · base → branch label (a home thread has no base). */
@@ -79,15 +79,15 @@ export function useWorkspaceStatus(wolf: string, slug: string, threadId: string,
 }
 
 /** The branch graph for the popover: fetched while it is open and again when the git status changes. */
-function useBranchGraph(wolf: string, slug: string, enabled: boolean, status: WorkspaceStatus | undefined): BranchGraph | undefined {
-	const [graph, setGraph] = useState<BranchGraph>();
+function useBranchGraph(wolf: string, slug: string, enabled: boolean, status: WorkspaceStatus | undefined): GitOverview | undefined {
+	const [graph, setGraph] = useState<GitOverview>();
 	useEffect(() => {
 		if (!enabled) return;
 		let live = true;
 		void (async () => {
 			try {
 				const res = await fetch(`${threadBase(wolf, slug)}/workspace/graph`);
-				if (res.ok && live) setGraph((await res.json()) as BranchGraph);
+				if (res.ok && live) setGraph((await res.json()) as GitOverview);
 			} catch {
 				/* the graph is a preview; the list below still works */
 			}
@@ -193,14 +193,17 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 						<div data-testid="git-tree-branch" title={branch} className="truncate font-mono text-muted-foreground">
 							{middleTruncate(branch)}
 							{workspace.base ? ` ← ${workspace.base}` : ""}
+							{graph?.parent ? ` · ${graph.parent.ahead} ahead · ${graph.parent.behind} behind` : ""}
 						</div>
 						{!status ? (
 							<div className="text-muted-foreground">Loading…</div>
 						) : (
 							<>
-								{graph && graph.commits.length > 0 ? (
-									<section data-testid="git-tree-graph" className="py-1">
-										<BranchGraphView graph={graph} />
+								{graph && graph.history.length > 0 ? (
+									<section data-testid="git-tree-graph" className="space-y-1.5 py-1">
+										<BranchGraphView overview={graph} />
+										<HistoryRuns overview={graph} />
+										<BranchRows overview={graph} />
 									</section>
 								) : (
 									status.commits.length > 0 && (

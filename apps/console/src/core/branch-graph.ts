@@ -1,80 +1,93 @@
 /**
- * Branch-graph model for the git popover: a pure lane assignment over a topo-ordered commit list.
- * No I/O here; src/server/branch-graph.ts feeds it from read-only git.
+ * Git overview model for the header popover: the thread's branch as the main lane with its history grouped by work
+ * item, plus one entry per child branch (where it forked, how far ahead/behind). Pure; src/server/branch-graph.ts
+ * feeds it from read-only git.
  */
+import { WORK_ID_SOURCE } from "./work-id-link.ts";
 
-/** `merged`: a child whose branch ref is gone, drawn from its merge commit's second parent. */
-export type LaneKind = "base" | "wolf" | "feature" | "subagent" | "merged";
-
-/** A branch to draw, in priority order (earlier lanes claim shared history first). `tip` is its head sha. */
-export interface LaneRef {
-	name: string;
-	kind: LaneKind;
-	tip: string;
-}
-
-/** One `git log --topo-order` row (newest first). */
+/** One `git log` row (newest first). */
 export interface RawCommit {
 	sha: string;
 	parents: string[];
 	subject: string;
+	/** Committer time, unix seconds. */
+	time?: number;
 }
 
-export interface GraphLane {
-	name: string;
-	kind: LaneKind;
-}
-
-/** A commit in the graph; `lane` indexes `lanes`. Commits are oldest → newest, so the array index is the x position. */
-export interface GraphCommit {
+/** Consecutive main-lane commits that share one work item (`workId` null: no ID in the subject). */
+export interface RunNode {
+	workId: string | null;
+	count: number;
+	/** Newest commit's sha and subject (the node's tooltip). */
 	sha: string;
 	subject: string;
-	/** Parent shas that are inside the graph window (older parents are cut off). */
-	parents: string[];
-	lane: number;
+	/** Every sha in the run, so a branch's fork commit can be placed on its node. */
+	shas: string[];
 }
 
-export interface BranchGraph {
-	lanes: GraphLane[];
-	commits: GraphCommit[];
+export interface OverviewBranch {
+	name: string;
+	kind: "subagent" | "feature";
+	ahead: number;
+	behind: number;
+	/** 0 ahead: everything it did is already on the main lane. */
+	landed: boolean;
+	/** Index into `history` of the node holding the fork commit; -1 when the fork is older than the window. */
+	forkIndex: number;
+	/** Main-lane commits hidden between the fork and the window start (only when forkIndex is -1). */
+	gap: number;
+	/** Committer time (unix s) of the fork commit / of the branch tip; null if unknown. */
+	splitAt: number | null;
+	lastAt: number | null;
+	dirty: boolean;
+	/** Full `work-<domain>-<id>` the branch name points at, when its tip's subject confirms the domain. */
+	workId: string | null;
 }
 
-export const GRAPH_COMMIT_LIMIT = 18;
+export interface GitOverview {
+	main: { name: string; kind: "wolf" | "feature" };
+	/** The main lane's recent history, oldest → newest. */
+	history: RunNode[];
+	branches: OverviewBranch[];
+	/** The main branch against its own parent (feature thread only). */
+	parent: { name: string; ahead: number; behind: number } | null;
+}
 
-/**
- * Assign each commit to a lane. Lanes claim commits in priority order by walking their first-parent chain from the
- * tip and stopping at an already-claimed commit; so a merged subagent branch (reachable only through the merge's
- * second parent) keeps its own lane, giving fork + merge-back, while an unmerged one diverges ahead of the feature.
- * Commits no lane claims (a deleted branch's history) inherit the lane of a child. Only the newest `limit` commits are
- * kept and lanes with no commit left are dropped.
- */
-export function buildBranchGraph(refs: LaneRef[], log: RawCommit[], limit = GRAPH_COMMIT_LIMIT): BranchGraph {
-	const bySha = new Map(log.map((c) => [c.sha, c]));
-	const claimed = new Map<string, number>();
-	refs.forEach((ref, i) => {
-		let sha: string | undefined = ref.tip;
-		while (sha && bySha.has(sha) && !claimed.has(sha)) {
-			claimed.set(sha, i);
-			sha = bySha.get(sha)!.parents[0];
-		}
-	});
-	// Unclaimed commits: newest first, so a child is already placed. Prefer a child that has it as first parent.
-	const children = new Map<string, string[]>();
-	for (const c of log) for (const p of c.parents) children.set(p, [...(children.get(p) ?? []), c.sha]);
-	for (const c of log) {
-		if (claimed.has(c.sha)) continue;
-		const kids = children.get(c.sha) ?? [];
-		const first = kids.find((k) => bySha.get(k)?.parents[0] === c.sha && claimed.has(k)) ?? kids.find((k) => claimed.has(k));
-		claimed.set(c.sha, first !== undefined ? claimed.get(first)! : 0);
+export const EMPTY_OVERVIEW: GitOverview = { main: { name: "", kind: "wolf" }, history: [], branches: [], parent: null };
+
+const WORK_ID_IN_SUBJECT = new RegExp(WORK_ID_SOURCE);
+
+/** The first full `work-<domain>-<id>` in a commit subject, or null. */
+export function workIdOfSubject(subject: string): string | null {
+	return WORK_ID_IN_SUBJECT.exec(subject)?.[0] ?? null;
+}
+
+/** Group a newest-first log into oldest → newest runs of consecutive commits sharing a work ID. */
+export function groupRuns(log: RawCommit[]): RunNode[] {
+	const runs: RunNode[] = [];
+	for (const c of [...log].reverse()) {
+		const id = workIdOfSubject(c.subject);
+		const last = runs[runs.length - 1];
+		if (last && last.workId === id) {
+			last.count++;
+			last.sha = c.sha;
+			last.subject = c.subject;
+			last.shas.push(c.sha);
+		} else runs.push({ workId: id, count: 1, sha: c.sha, subject: c.subject, shas: [c.sha] });
 	}
-	const window = log.slice(0, Math.max(0, limit));
-	const inWindow = new Set(window.map((c) => c.sha));
-	const used = [...new Set(window.map((c) => claimed.get(c.sha)!))].sort((a, b) => a - b);
-	const remap = new Map(used.map((old, i) => [old, i]));
-	return {
-		lanes: used.map((i) => ({ name: refs[i]!.name, kind: refs[i]!.kind })),
-		commits: window
-			.map((c) => ({ sha: c.sha, subject: c.subject, parents: c.parents.filter((p) => inWindow.has(p)), lane: remap.get(claimed.get(c.sha)!)! }))
-			.reverse(),
-	};
+	return runs;
+}
+
+/** `feat/1nLJglH-slug--agent-ab12` → `1nLJglH` (the 7-char id part of a feature branch name), or null. */
+export function branchShortId(branch: string): string | null {
+	return /^feat\/([0-9A-Za-z]{7})-/.exec(branch)?.[1] ?? null;
+}
+
+/** "4d ago" style age of a unix-seconds time. */
+export function ageLabel(time: number | null, nowSec: number): string {
+	if (time === null) return "?";
+	const s = Math.max(0, nowSec - time);
+	if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`;
+	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+	return `${Math.floor(s / 86400)}d ago`;
 }

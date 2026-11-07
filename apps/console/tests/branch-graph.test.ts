@@ -1,136 +1,123 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildBranchGraph, type RawCommit } from "../src/core/branch-graph.ts";
-import { parseLog } from "../src/server/branch-graph.ts";
+import { ageLabel, branchShortId, groupRuns, workIdOfSubject, type RawCommit } from "../src/core/branch-graph.ts";
+import { parseLog, workspaceGraph } from "../src/server/branch-graph.ts";
 
-/** newest-first log from "sha:parent,parent:subject" shorthand */
-const log = (...rows: string[]): RawCommit[] => rows.map((r) => { const [sha = "", p, subject = sha] = r.split(":"); return { sha, parents: p ? p.split(",") : [], subject }; });
-const laneOf = (g: ReturnType<typeof buildBranchGraph>, sha: string) => g.lanes[g.commits.find((c) => c.sha === sha)!.lane]!.name;
+const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
 
-describe("buildBranchGraph", () => {
-	it("linear history is one lane, oldest first", () => {
-		const g = buildBranchGraph([{ name: "main", kind: "base", tip: "c" }], log("c:b", "b:a", "a:"));
-		assert.deepEqual(g.lanes, [{ name: "main", kind: "base" }]);
-		assert.deepEqual(g.commits.map((c) => c.sha), ["a", "b", "c"]);
-		assert.deepEqual(g.commits[2]!.parents, ["b"]);
+describe("groupRuns", () => {
+	it("groups consecutive commits of one work item, oldest to newest; commits without an ID group as null", () => {
+		// newest first, as git log gives them
+		const runs = groupRuns(raw("fix b (work-wolfpack-1nLJglH)", "more b (work-wolfpack-1nLJglH)", "wip", "also wip", "a (work-wolfpack-Zfjn1Vw)", "again a (work-wolfpack-1nLJglH)"));
+		assert.deepEqual(runs.map((r) => [r.workId, r.count]), [["work-wolfpack-1nLJglH", 1], ["work-wolfpack-Zfjn1Vw", 1], [null, 2], ["work-wolfpack-1nLJglH", 2]]);
+		assert.deepEqual(runs[3]!.shas, ["s1", "s0"]);
 	});
-	it("fork without merge: feature diverges ahead of base", () => {
-		const g = buildBranchGraph([{ name: "main", kind: "base", tip: "b" }, { name: "feat", kind: "feature", tip: "f2" }], log("f2:f1", "f1:b", "b:a", "a:"));
-		assert.equal(laneOf(g, "a"), "main");
-		assert.equal(laneOf(g, "b"), "main");
-		assert.equal(laneOf(g, "f1"), "feat");
-		assert.equal(laneOf(g, "f2"), "feat");
-		assert.deepEqual(g.commits.find((c) => c.sha === "f1")!.parents, ["b"]);
+	it("reads the full work ID from a subject and the short ID from a branch name", () => {
+		assert.equal(workIdOfSubject("console: x (work-snapjack-AbC1234)"), "work-snapjack-AbC1234");
+		assert.equal(workIdOfSubject("no id here"), null);
+		assert.equal(branchShortId("feat/n73bJGY-console-polish--thread-git-graph-b7f21ea4"), "n73bJGY");
+		assert.equal(branchShortId("feat/home--x-1"), null);
 	});
-	it("fork + merge: merged side branch keeps its own lane", () => {
-		const g = buildBranchGraph(
-			[{ name: "feat", kind: "feature", tip: "m" }, { name: "feat--sub-1", kind: "subagent", tip: "s2" }],
-			log("m:f1,s2", "s2:s1", "s1:f1", "f1:a", "a:"),
-		);
-		assert.equal(laneOf(g, "m"), "feat");
-		assert.equal(laneOf(g, "f1"), "feat");
-		assert.equal(laneOf(g, "s1"), "feat--sub-1");
-		assert.equal(laneOf(g, "s2"), "feat--sub-1");
-		assert.deepEqual(g.commits.find((c) => c.sha === "m")!.parents, ["f1", "s2"]);
-	});
-	it("multiple subagent branches get separate lanes in ref order", () => {
-		const g = buildBranchGraph(
-			[{ name: "main", kind: "base", tip: "b" }, { name: "feat", kind: "feature", tip: "f" }, { name: "feat--x-1", kind: "subagent", tip: "x" }, { name: "feat--y-2", kind: "subagent", tip: "y" }],
-			log("y:f", "x:f", "f:b", "b:a", "a:"),
-		);
-		assert.deepEqual(g.lanes.map((l) => l.name), ["main", "feat", "feat--x-1", "feat--y-2"]);
-		assert.equal(laneOf(g, "x"), "feat--x-1");
-		assert.equal(laneOf(g, "y"), "feat--y-2");
-	});
-	it("caps to the newest commits and drops empty lanes and cut parents", () => {
-		const g = buildBranchGraph([{ name: "main", kind: "base", tip: "c" }, { name: "feat", kind: "feature", tip: "f" }], log("f:c", "c:b", "b:a", "a:"), 2);
-		assert.deepEqual(g.commits.map((c) => c.sha), ["c", "f"]);
-		assert.deepEqual(g.commits[0]!.parents, []);
-		assert.equal(g.lanes.length, 2);
-		const only = buildBranchGraph([{ name: "main", kind: "base", tip: "c" }, { name: "feat", kind: "feature", tip: "c" }], log("c:b", "b:"), 5);
-		assert.deepEqual(only.lanes.map((l) => l.name), ["main"]);
-	});
-	it("unclaimed history (deleted branch) inherits a child's lane", () => {
-		const g = buildBranchGraph([{ name: "feat", kind: "feature", tip: "m" }], log("m:f,gone", "gone:f", "f:"));
-		assert.equal(laneOf(g, "gone"), "feat");
+	it("labels ages", () => {
+		assert.equal(ageLabel(1000, 1000 + 4 * 86400 + 5), "4d ago");
+		assert.equal(ageLabel(1000, 1000 + 7200), "2h ago");
+		assert.equal(ageLabel(null, 5), "?");
 	});
 });
 
 describe("parseLog", () => {
-	it("splits sha, parents and subject", () => {
-		assert.deepEqual(parseLog("a\0b c\0hello\nd\0\0root\n"), [{ sha: "a", parents: ["b", "c"], subject: "hello" }, { sha: "d", parents: [], subject: "root" }]);
+	it("splits sha, parents, subject and time", () => {
+		assert.deepEqual(parseLog("a\0b c\0hello\x001700000000\nd\0\0root\x001\n"), [
+			{ sha: "a", parents: ["b", "c"], subject: "hello", time: 1700000000 },
+			{ sha: "d", parents: [], subject: "root", time: 1 },
+		]);
 	});
 });
 
+/** A temp repo: `home` (branch wolf/w) beside its worktrees folder. */
+function repo() {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "bg-")));
+	const dir = join(root, "home");
+	mkdirSync(dir);
+	const run = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "pipe" }).toString();
+	const g = (...a: string[]) => run(dir, ...a);
+	const commit = (cwd: string, subject: string) => run(cwd, "commit", "--allow-empty", "-m", subject);
+	g("init", "-b", "wolf/w");
+	return { root, dir, g, run, commit };
+}
+
 describe("workspaceGraph (real repo)", () => {
-	it("lays out a feature thread\u2019s branch and a subagent branch from read-only git", async () => {
-		const { execFileSync } = await import("node:child_process");
-		const { mkdtempSync } = await import("node:fs");
-		const { tmpdir } = await import("node:os");
-		const { join } = await import("node:path");
-		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
-		const dir = mkdtempSync(join(tmpdir(), "bg-"));
-		const g = (...a: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "pipe" });
-		g("init", "-b", "main");
-		g("commit", "--allow-empty", "-m", "root");
-		g("checkout", "-b", "feat/x");
-		g("commit", "--allow-empty", "-m", "f1");
-		g("checkout", "-b", "feat/x--sub-1");
-		g("commit", "--allow-empty", "-m", "s1");
-		const graph = await workspaceGraph({ toplevel: dir, branch: "feat/x", base: "main" }, "w");
-		assert.deepEqual(graph.lanes.map((l) => l.name), ["feat/x", "feat/x--sub-1"]);
-		assert.deepEqual(graph.commits.map((c) => c.subject), ["root", "f1", "s1"]);
-	});
-
-	it("a feature thread shows its own subagent lanes only, not the base or unrelated branches", async () => {
-		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
-		const git = async (_cwd: string, args: string[]) => {
-			if (args[0] === "for-each-ref") return "stable\0s1\nfeat/x\0f1\nfeat/x--a-1\0a1\nfeat/y\0y1\nfeat/y--b-2\0b1\n";
-			return "a1\0f1\0sub\nf1\0s1\0feat\ns1\0\0root\n";
-		};
-		const graph = await workspaceGraph({ toplevel: "/x", branch: "feat/x", base: "origin/stable" }, "w", git);
-		assert.deepEqual(graph.lanes.map((l) => l.name), ["feat/x", "feat/x--a-1"]);
-	});
-
-	it("a home thread shows only this wolf\'s feature branches (worktree beside the home checkout) and merged ones from the merge\'s second parent", async () => {
-		const { execFileSync } = await import("node:child_process");
-		const { mkdtempSync, mkdirSync, realpathSync } = await import("node:fs");
-		const { tmpdir } = await import("node:os");
-		const { join } = await import("node:path");
-		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
-		const root = realpathSync(mkdtempSync(join(tmpdir(), "bg-home-")));
+	it("home thread: main history grouped by work item; children by worktree folder with fork, ahead/behind, landed and dirty", async () => {
+		const { root, dir, g, run, commit } = repo();
 		const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "bg-else-")));
-		const dir = join(root, "home");
-		mkdirSync(dir);
-		const g = (...a: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "pipe" });
-		g("init", "-b", "wolf/w");
-		g("commit", "--allow-empty", "-m", "root");
+		commit(dir, "root (work-wolfpack-AAAAAAA)");
 		g("branch", "stable");
-		g("branch", "other/wolf");
-		g("worktree", "add", "-b", "feat/a-live", join(root, "a-live"));
-		execFileSync("git", ["-C", join(root, "a-live"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "live1"], { stdio: "pipe" });
-		g("worktree", "add", "-b", "feat/c-other-wolf", join(elsewhere, "c"));
-		execFileSync("git", ["-C", join(elsewhere, "c"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "other1"], { stdio: "pipe" });
-		g("branch", "feat/d-no-worktree");
-		g("checkout", "-b", "feat/b-done");
-		g("commit", "--allow-empty", "-m", "done1");
-		g("checkout", "wolf/w");
-		g("commit", "--allow-empty", "-m", "home1");
-		g("merge", "--no-ff", "-m", "Merge branch 'feat/b-done'", "feat/b-done");
-		g("branch", "-D", "feat/b-done");
-		const graph = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
-		assert.deepEqual(graph.lanes.map((l) => l.name), ["wolf/w", "feat/a-live", "feat/b-done"]);
-		assert.deepEqual(graph.lanes.map((l) => l.kind), ["wolf", "feature", "merged"]);
-		const lane = (subject: string) => graph.lanes[graph.commits.find((c) => c.subject === subject)!.lane]!.name;
-		assert.equal(lane("done1"), "feat/b-done");
-		assert.equal(lane("live1"), "feat/a-live");
-		assert.equal(lane("home1"), "wolf/w");
+		g("worktree", "add", "-b", "feat/Old1111-old", join(root, "old"));
+		commit(join(root, "old"), "old work (work-wolfpack-Old1111)");
+		commit(join(root, "old"), "old work 2 (work-wolfpack-Old1111)");
+		for (const n of [1, 2, 3, 4]) commit(dir, `main ${n} (work-wolfpack-BBBBBBB)`);
+		g("worktree", "add", "-b", "feat/New2222-new", join(root, "new"));
+		commit(join(root, "new"), "new work (work-wolfpack-New2222)");
+		writeFileSync(join(root, "new", "dirty.txt"), "x");
+		g("worktree", "add", "-b", "feat/Done333-done", join(root, "done")); // 0 ahead: landed
+		g("worktree", "add", "-b", "feat/Else444-else", join(elsewhere, "else"));
+		commit(join(elsewhere, "else"), "other wolf");
+		g("branch", "feat/Nowt555-no-worktree");
+		commit(dir, "main 5 no id");
+		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w", undefined, { commits: 4, days: 7 });
+		assert.deepEqual(o.main, { name: "wolf/w", kind: "wolf" });
+		assert.equal(o.parent, null);
+		// window = the newest 4 main commits: BBBBBBB x3 before the unlabelled one
+		assert.deepEqual(o.history.map((h) => [h.workId, h.count]), [["work-wolfpack-BBBBBBB", 3], [null, 1]]);
+		assert.deepEqual(o.branches.map((b) => b.name), ["feat/Done333-done", "feat/New2222-new", "feat/Old1111-old"]);
+		const by = Object.fromEntries(o.branches.map((b) => [b.name, b]));
+		assert.deepEqual([by["feat/Old1111-old"]!.ahead, by["feat/Old1111-old"]!.behind, by["feat/Old1111-old"]!.forkIndex], [2, 5, -1]);
+		assert.equal(by["feat/Old1111-old"]!.gap, 1); // 5 behind, 4 in the window
+		assert.equal(by["feat/Old1111-old"]!.workId, "work-wolfpack-Old1111");
+		assert.deepEqual([by["feat/New2222-new"]!.ahead, by["feat/New2222-new"]!.behind, by["feat/New2222-new"]!.forkIndex, by["feat/New2222-new"]!.dirty], [1, 1, 0, true]);
+		assert.deepEqual([by["feat/Done333-done"]!.landed, by["feat/Done333-done"]!.dirty], [true, false]);
+		assert.equal(by["feat/Old1111-old"]!.landed, false);
+		assert.equal(by["feat/Done333-done"]!.ahead, 0);
+		assert.equal(typeof by["feat/Old1111-old"]!.splitAt, "number");
+		assert.equal(run(dir, "rev-parse", "--abbrev-ref", "HEAD").trim(), "wolf/w");
 	});
 
-	it("a git timeout gives an empty graph; other errors still throw", async () => {
-		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
+	it("feature thread: its own subagent branches as children, and its ahead/behind against its parent", async () => {
+		const { root, dir, g, commit } = repo();
+		commit(dir, "root");
+		g("worktree", "add", "-b", "feat/Fea1111-feat", join(root, "feat"));
+		const feat = join(root, "feat");
+		commit(feat, "f1 (work-wolfpack-Fea1111)");
+		g("worktree", "add", "-b", "feat/Fea1111-feat--a-1", join(root, "sub"));
+		// the subagent's worktree is cut from the feature in real use; here from home, so rebase the point
+		execFileSync("git", ["-C", join(root, "sub"), "reset", "-q", "--hard", "feat/Fea1111-feat"]);
+		commit(join(root, "sub"), "sub work");
+		g("worktree", "add", "-b", "feat/Oth2222-other", join(root, "other"));
+		commit(dir, "home moves");
+		commit(dir, "home moves again");
+		const o = await workspaceGraph({ toplevel: feat, branch: "feat/Fea1111-feat", base: "wolf/w" }, "w");
+		assert.deepEqual(o.main, { name: "feat/Fea1111-feat", kind: "feature" });
+		assert.deepEqual(o.parent, { name: "wolf/w", ahead: 1, behind: 2 });
+		assert.deepEqual(o.branches.map((b) => [b.name, b.kind, b.ahead, b.behind]), [["feat/Fea1111-feat--a-1", "subagent", 1, 0]]);
+		assert.equal(o.branches[0]!.forkIndex, o.history.length - 1);
+	});
+
+	it("a branch with nothing ahead is landed", async () => {
+		const { root, dir, g, commit } = repo();
+		commit(dir, "root");
+		g("worktree", "add", "-b", "feat/Don1111-done", join(root, "done"));
+		commit(dir, "later");
+		const o = await workspaceGraph({ toplevel: dir, branch: "wolf/w" }, "w");
+		assert.deepEqual(o.branches.map((b) => [b.name, b.ahead, b.behind, b.landed]), [["feat/Don1111-done", 0, 1, true]]);
+	});
+
+	it("a git timeout gives an empty overview; other errors still throw", async () => {
 		const timeout = async () => { throw Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }); };
-		assert.deepEqual(await workspaceGraph({ toplevel: "/x", branch: "b" }, "w", timeout), { lanes: [], commits: [] });
+		assert.deepEqual((await workspaceGraph({ toplevel: "/x", branch: "b" }, "w", timeout)).history, []);
 		const boom = async () => { throw new Error("not a repo"); };
 		await assert.rejects(workspaceGraph({ toplevel: "/x", branch: "b" }, "w", boom), /not a repo/);
 	});

@@ -1,5 +1,6 @@
 /** Read-only git for the popover's branch graph: ref discovery + a bounded topo-ordered log, fed to the pure lane assignment. */
 import { execFile } from "node:child_process";
+import { dirname, sep } from "node:path";
 import { buildBranchGraph, type BranchGraph, type LaneRef, type RawCommit } from "../core/branch-graph.ts";
 
 export type GitRunner = (cwd: string, args: string[]) => Promise<string>;
@@ -43,6 +44,17 @@ export async function workspaceGraph(ws: GraphWorkspace, wolf: string, git: GitR
 	}
 }
 
+/** Branches checked out in a worktree under `folder` (from `git worktree list --porcelain`). */
+async function worktreeBranchesUnder(cwd: string, folder: string, git: GitRunner): Promise<Set<string>> {
+	const out = new Set<string>();
+	let path = "";
+	for (const line of (await git(cwd, ["worktree", "list", "--porcelain"])).split("\n")) {
+		if (line.startsWith("worktree ")) path = line.slice(9);
+		else if (line.startsWith("branch refs/heads/") && path.startsWith(folder + sep)) out.add(line.slice(18));
+	}
+	return out;
+}
+
 /** The branch a merge commit brought in, from its subject ("Merge branch 'x'", "Merge pull request #1 from o/x"), else the short sha. */
 export function mergedName(subject: string, sha: string): string {
 	const m = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(subject) ?? /^Merge pull request #\d+ from [^/\s]+\/(\S+)/.exec(subject);
@@ -59,8 +71,10 @@ async function workspaceGraphUnsafe(ws: GraphWorkspace, _wolf: string, git: GitR
 	if (!main) return { lanes: [], commits: [] };
 	const isFeature = ws.branch.startsWith("feat/");
 	const refs: LaneRef[] = [{ name: ws.branch, kind: isFeature ? "feature" : "wolf", tip: main }];
+	// A home thread owns only the feature branches whose worktree sits beside its own checkout (same workspaces folder).
+	const owned = isFeature ? undefined : await worktreeBranchesUnder(ws.toplevel, dirname(ws.toplevel), git);
 	const children = [...heads.keys()]
-		.filter((n) => (isFeature ? n.startsWith(`${ws.branch}--`) : n.startsWith("feat/") && (!n.includes("--") || n.startsWith("feat/home--"))))
+		.filter((n) => (isFeature ? n.startsWith(`${ws.branch}--`) : n.startsWith("feat/") && owned!.has(n)))
 		.sort();
 	for (const n of children) refs.push({ name: n, kind: isFeature ? "subagent" : "feature", tip: heads.get(n)! });
 	// Deleted children: second parents of merges on the main lane that no live branch already claims.

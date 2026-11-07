@@ -92,21 +92,26 @@ describe("workspaceGraph (real repo)", () => {
 		assert.deepEqual(graph.lanes.map((l) => l.name), ["feat/x", "feat/x--a-1"]);
 	});
 
-	it("a home thread shows feature branches cut from it, merged ones from the merge's second parent, and not stable or other wolves", async () => {
+	it("a home thread shows only this wolf\'s feature branches (worktree beside the home checkout) and merged ones from the merge\'s second parent", async () => {
 		const { execFileSync } = await import("node:child_process");
-		const { mkdtempSync } = await import("node:fs");
+		const { mkdtempSync, mkdirSync, realpathSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
 		const { join } = await import("node:path");
 		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
-		const dir = mkdtempSync(join(tmpdir(), "bg-home-"));
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "bg-home-")));
+		const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "bg-else-")));
+		const dir = join(root, "home");
+		mkdirSync(dir);
 		const g = (...a: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "pipe" });
 		g("init", "-b", "wolf/w");
 		g("commit", "--allow-empty", "-m", "root");
 		g("branch", "stable");
 		g("branch", "other/wolf");
-		g("checkout", "-b", "feat/a-live");
-		g("commit", "--allow-empty", "-m", "live1");
-		g("checkout", "wolf/w");
+		g("worktree", "add", "-b", "feat/a-live", join(root, "a-live"));
+		execFileSync("git", ["-C", join(root, "a-live"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "live1"], { stdio: "pipe" });
+		g("worktree", "add", "-b", "feat/c-other-wolf", join(elsewhere, "c"));
+		execFileSync("git", ["-C", join(elsewhere, "c"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "other1"], { stdio: "pipe" });
+		g("branch", "feat/d-no-worktree");
 		g("checkout", "-b", "feat/b-done");
 		g("commit", "--allow-empty", "-m", "done1");
 		g("checkout", "wolf/w");

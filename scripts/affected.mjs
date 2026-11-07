@@ -60,20 +60,24 @@ export function computeAffected(changed, workspaces) {
   const has = (re) => all || files.some((f) => re.test(f));
   const byName = new Map(workspaces.map((w) => [w.name, w]));
   const dirs = (f) => packages.map((n) => byName.get(n)).filter(f).map((w) => w.dir);
+  // console tests import @wolfpack/* deps from dist, so build them too (tsc --build follows their references)
+  const consoleTests = hit.has("@wolfpack/console");
+  const consoleDeps = !all && consoleTests ? (byName.get("@wolfpack/console")?.deps ?? []).map((n) => byName.get(n)).filter((w) => w?.inTsRoot).map((w) => w.dir) : [];
+  const tsProjects = all ? ["."] : [...new Set([...dirs((w) => w.inTsRoot), ...consoleDeps])];
   const tracerPk = ["@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/harness"];
   return {
     all,
     changedFiles: changed ?? null,
     packages,
     components,
-    /** `tsc --build` targets: affected packages that are root TS references (all => the root project). */
-    tsProjects: all ? ["."] : dirs((w) => w.inTsRoot),
+    /** `tsc --build` targets: affected packages that are root TS references (all => the root project); with console tests, also console's workspace deps. */
+    tsProjects,
     /** vitest path filters for affected packages (all => whole suite). */
     vitestPaths: all ? [] : dirs((w) => w.inTsRoot).map((d) => `${d}/src`),
     /** root-level vitest suites outside packages/ */
     extensionsTests: has(/^extensions\//) || packages.includes("@wolfpack/harness") || packages.includes("@wolfpack/memory"),
     scriptsTests: has(/^scripts\/[^/]*\.test\.ts$|^scripts\/(runtime-update|dev-stack-extensions)\./),
-    consoleTests: hit.has("@wolfpack/console"),
+    consoleTests,
     tracer: tracerPk.some((p) => hit.has(p)) || has(/^infra\/tracer\//),
     release: has(/^infra\/release\//) || has(/^scripts\/[^/]*release[^/]*$/) || has(/^package-lock\.json$/),
   };

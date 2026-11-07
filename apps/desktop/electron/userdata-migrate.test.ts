@@ -70,4 +70,28 @@ describe("migrateLegacyUserData", () => {
 		expect(fs.existsSync(path.join(newDir, "console.json"))).toBe(true);
 		expect(logs.join("\n")).toContain("locked.db");
 	});
+
+	it("copies rather than moves: the old folder is left untouched", () => {
+		migrateLegacyUserData(newDir);
+		expect(fs.readFileSync(path.join(oldDir, "console.json"), "utf8")).toBe('{"consoleUrl":"https://sfo"}');
+		expect(fs.existsSync(path.join(oldDir, "data", "chats", "a.json"))).toBe(true);
+	});
+
+	it("maps the -dev folder to the -dev folder", () => {
+		write(path.join(root, `${LEGACY}-dev`, "console.json"), "{}");
+		const devDir = path.join(root, "Wolfpack Console-dev");
+		expect(migrateLegacyUserData(devDir).migrated).toBe(true);
+		expect(fs.existsSync(path.join(devDir, "console.json"))).toBe(true);
+		expect(fs.existsSync(path.join(devDir, "auth.json"))).toBe(false); // prod legacy folder is not used
+	});
+
+	it("does nothing when there is no legacy folder", () => {
+		const other = fs.mkdtempSync(path.join(os.tmpdir(), "ud-migrate-none-"));
+		try {
+			expect(migrateLegacyUserData(path.join(other, "Wolfpack Console")).migrated).toBe(false);
+			expect(fs.existsSync(path.join(other, "Wolfpack Console"))).toBe(false);
+		} finally {
+			fs.rmSync(other, { recursive: true, force: true });
+		}
+	});
 });

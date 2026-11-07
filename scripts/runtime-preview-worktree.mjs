@@ -178,6 +178,19 @@ export function collectWorktrees({ home, cwd, git, mergedInto = ["wolf/1uk4", "s
 	});
 }
 
+/**
+ * Which worktree does `name` mean? Exact match on the folder name, the branch, or the branch without `feat/` first; else a
+ * substring of those. The runtime checkout is never a candidate. → {matches: [{dir, branch}]}
+ */
+export function matchWorktrees({ worktrees, name, runtimeBranch = "stable", runtimeDir }) {
+	const cands = worktrees.filter((w) => w.dir !== runtimeDir && w.branch !== runtimeBranch);
+	const keys = (w) => [path.basename(w.dir), w.branch, w.branch?.replace(/^feat\//, "")].filter(Boolean);
+	const exact = cands.filter((w) => keys(w).includes(name));
+	if (exact.length > 0) return { matches: exact };
+	const n = name.toLowerCase();
+	return { matches: cands.filter((w) => keys(w).some((k) => k.toLowerCase().includes(n))) };
+}
+
 const MARKS = { built: "●", stale: "◐", "not built": "○" };
 
 /** `feat/` dropped; a long slug cut to the id and two words ("yu741qH-floating-chat…"); a worker's copy by its worker name. */
@@ -194,7 +207,7 @@ export function shortName(branch, dir) {
  * Order: active, then the cwd's worktree, then newest commit first.
  */
 // The runtime checkout is never offered (not even under Show all, not even as the cwd): previewing it is previewing stable.
-export function pickerModel({ worktrees, runtimeBranch = "stable", runtimeDir, here, activeDir, showAll = false }) {
+export function pickerModel({ worktrees, runtimeBranch = "stable", runtimeDir, here, activeDir, showAll = false, marks = true }) {
 	const keep = (w) => w.dir !== runtimeDir && w.branch !== runtimeBranch && (showAll || w.dir === activeDir || w.dir === here || !(w.branch === runtimeBranch || w.main || !w.branch || (w.merged && !w.dirty)));
 	const kept = worktrees.filter(keep);
 	const rank = (w) => (w.dir === activeDir ? 0 : w.dir === here ? 1 : 2);
@@ -203,6 +216,10 @@ export function pickerModel({ worktrees, runtimeBranch = "stable", runtimeDir, h
 		const active = w.dir === activeDir;
 		const name = shortName(w.branch, w.dir);
 		const build = w.status !== "built";
+		if (!marks) {
+			// Console picker: branch and worktree folder only; nothing to build, so no built/stale marks.
+			return { dir: w.dir, name, status: w.status, active, build: false, label: [`${name}  ${path.basename(w.dir)}`, active ? "active" : ""].filter(Boolean).join("  "), hint: w.dir };
+		}
 		return {
 			dir: w.dir,
 			name,

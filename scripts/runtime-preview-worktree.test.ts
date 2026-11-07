@@ -78,6 +78,8 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	const helper: string[] = [];
 	const asked: string[] = [];
 	const logs: string[] = [];
+	const opened: string[] = [];
+	const installs: string[] = [];
 	const steps: Record<string, unknown> = {
 		launchctl: (...a: string[]) => (lc.push(a), 0),
 		sleep: async () => {},
@@ -87,6 +89,12 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 		fetchJson: async () => ({ wolves: [{ id: "x", name: "1uk4" }], chats: [] }),
 		build: (dir: string, b?: { logFile?: string }) => (builds.push({ dir, logFile: b?.logFile }), markBuilt(dir)),
 		health: async () => true,
+		open: (url: string) => void opened.push(url),
+		install: (dir: string) => {
+			installs.push(dir);
+			fs.mkdirSync(path.join(dir, "apps", "console", "node_modules", "next", "dist", "bin"), { recursive: true });
+			fs.writeFileSync(path.join(dir, "apps", "console", "node_modules", "next", "dist", "bin", "next"), "//");
+		},
 		pick: async (_title: string, items: Item[]) => (menus.push(items), o.pick ? o.pick(items) : null),
 		spawnHelper: (a: { args: string[] }) => helper.push(a.args.slice(4).join(" ")),
 	};
@@ -94,13 +102,97 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	if (o.confirm !== "none") steps.confirm = async (q: string) => (asked.push(q), o.confirm ?? true);
 	const run = (argv: string[], cwd = main) =>
 		runPreview({ argv, env: { HOME: home, PREVIEW_USERDATA_ROOT: ud() }, cwd, steps, log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m) });
-	return { run, lc, helper, asked, logs, builds, menus, flags };
+	return { run, lc, helper, asked, logs, builds, menus, flags, opened, installs };
 };
+
+describe("console preview: pick a worktree, its live console opens in a browser tab, the wolves stay put", () => {
+	const consolePlist = () => fs.readFileSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"), "utf8");
+	const unchanged = (h: ReturnType<typeof harness>) => {
+		expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(rt)); // the wolves' plist
+		expect(h.helper).toEqual([]);
+		expect(h.asked).toEqual([]); // no y/N
+		expect(h.builds).toEqual([]);
+		expect(h.lc.every((a) => a.join(" ").includes("preview-console"))).toBe(true); // only the console agent is touched
+	};
+
+	it("plain preview lists worktrees by branch and folder (no built/stale marks, no runtime checkout); picking one serves its next dev and opens the browser", async () => {
+		fs.writeFileSync(path.join(wtB, "b.txt"), "b"); // an unmerged branch, so the picker lists it
+		g(wtB, "add", "b.txt");
+		g(wtB, "commit", "-q", "-m", "b");
+		const h = harness({ pick: (items) => items.find((i) => i.label.startsWith("b "))?.value });
+		expect((await h.run([], wtA)).exitCode).toBe(0);
+		const labels = h.menus[0].map((i) => i.label);
+		expect(labels).toContain("a  wt-a");
+		expect(labels).toContain("b  wt-b");
+		expect(labels.some((l) => /[●◐○]/.test(l) || l.startsWith("stable") || l.includes("rt"))).toBe(false);
+		expect(consolePlist()).toContain(`<key>WorkingDirectory</key><string>${path.join(wtB, "apps", "console")}</string>`);
+		expect(h.opened).toEqual(["http://127.0.0.1:3230"]);
+		expect(readState()).toMatchObject({ console: { mode: "dev", dir: wtB }, consolePort: 3230 });
+		expect(readState().previewRef).toBeUndefined();
+		unchanged(h);
+	});
+
+	it("a worktree without node_modules gets one frozen install first, then the console and the browser", async () => {
+		const wtC = path.join(tmp, "wt-c");
+		g(main, "worktree", "add", "-q", "-b", "feat/c", wtC);
+		const h = harness();
+		expect((await h.run(["wt-c"])).exitCode).toBe(0);
+		expect(h.installs).toEqual([wtC]);
+		expect(h.logs.join("\n")).toContain("installing dependencies");
+		expect(h.opened).toEqual(["http://127.0.0.1:3230"]);
+		unchanged(h);
+	});
+
+	it("a name picks directly by a unique match on the folder or the branch; a path works too; nothing installs when node_modules exist", async () => {
+		const byFolder = harness();
+		await byFolder.run(["wt-a"]);
+		expect(readState().console.dir).toBe(wtA);
+		const byBranch = harness();
+		await byBranch.run(["feat/b"]);
+		expect(readState().console.dir).toBe(wtB);
+		const byPath = harness();
+		await byPath.run([wtA]);
+		expect(readState().console.dir).toBe(wtA);
+		expect([byFolder, byBranch, byPath].flatMap((x) => x.installs)).toEqual([]);
+	});
+
+	it("an ambiguous name lists the matches and a missing one says so; neither starts anything", async () => {
+		const amb = harness();
+		expect((await amb.run(["wt"])).exitCode).toBe(1);
+		expect(amb.logs.join("\n")).toMatch(/matches more than one.*wt-a.*wt-b|wt-a[\s\S]*wt-b/);
+		const none = harness();
+		expect((await none.run(["nonesuch"])).exitCode).toBe(1);
+		expect(none.logs.join("\n")).toContain('no worktree or ref matches "nonesuch"');
+		for (const x of [amb, none]) {
+			expect(x.lc).toEqual([]);
+			expect(x.opened).toEqual([]);
+		}
+		expect(fs.existsSync(stateFile())).toBe(false);
+	});
+
+	it("picking another worktree while one runs switches the console in place and opens the URL again", async () => {
+		const h = harness();
+		await h.run(["wt-a"]);
+		await h.run(["wt-b"]);
+		expect(consolePlist()).toContain(path.join(wtB, "apps", "console"));
+		expect(readState().console.dir).toBe(wtB);
+		expect(h.opened).toEqual(["http://127.0.0.1:3230", "http://127.0.0.1:3230"]);
+		unchanged(h);
+	});
+
+	it("--wolves [name] is the only way to move the wolves", async () => {
+		const h = harness();
+		expect((await h.run(["--wolves", "wt-a"])).exitCode).toBe(0);
+		expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA });
+		expect(h.opened).toEqual([]);
+		expect(h.asked.length).toBe(1);
+	});
+});
 
 describe("worktree preview: the wolves run straight from a built worktree", () => {
 	it("rewrites the stack plist to the worktree, serves the live console from it and hands over to the helper after one confirm", async () => {
 		const h = harness();
-		const r = await h.run([wtA]);
+		const r = await h.run(["--wolves", wtA]);
 		expect(r.exitCode).toBe(0);
 		expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
 		expect(h.asked.length).toBe(1);
@@ -117,22 +209,22 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	it("a refused confirm, or no terminal without --yes, changes nothing; --yes skips the question", async () => {
 		const before = stackPlist(rt);
 		const no = harness({ confirm: false });
-		expect((await no.run([wtA])).exitCode).toBe(1);
+		expect((await no.run(["--wolves", wtA])).exitCode).toBe(1);
 		const tty = harness({ confirm: "none" });
-		expect((await tty.run([wtA])).exitCode).toBe(1);
+		expect((await tty.run(["--wolves", wtA])).exitCode).toBe(1);
 		for (const h of [no, tty]) expect(h.helper).toEqual([]);
 		expect(fs.readFileSync(plistFile(), "utf8")).toBe(before);
 		expect(fs.existsSync(stateFile())).toBe(false);
 		const yes = harness({ confirm: "none" });
-		expect((await yes.run([wtA, "--yes"])).exitCode).toBe(0);
+		expect((await yes.run(["--wolves", wtA, "--yes"])).exitCode).toBe(0);
 		expect(yes.helper).toEqual(["running 0"]);
 	});
 
 	it("switching to another worktree keeps the first plist as the original, and off restores its bytes exactly", async () => {
 		const original = fs.readFileSync(plistFile());
 		const h = harness();
-		await h.run([wtA]);
-		await h.run([wtB]);
+		await h.run(["--wolves", wtA]);
+		await h.run(["--wolves", wtB]);
 		expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtB));
 		h.helper.length = 0;
 		const r = await h.run(["off", "--all"]);
@@ -144,7 +236,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	it("off --rollback (used by the helper) restores the plist without a helper and keeps the state", async () => {
 		const original = fs.readFileSync(plistFile());
 		const h = harness();
-		await h.run([wtA]);
+		await h.run(["--wolves", wtA]);
 		h.helper.length = 0;
 		expect((await h.run(["off", "--rollback"])).exitCode).toBe(0);
 		expect(fs.readFileSync(plistFile()).equals(original)).toBe(true);
@@ -155,17 +247,17 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	it("the global wolfpack cli follows the worktree: record, repoint, keep the original through a switch, restore on off and rollback", async () => {
 		const runtimeCli = path.join(rt, "packages", "cli");
 		const h = harness();
-		await h.run([wtA]);
+		await h.run(["--wolves", wtA]);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli"));
 		expect(readState().cli).toMatchObject({ link: cliLink(), target: runtimeCli });
-		await h.run([wtB]);
+		await h.run(["--wolves", wtB]);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtB, "packages", "cli"));
 		expect(readState().cli.target).toBe(runtimeCli);
 		await h.run(["off", "--rollback"]);
 		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
 		await h.run(["off", "--all"]);
 		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
-		await h.run([wtA]);
+		await h.run(["--wolves", wtA]);
 		await h.run(["off", "--console"]);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli")); // console-only leaves it
 		await h.run(["off", "--all"]);
@@ -177,13 +269,13 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		oldCli(wtA);
 		markBuilt(fallbackDir());
 		const h = harness();
-		await h.run([wtA]);
+		await h.run(["--wolves", wtA]);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(fallbackDir(), "packages", "cli"));
 		expect(h.logs.join("\n")).toContain(`wolfpack CLI from ${fallbackDir()} (the previewed worktree's CLI predates preview)`);
-		await h.run([wtB]); // compatible: used directly
+		await h.run(["--wolves", wtB]); // compatible: used directly
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtB, "packages", "cli"));
 		oldCli(wtB);
-		await h.run([wtA]);
+		await h.run(["--wolves", wtA]);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(fallbackDir(), "packages", "cli"));
 		await h.run(["off", "--all"]);
 		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
@@ -193,7 +285,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		oldCli(wtA);
 		fs.mkdirSync(path.join(fallbackDir(), "packages", "cli"), { recursive: true });
 		const h = harness();
-		expect((await h.run([wtA])).exitCode).toBe(0);
+		expect((await h.run(["--wolves", wtA])).exitCode).toBe(0);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(rt, "packages", "cli"));
 		expect(readState().cli).toBeUndefined();
 		expect(h.logs.join("\n")).toContain("node ~/.wolfpack/preview/bin/runtime-preview.mjs");
@@ -203,7 +295,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		const h = harness();
 		await h.run(["dev", wtB]);
 		h.flags.portBusy = true;
-		expect((await h.run([wtA])).exitCode).toBe(1);
+		expect((await h.run(["--wolves", wtA])).exitCode).toBe(1);
 		expect(fs.readlinkSync(cliLink())).toBe(path.join(rt, "packages", "cli"));
 	});
 
@@ -212,7 +304,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		fs.mkdirSync(cliLink());
 		fs.writeFileSync(path.join(cliLink(), "marker"), "x");
 		const h = harness();
-		expect((await h.run([wtA])).exitCode).toBe(0);
+		expect((await h.run(["--wolves", wtA])).exitCode).toBe(0);
 		expect(fs.lstatSync(cliLink()).isSymbolicLink()).toBe(false);
 		expect(fs.readFileSync(path.join(cliLink(), "marker"), "utf8")).toBe("x");
 		expect(readState().cli).toBeUndefined();
@@ -224,7 +316,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	it("a worktree deleted while active is flagged by status, and off still restores the plist", async () => {
 		const original = fs.readFileSync(plistFile());
 		const h = harness();
-		await h.run([wtA]);
+		await h.run(["--wolves", wtA]);
 		fs.rmSync(wtA, { recursive: true, force: true });
 		h.logs.length = 0;
 		await h.run(["status", "--json"]);
@@ -243,7 +335,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		const before = readState();
 		h.flags.portBusy = true;
 		h.lc.length = 0;
-		expect((await h.run([wtA])).exitCode).toBe(1);
+		expect((await h.run(["--wolves", wtA])).exitCode).toBe(1);
 		expect(fs.readFileSync(plistFile()).equals(original)).toBe(true);
 		expect(readState()).toEqual(before);
 		expect("plist" in readState()).toBe(false);
@@ -255,7 +347,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 	it("refuses a worktree that is not built, changing nothing", async () => {
 		fs.rmSync(path.join(wtA, "packages"), { recursive: true });
 		const h = harness();
-		expect((await h.run([wtA])).exitCode).toBe(1);
+		expect((await h.run(["--wolves", wtA])).exitCode).toBe(1);
 		expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(rt));
 		expect(fs.existsSync(stateFile())).toBe(false);
 	});
@@ -276,11 +368,11 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			commit(c, "c.txt");
 			commit(w, "w.txt");
 			const h = harness();
-			await h.run([wtB, "--build"]);
+			await h.run(["--wolves", wtB, "--build"]);
 			await h.run(["off", "--all"]);
 			commit(wtB, "b.txt");
 			commit(wtA, "a.txt");
-			await h.run([wtA, "--build"]);
+			await h.run(["--wolves", wtA, "--build"]);
 			fs.writeFileSync(path.join(wtA, "a.txt"), "edited");
 			await h.run(["off", "--all"]);
 			return h;
@@ -289,7 +381,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		it("shows one short line per worktree (name, status mark, no paths), hides stable and the main checkout, and offers Show all at the bottom", async () => {
 			const h = await setup();
 			h.menus.length = 0;
-			await h.run([], wtB);
+			await h.run(["--wolves"], wtB);
 			const l = labels(h);
 			expect(l).toContain("yu741qH-floating-chat…  ○ not built");
 			expect(l).toContain("detach-chat (worker)  ○ not built");
@@ -303,7 +395,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			const h = await setup();
 			const h2 = harness({ pick: (items) => (items.some((i) => i.label === "Show all worktrees…") && h2.menus.length === 1 ? "all" : null) });
 			h2.menus.length = 0;
-			await h2.run([], wtB);
+			await h2.run(["--wolves"], wtB);
 			expect(h2.menus.length).toBe(2);
 			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("stable"))).toBe(false); // the runtime checkout is never offered
 			expect(h2.menus[1].map((i) => i.label).some((x) => x.startsWith("main"))).toBe(true);
@@ -312,14 +404,14 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		it("without a terminal prints the list and exits 1", async () => {
 			const h = await setup();
 			h.logs.length = 0;
-			expect((await h.run([])).exitCode).toBe(1);
+			expect((await h.run(["--wolves"])).exitCode).toBe(1);
 			expect(h.logs.join("\n")).toContain("◐ stale");
 		});
 
 		it("picking a not-built row builds it first, with output in last-run.log, then starts its preview", async () => {
 			const h = await setup();
 			const h2 = harness({ pick: (items) => items.find((i) => i.label.startsWith("yu741qH"))?.value });
-			expect((await h2.run([], wtB)).exitCode).toBe(0);
+			expect((await h2.run(["--wolves"], wtB)).exitCode).toBe(0);
 			expect(h2.builds.map((b) => b.dir)).toEqual([path.join(tmp, "wt-c")]);
 			expect(h2.builds[0].logFile).toBe(path.join(home, ".wolfpack", "preview", "last-run.log"));
 			expect(h2.helper).toEqual(["running 0"]);
@@ -330,7 +422,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			await setup();
 			fs.writeFileSync(path.join(wtA, "a.txt"), "a.txt"); // undo the edit: built again
 			const h2 = harness({ pick: (items) => items.find((i) => i.label.includes("● built"))?.value });
-			expect((await h2.run([], wtB)).exitCode).toBe(0);
+			expect((await h2.run(["--wolves"], wtB)).exitCode).toBe(0);
 			expect(h2.builds).toEqual([]);
 			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
 		});
@@ -413,12 +505,12 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		it("a worktree whose workerd and cli dist are newer than its HEAD commit counts as built; older dist counts as not built", async () => {
 			const h = harness({ pick: () => null });
 			h.menus.length = 0;
-			await h.run([], wtA); // markBuilt just wrote dist files after the commit
+			await h.run(["--wolves"], wtA); // markBuilt just wrote dist files after the commit
 			expect(h.logs.join("\n")).toContain("a  ● built");
 			const old = new Date(Date.now() - 86_400_000 * 365);
 			for (const f of [path.join(wtA, "packages", "workerd", "dist", "bin", "workerd.js"), path.join(wtA, "packages", "cli", "dist", "bin", "wolfpack.js")]) fs.utimesSync(f, old, old);
 			h.logs.length = 0;
-			await h.run([], wtA);
+			await h.run(["--wolves"], wtA);
 			expect(h.logs.join("\n")).toContain("a  ○ not built");
 		});
 	});
@@ -434,7 +526,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 		it("starts a watch agent that rebuilds the worktree and logs to watch.log, and off stops it", async () => {
 			const h = harness();
-			await h.run([wtA]);
+			await h.run(["--wolves", wtA]);
 			const text = fs.readFileSync(watchPlist(), "utf8");
 			expect(text).toContain(wtA);
 			expect(text).toContain(path.join(home, ".wolfpack", "preview", "watch.log"));
@@ -446,7 +538,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 		it("status shows restart needed once a rebuild finished after the stack started", async () => {
 			const h = harness();
-			await h.run([wtA]);
+			await h.run(["--wolves", wtA]);
 			const started = readState().startedAt as string;
 			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.parse(started) - 60_000).toISOString() }));
 			expect((await status(h)).restartNeeded).toBe(false);
@@ -458,7 +550,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		});
 
 		it("restart asks, then kickstarts only the stack and clears restart needed", async () => {
-			await harness().run([wtA]);
+			await harness().run(["--wolves", wtA]);
 			const no = harness({ confirm: false });
 			fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), startedAt: new Date(Date.now() - 3_600_000).toISOString() }));
 			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.now() - 1_800_000).toISOString() }));
@@ -472,7 +564,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		});
 
 		it("restart with the real health poll waits on /healthz, then clears restart needed", async () => {
-			await harness().run([wtA]);
+			await harness().run(["--wolves", wtA]);
 			fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), startedAt: new Date(Date.now() - 3_600_000).toISOString() }));
 			fs.writeFileSync(watchJson(), JSON.stringify({ lastRebuildOk: new Date(Date.now() - 1_800_000).toISOString() }));
 			const urls: string[] = [];
@@ -490,7 +582,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 		it("off --rollback (used by the helper) stops the watcher too", async () => {
 			const h = harness();
-			await h.run([wtA]);
+			await h.run(["--wolves", wtA]);
 			h.lc.length = 0;
 			expect((await h.run(["off", "--rollback"])).exitCode).toBe(0);
 			expect(h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-watch"))).toBe(true);
@@ -500,20 +592,20 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		it("a worktree without typescript or a root tsconfig with references warns and starts no watcher, the preview still starts", async () => {
 			fs.rmSync(path.join(wtA, "node_modules", "typescript"), { recursive: true });
 			const h = harness();
-			expect((await h.run([wtA])).exitCode).toBe(0);
+			expect((await h.run(["--wolves", wtA])).exitCode).toBe(0);
 			expect(fs.existsSync(watchPlist())).toBe(false);
 			expect(h.logs.join("\n")).toMatch(/background rebuild did not start/);
 			fs.writeFileSync(path.join(wtB, "tsconfig.json"), JSON.stringify({ files: [] }));
 			const h2 = harness();
 			await h2.run(["off", "--all"]);
 			h2.logs.length = 0;
-			await h2.run([wtB]);
+			await h2.run(["--wolves", wtB]);
 			expect(fs.existsSync(watchPlist())).toBe(false);
 			expect(h2.logs.join("\n")).toMatch(/background rebuild did not start/);
 		});
 
 		it("the watch and console agents are throttled so a crash loop cannot spin", async () => {
-			await harness().run([wtA]);
+			await harness().run(["--wolves", wtA]);
 			for (const f of [watchPlist(), path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist")]) {
 				expect(fs.readFileSync(f, "utf8")).toMatch(/<key>ThrottleInterval<\/key><integer>30<\/integer>/);
 			}
@@ -530,7 +622,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 		it("offers Live console only or Wolves too; Wolves too restores the plist and hands over to the helper", async () => {
 			const h = harness({ pick: () => "all" });
-			await h.run([wtA]);
+			await h.run(["--wolves", wtA]);
 			h.helper.length = 0;
 			h.menus.length = 0;
 			expect((await h.run(["off"])).exitCode).toBe(0);
@@ -541,7 +633,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 		it("--console stops the live console but leaves the wolves on the worktree, and the app stays on its own console", async () => {
 			const h = harness();
-			await h.run([wtA]);
+			await h.run(["--wolves", wtA]);
 			expect(appUrl()).toBe("https://sfo-01.example"); // starting never points the app
 			h.helper.length = 0;
 			h.menus.length = 0;
@@ -558,7 +650,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 
 		it("without a terminal and without a flag prints the choices and exits 1, changing nothing", async () => {
 			const h = harness();
-			await h.run([wtA]);
+			await h.run(["--wolves", wtA]);
 			h.helper.length = 0;
 			h.logs.length = 0;
 			expect((await h.run(["off"])).exitCode).toBe(1);
@@ -615,5 +707,15 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(watchWith(["Found 3 errors. Watching for file changes.", "Found 0 errors. Watching for file changes."])).toMatchObject({ lastRebuildOk: expect.any(String) });
 			expect(watchWith(["Found 0 errors. Watching for file changes.", "Found 2 errors. Watching for file changes."])).toBeUndefined();
 		});
+	});
+});
+
+describe("default steps", () => {
+	it("every step the command calls has a real default, so a test that injects it cannot hide a missing one", () => {
+		const src = fs.readFileSync(path.join(__dirname, "runtime-preview.mjs"), "utf8");
+		const used = new Set([...src.matchAll(/\bst\.(\w+)\(/g)].map((m) => m[1]));
+		const block = src.slice(src.indexOf("const defaultSteps = {"), src.indexOf("export async function runPreview"));
+		const defined = new Set([...block.matchAll(/^\t(\w+)(?::|,| \()/gm)].map((m) => m[1]));
+		expect([...used].filter((u) => !defined.has(u))).toEqual([]);
 	});
 });

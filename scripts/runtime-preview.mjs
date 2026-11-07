@@ -23,13 +23,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { collectWorktrees, listWorktrees, pickerModel, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
+import { collectWorktrees, listWorktrees, matchWorktrees, pickerModel, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 7;
+export const PREVIEW_VERSION = 8;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -125,6 +125,23 @@ const defaultSteps = {
 		}
 		try {
 			for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: fd === undefined ? "inherit" : ["ignore", fd, fd], shell: process.platform === "win32" });
+		} finally {
+			if (fd !== undefined) fs.closeSync(fd);
+		}
+	},
+	/** Open a url in the default browser. */
+	open: (url) => {
+		spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore" });
+	},
+	/** `pnpm install --frozen-lockfile --prefer-offline` in a worktree, output to the log file. */
+	install: (wt, { logFile } = {}) => {
+		let fd;
+		if (logFile) {
+			fs.mkdirSync(path.dirname(logFile), { recursive: true });
+			fd = fs.openSync(logFile, "w");
+		}
+		try {
+			execFileSync("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], { cwd: wt, stdio: fd === undefined ? "inherit" : ["ignore", fd, fd], shell: process.platform === "win32" });
 		} finally {
 			if (fd !== undefined) fs.closeSync(fd);
 		}
@@ -297,8 +314,46 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			return fail(`${url}/api/wolves listed no wolf within 90 s; the dev console was stopped. See ${path.join(dir, "console.log")}`);
 		}
 		writeState({ ...(cur ?? { phase: "dev", startedAt: new Date().toISOString() }), consolePort: Number(consolePort), console: { mode: "dev", dir: wtDir } });
-		log(`live console from ${wtDir} on ${url}, in the app's Preview window (Window → Open Preview) or the browser. The main window is untouched. \`wolfpack preview off\` when done.`);
-		return { exitCode: 0 };
+		log(`live console from ${wtDir} on ${url}. The app's main window is untouched. \`wolfpack preview off\` when done.`);
+		return { exitCode: 0, url };
+	};
+
+	/** The default preview: serve the worktree's console as `next dev` and open it in the browser. No build, no wolf restart, no y/N. */
+	const startConsolePreview = async (wtDir) => {
+		try {
+			wtDir = fs.realpathSync(wtDir);
+		} catch (err) {
+			return fail(`${err.message}. Nothing was changed.`);
+		}
+		const needsInstall = !fs.existsSync(path.join(wtDir, "apps", "console", "node_modules"));
+		if (dryRun) {
+			if (needsInstall) log(`${tag}would run pnpm install --frozen-lockfile --prefer-offline in ${wtDir}`);
+			log(`${tag}would serve \`next dev\` from ${wtDir}/apps/console on :${state?.consolePort ?? env.PREVIEW_CONSOLE_PORT ?? 3230} under com.wolfpack.preview-console and open it in the browser; the wolves are not touched`);
+			return { exitCode: 0 };
+		}
+		if (needsInstall) {
+			log(`installing dependencies in ${wtDir} (pnpm install --frozen-lockfile --prefer-offline; output in ${logFile})`);
+			try {
+				st.install(wtDir, { logFile });
+			} catch (err) {
+				return fail(`pnpm install in ${wtDir} failed: ${err.message}. Nothing was changed.`);
+			}
+		}
+		try {
+			devConsoleApp(wtDir);
+		} catch (err) {
+			return fail(`${err.message}. Nothing was changed.`);
+		}
+		const r = await serveDev(wtDir, state);
+		if (r.exitCode === 0) {
+			try {
+				st.open(r.url);
+			} catch (err) {
+				warn(`preview: could not open the browser (${err.message}); open ${r.url} yourself.`);
+			}
+			log(`opened ${r.url} in the browser`);
+		}
+		return r;
 	};
 
 	if (sub === "dev") {
@@ -334,8 +389,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return state?.runtimeDir ?? worktrees(cwd).get(runtimeBranch) ?? knownDirs.find((d) => fs.existsSync(path.join(d, ".git")));
 	};
 
-	/** Plain `wolfpack preview`: list the worktrees, pick one (building it first when needed) and start its preview. */
-	const picker = async () => {
+	/** Plain `wolfpack preview`: list the worktrees and pick one. Default: its live console in the browser. `--wolves`: move the wolves onto it (building it first when needed). */
+	const picker = async (wolves) => {
 		let worktrees;
 		try {
 			worktrees = collectWorktrees({ home, cwd, git });
@@ -347,7 +402,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				return fs.realpathSync(git(cwd, "rev-parse", "--show-toplevel"));
 			} catch {}
 		})();
-		const activeDir = state?.mode === "worktree" ? state.worktree : undefined;
+		const activeDir = wolves ? (state?.mode === "worktree" ? state.worktree : undefined) : state?.console?.dir;
 		const runtimeDir = (() => {
 			try {
 				return findRuntime();
@@ -355,7 +410,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		})();
 		let showAll = false;
 		for (;;) {
-			const { rows, hiddenCount } = pickerModel({ worktrees, runtimeBranch, runtimeDir, here, activeDir, showAll });
+			const { rows, hiddenCount } = pickerModel({ worktrees, runtimeBranch, runtimeDir, here, activeDir, showAll, marks: wolves });
 			const items = rows.map((r) => ({ label: r.label, hint: r.hint, value: { dir: r.dir, build: r.build } }));
 			if (!showAll && hiddenCount > 0) items.push({ label: "Show all worktrees…", value: "all" });
 			const choice = await st.pick("Preview which worktree?", items);
@@ -365,9 +420,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			}
 			if (!choice) {
 				for (const it of items) log(it.label);
-				return fail("pick a worktree on a terminal, or pass its directory: `wolfpack preview <dir> [--build] --yes`.");
+				return fail(wolves ? "pick a worktree on a terminal, or pass its directory: `wolfpack preview --wolves <dir> [--build] --yes`." : "pick a worktree on a terminal, or name one: `wolfpack preview <name>`.");
 			}
-			return startWorktree(choice.dir, { build: choice.build });
+			return wolves ? startWorktree(choice.dir, { build: choice.build }) : startConsolePreview(choice.dir);
 		}
 	};
 
@@ -499,7 +554,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	if (sub && (sub.includes("/") || sub === ".")) {
 		try {
 			const asDir = fs.realpathSync(path.resolve(cwd, sub));
-			if (listWorktrees(cwd, git).some((w) => w.dir === asDir)) return startWorktree(asDir, { build: argv.includes("--build") });
+			if (listWorktrees(cwd, git).some((w) => w.dir === asDir)) return argv.includes("--wolves") ? startWorktree(asDir, { build: argv.includes("--build") }) : startConsolePreview(asDir);
 		} catch {} // not a directory, or not in a repo: treat it as a ref below
 	}
 
@@ -523,7 +578,28 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0 };
 	}
 
-	if (!sub) return picker();
+	if (!sub) return picker(argv.includes("--wolves"));
+
+	// A name: a worktree by folder or branch (a unique match), else a ref to preview the old way.
+	if (sub !== "off" && !sub.startsWith("-")) {
+		let worktrees = [];
+		try {
+			worktrees = collectWorktrees({ home, cwd, git });
+		} catch {}
+		const runtimeDir = (() => {
+			try {
+				return findRuntime();
+			} catch {}
+		})();
+		const { matches } = matchWorktrees({ worktrees, name: sub, runtimeBranch, runtimeDir });
+		if (matches.length > 1) {
+			for (const m of matches) log(`  ${path.basename(m.dir)}  ${m.branch ?? "(detached)"}`);
+			return fail(`"${sub}" matches more than one worktree (listed above); use a longer name or the directory. Nothing was changed.`);
+		}
+		if (matches.length === 1) return argv.includes("--wolves") ? startWorktree(matches[0].dir, { build: argv.includes("--build") }) : startConsolePreview(matches[0].dir);
+		const asRef = runtimeDir && ["", "refs/remotes/origin/"].some((p) => tryGit(runtimeDir, "rev-parse", "--verify", "--quiet", `${p}${sub}^{commit}`).ok);
+		if (!asRef) return fail(`no worktree or ref matches "${sub}". Run \`wolfpack preview\` to pick one. Nothing was changed.`);
+	}
 
 	const rtWt = findRuntime();
 	if (!rtWt) return fail(`branch ${runtimeBranch} is not checked out in any worktree`);

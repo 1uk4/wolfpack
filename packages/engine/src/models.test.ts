@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { resolveModel, DEFAULT_MAX_TOKENS, type EngineConfig } from "./config.js";
+import { resolveModel, type EngineConfig } from "./config.js";
 import {
   tierPiProvider,
   ENGINE_STEPS,
@@ -287,7 +287,6 @@ describe("modelTableFingerprint", () => {
 describe("resolveModel — output cap", () => {
   const cfg: EngineConfig = { provider: "anthropic", defaultModel: "m" };
   it("defaults every step to 16k output tokens", () => {
-    expect(DEFAULT_MAX_TOKENS).toBe(16_000);
     expect(resolveModel(cfg, "classify").maxTokens).toBe(16_000);
     expect(resolveModel(cfg, "produce").maxTokens).toBe(16_000);
   });

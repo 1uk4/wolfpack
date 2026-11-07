@@ -340,6 +340,43 @@ describe("work-ops", () => {
     });
   });
 
+  describe("closed parents", () => {
+    const mk = (kind: "feature" | "task", title: string) => createWork(roots, { kind, domain: "wolfpack", title, assignee: "owner" }).item;
+
+    it("refuses to create under a graduated feature, naming the parent and why", () => {
+      const feat = mk("feature", "Floating bar");
+      graduateWork(roots, feat.id);
+      const make = () => createWork(roots, { kind: "task", domain: "wolfpack", title: "late", assignee: "owner", partOf: feat.id });
+      expect(make).toThrow(/has graduated \(\d{4}-\d{2}-\d{2}\); file this under an open feature or the Inbox/);
+      expect(make).toThrow(feat.id);
+      try { make(); } catch (e) { expect((e as { code?: string }).code).toBe("parent_closed"); }
+    });
+
+    it("refuses to create under an archived feature", () => {
+      const feat = mk("feature", "Old");
+      stageWork(roots, feat.id, "archived");
+      expect(() => createWork(roots, { kind: "task", domain: "wolfpack", title: "late", assignee: "owner", partOf: feat.id })).toThrow(/is archived/);
+    });
+
+    it("refuses to move under a graduated feature", () => {
+      const feat = mk("feature", "Done");
+      const task = mk("task", "t");
+      graduateWork(roots, feat.id);
+      expect(() => moveWork(roots, task.id, feat.id)).toThrow(/has graduated/);
+    });
+
+    it("still allows an open parent, the Inbox, and un-parenting", () => {
+      const feat = mk("feature", "Open");
+      const t = createWork(roots, { kind: "task", domain: "wolfpack", title: "a", assignee: "owner", partOf: feat.id }).item;
+      expect(t.partOf).toBe(feat.id);
+      const inbox = mk("task", "b").partOf!;
+      expect(moveWork(roots, t.id, inbox).item.partOf).toBe(inbox);
+      expect(createWork(roots, { kind: "task", domain: "wolfpack", title: "c", assignee: "owner", partOf: inbox }).item.partOf).toBe(inbox);
+      const spike = createWork(roots, { kind: "feature", domain: "wolfpack", title: "g", assignee: "owner" }).item;
+      expect(moveWork(roots, spike.id, null).item.partOf).toBeNull();
+    });
+  });
+
   describe("moveWork", () => {
     it("re-parents a task, keeps its body, and records one event", () => {
       const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "owner" }).item;

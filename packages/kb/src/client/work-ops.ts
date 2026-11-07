@@ -75,6 +75,21 @@ export function syncFeatureStage(roots: KbRoots, featureId: string | null | unde
   return events;
 }
 
+// ── closed parents ──────────────────────────────────────────────────────────
+
+/** Typed refusal: the target parent already graduated or is archived. `code` is stable for mappers (hubd, agent tools). */
+export class ParentClosedError extends Error {
+  readonly code = "parent_closed";
+  constructor(message: string) { super(message); this.name = "ParentClosedError"; }
+}
+
+/** Refuse a parent that graduated or is archived (so its knowledge/closure is not orphaned). A container (the Inbox) is never closed. */
+function assertParentOpen(parent: WorkItem | null): void {
+  if (!parent || parent.container) return;
+  const why = parent.graduated ? `has graduated (${parent.graduated})` : parent.stage === "archived" ? "is archived" : null;
+  if (why) throw new ParentClosedError(`${parent.id} "${parent.title}" ${why}; file this under an open feature or the Inbox`);
+}
+
 // ── create ──────────────────────────────────────────────────────────────────
 
 export interface CreateWorkInput {
@@ -116,6 +131,7 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
   }
   const parent = partOf ? loadWorkState(roots).get(partOf as WorkId) ?? null : null;
   if (partOf && !parent) throw new Error(`parent work item ${partOf} not found`);
+  assertParentOpen(parent);
   const err = placementError(
     { kind: input.kind, domain: input.domain as DomainId, container: input.container },
     parent
@@ -208,6 +224,7 @@ export function moveWork(
 
   const parent = target ? items.get(target as WorkId) ?? null : null;
   if (target && !parent) throw new Error(`parent work item ${target} not found`);
+  assertParentOpen(parent);
   const err = placementError(item, parent);
   if (err) throw new Error(`Cannot move "${item.title}": ${err}`);
 

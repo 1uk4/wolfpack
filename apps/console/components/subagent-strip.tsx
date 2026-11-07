@@ -98,7 +98,7 @@ export function SubagentStripView({
 	if (visibleStripRows(items, now, attached) === 0) return null;
 	const { shown } = partitionChildren(items, now, false);
 	return (
-		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border bg-card text-xs shadow-sm">
+		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border border-l-2 border-l-(--thread-accent) bg-card text-xs shadow-sm">
 			{attached && (
 				<div data-testid="attached-row" data-state={attached.state} data-listening={attached.listening ? "true" : undefined} className="flex items-center gap-2 px-3 hover:bg-accent" style={{ minHeight: STRIP_ROW_PX }}>
 					<button type="button" data-testid="attached-open" aria-label={`Open chat with ${attached.title}`} onClick={attached.onOpen} className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">

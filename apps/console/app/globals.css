@@ -40,6 +40,9 @@
 	--popover-foreground: #e6ebf0;
 	--primary: #2dd4bf;
 	--primary-foreground: #04201c;
+	/* One highlight colour: a thread's screen (and its sidebar row) override these; elsewhere they stay teal. */
+	--thread-accent: var(--primary);
+	--thread-accent-foreground: var(--primary-foreground);
 	--secondary: #161c24;
 	--secondary-foreground: #e6ebf0;
 	--muted: #161c24;
@@ -78,6 +81,9 @@
 	--popover-foreground: #e6ebf0;
 	--primary: #2dd4bf;
 	--primary-foreground: #04201c;
+	/* One highlight colour: a thread's screen (and its sidebar row) override these; elsewhere they stay teal. */
+	--thread-accent: var(--primary);
+	--thread-accent-foreground: var(--primary-foreground);
 	--secondary: #161c24;
 	--secondary-foreground: #e6ebf0;
 	--muted: #161c24;

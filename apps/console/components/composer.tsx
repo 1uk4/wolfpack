@@ -194,8 +194,8 @@ export function Composer({
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
 						labelled && "w-auto px-3 font-ui text-xs",
 						busy && !canSend
-							? "bg-secondary text-foreground hover:bg-accent max-md:bg-primary max-md:text-primary-foreground"
-							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
+							? "bg-secondary text-foreground hover:bg-accent max-md:bg-(--thread-accent) max-md:text-(--thread-accent-foreground)"
+							: "bg-(--thread-accent) text-(--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
 					)}
 				>
 					{labelled ? (

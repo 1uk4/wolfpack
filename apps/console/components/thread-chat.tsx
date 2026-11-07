@@ -55,6 +55,7 @@ import {
 	type ToolItem,
 	ATTACHMENTS_PART,
 	threadTint,
+	threadAccentStyle,
 	threadTintSolid,
 	type ThreadColorSource,
 } from "@/src/core";
@@ -579,6 +580,7 @@ function ThreadChatInner({
 			data-testid="thread-chat"
 			data-thread={threadId}
 			data-dragging={dragging || undefined}
+			style={threadAccentStyle(tintHex) as CSSProperties}
 			onDragOver={(e) => {
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault(); // take the drop instead of the browser opening the file
@@ -757,7 +759,7 @@ function ThreadChatInner({
 									<div
 										data-testid="thread-composer-card"
 										{...(dictation.active ? { "data-listening": "true" } : {})}
-										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}${dictation.active ? " border-transparent ring-2" : ""}`}
+										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-(--thread-accent)" : ""} focus-within:border-(--thread-accent) focus-within:ring-1 focus-within:ring-(--thread-accent)${dictation.active ? " border-transparent ring-2" : ""}`}
 										style={dictation.active ? ({ "--tw-ring-color": tintHex, boxShadow: `0 0 24px ${tintHex}66` } as CSSProperties) : undefined}
 									>
 										<Composer

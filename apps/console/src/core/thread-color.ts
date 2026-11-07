@@ -69,3 +69,23 @@ export function threadTintSolid(hex: string): string {
 export function threadTint(hex: string): string {
 	return `color-mix(in srgb, ${hex} 5%, transparent)`;
 }
+
+/** Readable text on a thread colour: the slate background colour on light colours, white on dark ones (WCAG luminance). */
+export function accentForeground(hex: string): string {
+	const lin = (i: number) => {
+		const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+		return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+	};
+	const lum = 0.2126 * lin(1) + 0.7152 * lin(3) + 0.0722 * lin(5);
+	return lum > 0.18 ? "#0f141a" : "#ffffff";
+}
+
+/**
+ * The one shared highlight variable. Set on a thread's wrapper (and on its sidebar row) from the thread's colour; with no
+ * colour it is teal (`--primary`), which is also what :root defines, so everywhere else stays teal.
+ */
+export function threadAccentStyle(hex?: string): Record<"--thread-accent" | "--thread-accent-foreground", string> {
+	return hex
+		? { "--thread-accent": hex, "--thread-accent-foreground": accentForeground(hex) }
+		: { "--thread-accent": "var(--primary)", "--thread-accent-foreground": "var(--primary-foreground)" };
+}

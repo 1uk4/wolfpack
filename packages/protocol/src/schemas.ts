@@ -314,7 +314,7 @@ export const THREAD_COLORS = {
   orange: "#f5a15a",
   yellow: "#e6cd69",
   green: "#8bd17c",
-  teal: "#5fd4c4",
+  teal: "#b8d96a",
   blue: "#6cb2f2",
   purple: "#b69cf5",
   pink: "#f28cc4",

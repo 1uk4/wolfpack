@@ -2,7 +2,7 @@
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
 import "@/src/core/legacy-storage-boot.ts";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
@@ -28,7 +28,7 @@ import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVi
 import { ThreadColorPicker } from "@/components/thread-color-picker";
 import { settingsUrl } from "@/components/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { THREAD_COLORS, autoThreadColor, beginColorChange, onThreadColor, pendingColor, settleColorChange, threadColor, threadColorIndex, threadColorVersion, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
+import { THREAD_COLORS, autoThreadColor, beginColorChange, onThreadColor, pendingColor, settleColorChange, threadColor, threadColorIndex, threadColorVersion, threadAccentStyle, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -399,10 +399,11 @@ export function SessionRow({
 		return (
 			<div
 				title={offline ? "offline" : undefined}
+				style={threadAccentStyle(dotColor) as CSSProperties}
 				className={cn(
 					offline && "opacity-50",
 					"relative mb-px ml-8 flex w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border-l border-border pl-2 pr-2 text-xs leading-5 text-muted-foreground transition-colors hover:bg-accent",
-					active && "bg-accent text-foreground",
+					active && "bg-accent text-foreground shadow-[inset_2px_0_0_var(--thread-accent)]",
 					kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 				)}
 			>
@@ -444,11 +445,12 @@ export function SessionRow({
 			data-offline={offline || undefined}
 			title={offline ? "offline" : undefined}
 			aria-label={offline ? `${chat.title} (offline)` : undefined}
+			style={threadAccentStyle(dotColor) as CSSProperties}
 			className={cn(
 				offline && "opacity-50",
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
-				active && "bg-accent",
+				active && "bg-accent shadow-[inset_2px_0_0_var(--thread-accent)]",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
 		>

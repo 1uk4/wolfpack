@@ -26,7 +26,7 @@ describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 		assert.equal(a.fontFamily, null); // Source Sans 3
 		assert.equal(a.proseFontSize, 16);
 		assert.equal(a.sessionNameSerif, true);
-		assert.equal(a.mdRendering.headingWeight, 900);
+		assert.equal(a.mdRendering.headingWeight, 600);
 		assert.equal(a.mdRendering.boldColor, null); // white
 		assert.equal(a.mdRendering.italicColor, null);
 	});

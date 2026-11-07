@@ -28,7 +28,7 @@ describe("resolveAppearance — delta over factory", () => {
 		assert.equal(a.fontFamily, null);
 		assert.equal(a.proseFontSize, 16);
 		assert.equal(a.sessionNameSerif, true);
-		assert.deepEqual(a.mdRendering, { headingWeight: 900, boldColor: null, italicColor: null });
+		assert.deepEqual(a.mdRendering, { headingWeight: 600, boldColor: null, italicColor: null });
 	});
 
 	it("explicit deltas win field-by-field", () => {
@@ -70,7 +70,7 @@ describe("appearanceVars — the mapping the provider applies", () => {
 	it("factory appearance: only the always-applied tokens move", () => {
 		const vars = appearanceVars(resolveAppearance(undefined));
 		assert.equal(vars["--wp-prose-size"], "16px");
-		assert.equal(vars["--wp-heading-weight"], "900");
+		assert.equal(vars["--wp-heading-weight"], "600");
 		assert.equal(vars["--font-prose"], undefined, "no font override at factory");
 		assert.equal(vars["--font-title"], undefined, "CMU stays");
 		assert.equal(vars["--background"], undefined, "factory palette untouched");

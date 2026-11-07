@@ -290,7 +290,7 @@ export function AppearanceSection({
 				<CommitInput
 					type="number"
 					value={String(md?.headingWeight ?? "")}
-					placeholder="900"
+					placeholder="600"
 					ariaLabel="heading weight"
 					testid="input-heading-weight"
 					onCommit={(v) => {

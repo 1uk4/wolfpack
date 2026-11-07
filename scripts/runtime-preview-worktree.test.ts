@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
 import { runPreview } from "./runtime-preview.mjs";
 
+const fallbackDir = () => path.join(tmp, "picker-checkout");
+const oldCli = (d: string) => fs.writeFileSync(path.join(d, "packages", "cli", "dist", "commands", "preview.js"), "export async function previewCmd() {}\n"); // the task 1 version
+const cliLink = () => path.join(tmp, "global", "node_modules", "@wolfpack", "cli");
 let tmp: string, home: string, main: string, rt: string, wtA: string, wtB: string;
 const g = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 const stateFile = () => path.join(home, ".wolfpack", "preview", "state.json");
@@ -27,6 +30,10 @@ const markBuilt = (d: string) => {
 	fs.writeFileSync(path.join(d, "packages", "workerd", "dist", "bin", "workerd.js"), "//");
 	fs.mkdirSync(path.join(d, "apps", "console", "node_modules", "next", "dist", "bin"), { recursive: true });
 	fs.writeFileSync(path.join(d, "apps", "console", "node_modules", "next", "dist", "bin", "next"), "//");
+	fs.mkdirSync(path.join(d, "packages", "cli", "dist", "bin"), { recursive: true });
+	fs.writeFileSync(path.join(d, "packages", "cli", "dist", "bin", "wolfpack.js"), "//");
+	fs.mkdirSync(path.join(d, "packages", "cli", "dist", "commands"), { recursive: true });
+	fs.writeFileSync(path.join(d, "packages", "cli", "dist", "commands", "preview.js"), "export const PREVIEW_CLI = 1; // bin copy aware\n");
 	fs.mkdirSync(path.join(d, "node_modules", "typescript", "bin"), { recursive: true });
 	fs.writeFileSync(path.join(d, "node_modules", "typescript", "bin", "tsc"), "//");
 	fs.writeFileSync(path.join(d, "tsconfig.json"), JSON.stringify({ files: [], references: [{ path: "packages/a" }] }));
@@ -54,6 +61,9 @@ beforeEach(() => {
 	markBuilt(wtA);
 	markBuilt(wtB);
 	fs.writeFileSync(plistFile(), stackPlist(rt));
+	fs.mkdirSync(path.dirname(cliLink()), { recursive: true });
+	fs.mkdirSync(path.join(rt, "packages", "cli"), { recursive: true });
+	fs.symlinkSync(path.join(rt, "packages", "cli"), cliLink()); // the global `wolfpack`: a link to the runtime's cli
 });
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -69,6 +79,8 @@ const harness = (o: { confirm?: boolean | "none"; pick?: (items: Item[]) => unkn
 	const steps: Record<string, unknown> = {
 		launchctl: (...a: string[]) => (lc.push(a), 0),
 		sleep: async () => {},
+		cliLink: () => cliLink(),
+		cliFallbackDir: () => fallbackDir(),
 		portFree: async () => !flags.portBusy,
 		fetchJson: async () => ({ wolves: [{ id: "x", name: "1uk4" }], chats: [] }),
 		build: (dir: string, b?: { logFile?: string }) => (builds.push({ dir, logFile: b?.logFile }), markBuilt(dir)),
@@ -133,6 +145,75 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect(readState().mode).toBe("worktree");
 	});
 
+	it("the global wolfpack cli follows the worktree: record, repoint, keep the original through a switch, restore on off and rollback", async () => {
+		const runtimeCli = path.join(rt, "packages", "cli");
+		const h = harness();
+		await h.run([wtA]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli"));
+		expect(readState().cli).toMatchObject({ link: cliLink(), target: runtimeCli });
+		await h.run([wtB]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtB, "packages", "cli"));
+		expect(readState().cli.target).toBe(runtimeCli);
+		await h.run(["off", "--rollback"]);
+		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
+		await h.run(["off", "--all"]);
+		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
+		await h.run([wtA]);
+		await h.run(["off", "--console"]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtA, "packages", "cli")); // console-only leaves it
+		await h.run(["off", "--all"]);
+		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
+	});
+
+	it("a worktree whose cli predates the bin copy is not linked: the picker checkout's cli is, with a line saying so; restore is exact", async () => {
+		const runtimeCli = path.join(rt, "packages", "cli");
+		oldCli(wtA);
+		markBuilt(fallbackDir());
+		const h = harness();
+		await h.run([wtA]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(fallbackDir(), "packages", "cli"));
+		expect(h.logs.join("\n")).toContain(`wolfpack CLI from ${fallbackDir()} (the previewed worktree's CLI predates preview)`);
+		await h.run([wtB]); // compatible: used directly
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(wtB, "packages", "cli"));
+		oldCli(wtB);
+		await h.run([wtA]);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(fallbackDir(), "packages", "cli"));
+		await h.run(["off", "--all"]);
+		expect(fs.readlinkSync(cliLink())).toBe(runtimeCli);
+	});
+
+	it("when neither the worktree's cli nor the picker checkout's is compatible the link is left alone and the node bin fallback is printed", async () => {
+		oldCli(wtA);
+		fs.mkdirSync(path.join(fallbackDir(), "packages", "cli"), { recursive: true });
+		const h = harness();
+		expect((await h.run([wtA])).exitCode).toBe(0);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(rt, "packages", "cli"));
+		expect(readState().cli).toBeUndefined();
+		expect(h.logs.join("\n")).toContain("node ~/.wolfpack/preview/bin/runtime-preview.mjs");
+	});
+
+	it("a failed start leaves the cli link on its original target", async () => {
+		const h = harness();
+		await h.run(["dev", wtB]);
+		h.flags.portBusy = true;
+		expect((await h.run([wtA])).exitCode).toBe(1);
+		expect(fs.readlinkSync(cliLink())).toBe(path.join(rt, "packages", "cli"));
+	});
+
+	it("a global cli that is a real install, not a link, is left untouched with a warning naming the bin fallback", async () => {
+		fs.rmSync(cliLink());
+		fs.mkdirSync(cliLink());
+		fs.writeFileSync(path.join(cliLink(), "marker"), "x");
+		const h = harness();
+		expect((await h.run([wtA])).exitCode).toBe(0);
+		expect(fs.lstatSync(cliLink()).isSymbolicLink()).toBe(false);
+		expect(fs.readFileSync(path.join(cliLink(), "marker"), "utf8")).toBe("x");
+		expect(readState().cli).toBeUndefined();
+		expect(h.logs.join("\n")).toContain("node ~/.wolfpack/preview/bin/runtime-preview.mjs");
+		await h.run(["off", "--all"]);
+		expect(fs.readFileSync(path.join(cliLink(), "marker"), "utf8")).toBe("x");
+	});
+
 	it("a worktree deleted while active is flagged by status, and off still restores the plist", async () => {
 		const original = fs.readFileSync(plistFile());
 		const h = harness();
@@ -141,6 +222,9 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		h.logs.length = 0;
 		await h.run(["status", "--json"]);
 		expect(JSON.parse(h.logs.join("\n")).worktreeMissing).toBe(true);
+		h.logs.length = 0;
+		await h.run(["status"]);
+		expect(h.logs.join("\n")).toContain("node ~/.wolfpack/preview/bin/runtime-preview.mjs off --all");
 		expect((await h.run(["off", "--all"])).exitCode).toBe(0);
 		expect(fs.readFileSync(plistFile()).equals(original)).toBe(true);
 	});
@@ -365,6 +449,35 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(h.helper).toEqual([]);
 			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
 		});
+	});
+
+	it("a bin copy with a higher PREVIEW_VERSION is never overwritten by an older script", async () => {
+		const bin = path.join(home, ".wolfpack", "preview", "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		fs.writeFileSync(path.join(bin, "runtime-preview.mjs"), "export const PREVIEW_VERSION = 999;\n");
+		await harness().run(["status"]);
+		expect(fs.readFileSync(path.join(bin, "runtime-preview.mjs"), "utf8")).toBe("export const PREVIEW_VERSION = 999;\n");
+	});
+
+	it("copying the scripts skips an optional file that is missing instead of throwing", async () => {
+		const src = path.join(tmp, "scripts-copy");
+		fs.mkdirSync(src);
+		for (const f of fs.readdirSync(__dirname).filter((n) => /^(runtime-preview.*|runtime-update|dev-stack-extensions)\.mjs$/.test(n))) fs.copyFileSync(path.join(__dirname, f), path.join(src, f));
+		fs.rmSync(path.join(src, "runtime-preview-watch.mjs"));
+		const mod = await import(`${path.join(src, "runtime-preview.mjs")}?partial`);
+		const r = await mod.runPreview({ argv: ["status"], env: { HOME: home }, cwd: main, steps: {}, log: () => {}, warn: () => {} });
+		expect(r.exitCode).toBe(0);
+		expect(fs.existsSync(path.join(home, ".wolfpack", "preview", "bin", "runtime-preview-worktree.mjs"))).toBe(true);
+	});
+
+	it("every command refreshes the stable copy under ~/.wolfpack/preview/bin, so the bin never goes stale", async () => {
+		const bin = path.join(home, ".wolfpack", "preview", "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		fs.writeFileSync(path.join(bin, "runtime-preview.mjs"), "// an old copy");
+		await harness().run(["status"]);
+		expect(fs.readFileSync(path.join(bin, "runtime-preview.mjs"), "utf8")).toContain("export async function runPreview");
+		expect(fs.existsSync(path.join(bin, "runtime-preview-worktree.mjs"))).toBe(true);
+		expect(fs.existsSync(path.join(bin, "runtime-preview-watch.mjs"))).toBe(true);
 	});
 
 	describe("watch script", () => {

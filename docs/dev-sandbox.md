@@ -166,6 +166,47 @@ with the wolves on stable or on a ref preview. If port 3230 is held by something
 - `wolfpack preview status` (and `--json`) shows the mode and dir. A worker worktree is deleted when the worker finishes: status then says the dir no longer exists; run `wolfpack preview dev` from another worktree, or `off`.
 - A branch literally named `dev` cannot be previewed by that name (use `origin/dev`).
 
+### Preview a worktree: wolves and console straight from a built tree
+
+`wolfpack preview` with no argument opens a picker of every worktree of the wolfpack repo. Each row shows the branch and path,
+**built / stale / not built** (stale: HEAD moved, or a file changed after the last build), uncommitted edits, which one is
+active, and worker copies (`*--<name>-<hex8>`, which vanish when the worker finishes). The last rows are **Build this worktree**
+(the one containing cwd, shown when it is not built or stale) and **Build another worktree…**. Building runs install plus build
+in that worktree (output in `~/.wolfpack/preview/last-run.log`, one progress line), records a stamp outside the worktree
+(`~/.wolfpack/preview/builds/<hash>.json`, so it never looks dirty), then starts the preview.
+
+Picking a worktree runs the wolves **straight from it**: no copy and no rebuild. `~/Library/LaunchAgents/com.wolfpack.stack.plist`
+is rewritten so its working directory and `workerd.js` path point at the worktree (everything else is kept); the original bytes
+are recorded in the state file and in `~/.wolfpack/preview/stack.plist.orig`, and restored exactly by `off --all` and by an
+automatic rollback. The live console (`next dev`, as in `preview dev`) is served from the same worktree. The runtime checkout is
+not touched. Because this restarts the wolves (and ends the wolf session running the command), it asks y/N first; with no terminal
+it needs `--yes`. Explicit forms: `wolfpack preview <worktree dir> [--build] [--yes]`; `wolfpack preview <ref>` still works for a
+commit with no worktree (it asks y/N too).
+
+While a worktree preview runs:
+
+- **Console edits** are live through `next dev`; nothing to do.
+- **Backend edits** are rebuilt in the background by the launchd agent `com.wolfpack.preview-watch` (`tsc --build --watch` on the
+  worktree, log `~/.wolfpack/preview/watch.log`). The wolves keep running the old code until you restart them: `status` (and
+  `status --json`, field `restartNeeded`) says **restart needed** once a rebuild finished after the wolves started, and
+  `wolfpack preview restart` asks y/N, runs `launchctl kickstart -k gui/<uid>/com.wolfpack.stack` and waits for `/healthz`. There
+  is no automatic restart: it would cut off the wolf making the edits.
+- `wolfpack preview off` asks **Live console only** (the app goes back to its own console, the wolves stay) or **Wolves too**
+  (the plist is restored, the watcher stopped, everything back on stable). `--console` and `--all` skip the question; with no
+  terminal and no flag it prints the choices and exits 1.
+- **The `wolfpack` command follows the worktree.** The global `wolfpack` is a symlink (`.../lib/node_modules/@wolfpack/cli`) to the
+  runtime's `packages/cli`, and stable's CLI has no `preview`. So starting a worktree preview records that link's target in the
+  state file, then points it at `<worktree>/packages/cli` (which must be built); a switch repoints it, keeping the original, and
+  `off --all` and rollback put the original target back. `off --console` leaves it. If the global `wolfpack` is a real install
+  rather than a link, or neither the worktree's cli nor the checkout the preview script came from has the `PREVIEW_CLI` marker
+  (a worktree branched before this feature has an older `preview` command that would misread the state: the link then goes to the
+  script's own checkout, with a line saying so), it is not touched; use `node ~/.wolfpack/preview/bin/runtime-preview.mjs status|restart|off` instead.
+- If the worktree is deleted while active (a worker's copy), `status` says so; `off --all` still restores the plist.
+
+Every `wolfpack preview` command refreshes `~/.wolfpack/preview/bin/`, and the CLI runs whichever of that copy and its own
+checkout's script has the higher `PREVIEW_VERSION` (a copy is never overwritten by a lower version), so the copy never goes stale. Stable's CLI has no `preview` command until this is released: until then run
+`node ~/.wolfpack/preview/bin/runtime-preview.mjs ...` from any checkout that has it.
+
 ### Preview a branch on the live stack
 
 `wolfpack preview <ref>` runs a branch on the Mac, `wolfpack preview status` shows where you are, and `wolfpack preview off`
@@ -192,7 +233,7 @@ Beyond the switch itself:
   and return a list on `/api/chats` (wolfd's `/v1/wolves` only tells a dead console from a dead wolfd). If that fails within
   the timeout, the helper stops the console, checks out `previousRef`, builds, restarts and ends in phase `rolled-back` with
   the `reason` in the state (see `wolfpack preview status`). A rollback that itself fails ends `stack-down`: use the manual way back.
-- **`off` from an old branch.** `on` copies the preview scripts and their imports to `~/.wolfpack/preview/bin/`; `wolfpack
+- **`off` from an old branch.** Every preview command copies the preview scripts and their imports to `~/.wolfpack/preview/bin/`; `wolfpack
   preview` runs that copy when present. The guaranteed way back is `node ~/.wolfpack/preview/bin/runtime-preview.mjs off`.
 - **Refs.** `origin/<ref>` is preferred, unless the local `<ref>` is ahead of it or has diverged: then the local one is used
   with a warning. A detached runtime is found at `WOLVES_DIR/runtime/wolfpack` (or `~/wolves/local/runtime/wolfpack`) and its
@@ -202,6 +243,15 @@ Beyond the switch itself:
 the normal stable update, which still refuses a branch argument.
 
 #### Manual way back
+
+For a **worktree preview** the runtime checkout was never touched, so the way back is the saved plist (the helper prints this too):
+
+```sh
+cp ~/.wolfpack/preview/stack.plist.orig ~/Library/LaunchAgents/com.wolfpack.stack.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wolfpack.stack.plist
+rm -f ~/.wolfpack/preview/state.json
+```
+
+For a ref preview:
 
 If `node ~/.wolfpack/preview/bin/runtime-preview.mjs off` does not work, or the helper reports `stack-down` or `unhealthy` (it prints this block too):
 

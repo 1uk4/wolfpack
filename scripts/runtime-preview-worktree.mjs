@@ -36,6 +36,42 @@ export function rewriteStackPlist(text, wt) {
 	return text.replace(new RegExp(`${reEscape(m[1])}(?=[/<"'\\s])`, "g"), () => xml(wt));
 }
 
+export const cliEntry = (wt) => path.join(wt, "packages", "cli", "dist", "bin", "wolfpack.js");
+
+/** A built cli that understands the bin copy (its preview command exports the PREVIEW_CLI marker); an older one would misread worktree state. */
+export function cliCompatible(dir) {
+	try {
+		return fs.existsSync(cliEntry(dir)) && fs.readFileSync(path.join(dir, "packages", "cli", "dist", "commands", "preview.js"), "utf8").includes("PREVIEW_CLI");
+	} catch {
+		return false;
+	}
+}
+
+/** Which checkout the global cli should come from: the worktree if compatible, else the checkout the running script came from, else none. */
+export const chooseCli = (wt, fallbackDir) => (cliCompatible(wt) ? { dir: wt, fallback: false } : fallbackDir && cliCompatible(fallbackDir) ? { dir: fallbackDir, fallback: true } : null);
+
+/** The global `wolfpack` is a symlink to the runtime's packages/cli. Record its target (once) before it is repointed; null when it is not a symlink. */
+export function recordCli({ link, existing }) {
+	if (existing) return existing;
+	try {
+		if (!link || !fs.lstatSync(link).isSymbolicLink()) return null;
+		return { link, target: fs.readlinkSync(link) };
+	} catch {
+		return null;
+	}
+}
+
+const setLink = (link, target) => {
+	fs.rmSync(link, { force: true });
+	fs.symlinkSync(target, link);
+};
+
+/** Point the global cli at the worktree's packages/cli, so `wolfpack preview ...` works while the runtime stays on stable. */
+export const pointCli = (rec, wt) => setLink(rec.link, path.join(wt, "packages", "cli"));
+
+/** Put the original link target back. */
+export const restoreCli = (rec) => rec && setLink(rec.link, rec.target);
+
 const backupFile = (dir) => path.join(dir, "stack.plist.orig");
 
 /** Record the original plist bytes (once: a repeat keeps the first record) and return the entry for the state file. */

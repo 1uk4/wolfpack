@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * wolfpack preview <ref> | status | off [--dry-run]
+ * wolfpack preview [<ref> | <worktree dir> [--build] | status | restart | off [--console|--all] | dev [dir]] [--dry-run] [--yes]
+ * (no argument: a picker of the repo's worktrees; a worktree preview runs the wolves from it via the stack plist: see runtime-preview-worktree.mjs)
  *
  * Try a branch on the live Mac stack, and get back to stable, with one command each. The runtime is the stable worktree
  * (`git worktree list`, env RUNTIME_BRANCH, default stable) run by launchd `com.wolfpack.stack`. State lives in
@@ -22,10 +23,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyApps, planApps, recoverApps, restoreApps, startConsole, startDevConsole, stopConsole, devConsoleApp } from "./runtime-preview-console.mjs";
 import { probePortFree } from "./runtime-preview-switch.mjs";
-import { buildStatus, listWorktrees, pickerRows, pointPlist, recordPlist, restorePlist, restartNeeded, rowLabel, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
+import { buildStatus, listWorktrees, pickerRows, chooseCli, pointCli, pointPlist, recordCli, restoreCli, cliEntry, recordPlist, restorePlist, restartNeeded, rowLabel, startWatch, stopWatch, workerdEntry, writeStamp } from "./runtime-preview-worktree.mjs";
 import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtime-update.mjs";
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+/** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
+export const PREVIEW_VERSION = 4;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -34,7 +38,15 @@ const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "ru
 function copyScripts(binDir) {
 	fs.mkdirSync(binDir, { recursive: true });
 	if (path.resolve(binDir) === SCRIPT_DIR) return; // already running from the copy
-	for (const f of COPIED_SCRIPTS) fs.copyFileSync(path.join(SCRIPT_DIR, f), path.join(binDir, f));
+	try {
+		const have = Number(/export const PREVIEW_VERSION = (\d+)/.exec(fs.readFileSync(path.join(binDir, "runtime-preview.mjs"), "utf8"))?.[1] ?? 0);
+		if (have > PREVIEW_VERSION) return; // a newer copy is there: never downgrade it
+	} catch {} // no copy yet
+	for (const f of COPIED_SCRIPTS) {
+		const from = path.join(SCRIPT_DIR, f);
+		if (f !== "runtime-preview.mjs" && !fs.existsSync(from)) continue; // optional; only this script itself is required
+		fs.copyFileSync(from, path.join(binDir, f));
+	}
 }
 
 const defaultSteps = {
@@ -72,6 +84,19 @@ const defaultSteps = {
 			return false;
 		}
 	},
+	/** Where the global `wolfpack` package is linked (npm's global root, else next to this node). */
+	cliLink: () => {
+		for (const root of [path.join(path.dirname(process.execPath), "..", "lib", "node_modules")]) {
+			const l = path.join(root, "@wolfpack", "cli");
+			try {
+				fs.lstatSync(l);
+				return l;
+			} catch {}
+		}
+		return undefined;
+	},
+	/** The checkout this script runs from (null when it runs from the bin copy): the fallback source of the global cli. */
+	cliFallbackDir: () => (path.basename(SCRIPT_DIR) === "scripts" ? path.dirname(SCRIPT_DIR) : null),
 	build: (wt, { logFile } = {}) => {
 		const { pm } = choosePm(wt, { pnpmFound: probePnpm });
 		let fd;
@@ -116,6 +141,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const port = String(env.STACK_PORT || 7141);
 	const runtimeBranch = env.RUNTIME_BRANCH || "stable";
 	const tag = dryRun ? "[dry-run] " : "";
+	if (!dryRun) copyScripts(path.join(dir, "bin")); // keep the copy `wolfpack preview` falls back to current, whatever command this is
 	const fail = (msg) => {
 		warn(`preview: ${msg}`);
 		return { exitCode: 1 };
@@ -168,7 +194,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			log(`phase: ${state.phase}, started ${state.startedAt}, previous ${state.previousBranch ?? state.previousRef}`);
 		}
 		if (needsRestart) log("restart needed: backend files were rebuilt after the wolves started. Run `wolfpack preview restart`.");
-		if (worktreeMissing) log(`  the worktree ${state.worktree} no longer exists (a worker's copy is deleted when it finishes). The wolves cannot run from it: \`wolfpack preview off --all\` restores stable.`);
+		if (worktreeMissing) log(`  the worktree ${state.worktree} no longer exists (a worker's copy is deleted when it finishes). The wolves cannot run from it: \`wolfpack preview off --all\` restores stable. If the \`wolfpack\` command fails, its cli link pointed into that worktree: run \`node ~/.wolfpack/preview/bin/runtime-preview.mjs off --all\` (the bin copy does not need the worktree).`);
 		if (cons) {
 			log(`${cons.mode} console from ${cons.dir} on ${consoleUrl}${state.previewRef ? "" : " (the wolves are on stable)"}`);
 			if (cons.missing) log(`  ${cons.dir} no longer exists (a worker worktree is deleted when it finishes). Fix: cd <another worktree> && wolfpack preview dev, or wolfpack preview off`);
@@ -324,6 +350,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		if (!fs.existsSync(plist)) return fail(`${plist} does not exist. Nothing was changed.`);
 		if (dryRun) {
+			log(`${tag}would repoint the global wolfpack cli link at ${wtDir}/packages/cli (original target recorded)`);
 			if (build) log(`${tag}would install and build ${wtDir} (output in ${logFile})`);
 			log(`${tag}would point ${plist} at ${workerdEntry(wtDir)} (working directory ${wtDir}), keeping the original bytes in ${stateFile} and ${dir}`);
 			log(`${tag}would serve \`next dev\` from ${wtDir}/apps/console, then restart ${label} and wait for /healthz on ${port}`);
@@ -347,6 +374,8 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		const priorText = fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : undefined;
 		const rec = recordPlist({ plist, dir, existing: state?.plist });
+		const cliRec = recordCli({ link: st.cliLink(), existing: state?.cli });
+		const cliPick = cliRec ? chooseCli(wtDir, st.cliFallbackDir()) : null;
 		const branch = (() => {
 			const b = tryGit(wtDir, "rev-parse", "--abbrev-ref", "HEAD");
 			return b.ok && b.out !== "HEAD" ? b.out : null;
@@ -356,6 +385,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			mode: "worktree",
 			worktree: wtDir,
 			plist: rec,
+			...(cliRec && cliPick ? { cli: { ...cliRec, dir: cliPick.dir } } : state?.cli ? { cli: state.cli } : {}), // nothing recorded when the link is not touched
 			previewRef: branch ?? wtDir,
 			previewSha: git(wtDir, "rev-parse", "HEAD"),
 			previousRef: "the original stack launch",
@@ -365,13 +395,21 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 			consolePort: state?.consolePort ?? Number(env.PREVIEW_CONSOLE_PORT || 3230),
 		}); // record first, then touch the plist
 		pointPlist(rec, wtDir);
+		if (cliPick) {
+			pointCli(cliRec, cliPick.dir);
+			if (cliPick.fallback) log(`wolfpack CLI from ${cliPick.dir} (the previewed worktree's CLI predates preview)`);
+		} else {
+			warn(`preview: ${cliRec ? "no compatible wolfpack cli to link (the worktree's predates preview)" : "the global wolfpack cli is a real install, not a link"}, so it was left alone and stable's cli has no \`preview\` command. Use \`node ~/.wolfpack/preview/bin/runtime-preview.mjs status|restart|off\` while this preview runs.`);
+		}
 		const r = await serveDev(wtDir, readState());
 		if (r.exitCode !== 0) {
 			if (state?.plist) {
 				fs.writeFileSync(stateFile, priorText);
 				pointPlist(rec, state.worktree);
+				if (cliRec && state.cli?.dir) pointCli(cliRec, state.cli.dir);
 			} else {
 				restorePlist(rec);
+				restoreCli(cliRec);
 				if (priorText === undefined) fs.rmSync(stateFile, { force: true });
 				else fs.writeFileSync(stateFile, priorText);
 			}
@@ -408,12 +446,14 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		}
 		if (argv.includes("--rollback")) {
 			restorePlist(state.plist); // the switch helper restarts the stack itself
+			restoreCli(state.cli);
 			stopWatch({ home, uid, launchctl: st.launchctl });
 			return { exitCode: 0 };
 		}
 		const refused = await gate("This restarts the wolves back on stable.");
 		if (refused) return refused;
 		restorePlist(state.plist);
+		restoreCli(state.cli);
 		stopWatch({ home, uid, launchctl: st.launchctl });
 		writeState({ ...state, phase: "restoring" });
 		copyScripts(path.join(dir, "bin"));

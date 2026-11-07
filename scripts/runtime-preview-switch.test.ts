@@ -16,7 +16,8 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 /** launchctl, sleep and health are stubs; `bootstrapResults` is consumed one per bootstrap call (then repeats the last). */
-const sw = (o: { bootstrapResults?: number[]; healthy?: boolean; okPhase?: string; clear?: boolean } = {}) => {
+type Json = unknown;
+const sw = (o: { bootstrapResults?: number[]; healthy?: boolean; okPhase?: string; clear?: boolean; deep?: { consoleUrl: string; fetchJson: (url: string) => Promise<Json>; rollback: () => Promise<boolean> } } = {}) => {
 	const calls: string[] = [];
 	const logs: string[] = [];
 	const results = [...(o.bootstrapResults ?? [0])];
@@ -28,10 +29,11 @@ const sw = (o: { bootstrapResults?: number[]; healthy?: boolean; okPhase?: strin
 	const run = () =>
 		runSwitch({
 			stateFile, plist, label: "com.wolfpack.stack", port: "7141", okPhase: o.okPhase ?? "running", clear: o.clear ?? false, uid: 501,
-			launchctl, sleep: async () => {}, health: async () => o.healthy ?? true, log: (m: string) => logs.push(m),
+			launchctl, sleep: async () => {}, health: async () => o.healthy ?? true, log: (m: string) => logs.push(m), ...(o.deep ? { deep: { consoleUrl: o.deep.consoleUrl }, fetchJson: o.deep.fetchJson, rollback: o.deep.rollback } : {}),
 		});
 	return { calls, logs, run };
 };
+const state = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
 const phase = () => JSON.parse(fs.readFileSync(stateFile, "utf8")).phase;
 
 describe("runtime-preview-switch", () => {
@@ -72,5 +74,38 @@ describe("runtime-preview-switch", () => {
 		const s = sw({ clear: true });
 		expect(await s.run()).toBe(0);
 		expect(fs.existsSync(stateFile)).toBe(false);
+	});
+
+	describe("deep health", () => {
+		const good = async (url: string): Promise<Json> => (url.endsWith("/api/wolves") ? { wolves: [{ name: "w" }] } : { chats: [] });
+		const deep = (fetchJson: (u: string) => Promise<Json>, rollback = async () => true) => ({ consoleUrl: "http://127.0.0.1:3230", fetchJson, rollback });
+
+		it("a console that lists a wolf and a chat list passes and ends in the ok phase", async () => {
+			const s = sw({ deep: deep(good) });
+			expect(await s.run()).toBe(0);
+			expect(phase()).toBe("running");
+		});
+
+		it("an empty wolf list rolls back: rollback runs, the stack restarts, and the state ends rolled-back with the reason", async () => {
+			let rolled = 0;
+			const s = sw({ deep: deep(async (u) => (u.endsWith("/api/wolves") ? { wolves: [] } : { chats: [] }), async () => (rolled++, true)) });
+			expect(await s.run()).toBe(1);
+			expect(rolled).toBe(1);
+			expect(s.calls).toEqual(["bootout", "bootstrap", "bootout", "bootstrap"]);
+			expect(state()).toMatchObject({ phase: "rolled-back", reason: expect.stringContaining("/api/wolves") });
+		});
+
+		it("a rollback that fails ends stack-down with the manual way back", async () => {
+			const s = sw({ deep: deep(async () => { throw new Error("down"); }, async () => false) });
+			expect(await s.run()).toBe(1);
+			expect(phase()).toBe("stack-down");
+			expect(s.logs.join("\n")).toContain("Manual way back");
+		});
+
+		it("a console that is down while wolfd answers is reported as such, and still rolls back", async () => {
+			const s = sw({ deep: deep(async (u) => { if (u.includes("3230")) throw new Error("ECONNREFUSED"); return { wolves: [{ name: "w" }] }; }) });
+			expect(await s.run()).toBe(1);
+			expect(state()).toMatchObject({ phase: "rolled-back", reason: expect.stringContaining("wolfd answers") });
+		});
 	});
 });

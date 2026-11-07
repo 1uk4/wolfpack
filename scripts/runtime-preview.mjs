@@ -23,15 +23,13 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-// Read at load time: by the time the helper is spawned the checked-out tree may be a branch that has no such file.
-const HELPER_SRC = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime-preview-switch.mjs"), "utf8");
-
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs"];
 
 /** Copy this command and its imports out of the runtime tree, so `off` works after checking out a branch that lacks them. */
 function copyScripts(binDir) {
 	fs.mkdirSync(binDir, { recursive: true });
+	if (path.resolve(binDir) === SCRIPT_DIR) return; // already running from the copy
 	for (const f of COPIED_SCRIPTS) fs.copyFileSync(path.join(SCRIPT_DIR, f), path.join(binDir, f));
 }
 
@@ -50,11 +48,10 @@ const defaultSteps = {
 			if (fd !== undefined) fs.closeSync(fd);
 		}
 	},
-	/** Copy the helper out of the runtime tree and run it detached, output to the last-run log. */
+	/** Run the helper from the stable copy under bin/ (the runtime tree is being switched under it), detached, output to the last-run log. */
 	spawnHelper: ({ args, dir, logFile }) => {
-		fs.mkdirSync(dir, { recursive: true });
-		const copy = path.join(dir, "runtime-preview-switch.mjs");
-		fs.writeFileSync(copy, HELPER_SRC);
+		copyScripts(path.join(dir, "bin"));
+		const copy = path.join(dir, "bin", "runtime-preview-switch.mjs");
 		const fd = fs.openSync(logFile, "a");
 		spawn(process.execPath, [copy, ...args], { detached: true, stdio: ["ignore", fd, fd] }).unref();
 	},
@@ -154,6 +151,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		} catch (err) {
 			return fail(`build of ${branch ?? state.previousRef} failed: ${err.message}. The stack was not touched; state kept, run \`wolfpack preview off\` again.`);
 		}
+		if (argv.includes("--rollback")) return { exitCode: 0 }; // the switch helper restarts the stack itself
 		helper(branch ?? "stable", true);
 		log("restoring stable: the wolf session running this command will end. Run `wolfpack preview status` from Terminal.");
 		return { exitCode: 0 };

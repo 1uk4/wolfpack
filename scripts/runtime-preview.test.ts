@@ -230,6 +230,16 @@ describe("runtime-preview", () => {
 		expect(g(rtWt, "rev-parse", "HEAD")).toBe(stableSha);
 	});
 
+	it("off --rollback (used by the helper) checks out and builds the previous ref but launches no helper and keeps the state", async () => {
+		const h = harness();
+		const stableSha = g(rtWt, "rev-parse", "HEAD");
+		await h.run(["feat/x"]);
+		h.calls.length = 0;
+		expect((await h.run(["off", "--rollback"])).exitCode).toBe(0);
+		expect(h.calls).toEqual(["git checkout stable", `build@${stableSha}`]);
+		expect(readState()).toMatchObject({ previewRef: "feat/x" });
+	});
+
 	it("status with no state says stable, no preview", async () => {
 		const h = harness();
 		await h.run(["status"]);

@@ -16,6 +16,7 @@ Run from the repo root (turbo):
 | `pnpm verify` | `turbo run build typecheck lint test`, cached, all workspaces. Run before committing. |
 | `pnpm build` | `tsc --build` (legacy root build). A bare root `tsc --build` leaves `packages/hubd/dist/cli.js` without its exec bit: run `pnpm --filter @wolfpack/hubd build` to restore it, or use `node dist/cli.js`. |
 | `pnpm exec vitest run` | Root vitest run for the packages. |
+| `wolfpack test related <files>` | How agents run tests: queued per host, capped, cached. See [testing](testing.md#the-test-runner-wolfpack-test). |
 
 Packages have no linter yet (`lint` is a no-op echo). The console lints with eslint, including its import-law rules.
 

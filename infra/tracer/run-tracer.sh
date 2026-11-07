@@ -42,7 +42,12 @@ finish() {
   [ "$RESULT" = PASS ] && exit 0; [ "$rc" = 0 ] && rc=1; exit "$rc"
 }
 trap finish EXIT
-fail() { REASON="$1"; log "FAIL at step '$STEP': $1"; exit "${2:-1}"; }
+fail() {
+  REASON="$1"; log "FAIL at step '$STEP': $1"
+  # surface the real error (e.g. the docker build output) in the job log, not only in the runner-local file
+  if [ -s "$LOG" ]; then { echo "--- last 80 lines of $LOG ---"; tail -n 80 "$LOG"; echo "--- end of log tail ---"; } >&2; fi
+  exit "${2:-1}"
+}
 
 # run_step <name> <limit-seconds> <kill-cmd-or-empty> <command...>: runs in the background with a watchdog; on timeout kills it and fails with the step name.
 run_step() {

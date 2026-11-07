@@ -57,4 +57,5 @@ A fix that belongs to no feature does not get its own PR. A standing `fixes` bra
 
 ## Owner actions (agents never do these)
 - On the `stable` ruleset: require a pull request and the `ci` check, allow merge commits, keep the owner as the bypass actor.
+- The `ci` check is affected-only for feature work. For a PR into `stable` (and a push to `stable`) it runs everything: full vitest default project, console tests, tracer, release-smoke and the `eval` job. Live tests are not in CI; `wolfpack pr prepare` runs them. See `docs/testing.md`.
 - Confirm that agent tokens cannot merge pull requests.

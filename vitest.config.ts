@@ -10,7 +10,7 @@ import { defineConfig } from "vitest/config";
  *  - eval:    only `*.eval.test.*`  (`pnpm test:eval`; release PR only).
  *  - live:    only `*.live.test.*`  (`pnpm test:live`; this Mac only, before the release PR).
  */
-const include = ["packages/*/src/**/*.test.ts", "extensions/wolfpack-subagents/*.test.ts", "extensions/wolfpack-memory/*.test.ts", "extensions/wolfpack-browser/*.test.ts", "extensions/wolfpack-visual-tools/*.test.ts", "scripts/*.test.ts"];
+const include = ["packages/*/src/**/*.test.ts", "extensions/wolfpack-subagents/*.test.ts", "extensions/wolfpack-memory/*.test.ts", "extensions/wolfpack-browser/*.test.ts", "extensions/wolfpack-visual-tools/*.test.ts", "scripts/*.test.ts", "apps/desktop/electron/*.test.ts"];
 const base = ["**/node_modules/**", "**/dist/**"];
 const shared = {
   // Tests run from inside a wolf's shell; never let them log usage (or

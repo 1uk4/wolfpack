@@ -142,3 +142,29 @@ rebuilds stale den extension bundles for non-sandbox wolves (old dir kept as `ex
 reload the console (Cmd-R) or restart the stack. It never merges a branch, never rebases and never pushes; a branch argument
 is refused (open a release PR with `wolfpack pr prepare` instead). The `stable` worktree is found via `git worktree list`;
 override with `RUNTIME_BRANCH`, `WOLVES_DIR`. It needs to reach `origin` to fetch; offline, only `--dry-run` works (it does not fetch).
+
+### Preview a branch on the live stack
+
+`wolfpack preview <ref>` runs a branch on the Mac, `wolfpack preview status` shows where you are, and `wolfpack preview off`
+returns to stable. `<ref>` is a branch or SHA. On `<ref>` it refuses a dirty runtime or a preview of another ref, fetches,
+records `~/.wolfpack/preview/state.json`, then checks out the SHA (detached), installs and builds **while the wolves are still
+up**. A failed build checks the previous ref back out and never stops the stack (state `build-failed`). After a good build a
+detached helper (copied to `~/.wolfpack/preview/`) restarts `com.wolfpack.stack`, polls `/healthz` on 7141 for 60 s and logs to
+`~/.wolfpack/preview/last-run.log`. Restarting ends the wolf session that ran the command: run `status` from Terminal.
+`off` needs only the state file (it works after a crash at any phase): previous branch, fast-forward, install, build, restart,
+clear state. Both take `--dry-run` (print the plan, change nothing). It never pushes or merges. Use `pnpm runtime:update` for
+the normal stable update, which still refuses a branch argument.
+
+#### Manual way back
+
+If `wolfpack preview off` is not available (the previewed branch is older than `wolfpack preview`, so the CLI in the runtime
+tree has no such command), or the helper reports `stack-down` or `unhealthy` (it prints this block too):
+
+```sh
+cd ~/wolves/local/runtime/wolfpack && git checkout stable && pnpm install --frozen-lockfile --prefer-offline && node scripts/turbo.mjs run build
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wolfpack.stack.plist
+rm -f ~/.wolfpack/preview/state.json   # when the stack is back on stable
+```
+
+The helper refuses to stop anything when the plist is missing (`plist-missing`), retries `launchctl bootstrap` five times
+(2 s apart) after the bootout, and records `stack-down` if that never works.

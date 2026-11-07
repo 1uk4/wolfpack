@@ -19,6 +19,7 @@
     "dev": "node scripts/turbo.mjs run dev --filter=@wolfpack/console",
     "verify": "node scripts/turbo.mjs run build typecheck lint test",
     "runtime:update": "node scripts/runtime-update.mjs",
+    "runtime:preview": "node scripts/runtime-preview.mjs",
     "dev:stack": "node scripts/dev-stack.mjs",
     "stack": "node scripts/stack.mjs",
     "check:deps": "node scripts/check-deps.mjs .",

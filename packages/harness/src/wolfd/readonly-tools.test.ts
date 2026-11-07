@@ -6,10 +6,10 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
-import { globToRegExp, readOnlyToolsExcluding, runSearch } from "../engine/readonly-tools.js";
+import { globToRegExp, prepareGuardedBash, readOnlyToolsExcluding, runSearch } from "../engine/readonly-tools.js";
 
 let tw: TestWolf | undefined;
 const dirs: string[] = [];
@@ -257,5 +257,30 @@ describe("name collisions", () => {
     const ext = readOnlyToolsExcluding(new Set(["grep"]), (m) => seen.push(m));
     expect((ext?.tools ?? []).map((t) => t.name)).toEqual(["ls", "find", "guarded_bash"]);
     expect(seen).toEqual(['read-only tool "grep" not registered: another extension already defines it']);
+  });
+});
+
+/** A `wolfpack` on PATH that supports `test` (a temp dir; the real PATH is never consulted). */
+beforeAll(() => {
+  const dir = mkdtempSync(join(tmpdir(), "wolfpack-shim-"));
+  writeFileSync(join(dir, "wolfpack"), "#!/bin/sh\n[ \"$1 $2\" = \"test --help\" ] && exit 0\nexit 1\n", { mode: 0o755 });
+  process.env.PATH = `${dir}:${process.env.PATH}`;
+});
+
+describe("guarded_bash prepare", () => {
+  const ex = (command: string) => ({ command, cwd: "/tmp", env: {} as Record<string, string>, inheritEnv: true });
+
+  it("marks the shell as an agent's and routes a direct test run through `wolfpack test`", () => {
+    const e = ex("pnpm exec vitest run packages/cli/src/pm.test.ts");
+    prepareGuardedBash(e);
+    expect(e.env.WOLFPACK_AGENT_RUN).toBe("1");
+    expect(e.command).toMatch(/routed through the test queue.*; wolfpack test run packages\/cli\/src\/pm\.test\.ts$/);
+  });
+
+  it("still refuses what the read-only guard blocks, and leaves other commands as written", () => {
+    expect(() => prepareGuardedBash(ex("rm -rf x"))).toThrow(/Blocked by guarded_bash/);
+    const e = ex("ls -a");
+    prepareGuardedBash(e);
+    expect(e.command).toBe("ls -a");
   });
 });

@@ -7,9 +7,14 @@
  * `ssh host '<cmd>'`, `bash -c`, `su -c`, `sudo <cmd>`, `xargs <cmd>`,
  * `find -exec <cmd>` and similar wrappers. Pure functions, no I/O.
  *
+ * `wolfpack test` is allowed on purpose: it writes queue and cache files under ~/.wolfpack and ~/.cache, never the
+ * checkout, and agents are routed to it (see routeTestCommand below).
+ *
  * Known gap: an interpreter can still write or delete (`python3 -c
  * "os.remove(...)"`); that is covered by read-only accounts on the hosts.
  */
+
+import { spawnSync } from "node:child_process";
 
 class GuardBlock extends Error {}
 class ParseError extends Error {}
@@ -562,4 +567,194 @@ export function checkReadOnlyCommand(command: string): string | null {
 		if (e instanceof ParseError) return `Blocked by guarded_bash: couldn't parse; simplify the command (${e.message}).`;
 		throw e;
 	}
+}
+
+// ── Routing test runs through `wolfpack test` ───────────────────────────────
+
+/**
+ * Packages whose `test` script is `vitest run … packages/<name>/src`: `pnpm --filter @wolfpack/<name> test` becomes
+ * `wolfpack test run packages/<name>`. The console (a `tsx --test` suite) and anything unlisted are left alone.
+ */
+const VITEST_PACKAGES = new Set([
+	"memory", "workerd", "kb", "hubd", "agents", "agent", "protocol", "cli", "workspaces", "harness", "work-server", "engine", "client",
+]);
+
+const ROUTE_NOTE = "echo '[wolfpack] test run routed through the test queue (wolfpack test)' >&2; ";
+
+/** Split at top-level `&&`, `||`, `;`, `|`, `&` and newlines; undefined when the text has structure it does not take apart. */
+function splitSegments(src: string): Array<{ text: string; sep: string }> | undefined {
+	const out: Array<{ text: string; sep: string }> = [];
+	let cur = "";
+	const push = (sep: string) => {
+		out.push({ text: cur, sep });
+		cur = "";
+	};
+	for (let i = 0; i < src.length; i++) {
+		const c = src[i];
+		if (c === "\\") return undefined;
+		if (c === "'") {
+			const end = src.indexOf("'", i + 1);
+			if (end < 0) return undefined;
+			cur += src.slice(i, end + 1);
+			i = end;
+		} else if (c === '"') {
+			let j = i + 1;
+			while (j < src.length && src[j] !== '"') {
+				if (src[j] === "\\" || src[j] === "`" || (src[j] === "$" && src[j + 1] === "(")) return undefined;
+				j++;
+			}
+			if (j >= src.length) return undefined;
+			cur += src.slice(i, j + 1);
+			i = j;
+		} else if (c === "`" || c === "(" || c === ")" || (c === "$" && src[i + 1] === "(")) return undefined;
+		else if (c === "<" && src[i + 1] === "<") return undefined;
+		else if (c === "#" && (cur === "" || /\s$/.test(cur))) return undefined;
+		else if ((c === "&" && src[i + 1] === "&") || (c === "|" && src[i + 1] === "|")) {
+			push(c + c);
+			i++;
+		} else if (c === "&" && (cur.endsWith(">") || cur.endsWith("<") || src[i + 1] === ">")) cur += c;
+		else if (c === ";" || c === "|" || c === "&" || c === "\n") push(c);
+		else cur += c;
+	}
+	out.push({ text: cur, sep: "" });
+	return out;
+}
+
+/** Shell words of one segment, raw (quotes kept); undefined on an unbalanced quote. */
+function rawWords(s: string): string[] | undefined {
+	const words: string[] = [];
+	let cur = "";
+	for (let i = 0; i < s.length; i++) {
+		const c = s[i];
+		if (c === " " || c === "\t") {
+			if (cur) words.push(cur);
+			cur = "";
+		} else if (c === "'" || c === '"') {
+			const end = s.indexOf(c, i + 1);
+			if (end < 0) return undefined;
+			cur += s.slice(i, end + 1);
+			i = end;
+		} else cur += c;
+	}
+	if (cur) words.push(cur);
+	return words;
+}
+
+const REDIRECT_WORD = /^(\d*>>?|&>|\d*<)$/;
+const REDIRECT_ATTACHED = /^(\d*>>?|&>|\d*<)\S/;
+
+/** `wolfpack test` arguments for the words after a vitest/test-script command; undefined when they cannot be routed. */
+function routeArgs(words: string[]): string[] | undefined {
+	const out: string[] = [];
+	let first = true;
+	for (let i = 0; i < words.length; i++) {
+		const w = words[i]!;
+		if (w === "--run") continue;
+		if (w === "--" && first) continue; // `pnpm test -- run x`: the separator before the script's arguments
+		if (/[$*?[]/.test(w.replace(/'[^']*'|"[^"]*"/g, ""))) return undefined;
+		if (REDIRECT_WORD.test(w)) {
+			if (words[i + 1] === undefined) return undefined;
+			out.push(w, words[++i]!);
+		} else if (REDIRECT_ATTACHED.test(w)) out.push(w);
+		else if (w === "-t" || w === "--testNamePattern") {
+			if (words[i + 1] === undefined) return undefined;
+			out.push(w, words[++i]!);
+		} else if (w === "--no-cache") out.push(w);
+		else if (w.startsWith("-")) return undefined;
+		else {
+			if (first && /^(watch|dev|bench|init|list|typecheck|--)$/.test(w)) return undefined;
+			out.push(w);
+		}
+		first = false;
+	}
+	return out;
+}
+
+function routeSegment(text: string): { text: string; namesPath: boolean } | undefined {
+	const m = /^(\s*)((?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*)(.*)$/.exec(text);
+	if (!m) return undefined;
+	const [, lead, envs, rest] = m as unknown as [string, string, string, string];
+	if (/\bWOLFPACK_TEST_BYPASS=/.test(envs)) return undefined;
+	const words = rawWords(rest);
+	if (!words?.length) return undefined;
+	let used = 0;
+	let pkgDir: string | undefined;
+	const w = words;
+	if (w[0] === "npx" && w[1] === "vitest") used = 2;
+	else if (w[0] === "pnpm" && w[1] === "exec" && w[2] === "vitest") used = 3;
+	else if (w[0] === "pnpm" && w[1] === "vitest") used = 2;
+	else if (/(^|\/)vitest$/.test(w[0]!) && w[0] !== "npx") used = 1;
+	// (bare `pnpm test` / `npm test` / `npm run test` are not routed: they run the suite of the directory they are run in,
+	// and `wolfpack test` without paths would run the whole repo's)
+	else if (w[0] === "pnpm" && (w[1] === "--filter" || w[1] === "-F") && w[3] === "test") {
+		const m2 = /^@wolfpack\/(.+)$/.exec(w[2]!);
+		if (!m2 || !VITEST_PACKAGES.has(m2[1]!)) return undefined;
+		pkgDir = `packages/${m2[1]}`;
+		used = 4;
+	} else return undefined;
+	const args = routeArgs(w.slice(used));
+	if (!args) return undefined;
+	const tail = pkgDir ? ["run", pkgDir, ...args] : args;
+	// "names a path": a --filter package, or a word that looks like one (contains `/` or ends in a file extension)
+	const namesPath = Boolean(pkgDir) || args.some((a, i) => !a.startsWith("-") && args[i - 1] !== "-t" && args[i - 1] !== "--testNamePattern" && /\/|\.[A-Za-z0-9]+['"]?$/.test(a));
+	return { text: `${lead}${envs}${["wolfpack", "test", ...tail].join(" ")}${/\s*$/.exec(text)![0]}`, namesPath };
+}
+
+/** A segment that changes the directory the following segments run in. */
+const CHANGES_DIR = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:cd|pushd)(?:\s|$)/;
+
+type SpawnResult = { status: number | null; error?: (Error & { code?: string }) | undefined };
+
+/**
+ * A support check that keeps only a definite answer: exit 0 is yes; a non-zero exit or ENOENT (no `wolfpack` on PATH) is
+ * no. A timeout or any other spawn error says nothing about the install, so it counts as "not supported" for that call
+ * only and is asked again next time. `spawn` is injectable for tests.
+ */
+export function makeSupportCheck(
+	spawn: (cmd: string, args: string[], opts: { stdio: "ignore"; timeout: number }) => SpawnResult = spawnSync,
+): () => boolean {
+	let known: boolean | undefined;
+	return () => {
+		if (known !== undefined) return known;
+		const r = spawn("wolfpack", ["test", "--help"], { stdio: "ignore", timeout: 15_000 });
+		if (r.error) {
+			if (r.error.code === "ENOENT") return (known = false);
+			return false;
+		}
+		if (r.status === null) return false; // killed by a signal or the timeout: unknown
+		return (known = r.status === 0);
+	};
+}
+
+/** Whether the `wolfpack` on PATH can run `test` (an older install cannot): `wolfpack test --help` exits 0. */
+export const wolfpackSupportsTest: () => boolean = makeSupportCheck();
+
+/**
+ * Agent shells (WOLFPACK_AGENT_RUN=1) must not start vitest themselves: a direct test run (`vitest`, `npx vitest`,
+ * `pnpm exec vitest`, `pnpm vitest`, `pnpm --filter X test`) is rewritten to
+ * `wolfpack test …` with the same arguments, so it queues, is capped and is cached. Rewrites only, never blocks, and only
+ * the test segment of a compound command; anything the scanner is unsure about (substitutions, subshells, heredocs,
+ * comments, unknown flags, vitest subcommands) is returned unchanged. `WOLFPACK_TEST_BYPASS` (env or inline) is honoured.
+ */
+export function routeTestCommand(
+	command: string,
+	env: NodeJS.ProcessEnv = process.env,
+	supported: () => boolean = wolfpackSupportsTest,
+): { command: string; routed: boolean } {
+	const same = { command, routed: false };
+	if (env.WOLFPACK_AGENT_RUN !== "1" || env.WOLFPACK_TEST_BYPASS) return same;
+	const segments = splitSegments(command);
+	if (!segments) return same;
+	const routes = segments.map((s) => routeSegment(s.text));
+	if (routes.every((r) => r === undefined)) return same;
+	// After a cd/pushd, a test segment that names no path would run the whole repo instead of the directory's own suite.
+	let cd = false;
+	for (let i = 0; i < segments.length; i++) {
+		if (routes[i] && cd && !routes[i]!.namesPath) return same;
+		if (CHANGES_DIR.test(segments[i]!.text)) cd = true;
+	}
+	// Ask only when there is something to route, and leave the command alone when `wolfpack test` would not run.
+	if (!supported()) return same;
+	const rebuilt = segments.map((s, i) => (routes[i]?.text ?? s.text) + s.sep);
+	return { command: ROUTE_NOTE + rebuilt.join(""), routed: true };
 }

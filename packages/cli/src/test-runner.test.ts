@@ -215,3 +215,12 @@ describe("wolfpack test settings and arguments", () => {
     expect(() => parseTestArgs(["test", "run", "--config=/x.ts"])).toThrow(/unknown argument/);
   });
 });
+
+describe("wolfpack test --help", () => {
+  // The agents' command router asks `wolfpack test --help` (exit 0) to learn that this install can run `test`.
+  it("prints the usage and exits 0 without running anything", () => {
+    const bin = join(__dirname, "..", "dist", "bin", "wolfpack.js");
+    const out = execFileSync(process.execPath, [bin, "test", "--help"], { encoding: "utf8", env: { ...process.env, HOME: tmpdir() } });
+    expect(out).toMatch(/Usage: wolfpack test \[run\|related\]/);
+  });
+});

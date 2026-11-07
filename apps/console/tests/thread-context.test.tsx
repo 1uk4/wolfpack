@@ -143,7 +143,8 @@ describe("Memory panel Context row", () => {
 		const c = new CtxClient();
 		c.ctx = { ...BASE, compactions: { count: 1, lastAt: new Date(2026, 9, 29, 9, 30).toISOString() } };
 		await mountSection(c);
-		assert.equal(q('[data-testid="context-section-label"]')?.textContent, "312k / 1M · 1× compacted 09:30");
+		assert.equal(q('[data-testid="context-section-label"]')?.textContent?.trim(), "312k / 1M");
+		assert.equal(q('[data-testid="context-section-detail"]')?.textContent, "1× compacted · last 09:30");
 		assert.ok(q('[data-testid="context-bar"]'));
 		assert.equal(q('[data-testid="input-compaction-threshold"]'), null, "no settings editor in the panel");
 		const btn = () => q('[data-testid="context-compact"]') as HTMLButtonElement;
@@ -152,10 +153,16 @@ describe("Memory panel Context row", () => {
 		await settle(100);
 		assert.equal(c.compacts.length, 1);
 		assert.equal(btn().disabled, true);
-		assert.match(btn().textContent ?? "", /Summarising…/);
+		assert.match(q('[data-testid="context-section-detail"]')?.textContent ?? "", /Summarising…/);
 		c.ctx = { ...BASE, tokens: 40_000, compactions: { count: 2, lastAt: new Date(2026, 9, 29, 14, 5).toISOString() }, compacting: false };
 		await settle(3200);
 		assert.equal(btn().disabled, false);
-		assert.equal(q('[data-testid="context-section-label"]')?.textContent, "40k / 1M · 2× compacted 14:05");
+		assert.equal(q('[data-testid="context-section-label"]')?.textContent?.trim(), "40k / 1M");
+		assert.equal(q('[data-testid="context-section-detail"]')?.textContent, "2× compacted · last 14:05");
+	});
+
+	it("a never-compacted wolf shows a single line: no detail row", async () => {
+		await mountSection(new CtxClient());
+		assert.equal(q('[data-testid="context-section-detail"]'), null);
 	});
 });

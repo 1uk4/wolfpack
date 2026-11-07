@@ -25,6 +25,12 @@ export function contextLabel(c: ThreadContext): string {
 	return c.compactions.count > 0 ? `${size} · ${c.compactions.count}× compacted${c.compactions.lastAt ? ` ${clock(c.compactions.lastAt)}` : ""}` : size;
 }
 
+/** `8× compacted · last 06:20`: the secondary detail under the Context row; undefined when never compacted. */
+export function compactionDetail(c: ThreadContext): string | undefined {
+	if (c.compactions.count === 0) return undefined;
+	return `${c.compactions.count}× compacted${c.compactions.lastAt ? ` · last ${clock(c.compactions.lastAt)}` : ""}`;
+}
+
 /** Past the background threshold: the summary is due (or running). */
 export function pastStartAt(c: ThreadContext): boolean {
 	return c.startAt !== undefined && c.tokens > c.startAt;

@@ -31,6 +31,7 @@ const { createThreadApi } = await import("../src/server/thread-api.ts");
 const { createActivityBridge } = await import("../src/server/needs-you-api.ts");
 const { SubagentModalProvider } = await import("../components/subagent-modal.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
+const strip = await import("../components/subagent-strip.tsx");
 const { ActivitySection } = await import("../components/activity-dock.tsx");
 const { SessionRow, SessionsSidebar } = await import("../components/sidebar.tsx");
 const { SidebarProvider } = await import("../components/sidebar.tsx");
@@ -647,5 +648,21 @@ describe("subagent openers: the modal opens over the page, with the wolf the cal
 		await settle(30);
 		assert.match(scrolled.at(-1) ?? "", /Live feature/);
 		(dom.window.Element.prototype as unknown as Record<string, unknown>).scrollIntoView = () => {};
+	});
+});
+
+describe("the room the thread reserves above the strip", () => {
+	const { stripReservePx, STRIP_ROW_PX } = strip;
+	const finished = Array.from({ length: 30 }, (_, i) => child(i + 10, { state: "done", finishedAt: ago(60_000) }));
+	const row = { title: "t", color: "#000", state: "idle" as const, listening: false, onOpen() {} };
+
+	it("counts only the rows the strip draws, not every child the thread ever had", () => {
+		assert.equal(stripReservePx([...finished, child(1)] as never, NOW, null), 1 * STRIP_ROW_PX + 8);
+	});
+	it("counts the attached row too", () => {
+		assert.equal(stripReservePx([...finished, child(1)] as never, NOW, row), 2 * STRIP_ROW_PX + 8);
+	});
+	it("is zero with no rows, finished children alone included", () => {
+		assert.equal(stripReservePx(finished as never, NOW, null), 0);
 	});
 });

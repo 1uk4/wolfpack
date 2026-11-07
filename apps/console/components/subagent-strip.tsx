@@ -14,6 +14,17 @@ import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, part
 /** A strip row's height, for the composer reserve (see ThreadChat). */
 export const STRIP_ROW_PX = 28;
 
+/** The rows the strip draws: active children (settled ones leave at once, they are not listed) plus the attached chat's row. */
+function visibleStripRows(items: readonly ChildThread[], now: number, attached?: AttachedRow | null): number {
+	return partitionChildren(items, now, false).shown.length + (attached ? 1 : 0);
+}
+
+/** The bottom room a thread reserves so its tail scrolls clear of the strip: exactly what the strip draws, 0 for none. */
+export function stripReservePx(items: readonly ChildThread[], now: number, attached?: AttachedRow | null): number {
+	const rows = visibleStripRows(items, now, attached);
+	return rows ? rows * STRIP_ROW_PX + 8 : 0;
+}
+
 /**
  * The thread's children, live: fetched on mount, patched by thread-updated, refetched after a reconnect (and on the
  * wolf stream's needs-you baseline, which the server sends on every reconnect of its own stream).
@@ -83,8 +94,7 @@ export function SubagentStripView({
 	/** Phone: the floating chat's thread, as one more row (see useAttachedStripRow). */
 	attached?: AttachedRow | null;
 }) {
-	if (items.length === 0 && !attached) return null;
-	// Only active subagents are visible: a settled one leaves at once (DONE_LINGER_MS is 0) and is not listed anywhere.
+	if (visibleStripRows(items, now, attached) === 0) return null;
 	const { shown } = partitionChildren(items, now, false);
 	return (
 		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border bg-card text-xs shadow-sm">

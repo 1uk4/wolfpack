@@ -172,8 +172,10 @@
 	--color-ring: var(--ring);
 }
 
-* {
-	border-color: var(--color-border);
+@layer base {
+	* {
+		border-color: var(--color-border);
+	}
 }
 
 body {

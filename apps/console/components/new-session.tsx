@@ -144,7 +144,7 @@ export function DraftShell({
 							<div className={DOCK}>
 								<SubagentStripView items={[]} now={0} onOpen={() => {}} onStop={() => {}} attached={attachedRow} />
 								<ComposerActions setup={setupCta} />
-								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
+								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)">
 									<Composer
 										busy={busy}
 										value={text}

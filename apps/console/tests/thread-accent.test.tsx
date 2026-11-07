@@ -3,7 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { useThreadColor } from "../components/use-thread-color.ts";
-import { THREAD_COLORS, THREAD_COLOR_KEYS, accentForeground, beginColorChange, resetThreadColorStore, threadAccentStyle } from "../src/core/index.ts";
+import { accentForeground, beginColorChange, resetThreadColorStore, threadAccentStyle } from "../src/core/index.ts";
 
 afterEach(() => resetThreadColorStore());
 
@@ -15,10 +15,10 @@ describe("thread accent variable", () => {
 		assert.deepEqual(threadAccentStyle(undefined), { "--thread-accent": "var(--primary)", "--thread-accent-foreground": "var(--primary-foreground)" });
 	});
 	it("follows the thread's colour, and a live pick, with a readable foreground", () => {
-		assert.match(html("w/a", "red"), new RegExp(`--thread-accent:${THREAD_COLORS.red}`));
+		assert.match(html("w/a", "red"), new RegExp(`--thread-accent:#f07178`));
 		beginColorChange("w/a", "blue", "red");
-		assert.match(html("w/a", "red"), new RegExp(`--thread-accent:${THREAD_COLORS.blue}`));
-		for (const k of THREAD_COLOR_KEYS) assert.equal(accentForeground(THREAD_COLORS[k]), "#0f141a");
+		assert.match(html("w/a", "red"), new RegExp(`--thread-accent:#6cb2f2`));
+		for (const hex of ["#f07178", "#f5a15a", "#e6cd69", "#8bd17c", "#a3e635", "#6cb2f2", "#b69cf5", "#f28cc4"]) assert.equal(accentForeground(hex), "#0f141a");
 		assert.equal(accentForeground("#101820"), "#ffffff");
 	});
 });

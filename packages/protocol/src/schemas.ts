@@ -308,13 +308,15 @@ export type ThreadWorkspace = z.infer<typeof ThreadWorkspaceSchema>;
 export const ThreadTierSchema = z.enum(["main", "smart", "fast"]);
 export type ThreadTier = z.infer<typeof ThreadTierSchema>;
 export const THREAD_TIERS = ThreadTierSchema.options;
-/** The fixed thread palette (readable on the dark theme). Keys are what settings store; hex is for display. */
+/** The fixed thread palette (readable on the dark theme). Keys are what settings store; hex is for display.
+ *  The `teal` key is stored in settings, so it stays; its colour is lime (#a3e635) because a teal thread colour was too
+ *  close to the UI's teal accent (#2dd4bf). Show it as "lime" (THREAD_COLOR_NAMES in the console). */
 export const THREAD_COLORS = {
   red: "#f07178",
   orange: "#f5a15a",
   yellow: "#e6cd69",
   green: "#8bd17c",
-  teal: "#b8d96a",
+  teal: "#a3e635",
   blue: "#6cb2f2",
   purple: "#b69cf5",
   pink: "#f28cc4",

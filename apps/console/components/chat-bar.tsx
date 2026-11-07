@@ -506,7 +506,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	if (minimized) {
 		return (
 			<div data-testid="chat-bar" data-state="minimized" className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2">
-				<div className="relative rounded-full border bg-card shadow-md" style={{ borderColor: color }}>
+				<div className="relative rounded-full border bg-card shadow-md focus-within:ring-1 focus-within:ring-(color:--thread-accent)" style={{ borderColor: color }}>
 					<div className="flex items-center">
 						{chip}
 						<CompactMeter dictation={dictation} />
@@ -528,7 +528,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="mb-2 empty:hidden">
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<div className="relative rounded-2xl border bg-card shadow-lg" style={{ borderColor: color }}>
+			<div className="relative rounded-2xl border bg-card shadow-lg focus-within:ring-1 focus-within:ring-(color:--thread-accent)" style={{ borderColor: color }}>
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{badge}

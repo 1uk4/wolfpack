@@ -759,7 +759,7 @@ function ThreadChatInner({
 									<div
 										data-testid="thread-composer-card"
 										{...(dictation.active ? { "data-listening": "true" } : {})}
-										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-(--thread-accent)" : ""} focus-within:border-(--thread-accent) focus-within:ring-1 focus-within:ring-(--thread-accent)${dictation.active ? " border-transparent ring-2" : ""}`}
+										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dictation.active ? " border-transparent ring-2" : dragging ? " ring-2 ring-(color:--thread-accent)" : " focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)"}`}
 										style={dictation.active ? ({ "--tw-ring-color": tintHex, boxShadow: `0 0 24px ${tintHex}66` } as CSSProperties) : undefined}
 									>
 										<Composer

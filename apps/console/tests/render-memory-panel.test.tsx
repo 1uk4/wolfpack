@@ -33,7 +33,6 @@ describe("MemoryPanel SSR", () => {
 			</MemoryEventsProvider>,
 		);
 		assert.doesNotMatch(html, /memory-record|memory-bind|memory-work-link|memory-back-bound|memory-feed-back/);
-		assert.match(html, /data-testid="context-section"/);
 	});
 	it("observations: the Den group with its count, not the observation text", () => {
 		const html = renderToStaticMarkup(<ObservationsSection observations={obsProps()} />);

@@ -1,4 +1,4 @@
-/** The thread header's context chip (label, percent, amber, summarising, toggles the Memory panel) and the panel's Context section (live context, Compact, compaction settings). */
+/** The thread header's context chip (label, percent, amber, summarising, toggles the Memory panel) and the panel's Context row (live context, Compact, compaction settings). */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
@@ -57,26 +57,9 @@ afterEach(() => {
 	globalThis.fetch = realFetch;
 });
 
-const puts: Array<{ url: string; body: unknown }> = [];
-/** The thread routes over `client`, plus the settings record (GET /api/settings, PUT /api/settings/compaction). */
-function withSettings(client: CtxClient): typeof fetch {
-	const inner = threadFetch(client);
-	let compaction: unknown;
-	return (async (input: RequestInfo | URL, init?: RequestInit) => {
-		const url = new URL(String(input), "http://console.test");
-		if (url.pathname === "/api/settings") return Response.json({ settings: { version: 1, compaction } });
-		if (url.pathname === "/api/settings/compaction") {
-			const body = JSON.parse(String(init?.body));
-			puts.push({ url: url.pathname, body });
-			compaction = body;
-			return Response.json({ settings: { version: 1, compaction } });
-		}
-		return inner(input, init);
-	}) as typeof fetch;
-}
 const slugOf = () => FIXTURE_THREAD.id.slice(FIXTURE_THREAD.wolf.length + 1);
 async function mountSection(client: CtxClient) {
-	globalThis.fetch = withSettings(client);
+	globalThis.fetch = threadFetch(client);
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
@@ -155,13 +138,14 @@ describe("ThreadContextChip", () => {
 	});
 });
 
-describe("Memory panel Context section", () => {
+describe("Memory panel Context row", () => {
 	it("shows tokens against the window and compactions; Compact posts, shows progress, and the stats refresh when done", async () => {
 		const c = new CtxClient();
 		c.ctx = { ...BASE, compactions: { count: 1, lastAt: new Date(2026, 9, 29, 9, 30).toISOString() } };
 		await mountSection(c);
 		assert.equal(q('[data-testid="context-section-label"]')?.textContent, "312k / 1M · 1× compacted 09:30");
 		assert.ok(q('[data-testid="context-bar"]'));
+		assert.equal(q('[data-testid="input-compaction-threshold"]'), null, "no settings editor in the panel");
 		const btn = () => q('[data-testid="context-compact"]') as HTMLButtonElement;
 		assert.equal(btn().disabled, false);
 		await click(btn());
@@ -173,18 +157,5 @@ describe("Memory panel Context section", () => {
 		await settle(3200);
 		assert.equal(btn().disabled, false);
 		assert.equal(q('[data-testid="context-section-label"]')?.textContent, "40k / 1M · 2× compacted 14:05");
-	});
-
-	it("edits the compaction threshold inline through the settings compaction route, floored at 32000", async () => {
-		puts.length = 0;
-		await mountSection(new CtxClient());
-		const input = q('[data-testid="input-compaction-threshold"]') as HTMLInputElement;
-		assert.equal(input.placeholder, "150000");
-		const key = Object.keys(input).find((k) => k.startsWith("__reactProps"))!;
-		const props = () => (input as unknown as Record<string, { onChange(e: unknown): void; onBlur(): void }>)[key]!;
-		await act(async () => props().onChange({ target: { value: "10" } }));
-		await act(async () => props().onBlur());
-		await settle(50);
-		assert.deepEqual(puts, [{ url: "/api/settings/compaction", body: { thresholdTokens: 32000 } }]);
 	});
 });

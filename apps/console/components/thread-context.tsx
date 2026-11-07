@@ -138,10 +138,10 @@ export function ContextBar({ c }: { c: ThreadContext }) {
 	const max = c.window ?? Math.max(c.tokens, 1);
 	const pct = (n: number) => `${Math.min(100, (n / max) * 100)}%`;
 	return (
-		<div data-testid="context-bar" className="relative h-2 w-full rounded bg-accent">
+		<div data-testid="context-bar" className="relative h-1.5 w-full rounded bg-accent">
 			<div data-testid="context-bar-fill" className={`h-full rounded ${pastStartAt(c) ? "bg-amber-500" : "bg-foreground/60"}`} style={{ width: pct(c.tokens) }} />
-			{c.startAt !== undefined && <div data-testid="context-bar-start" title={`summary starts at ${formatTokens(c.startAt)}`} className="absolute top-[-2px] h-3 w-px bg-amber-500" style={{ left: pct(c.startAt) }} />}
-			{c.waitAt !== undefined && <div data-testid="context-bar-wait" title={`generation waits at ${formatTokens(c.waitAt)}`} className="absolute top-[-2px] h-3 w-px bg-red-500" style={{ left: pct(c.waitAt) }} />}
+			{c.startAt !== undefined && <div data-testid="context-bar-start" title={`summary starts at ${formatTokens(c.startAt)}`} className="absolute top-[-2px] h-2.5 w-px bg-amber-500" style={{ left: pct(c.startAt) }} />}
+			{c.waitAt !== undefined && <div data-testid="context-bar-wait" title={`generation waits at ${formatTokens(c.waitAt)}`} className="absolute top-[-2px] h-2.5 w-px bg-red-500" style={{ left: pct(c.waitAt) }} />}
 		</div>
 	);
 }

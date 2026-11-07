@@ -15,24 +15,35 @@ export interface Affected {
   consoleTests: boolean;
 }
 
+export interface VerifyResult {
+  ok: boolean;
+  summary: string;
+  /** What happened to the live tests (`test:live`, this machine only): for the PR body. */
+  live: string;
+}
+
 export function verifyChanges(
   a: Affected,
   pm: Pm,
   run: (cmd: string, args: string[]) => CmdResult,
   bin?: string,
-): { ok: boolean; summary: string } {
+  opts: { skipLive?: boolean } = {},
+): VerifyResult {
   const steps: ({ name: string } & Cmd)[] = [];
   if (a.tsProjects.length) steps.push({ name: "build+typecheck", ...toolCommand(pm, "tsc", ["--build", ...a.tsProjects]) });
   const paths = [...a.vitestPaths, ...(a.extensionsTests ? ["extensions/"] : []), ...(a.scriptsTests ? ["scripts/"] : [])];
   if (a.all) steps.push({ name: "vitest (all)", ...vitestCommand([], bin) });
   else if (paths.length) steps.push({ name: "vitest (affected)", ...vitestCommand(paths, bin) });
   if (a.consoleTests) steps.push({ name: "console tests", ...consoleTestCommand(pm) });
+  // The live tests (real Claude Code login) run last, on this machine, before the PR opens; --skip-live omits them.
+  const live = opts.skipLive ? "skipped (--skip-live)" : "passed on this machine";
+  if (!opts.skipLive) steps.push({ name: "live tests", cmd: pm, args: ["run", "test:live"] });
   const lines: string[] = [];
   for (const s of steps) {
     const r = run(s.cmd, s.args);
-    if (r.code !== 0) return { ok: false, summary: `${s.name} FAILED\n${(r.out + r.err).trim().split("\n").slice(-15).join("\n")}` };
+    if (r.code !== 0) return { ok: false, live: s.name === "live tests" ? "failed" : "not run", summary: `${s.name} FAILED\n${(r.out + r.err).trim().split("\n").slice(-15).join("\n")}` };
     const totals = parseTotals(r.out);
     lines.push(`${s.name}: ok${totals ? ` (${totals})` : ""}`);
   }
-  return { ok: true, summary: lines.length ? lines.join("; ") : "no affected packages" };
+  return { ok: true, live, summary: lines.length ? lines.join("; ") : "no affected packages" };
 }

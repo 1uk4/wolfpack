@@ -15,7 +15,7 @@ function harness(aff: Partial<Affected>, results: Record<string, CmdResult> = {}
     spawned.push(line);
     return results[line] ?? { code: 0, out: "Test Files  2 passed (2)\n      Tests  9 passed (9)\n", err: "" };
   };
-  return { spawned, verify: (pm: "pnpm" | "npm" = "pnpm") => verifyChanges({ ...none, ...aff }, pm, run, BIN) };
+  return { spawned, verify: (pm: "pnpm" | "npm" = "pnpm", skipLive = true) => verifyChanges({ ...none, ...aff }, pm, run, BIN, { skipLive }) };
 }
 
 describe("pr verify", () => {
@@ -64,7 +64,35 @@ describe("pr verify", () => {
     expect(h.spawned).toEqual([`${T} run packages/cli/src`]);
   });
 
+  it("runs the live tests last, with the package manager's script runner, and reports them", () => {
+    for (const [pm, cmd] of [["pnpm", "pnpm run test:live"], ["npm", "npm run test:live"]] as const) {
+      const h = harness({ vitestPaths: ["packages/x/src"] });
+      const r = h.verify(pm, false);
+      expect(h.spawned).toEqual([`${T} run packages/x/src`, cmd]);
+      expect(r).toMatchObject({ ok: true, live: "passed on this machine" });
+    }
+  });
+
+  it("runs the live tests even when nothing else is affected", () => {
+    const h = harness({});
+    expect(h.verify("pnpm", false).ok).toBe(true);
+    expect(h.spawned).toEqual(["pnpm run test:live"]);
+  });
+
+  it("skipLive starts no live run and says it was skipped", () => {
+    const h = harness({ vitestPaths: ["packages/x/src"] });
+    expect(h.verify("pnpm", true)).toMatchObject({ ok: true, live: "skipped (--skip-live)" });
+    expect(h.spawned.join("\n")).not.toMatch(/test:live/);
+  });
+
+  it("a failing live run fails the verify", () => {
+    const h = harness({}, { "pnpm run test:live": { code: 1, out: "no Claude Code login\n", err: "" } });
+    const r = h.verify("pnpm", false);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/^live tests FAILED\nno Claude Code login/);
+  });
+
   it("says so when nothing is affected", () => {
-    expect(harness({}).verify()).toEqual({ ok: true, summary: "no affected packages" });
+    expect(harness({}).verify()).toMatchObject({ ok: true, summary: "no affected packages" });
   });
 });

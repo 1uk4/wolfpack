@@ -617,17 +617,64 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			expect(h.lc).toEqual([]);
 		});
 	});
-	describe("off asks which part to undo", () => {
+	describe("off stops the console, then asks about the wolves only if they were moved", () => {
 		const appUrl = () => JSON.parse(fs.readFileSync(path.join(ud(), "LearnHarness", "console.json"), "utf8")).consoleUrl;
+		const consoleStopped = (h: ReturnType<typeof harness>) => h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-console"));
 
-		it("offers Live console only or Wolves too; Wolves too restores the plist and hands over to the helper", async () => {
-			const h = harness({ pick: () => "all" });
+		it("with only the console running it stops it without a question and clears the state; the wolves are never touched", async () => {
+			const h = harness();
+			await h.run(["wt-a"]);
+			h.lc.length = 0;
+			expect((await h.run(["off"])).exitCode).toBe(0);
+			expect(h.asked).toEqual([]);
+			expect(consoleStopped(h)).toBe(true);
+			expect(fs.existsSync(stateFile())).toBe(false);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(rt));
+			expect(h.helper).toEqual([]);
+		});
+
+		it("with the wolves moved it stops the console, asks one y/N, and yes restores the plist and hands over to the helper", async () => {
+			const h = harness();
 			await h.run(["--wolves", wtA]);
 			h.helper.length = 0;
-			h.menus.length = 0;
+			h.asked.length = 0;
+			h.lc.length = 0;
 			expect((await h.run(["off"])).exitCode).toBe(0);
-			expect(h.menus[0].map((i) => i.label)).toEqual(["Live console only", "Wolves too"]);
+			expect(h.asked.length).toBe(1);
+			expect(h.asked[0]).toContain("stable");
+			expect(consoleStopped(h)).toBe(true);
 			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(rt));
+			expect(h.helper).toEqual(["stable 1"]);
+		});
+
+		it("answering no stops the console but leaves the wolves on the worktree", async () => {
+			await harness().run(["--wolves", wtA]);
+			const h = harness({ confirm: false });
+			expect((await h.run(["off"])).exitCode).toBe(0);
+			expect(consoleStopped(h)).toBe(true);
+			expect(h.helper).toEqual([]);
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
+			expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA });
+			expect(readState().console).toBeUndefined();
+		});
+
+		it("without a terminal it stops the console, leaves the wolves, and says how to put them back", async () => {
+			await harness().run(["--wolves", wtA]);
+			const h = harness({ confirm: "none" });
+			expect((await h.run(["off"])).exitCode).toBe(0);
+			expect(consoleStopped(h)).toBe(true);
+			expect(h.helper).toEqual([]);
+			expect(h.logs.join("\n")).toContain("wolfpack preview off --all");
+			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
+		});
+
+		it("--all restores the wolves without asking", async () => {
+			const h = harness();
+			await h.run(["--wolves", wtA]);
+			h.asked.length = 0;
+			h.helper.length = 0;
+			expect((await h.run(["off", "--all", "--yes"])).exitCode).toBe(0);
+			expect(h.asked).toEqual([]);
 			expect(h.helper).toEqual(["stable 1"]);
 		});
 
@@ -636,27 +683,16 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 			await h.run(["--wolves", wtA]);
 			expect(appUrl()).toBe("https://sfo-01.example"); // starting never points the app
 			h.helper.length = 0;
-			h.menus.length = 0;
+			h.asked.length = 0;
 			h.lc.length = 0;
 			expect((await h.run(["off", "--console"])).exitCode).toBe(0);
-			expect(h.menus).toEqual([]); // the flag skips the question
+			expect(h.asked).toEqual([]); // the flag skips the question
 			expect(appUrl()).toBe("https://sfo-01.example");
 			expect(h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-console"))).toBe(true);
 			expect(h.helper).toEqual([]);
 			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
 			expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA });
 			expect(readState().console).toBeUndefined();
-		});
-
-		it("without a terminal and without a flag prints the choices and exits 1, changing nothing", async () => {
-			const h = harness();
-			await h.run(["--wolves", wtA]);
-			h.helper.length = 0;
-			h.logs.length = 0;
-			expect((await h.run(["off"])).exitCode).toBe(1);
-			expect(h.logs.join("\n")).toMatch(/Live console only[\s\S]*Wolves too/);
-			expect(h.helper).toEqual([]);
-			expect(fs.readFileSync(plistFile(), "utf8")).toBe(stackPlist(wtA));
 		});
 	});
 

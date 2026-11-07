@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 8;
+export const PREVIEW_VERSION = 9;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -193,7 +193,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		fs.mkdirSync(dir, { recursive: true });
 		fs.writeFileSync(stateFile, `${JSON.stringify(s, null, 2)}\n`);
 	};
-	const yes = argv.includes("--yes") || argv.includes("-y");
+	let yes = argv.includes("--yes") || argv.includes("-y");
 	/** Ask y/N before something restarts the wolves. Returns a result to hand back when the answer is no, else undefined. */
 	const gate = async (question) => {
 		if (yes) return undefined;
@@ -240,30 +240,24 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		return { exitCode: 0, state };
 	}
 
-	// off while the wolves run a preview: undo the live console only, or the wolves too.
+	// off while the wolves run a preview (moved now, or by an older run): the console always stops; the wolves only on a yes.
 	if (sub === "off" && state?.previewRef) {
-		let part = argv.includes("--console") ? "console" : argv.includes("--all") || argv.includes("--rollback") || dryRun ? "all" : undefined;
-		if (!part) {
-			part = await st.pick("Undo which part of the preview?", [
-				{ label: "Live console only", value: "console" },
-				{ label: "Wolves too", value: "all" },
-			]);
-			if (!part) {
-				log("Live console only: the app goes back to its own console, the wolves stay on the preview (--console)");
-				log("Wolves too: everything goes back to stable (--all)");
-				return fail("choose with `wolfpack preview off --console` or `wolfpack preview off --all`. Nothing was changed.");
-			}
-		}
-		if (part === "console") {
-			if (dryRun) {
-				log(`${tag}would stop com.wolfpack.preview-console (and undo any old console.json pointing); the wolves stay on the preview`);
-				return { exitCode: 0 };
-			}
+		const flag = argv.includes("--console") ? "console" : argv.includes("--all") || argv.includes("--rollback") || dryRun ? "all" : undefined;
+		if (flag === "console" || !flag) {
 			stopConsole({ home, uid, launchctl: st.launchctl });
 			restoreApps(state.apps ?? recoverApps({ root: userDataRoot, url: `http://127.0.0.1:${state.consolePort ?? 3230}` }));
-			writeState({ ...state, console: undefined, apps: undefined, consolePort: undefined });
-			log("live console stopped (any old console.json pointing undone); the wolves stay on the preview. `wolfpack preview off --all` returns everything to stable.");
-			return { exitCode: 0 };
+			let putBack = false;
+			if (!flag) {
+				const answer = yes ? true : await st.confirm(`The wolves are on ${state.previewRef}. Put them back on stable? This restarts the wolves and ends the wolf session running this command.`);
+				putBack = answer === true;
+				if (answer === null) log("no terminal to ask on: the wolves stay on the preview. `wolfpack preview off --all` puts them back on stable.");
+			}
+			if (!putBack) {
+				writeState({ ...state, console: undefined, apps: undefined, consolePort: undefined });
+				log(flag ? "live console stopped; the wolves stay on the preview. `wolfpack preview off --all` returns everything to stable." : "console stopped; the wolves stay on the preview (`wolfpack preview off --all` puts them back on stable).");
+				return { exitCode: 0 };
+			}
+			yes = true; // asked already: the restore below must not ask again
 		}
 	}
 

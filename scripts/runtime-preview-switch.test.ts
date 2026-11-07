@@ -71,6 +71,15 @@ describe("runtime-preview-switch", () => {
 		expect(out).toContain("Manual way back");
 	});
 
+	it("for a worktree preview the manual way back restores the saved plist and never mentions the runtime checkout", async () => {
+		fs.writeFileSync(stateFile, JSON.stringify({ previewRef: "feat/x", mode: "worktree", phase: "switching" }));
+		const s = sw({ bootstrapResults: [5] });
+		await s.run();
+		const out = s.logs.join("\n");
+		expect(out).toContain("cp ~/.wolfpack/preview/stack.plist.orig ~/Library/LaunchAgents/com.wolfpack.stack.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wolfpack.stack.plist");
+		expect(out).not.toContain("git checkout stable");
+	});
+
 	it("healthz never answering after a good bootstrap is unhealthy, and the stack stays bootstrapped", async () => {
 		const s = sw({ healthy: false });
 		expect(await s.run()).toBe(1);

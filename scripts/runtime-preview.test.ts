@@ -74,6 +74,7 @@ const harness = (opts: { buildFails?: boolean; checkoutFails?: boolean; noWolves
 		},
 		spawnHelper: (a: { args: string[] }) => calls.push(`helper ${a.args.slice(4).join(" ")}`),
 		launchctl: (...a: string[]) => (lc.push(a), 0),
+		confirm: async () => true,
 		sleep: async () => {},
 		portFree: async () => !opts.portBusy,
 		fetchJson: async (u: string) => (u.endsWith("/api/wolves") ? { wolves: opts.noWolves ? [] : [{ id: "ddkyhT", name: "1uk4", host: "local", status: "busy", librarian: false, kbReadable: true }] } : { chats: [] }),

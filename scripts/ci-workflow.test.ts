@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-type Step = { name?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> };
-type Job = { steps?: Step[] };
+type Step = { id?: string; name?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> };
+type Job = { steps?: Step[]; if?: string; needs?: string | string[]; concurrency?: { group?: string; "cancel-in-progress"?: boolean } };
 const raw = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const ci = parse(raw) as { jobs: Record<string, Job>; env?: Record<string, string> };
 const pm = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).packageManager as string;
@@ -55,5 +55,60 @@ describe("ci.yml uses pnpm", () => {
 
 	it("no turbo remote cache in CI", () => {
 		expect(raw).not.toMatch(/TURBO_(TOKEN|TEAM|REMOTE)|--remote-cache|remote-cache/i);
+	});
+});
+
+describe("ci.yml release runs (PR into stable, push to stable)", () => {
+	const detect = ci.jobs.detect as Job & { outputs?: Record<string, string> };
+	const affectedStep = detect.steps!.find((s) => s.name === "affected packages")!;
+	const releaseStep = detect.steps!.find((s) => s.id === "release")!;
+
+	it("detect computes a release flag from the stable base branch or the stable ref", () => {
+		expect(detect.outputs?.release).toContain("steps.release.outputs.release");
+		const env = JSON.stringify(releaseStep.env);
+		expect(env).toContain("github.base_ref == 'stable'");
+		expect(env).toContain("github.ref == 'refs/heads/stable'");
+	});
+
+	it("on a release the affected computation is forced to everything (empty base)", () => {
+		expect(detect.steps!.indexOf(releaseStep)).toBeLessThan(detect.steps!.indexOf(affectedStep));
+		expect(affectedStep.env?.RELEASE).toContain("steps.release.outputs.release");
+		expect(affectedStep.run).toMatch(/RELEASE.*=.*true[\s\S]*BASE=""/);
+	});
+
+	it("tracer and release-smoke run unconditionally on a release", () => {
+		for (const name of ["tracer", "release-smoke"]) {
+			expect(ci.jobs[name].if).toContain("needs.detect.outputs.release == 'true'");
+			expect(ci.jobs[name].if).toContain("fromJSON(needs.detect.outputs.affected)");
+		}
+	});
+
+	it("the eval job runs pnpm test:eval after a frozen install, only on a release, and the ci aggregate waits for it", () => {
+		const job = ci.jobs.eval;
+		expect(job.if).toBe("needs.detect.outputs.release == 'true'");
+		const steps = job.steps!;
+		const install = steps.findIndex((s) => s.run && /pnpm install --frozen-lockfile/.test(s.run));
+		const evalRun = steps.findIndex((s) => s.run && /^pnpm test:eval$/m.test(s.run));
+		expect(install).toBeGreaterThanOrEqual(0);
+		expect(evalRun).toBeGreaterThan(install);
+		expect(ci.jobs.ci.needs).toContain("eval");
+	});
+
+	it("eval builds before it runs the evals (the evals import @wolfpack/engine from dist)", () => {
+		const steps = ci.jobs.eval.steps!;
+		const install = steps.findIndex((s) => s.run && /pnpm install --frozen-lockfile/.test(s.run));
+		const build = steps.findIndex((s) => s.run && /tsc --build packages\/kb\b/.test(s.run));
+		const evalRun = steps.findIndex((s) => s.run && /^pnpm test:eval$/m.test(s.run));
+		expect(build).toBeGreaterThan(install);
+		expect(build).toBeLessThan(evalRun);
+	});
+
+	it("eval runs are never cancelled by a newer push (own concurrency group)", () => {
+		expect(ci.jobs.eval.concurrency?.["cancel-in-progress"]).toBe(false);
+		expect(ci.jobs.eval.concurrency?.group).toContain("eval");
+	});
+
+	it("no secrets and no live tests in CI (live runs in wolfpack pr prepare)", () => {
+		expect(code(raw)).not.toMatch(/secrets\.|test:live|pull_request_target/);
 	});
 });

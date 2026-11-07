@@ -17,7 +17,7 @@ One mechanism: vitest projects in the root `vitest.config.ts`.
 - `default` collects everything except `*.live.test.*` and `*.eval.test.*`. `wolfpack test` always selects it, so a slow file named by path (or through `related`) is not run. `pnpm test` does too.
 - `pnpm test:live` runs only `*.live.test.*` with `WOLFPACK_LIVE=1`: real Claude through the Claude Code login, so only on the owner's Mac. Today that is the one-turn subscription smoke test (`wolfd.subscription.live.test.ts`); without a login it fails with a message that says so.
 - `pnpm test:eval` runs only `*.eval.test.*` (the KB tree-rules and llm-split evals, about a minute).
-- Both run on the release PR only, never per task or per merge: `wolfpack pr prepare` runs `test:live` before opening the PR (`--skip-live` omits it and the PR body says so), and CI runs `test:eval` (the workflow is a separate task).
+- Both run on the release PR only, never per task or per merge: `wolfpack pr prepare` runs `test:live` before opening the PR (`--skip-live` omits it and the PR body says so), and CI runs `test:eval` as its own `eval` job. Live tests never run in GitHub CI (no secrets there).
 - A test that costs money or needs a login is never gated by a `skipIf` of its own: name it `.live.` or `.eval.`. `scripts/vitest-projects.test.ts` fails if the default selection ever collects one.
 
 ## Sources
@@ -35,3 +35,11 @@ House rules (ours, not cited): when not to test; seams listed in the plan and th
 reviewer seam check; red evidence; no "known failing"; no retries for flakes.
 
 The git commit standard lives in [`packages/agents/standards/git.md`](../packages/agents/standards/git.md). The loader always appends it to `worker` and `reviewer` (not the planner), after `testing`.
+
+## CI by event
+| Event | What `ci` runs |
+|---|---|
+| Push to a feature branch, PR into a non-`stable` branch | affected-only: tsc, `vitest --project default` on affected paths, console tests; tracer and release-smoke only when affected |
+| PR into `stable`, push to `stable` (a "release") | the whole suite as if everything were affected, tracer and release-smoke always, and the `eval` job (`pnpm test:eval`) |
+
+`pnpm test:live` runs only in `wolfpack pr prepare`, on the Mac.

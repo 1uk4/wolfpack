@@ -47,7 +47,9 @@ const { ServerEventsProvider } = await import("../components/server-events.tsx")
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { AttachedThreadProvider } = await import("../components/attached-thread.tsx");
 const { ChatBar } = await import("../components/chat-bar.tsx");
-const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
+const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/chat-bar.ts");
+// The extras (cards, peek, badge, switcher) are off in the shipped floating chat; this file covers their kept code, so it switches them on.
+Object.assign(BAR_EXTRAS, { cards: true, peek: true, badge: true, switcher: true });
 
 type Call = { url: string; body?: any };
 let calls: Call[] = [];
@@ -99,8 +101,8 @@ const until = async (cond: () => unknown, what: string) => {
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const qa = (s: string) => Array.from(document.querySelectorAll(s)) as HTMLElement[];
 let startPath = "/kb";
-async function mount(stored: object = A, extra?: React.ReactNode, expectBar = true) {
-	mem.set(ATTACHED_KEY, JSON.stringify(stored));
+async function mount(stored: object | null = A, extra?: React.ReactNode, expectBar = true) {
+	if (stored) mem.set(ATTACHED_KEY, JSON.stringify(stored));
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
@@ -330,6 +332,24 @@ describe("ChatBar on a phone", () => {
 		phone = false;
 		await mount();
 		assert.equal(bar().getAttribute("data-state"), "open", "desktop pill on another thread page");
+	});
+
+	it("shows no dock and reserves nothing until something is popped out", async () => {
+		(HTMLElement.prototype as any).getBoundingClientRect = () => ({ height: 90 });
+		await mount(null, undefined, false);
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(reserve(), "");
+	});
+
+	it("the Dock button clears the popped-out thread and keeps its draft", async () => {
+		await mount();
+		await type("phone draft");
+		await click(q('[data-testid="chat-bar-dock"]'));
+		await flush();
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(reserve(), "");
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(mem.get("wolfpack:draft:w:w/a"), "phone draft");
 	});
 
 	it("keeps the draft when the viewport crosses 768px and the composer remounts", async () => {

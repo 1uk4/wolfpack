@@ -59,7 +59,7 @@ interface Bundle {
 }
 const fresh = (key: string): Bundle => ({ key, pending: [], reply: null, peekOn: false, superseded: [], error: null });
 
-export function useBarCards(target: AttachedRef, working: boolean): BarCards {
+export function useBarCards(target: AttachedRef, working: boolean, enabled = true): BarCards {
 	const key = `${target.wolf}:${target.threadId}`;
 	const [bundle, setBundle] = useState<Bundle>(() => fresh(key));
 	/** Update the bundle of the CURRENT target only (a stale key starts from empty). */
@@ -82,6 +82,7 @@ export function useBarCards(target: AttachedRef, working: boolean): BarCards {
 	const base = threadBase(target.wolf, target.slug);
 
 	const refetch = useCallback(() => {
+		if (!enabled) return;
 		const n = ++seq.current;
 		const k = keyRef.current;
 		void (async () => {
@@ -102,7 +103,7 @@ export function useBarCards(target: AttachedRef, working: boolean): BarCards {
 				/* the next event refetches */
 			}
 		})();
-	}, [base, update]);
+	}, [base, update, enabled]);
 
 	useEffect(() => refetch(), [refetch]);
 	const mine = (wolf: string, id?: string) => wolf === target.wolf && (!id || id === target.threadId);

@@ -6,26 +6,40 @@
  * thread's submit route (steering when a turn runs), aborts through the abort route, and shows "working…" from the
  * events channel (see attached-thread.tsx). Drafts share the thread page's key.
  *
- * On the attached thread's own page the bar is hidden (the page composer takes over; Cmd/Ctrl+J focuses it). Only the
- * chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
+ * On the attached thread's own page the bar is hidden (the page composer takes over; Cmd/Ctrl+J focuses it), EXCEPT while
+ * dictating: then it shows there too, in full, REPLACING the page composer (ThreadChat unmounts its composer while the chat
+ * owns the input). Stopping on that page docks it and the composer returns with the text; stopping anywhere else leaves it showing the words. Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
-import { usePathname } from "next/navigation";
-import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPicture2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useAttachedThread } from "@/components/attached-thread";
 import { onOwnThreadPage } from "@/components/chat-bar-io";
+import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/dictation";
+import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { useThreadColor } from "@/components/use-thread-color";
 import { useBarCards } from "@/components/chat-bar-cards";
 import { useOptionalServerEvent } from "@/components/server-events";
-import { attachable, kbdEventForAction, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { attachable, BAR_EXTRAS, kbdEventForAction, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar-io";
 
 const loadComposer = () => import("@/components/chat-bar-composer");
 const BarComposer = dynamic(loadComposer, { ssr: false });
+/**
+ * Finish the floating chat's own dictation run first (the words land in its draft), then run `then` (dock or navigate).
+ * A page composer's run is not touched. A second call while one is pending is a no-op.
+ */
+let afterPending = false;
+const afterBarDictation = (then?: () => void) => {
+	if (afterPending) return;
+	afterPending = true;
+	void finishDictation("bar").then(() => then?.()).finally(() => void (afterPending = false));
+};
+
 const BarCardSurface = dynamic(() => import("@/components/bar-card-surface").then((m) => m.BarCardSurface), { ssr: false });
 
 /** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
@@ -71,19 +85,107 @@ export function ChatBar() {
 	const pathname = usePathname();
 	const wide = useWide();
 	const attached = api?.attached ?? null;
-	const own = onOwnThreadPage(pathname, attached);
+	const onOwn = onOwnThreadPage(pathname, attached);
 	const [switcher, setSwitcher] = useState(false);
 	const chipRef = useRef<HTMLButtonElement | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
 	const minimized = api?.minimized ?? false;
 	const dockless = !wide && !!pathname && THREAD_PAGE.test(pathname);
-	const full = !!attached && !own && !dockless && (!wide || !minimized);
 	const scrolls = !!pathname && SCROLLING.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
 	// when the bar (or, on its own thread's page, the page composer) actually answers.
-	const live = useRef({ attached, own, wide, minimized, setMinimized: api?.setMinimized });
-	live.current = { attached, own, wide, minimized, setMinimized: api?.setMinimized };
+	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating: false });
+
+	// Dictation lives HERE, not in the composer: ChatBar stays mounted across page changes (and while the composer is
+	// unmounted: minimized, or the phone on a thread page), so a run keeps listening while the owner browses. The
+	// transcript goes to the composer when it is mounted, else straight into the thread's draft. Enabled only while a
+	// thread is popped out; ⌘D routing is in dictation.tsx (shortcutHook).
+	const composerAppend = useRef<((t: string) => void) | null>(null);
+	const registerAppend = useCallback((fn: ((t: string) => void) | null) => void (composerAppend.current = fn), []);
+	const dictation = useDictation({
+		kind: "bar",
+		enabled: !!attached,
+		// The bar unmounting mid-run (the app shell going away) saves what was heard into the popped-out thread's draft.
+		onOrphan: (t) => {
+			const a = live.current.attached;
+			if (a) appendToDraft(draftKey(a.wolf, a.threadId), t);
+		},
+		append: (t) => {
+			if (composerAppend.current) return composerAppend.current(t);
+			const a = live.current.attached;
+			if (!a) return;
+			appendToDraft(draftKey(a.wolf, a.threadId), t);
+		},
+	});
+
+	// On its own page the bar shows only while dictating; `own` = "hidden because it is the page's thread".
+	const dictating = dictation.active;
+	const own = onOwn && !dictating;
+	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating };
+	const full = !!attached && !own && !dockless && (!wide || !minimized || onOwn);
+	const shown = !!attached && !own && !dockless;
+
+	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
+	// the page reads is a dep (phase/active/error for the state, toggle/stop/finish/cancel for the actions, levelRef for
+	// the meter); clearError only sets state, so a stale copy is as good as the current one.
+	useEffect(() => {
+		publishBarDictation(dictation, shown);
+	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown]);
+	useEffect(() => () => publishBarDictation(null), []);
+
+	// Landing on the popped-out thread's own page docks it (its page composer shows the draft), unless a run is live:
+	// dictation keeps going and the bar stays. Only a navigation does this, so popping out on the page itself leaves it popped out.
+	useEffect(() => {
+		const l = live.current;
+		if (api?.ready && onOwnThreadPage(pathname, l.attached) && !l.dictating) afterBarDictation(l.dock);
+	}, [pathname, api?.ready]);
+
+	// Stopping decides where the chat goes (mic, Cmd+D, Esc cancel, Enter-to-send all end the run the same way): stopped on
+	// the thread's own page it docks back into the thread (the words are already in the thread's draft, which the page
+	// composer shows); stopped anywhere else it stays, showing the words in its input. A failed start (error) leaves it be.
+	// The target is the thread the run STARTED on, not whatever is attached at stop time: a handoff A→B (A finishes, B is
+	// attached in the same batch) must not dock B because A's stop was seen with B attached.
+	const wasDictating = useRef(false);
+	const runThread = useRef<AttachedRef | null>(null);
+	useEffect(() => {
+		const was = wasDictating.current;
+		wasDictating.current = dictating;
+		if (!was && dictating) runThread.current = live.current.attached;
+		if (was && !dictating) {
+			const t = runThread.current;
+			runThread.current = null;
+			const a = live.current.attached;
+			if (t && a && a.wolf === t.wolf && a.threadId === t.threadId && live.current.onOwn && !dictation.error) live.current.dock?.();
+		}
+	}, [dictating]);
+
+	// Using another thread's composer docks the floating chat. Only a USER action counts: a pointerdown in a composer
+	// outside the bar, or typing (keydown / beforeinput) into one. Focus alone never docks, so a page whose composer
+	// autofocuses (a thread page, /chat/new) can be viewed without docking. Not the bar's own textarea, not a textarea
+	// outside a composer, and not on the popped-out thread's own page (landing there already docked it). The bar composer
+	// flushes its draft on unmount, so the text stays unsent in that thread's draft store.
+	useEffect(() => {
+		const other = (e: Event): boolean => {
+			const t = e.target as HTMLElement | null;
+			if (!t || !t.closest || t.closest('[data-testid="chat-bar"]')) return false;
+			const box = t.closest('[data-testid="composer"]');
+			return !!box && (t.tagName === "TEXTAREA" || e.type === "pointerdown");
+		};
+		const onUse = (e: Event) => {
+			if (e.type === "keydown") {
+				const k = e as KeyboardEvent;
+				if (k.metaKey || k.ctrlKey || k.altKey || k.key === "Tab" || k.key === "Escape" || k.key === "Shift") return; // shortcuts and focus moves are not typing
+			}
+			const l = live.current;
+			if (l.attached && !l.onOwn && other(e)) afterBarDictation(l.dock);
+		};
+		const evs = ["pointerdown", "keydown", "beforeinput"] as const;
+		for (const n of evs) document.addEventListener(n, onUse, true);
+		return () => {
+			for (const n of evs) document.removeEventListener(n, onUse, true);
+		};
+	}, []);
 	useEffect(() => {
 		const focusInput = (n = 0) => {
 			const el = document.querySelector('[data-testid="chat-bar"] textarea') as HTMLTextAreaElement | null;
@@ -93,7 +195,8 @@ export function ChatBar() {
 		const onFocus = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			if (l.own) {
+			// On its own page the page composer is the input, except while dictating: then the chat has replaced it.
+			if (l.onOwn && !l.dictating) {
 				const page = document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement | null;
 				if (!page) return;
 				kev?.preventDefault();
@@ -108,7 +211,7 @@ export function ChatBar() {
 		const onSwitcher = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			if (!l.attached || !l.wide || l.own) return;
+			if (!BAR_EXTRAS.switcher || !l.attached || !l.wide || l.onOwn) return;
 			kev?.preventDefault();
 			if (l.minimized) l.setMinimized?.(false);
 			setSwitcher(true);
@@ -124,7 +227,9 @@ export function ChatBar() {
 	// Scroll room: while the full bar floats over a scrolling page, main reserves its height (--chat-bar-reserve, globals.css).
 	useLayoutEffect(() => {
 		const root = document.documentElement;
-		if (!full || (wide && !scrolls) || !wrapRef.current) {
+		// On its own thread's page (dictating) the pill would sit over the page composer: reserve its height there too, so the
+		// composer is pushed up above it instead of being covered.
+		if (!full || (wide && !scrolls && !onOwn) || !wrapRef.current) {
 			root.style.removeProperty("--chat-bar-reserve");
 			return;
 		}
@@ -141,7 +246,7 @@ export function ChatBar() {
 			ro.disconnect();
 			root.style.removeProperty("--chat-bar-reserve");
 		};
-	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
+	}, [full, scrolls, wide, onOwn, attached?.wolf, attached?.threadId]);
 
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
@@ -158,7 +263,6 @@ export function ChatBar() {
 
 	// A hidden bar closes its switcher (it must not reappear on return); and the input chunk preloads when idle,
 	// so a cold Cmd+J finds the textarea.
-	const shown = !!attached && !own && !dockless;
 	useEffect(() => {
 		if (!shown) setSwitcher(false);
 	}, [shown]);
@@ -169,15 +273,38 @@ export function ChatBar() {
 		else setTimeout(() => void loadComposer(), 200);
 	}, [!!attached]);
 
+	// Phone: the dock is off on thread pages, so a live run for ANOTHER thread there would have no meter or Stop. Show a
+	// minimal listening pill with Stop (the words go to that thread's draft; the chat stays attached for when they leave).
+	if (api && attached && dockless && dictating && !onOwn) {
+		return (
+			<div data-testid="chat-bar-listening-pill" className="fixed right-2 top-2 z-30 flex items-center gap-2 rounded-full border bg-card px-3 py-1 shadow-md" style={{ paddingTop: "max(0.25rem, env(safe-area-inset-top))" }}>
+				<MicIcon className="size-4 text-red-500" />
+				<CompactMeter dictation={dictation} />
+				<span className="max-w-32 truncate font-ui text-xs">{attachedThreadTitle(api, attached)}</span>
+				<button type="button" data-testid="chat-bar-listening-stop" aria-label="Stop dictation" onClick={dictation.toggle} className="min-h-8 rounded-full px-2 font-ui text-xs hover:bg-accent">
+					Stop
+				</button>
+			</div>
+		);
+	}
 	if (!api || !attached || own || dockless) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} />;
+	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} ownPage={onOwn} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+}
+
+function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
+	const t = api.attachedThread;
+	return t ? (t.kind === "home" ? a.wolf : t.title) : a.slug;
 }
 
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher }: {
+function Bar({ target, ownPage, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+	dictation: Dictation;
+	registerAppend: (fn: ((t: string) => void) | null) => void;
 	target: AttachedRef;
+	/** Showing on the thread's own page (while dictating): it replaces the page composer, so never minimized. */
+	ownPage: boolean;
 	phone: boolean;
 	wrapRef: React.RefObject<HTMLDivElement | null>;
 	chipRef: React.RefObject<HTMLButtonElement | null>;
@@ -186,12 +313,14 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	closeSwitcher: () => void;
 }) {
 	const api = useAttachedThread()!;
-	const { minimized, setMinimized, working, attachedThread, groups, note } = api;
+	const { setMinimized, working, attachedThread, groups } = api;
+	const minimized = api.minimized && !ownPage;
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.settings ? { settings: attachedThread.settings } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all).hex;
-	const cards = useBarCards(target, working);
-	const raised = useRaisedAt(api.attached !== null);
-	const waiting = useMemo(() => oldestFirst(waitingElsewhere(api.threads, target), raised), [api.threads, target, raised]);
+	const router = useRouter();
+	const cards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek);
+	const raised = useRaisedAt(BAR_EXTRAS.badge && api.attached !== null);
+	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
 	// Phone only: the dock expands into a full-screen sheet. The composer stays at the same spot in the tree, so the draft survives both ways.
 	const [sheet, setSheet] = useState(false);
@@ -258,17 +387,17 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			first.focus();
 		}
 	};
-	const hasSurface = pendingCount > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error;
+	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (pendingCount > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
-	const badge = waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
+	const badge = BAR_EXTRAS.badge && waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
 	const chip = (
 		<button
 			ref={chipRef}
 			type="button"
 			data-testid="chat-bar-chip"
-			aria-haspopup="dialog"
-			aria-expanded={switcher}
-			onClick={() => (minimized ? setMinimized(false) : setSwitcher((s) => !s))}
+			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
+			aria-expanded={BAR_EXTRAS.switcher ? switcher : undefined}
+			onClick={() => (minimized ? setMinimized(false) : BAR_EXTRAS.switcher ? setSwitcher((s) => !s) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
 			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
@@ -276,6 +405,13 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			<span className="truncate">{title}</span>
 			<span className="text-muted-foreground">{target.wolf}</span>
 			{working && <BrailleSpinner />}
+			{dictation.active && <MicIcon data-testid="chat-bar-listening" className="size-3 shrink-0 text-red-500" />}
+		</button>
+	);
+
+	const dockBtn = (cls: string) => (
+		<button type="button" aria-label="Dock chat" title="Dock: keeps your draft" data-testid="chat-bar-dock" onClick={() => afterBarDictation(api.dock)} className={cls}>
+			<PictureInPicture2Icon className="size-4" />
 		</button>
 	);
 
@@ -319,7 +455,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				)}
 				{sheet && !minimized && (
 					<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p>}
+						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : BAR_EXTRAS.cards || BAR_EXTRAS.peek ? <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p> : null}
 					</div>
 				)}
 				{!sheet && !minimized && hasSurface && (
@@ -337,7 +473,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 					{chip}
 					{badge}
 					{working && !minimized && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					{note && !working && !minimized && <span data-testid="chat-bar-note" className="truncate font-ui text-xs text-muted-foreground">{note}</span>}
+					{minimized && <CompactMeter dictation={dictation} />}
 					{minimized ? (
 						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className={cn(tap, "ml-auto")}>
 							<MessageSquareIcon className="size-4" />
@@ -349,14 +485,15 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 									<ChevronUpIcon className="size-5" />
 								</button>
 							)}
+							{dockBtn(tap)}
 							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
 								<ChevronDownIcon className="size-4" />
 							</button>
 						</div>
 					)}
 				</div>
-				{!minimized && <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} />}
-				{switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
+				{!minimized && <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
+				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 		);
 	}
@@ -367,12 +504,14 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				<div className="relative rounded-full border bg-card shadow-md" style={{ borderColor: color }}>
 					<div className="flex items-center">
 						{chip}
+						<CompactMeter dictation={dictation} />
 						{badge}
+						{dockBtn("rounded-full p-1 text-muted-foreground hover:bg-accent")}
 						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className="mr-1 rounded-full p-1 text-muted-foreground hover:bg-accent">
 							<MessageSquareIcon className="size-3.5" />
 						</button>
 					</div>
-					{switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
+					{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 				</div>
 			</div>
 		);
@@ -382,20 +521,20 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
 			{/* Card surface slot (PtJkpk6): the thread's pending question/brief cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="mb-2 empty:hidden">
-				{(cards.pending.length > 0 || cards.superseded.length > 0 || cards.peek || cards.error) && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
+				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
 			<div className="relative rounded-2xl border bg-card shadow-lg" style={{ borderColor: color }}>
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					{note && !working && <span data-testid="chat-bar-note" className="truncate font-ui text-xs text-muted-foreground">{note}</span>}
-					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-accent">
+					{dockBtn("ml-auto rounded-md p-1 text-muted-foreground hover:bg-accent")}
+					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
 						<ChevronDownIcon className="size-4" />
 					</button>
 				</div>
-				<BarComposer target={target} title={title} cardOpen={cards.pending.length > 0} onReplied={cards.replied} />
-				{switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
+				<BarComposer target={target} title={title} cardOpen={cards.pending.length > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />
+				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>
 	);

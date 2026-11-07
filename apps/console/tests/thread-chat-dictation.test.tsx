@@ -13,8 +13,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<html><body></body></html>");
+const store = new Map<string, string>();
 Object.assign(globalThis, {
-	window: dom.window,
+	window: Object.assign(dom.window, { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) } }),
 	document: dom.document,
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,
@@ -36,6 +37,11 @@ const { SettingsDialogProvider } = await import("../components/settings/settings
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { FakeNav } = await import("./helpers/fake-nav.tsx");
+const { ServerEventsProvider } = await import("../components/server-events.tsx");
+const { AttachedThreadProvider } = await import("../components/attached-thread.tsx");
+const { ChatBar } = await import("../components/chat-bar.tsx");
+const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 
 const CALL = "call-1";
@@ -124,7 +130,7 @@ let root: Root | null = null;
 /** POSTs the page made (card answers, submits), bodies parsed. */
 let posts: { url: string; body: any }[] = [];
 
-async function mount(client: CardClient, opts: { inFlight?: boolean } = {}) {
+async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?: boolean } = {}) {
 	posts = [];
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
@@ -144,23 +150,38 @@ async function mount(client: CardClient, opts: { inFlight?: boolean } = {}) {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
+	const chat = (
+		<SettingsDialogProvider>
+			<MemoryEventsProvider connect={inertSource}>
+				<ThreadChat
+					wolf="1uk4"
+					slug="home"
+					threadId={FIXTURE_THREAD.id}
+					title="Home"
+					initialMessages={threadMessagesToNative(detail.messages)}
+					initialCards={cardsOfThread(detail)}
+					initiallyInFlight={opts.inFlight}
+				/>
+			</MemoryEventsProvider>
+		</SettingsDialogProvider>
+	);
+	if (opts.poppedOut) store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: FIXTURE_THREAD.id }));
 	await act(async () => {
 		root!.render(
-			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
-					<MemoryEventsProvider connect={inertSource}>
-						<ThreadChat
-							wolf="1uk4"
-							slug="home"
-							threadId={FIXTURE_THREAD.id}
-							title="Home"
-							initialMessages={threadMessagesToNative(detail.messages)}
-							initialCards={cardsOfThread(detail)}
-							initiallyInFlight={opts.inFlight}
-						/>
-					</MemoryEventsProvider>
-				</SettingsDialogProvider>
-			</AppRouterContext.Provider>,
+			opts.poppedOut ? (
+				<FakeNav start="/wolf/1uk4/thread/home">
+					<SettingsDialogProvider>
+						<ServerEventsProvider connect={() => ({ close() {}, onOpen() {}, onEvent() {} })}>
+							<AttachedThreadProvider>
+								<ChatBar />
+								{chat}
+							</AttachedThreadProvider>
+						</ServerEventsProvider>
+					</SettingsDialogProvider>
+				</FakeNav>
+			) : (
+				<AppRouterContext.Provider value={{ push() {} } as never}>{chat}</AppRouterContext.Provider>
+			),
 		);
 	});
 }
@@ -205,6 +226,17 @@ async function recording(...finals: string[]) {
 }
 /** Let Deepgram close the socket after our CloseStream: the run ends and the tail flushes. */
 const closeSocket = (ws: FakeWS) => act(async () => ws.emit("close", { code: 1000 }));
+/** Type into a textarea the way the browser does: set the value, then fire React's onChange. */
+const typeIn = (el: HTMLTextAreaElement, v: string) =>
+	act(async () => {
+		el.value = v;
+		const k = Object.keys(el).find((x) => x.startsWith("__reactProps$"))!;
+		(el as any)[k].onChange({ target: el, currentTarget: el });
+	});
+const barTa = () => q('[data-testid="chat-bar"] textarea') as HTMLTextAreaElement | null;
+/** Composer cards on the thread page itself (the floating chat's own card is inside [data-testid="chat-bar"]). */
+const pageComposers = () => document.querySelectorAll('[data-testid="composer"]').length - document.querySelectorAll('[data-testid="chat-bar"] [data-testid="composer"]').length;
+const DRAFT = () => store.get(`wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`);
 const press = (el: Element, init: { key: string; metaKey?: boolean }) =>
 	act(async () => {
 		el.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), init));
@@ -218,6 +250,7 @@ afterEach(async () => {
 	root = null;
 	tokenStatus = 200;
 	FakeWS.last = null;
+	store.clear();
 	document.body.innerHTML = "";
 });
 
@@ -230,6 +263,15 @@ describe("ThreadChat dictation", () => {
 		assert.ok(q('[data-testid="dictation-bar"]'), "meter shows from the click");
 		await act(async () => window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation")));
 		assert.equal(q('[data-testid="dictation-bar"]'), null);
+	});
+
+	it("leaving the page mid-run saves the received words into the thread's draft and stops the mic and socket", async () => {
+		await mount(new CardClient(null));
+		const ws = await recording("heard before leaving");
+		await act(async () => root?.unmount());
+		root = null;
+		assert.equal(ws.readyState, 3, "socket closed");
+		assert.equal(store.get(`wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`), "heard before leaving");
 	});
 
 	it("finishing inserts the transcript into the composer; a second run appends to it", async () => {
@@ -309,6 +351,89 @@ describe("ThreadChat dictation", () => {
 		const sent = posts.filter((p) => !p.url.includes("abort"));
 		assert.equal(sent.length, 1);
 		assert.match(JSON.stringify(sent[0]!.body), /typed spoken tail/);
+	});
+
+	it("popped out: Enter while the floating chat's run is live sends the text with the dictated tail and leaves no draft behind", async () => {
+		// A running turn makes Enter a steer, whose POST succeeds in the fake (a plain send would hit the unmocked stream and be restored).
+		await mount(new CardClient(null), { poppedOut: true, inFlight: true });
+		await dictate("typed"); // the bar's run (the page hook is off while popped out); the words reach the composer via the draft
+		assert.equal(composer().value, "typed");
+		const ws = await recording("spoken tail");
+		await press(composer(), { key: "Enter" });
+		await closeSocket(ws);
+		await settle(400);
+		const sent = posts.filter((p) => p.url.includes("/submit"));
+		assert.equal(sent.length, 1);
+		assert.match(JSON.stringify(sent[0]!.body), /typed spoken tail/);
+		assert.equal(composer().value, "");
+		assert.equal(store.get(`wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`), undefined, "nothing left in the draft");
+	});
+
+	it("popped out, real page: dictating swaps the page composer for the floating chat holding the typed text; stopping brings the composer back with typed plus dictated, unsent", async () => {
+		await mount(new CardClient(null), { poppedOut: true });
+		await typeIn(composer(), "typed");
+		await click(toggle());
+		await settle(60);
+		const ws = FakeWS.last!;
+		await act(async () => ws.open());
+		assert.equal(pageComposers(), 0, "the page composer card is gone");
+		assert.equal(barTa()!.value, "typed", "the floating input shows the page's text");
+		await act(async () => ws.final("tail"));
+		await click(toggle()); // Stop (the floating chat's)
+		await closeSocket(ws);
+		await settle(60);
+		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
+		assert.equal(pageComposers(), 1);
+		assert.equal(composer().value, "typed tail");
+		assert.equal(DRAFT(), "typed tail");
+		assert.deepEqual(posts, [], "nothing sent");
+	});
+
+	it("popped out: a debounced page write pending at the hand-off cannot bring back text the owner cleared in the floating input", async () => {
+		await mount(new CardClient(null), { poppedOut: true });
+		await typeIn(composer(), "page text"); // debounce pending
+		await click(toggle());
+		await settle(60);
+		assert.equal(barTa()!.value, "page text");
+		await typeIn(barTa()!, ""); // clearing removes the draft at once
+		await settle(500); // past the page's old debounce
+		assert.equal(DRAFT(), undefined);
+	});
+
+	it("popped out: words appended to the draft from outside while the chat owns the input are not merged into the hidden page composer's stale text", async () => {
+		await mount(new CardClient(null), { poppedOut: true });
+		await typeIn(composer(), "a");
+		await click(toggle());
+		await settle(60);
+		await typeIn(barTa()!, "a b");
+		await settle(500);
+		const { appendToDraft, draftKey } = await import("../lib/composer-draft.ts");
+		await act(async () => appendToDraft(draftKey("1uk4", FIXTURE_THREAD.id), "X"));
+		await settle(60);
+		assert.equal(DRAFT(), "a b X");
+		assert.equal(barTa()!.value, "a b X");
+	});
+
+	it("popped out: the floating chat says how many attachments wait in the page, and Enter there sends text only", async () => {
+		await mount(new CardClient(null), { poppedOut: true, inFlight: true });
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-1", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		const chat = q('[data-testid="thread-chat"]')!;
+		await act(async () => void chat.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: { types: ["Files"], files: [png] } })));
+		await settle(100);
+		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1, "the page holds one attachment");
+		await click(toggle());
+		await settle(60);
+		assert.equal(pageComposers(), 0);
+		assert.match(q('[data-testid="chat-bar-attachments-waiting"]')?.textContent ?? "", /^1 attachment waiting in the thread$/);
+		await typeIn(barTa()!, "words only");
+		await press(barTa()!, { key: "Enter" });
+		await settle(100);
+		const sent = posts.filter((p) => p.url.includes("/submit"));
+		assert.equal(sent.length, 1);
+		assert.doesNotMatch(JSON.stringify(sent[0]!.body), /up-1/);
 	});
 
 	it("Submit on a card while recording includes the tail; a double click answers once", async () => {

@@ -23,21 +23,21 @@ Object.assign(globalThis, {
 });
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
+const { usePathname } = await import("next/navigation");
 const { AppRouterContext: await_ctx } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { KeyboardShortcuts } = await import("../components/keyboard-shortcuts.tsx");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
-const { AttachedThreadProvider, AttachBarWorkButton, attachToWorkItem, useAttachedThread } = await import("../components/attached-thread.tsx");
+const { AttachedThreadProvider, useAttachedThread } = await import("../components/attached-thread.tsx");
 const { ChatBar, submitToThread } = await import("../components/chat-bar.tsx");
-const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
+const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/chat-bar.ts");
 
 type Call = { url: string; body?: any };
 let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
 let archived = false;
-let created = false;
-let hold: Promise<void> | null = null;
+let gets: string[] = [];
 const handlers = new Map<string, (d: string) => void>();
 const fakeSource = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
 const emit = (n: string, d: object) => act(async () => void handlers.get(n)?.(JSON.stringify(d)));
@@ -47,19 +47,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	const url = String(input);
 	if (init?.method === "POST") {
 		calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
-		if (url === "/api/wolves/w/threads") created = true;
-		return new Response(JSON.stringify({ id: "w/created", title: "Created" }), { status: 200 });
+		return new Response("{}", { status: 200 });
 	}
+	if (init?.method !== "POST") gets.push(url);
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (url === "/api/wolves/w/threads" && hold) {
-		// A list fetched BEFORE the attach (stale snapshot), delivered after it.
-		const wait = hold;
-		hold = null;
-		const snapshot = [th("w/home", { kind: "home" }), th("w/a"), th("w/b")];
-		await wait;
-		return Response.json({ threads: snapshot });
-	}
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b"), ...(created ? [th("w/created")] : [])] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b")] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -108,19 +100,172 @@ afterEach(async () => {
 	calls = [];
 	status = "idle";
 	archived = false;
-	created = false;
-	hold = null;
+	gets = [];
 	handlers.clear();
 });
 after(() => void (globalThis.fetch = realFetch));
 
 const A = { wolf: "w", slug: "a", threadId: "w/a" };
 
+/** Test stand-in for what starting dictation on a thread page does (attach it); the product has no Pop out button. */
+function AttachHere() {
+	const api = useAttachedThread();
+	return <button type="button" data-testid="test-attach" onClick={() => api!.attach({ wolf: "w", threadId: "w/a", slug: "a" })} />;
+}
+
 describe("ChatBar", () => {
-	it("falls back to the home thread with no stored target; navigation never re-targets", async () => {
+	it("renders nothing and reserves no space with nothing popped out, and clears the old home-wolf default", async () => {
+		mem.set("wolfpack:chatbar:attached", JSON.stringify(A));
+		mem.set("wolfpack:chatbar:home-wolf", "w");
 		await mount("/kb");
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-reserve"), "");
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(mem.get("wolfpack:chatbar:attached"), undefined);
+		assert.equal(mem.get("wolfpack:chatbar:home-wolf"), undefined);
+	});
+
+	it("with the extras off the bar fetches no cards, reply peek or needs-you list", async () => {
+		assert.equal(BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.badge || BAR_EXTRAS.switcher, false);
+		await mount("/kb", A);
+		assert.ok(q('[data-testid="chat-bar"]'));
+		assert.deepEqual(gets.filter((u) => /\/threads\/a(\?|$)|needs-you/.test(u)), []);
+		assert.equal(q('[data-testid="chat-bar-card-surface"]')?.children.length ?? 0, 0);
+		assert.equal(q('[data-testid="chat-bar-needs-you"]'), null);
+	});
+
+	it("A thread attached while its page is open shows the bar once the owner leaves", async () => {
+		let go: (u: string) => void = () => {};
+		function Nav() {
+			const r = React.useContext((await_ctx as any));
+			go = (u) => (r as any).push(u);
+			return null;
+		}
+		await mount("/wolf/w/thread/a", undefined, <><Nav /><AttachHere /></>);
+		await click(q('[data-testid="test-attach"]'));
+		assert.equal(q('[data-testid="chat-bar"]'), null, "hidden on its own page");
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "kept across reloads");
+		await act(async () => go("/kb"));
+		await wait();
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
+	});
+
+	it("Dock hides the bar and keeps the draft unsent", async () => {
+		await mount("/kb", A);
+		await type("half a thought");
+		await click(q('[data-testid="chat-bar-dock"]'));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(mem.get("wolfpack:draft:w:w/a"), "half a thought");
+		assert.equal(calls.length, 0);
+	});
+
+	it("landing on the popped-out thread's own page docks it", async () => {
+		let go: (u: string) => void = () => {};
+		function Nav() {
+			const r = React.useContext((await_ctx as any));
+			go = (u) => (r as any).push(u);
+			return null;
+		}
+		await mount("/kb", A, <Nav />);
+		await type("kept");
+		await act(async () => go("/wolf/w/thread/a"));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(mem.get("wolfpack:draft:w:w/a"), "kept");
+	});
+
+	it("a reload on the popped-out thread's own page docks it and leaves the page's draft alone", async () => {
+		mem.set("wolfpack:draft:w:w/a", "typed on the page");
+		await mount("/wolf/w/thread/a", A);
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		window.dispatchEvent(new dom.window.Event("pagehide"));
+		await wait();
+		assert.equal(mem.get("wolfpack:draft:w:w/a"), "typed on the page", "no stale flush from the bar");
+	});
+
+	it("clicking the chip opens the thread page, which docks it", async () => {
+		function Path() {
+			return <span data-testid="path">{usePathname()}</span>;
+		}
+		await mount("/kb", A, <Path />);
+		await click(q('[data-testid="chat-bar-chip"]'));
+		await wait();
+		assert.equal(q('[data-testid="path"]')?.textContent, "/wolf/w/thread/a");
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+	});
+
+	describe("using another thread's composer docks the bar (user actions only)", () => {
+		const pageComposer = (
+			<form data-testid="composer">
+				<textarea data-testid="page-ta" />
+			</form>
+		);
+		const fire = (el: HTMLElement | null, name: string, init: object = {}) =>
+			act(async () => void el!.dispatchEvent(Object.assign(new dom.window.Event(name, { bubbles: true, cancelable: true }), init)));
+		const page = () => q('[data-testid="page-ta"]');
+		const popped = () => mem.get(ATTACHED_KEY) !== undefined;
+
+		it("viewing B with an autofocused composer does not dock", async () => {
+			await mount("/wolf/w/thread/b", A, pageComposer);
+			await act(async () => {
+				page()!.focus();
+				page()!.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
+			});
+			await wait();
+			assert.ok(q('[data-testid="chat-bar"]'));
+			assert.equal(popped(), true);
+		});
+
+		it("clicking B's composer docks, keeping the draft", async () => {
+			await mount("/wolf/w/thread/b", A, pageComposer);
+			await type("for a");
+			await fire(page(), "pointerdown");
+			await wait();
+			assert.equal(q('[data-testid="chat-bar"]'), null);
+			assert.equal(popped(), false);
+			assert.equal(mem.get("wolfpack:draft:w:w/a"), "for a");
+		});
+
+		it("typing in B's composer docks; a shortcut chord does not", async () => {
+			await mount("/wolf/w/thread/b", A, pageComposer);
+			await fire(page(), "keydown", { key: "j", metaKey: true });
+			assert.equal(popped(), true);
+			await fire(page(), "beforeinput");
+			await wait();
+			assert.equal(popped(), false);
+			assert.equal(q('[data-testid="chat-bar"]'), null);
+		});
+
+		it("the bar's own textarea and a textarea outside a composer do not dock", async () => {
+			await mount("/kb", A, <textarea data-testid="loose" />);
+			await fire(ta(), "pointerdown");
+			await fire(ta(), "beforeinput");
+			await fire(q('[data-testid="loose"]'), "pointerdown");
+			await fire(q('[data-testid="loose"]'), "beforeinput");
+			assert.equal(popped(), true);
+			assert.ok(q('[data-testid="chat-bar"]'));
+		});
+
+		it("the popped-out thread's own page does not dock on use (popped out while there)", async () => {
+			await mount("/wolf/w/thread/a", undefined, <>{pageComposer}<AttachHere /></>);
+			await click(q('[data-testid="test-attach"]'));
+			await fire(page(), "pointerdown");
+			await fire(page(), "beforeinput");
+			assert.equal(popped(), true);
+		});
+
+		it("/chat/new docks on a click", async () => {
+			await mount("/chat/new", A, pageComposer);
+			assert.equal(popped(), true);
+			await fire(page(), "pointerdown");
+			await wait();
+			assert.equal(popped(), false);
+		});
 	});
 
 	it("an idle send POSTs reject; a busy send steers; Stop aborts", async () => {
@@ -143,54 +288,6 @@ describe("ChatBar", () => {
 		await submit();
 		await wait();
 		assert.ok(calls.some((c) => c.url.endsWith("/threads/a/abort")));
-	});
-
-	it("each thread keeps its own draft across switches", async () => {
-		await mount("/kb", A);
-		await type("draft for a");
-		await click(q('[data-testid="chat-bar-chip"]'));
-		const b = [...document.querySelectorAll('[data-testid="switcher-entry"]')].find((e) => e.getAttribute("data-thread") === "w/b") as HTMLElement;
-		await click(b);
-		await wait();
-		assert.equal(ta().value, "");
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "draft for a");
-		await type("draft for b");
-		await click(q('[data-testid="chat-bar-chip"]'));
-		const a = [...document.querySelectorAll('[data-testid="switcher-entry"]')].find((e) => e.getAttribute("data-thread") === "w/a") as HTMLElement;
-		await click(a);
-		await wait();
-		assert.equal(ta().value, "draft for a");
-	});
-
-	it("hides on the attached thread's own page and never touches the page's draft", async () => {
-		mem.set("wolfpack:draft:w:w/a", "typed on the page");
-		await mount("/wolf/w/thread/a", A);
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		window.dispatchEvent(new dom.window.Event("pagehide"));
-		await wait();
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "typed on the page", "no stale flush from the bar");
-	});
-
-	it("shows the page's newer draft after leaving the page", async () => {
-		mem.set("wolfpack:draft:w:w/a", "old");
-		let go: (u: string) => void = () => {};
-		function Nav() {
-			const r = React.useContext((await_ctx as any));
-			go = (u) => (r as any).push(u);
-			return null;
-		}
-		await mount("/wolf/w/thread/a", A, <Nav />);
-		mem.set("wolfpack:draft:w:w/a", "newer from the page");
-		await act(async () => go("/kb"));
-		await wait();
-		assert.equal(ta().value, "newer from the page");
-	});
-
-	it("the switcher groups by wolf and leaves out subagents", async () => {
-		await mount("/kb", A);
-		await click(q('[data-testid="chat-bar-chip"]'));
-		assert.equal(document.querySelectorAll('[data-testid="switcher-group"]').length, 1);
-		assert.equal(document.querySelectorAll('[data-testid="switcher-entry"]').length, 3);
 	});
 
 	it("minimized state persists", async () => {
@@ -231,47 +328,32 @@ describe("ChatBar behaviours", () => {
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		mem.clear();
-		await mount("/kb"); // nothing stored: falls to home, but with no wolves online yet the bar may not be attached
-		const none = (document.querySelector('[data-testid="chat-bar"]') === null);
-		if (none) assert.equal(press("lh:kbd-focus-chat-bar"), false);
+		await mount("/kb"); // nothing popped out: no bar, Cmd+J does nothing
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(press("lh:kbd-focus-chat-bar"), false);
 	});
 
-	it("Cmd+J on the own page focuses the page composer", async () => {
+	it("Cmd+J on the popped-out thread's own page focuses the page composer", async () => {
 		let focused = false;
 		const page = (
 			<form data-testid="composer">
 				<textarea ref={(el) => { if (el) el.focus = () => void (focused = true); }} />
 			</form>
 		);
-		await mount("/wolf/w/thread/a", A, page);
+		await mount("/wolf/w/thread/a", undefined, <>{page}<AttachHere /></>);
+		await click(q('[data-testid="test-attach"]')); // attached while still on its own page
 		let prevented = false;
 		window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-focus-chat-bar", { detail: { event: { preventDefault: () => void (prevented = true) } } }));
 		assert.ok(focused && prevented);
 	});
 
-	it("a live archive of the attached thread falls back to home", async () => {
+	it("a live archive of the popped-out thread docks it", async () => {
 		await mount("/kb", A);
 		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a");
 		archived = true;
 		await emit("needs-you-changed", { wolf: "w", threadId: "w/a", status: "idle" });
 		await wait();
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
-	});
-});
-
-describe("refresh ordering", () => {
-	it("a refresh that started before an attach does not overwrite the fresher list", async () => {
-		let release!: () => void;
-		hold = new Promise<void>((r) => (release = r));
-		await mount("/work/x", A, <AttachBarWorkButton wolf="w" workItemId="work-w-3" />);
-		await click(q('[data-testid="attach-bar-work"]'));
-		await wait();
-		release(); // the stale snapshot (no w/created) lands now
-		await wait();
-		await click(q('[data-testid="chat-bar-chip"]'));
-		const ids = [...document.querySelectorAll('[data-testid="switcher-entry"]')].map((e) => e.getAttribute("data-thread"));
-		assert.ok(ids.includes("w/created"), `list kept the fresher thread: ${ids}`);
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/created");
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
 	});
 });
 
@@ -304,7 +386,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		});
 		await wait();
 	}
-	it("Cmd+J un-minimizes and focuses; Cmd+Shift+J opens the switcher; a bare j in another input is ignored", async () => {
+	it("Cmd+J un-minimizes and focuses; Cmd+Shift+J does nothing (switcher off); a bare j in another input is ignored", async () => {
 		await mountWithKeys("/kb");
 		await click(q('[data-testid="chat-bar-minimize"]'));
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
@@ -317,7 +399,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 		await keydown({ key: "j", metaKey: true, shiftKey: true });
 		await wait();
-		assert.ok(q('[data-testid="chat-bar-switcher"]'));
+		assert.equal(q('[data-testid="chat-bar-switcher"]'), null, "switcher is off");
 	});
 	it("Cmd+J is left to the browser with nothing attached", async () => {
 		await mountWithKeys("/kb");
@@ -338,34 +420,6 @@ describe("real keydown through KeyboardShortcuts", () => {
 		});
 		const ev = await keydown({ key: "j", metaKey: true });
 		assert.equal(ev.defaultPrevented, false);
-	});
-});
-
-describe("Attach bar here (work item)", () => {
-	it("a double click creates the thread once", async () => {
-		await mount("/work/x", A, <AttachBarWorkButton wolf="w" workItemId="work-w-2" />);
-		const b = q('[data-testid="attach-bar-work"]');
-		await act(async () => {
-			const key = Object.keys(b!).find((k) => k.startsWith("__reactProps$"))!;
-			(b as any)[key].onClick();
-			(b as any)[key].onClick();
-		});
-		await wait();
-		assert.equal(calls.filter((c) => c.url === "/api/wolves/w/threads").length, 1);
-	});
-	it("creates the item's thread, then attaches", async () => {
-		await mount("/work/x", A, <AttachBarWorkButton wolf="w" workItemId="work-w-1" />);
-		await click(q('[data-testid="attach-bar-work"]'));
-		await wait();
-		const create = calls.find((c) => c.url === "/api/wolves/w/threads")!;
-		assert.deepEqual(create.body, { kind: "feature", workItemId: "work-w-1" });
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/created");
-	});
-	it("surfaces a failed open without attaching", async () => {
-		let attached = false;
-		const msg = await attachToWorkItem("w", "x", async () => ({ ok: false, reason: "error", message: "nope" }) as never, () => void (attached = true));
-		assert.equal(msg, "nope");
-		assert.equal(attached, false);
 	});
 });
 

@@ -21,6 +21,8 @@ describe("groupRuns", () => {
 		assert.equal(workIdOfSubject("no id here"), null);
 		assert.equal(branchShortId("feat/n73bJGY-console-polish--thread-git-graph-b7f21ea4"), "n73bJGY");
 		assert.equal(branchShortId("feat/home--x-1"), null);
+		// an all-lowercase word is not a base62 work id (feat/preview-slot-pair would otherwise be looked up as work-*-preview)
+		assert.equal(branchShortId("feat/preview-slot-pair"), null);
 	});
 	it("sums added and removed lines per run from numstat", () => {
 		const log = parseLog("\x01b\0a\0two (work-wolfpack-1nLJglH)\x00200\n3\t1\tf.ts\n-\t-\timg.png\n\x01a\0\0one (work-wolfpack-1nLJglH)\x00100\n10\t4\tg.ts\n");
@@ -289,6 +291,17 @@ describe("timeScale fit", () => {
 		assert.ok(fit.x(NOW) - fit.x(NOW - 4 * 3600) >= 190, `last 4h got ${fit.x(NOW) - fit.x(NOW - 4 * 3600)}px of 380`);
 		const xs = [...quiet, ...busy].map(fit.x);
 		assert.deepEqual([...xs].sort((a, b) => a - b), xs);
+	});
+	it("home shape: 2 PR clusters 4 and 1 days ago, 3 splits in the last 3 hours, 380px; quiet gaps stay under their 48px cap and the last 3 hours get 40%+", () => {
+		const times = [4 * DAY, 4 * DAY - 600, 1 * DAY, 1 * DAY - 600].map((d) => NOW - d).concat([3 * 3600, 2 * 3600, 3600].map((h) => NOW - h));
+		const fit = timeScale(times, NOW - 7 * DAY, NOW, { width: 380, grow: false });
+		const anchors = [NOW - 7 * DAY, ...times, NOW].sort((a, b) => a - b);
+		for (let i = 1; i < anchors.length; i++) {
+			if (anchors[i]! - anchors[i - 1]! > 8 * 3600) assert.ok(fit.x(anchors[i]!) - fit.x(anchors[i - 1]!) <= 48.001, `quiet gap ${i} is ${fit.x(anchors[i]!) - fit.x(anchors[i - 1]!)}px`);
+		}
+		const recent = fit.x(NOW) - fit.x(NOW - 3 * 3600);
+		assert.ok(recent >= 380 * 0.4, `last 3h got ${recent}px of 380`);
+		assert.ok(fit.width <= 380 + 0.001);
 	});
 	it("only when the minimums alone overflow does it scale everything evenly", () => {
 		const times = Array.from({ length: 20 }, (_, i) => NOW - 3600 + i * 60);

@@ -120,7 +120,9 @@ export function groupRuns(log: RawCommit[]): RunNode[] {
 
 /** `feat/1nLJglH-slug--agent-ab12` → `1nLJglH` (the 7-char id part of a feature branch name), or null. */
 export function branchShortId(branch: string): string | null {
-	return /^feat\/([0-9A-Za-z]{7})-/.exec(branch)?.[1] ?? null;
+	const id = /^feat\/([0-9A-Za-z]{7})-/.exec(branch)?.[1];
+	// Work ids are random base62: an all-lowercase word (feat/preview-slot-pair) is not one.
+	return id && /[A-Z0-9]/.test(id) ? id : null;
 }
 
 /** "4d ago" style age of a unix-seconds time. */
@@ -282,6 +284,8 @@ export const MAX_GAP_PX = 48;
 const PX_PER_HOUR = 2;
 /** Quiet stretches never squeeze below this while a busy stretch still needs room. */
 const QUIET_FLOOR_PX = 4;
+/** A busy gap takes spare card width up to this much. */
+const BUSY_MAX_PX = 80;
 
 /**
  * Squeeze quiet stretches: a piecewise-linear time axis through the moment times where each stretch between
@@ -297,10 +301,18 @@ export function timeScale(times: number[], start: number, end: number, fit?: { w
 	// Fit a target width. Too wide: squeeze the quiet gaps toward MIN_GAP_PX first (busy stretches keep their width),
 	// and scale everything evenly only if the minimums alone overflow. Grow (the large view) stretches evenly.
 	const natural = xs[xs.length - 1]!;
+	// Busy: a recent (last day) gap whose neighbours are under 8h apart; everything else is quiet (never past MAX_GAP_PX).
+	const busy = xs.slice(1).map((_, i) => anchors[i + 1]! - anchors[i]! < (MIN_GAP_PX / PX_PER_HOUR) * 3600 && anchors[i + 1]! > end - 86400);
+	if (fit && !fit.grow && natural > 0 && natural < fit.width && busy.some(Boolean)) {
+		// Room to spare in a card: it goes to the recent busy stretch (up to BUSY_MAX_PX a gap), never to a quiet gap.
+		// What is still left over is the caller's to leave empty at the left, so "now" stays at the right edge.
+		const nb = busy.filter(Boolean).length;
+		const each = Math.min(BUSY_MAX_PX, MIN_GAP_PX + (fit.width - natural) / nb);
+		const gaps = xs.slice(1).map((v, i) => v - xs[i]!);
+		for (let i = 1; i < xs.length; i++) xs[i] = xs[i - 1]! + (busy[i - 1] ? Math.max(gaps[i - 1]!, each) : gaps[i - 1]!);
+	}
 	if (fit && natural > 0 && (natural > fit.width || fit.grow)) {
 		const gaps = xs.slice(1).map((v, i) => v - xs[i]!);
-		// Busy: a recent (last day) gap whose neighbours are under 8h apart; everything else is quiet.
-		const busy = gaps.map((_, i) => anchors[i + 1]! - anchors[i]! < (MIN_GAP_PX / PX_PER_HOUR) * 3600 && anchors[i + 1]! > end - 86400);
 		const n = gaps.length;
 		const b = busy.filter(Boolean).length;
 		const q = n - b;

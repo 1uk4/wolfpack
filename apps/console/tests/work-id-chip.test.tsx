@@ -203,6 +203,7 @@ describe("hover card", () => {
 		assert.equal(calls.length, n);
 		assert.equal((await lookupWorkItem("work-wolfpack-preview-slot-pair")).kind, "unknown");
 		assert.equal((await lookupWorkItem("origin/wolf/1uk4")).kind, "unknown");
+		for (const d of ["personal", "snapjack", "wolfpack"]) assert.equal((await lookupWorkItem(`work-${d}-preview`)).kind, "unknown");
 		assert.equal(calls.length, n);
 	});
 
@@ -218,6 +219,28 @@ describe("hover card", () => {
 		await act(async () => root!.render(<MomentList overview={{ ...EMPTY_OVERVIEW, main: { name: "w", kind: "wolf" } }} rings={[ring]} days={30} nowSec={NOW} />));
 		await flush();
 		assert.match(q('[data-testid="git-moments"] li')!.textContent!, /Resolved row title/);
+	});
+
+	it("a home lane label shows the branch name first and updates to the work item title once the lookup resolves, even after a transient failure", async () => {
+		const { Swimlanes } = await import("../components/branch-graph.tsx");
+		const { EMPTY_OVERVIEW } = await import("../src/core/index.ts");
+		const NOW = 1_800_000_000;
+		const branch = "feat/bOm8itk-browser-slot-pair";
+		const record = { id: "work-wolfpack-bOm8itk", title: "Preview agent slots", kind: "feature", stage: "building", domain: "wolfpack", plan: "", record: "" };
+		respond({ "work-wolfpack-bOm8itk": record });
+		const ok = (globalThis as { fetch: (u: string) => Promise<Response> }).fetch;
+		let wolvesCalls = 0;
+		// the first wolves list request fails (a blip); the next works
+		(globalThis as Record<string, unknown>).fetch = (u: string) => (u === "/api/wolves" && wolvesCalls++ === 0 ? Promise.resolve(Response.json({ error: "x" }, { status: 503 })) : ok(u));
+		const overview = { ...EMPTY_OVERVIEW, main: { name: "wolf/w", kind: "wolf" as const }, home: "wolf/w", branches: [{ name: branch, shortId: "bOm8itk", landed: false, ahead: 1, behind: 0, forkAt: NOW - 3600, parent: "wolf/w" }] } as never;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<Swimlanes overview={overview} rings={[]} days={7} nowSec={NOW} />));
+		const labels = () => [...document.querySelectorAll("svg text")].map((t) => t.textContent);
+		assert.ok(labels().some((t) => t!.includes("bOm8")), "branch name before the lookup");
+		await act(async () => { await new Promise((r) => setTimeout(r, 2200)); });
+		assert.ok(labels().some((t) => t!.includes("Preview agent slots")), `labels: ${labels().join(" | ")}`);
 	});
 
 	it("in-flight lookups are deduped", async () => {

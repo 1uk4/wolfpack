@@ -32,17 +32,24 @@ function useBranchTitle(shortId: string | null, domain?: string): string | undef
 	useEffect(() => {
 		if (!shortId) return;
 		let live = true;
-		void (async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const attempt = async (left: number): Promise<void> => {
+			let blip = false;
 			for (const id of candidateWorkIds(shortId, domain)) {
 				const v = await lookupWorkItem(id);
 				if (v.kind === "ok") {
 					if (live) setTitle(v.item.title);
 					return;
 				}
+				if (v.kind === "unavailable") blip = true;
 			}
-		})();
+			// A transient failure (no wolf answered yet) is retried a couple of times, so the label still turns into the title.
+			if (blip && left > 0 && live) timer = setTimeout(() => void attempt(left - 1), 1500);
+		};
+		void attempt(3);
 		return () => {
 			live = false;
+			if (timer) clearTimeout(timer);
 		};
 	}, [shortId, domain]);
 	return title;
@@ -164,7 +171,9 @@ export function Swimlanes({ overview, rings, days, nowSec, labelW = CARD_LABEL_W
 	const unmergedSince = overview.main.kind === "feature" ? sinceOf(overview.unmerged) : null;
 	const times = [...raw.map((m) => m.at), ...[unreleasedSince, unmergedSince].filter((t): t is number => t !== null && t > start)];
 	const scale = timeScale(times, start, nowSec, fitWidth ? { width: Math.max(80, fitWidth - labelW - PAD_R), grow } : undefined);
-	const x0 = labelW;
+	// Spare card width (the axis never stretches quiet gaps) is left empty at the LEFT, so "now" stays at the right edge.
+	const spare = fitWidth && !grow ? Math.max(0, fitWidth - labelW - PAD_R - scale.width) : 0;
+	const x0 = labelW + spare;
 	const x = (t: number) => x0 + scale.x(t);
 	const x1 = x(nowSec);
 	const width = x1 + PAD_R;

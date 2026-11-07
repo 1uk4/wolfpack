@@ -49,7 +49,14 @@ export function resetWorkLookupCache(): void {
 
 /** One short-lived wolves list shared by every lookup. */
 function sharedWolves(now: number) {
-	if (!wolvesCache || now - wolvesCache.at > WOLVES_TTL_MS) wolvesCache = { at: now, value: fetchWolves() };
+	if (!wolvesCache || now - wolvesCache.at > WOLVES_TTL_MS) {
+		const value = fetchWolves();
+		wolvesCache = { at: now, value };
+		// A failed list is not kept: the next lookup asks again instead of failing for the whole TTL.
+		void value.then((r) => {
+			if (!r.ok && wolvesCache?.value === value) wolvesCache = null;
+		});
+	}
 	return wolvesCache.value;
 }
 
@@ -108,7 +115,7 @@ async function fetchLookup(id: string, current: string | null, now: number): Pro
 /** Cached lookup: one request per id per TTL, concurrent callers share it. Transient failures are not cached. */
 export function lookupWorkItem(id: string, current: string | null = null, now: () => number = Date.now): Promise<WorkLookup> {
 	// Not a work id (a branch name, a ref): never asked, so it cannot 404.
-	if (!/^work-[a-z]+-[0-9A-Za-z]{7}$/.test(id)) return Promise.resolve({ kind: "unknown" });
+	if (!/^work-[a-z]+-(?=[0-9A-Za-z]*[A-Z0-9])[0-9A-Za-z]{7}$/.test(id)) return Promise.resolve({ kind: "unknown" });
 	const c = cache.get(id);
 	// A confirmed 404 stays cached for the whole session; found items refresh after the TTL.
 	if (c && (c.value.kind === "unknown" || now() - c.at < WORK_CACHE_TTL_MS)) return Promise.resolve(c.value);

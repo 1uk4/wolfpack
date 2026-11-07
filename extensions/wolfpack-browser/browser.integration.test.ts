@@ -15,7 +15,8 @@ import createBrowserExtension from "./durable.js";
 import { BrowserSession, defaultPairRunner, findBrowser, isSlotUrl } from "./session.js";
 
 const found = findBrowser({}, true);
-const d = found ? describe : describe.skip;
+// Real Chromium timing is unreliable on 2-core GitHub runners, so the live suites run locally only (WOLFPACK_LIVE_BROWSER=1 forces them on).
+const d = found && (!process.env.CI || process.env.WOLFPACK_LIVE_BROWSER === "1") ? describe : describe.skip;
 
 d("browser extension (live)", () => {
   let server: Server;

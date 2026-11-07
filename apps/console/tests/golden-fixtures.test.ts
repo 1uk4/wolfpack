@@ -28,7 +28,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN = path.join(HERE, "fixtures", "golden-data");
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lh-golden-"));
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "wp-golden-"));
 fs.cpSync(GOLDEN, TMP, { recursive: true });
 process.env.WOLFPACK_DATA_DIR = TMP;
 

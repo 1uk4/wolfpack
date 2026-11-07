@@ -315,7 +315,7 @@ export function GraphPane({
 			data-kind={card.kind}
 			data-node={card.id}
 			style={{ width }}
-			className="lh-no-drag relative flex h-full shrink-0 flex-col border-l bg-card text-left"
+			className="wp-no-drag relative flex h-full shrink-0 flex-col border-l bg-card text-left"
 		>
 			<div
 				role="separator"

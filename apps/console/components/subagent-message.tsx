@@ -49,7 +49,7 @@ export function SubagentMessage({ origin, children, wolf }: { origin: SubagentOr
 				{!open && <span data-testid="subagent-message-summary" className="min-w-0 flex-1 truncate font-prose text-muted-foreground">{origin.summary}</span>}
 			</div>
 			{open && (
-				<div data-testid="subagent-message-body" className="lh-prose mt-1 text-foreground">
+				<div data-testid="subagent-message-body" className="wp-prose mt-1 text-foreground">
 					<MessageResponse>{origin.body}</MessageResponse>
 				</div>
 			)}

@@ -1,3 +1,5 @@
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "@/src/core/legacy-storage-boot.ts";
 import type { NeedsYouNotification } from "@/src/core";
 import { desktopBridge } from "@/components/sidebar";
 
@@ -10,7 +12,7 @@ import { desktopBridge } from "@/components/sidebar";
  * without both, nothing fires. A click focuses the tab and navigates.
  */
 
-export const NOTIFY_PREF_KEY = "lh:notify-needs-you";
+export const NOTIFY_PREF_KEY = "wolfpack:notify-needs-you";
 
 const webSupported = (): boolean => typeof window !== "undefined" && typeof Notification !== "undefined";
 

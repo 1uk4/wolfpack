@@ -50,8 +50,8 @@ const MIN_USABLE = 96; // floor: a shorter cap is an unusable sliver; the
  *  settings dialog locks; anything un-lockable keeps the re-place-on-
  *  scroll fallback below). Count-based: overlapping menus open/close in
  *  any order and the accounting stays balanced. */
-export const MENU_OPEN_EVENT = "lh:menu-open";
-export const MENU_CLOSE_EVENT = "lh:menu-close";
+export const MENU_OPEN_EVENT = "wolfpack:menu-open";
+export const MENU_CLOSE_EVENT = "wolfpack:menu-close";
 
 export type MenuSide = "up" | "down";
 export type MenuAlign = "left" | "right";
@@ -229,7 +229,7 @@ export function MenuShell({
 			<div
 				ref={menuRef}
 				data-testid={testid}
-				data-lh-menu=""
+				data-wp-menu=""
 				style={{ position: "fixed", left: 0, top: 0, visibility: "hidden" }}
 				className={menuClass}
 			>
@@ -242,7 +242,7 @@ export function MenuShell({
 		<div
 			ref={menuRef}
 			data-testid={testid}
-			data-lh-menu=""
+			data-wp-menu=""
 			tabIndex={-1}
 			onKeyDown={onBodyKeyDown}
 			style={{ position: "fixed", zIndex: 60, ...placed.style, maxHeight: placed.maxHeight, overflowY: "auto" }}

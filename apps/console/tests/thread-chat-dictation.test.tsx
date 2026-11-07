@@ -1,7 +1,7 @@
 /**
  * ThreadChat dictation wiring (real mount; fake Deepgram socket + mic, no real audio): the bar renders in the dock,
  * finishing inserts into the composer or the focused card field (free-text / Other), composer focus hands the target
- * back, Esc and the lh:kbd-* events drive the run, Send/Submit while recording include the final tail exactly once,
+ * back, Esc and the wolfpack:kbd-* events drive the run, Send/Submit while recording include the final tail exactly once,
  * Stop stays available while a turn runs, and a missing key shows the keyless hint.
  */
 import React, { act } from "react";
@@ -285,7 +285,7 @@ describe("ThreadChat dictation", () => {
 		assert.equal(q('[data-testid="dictation-bar"]'), null);
 		await click(toggle());
 		assert.ok(q('[data-testid="dictation-bar"]'), "meter shows from the click");
-		await act(async () => window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation")));
+		await act(async () => window.dispatchEvent(new CustomEvent("wolfpack:kbd-cancel-dictation")));
 		assert.equal(q('[data-testid="dictation-bar"]'), null);
 	});
 
@@ -521,12 +521,12 @@ describe("ThreadChat dictation", () => {
 		assert.equal(answers[0]!.body.answers.why.value, "because and more");
 	});
 
-	it("the lh:kbd-toggle-dictation event starts and stops a run (⌘D)", async () => {
+	it("the wolfpack:kbd-toggle-dictation event starts and stops a run (⌘D)", async () => {
 		await mount(new CardClient(null));
-		await act(async () => window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation")));
+		await act(async () => window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation")));
 		await settle();
 		assert.ok(q('[data-testid="dictation-bar"]'), "run started");
-		await act(async () => window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation")));
+		await act(async () => window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation")));
 		await act(async () => FakeWS.last?.emit("close", { code: 1000 }));
 		await settle();
 		assert.equal(q('[data-testid="dictation-bar"]'), null, "run stopped");

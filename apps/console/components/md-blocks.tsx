@@ -152,7 +152,7 @@ function MermaidInline({ chart }: { chart: string }) {
 	// so a chart would otherwise stretch to the full column and render its
 	// text larger than the session's own text. Cap the holder at the width
 	// where the chart's 16px base font lands at the SESSION font (measured
-	// live from the wrapper — --lh-prose-size today): a chart may shrink to
+	// live from the wrapper — --wp-prose-size today): a chart may shrink to
 	// fit the column, but never blow its text up past the chat's.
 	const holderRef = useRef<HTMLDivElement>(null);
 	const [capW, setCapW] = useState<number | null>(null);
@@ -502,12 +502,12 @@ export function MathDisplay(props: ComponentProps<"span"> & ExtraProps) {
 
 /** Bold as the REAL element (appearance fix, 2026-09-23): streamdown's
  *  default `strong` renders `<span class="font-semibold" data-streamdown=
- *  "strong">` — and `.lh-prose :where(strong, b)` matches strong/b
+ *  "strong">` — and `.wp-prose :where(strong, b)` matches strong/b
  *  ELEMENTS, so neither the factory ink (#ee928c) nor a settings
  *  boldColor ever landed on bold text (italic worked: streamdown leaves
  *  `em` native). Rendering the semantic element restores screen-reader
  *  emphasis AND lets the designed token rule apply unmodified — color
- *  --lh-ink-strong, weight 700 (beating the old 600 utility). */
+ *  --wp-ink-strong, weight 700 (beating the old 600 utility). */
 export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
 	const { children, className, node, ...rest } = props;
 	return (

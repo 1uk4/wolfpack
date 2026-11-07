@@ -5,7 +5,7 @@
  * the factory defaults and applied as RUNTIME CSS variables on <html>.
  *
  * Why variables and not className swaps: every seam the settings touch was
- * built token-first (--font-prose, --lh-prose-size, --lh-ink-strong, …),
+ * built token-first (--font-prose, --wp-prose-size, --wp-ink-strong, …),
  * so application is setProperty and nothing re-renders. The ONE thing the
  * variables can't reach — the mode — is dark-only this wave (the light
  * palette is designed in the later design wave; <html class="dark"> is
@@ -82,16 +82,16 @@ export function appearanceVars(a: ReturnType<typeof resolveAppearance>): Record<
 	}
 	// The ONE documented reading-size variable (typography round 4): prose,
 	// inputs, and session titles all read it, so one setProperty moves them.
-	vars["--lh-prose-size"] = `${a.proseFontSize}px`;
+	vars["--wp-prose-size"] = `${a.proseFontSize}px`;
 	// Session names: CMU Serif by default; the toggle swaps the title font
 	// to the prose family — covers chat.tsx + new-session.tsx titles with
 	// zero component edits (they use the .font-title utility).
 	if (!a.sessionNameSerif) vars["--font-title"] = "var(--font-prose)";
 	// Markdown rendering: heading weight + the emphasis inks (the vars
 	// were built "ready for the settings UI").
-	vars["--lh-heading-weight"] = String(a.mdRendering.headingWeight);
-	if (a.mdRendering.boldColor !== null) vars["--lh-ink-strong"] = a.mdRendering.boldColor;
-	if (a.mdRendering.italicColor !== null) vars["--lh-ink-italic"] = a.mdRendering.italicColor;
+	vars["--wp-heading-weight"] = String(a.mdRendering.headingWeight);
+	if (a.mdRendering.boldColor !== null) vars["--wp-ink-strong"] = a.mdRendering.boldColor;
+	if (a.mdRendering.italicColor !== null) vars["--wp-ink-italic"] = a.mdRendering.italicColor;
 	return vars;
 }
 

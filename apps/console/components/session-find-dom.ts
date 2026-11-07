@@ -6,7 +6,7 @@ import { findSessionTextMatches } from "@/src/core";
 const EXCLUDED = [
 	"script", "style", "noscript", "textarea", "input", "select", "iframe", "canvas",
 	"title", "defs", "metadata", "desc", ".katex-mathml", ".sr-only", "[hidden]",
-	"[data-session-find-exclude]", "[data-lh-menu]", '[role="menu"]', '[role="dialog"]', '[role="tooltip"]',
+	"[data-session-find-exclude]", "[data-wp-menu]", '[role="menu"]', '[role="dialog"]', '[role="tooltip"]',
 ].join(",");
 
 interface TextPoint { node: Text; offset: number }

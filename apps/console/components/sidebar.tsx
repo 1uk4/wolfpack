@@ -1,5 +1,7 @@
 "use client";
 
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "@/src/core/legacy-storage-boot.ts";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -42,7 +44,7 @@ import { kbdEventForAction } from "@/src/core";
  * layout) and across reloads (localStorage).
  */
 
-const STORAGE_KEY = "lh:sidebar-open";
+const STORAGE_KEY = "wolfpack:sidebar-open";
 
 /*
  * Narrow-window behavior (owner, 2026-09-17): below SIDEBAR_AUTOCLOSE the
@@ -53,7 +55,7 @@ const STORAGE_KEY = "lh:sidebar-open";
  * rendered = pref && !narrow, where pref is the persisted user choice.
  * Manual closes persist and stay closed; auto-close does not touch the
  * preference. Opening the sidebar while narrow asks the Electron shell to
- * widen the window to the threshold (window.lh.expandWindow, IPC in
+ * widen the window to the threshold (window.wolfpack.expandWindow, IPC in
  * electron/main.cjs) — the resize listener flips `narrow` and the sidebar
  * appears. In the plain browser there is no window to widen and no
  * suppression — a narrow tab opens the sidebar if the user says so.
@@ -69,10 +71,10 @@ type DesktopBridgeApi = {
 	/** Read-only host OS; determines the native-control gutter. */
 	platform?: string;
 	expandWindow: () => void;
-	/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
+	/** The zoom truth (owner round 7): subscribes to "wolfpack:zoom" pushes; returns unsubscribe. */
 	onZoom?: (cb: (factor: number) => void) => () => void;
 	getZoom?: () => Promise<number>;
-	/** Auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes once a staged update exists. */
+	/** Auto-update channel (Wave C, 2026-10-10): "wolfpack:update-status" pushes once a staged update exists. */
 	onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
 	installUpdate?: () => void;
 	/** Needs-you notification (ticket 4): main shows it only while the window is unfocused, once per `key`. */
@@ -89,7 +91,7 @@ declare global {
 	}
 }
 
-/** The desktop preload bridge: `window.wolfpack`, or the old preload's `window.lh`. */
+/** The desktop preload bridge: `window.wolfpack`, or the old preload's legacy global. */
 export const desktopBridge = (): DesktopBridgeApi | undefined =>
 	typeof window === "undefined" ? undefined : (window.wolfpack ?? window.lh); // legacy window.lh shim, remove after the next desktop release
 
@@ -120,22 +122,22 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
-		// .lh-electron CSS (app/globals.css) that turns the header bands
+		// .wp-electron CSS (app/globals.css) that turns the header bands
 		// into the window's drag surface. Post-mount only — server HTML
 		// and first client render must agree (no hydration mismatch),
 		// and in the plain browser the class never appears.
 		if (IS_ELECTRON) {
-			document.documentElement.classList.add("lh-electron");
-			document.documentElement.dataset.lhPlatform = desktopBridge()?.platform ?? "";
+			document.documentElement.classList.add("wp-electron");
+			document.documentElement.dataset.wpPlatform = desktopBridge()?.platform ?? "";
 		}
 
 		// THE ZOOM TRUTH (owner round 7, 2026-10-05): ⌘±/⌘0 zoom the UI
 		// (Electron zoomFactor) while the native traffic lights stay
 		// physical-fixed — the CSS gutter lengths divide by this factor so
 		// their RENDERED size never moves. getZoom covers the first-paint
-		// race; every later change arrives as an lh:zoom push.
+		// race; every later change arrives as an wolfpack:zoom push.
 		const setZoomVar = (factor: number) =>
-			document.documentElement.style.setProperty("--lh-zoom", String(factor));
+			document.documentElement.style.setProperty("--wp-zoom", String(factor));
 		const off = desktopBridge()?.onZoom?.(setZoomVar);
 		void desktopBridge()?.getZoom?.().then(setZoomVar);
 
@@ -200,8 +202,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
 	// is the fix for the interlude bug (the listener sat on the pre-
-	// convention name "lh:toggle-sidebar" while the dispatcher sent
-	// "lh:kbd-toggle-sidebar", so ⌘B silently did nothing; owner
+	// convention name "wolfpack:toggle-sidebar" while the dispatcher sent
+	// "wolfpack:kbd-toggle-sidebar", so ⌘B silently did nothing; owner
 	// 2026-09-25).
 	useEffect(() => {
 		const event = kbdEventForAction("toggle-sidebar");
@@ -214,7 +216,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		<SidebarContext.Provider value={{ open: open && !narrow, toggle, mobile, closeList, registerToggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			{/* phone: the shell owns the top safe-area inset (pages without a header must not draw under the notch) */}
-			<div data-lh-shell className={cn("flex h-dvh max-md:pt-[env(safe-area-inset-top)]", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			<div data-wp-shell className={cn("flex h-dvh max-md:pt-[env(safe-area-inset-top)]", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 			<FloatingBack toggles={toggles} open={open && !narrow} mobile={mobile} onClick={toggle} />
 		</SidebarContext.Provider>
 	);
@@ -269,8 +271,8 @@ export function SidebarToggle() {
 	return (
 		<span
 			className={cn(
-				"sidebar-motion lh-no-drag relative flex h-9 shrink-0 overflow-hidden duration-200",
-				open ? "w-0 -mr-3" : "w-9 mr-0 lh-closed-toggle",
+				"sidebar-motion wp-no-drag relative flex h-9 shrink-0 overflow-hidden duration-200",
+				open ? "w-0 -mr-3" : "w-9 mr-0 wp-closed-toggle",
 			)}
 		>
 			<Hint label="Open sidebar" action="toggle-sidebar">
@@ -458,11 +460,11 @@ export function SessionRow({
 			)}
 			<span className="min-w-0 flex-1">
 				{/* Titles are human WORDS — Source Sans 3, the
-				    same voice the words were typed in (every input is lh-prose);
+				    same voice the words were typed in (every input is wp-prose);
 				    the meta line below stays JetBrains Mono (machine data). One
 				    rule, finally applied to the picker too (owner, typography
 				    round): mono = chrome, Source Sans = human words. */}
-				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--lh-prose-size)">
+				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
 					{home && <WorkflowIcon data-testid="orchestrator-icon" aria-label="Orchestrator" className="size-[1em] shrink-0 text-muted-foreground" />}
 					<span className="truncate">{chat.title}</span>
 				</span>
@@ -522,7 +524,7 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 					}}
 					aria-label="Rename session"
 					data-testid="session-rename-input"
-					className="lh-input w-full min-w-0 truncate border-0 border-b border-border bg-transparent px-0 text-foreground outline-none"
+					className="wp-input w-full min-w-0 truncate border-0 border-b border-border bg-transparent px-0 text-foreground outline-none"
 				/>
 				<span className="block truncate text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
@@ -552,7 +554,7 @@ export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
 	return (
 		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
 			<span className="min-w-0 flex-1">
-				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--lh-prose-size)">
+				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
 					<WorkflowIcon aria-hidden className="size-[1em] shrink-0 text-muted-foreground" />
 					<span className="truncate">{wolf.name}</span>
 				</span>
@@ -714,19 +716,19 @@ export function SessionsSidebar() {
 	}), []);
 
 	/* Instant rename propagation (2026-09-17): the chat header's rename
-	   commits dispatch lh:chat-renamed; patch the snapshot in place instead
+	   commits dispatch wolfpack:chat-renamed; patch the snapshot in place instead
 	   of waiting for the 2.5s poll. */
 	useEffect(() => {
 		const onRenamed = (e: Event) => {
 			const { id, title } = (e as CustomEvent<{ id: string; title: string }>).detail;
 			setChats((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, title } : c)) : prev));
 		};
-		window.addEventListener("lh:chat-renamed", onRenamed);
-		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
+		window.addEventListener("wolfpack:chat-renamed", onRenamed);
+		return () => window.removeEventListener("wolfpack:chat-renamed", onRenamed);
 	}, []);
 
 	/* INSTANT TURN-STATE (owner, sidebar round 2026-10-02): the open
-	   session broadcasts lh:turn-state the instant its turn starts
+	   session broadcasts wolfpack:turn-state the instant its turn starts
 	   (submitted — the optimistic machine's own flip) and at settle —
 	   busy mirrors the server's own definition (isTurnRunning), so the
 	   patch is exact: spinner up the moment the action happens, cleared
@@ -751,8 +753,8 @@ export function SessionsSidebar() {
 			setChats((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, busy: false } : c)) : prev));
 			void refresh(); // settle: the server snapshot is now truthful — land it now
 		};
-		window.addEventListener("lh:turn-state", onTurnState);
-		return () => window.removeEventListener("lh:turn-state", onTurnState);
+		window.addEventListener("wolfpack:turn-state", onTurnState);
+		return () => window.removeEventListener("wolfpack:turn-state", onTurnState);
 	}, [refresh]);
 
 	/* PUSH (architecture S6, 2026-10-02): the 2.5s poll is RETIRED — the
@@ -761,8 +763,8 @@ export function SessionsSidebar() {
 	   writes), and turn-started/turn-settled for EVERY chat (unfiltered:
 	   any chat's turn flips busy/order/phase in this list). Announced
 	   fetches ride the 250ms trailing debounce (the S4/S5 law); resync
-	   (reconnect / dev-restart) is immediate. lh:turn-state +
-	   lh:chat-renamed stay for same-tab INSTANTS — local beats any
+	   (reconnect / dev-restart) is immediate. wolfpack:turn-state +
+	   wolfpack:chat-renamed stay for same-tab INSTANTS — local beats any
 	   round-trip. */
 	const refreshRef = useRef(refresh);
 	refreshRef.current = refresh;
@@ -873,7 +875,7 @@ export function SessionsSidebar() {
 		if (ctxChatId === null) return;
 		const onPointerDown = (e: PointerEvent) => {
 			const target = e.target as Node;
-			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
+			if (target instanceof Element && target.closest("[data-wp-menu]")) return;
 			if (ctxAnchorRef.current?.contains(target)) return;
 			setCtxChatId(null);
 		};
@@ -893,7 +895,7 @@ export function SessionsSidebar() {
 
 	// Inline rename (owner ruling, wave 6): the row swaps to a text input;
 	// commit rides the SAME plumbing as the header rename — PUT the title,
-	// then lh:chat-renamed patches every listener (this sidebar's own
+	// then wolfpack:chat-renamed patches every listener (this sidebar's own
 	// listener patches the snapshot instantly; an open chat header hears
 	// it too). Esc discards; empty commit discards (the header's rules).
 	const commitRename = useCallback(async (id: string, next: string) => {
@@ -907,7 +909,7 @@ export function SessionsSidebar() {
 				body: JSON.stringify({ title: t }),
 			});
 			if (!res.ok) throw new Error(`rename failed: ${res.status}`);
-			window.dispatchEvent(new CustomEvent("lh:chat-renamed", { detail: { id, title: t } }));
+			window.dispatchEvent(new CustomEvent("wolfpack:chat-renamed", { detail: { id, title: t } }));
 		} catch (err) {
 			console.error("rename failed:", err); // keep the old title
 		}
@@ -932,8 +934,8 @@ export function SessionsSidebar() {
 			// slide-in doesn't gate the keystroke.
 			requestAnimationFrame(() => searchRef.current?.focus());
 		};
-		window.addEventListener("lh:kbd-sessions-search", onFocusSearch);
-		return () => window.removeEventListener("lh:kbd-sessions-search", onFocusSearch);
+		window.addEventListener("wolfpack:kbd-sessions-search", onFocusSearch);
+		return () => window.removeEventListener("wolfpack:kbd-sessions-search", onFocusSearch);
 	}, [open, toggle]);
 
 	// Keep the kbd-selected row in view (the rows are the container's only
@@ -962,11 +964,11 @@ export function SessionsSidebar() {
 				{/* LH wordmark — the owner's header; close toggle sits at the edge.
 				    Merged chrome (2026-09-17): in Electron this band is the
 				    window's drag surface and starts after the traffic lights
-				    (.lh-lights-gutter); in the browser those classes are inert. */}
-				<div className="lh-drag lh-lights-gutter flex items-center justify-between px-4 py-3">
+				    (.wp-lights-gutter); in the browser those classes are inert. */}
+				<div className="wp-drag wp-lights-gutter flex items-center justify-between px-4 py-3">
 					{/* The owner's mark (2026-09-17) replaces the "LH" text — still the
 					    home link, still vertically centered by the band's items-center.
-					    The 92px .lh-lights-gutter keeps it clear of the traffic lights
+					    The 92px .wp-lights-gutter keeps it clear of the traffic lights
 					    with the lights' own edge-inset as the gap. */}
 					{/* Hover mirrors the ghost toggle buttons (owner ask, 2026-09-17):
 					    same size-9 chip geometry, same hover:bg-accent treatment. */}
@@ -983,7 +985,7 @@ export function SessionsSidebar() {
 							href="/"
 							onClick={closeList}
 							aria-label="Home"
-							className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
+							className="wp-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
 						>
 							<WolfpackMark className="size-6" />
 						</Link>
@@ -994,7 +996,7 @@ export function SessionsSidebar() {
 							size="icon"
 							aria-label="Close sidebar"
 							onClick={toggle}
-							className="lh-no-drag"
+							className="wp-no-drag"
 						>
 							<PanelLeftCloseIcon className="size-4" />
 						</Button>

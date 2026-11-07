@@ -27,7 +27,7 @@ const REAL_DIR = path.join(PATHS.debug, "provider-events");
 const REAL_CAP = 20 * 1024 * 1024;
 
 function tmpDir(): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), "lh-provider-events-"));
+	return fs.mkdtempSync(path.join(os.tmpdir(), "wp-provider-events-"));
 }
 
 function readLines(dir: string, chatId: string): Array<Record<string, unknown>> {

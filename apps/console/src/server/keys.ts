@@ -63,7 +63,7 @@ interface AuthBoot {
 	/** Vars WE put into process.env (the file's reflection) — deletable. */
 	fillGap: Set<string>;
 }
-const BOOT_KEY = Symbol.for("lh.authBoot");
+const BOOT_KEY = Symbol.for("wolfpack.authBoot");
 
 function boot(): AuthBoot {
 	const g = globalThis as Record<symbol, AuthBoot | undefined>;

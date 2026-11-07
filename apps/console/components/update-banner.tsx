@@ -2,7 +2,7 @@
 
 /**
  * The auto-update banner (Wave C, owner 2026-10-10: silent download +
- * restart-banner UX). The shell pushes "lh:update-status" once a staged
+ * restart-banner UX). The shell pushes "wolfpack:update-status" once a staged
  * update exists (electron/main.cjs update-downloaded); this is the whole
  * renderer surface — a small fixed card, bottom-right, offering Restart.
  * Browser builds have no desktop bridge and never see a push: renders null.

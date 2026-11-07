@@ -634,7 +634,7 @@ function ThreadChatInner({
 												className="my-2 w-full border-l-[calc(3ch-14px)] border-muted-foreground/30 bg-card py-1 pl-[14px] pr-4 font-ui text-xs"
 											>
 												<div className="font-medium uppercase tracking-wide text-muted-foreground">You</div>
-												<div className="lh-prose whitespace-pre-wrap text-foreground">
+												<div className="wp-prose whitespace-pre-wrap text-foreground">
 													{m.parts
 														.filter((p) => p.type === "text")
 														.map((p) => p.text)

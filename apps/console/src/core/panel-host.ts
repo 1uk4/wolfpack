@@ -1,6 +1,8 @@
 /** Pure model of the console's switchable right-panel host: persisted per-thread selection. */
 
-export const RIGHT_PANEL_KEY = "lh.right-panel.v1";
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "./legacy-storage-boot.ts";
+export const RIGHT_PANEL_KEY = "wolfpack.right-panel.v1";
 export const DEFAULT_PANEL_ID = "memory";
 
 /** Stored shape: { [threadId]: panelId }. Anything malformed reads as empty. */

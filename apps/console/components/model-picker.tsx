@@ -163,14 +163,14 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 	// menu's own surface keeps it open: the toggle buttons live inside the
 	// container, and the menu BODY lives in a portal on document.body
 	// (MenuShell) — never a container descendant, so its rows are carved
-	// out via [data-lh-menu] (the settings sections' discipline; without
+	// out via [data-wp-menu] (the settings sections' discipline; without
 	// it a row's pointerdown counts as outside and eats the pick —
 	// live-caught in the fix wave, broken since the MenuShell migration).
 	useEffect(() => {
 		if (open === null) return;
 		const onPointerDown = (e: PointerEvent) => {
 			const t = e.target as Element;
-			if (t instanceof Element && t.closest("[data-lh-menu]")) return;
+			if (t instanceof Element && t.closest("[data-wp-menu]")) return;
 			if (containerRef.current && !containerRef.current.contains(t)) {
 				setOpen(null);
 			}
@@ -279,8 +279,8 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 			setError(null);
 			refresh(); // mid-session key changes widen the menu (cache fix)
 		};
-		window.addEventListener("lh:kbd-open-model-picker", onOpenPicker);
-		return () => window.removeEventListener("lh:kbd-open-model-picker", onOpenPicker);
+		window.addEventListener("wolfpack:kbd-open-model-picker", onOpenPicker);
+		return () => window.removeEventListener("wolfpack:kbd-open-model-picker", onOpenPicker);
 	}, [refresh]);
 
 	useEffect(() => {
@@ -291,8 +291,8 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 			if (next === undefined) return;
 			apply(effectiveProvider ?? "", effectiveId ?? "", next);
 		};
-		window.addEventListener("lh:kbd-cycle-thinking", onCycleThinking);
-		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
+		window.addEventListener("wolfpack:kbd-cycle-thinking", onCycleThinking);
+		return () => window.removeEventListener("wolfpack:kbd-cycle-thinking", onCycleThinking);
 	}, [levels, effectiveLevel, effectiveProvider, effectiveId, apply]);
 
 	// Selecting a model (click and Enter share one path): keep the

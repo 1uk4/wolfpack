@@ -109,7 +109,7 @@ export function ThinkingBlock({
 				// chevron law); the rail narrows (14px gap), padding 4px, pr-4
 				// keeps the text off the band's right edge. In-card rows take
 				// NO band — the accent lift read too light; rail only.
-				"lh-card-enter my-2 w-full border-l-[calc(3ch-14px)] border-muted-foreground/30 py-1 pl-[14px] pr-4 font-ui text-xs",
+				"wp-card-enter my-2 w-full border-l-[calc(3ch-14px)] border-muted-foreground/30 py-1 pl-[14px] pr-4 font-ui text-xs",
 				inCard ? "" : "bg-card",
 			)}
 		>
@@ -127,7 +127,7 @@ export function ThinkingBlock({
 				<ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open ? "rotate-180" : "rotate-0")} />
 			</button>
 			{open && (
-				<span className="lh-prose mt-1.5 block whitespace-pre-wrap text-[15px] italic text-foreground/50">{text}</span>
+				<span className="wp-prose mt-1.5 block whitespace-pre-wrap text-[15px] italic text-foreground/50">{text}</span>
 			)}
 		</div>
 	);

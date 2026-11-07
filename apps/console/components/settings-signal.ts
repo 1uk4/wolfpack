@@ -5,7 +5,7 @@
  * every WRITER dispatches after a successful PUT, every READER re-reads —
  * the composer reflects the strong slot the instant setup saves, the
  * settings section reflects the composer's pick on its next mount... and
- * so on, by construction. CustomEvent on the window, the lh:chat-renamed
+ * so on, by construction. CustomEvent on the window, the wolfpack:chat-renamed
  * pattern: writers and readers live in different component subtrees
  * (portaled dialogs included), and the app already speaks this dialect.
  *
@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef } from "react";
 
-export const SETTINGS_SAVED_EVENT = "lh:settings-saved";
+export const SETTINGS_SAVED_EVENT = "wolfpack:settings-saved";
 
 /** The settings sections a writer can land (the write seam's union). */
 // "keys" joined the roster (zero-keys wave, 2026-09-25): keys-section

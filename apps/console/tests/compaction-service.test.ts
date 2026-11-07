@@ -19,7 +19,7 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 
 // ── the seam, BEFORE any config-loading import (the birth-stamp discipline) ─
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-compaction-"));
+const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "wp-compaction-"));
 process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { chatStore } = await import("../src/store/chats.ts");

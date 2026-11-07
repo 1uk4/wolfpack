@@ -69,7 +69,7 @@ describe("AUTH_FILE resolution", () => {
 
 describe("PUT then GET round-trip under WOLFPACK_DATA_DIR", () => {
 	it("stores server-side, masked in status, mode 0600", async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-kusv-"));
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wp-kusv-"));
 		const dataDir = path.join(dir, "data");
 		fs.mkdirSync(dataDir);
 		delete process.env.WOLFPACK_AUTH_FILE;

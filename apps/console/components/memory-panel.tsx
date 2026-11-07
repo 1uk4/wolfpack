@@ -44,7 +44,7 @@ const INFO_TTL_MS = 60_000;
  * The thread's Memory panel (flex sibling of the conversation column): off/inert banner, pool gauge with its
  * consolidate / promote actions, the observation pool (loaded from wolfd on open, refetched on every live capture,
  * grouped into the den and work items) and, at the top, the Context row (live context, Compact). It shows no
- * tasks: work items open in the large task view. Collapse state persists in localStorage (lh.memory-panel.open.v1).
+ * tasks: work items open in the large task view. Collapse state persists in localStorage (wolfpack.memory-panel.open.v1).
  */
 export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	wolf: string;

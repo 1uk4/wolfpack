@@ -18,7 +18,7 @@ import * as path from "node:path";
 import test from "node:test";
 
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-stamps-"));
+const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "wp-stamps-"));
 process.env.WOLFPACK_DATA_DIR = TMP_DATA;
 
 const { chatStore } = await import("../src/store/chats.ts");

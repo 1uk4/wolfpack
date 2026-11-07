@@ -10,7 +10,7 @@ import { useEffect } from "react";
  * so there is no reverse gear; the chain wraps.
  *
  * The event (not a prop bridge): the global Tab handler dispatches
- * `lh:kbd-cycle-fields` and each composer-bearing surface answers with
+ * `wolfpack:kbd-cycle-fields` and each composer-bearing surface answers with
  * its own chain, gathered at event time from live DOM — the fields
  * mount/unmount with the docks, so a query beats stale refs. The quiz
  * dock's own Tab claim (rows ↔ thinking, while an option question is
@@ -30,7 +30,7 @@ export function useFieldCycle(fields: () => readonly HTMLElement[]) {
 			}
 			list[(idx + 1) % list.length]!.focus();
 		};
-		window.addEventListener("lh:kbd-cycle-fields", onCycle);
-		return () => window.removeEventListener("lh:kbd-cycle-fields", onCycle);
+		window.addEventListener("wolfpack:kbd-cycle-fields", onCycle);
+		return () => window.removeEventListener("wolfpack:kbd-cycle-fields", onCycle);
 	}, [fields]);
 }

@@ -2,7 +2,7 @@
 /**
  * The Keyboard section (thin settings wave): view / rebind / reset over
  * core/keyboard.ts's registry. The overrides persist in localStorage
- * (lh:keymap, overrides-only, merged over DEFAULT_BINDINGS), so rebinding
+ * (wolfpack:keymap, overrides-only, merged over DEFAULT_BINDINGS), so rebinding
  * is INSTANT — the dispatcher reads the map per keydown, no reload.
  *
  * Rebind flow: click Rebind → the row listens for the next keydown
@@ -156,7 +156,7 @@ export function KeyboardSection() {
 				);
 			})}
 			<div className="mt-1 flex items-center justify-between">
-				<span className="text-xs text-muted-foreground/70">Stored on this device (lh:keymap) — overrides only.</span>
+				<span className="text-xs text-muted-foreground/70">Stored on this device (wolfpack:keymap) — overrides only.</span>
 				<button
 					type="button"
 					onClick={resetAll}

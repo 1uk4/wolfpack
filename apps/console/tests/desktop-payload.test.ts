@@ -17,7 +17,7 @@ function withPayload(test: (fixture: {
 	run: () => ReturnType<typeof spawnSync>;
 }) => void) {
 	// Monorepo fixture: <fixture>/desktop/scripts/build-server.mjs + <fixture>/console (the app).
-	const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "lh-payload-test-"));
+	const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "wp-payload-test-"));
 	const root = path.join(fixture, "console");
 	const write = (relative: string, content = "fixture") => {
 		const target = path.join(root, relative);

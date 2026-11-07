@@ -108,8 +108,8 @@ const persistSelection = (threadId: string, id: string) => {
 
 /**
  * Holds the right-panel state for one thread view. Selection is remembered per thread (localStorage
- * `lh.right-panel.v1`, non-default entries only); open/closed is global (the Memory panel's existing
- * `lh.memory-panel.open.v1`).
+ * `wolfpack.right-panel.v1`, non-default entries only); open/closed is global (the Memory panel's existing
+ * `wolfpack.memory-panel.open.v1`).
  */
 export function PanelHostProvider({ wolf, slug, threadId, panels = PANELS, children }: { wolf: string; slug?: string; threadId: string; panels?: readonly PanelDef[]; children: ReactNode }) {
 	const [st, setSt] = useState<HostState>({ selections: {}, props: {}, open: true });

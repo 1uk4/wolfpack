@@ -168,7 +168,7 @@ describe("ThreadChat", () => {
 		const h = history(`look\n\n${PATH_LINE}`);
 		await mount(A.withHistoryAttachments(threadMessagesToNative(h), h));
 		const bubble = document.querySelector('[data-testid="user-message"]')!;
-		assert.equal(bubble.querySelector(".lh-prose")!.textContent, "look");
+		assert.equal(bubble.querySelector(".wp-prose")!.textContent, "look");
 		assert.doesNotMatch(bubble.textContent ?? "", /Attached image/);
 		const img = bubble.querySelector('[data-testid="attachment-thumb"]')!;
 		assert.equal(img.getAttribute("src"), `/api/wolves/w/threads/s/attachments/${ID}`);
@@ -178,7 +178,7 @@ describe("ThreadChat", () => {
 		const h = history(PATH_LINE);
 		await mount(A.withHistoryAttachments(threadMessagesToNative(h), h));
 		const bubble = document.querySelector('[data-testid="user-message"]')!;
-		assert.equal(bubble.querySelector(".lh-prose")!.textContent, "");
+		assert.equal(bubble.querySelector(".wp-prose")!.textContent, "");
 		assert.equal(bubble.querySelectorAll('[data-testid="attachment-thumb"]').length, 1);
 	});
 

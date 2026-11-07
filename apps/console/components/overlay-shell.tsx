@@ -15,11 +15,11 @@ const reachable = (el: HTMLElement): boolean => {
 
 /**
  * The overlay's header band. In the Electron desktop app (macOS) the traffic lights sit over the page's top-left, so
- * `lh-lights-gutter` pads the band clear of them (92px from the window edge: the -ml-4 cancels the overlay's p-4) and
- * `lh-drag` makes it a window-drag region, as the sidebar header does; buttons and links inside stay clickable (the
+ * `wp-lights-gutter` pads the band clear of them (92px from the window edge: the -ml-4 cancels the overlay's p-4) and
+ * `wp-drag` makes it a window-drag region, as the sidebar header does; buttons and links inside stay clickable (the
  * auto carve-out in globals.css). Both classes are inert in the browser.
  */
-export const OVERLAY_HEADER_CLASS = "lh-drag lh-lights-gutter -ml-4 select-none";
+export const OVERLAY_HEADER_CLASS = "wp-drag wp-lights-gutter -ml-4 select-none";
 export function OverlayHeader({ children, className = "", ...rest }: { children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
 	return (
 		<div {...rest} className={`${OVERLAY_HEADER_CLASS} ${className}`} data-overlay-header="">

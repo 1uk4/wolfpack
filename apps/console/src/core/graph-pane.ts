@@ -2,11 +2,13 @@
  * The graph's docked side pane: pure helpers (width bounds + persistence,
  * the Record/log text the pane shows, the lazy-fetch cache). No React here.
  */
+// Must stay the first import: copies the pre-rename localStorage keys before any read.
+import "./legacy-storage-boot.ts";
 import { composeItemDocument } from "./item-document.ts";
 import type { WorkRecordResponse } from "./kb.ts";
 
 /** localStorage key of the pane's width (per-device). */
-export const GRAPH_PANE_WIDTH_KEY = "lh.graph.pane-width.v1";
+export const GRAPH_PANE_WIDTH_KEY = "wolfpack.graph.pane-width.v1";
 export const PANE_MIN_WIDTH = 280;
 export const PANE_MAX_WIDTH = 720;
 export const PANE_DEFAULT_WIDTH = 380;

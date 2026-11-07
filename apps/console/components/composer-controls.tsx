@@ -90,7 +90,7 @@ export function ComposerControls({
 		if (!open) return;
 		const onDown = (e: PointerEvent) => {
 			const t = e.target as Element;
-			if (t instanceof Element && t.closest("[data-lh-menu]")) return;
+			if (t instanceof Element && t.closest("[data-wp-menu]")) return;
 			if (anchor.current && !anchor.current.contains(t)) setOpen(false);
 		};
 		const onKey = (e: KeyboardEvent) => {

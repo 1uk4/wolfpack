@@ -772,12 +772,12 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		const onToggle = () => {
 			if (shortcutHook() === idRef.current) toggle();
 		};
-		window.addEventListener("lh:kbd-toggle-dictation", onToggle);
-		return () => window.removeEventListener("lh:kbd-toggle-dictation", onToggle);
+		window.addEventListener("wolfpack:kbd-toggle-dictation", onToggle);
+		return () => window.removeEventListener("wolfpack:kbd-toggle-dictation", onToggle);
 	}, [toggle]);
 	useEffect(() => {
-		window.addEventListener("lh:kbd-cancel-dictation", cancel);
-		return () => window.removeEventListener("lh:kbd-cancel-dictation", cancel);
+		window.addEventListener("wolfpack:kbd-cancel-dictation", cancel);
+		return () => window.removeEventListener("wolfpack:kbd-cancel-dictation", cancel);
 	}, [cancel]);
 
 	return {
@@ -965,11 +965,11 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 			return;
 		}
 		if (listening) {
-			window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation"));
+			window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation"));
 			return;
 		}
 		onClaim();
-		if (!running) window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation"));
+		if (!running) window.dispatchEvent(new CustomEvent("wolfpack:kbd-toggle-dictation"));
 	};
 	return (
 		<>

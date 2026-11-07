@@ -49,7 +49,7 @@ describe("NeedsYouNotifier (headless)", () => {
 		const dom = parseHTML("<html><body></body></html>");
 		const notified: { key: string; href: string }[] = [];
 		const win = dom.window as unknown as Record<string, unknown>;
-		win.lh = { notify: (n: { key: string; href: string }) => notified.push(n) };
+		win.wolfpack = { notify: (n: { key: string; href: string }) => notified.push(n) };
 		const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 		const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, IS_REACT_ACT_ENVIRONMENT: g.IS_REACT_ACT_ENVIRONMENT };
 		Object.assign(globalThis, { window: dom.window, document: Object.assign(dom.document, { hasFocus: () => false }), IS_REACT_ACT_ENVIRONMENT: true });

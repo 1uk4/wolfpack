@@ -6,7 +6,7 @@ import type { Static, TSchema } from "typebox";
  * expressed natively (Wave A of the pi-native migration, 2026-09-26): tools
  * are authored as pi-agent-core AgentTools (TypeBox parameters, native
  * execute), and this module owns the semantics the old LhTool wrapper
- * (lh-tool.ts, deleted) used to add around every execute:
+ * (wp-tool.ts, deleted) used to add around every execute:
  *
  * - the system-level per-call timeout + abort cascade (runWithAbortGuard),
  * - the authoring-refinement failure shape (invalidInputResult —

@@ -85,7 +85,7 @@ describe("sessionFindRanges — the displayed-text DOM seam", () => {
 		mount(`<div data-session-find-root="">
 			<p>needle visible</p>
 			<p hidden>needle hidden-attr</p>
-			<div data-lh-menu><p>needle menu</p></div>
+			<div data-wp-menu><p>needle menu</p></div>
 			<span class="katex-mathml">needle mathml</span>
 			<textarea>needle draft</textarea>
 		</div>`);
@@ -134,7 +134,7 @@ describe("sessionFindHasForegroundLayer — the one-Esc law", () => {
 
 	it("a surfaced menu/dialog/cheat sheet outranks the Find bar", () => {
 		for (const html of [
-			'<div data-lh-menu></div>',
+			'<div data-wp-menu></div>',
 			'<div data-testid="cheat-sheet"></div>',
 			'<div role="dialog"></div>',
 			'<div data-radix-popper-content-wrapper></div>',
@@ -162,8 +162,8 @@ describe("injectFindStyles — ::highlight rules ship outside the PostCSS pipeli
 		const styles = [...document.querySelectorAll("style")];
 		assert.equal(styles.length, 1, "one style element, never duplicated");
 		const css = styles[0]!.textContent ?? "";
-		assert.ok(css.includes("::highlight(lh-session-find) {"));
-		assert.ok(css.includes("::highlight(lh-session-find-active) {"));
+		assert.ok(css.includes("::highlight(wp-session-find) {"));
+		assert.ok(css.includes("::highlight(wp-session-find-active) {"));
 	});
 });
 
@@ -175,7 +175,7 @@ describe("clearSessionFindHighlights — browser-API shaped, linkedom-safe", () 
 		mount(`<div data-session-find-root=""><p>needle</p></div>`);
 		const [range] = sessionFindRanges(document.body as unknown as HTMLElement, "needle");
 		// linkedom ships no Highlight constructor — the publisher guards on it.
-		(CSS as { highlights?: Map<string, unknown> }).highlights = new Map([["lh-session-find", {}]]);
+		(CSS as { highlights?: Map<string, unknown> }).highlights = new Map([["wp-session-find", {}]]);
 		clearSessionFindHighlights();
 		assert.equal((CSS as { highlights?: Map<string, unknown> }).highlights!.size, 0);
 		assert.ok(range!, "a range existed and the DOM beneath it is untouched");

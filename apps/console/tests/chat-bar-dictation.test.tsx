@@ -175,7 +175,7 @@ const pageTa = () => q('[data-testid="page-ta"]') as HTMLTextAreaElement;
 const fire = (el: Element, name: string, init: object = {}) =>
 	act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event(name, { bubbles: true, cancelable: true }), init)));
 const barToggle = () => q('[data-testid="chat-bar"] [data-testid="dictation-toggle"]')!;
-const key = () => act(async () => void window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-toggle-dictation")));
+const key = () => act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
 const A = { wolf: "w", slug: "a", threadId: "w/a" };
 
 /** After the run is recording: deliver a final, then the socket closes (the run ends and its transcript flushes). */
@@ -640,7 +640,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		await mount("/wolf/w/thread/a", null, <OnPageA />);
 		await fire(pageToggle(), "click", { detail: 1 });
 		await wait();
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-focus-chat-bar", { detail: {} })));
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-focus-chat-bar", { detail: {} })));
 		await wait();
 		assert.equal(document.activeElement, pageTa());
 	});
@@ -651,7 +651,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		await fire(pageToggle(), "click", { detail: 1 });
 		await wait();
 		await say("thrown away");
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-cancel-dictation")));
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-cancel-dictation")));
 		await wait();
 		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
 		assert.equal(pageTa().value, "typed only", "the composer returns with only the typed text");
@@ -663,7 +663,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		await fire(barToggle(), "click", { detail: 1 });
 		await wait();
 		await say("also thrown away");
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-cancel-dictation")));
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-cancel-dictation")));
 		await wait();
 		assert.ok(q('[data-testid="chat-bar"]'), "stays elsewhere");
 		assert.equal(barTa()!.value, "");
@@ -816,7 +816,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 
 	it("wide: Cmd+J on another thread's page opens the attached chat over it", async () => {
 		await mount("/wolf/w/thread/b", A, <><OnPages /><StripOnB /></>);
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-focus-chat-bar", { detail: {} })));
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-focus-chat-bar", { detail: {} })));
 		await wait();
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 	});
@@ -848,12 +848,12 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		await wait();
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
 		assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0, "idle: no meter");
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-toggle-dictation")));
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
 		await wait();
 		await say("words");
 		assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 1, "dictating: exactly one meter");
 		assert.ok(q('[data-testid="chat-bar"] [data-testid="dictation-meter"]'));
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-toggle-dictation")));
+		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
 		await endRun(FakeWS.last!);
 		await wait();
 		assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0, "stopped: no meter");
@@ -868,11 +868,11 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 			await wait();
 			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
 			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0);
-			await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-toggle-dictation")));
+			await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
 			await wait();
 			await say("words");
 			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 1);
-			await act(async () => window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-toggle-dictation")));
+			await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
 			await endRun(FakeWS.last!);
 			await wait();
 			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0);
@@ -1025,7 +1025,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		await act(async () => {
 			pageToggle().dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 }));
 			for (let i = 0; i < TICKS; i++) await Promise.resolve();
-			window.dispatchEvent(new dom.window.CustomEvent("lh:kbd-toggle-dictation"));
+			window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation"));
 		});
 		await wait();
 		await wait();

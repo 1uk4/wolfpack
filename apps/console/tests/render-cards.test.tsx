@@ -393,7 +393,7 @@ describe("question context renders as markdown everywhere (owner, 2026-10-12)", 
 		assert.ok(katexCount >= 3, `details + option-label math renders (got ${katexCount})`);
 		// Quiz options carry NO description field at all (owner ruling
 		// 2026-09-26) — the desc map is ask-only and stays empty here.
-		assert.ok(!html.includes("lh-prose block text-xs"), "no option-subtext slot on quiz rows");
+		assert.ok(!html.includes("wp-prose block text-xs"), "no option-subtext slot on quiz rows");
 	});
 
 	it("legacy settled records (no input prop) render exactly as before", () => {
@@ -401,6 +401,6 @@ describe("question context renders as markdown everywhere (owner, 2026-10-12)", 
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
 		assert.match(html, /Very/, "the card renders");
 		assert.equal((html.match(/class="katex"/g) ?? []).length, 0, "no context slot appears from nothing");
-		assert.ok(!html.includes("lh-prose block text-xs"), "no description slot without an ask input");
+		assert.ok(!html.includes("wp-prose block text-xs"), "no description slot without an ask input");
 	});
 });

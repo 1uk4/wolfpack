@@ -11,15 +11,15 @@
  *
  * Mechanics baked in (the chat-session bar's proven pattern):
  * - h-15 (60px) — matches the sidebar's wordmark band, one border line.
- * - lh-drag — the window-drag band. NATIVE interactive children
+ * - wp-drag — the window-drag band. NATIVE interactive children
  *   (button/input/a/…) carve out AUTOMATICALLY via the globals.css auto
  *   carve-out rule (owner standardization ruling, 2026-09-29 night) —
  *   "draggable anywhere that is not a clickable element" is structural,
- *   not per-child discipline; manual lh-no-drag is only for clickable
+ *   not per-child discipline; manual wp-no-drag is only for clickable
  *   non-natives (spans/divs with onClick).
  * - select-none — dragging never highlights the title.
  * - SidebarToggle FIRST — the sidebar reopen when closed, with its
- *   Electron traffic-light gutter (lh-closed-toggle).
+ *   Electron traffic-light gutter (wp-closed-toggle).
  * - border-b border-border px-3, gap-3 rhythm.
  *
  * The consumer brings the title (font-title text-3xl tracking-tight) and
@@ -53,7 +53,7 @@ export function TopBar({
 	return (
 		<header
 			onMouseDown={onMouseDown}
-			className={`${drag ? "lh-drag " : ""}lh-wco-gutter flex h-15 select-none items-center gap-3 border-b border-border px-3`}
+			className={`${drag ? "wp-drag " : ""}wp-wco-gutter flex h-15 select-none items-center gap-3 border-b border-border px-3`}
 		>
 			<SidebarToggle />
 			{children}

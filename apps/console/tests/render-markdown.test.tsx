@@ -230,17 +230,17 @@ describe("render — mermaid", () => {
 describe("render — bold is the real <strong> (the dead Bold-color fix)", () => {
 	// Streamdown's default `strong` renders <span class="font-semibold"
 	// data-streamdown="strong"> — and the app's ink token rule
-	// (.lh-prose :where(strong, b), globals.css) matches strong/b
-	// ELEMENTS, so bold never took the --lh-ink-strong color (neither the
+	// (.wp-prose :where(strong, b), globals.css) matches strong/b
+	// ELEMENTS, so bold never took the --wp-ink-strong color (neither the
 	// factory #ee928c nor a settings boldColor). The mdComponents override
 	// renders the semantic element.
-	it("bold renders a real <strong> element inside .lh-prose", () => {
+	it("bold renders a real <strong> element inside .wp-prose", () => {
 		const html = render("plain **bold** plain");
 		assert.ok(
 			html.includes('<strong data-streamdown="strong">bold</strong>'),
 			"bold renders as a semantic strong element",
 		);
-		assert.ok(html.includes("lh-prose"), "the markdown surface carries .lh-prose (the token rule's anchor)");
+		assert.ok(html.includes("wp-prose"), "the markdown surface carries .wp-prose (the token rule's anchor)");
 	});
 
 	it("no span-for-bold regression: the font-semibold span is gone", () => {

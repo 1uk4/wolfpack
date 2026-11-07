@@ -47,7 +47,7 @@ async function isolated<T>(env: Record<string, string>, run: () => Promise<T>): 
 	const previous = process.env;
 	const fetch = globalThis.fetch;
 	const previousEventsDir = providerEventsDir.current;
-	const eventsDir = mkdtempSync(path.join(tmpdir(), "lh-provider-neutral-"));
+	const eventsDir = mkdtempSync(path.join(tmpdir(), "wp-provider-neutral-"));
 	providerEventsDir.current = eventsDir;
 	globalThis.fetch = async () => { throw new Error("CLOSED: unexpected fetch"); };
 	process.env = { NODE_ENV: "test", HOME: "/nonexistent/provider-neutral-test-home", ...env };

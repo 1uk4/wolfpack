@@ -155,7 +155,7 @@ export function AppearanceSection({
 		const onPointerDown = (e: PointerEvent) => {
 			const target = e.target as Node;
 			if (menuAnchorRef.current?.contains(target)) return;
-			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
+			if (target instanceof Element && target.closest("[data-wp-menu]")) return;
 			if (target instanceof Element && target.closest('[role="dialog"]')) {
 				setFontMenuOpen(false);
 			}

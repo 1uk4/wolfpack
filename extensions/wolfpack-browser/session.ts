@@ -184,8 +184,9 @@ export class BrowserSession {
           // WebRTC would otherwise reach hosts (and leak LAN addresses) outside the request policy.
           "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
           "--webrtc-ip-handling-policy=disable_non_proxied_udp",
-          // Chromium's local-network-access check would refuse WebSockets/requests to allowlisted loopback hosts.
-          // Safe: the route guard already blocks every private address that is not in allowHosts.
+          // Chromium's local-network-access check would refuse WebSockets to allowlisted loopback hosts. This flag is
+          // global to the browser. Non-allowlisted private hosts stay blocked by the request/WebSocket policy, but
+          // redirects on the native EventSource path are not vetted.
           "--disable-features=LocalNetworkAccessChecks",
         ],
       });
@@ -215,10 +216,12 @@ export class BrowserSession {
           return await route.abort("blockedbyclient").catch(() => undefined);
         }
         if (!/^https?:/i.test(url)) return await route.continue().catch(() => undefined);
-        // Event streams (EventSource sends Accept: text/event-stream) cannot pass through the Node fetcher, so on an
-        // allowlisted host they are served by Chromium's own network stack. Only these requests take that path:
-        // route.continue() hides redirect hops from this handler (verified), so everything else stays vetted per hop.
-        if (hostAllowed(new URL(url).hostname, allowHosts) && /text\/event-stream/i.test(req.headers()["accept"] ?? "")) {
+        const parsed = new URL(url);
+        // EventSource streams cannot pass through the Node fetcher, so an EventSource to an allowlisted host that is
+        // also the page's own host is served by Chromium's own network stack. resourceType() comes from the browser
+        // and page JS cannot forge it (unlike the Accept header). Redirects on this path are NOT vetted: Playwright
+        // does not show the hop to this handler.
+        if (req.resourceType() === "eventsource" && hostAllowed(parsed.hostname, allowHosts) && this.pageHost() === parsed.hostname) {
           return await route.continue().catch(() => undefined);
         }
         const method: string = req.method();
@@ -283,6 +286,11 @@ export class BrowserSession {
       }
       ws.connectToServer();
     });
+  }
+
+  /** Hostname of the page's current URL, or undefined. */
+  private pageHost(): string | undefined {
+    try { return new URL(this.page?.url() ?? "").hostname; } catch { return undefined; }
   }
 
   /** Open the single working page; pages restored from the profile and later popups are closed. */

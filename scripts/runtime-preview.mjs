@@ -29,7 +29,7 @@ import { buildCommands, choosePm, isDirty, probePnpm, worktrees } from "./runtim
 const realGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** Bump when the script changes behaviour: the CLI runs the highest version it finds, and a copy is never replaced by a lower one. */
-export const PREVIEW_VERSION = 17;
+export const PREVIEW_VERSION = 18;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const COPIED_SCRIPTS = ["runtime-preview.mjs", "runtime-preview-switch.mjs", "runtime-update.mjs", "dev-stack-extensions.mjs", "runtime-preview-console.mjs", "runtime-preview-worktree.mjs", "runtime-preview-watch.mjs"];
@@ -461,12 +461,27 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	 * script ran from), so a name or the picker works from ~ too.
 	 */
 	const anchor = (() => {
-		try {
-			git(cwd, "rev-parse", "--show-toplevel");
-			return cwd;
-		} catch {}
-		const known = [state?.runtimeDir, path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack"), st.cliFallbackDir?.()];
-		return known.find((d) => d && fs.existsSync(path.join(d, ".git"))) ?? cwd;
+		const known = [state?.runtimeDir, path.join(env.WOLVES_DIR || path.join(home, "wolves", "local"), "runtime", "wolfpack"), path.join(home, "wolves", "local", "runtime", "wolfpack"), st.cliFallbackDir?.()].filter((d) => d && fs.existsSync(path.join(d, ".git")));
+		const commonDir = (d) => {
+			try {
+				return fs.realpathSync(path.resolve(d, git(d, "rev-parse", "--git-common-dir")));
+			} catch {}
+		};
+		// cwd counts only when its repo IS the wolfpack repo (the home dir can itself be an unrelated git repo): same common git dir as a
+		// known checkout, or a worktree on the runtime branch, or the wolfpack marker script.
+		const mine = commonDir(cwd);
+		if (mine) {
+			const hasRuntimeBranch = () => {
+				try {
+					return listWorktrees(cwd, git).some((w) => w.branch === runtimeBranch);
+				} catch {
+					return false;
+				}
+			};
+			const wolfpack = known.some((d) => commonDir(d) === mine) || hasRuntimeBranch() || fs.existsSync(path.join(git(cwd, "rev-parse", "--show-toplevel"), "scripts", "runtime-preview.mjs"));
+			if (wolfpack) return cwd;
+		}
+		return known[0] ?? cwd;
 	})();
 
 	/** The runtime checkout. A detached runtime has no worktree on RUNTIME_BRANCH: fall back to its known path. */

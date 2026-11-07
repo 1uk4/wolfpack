@@ -838,6 +838,27 @@ describe("worktrees are found from any directory", () => {
 	});
 });
 
+describe("worktrees from inside an unrelated git repo", () => {
+	it("a cwd in another repo (the home dir is one) does not hide the wolfpack worktrees", async () => {
+		const wl = path.join(tmp, "wl");
+		fs.mkdirSync(path.join(wl, "runtime"), { recursive: true });
+		g(main, "worktree", "move", rt, path.join(wl, "runtime", "wolfpack"));
+		const homeRepo = path.join(tmp, "homerepo");
+		fs.mkdirSync(homeRepo);
+		g(homeRepo, "init", "-q", "-b", "master"); // empty, no commits
+		const h = harness();
+		const r = await h.run(["feat/a"], homeRepo, { WOLVES_DIR: wl });
+		expect(r.exitCode).toBe(0);
+		expect(readState().console.dir).toBe(fs.realpathSync(wtA));
+	});
+
+	it("a cwd inside a wolfpack worktree still lists that repo's worktrees", async () => {
+		const h = harness();
+		expect((await h.run(["feat/b"], wtA)).exitCode).toBe(0);
+		expect(readState().console.dir).toBe(fs.realpathSync(wtB));
+	});
+});
+
 describe("automatic browser sign-in in hub mode", () => {
 	const pairedMarker = () => path.join(home, ".wolfpack", "preview", "paired.json");
 	const consoleToken = { WOLFPACK_HUB_TOKEN: "CONSOLE-SECRET" };

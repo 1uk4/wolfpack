@@ -56,7 +56,9 @@ import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { HttpError } from "./http-error.js";
-import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, promptDef, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
+import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
+import type { PromptBlock } from "./context.js";
+import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
@@ -96,6 +98,10 @@ export interface WolfServerOptions {
   // ---- header git tree ----
   /** The wolf's home dir: where `agent/prompts/<id>.md` overrides live. Unset: /prompts answers 404. */
   wolfHome?: string;
+  /** The system-prompt blocks wolfd built at start-up (read-only in /prompts). */
+  promptBlocks?: readonly PromptBlock[];
+  /** The tools wolfd registered, with their descriptions (read-only in /prompts). */
+  toolInfos?: readonly ToolInfo[];
   /** The wolf's workspace (the home thread's cwd): its git state is the home thread's `workspace`. Unset: home reports none. */
   workspace?: string;
   /** How long git answers behind `workspace` stay cached. Default 5000. */
@@ -494,8 +500,31 @@ export class WolfServer {
     this.checkWolf(name);
     const home = this.opts.wolfHome;
     if (!home) throw new HttpError("not_found", "this wolf has no home dir for prompt overrides");
-    const view = (defId: string) => ({ ...promptDef(defId)!, ...resolvePrompt(defId, home) });
-    if (id === undefined) return this.json(res, 200, { prompts: PROMPTS.map((p) => view(p.id)) });
+    const view = (defId: string) => {
+      const def = promptDef(defId)!;
+      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const };
+    };
+    const readOnly = readOnlyCatalog({ blocks: this.opts.promptBlocks ?? [], tools: this.opts.toolInfos ?? [] }).map((e) => ({
+      id: e.id,
+      group: e.group,
+      label: e.label,
+      editable: false as const,
+      text: e.text,
+      source: "default" as const,
+      etag: promptEtag(e.text),
+      kind: e.kind,
+      file: e.file,
+      user: e.user,
+      scope: e.scope,
+      ...(e.contract ? { contract: e.contract } : {}),
+      placeholders: e.placeholders,
+    }));
+    if (id === undefined) return this.json(res, 200, { prompts: [...PROMPTS.map((p) => view(p.id)), ...readOnly] });
+    const ro = readOnly.find((p) => p.id === id);
+    if (ro) {
+      if (req.method === "GET") return this.json(res, 200, ro);
+      throw new HttpError("forbidden", `prompt "${id}" is not editable per wolf`);
+    }
     if (!promptDef(id)) throw new HttpError("not_found", `unknown prompt "${id}"`);
     if (req.method === "GET") return this.json(res, 200, view(id));
     const ifMatch = typeof req.headers["if-match"] === "string" ? req.headers["if-match"].replace(/^"|"$/g, "") : undefined;

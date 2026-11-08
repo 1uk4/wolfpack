@@ -203,3 +203,6 @@ export {
 export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
 export { CHILDREN_CAP, LOG_TAIL, shapeWorkList, shapeWorkRecord, toWorkChild, withoutLog, logTail, type ShapeWorkItem, type ShapedWorkChild, type ShapedWorkListItem, type ShapedWorkRecord } from "./work-shape.js";
 export { parseRecordLines, stripSources, lineRef, numberRecordLines, formatSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
+
+// Every memory prompt template and stage text (the Prompts page lists them read-only)
+export * from "./config/prompts/index.js";

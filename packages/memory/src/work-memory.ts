@@ -123,7 +123,7 @@ export function getWorkSession(workId: WorkId): WorkSession | undefined {
 // 4 · TASK COMPLETION SUMMARIZATION
 // ════════════════════════════════════════════════════════════════════════════
 
-const TaskSummaryResult = z.object({
+export const TaskSummaryResult = z.object({
   summary: z.string().max(140),
   implementation: z.string(),
 });

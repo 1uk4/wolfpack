@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { orchestratorRules } from "./orchestrator.js";
-import { PROMPT_MAX_BYTES, PromptWriteError, resetPromptOverride, resolvePrompt, writePromptOverride } from "./prompts.js";
+import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, resetPromptOverride, resolvePrompt, writePromptOverride } from "./prompts.js";
 
 let a: string;
 let b: string;
@@ -45,5 +45,17 @@ describe("prompt resolver", () => {
     expect(readFileSync(join(a, "agent", "prompts", "orchestrator-rules.md"), "utf8")).toBe("two");
     expect(readdirSync(join(a, "agent", "prompts"))).toEqual(["orchestrator-rules.md"]);
     expect(existsSync(join(b, "agent"))).toBe(false);
+  });
+});
+
+describe("prompt registry", () => {
+  it("every id has a non-empty default and declares exactly the {{placeholders}} its default uses", () => {
+    expect(PROMPTS.length).toBeGreaterThan(0);
+    for (const def of PROMPTS) {
+      const text = resolvePrompt(def.id).text;
+      expect(text.trim().length, def.id).toBeGreaterThan(0);
+      const used = [...new Set([...text.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1]))].sort();
+      expect([...def.placeholders].sort(), def.id).toEqual(used);
+    }
   });
 });

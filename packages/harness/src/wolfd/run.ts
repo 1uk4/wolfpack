@@ -255,6 +255,8 @@ async function startConfigured(
     const server = new WolfServer({
       name: config.identity.name,
       wolfHome: dirname(config.file),
+      promptBlocks: context.blocks,
+      toolInfos: extensions.flatMap((e) => (e.tools ?? []).map((t) => ({ name: t.name, description: t.description, extension: e.name }))),
       ...(env.WOLFPACK_STALL_TIMEOUT_MS !== undefined && Number.isFinite(stallEnv) && stallEnv >= 0 ? { stallTimeoutMs: stallEnv } : {}),
       workspace: cwd, // header git tree: the home thread's git workspace
       conversation,

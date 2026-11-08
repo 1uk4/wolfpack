@@ -67,6 +67,14 @@ export interface SkillSummary {
   path: string;
 }
 
+/** One piece of the composed system prompt: `text` is exactly what is joined (with a blank line between blocks), `source` says where it came from. */
+export interface PromptBlock {
+  id: string;
+  label: string;
+  source: string;
+  text: string;
+}
+
 export interface ProjectContext {
   /** The wolf's identity file, when one was found. */
   identity?: FoundFile;
@@ -75,6 +83,8 @@ export interface ProjectContext {
   skills: SkillSummary[];
   /** The composed instructions text. */
   instructions: string;
+  /** The same text, block by block with each block's source; `blocks.map(b => b.text).join("\n\n") === instructions`. */
+  blocks: PromptBlock[];
 }
 
 /** Nearest `file` walking up from `from` to `home` (inclusive). */
@@ -162,23 +172,24 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
   const claude = findUp("CLAUDE.md", input.cwd, input.home);
   const skills = loadSkills(input.den);
 
-  const parts: string[] = [];
+  const blocks: PromptBlock[] = [];
+  const add = (id: string, label: string, source: string, text: string) => blocks.push({ id, label, source, text });
   const domains = input.domains?.length ? ` Domains: ${input.domains.join(", ")}.` : "";
-  parts.push(`You are ${input.name}, a wolf in the wolfpack.${domains} Your workspace is ${input.cwd}.`);
-  if (identity) parts.push(`# Identity (${identity.path})\n\n${identity.text.trim()}`);
+  add("header", "Header (name, domains, workspace)", "packages/harness/src/wolfd/context.ts", `You are ${input.name}, a wolf in the wolfpack.${domains} Your workspace is ${input.cwd}.`);
+  if (identity) add("identity", "Identity", identity.path, `# Identity (${identity.path})\n\n${identity.text.trim()}`);
   if (input.wolfHome) {
     const roster = formatRosterLines(discoverAgents({ cwd: input.cwd, agentDir: join(input.wolfHome, "agent") }));
     const rules = orchestratorRules({ opsRef: opsRef(), surface: "wolfd", wolfHome: input.wolfHome });
-    parts.push(`# Orchestrator rules\n\n${rules}\n\nSubagent roster:\n${roster.length ? roster.join("\n") : "No subagent definitions found."}`);
+    add("orchestrator", "Orchestrator rules and subagent roster", "packages/agents/prompts/orchestrator-rules.md (override: <wolf-home>/agent/prompts/orchestrator-rules.md); roster from <wolf-home>/agent/agents", `# Orchestrator rules\n\n${rules}\n\nSubagent roster:\n${roster.length ? roster.join("\n") : "No subagent definitions found."}`);
   }
-  if (agents) parts.push(`# AGENTS.md (${agents.path})\n\n${agents.text.trim()}`);
-  if (claude) parts.push(`# CLAUDE.md (${claude.path})\n\n${claude.text.trim()}`);
+  if (agents) add("agents-md", "Project AGENTS.md", agents.path, `# AGENTS.md (${agents.path})\n\n${agents.text.trim()}`);
+  if (claude) add("claude-md", "Project CLAUDE.md", claude.path, `# CLAUDE.md (${claude.path})\n\n${claude.text.trim()}`);
   if (skills.length) {
     const list = skills.map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ""} (${s.path})`).join("\n");
-    parts.push(`# Skills\n\nRead a skill's SKILL.md with the read tool when its description matches the task.\n\n${list}`);
+    add("skills", "Skills index", join(input.den, "skills"), `# Skills\n\nRead a skill's SKILL.md with the read tool when its description matches the task.\n\n${list}`);
   }
   const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
-  if (so !== false && so.trim()) parts.push(`# Structured output\n\n${so.trim()}`);
-  parts.push(`# Ending a turn\n\n${BRIEF_GUIDANCE}`);
-  return { identity, agents, claude, skills, instructions: parts.join("\n\n") };
+  if (so !== false && so.trim()) add("structured-output", "Structured output guidance", "wolf.yaml prompts.structuredOutput (default: DEFAULT_STRUCTURED_OUTPUT_GUIDANCE in packages/harness/src/wolfd/context.ts)", `# Structured output\n\n${so.trim()}`);
+  add("brief", "Ending a turn (brief guidance)", "packages/harness/src/wolfd/context.ts BRIEF_GUIDANCE", `# Ending a turn\n\n${BRIEF_GUIDANCE}`);
+  return { identity, agents, claude, skills, instructions: blocks.map((b) => b.text).join("\n\n"), blocks };
 }

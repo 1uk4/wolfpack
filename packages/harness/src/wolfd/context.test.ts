@@ -187,3 +187,23 @@ describe("orchestrator rules in the system prompt", () => {
     expect(compose().text).toContain("# Orchestrator rules\n\nMY RULES\n\nSubagent roster:");
   });
 });
+
+describe("system prompt blocks", () => {
+  it("returns every part of the prompt as a block with its source; the blocks join to the instructions byte for byte", () => {
+    put("wolf/agent/AGENTS.md", "I am the owner");
+    put("ws/AGENTS.md", "workspace rules");
+    put("ws/CLAUDE.md", "claude rules");
+    put("den/skills/a/SKILL.md", "---\nname: a\ndescription: d\n---\n");
+    const ctx = composeProjectContext({ name: "w", cwd: join(home, "ws"), den: join(home, "den"), home, wolfHome: join(home, "wolf") });
+    expect(ctx.blocks.map((b) => b.id)).toEqual(["header", "identity", "orchestrator", "agents-md", "claude-md", "skills", "structured-output", "brief"]);
+    expect(ctx.blocks.map((b) => b.text).join("\n\n")).toBe(ctx.instructions);
+    const src = Object.fromEntries(ctx.blocks.map((b) => [b.id, b.source]));
+    expect(src.identity).toBe(join(home, "wolf/agent/AGENTS.md"));
+    expect(src["agents-md"]).toBe(join(home, "ws/AGENTS.md"));
+    expect(src["claude-md"]).toBe(join(home, "ws/CLAUDE.md"));
+    expect(src.skills).toBe(join(home, "den/skills"));
+    expect(src.structuredOutput ?? src["structured-output"]).toContain("wolf.yaml prompts.structuredOutput");
+    expect(src.orchestrator).toContain("packages/agents/prompts/orchestrator-rules.md");
+    expect(src.header).toBe("packages/harness/src/wolfd/context.ts");
+  });
+});

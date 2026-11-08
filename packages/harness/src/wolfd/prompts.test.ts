@@ -13,10 +13,10 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-async function boot() {
+async function boot(extra: Record<string, unknown> = {}) {
   const wolfHome = mkdtempSync(join(tmpdir(), "wolfd-prompts-"));
   dirs.push(wolfHome);
-  const s = new WolfServer({ name: "w", wolfHome, conversation: new ScriptedEngine({ delayMs: 1, id: "900" }) });
+  const s = new WolfServer({ name: "w", wolfHome, conversation: new ScriptedEngine({ delayMs: 1, id: "900" }), ...extra });
   servers.push(s);
   await s.attach();
   return { wolfHome, url: `${await s.listen()}/v1/wolves/w/prompts` };
@@ -59,5 +59,26 @@ describe("wolfd /prompts", () => {
     expect(existsSync(join(wolfHome, "agent", "prompts"))).toBe(false);
     await send(`${url}/orchestrator-rules`, "PUT", { text: "ok" });
     expect(readdirSync(join(wolfHome, "agent", "prompts"))).toEqual(["orchestrator-rules.md"]);
+  });
+
+  it("lists the read-only prompts with source, user, scope and contract, and refuses to write them (403)", async () => {
+    const { url, wolfHome } = await boot({
+      promptBlocks: [{ id: "identity", label: "Identity", source: "/x/agent/AGENTS.md", text: "I am w" }],
+      toolInfos: [{ name: "show_graph", description: "Show a graph.", extension: "wolfpack-objects" }],
+    });
+    const listed = (await (await send(url, "GET")).json()).prompts as Record<string, unknown>[];
+    const byId = (id: string) => listed.find((p) => p.id === id);
+    expect(byId("system.identity")).toMatchObject({ editable: false, kind: "system-block", text: "I am w", file: "/x/agent/AGENTS.md", scope: "wolf", source: "default" });
+    expect(byId("tool.show_graph")).toMatchObject({ editable: false, kind: "tool", text: "Show a graph." });
+    expect(String((byId("pipeline.observer") as { contract: string }).contract)).toContain('"observations"');
+    expect(byId("compaction.pi-durable-system")).toMatchObject({ kind: "compaction", editable: false });
+    expect(byId("orchestrator-rules")).toMatchObject({ editable: true, kind: "editable", scope: "wolf" });
+    const got = await send(`${url}/system.identity`, "GET");
+    expect(got.status).toBe(200);
+    for (const method of ["PUT", "DELETE"]) {
+      expect((await send(`${url}/system.identity`, method, { text: "mine" })).status, method).toBe(403);
+      expect((await send(`${url}/pipeline.observer`, method, { text: "mine" })).status, method).toBe(403);
+    }
+    expect(existsSync(join(wolfHome, "agent", "prompts"))).toBe(false);
   });
 });

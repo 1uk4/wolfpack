@@ -12,6 +12,18 @@ export const PromptViewSchema = z.object({
   source: z.enum(["default", "override"]),
   /** Hash of the effective text: send as If-Match on PUT/DELETE; a different current etag is 409 `conflict`. */
   etag: z.string(),
+  /** Which part of the system the prompt belongs to; absent on the editable work-creation prompts. */
+  kind: z.enum(["editable", "system-block", "tool", "pipeline", "compaction"]).optional(),
+  /** Where the text lives (repo path, or the wolf-home file for a block read from there). */
+  file: z.string().optional(),
+  /** The process or agent that uses it (main wolf, subagent, memory pipeline, crawl, console, ...). */
+  user: z.string().optional(),
+  /** per-wolf: this wolf's own copy; global: the same for every wolf; hub: runs on the hub. */
+  scope: z.enum(["wolf", "global", "hub"]).optional(),
+  /** Pipeline prompts: the shape the reply is parsed against, as readable JSON-schema-like text. Read-only. */
+  contract: z.string().optional(),
+  /** The {{name}} placeholders the text declares. */
+  placeholders: z.array(z.string()).optional(),
 });
 export type PromptView = z.infer<typeof PromptViewSchema>;
 

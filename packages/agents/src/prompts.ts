@@ -14,14 +14,20 @@ export interface PromptDef {
   label: string;
   /** A wolf may override it (PUT /prompts). Ids not editable here are read-only. */
   editable: boolean;
+  /** The `{{name}}` placeholders the default uses; a registry test checks the list against the text. */
+  placeholders: readonly string[];
+  /** Which process or agent reads it. */
+  user: string;
+  /** Repo path of the default. */
+  file: string;
 }
 
 export const PROMPTS: readonly PromptDef[] = [
-  { id: "orchestrator-rules", group: "Orchestrator", label: "Orchestrator rules", editable: true },
-  { id: "new-work", group: "Work creation", label: "New work (routing and pipeline)", editable: true },
-  { id: "grilling", group: "Work creation", label: "Grilling protocol", editable: true },
-  { id: "to-spec", group: "Work creation", label: "To-spec protocol", editable: true },
-  { id: "to-tickets", group: "Work creation", label: "To-tickets protocol", editable: true },
+  { id: "orchestrator-rules", group: "Orchestrator", label: "Orchestrator rules", editable: true, placeholders: ["opsRef", "paneNote"], user: "main wolf (home and feature threads)", file: "packages/agents/prompts/orchestrator-rules.md" },
+  { id: "new-work", group: "Work creation", label: "New work (routing and pipeline)", editable: true, placeholders: ["domains", "grilling", "toSpec", "toTickets"], user: "main wolf (new-work skill)", file: "packages/agents/prompts/new-work.md" },
+  { id: "grilling", group: "Work creation", label: "Grilling protocol", editable: true, placeholders: [], user: "main wolf (new-work skill)", file: "packages/agents/prompts/grilling.md" },
+  { id: "to-spec", group: "Work creation", label: "To-spec protocol", editable: true, placeholders: [], user: "main wolf (new-work skill)", file: "packages/agents/prompts/to-spec.md" },
+  { id: "to-tickets", group: "Work creation", label: "To-tickets protocol", editable: true, placeholders: [], user: "main wolf (new-work skill)", file: "packages/agents/prompts/to-tickets.md" },
 ];
 
 export const PROMPT_MAX_BYTES = 64 * 1024;

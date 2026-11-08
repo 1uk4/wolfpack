@@ -79,6 +79,7 @@ import {
 } from "@wolfpack/memory";
 import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
 import { newWorkPrompt } from "@wolfpack/agents";
+import { resolveWolfHome } from "./wolf-home.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -1033,9 +1034,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       if (action === "new") {
         // Conversational flow: let the agent ask questions and create the task
         try {
-          pi.sendUserMessage(newWorkPrompt(listSubscribedDomains(kbBase), process.env.WOLF_HOME));
+          pi.sendUserMessage(newWorkPrompt(listSubscribedDomains(kbBase), resolveWolfHome()));
         } catch {
-          ctx.ui.pasteToEditor(newWorkPrompt(listSubscribedDomains(kbBase), process.env.WOLF_HOME));
+          ctx.ui.pasteToEditor(newWorkPrompt(listSubscribedDomains(kbBase), resolveWolfHome()));
         }
       } else if (action === "bind" && activeItem) {
         await promptTaskIteration(pi, ctx, client, activeItem);

@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { FIT_ZOOM_MAX, ZOOM_MAX, fitGraphView, fitZoomFor, zoomedGraphView } from "../components/pan-zoom.ts";
+import { FIT_ZOOM_MAX, ZOOM_MAX, fitFloorView, fitGraphView, fitZoomFor, zoomedGraphView } from "../components/pan-zoom.ts";
 
 describe("fitZoomFor", () => {
 	it("binds on the axis that runs out of room (wide box → width)", () => {
@@ -68,5 +68,24 @@ describe("zoomedGraphView", () => {
 		const view = { x: -37, y: 12, zoom: 1 };
 		const out = zoomedGraphView(view, 1, floor, { x: 0, y: 0 }, box, viewport);
 		assert.equal(out, view);
+	});
+});
+
+describe("fitFloorView", () => {
+	it("scales a wide graph to fit and centres it while the scale stays at or above the minimum", () => {
+		const v = fitFloorView({ w: 1700, h: 560 }, { w: 940, h: 480 }, 0.5);
+		assert.equal(v.zoom, 924 / 1700);
+		assert.equal(v.x, (940 - 1700 * v.zoom) / 2);
+		assert.equal(v.y, (480 - 560 * v.zoom) / 2);
+	});
+
+	it("never enlarges a small graph past 1", () => {
+		assert.deepEqual(fitFloorView({ w: 200, h: 100 }, { w: 940, h: 480 }, 0.5), { zoom: 1, x: 370, y: 190 });
+	});
+
+	it("below the minimum fits the height and starts at the left edge so the rest pans", () => {
+		assert.deepEqual(fitFloorView({ w: 4000, h: 400 }, { w: 800, h: 500 }, 0.5), { zoom: 1, x: 8, y: 50 });
+		// too tall as well: the scale stops at the minimum
+		assert.equal(fitFloorView({ w: 4000, h: 1400 }, { w: 800, h: 500 }, 0.5).zoom, 0.5);
 	});
 });

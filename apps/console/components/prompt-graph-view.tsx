@@ -32,7 +32,7 @@ export function PromptGraphCanvas({ graph, selected, onSelect }: { graph: Prompt
 			graph={data}
 			label={`${graph.title} prompt graph`}
 			draggable
-			recenterOnResize
+			zoomable
 			fill
 			highlightId={selected}
 			onNodeClick={onSelect}

@@ -375,6 +375,18 @@ export function PromptsView() {
 	const activeGraph = graphMode ? graphs.find((g) => g.key === urlState.graph) : undefined;
 	const activeNode = activeGraph?.nodes.find((n) => n.id === urlState.node);
 	/** The side panel: the clicked node's existing editor cards, next to the graph. A bottom-up full-screen overlay on a narrow screen. */
+	const panelOpen = !!activeNode;
+	const closeGraph = urlState.graph;
+	// Escape closes the node panel and clears `node` from the URL.
+	useEffect(() => {
+		if (!panelOpen) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setUrl({ graph: closeGraph });
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [panelOpen, closeGraph, pathname]);
 	const renderPanel = () => {
 		if (!activeGraph || !activeNode) return null;
 		const many = activeNode.ids.length > 3;

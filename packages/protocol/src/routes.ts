@@ -45,6 +45,7 @@ import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffReques
 
 import * as R from "./registry.js";
 import { HubSettingsSchema } from "./hub-settings.js";
+import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
@@ -224,6 +225,20 @@ export const ROUTES = {
    * The thread's composer settings: model tier (`main|smart|fast`) and auto-ship. `models` hints which model each tier
    * resolves to on this wolf. Defaults `{tier: "main", autoShip: false}`. 404 `not_found` for an unknown thread.
    */
+  /**
+   * The wolf's prompt registry, each with its effective text (`source` default|override), `etag` and `editable` flag. Overrides live in the
+   * wolf's home (`agent/prompts/<id>.md`); an edit applies when the wolf's system prompt is next built (wolfd builds it at start-up).
+   * 404 `not_found` for an unknown wolf or prompt.
+   */
+  listPrompts: { method: "GET", path: "/v1/wolves/:name/prompts", response: { kind: "json", schema: ListPromptsResponseSchema }, status: [200], error: err },
+  getPrompt: { method: "GET", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
+  /**
+   * Write the wolf's override (atomic). Header `If-Match: <etag>` makes it conditional: a stale etag is 409 `conflict`. 403 `forbidden` for a
+   * prompt that is not wolf-editable, 413 `too_large` over 64 KB, 400 `invalid_request` for a bad body. Answers the new view.
+   */
+  putPrompt: { method: "PUT", path: "/v1/wolves/:name/prompts/:id", body: PutPromptBodySchema, response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
+  /** Remove the override (reset to the repo default); same `If-Match` / 403 / 409 rules. Idempotent. Answers the default view. */
+  resetPrompt: { method: "DELETE", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
   getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   /**
    * Change the thread's settings (body: `tier`, `autoShip` and/or `color` (a palette key; null = automatic); the rest is kept). Persisted: survives a wolf restart.

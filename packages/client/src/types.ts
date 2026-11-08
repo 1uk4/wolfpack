@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView } from "@wolfpack/protocol";
 export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
@@ -42,6 +42,7 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
+export type { PromptView } from "@wolfpack/protocol";
 export type { ThreadContext, CreateThreadBody, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, ThreadTier } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, HubEvent, HubEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, CardBrief, PendingCard, ThreadStatus } from "@wolfpack/protocol";
@@ -120,6 +121,12 @@ export interface ConsoleClient {
   answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
   /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
   skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
+  /** The wolf's prompt registry with effective text, source, etag and editable flag. Optional: the mock has none. */
+  listPrompts?(wolf: string): Promise<PromptView[]>;
+  /** Write the wolf's override of an editable prompt. `ifMatch` = the etag loaded; a stale one rejects ProtocolError `conflict`; non-editable `forbidden`; over 64 KB `too_large`. */
+  putPrompt?(wolf: string, id: string, text: string, ifMatch?: string): Promise<PromptView>;
+  /** Remove the override (reset to the repo default). Errors as `putPrompt`. */
+  resetPrompt?(wolf: string, id: string, ifMatch?: string): Promise<PromptView>;
   /** The thread's composer settings (model tier, auto-ship) and the model each tier resolves to. Optional: the mock keeps them in memory. */
   getThreadSettings?(threadId: string): Promise<ThreadSettingsResponse>;
   /** Change the thread's settings (persisted by the wolf; a tier change applies from the next turn). Rejects ProtocolError `invalid_request`, NotFoundError. */

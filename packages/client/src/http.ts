@@ -16,6 +16,8 @@ import {
   type ThreadContext,
   type ThreadSettingsPatch,
   type ThreadSettingsResponse,
+  type PromptView,
+  type ListPromptsResponse,
   type RouteName,
   type KbCommitRequest,
   type KbCommitResponse,
@@ -176,6 +178,19 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
     return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
+  }
+
+  async listPrompts(wolf: string): Promise<PromptView[]> {
+    return ((await this.json("listPrompts", { name: wolf }, ROUTES.listPrompts.response.schema, undefined, wolf)) as ListPromptsResponse).prompts;
+  }
+
+  /** `ifMatch`: the etag the caller loaded; a stale one is a ProtocolError `conflict`. */
+  async putPrompt(wolf: string, id: string, text: string, ifMatch?: string): Promise<PromptView> {
+    return (await this.json("putPrompt", { name: wolf, id }, ROUTES.putPrompt.response.schema, { text }, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as PromptView;
+  }
+
+  async resetPrompt(wolf: string, id: string, ifMatch?: string): Promise<PromptView> {
+    return (await this.json("resetPrompt", { name: wolf, id }, ROUTES.resetPrompt.response.schema, undefined, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as PromptView;
   }
 
   async getThreadSettings(threadId: string): Promise<ThreadSettingsResponse> {
@@ -578,8 +593,8 @@ export class HttpConsoleClient implements ConsoleClient {
     throw await this.toError(res, threadId);
   }
 
-  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = ""): Promise<unknown> {
-    const headers: Record<string, string> = {};
+  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = "", extraHeaders: Record<string, string> = {}): Promise<unknown> {
+    const headers: Record<string, string> = { ...extraHeaders };
     const init: RequestInit & { headers: Record<string, string> } = { headers };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";

@@ -39,6 +39,14 @@ describe("console relay through the hub", () => {
     expect((await get("/v1/wolves/ghost/threads")).status).toBe(404);
   });
 
+  it("prompt PUT and DELETE cross the hub and the worker link with body and If-Match; a stale etag comes back as a conflict", async () => {
+    const { r, token } = await rig();
+    const c = new HttpConsoleClient({ baseUrl: r.hub.url, hub: { baseUrl: r.hub.url, token, relay: true } });
+    expect(await c.putPrompt!("alpha", "orchestrator-rules", "mine", "e1")).toMatchObject({ text: "mine", source: "override", etag: "PUT:e1" });
+    expect(await c.resetPrompt!("alpha", "orchestrator-rules", "e2")).toMatchObject({ text: "default", source: "default", etag: "DELETE:e2" });
+    await expect(c.putPrompt!("alpha", "orchestrator-rules", "x", "stale")).rejects.toMatchObject({ code: "conflict" });
+  });
+
   it("a large response is split into bounded chunk frames and arrives intact", async () => {
     const { r, get } = await rig();
     const sizes: number[] = [];

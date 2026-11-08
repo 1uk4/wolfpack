@@ -31,6 +31,17 @@ const server = createServer((req, res) => {
     return res.end("{}");
   }
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("hang")) return; // never answers
+  // prompt overrides: reflect the If-Match header and the body back as the prompt view; "stale" is the conflict case
+  if (p === `/v1/wolves/${name}/prompts/orchestrator-rules` && (req.method === "PUT" || req.method === "DELETE")) {
+    const bufs = [];
+    req.on("data", (c) => bufs.push(c));
+    return req.on("end", () => {
+      const ifMatch = req.headers["if-match"] ?? "";
+      if (ifMatch === "stale") return json(res, 409, { code: "conflict", message: "changed since you loaded it", retryable: false });
+      const text = bufs.length ? JSON.parse(Buffer.concat(bufs).toString("utf8")).text : "default";
+      json(res, 200, { id: "orchestrator-rules", group: "Orchestrator", label: "Orchestrator rules", editable: true, text, source: req.method === "PUT" ? "override" : "default", etag: `${req.method}:${ifMatch}` });
+    });
+  }
   if (p === `/v1/wolves/${name}/threads` && req.method === "POST") {
     const bufs = [];
     req.on("data", (c) => bufs.push(c));

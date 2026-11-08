@@ -56,6 +56,7 @@ import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { HttpError } from "./http-error.js";
+import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, promptDef, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
@@ -93,6 +94,8 @@ export interface WolfServerOptions {
   /** The Work API client settings (effective WORK_ENDPOINT / WORK_TOKEN) behind the work Record route. */
   work?: { endpoint?: string; token?: string };
   // ---- header git tree ----
+  /** The wolf's home dir: where `agent/prompts/<id>.md` overrides live. Unset: /prompts answers 404. */
+  wolfHome?: string;
   /** The wolf's workspace (the home thread's cwd): its git state is the home thread's `workspace`. Unset: home reports none. */
   workspace?: string;
   /** How long git answers behind `workspace` stay cached. Default 5000. */
@@ -483,6 +486,47 @@ export class WolfServer {
 
   // ------------------------------------------------------------- http
 
+  /**
+   * The prompt routes (listPrompts, getPrompt, putPrompt, resetPrompt): this wolf's prompt registry. PUT/DELETE take `If-Match: <etag>`
+   * (a stale one is 409 `conflict`); only wolf-editable prompts are writable (403 `forbidden`); text over the cap is 413 `too_large`.
+   */
+  private async handlePrompt(req: IncomingMessage, res: ServerResponse, name: string, id: string | undefined): Promise<void> {
+    this.checkWolf(name);
+    const home = this.opts.wolfHome;
+    if (!home) throw new HttpError("not_found", "this wolf has no home dir for prompt overrides");
+    const view = (defId: string) => ({ ...promptDef(defId)!, ...resolvePrompt(defId, home) });
+    if (id === undefined) return this.json(res, 200, { prompts: PROMPTS.map((p) => view(p.id)) });
+    if (!promptDef(id)) throw new HttpError("not_found", `unknown prompt "${id}"`);
+    if (req.method === "GET") return this.json(res, 200, view(id));
+    const ifMatch = typeof req.headers["if-match"] === "string" ? req.headers["if-match"].replace(/^"|"$/g, "") : undefined;
+    try {
+      if (req.method === "DELETE") resetPromptOverride(home, id, ifMatch);
+      else {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const c of req) {
+          size += (c as Buffer).length;
+          // JSON escaping can inflate the text, so allow the cap times six plus slack; the exact cap is checked on the decoded text.
+          if (size > PROMPT_MAX_BYTES * 6 + 1024) throw new HttpError("too_large", `prompt text is over ${PROMPT_MAX_BYTES} bytes`, size);
+          chunks.push(c as Buffer);
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          body = undefined;
+        }
+        const text = (body as { text?: unknown } | undefined)?.text;
+        if (typeof text !== "string") throw new HttpError("invalid_request", "body must be {text: string}");
+        writePromptOverride(home, id, text, ifMatch);
+      }
+      return this.json(res, 200, view(id));
+    } catch (e) {
+      if (e instanceof PromptWriteError) throw new HttpError({ unknown: "not_found", not_editable: "forbidden", too_large: "too_large", stale: "conflict" }[e.code] as ErrorCode, e.message);
+      throw e;
+    }
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://wolfd");
     res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
@@ -500,6 +544,12 @@ export class WolfServer {
 
     const { params } = m;
     switch (m.name) {
+      case "listPrompts":
+        return this.handlePrompt(req, res, params.name, undefined);
+      case "getPrompt":
+      case "putPrompt":
+      case "resetPrompt":
+        return this.handlePrompt(req, res, params.name, params.id);
       case "listWolves":
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":

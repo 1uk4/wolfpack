@@ -43,6 +43,7 @@ import {
   type GraduationObservations,
   type GraduationStatus,
   type WorkListResponse,
+  type HubSettings,
   type KbActivityResponse,
   type KbActivityQuery,
   type PendingCard,
@@ -506,6 +507,11 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** The hub curator's KB activity from the hub's own ledger (GET /v1/kb/activity). Hub clients only. */
+  async getHubSettings(): Promise<HubSettings> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "getHubSettings needs a hub client", false);
+    return (await this.json("hubSettings", {}, ROUTES.hubSettings.response.schema)) as HubSettings;
+  }
+
   async getKbActivity(query: KbActivityQuery = {}): Promise<KbActivityResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "getKbActivity needs a hub client", false);
     const q = new URLSearchParams();

@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView, HubSettings } from "@wolfpack/protocol";
 export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
@@ -42,7 +42,7 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
-export type { PromptView } from "@wolfpack/protocol";
+export type { PromptView, HubSettings } from "@wolfpack/protocol";
 export type { ThreadContext, CreateThreadBody, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, ThreadTier } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, HubEvent, HubEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, CardBrief, PendingCard, ThreadStatus } from "@wolfpack/protocol";
@@ -217,6 +217,8 @@ export interface ConsoleClient {
   /** The KB graph from the hub's read-only KB copy, limited to the domains the token may read. */
   getHubKbGraph?(opts?: { domain?: string; archivedWork?: boolean }): Promise<KbGraph>;
   /** The hub curator's activity (GET /v1/kb/activity): incoming, decisions, recent changes. Hub clients only. */
+  /** The hub's prompts, effective config (secrets masked) and package version. Console/browser tokens only. Optional: needs a hub. */
+  getHubSettings?(): Promise<HubSettings>;
   getKbActivity?(query?: KbActivityQuery): Promise<KbActivityResponse>;
   /** One KB entry from the hub's read-only KB copy, scoped to the token's readable domains. */
   getHubKbEntry?(id: string): Promise<KbEntryDetail>;

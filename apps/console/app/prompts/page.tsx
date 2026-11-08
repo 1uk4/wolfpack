@@ -1,12 +1,4 @@
-import { Suspense } from "react";
-import { PromptsView } from "@/components/prompts-view";
-
-export const dynamic = "force-dynamic";
-
-export default function PromptsPage() {
-	return (
-		<Suspense fallback={null}>
-			<PromptsView />
-		</Suspense>
-	);
+/** /prompts opens the Settings modal on its tab (AppShell's SettingsDialogProvider reads the URL); the page itself draws nothing. */
+export default function Page() {
+	return null;
 }

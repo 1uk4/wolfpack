@@ -28,7 +28,10 @@ import {
 	useEffect,
 	useRef,
 	useState,
+	Suspense,
 } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime.js";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import {
@@ -48,6 +51,9 @@ import { Hint } from "@/components/ui/hint";
 import { AppearanceSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { DevicesSection } from "./devices-section.tsx";
+import { PromptsView } from "@/components/prompts-view";
+import { WolfSettingsView } from "@/components/wolf-settings-view";
+import { parseSettingsRoute, settingsTabHref } from "./settings-route.ts";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining
  *  prose is out; only the keyboard note stays (storage location is a
@@ -58,6 +64,9 @@ const SECTIONS = [
 	{ id: "appearance", label: "Appearance" },
 	{ id: "devices", label: "Devices" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
+	// The last two are routed: /settings and /prompts open the dialog on them (settings-route.ts).
+	{ id: "wolf", label: "Wolf settings" },
+	{ id: "prompts", label: "Prompts" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
@@ -79,19 +88,66 @@ export function SettingsDialogProvider({
 	const [show, setShow] = useState(false);
 	const [landOn, setLandOn] = useState<SectionId>("keys");
 	const [landOnRow, setLandOnRow] = useState<string | null>(null);
+	// The URL is the second way in: /prompts and /settings show the dialog on their tab (reported by the bridge below).
+	const [loc, setLoc] = useState<{ pathname: string; search: string }>({ pathname: "", search: "" });
+	const router = useContext(AppRouterContext);
+	const route = parseSettingsRoute(loc.pathname, loc.search);
+	// Where closing goes back to: the last page that was not a settings URL.
+	const returnTo = useRef("/");
+	if (!route && loc.pathname) returnTo.current = `${loc.pathname}${loc.search}`;
 	const open = useCallback((section?: string, row?: string) => {
+		const href = section ? settingsTabHref(section) : null;
+		if (href) {
+			router?.push(href);
+			return;
+		}
 		if (section) setLandOn(section as SectionId);
 		setLandOnRow(row ?? null);
 		setShow(true);
-	}, []);
+	}, [router]);
+	const close = useCallback(() => {
+		setShow(false);
+		if (route) router?.replace(returnTo.current);
+	}, [route, router]);
+	// Switching tabs keeps the URL honest: a routed tab navigates to its path, any other tab leaves the settings URL.
+	const onSectionChange = useCallback(
+		(section: string) => {
+			const href = settingsTabHref(section);
+			if (href) router?.replace(href);
+			else if (route) {
+				setLandOn(section as SectionId);
+				setShow(true);
+				router?.replace(returnTo.current);
+			}
+		},
+		[route, router],
+	);
 	return (
 		<DialogContext.Provider value={{ open }}>
 			{children}
-			{show && (
-				<SettingsDialog onClose={() => setShow(false)} initialSection={landOn} initialRow={landOnRow} />
+			<Suspense fallback={null}>
+				<LocationBridge onChange={setLoc} />
+			</Suspense>
+			{(show || route) && (
+				<SettingsDialog
+					onClose={close}
+					initialSection={route ? route.section : landOn}
+					initialRow={landOnRow}
+					onSectionChange={onSectionChange}
+				/>
 			)}
 		</DialogContext.Provider>
 	);
+}
+
+/** Reports the current URL to the provider (useSearchParams needs a Suspense boundary). Draws nothing. */
+function LocationBridge({ onChange }: { onChange: (loc: { pathname: string; search: string }) => void }) {
+	const pathname = usePathname() ?? "";
+	const search = useSearchParams()?.toString() ?? "";
+	useEffect(() => {
+		onChange({ pathname, search: search ? `?${search}` : "" });
+	}, [pathname, search, onChange]);
+	return null;
 }
 
 export function useSettingsDialog() {
@@ -102,22 +158,24 @@ function SettingsDialog({
 	onClose,
 	initialSection,
 	initialRow,
+	onSectionChange,
 }: {
 	onClose: () => void;
 	initialSection: SectionId;
 	/** The keys-section row to unfold (see DialogContext above). */
 	initialRow: string | null;
+	onSectionChange?: (section: SectionId) => void;
 }) {
 	const backdropDismiss = useBackdropDismiss(onClose);
 	// Plain dim backdrop (no blur — nothing decorative); a genuine
 	// backdrop click closes, the dialog body stops propagation.
 	return createPortal(
 		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
+			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 max-md:items-stretch"
 			data-testid="settings-backdrop"
 			{...backdropDismiss}
 		>
-			<SettingsDialogBody onClose={onClose} initialSection={initialSection} initialRow={initialRow} />
+			<SettingsDialogBody onClose={onClose} initialSection={initialSection} initialRow={initialRow} onSectionChange={onSectionChange} />
 		</div>,
 		document.body,
 	);
@@ -129,9 +187,11 @@ export function SettingsDialogBody({
 	onClose,
 	initialSection = "keys",
 	initialRow = null,
+	onSectionChange,
 }: {
 	onClose: () => void;
 	initialSection?: SectionId;
+	onSectionChange?: (section: SectionId) => void;
 	/** The keys row to unfold on arrival (null = none). While-open
 	 *  retargets follow it exactly like initialSection below. */
 	initialRow?: string | null;
@@ -261,11 +321,11 @@ export function SettingsDialogBody({
 			aria-modal="true"
 			aria-label="Settings"
 			data-testid="settings-dialog"
-			className="settings-dialog-pop flex h-[620px] max-h-[85vh] w-[920px] max-w-[90vw] flex-col overflow-hidden rounded-md border border-border bg-card shadow-xl"
+			className="settings-dialog-pop flex h-[90vh] w-[min(1200px,95vw)] flex-col overflow-hidden rounded-md border border-border bg-card shadow-xl max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0 max-md:pb-[env(safe-area-inset-bottom)]"
 			onClick={(e) => e.stopPropagation()}
 		>
 			{/* Header — the app's quiet CMU title language. */}
-			<header className="flex h-15 shrink-0 items-center gap-3 border-b border-border px-5">
+			<header className="flex h-15 shrink-0 max-md:pt-[env(safe-area-inset-top)] max-md:h-[calc(3.75rem+env(safe-area-inset-top))] items-center gap-3 border-b border-border px-5">
 				<h2 className="font-title text-2xl tracking-tight">Settings</h2>
 				<Hint
 						// Esc closes the dialog (its own listener) — surface it.
@@ -307,12 +367,15 @@ export function SettingsDialogBody({
 							type="button"
 							data-testid={`settings-nav-${s.id}`}
 							aria-current={active === s.id}
-							className={`rounded-sm px-3 py-1.5 text-left font-ui text-sm transition-colors ${
+							className={`shrink-0 whitespace-nowrap rounded-sm px-3 py-1.5 text-left font-ui text-sm transition-colors ${
 								active === s.id
 									? "bg-accent text-foreground"
 									: "text-muted-foreground hover:bg-accent hover:text-foreground"
 							}`}
-							onClick={() => setActive(s.id)}
+							onClick={() => {
+								setActive(s.id);
+								onSectionChange?.(s.id);
+							}}
 						>
 							{s.label}
 						</button>
@@ -327,7 +390,7 @@ export function SettingsDialogBody({
 				    nothing may shift when the lock engages. */}
 				<div
 					ref={contentRef}
-					className="min-w-0 flex-1 overflow-y-auto"
+					className="min-h-0 min-w-0 flex-1 overflow-y-auto"
 					data-testid="settings-content"
 				>
 					{error && (
@@ -339,7 +402,11 @@ export function SettingsDialogBody({
 							{error}
 						</p>
 					)}
-					{record === undefined ? (
+					{active === "prompts" ? (
+						<PromptsView />
+					) : active === "wolf" ? (
+						<WolfSettingsView />
+					) : record === undefined ? (
 						<p className="px-6 py-5 text-xs text-muted-foreground/70">
 							Loading settings…
 						</p>

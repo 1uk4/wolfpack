@@ -246,8 +246,7 @@ export function WolfSettingsView() {
 	const canRestart = !!view && view.restartable && wait <= 0 && !pending;
 
 	return (
-		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-6" data-testid="wolf-settings-page">
-			<h1 className="text-lg font-semibold">Settings</h1>
+		<div className="mx-auto flex max-w-4xl flex-col gap-4 p-4 sm:p-6" data-testid="wolf-settings-page">
 			<label className="flex items-center gap-2 text-sm">
 				Wolf
 				<select className="rounded border bg-background px-2 py-1" value={wolf} onChange={(e) => setWolf(e.target.value)} data-testid="settings-wolf">
@@ -330,6 +329,6 @@ export function WolfSettingsView() {
 					</section>
 				</>
 			)}
-		</main>
+		</div>
 	);
 }

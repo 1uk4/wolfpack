@@ -1,8 +1,4 @@
-import { WolfSettingsView } from "@/components/wolf-settings-view";
-
-export const dynamic = "force-dynamic";
-
-/** The per-wolf Settings page. The dialog (Keys, Agent, Appearance...) stays reachable from the sidebar's Settings row. */
-export default function SettingsPage() {
-	return <WolfSettingsView />;
+/** /settings opens the Settings modal on its tab (AppShell's SettingsDialogProvider reads the URL); the page itself draws nothing. */
+export default function Page() {
+	return null;
 }

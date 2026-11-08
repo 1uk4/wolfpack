@@ -8,7 +8,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { XIcon } from "lucide-react";
-import { SidebarToggle } from "@/components/sidebar";
 import { PromptGraphCanvas } from "@/components/prompt-graph-view";
 import { PromptReader, ToolsReader } from "@/components/prompt-reader";
 import { buildGraphs, EDITED_IN, parsePromptsUrl, PROMPT_TABS, promptsUrlSearch, type PromptsUrlState, HOST_LABEL, hostOf, hubId, standardUsers } from "../src/core/prompt-flows.ts";
@@ -203,8 +202,16 @@ export function PromptsView() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") setUrl({ graph: closeGraph });
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		// Capture on the document: this runs before the Settings dialog's Escape handler, and claiming the event keeps
+		// that handler (and the window chain) from also acting. The first Escape closes the reader, the next the dialog.
+		const onKeyFirst = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			onKey(e);
+		};
+		document.addEventListener("keydown", onKeyFirst, true);
+		return () => document.removeEventListener("keydown", onKeyFirst, true);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [panelOpen, closeGraph, pathname]);
 	const renderPanel = () => {
@@ -237,7 +244,7 @@ export function PromptsView() {
 			/>
 		);
 		return (
-			<aside className="fixed inset-0 z-40 flex min-w-0 flex-col gap-4 overflow-y-auto bg-background p-4 md:static md:z-auto md:h-[70vh] md:w-1/2 md:shrink-0 md:rounded-md md:border" data-testid="prompt-panel" aria-label={`${activeNode.title} prompt`}>
+			<aside className="fixed inset-0 z-40 flex min-w-0 flex-col gap-4 overflow-y-auto bg-background p-4 md:static md:z-auto md:h-[60vh] md:w-1/2 md:shrink-0 md:rounded-md md:border" data-testid="prompt-panel" aria-label={`${activeNode.title} prompt`}>
 				{single ? (
 					readerFor(panelRows[0]!, true, true)
 				) : (
@@ -264,11 +271,7 @@ export function PromptsView() {
 	};
 
 	return (
-		<main className="mx-auto flex max-w-7xl flex-col gap-4 p-3 sm:p-6" data-testid="prompts-page">
-			<header className="flex items-center gap-2">
-				<SidebarToggle />
-				<h1 className="text-lg font-semibold">Prompts</h1>
-			</header>
+		<div className="flex min-w-0 flex-col gap-4 p-3 sm:p-5" data-testid="prompts-page">
 			<label className="flex items-center gap-2 text-sm">
 				Wolf
 				<select className="rounded border bg-background px-2 py-1" value={wolf} onChange={(e) => setWolf(e.target.value)} data-testid="prompts-wolf">
@@ -285,11 +288,11 @@ export function PromptsView() {
 			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
 			{activeGraph.key === "sweep" && hubRows === null && <p className="text-xs text-muted-foreground" data-testid="flow-hub-missing-line">Hub not connected{hubNote ? ` (${hubNote})` : ""}.</p>}
 			<div className="flex min-w-0 flex-col gap-3 md:flex-row" data-testid={`prompt-graph-${activeGraph.key}`}>
-				<div className="h-[70vh] min-h-[320px] min-w-0 flex-1 rounded-md border">
+				<div className="h-[60vh] min-h-[320px] min-w-0 flex-1 rounded-md border">
 					<PromptGraphCanvas graph={activeGraph} selected={activeNode?.id ?? null} onSelect={onSelect} />
 				</div>
 				{renderPanel()}
 			</div>
-		</main>
+		</div>
 	);
 }

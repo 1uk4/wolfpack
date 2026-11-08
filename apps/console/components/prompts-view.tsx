@@ -15,7 +15,16 @@ interface PromptRow {
 	text: string;
 	source: "default" | "override";
 	etag: string;
+	kind?: "editable" | "system-block" | "tool" | "pipeline" | "compaction";
+	file?: string;
+	user?: string;
+	scope?: "wolf" | "global" | "hub";
+	contract?: string;
 }
+
+const HUB = "__hub__";
+/** Past this many characters a read-only text starts collapsed. */
+const COLLAPSE_AT = 400;
 
 /** Truthful: wolfd builds the system prompt when it starts (and for reopened feature workspaces and new subagents), not per turn. */
 export const APPLIES_NOTE =
@@ -34,6 +43,8 @@ export function PromptsView() {
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [errors, setErrors] = useState<Record<string, string>>({});
 	const [loadError, setLoadError] = useState("");
+	const [group, setGroup] = useState("");
+	const [open, setOpen] = useState<Record<string, boolean>>({});
 
 	useEffect(() => {
 		void fetch("/api/wolves")
@@ -50,6 +61,28 @@ export function PromptsView() {
 	const load = useCallback(async () => {
 		if (!wolf) return;
 		setLoadError("");
+		setGroup("");
+		if (wolf === HUB) {
+			const o = await fetch("/api/settings/overview");
+			if (!o.ok) return setLoadError(await readError(o));
+			const j = (await o.json()) as { hub?: { ok: boolean; error?: string; settings?: { prompts: { id: string; group: string; label: string; text: string }[] } } };
+			if (!j.hub?.ok) return setLoadError(`The hub did not answer: ${j.hub?.error ?? "unknown error"}`);
+			setRows(
+				(j.hub.settings?.prompts ?? []).map((p) => ({
+					...p,
+					editable: false,
+					source: "default" as const,
+					etag: "",
+					kind: "pipeline" as const,
+					file: "packages/engine/src/prompts.ts (hubd GET /v1/settings)",
+					user: "hubd KB sweep (librarian)",
+					scope: "hub" as const,
+				})),
+			);
+			setDrafts({});
+			setErrors({});
+			return;
+		}
 		const r = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/prompts`);
 		if (!r.ok) return setLoadError(await readError(r));
 		const j = (await r.json()) as { prompts: PromptRow[] };
@@ -80,6 +113,9 @@ export function PromptsView() {
 		setErrors((e) => ({ ...e, [row.id]: "" }));
 	};
 
+	const groups = [...new Set(rows.map((r) => r.group))];
+	const shown = group ? rows.filter((r) => r.group === group) : rows;
+
 	return (
 		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-6" data-testid="prompts-page">
 			<h1 className="text-lg font-semibold">Prompts</h1>
@@ -90,10 +126,20 @@ export function PromptsView() {
 					{wolves.map((w) => (
 						<option key={w} value={w}>{w}</option>
 					))}
+					<option value={HUB}>Hub (KB sweep prompts)</option>
 				</select>
 			</label>
+			{groups.length > 1 && (
+				<nav className="flex flex-wrap gap-1.5" aria-label="Prompt groups" data-testid="prompts-groups">
+					{["", ...groups].map((g) => (
+						<button key={g || "all"} className={`rounded border px-2 py-0.5 text-xs ${group === g ? "bg-accent" : ""}`} onClick={() => setGroup(g)} data-testid={`prompts-group-${g || "all"}`}>
+							{g || "All"} ({g ? rows.filter((r) => r.group === g).length : rows.length})
+						</button>
+					))}
+				</nav>
+			)}
 			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
-			{rows.map((row) => {
+			{shown.map((row) => {
 				const draft = drafts[row.id] ?? row.text;
 				return (
 					<section key={row.id} className="flex flex-col gap-2 rounded-md border p-3" data-testid={`prompt-${row.id}`}>
@@ -101,8 +147,34 @@ export function PromptsView() {
 							<span className="text-xs uppercase tracking-wider text-muted-foreground">{row.group}</span>
 							<h2 className="text-sm font-medium">{row.label}</h2>
 							<span className="rounded bg-accent px-1.5 py-0.5 text-xs" data-testid={`prompt-badge-${row.id}`}>{row.source === "override" ? "overridden" : "default"}</span>
-							{!row.editable && <span className="text-xs text-muted-foreground">read-only</span>}
+							{!row.editable && <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground" data-testid={`prompt-readonly-${row.id}`}>read-only</span>}
 						</header>
+						{(row.file || row.user || row.scope) && (
+							<dl className="grid grid-cols-[auto_1fr] gap-x-3 text-xs text-muted-foreground" data-testid={`prompt-meta-${row.id}`}>
+								{row.file && (<><dt>Source</dt><dd className="break-all font-mono">{row.file}</dd></>)}
+								{row.user && (<><dt>Used by</dt><dd>{row.user}</dd></>)}
+								{row.scope && (<><dt>Scope</dt><dd>{row.scope === "wolf" ? "per wolf" : row.scope}</dd></>)}
+							</dl>
+						)}
+						{!row.editable ? (
+							<>
+								<pre
+									className={`w-full overflow-auto whitespace-pre-wrap rounded border bg-muted/30 p-2 font-mono text-xs ${open[row.id] || row.text.length <= COLLAPSE_AT ? "max-h-[32rem]" : "max-h-20"}`}
+									data-testid={`prompt-text-${row.id}`}
+								>{row.text}</pre>
+								{row.text.length > COLLAPSE_AT && (
+									<button className="self-start text-xs underline" onClick={() => setOpen((o) => ({ ...o, [row.id]: !o[row.id] }))} data-testid={`prompt-expand-${row.id}`}>
+										{open[row.id] ? "Collapse" : `Show full text (${row.text.length} characters)`}
+									</button>
+								)}
+								{row.contract && (
+									<details data-testid={`prompt-contract-${row.id}`}>
+										<summary className="cursor-pointer text-xs">Output contract (read-only: the reply is parsed against this)</summary>
+										<pre className="mt-1 max-h-72 overflow-auto rounded border bg-muted/30 p-2 font-mono text-xs">{row.contract}</pre>
+									</details>
+								)}
+							</>
+						) : (
 						<textarea
 							className="h-72 w-full rounded border bg-background p-2 font-mono text-xs"
 							value={draft}
@@ -110,6 +182,7 @@ export function PromptsView() {
 							onChange={(e) => setDrafts((d) => ({ ...d, [row.id]: e.target.value }))}
 							data-testid={`prompt-text-${row.id}`}
 						/>
+						)}
 						{errors[row.id] && <p className="text-sm text-destructive" role="alert" data-testid={`prompt-error-${row.id}`}>{errors[row.id]}</p>}
 						{row.editable && (
 							<div className="flex gap-2">

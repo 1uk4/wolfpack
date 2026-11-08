@@ -126,14 +126,14 @@ function pipelineEntries(): CatalogEntry[] {
   const CON = "Memory pipeline (consolidation, per wolf)";
   const CRAWL = "Crawl (knowledge ingest)";
   const stages = Object.entries(STAGE_CONTEXT).map(([stage, text]) =>
-    pipeline(`stage-context.${stage}`, "Work context", `Stage context: ${stage}`, "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, text, { constants: ["STAGE_CONTEXT"], contractNote: "Free text injected into the system prompt; not parsed." }),
+    pipeline(`stage-context.${stage}`, "Work context", `Stage context: ${stage}`, "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, text, { constants: ["STAGE_CONTEXT"] }),
   );
   return [
     pipeline("observer", "Memory observation", "Observer system prompt (live conversations)", OBS, MEMORY_PROMPTS, OBSERVER_SYSTEM, { schema: ObserverResultSchema, constants: ["OBSERVER_SYSTEM"] }),
     pipeline("observer-user", "Memory observation", "Observer user template (live)", OBS, `${MEMORY_TEMPLATES}/observations.ts`, LIVE_OBSERVER_USER_PROMPT, { schema: ObserverResultSchema, constants: ["LIVE_OBSERVER_USER_PROMPT"] }),
     pipeline("consolidate", "Memory consolidation", "Consolidation system prompt", CON, MEMORY_PROMPTS, CONSOLIDATE_SYSTEM, { schema: ConsolidationResultSchema, constants: ["CONSOLIDATE_SYSTEM"] }),
     pipeline("consolidate-user", "Memory consolidation", "Session consolidation user template", CON, `${MEMORY_TEMPLATES}/consolidations.ts`, SESSION_CONSOLIDATION_USER_PROMPT, { schema: ConsolidationResultSchema, constants: ["SESSION_CONSOLIDATION_USER_PROMPT"] }),
-    pipeline("pack-digest", "Memory consolidation", "Running digest block (what the pack already knows)", CON, `${MEMORY_TEMPLATES}/consolidations.ts`, PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE, { constants: ["PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE"], contractNote: "A block spliced into the consolidation prompt; not parsed." }),
+    pipeline("pack-digest", "Memory consolidation", "Running digest block (what the pack already knows)", CON, `${MEMORY_TEMPLATES}/consolidations.ts`, PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE, { constants: ["PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE"] }),
     pipeline("crawl-observer", "Crawl", "Crawl observer system prompt (documents)", CRAWL, MEMORY_PROMPTS, CRAWL_OBSERVER_SYSTEM, { schema: ObserverResultSchema, constants: ["CRAWL_OBSERVER_SYSTEM"] }),
     pipeline("crawl-observer-user", "Crawl", "Crawl observer user template", CRAWL, `${MEMORY_TEMPLATES}/observations.ts`, CRAWL_OBSERVER_USER_PROMPT, { schema: ObserverResultSchema, constants: ["CRAWL_OBSERVER_USER_PROMPT"] }),
     pipeline("crawl-consolidate", "Crawl", "Crawl consolidation system prompt", CRAWL, MEMORY_PROMPTS, CRAWL_CONSOLIDATE_SYSTEM, { schema: CrawlTopicSchema, constants: ["CRAWL_CONSOLIDATE_SYSTEM"] }),
@@ -146,8 +146,8 @@ function pipelineEntries(): CatalogEntry[] {
     pipeline("work-record", "Work memory", "Work record: rewrite a work item's Record", "Work-record consolidation (memory extension)", ENGINE_PROMPTS, WORK_RECORD_SYSTEM, { schema: WorkRecordSchema, constants: ["WORK_RECORD_SYSTEM"] }),
     pipeline("task-summary", "Work memory", "Task summary on completion", "Work memory (task done)", `${MEMORY_TEMPLATES}/tasks.ts`, TASK_SUMMARY_SYSTEM, { schema: TaskSummaryResult, constants: ["TASK_SUMMARY_SYSTEM"] }),
     pipeline("breakdown-suggestion", "Work memory", "Breakdown suggestion (child tasks or features)", "Work memory (defined; no engine.call site uses it yet)", `${MEMORY_TEMPLATES}/tasks.ts`, BREAKDOWN_SUGGESTION_SYSTEM, { constants: ["BREAKDOWN_SUGGESTION_SYSTEM"], contractNote: "No call site parses a reply against a schema yet." }),
-    pipeline("active-work-header", "Work context", "Active work context header", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, ACTIVE_WORK_CONTEXT_HEADER, { constants: ["ACTIVE_WORK_CONTEXT_HEADER"], contractNote: "Free text injected into the system prompt; not parsed." }),
-    pipeline("success-criteria-line", "Work context", "Success criteria line", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, SUCCESS_CRITERIA_LINE, { constants: ["SUCCESS_CRITERIA_LINE"], contractNote: "Free text injected into the system prompt; not parsed." }),
+    pipeline("active-work-header", "Work context", "Active work context header", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, ACTIVE_WORK_CONTEXT_HEADER, { constants: ["ACTIVE_WORK_CONTEXT_HEADER"] }),
+    pipeline("success-criteria-line", "Work context", "Success criteria line", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, SUCCESS_CRITERIA_LINE, { constants: ["SUCCESS_CRITERIA_LINE"] }),
     ...stages,
   ];
 }

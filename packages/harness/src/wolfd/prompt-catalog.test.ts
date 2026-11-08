@@ -35,6 +35,11 @@ describe("read-only prompt catalog", () => {
     expect(Object.keys(c.properties)).toContain("observations");
   });
 
+  it("context snippets injected into a prompt (work context, running digest) have no output contract: nothing parses a reply against them", () => {
+    const ids = ["pipeline.active-work-header", "pipeline.success-criteria-line", "pipeline.stage-context.in_build", "pipeline.pack-digest"];
+    for (const id of ids) expect(catalog().find((e) => e.id === id)?.contract, id).toBeUndefined();
+  });
+
   it("returns the real pi-durable compaction text, read from the installed package", () => {
     const all = catalog();
     expect(all.find((e) => e.id === "compaction.pi-durable-system")?.text).toMatch(/^You are a context summarization assistant\./);

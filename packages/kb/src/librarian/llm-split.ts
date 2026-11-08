@@ -105,17 +105,23 @@ export interface SplitVerdict {
 
 /**
  * Map the model's ids back to member indexes. Entry ids are "kb-<domain>-<short>" and the model sometimes answers with only the
- * short part ("h18Dpg5"); an exact match wins, else a bare id that is the unique "-"-suffix of a member id. Unknown or ambiguous
- * ids are dropped (they were silently dropped before too, which turned a whole section's answer into "0 proposed").
+ * short part ("h18Dpg5"); an exact match wins, else a bare id that is the unique "-"-suffix of a member id. Ids are trimmed once, up
+ * front. Unknown or ambiguous ids are dropped, but reported ("N of M ids in category X did not map"): they used to vanish silently,
+ * which turned a whole section's answer into "0 proposed".
  */
-function idResolver(ids: string[]): (xs: string[]) => number[] {
+function idResolver(ids: string[], notify?: (msg: string) => void): (xs: string[], label: string) => number[] {
   const exact = new Map(ids.map((id, i) => [id, i]));
   const bySuffix = new Map<string, number | null>();
   ids.forEach((id, i) => {
     const short = id.slice(id.lastIndexOf("-") + 1);
     bySuffix.set(short, bySuffix.has(short) ? null : i);
   });
-  return (xs) => xs.map((x) => exact.get(x) ?? bySuffix.get(x.trim()) ?? undefined).filter((i): i is number => i !== undefined);
+  return (xs, label) => {
+    const out = xs.map((x) => x.trim()).map((x) => exact.get(x) ?? bySuffix.get(x) ?? undefined);
+    const bad = out.filter((i) => i === undefined).length;
+    if (bad > 0) notify?.(`${bad} of ${xs.length} ids in category ${label} did not map`);
+    return out.filter((i): i is number => i !== undefined);
+  };
 }
 
 /** Decide whether and how one oversized section splits. */
@@ -155,21 +161,86 @@ export async function judgeSplit(
       return fromKmeans(kmeans(), why);
     }
   }
-  const asIdx = idResolver(ids);
+  const asIdx = idResolver(ids, deps.notify);
   const result = validatePartition(vectors, {
     names: proposal.categories.map((c) => c.name),
-    members: proposal.categories.map((c) => asIdx(c.ids)),
-    doesntFit: asIdx(proposal.doesntFit),
+    members: proposal.categories.map((c) => asIdx(c.ids, c.name)),
+    doesntFit: asIdx(proposal.doesntFit, "doesn't fit"),
   }, rules);
   const diag = deps.diagnostics ? kmeans() : undefined;
+  if (!isPartition(result) && result.single) {
+    // One category survived: the leftovers may hold its partner.
+    const two = await secondPass(deps, rules, args, members, vectors, result.single);
+    if (two.d.k >= 2) return {
+      source: "llm", decision: { labels: two.d.labels, k: two.d.k, names: two.d.names, leftovers: two.d.leftovers },
+      categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached: cached && !two.asked,
+    };
+  }
   if (!isPartition(result)) {
     deps.notify?.(`no split: ${result.reason}`);
     return { source: "llm", reason: result.reason, categories: result.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached };
   }
+  const final = await secondPass(deps, rules, args, members, vectors, result);
   return {
     source: "llm",
-    decision: { labels: result.labels, k: result.k, names: result.names, leftovers: result.leftovers },
-    categories: result.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached,
+    decision: { labels: final.d.labels, k: final.d.k, names: final.d.names, leftovers: final.d.leftovers },
+    categories: final.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached: cached && !final.asked,
   };
+}
+
+/**
+ * ONE more grouping pass over what the first pass left on the parent (leftovers fitting no group). The model is asked about the
+ * leftovers alone; its categories are then validated together with the groups already kept, so a new group must be closer to its
+ * own members than to every kept group (and has at least minGroup coherent members). A failed call or a pass that adds nothing
+ * leaves the first result as it was. The answer is cached under its own key (the leftover set, salted); `asked` is true when the
+ * model was called (a cache miss).
+ *
+ * Total cap: the two passes together yield at most rules.llmMaxCategoriesTotal groups (the per-answer cap llmMaxCategories applies to
+ * each pass on its own). Every first-pass group must survive the joint validation with at least its original members; otherwise the
+ * first result is kept. The returned categories are the first pass's reports (dropped ones included) followed by the second pass's.
+ */
+async function secondPass(
+  deps: JudgeDeps, rules: TreeRules, args: { domain: string; parentTitle: string }, members: JudgeMember[], vectors: Vec[], first: PartitionDecision,
+): Promise<{ d: PartitionDecision; asked: boolean }> {
+  const keepFirst = (asked: boolean) => ({ d: first, asked });
+  if (!deps.partitioner || first.leftovers.length < rules.minGroup) return keepFirst(false);
+  const left = first.leftovers.map((i) => members[i]);
+  const leftIds = left.map((m) => m.id);
+  const key = splitCacheKey(args.domain + "#leftovers", leftIds);
+  let proposal = deps.cache?.get(key);
+  if (proposal !== undefined && !isValidProposal(proposal)) {
+    deps.notify?.("cached leftover proposal is malformed; treating it as a cache miss");
+    proposal = undefined;
+  }
+  const asked = !proposal;
+  if (!proposal) {
+    try {
+      const fresh = await deps.partitioner({
+        parentTitle: `${args.parentTitle} (entries that fit none of its other groups)`,
+        members: left.map(({ id, title, summary }) => ({ id, title, summary })),
+      });
+      if (!isValidProposal(fresh)) throw new Error("the proposal is malformed (categories/doesntFit)");
+      proposal = fresh;
+      deps.cache?.set(key, proposal);
+    } catch (err) {
+      deps.notify?.(`leftover grouping failed (${err instanceof Error ? err.message : String(err)}); keeping the first pass`);
+      return keepFirst(true);
+    }
+  }
+  const asIdx = idResolver(leftIds, deps.notify);
+  const keptGroups = first.names.map((_, g) => first.labels.flatMap((l, i) => (l === g ? [i] : [])));
+  const newGroups = proposal.categories.map((c) => asIdx(c.ids, c.name).map((j) => first.leftovers[j]));
+  const total = keptGroups.length + newGroups.length;
+  const both = validatePartition(vectors, {
+    names: [...first.names, ...proposal.categories.map((c) => c.name)],
+    members: [...keptGroups, ...newGroups],
+    doesntFit: [],
+  }, { ...rules, llmMaxCategories: Math.max(rules.llmMaxCategories, Math.min(total, rules.llmMaxCategoriesTotal)) });
+  if (!isPartition(both) || both.k <= first.k || both.k > rules.llmMaxCategoriesTotal) return keepFirst(asked);
+  // Every first-pass group must still hold its original members (compared by members, not names: a second-pass category may reuse a name).
+  const survives = keptGroups.every((ms) => ms.length > 0 && new Set(ms.map((i) => both.labels[i])).size === 1 && both.labels[ms[0]] >= 0);
+  if (!survives) return keepFirst(asked);
+  deps.notify?.(`second pass over ${left.length} leftovers added ${both.k - first.k} group(s)`);
+  return { d: { ...both, categories: [...first.categories, ...both.categories.slice(first.k)] }, asked };
 }
 export type { PartitionDecision };

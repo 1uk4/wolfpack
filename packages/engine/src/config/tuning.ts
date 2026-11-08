@@ -324,6 +324,10 @@ export const SECTION_TREE = {
     llmMinCoherence: 0.7,
     /** At most this many categories are taken from one LLM answer (the prompt asks for 2-5); further ones are ignored and their members become leftovers. */
     llmMaxCategories: 5,
+    /** A partly coherent category (below llmMinCoherence) is kept only when at least this share of what was proposed is coherent: 3 coherent members out of 30 proposed is not a group. */
+    llmMinPartialShare: 0.3,
+    /** Across the first pass and the leftover pass together, at most this many groups come out of one section. */
+    llmMaxCategoriesTotal: 8,
     /** Child label restating the parent: token Jaccard at or above this. */
     restateJaccard: 0.6,
     /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */

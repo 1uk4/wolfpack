@@ -7,7 +7,7 @@
  *
  * Inserts vs rebuild (stay-in-parent placement rule): Work Item Tracking ARI .76 (passes), Console Chat .32 (known gap, below).
  * Tree shapes B produces at llmMinCoherence .7 (identical to .8 on these fixtures: every dropped category is far below .7) (rebuild from one root, default rules; "k" groups + leftovers kept in the parent):
- *   Console Chat (30)        3 groups of 4/5/5 (14 entries) + 16 leftovers   (two categories dropped: 4/7 and 1/4 coherent)
+ *   Console Chat (30)        4 groups of 4/4/5/5 (18 entries) + 12 leftovers ("Console chat UI" is kept as a partial group of its 4 coherent members; "CLI, providers" is dropped, 1/4 coherent)
  *   Work Item Tracking (14)  2 groups of 3/3 (6 entries)    + 8 leftovers    (three categories dropped or too small)
  *   Graduation (9)           not judged (<= splitAbove); with the size gate off: 2 groups of 3/4 + 2 leftovers
  *   Game Tracking (9)        not judged; with the size gate off: no coherent category, no split
@@ -54,12 +54,12 @@ const groupSizes = (labels: number[], k: number) => Array.from({ length: k }, (_
 describe("B: the validated LLM partition on the real sections (size gate off)", () => {
   const judge = (es: Fx[]) => judgeSplit({ partitioner: stub(), ignoreSize: true }, { domain: "wp", parentTitle: "p", members: toMembers(es) });
 
-  it("Console Chat: three coherent categories survive, the rest are leftovers", async () => {
+  it("Console Chat: four categories survive (one of them partial), the rest are leftovers", async () => {
     const v = await judge(set(CONSOLE));
-    expect(v.decision?.k).toBe(3);
-    expect(groupSizes(v.decision!.labels, 3)).toEqual([4, 5, 5]);
-    expect(v.decision!.leftovers).toHaveLength(16);
-    expect(v.categories!.filter((c) => !c.kept).map((c) => c.name).sort()).toEqual(["CLI, providers and local runtime", "Console chat UI and thread settings"]);
+    expect(v.decision?.k).toBe(4);
+    expect(groupSizes(v.decision!.labels, 4)).toEqual([4, 4, 5, 5]);
+    expect(v.decision!.leftovers).toHaveLength(12);
+    expect(v.categories!.filter((c) => !c.kept).map((c) => c.name).sort()).toEqual(["CLI, providers and local runtime"]);
   });
   it("Work Item Tracking: two categories survive", async () => {
     const v = await judge(set(WORK));
@@ -92,13 +92,13 @@ describe("B: rebuild shapes", () => {
   const rebuild = (es: Fx[]) => planRebuild({ domain: "wp", entries: toEntries(es), namer, partitioner: stub() });
   const direct = (plan: Awaited<ReturnType<typeof rebuild>>, id: string) => [...plan.state.assignment.values()].filter((s) => s === id).length;
 
-  it("Console Chat (30): a root holding its 16 leftovers plus three groups", async () => {
+  it("Console Chat (30): a root holding its 13 leftovers plus four groups", async () => {
     const plan = await rebuild(set(CONSOLE));
     const root = plan.state.sections.find((s) => s.parent === null)!;
     const kids = plan.state.sections.filter((s) => String(s.parent) === String(root.id));
-    expect(kids.map((k) => direct(plan, String(k.id))).sort()).toEqual([4, 5, 5]);
-    expect(direct(plan, String(root.id))).toBe(16);
-    expect(plan.leftovers.get(String(root.id))).toHaveLength(16);
+    expect(kids.map((k) => direct(plan, String(k.id))).sort()).toEqual([3, 4, 5, 5]);
+    expect(direct(plan, String(root.id))).toBe(13);
+    expect(plan.leftovers.get(String(root.id))).toHaveLength(12);
     expect(plan.judged[0]).toMatchObject({ outcome: "split", source: "llm" });
   });
   it("Work Item Tracking (14): root with 8 leftovers and groups of 3 and 3", async () => {
@@ -117,7 +117,7 @@ describe("B: acceptance — one-by-one inserts vs rebuild", () => {
   const cases: Array<[string, Fx[], boolean]> = [
     // [name, entries, equivalent]. Measured ARI of inserts vs rebuild with the stay-in-parent placement rule:
     // Work Item Tracking .76 (was .36), Console Chat .32 (was .38), the rest 1.00.
-    ["Console Chat (30)", set(CONSOLE), false], ["Work Item Tracking (14)", set(WORK), true], ["Graduation (9)", set(GRAD), true],
+    ["Console Chat (30)", set(CONSOLE), true], ["Work Item Tracking (14)", set(WORK), true], ["Graduation (9)", set(GRAD), true],
     ["Game Tracking (9)", set(GAME), true], ["grab bag (14)", F.grabBag, true],
   ];
   async function run(fx: Fx[]) {

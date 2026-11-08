@@ -319,7 +319,7 @@ function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): stri
   if (v.source === "llm") {
     out.push(`grouping proposed by the LLM${v.cached ? " (cached)" : ""}; vectors validated it`);
     for (const c of v.categories ?? []) {
-      out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? "kept" : `dropped (${c.why})`}`);
+      out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? (c.why === "partial" ? "kept (partial)" : "kept") : `dropped (${c.why})`}`);
     }
     if (v.doesntFit?.length) out.push(`  - doesn't fit: ${v.doesntFit.map((i) => byEntry.get(i)?.title ?? i).join("; ")}`);
     if (!v.decision && v.reason) out.push(`  → no split: ${v.reason}`);

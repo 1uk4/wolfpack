@@ -79,6 +79,19 @@ describe("validatePartition (vectors validate, never assign)", () => {
     expect(isPartition(d3) && d3.categories[1].share).toBeGreaterThanOrEqual(0.7);
     expect(isPartition(d3) && d3.categories[1].share).toBeLessThan(0.8);
   });
+  it("a category with only a sliver coherent (3 of 12 proposed) is dropped as low-share, though it has minGroup coherent members", () => {
+    const S = [12, 12, 3];
+    const es = make(S);
+    const idx = (c: number) => es.flatMap((e, i) => (cluster(e.id, S) === c ? [i] : []));
+    // B = its own 3 plus 9 members of cluster 0; A holds the rest of cluster 0 (A is listed second, so B's claim comes first)
+    const b = [...idx(2), ...idx(0).slice(0, 9)];
+    const r = validatePartition(es.map((e) => e.vector), { names: ["B", "A", "C"], members: [b, idx(0).slice(9), idx(1)], doesntFit: [] });
+    expect(r.categories.map((c) => ({ name: c.name, coherent: c.coherent, kept: c.kept, why: c.why }))).toEqual([
+      { name: "B", coherent: 3, kept: false, why: "low-share" },
+      { name: "A", coherent: 3, kept: true, why: undefined },
+      { name: "C", coherent: 12, kept: true, why: undefined },
+    ]);
+  });
   it("fewer than two surviving categories: no split", () => {
     const es = make(SIZES);
     const r = validatePartition(es.map((e) => e.vector), { names: ["All"], members: [es.map((_, i) => i)], doesntFit: [] });
@@ -117,7 +130,7 @@ describe("judgeSplit", () => {
   it("a partly coherent category is kept as a group of its coherent members (>= minGroup); the strays become leftovers", async () => {
     const e4 = make([6, 6, 6]);
     const c = (k: number) => e4.filter((e) => cluster(e.id, SIZES) === k);
-    // "Mixed" holds 4 entries of cluster 2 plus 2 of cluster 1 (which also sit coherent in "B"? no: they are only listed here)
+    // "Mixed" lists 4 entries of cluster 2 plus 2 of cluster 1 (those 2 are filed nowhere else): 4 of 6 coherent is below .7, so it is kept "partial"
     const mixed = [...c(2).slice(0, 4), ...c(1).slice(0, 2)];
     const v = await judgeSplit({ partitioner: async () => ({
       categories: [
@@ -127,9 +140,92 @@ describe("judgeSplit", () => {
       ], doesntFit: c(2).slice(4).map((e) => e.id),
     }) }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(v.decision?.names).toEqual(["A", "B", "Mixed"]);
+    expect(v.categories?.find((x) => x.name === "Mixed")).toMatchObject({ kept: true, why: "partial" });
     const ids = e4.map((e) => e.id).sort();
     const left = (v.decision?.leftovers ?? []).map((i) => ids[i]).sort();
     expect(left).toEqual([...c(1).slice(0, 2), ...c(2).slice(4)].map((e) => e.id).sort());
+  });
+
+  it("leftovers get one more grouping pass, asked about the leftovers alone and validated like the first", async () => {
+    const S4 = [6, 6, 6, 6];
+    const e4 = make(S4);
+    const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
+    const asked: string[][] = [];
+    const part: Partitioner = async ({ members: m }) => {
+      asked.push(m.map((x) => x.id));
+      if (m.length === 24) return { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: [...of(2), ...of(3)] };
+      return { categories: [{ name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] };
+    };
+    const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toEqual([...of(2), ...of(3)].sort());
+    expect(v.decision?.names).toEqual(["A", "B", "C", "D"]);
+    expect(v.decision?.leftovers).toEqual([]);
+  });
+
+  it("when only one category survives the first pass, the leftover pass may find its partner", async () => {
+    const S4 = [6, 6, 6, 6];
+    const e4 = make(S4);
+    const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
+    const part: Partitioner = async ({ members: m }) => (m.length === 24
+      ? { categories: [{ name: "A", ids: of(0) }], doesntFit: [...of(1), ...of(2), ...of(3)] }
+      : { categories: [{ name: "B", ids: of(1) }, { name: "C", ids: of(2) }], doesntFit: of(3) });
+    const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    expect(v.decision?.names).toEqual(["A", "B", "C"]);
+    const sorted = e4.map((e) => e.id).sort();
+    expect((v.decision?.leftovers ?? []).map((i) => sorted[i])).toEqual([...of(3)].sort());
+  });
+
+  it("ids that do not map (unknown, or the same short id on two members) are dropped AND reported per category", async () => {
+    // e001 now answers to the short id "e001" twice (kb-wp-e001, kb-zz-e001) and no member is short "e002"
+    const m = es.map((e) => ({ ...e, id: e.id === "e002" ? "kb-zz-e001" : `kb-wp-${e.id}` }));
+    const notes: string[] = [];
+    const v = await judgeSplit({ partitioner: async () => ideal(es), notify: (x) => notes.push(x) }, { domain: "wp", parentTitle: "P", members: members(m) });
+    expect(notes).toContain(`2 of 6 ids in category ${names[0]} did not map`);
+    expect(v.decision?.k).toBe(3);
+  });
+
+  it("a failed or malformed leftover pass keeps the first pass's result", async () => {
+    const S4 = [6, 6, 6, 6];
+    const e4 = make(S4);
+    const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
+    const first: SplitProposal = { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: [...of(2), ...of(3)] };
+    for (const second of [() => { throw new Error("boom"); }, () => ({ categories: null, doesntFit: [] })]) {
+      const notes: string[] = [];
+      const part = (async ({ members: m }) => (m.length === 24 ? first : second())) as Partitioner;
+      const v = await judgeSplit({ partitioner: part, notify: (x) => notes.push(x) }, { domain: "wp", parentTitle: "P", members: members(e4) });
+      expect(v.decision?.names).toEqual(["A", "B"]);
+      expect(v.decision?.leftovers).toHaveLength(12);
+      expect(notes.some((x) => /leftover grouping failed/.test(x))).toBe(true);
+    }
+  });
+
+  it("the leftover pass is cached under its own key: a second run asks nothing, and is reported cached", async () => {
+    const S4 = [6, 6, 6, 6];
+    const e4 = make(S4);
+    const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
+    const part = vi.fn<Parameters<Partitioner>, ReturnType<Partitioner>>(async ({ members: m }) => (m.length === 24
+      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: [...of(2), ...of(3)] }
+      : { categories: [{ name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] }));
+    const cache = memorySplitCache();
+    const a = await judgeSplit({ partitioner: part, cache }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    const b = await judgeSplit({ partitioner: part, cache }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    expect(part).toHaveBeenCalledTimes(2);
+    expect([a.cached, b.cached]).toEqual([false, true]);
+    expect(b.decision?.names).toEqual(["A", "B", "C", "D"]);
+  });
+
+  it("a leftover-pass category that reuses a first-pass group's name does not hide that the first-pass group was dropped (checked by members)", async () => {
+    const S4 = [6, 9, 6, 6];
+    const e4 = make(S4);
+    const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
+    const part: Partitioner = async ({ members: m }) => (m.length === 27
+      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1).slice(0, 3) }], doesntFit: [...of(1).slice(3), ...of(2), ...of(3)] }
+      // the second "B" lies on top of the first one, so the joint validation drops the old B (its members no longer beat the new B)
+      : { categories: [{ name: "B", ids: of(1).slice(3) }, { name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] });
+    const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    expect(v.decision?.names).toEqual(["A", "B"]);
+    expect(v.decision?.leftovers).toHaveLength(18);
   });
 
   it("a category dropped for incoherence is reported, and its members are leftovers", async () => {

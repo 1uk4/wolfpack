@@ -6,6 +6,7 @@
  * repo default. Overrides live in the wolf's home; other wolves keep the default.
  */
 import { useCallback, useEffect, useState } from "react";
+import { buildFlows, buildTree, chipGroup, HOST_LABEL, hubId, standardUsers, visibleRows, type FlowStep, type TreeNode } from "../src/core/prompt-flows.ts";
 
 interface PromptRow {
 	id: string;
@@ -57,6 +58,19 @@ async function readError(r: Response): Promise<string> {
 	return r.status === 409 ? `Conflict: ${msg}. Reload to see the current text.` : r.status === 413 ? `Too large: ${msg}` : msg;
 }
 
+type HubPrompt = { id: string; group: string; label: string; text: string };
+const toHubRows = (ps: HubPrompt[]): PromptRow[] =>
+	ps.map((p) => ({
+		...p,
+		editable: false,
+		source: "default" as const,
+		etag: "",
+		kind: "pipeline" as const,
+		file: "packages/engine/src/prompts.ts (hubd GET /v1/settings)",
+		user: "hubd KB sweep (librarian)",
+		scope: "hub" as const,
+	}));
+
 export function PromptsView() {
 	const [wolves, setWolves] = useState<string[]>([]);
 	const [wolf, setWolf] = useState("");
@@ -68,6 +82,10 @@ export function PromptsView() {
 	const [open, setOpen] = useState<Record<string, boolean>>({});
 	const [settings, setSettings] = useState<SettingsInfo | null>(null);
 	const [soDraft, setSoDraft] = useState<string | null>(null);
+	const [view, setView] = useState<"tree" | "flows">("tree");
+	/** The hub's KB-sweep prompts for flow B step 4; null when the hub is not connected (hubNote says why). */
+	const [hubRows, setHubRows] = useState<PromptRow[] | null>(null);
+	const [hubNote, setHubNote] = useState("");
 
 	useEffect(() => {
 		void fetch("/api/wolves")
@@ -88,20 +106,9 @@ export function PromptsView() {
 		if (wolf === HUB) {
 			const o = await fetch("/api/settings/overview");
 			if (!o.ok) return setLoadError(await readError(o));
-			const j = (await o.json()) as { hub?: { ok: boolean; error?: string; settings?: { prompts: { id: string; group: string; label: string; text: string }[] } } };
+			const j = (await o.json()) as { hub?: { ok: boolean; error?: string; settings?: { prompts: HubPrompt[] } } };
 			if (!j.hub?.ok) return setLoadError(`The hub did not answer: ${j.hub?.error ?? "unknown error"}`);
-			setRows(
-				(j.hub.settings?.prompts ?? []).map((p) => ({
-					...p,
-					editable: false,
-					source: "default" as const,
-					etag: "",
-					kind: "pipeline" as const,
-					file: "packages/engine/src/prompts.ts (hubd GET /v1/settings)",
-					user: "hubd KB sweep (librarian)",
-					scope: "hub" as const,
-				})),
-			);
+			setRows(toHubRows(j.hub.settings?.prompts ?? []));
 			setDrafts({});
 			setErrors({});
 			return;
@@ -114,6 +121,21 @@ export function PromptsView() {
 		setErrors({});
 		setSoDraft(null);
 		setSettings(null);
+		void fetch("/api/settings/overview")
+			.then(async (o) => {
+				const h = o.ok ? ((await o.json()) as { hub?: { ok: boolean; error?: string; settings?: { prompts: HubPrompt[] } } }).hub : undefined;
+				if (h?.ok) {
+					setHubRows(toHubRows(h.settings?.prompts ?? []));
+					setHubNote("");
+				} else {
+					setHubRows(null);
+					setHubNote(h?.error ?? "no hub answered");
+				}
+			})
+			.catch(() => {
+				setHubRows(null);
+				setHubNote("no hub answered");
+			});
 		const sr = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/settings`).catch(() => null);
 		if (sr?.ok) {
 			const v = (await sr.json()) as { etag: string; config?: { prompts?: { structuredOutput?: string | false } }; restartNeeded?: boolean };
@@ -158,36 +180,19 @@ export function PromptsView() {
 		await load();
 	};
 
-	const groups = [...new Set(rows.map((r) => r.group))];
-	const shown = group ? rows.filter((r) => r.group === group) : rows;
+	const isHub = wolf === HUB;
+	const listed = isHub ? rows : visibleRows(rows);
+	const chipOf = (r: PromptRow) => (isHub ? r.group : chipGroup(r));
+	const groups = [...new Set(listed.map(chipOf))];
+	const shown = group ? listed.filter((r) => chipOf(r) === group) : listed;
+	const shownIds = new Set(shown.map((r) => r.id));
+	const byId = new Map<string, PromptRow>([...rows.map((r) => [r.id, r] as [string, PromptRow]), ...(hubRows ?? []).map((r) => [hubId(r.id), r] as [string, PromptRow])]);
 
-	return (
-		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-6" data-testid="prompts-page">
-			<h1 className="text-lg font-semibold">Prompts</h1>
-			{!SPAWN_GROUPS.has(group) && <p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>}
-			<label className="flex items-center gap-2 text-sm">
-				Wolf
-				<select className="rounded border bg-background px-2 py-1" value={wolf} onChange={(e) => setWolf(e.target.value)} data-testid="prompts-wolf">
-					{wolves.map((w) => (
-						<option key={w} value={w}>{w}</option>
-					))}
-					<option value={HUB}>Hub (KB sweep prompts)</option>
-				</select>
-			</label>
-			{groups.length > 1 && (
-				<nav className="flex flex-wrap gap-1.5" aria-label="Prompt groups" data-testid="prompts-groups">
-					{["", ...groups].map((g) => (
-						<button key={g || "all"} className={`rounded border px-2 py-0.5 text-xs ${group === g ? "bg-accent" : ""}`} onClick={() => setGroup(g)} data-testid={`prompts-group-${g || "all"}`}>
-							{g || "All"} ({g ? rows.filter((r) => r.group === g).length : rows.length})
-						</button>
-					))}
-				</nav>
-			)}
-			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
-			{shown.map((row) => {
+	/** One prompt's card: the same editor in every view. `ctx` adds the view-specific lines (edited-in link, used-by). */
+	const card = (row: PromptRow, ctx: { editedIn?: string; usedBy?: string[] } = {}, key = row.id) => {
 				const draft = drafts[row.id] ?? row.text;
 				return (
-					<section key={row.id} className="flex flex-col gap-2 rounded-md border p-3" data-testid={`prompt-${row.id}`}>
+					<section key={key} id={`prompt-card-${row.id}`} className="flex min-w-0 flex-col gap-2 rounded-md border p-3" data-testid={`prompt-${row.id}`}>
 						<header className="flex items-center gap-2">
 							<span className="text-xs uppercase tracking-wider text-muted-foreground">{row.group}</span>
 							<h2 className="text-sm font-medium">{row.label}</h2>
@@ -201,6 +206,12 @@ export function PromptsView() {
 								{row.scope && (<><dt>Scope</dt><dd>{row.scope === "wolf" ? "per wolf" : row.scope}</dd></>)}
 							</dl>
 						)}
+						{ctx.editedIn && (
+							<p className="text-xs" data-testid={`prompt-edited-in-${row.id}`}>Edited in: <a className="underline" href={`#prompt-card-${ctx.editedIn}`}>{byId.get(ctx.editedIn)?.label ?? ctx.editedIn}</a></p>
+						)}
+						{row.id === STRUCTURED && <p className="text-xs" data-testid="prompt-edited-in-structured">Edited in: the box below (saved to wolf.yaml).</p>}
+						{!row.editable && row.kind === "system-block" && row.id !== STRUCTURED && !ctx.editedIn && <p className="text-xs text-muted-foreground" data-testid={`prompt-edited-in-${row.id}`}>Edited in: nowhere; read-only.</p>}
+						{ctx.usedBy && <p className="text-xs text-muted-foreground" data-testid={`prompt-used-by-${row.id}`}>Used by: {ctx.usedBy.length ? ctx.usedBy.join(", ") : "no profile names it"}</p>}
 						{row.editable && row.applies && <p className="text-xs text-muted-foreground" data-testid={`prompt-applies-${row.id}`}>An edit applies {row.applies}. {row.id === "identity" ? "Restore original puts back the identity as it was before its first edit here; every edit is also kept as a backup (last 10). This is the wolf's own agent/AGENTS.md (there is no repo default)." : "The previous version is kept as a backup (last 10)."}</p>}
 						{row.editable && row.inlineIdentity && (
 							<p className="text-xs text-destructive" data-testid={`prompt-inline-identity-${row.id}`}>wolf.yaml sets <span className="font-mono">identity: {row.inlineIdentity}</span>, which the running wolf reads instead of this file. An edit here is saved but has no effect until that line is removed.</p>
@@ -264,7 +275,120 @@ export function PromptsView() {
 						)}
 					</section>
 				);
+	};
+
+	const keep = (id: string) => shownIds.has(id);
+
+	const renderTreeNode = (node: TreeNode) => {
+		const items = node.items.filter((i) => keep(i.id) || (i.editedIn && keep(i.editedIn)));
+		const subs = (node.subagents ?? []).filter((sa) => keep(sa.id) || sa.cards.some(keep));
+		if (!items.length && !subs.length) return null;
+		return (
+			<details key={node.key} open={!node.collapsed || !!group} className="flex flex-col gap-2" data-testid={`tree-node-${node.key}`}>
+				<summary className="cursor-pointer text-sm font-semibold">{node.title}</summary>
+				<div className="flex min-w-0 flex-col gap-3 border-l pl-2 sm:pl-5">
+					{node.note && <p className="text-xs text-muted-foreground">{node.note}</p>}
+					{items.map((i) => {
+						const row = byId.get(i.id);
+						if (!row) return null;
+						const target = i.editedIn ? byId.get(i.editedIn) : undefined;
+						return (
+							<div key={i.id} className="flex min-w-0 flex-col gap-2" data-testid={`tree-item-${i.id}`}>
+								{keep(i.id) && card(row, i.editedIn ? { editedIn: i.editedIn } : {})}
+								{target && keep(i.editedIn!) && <div className="ml-2 min-w-0 border-l pl-2 sm:ml-5 sm:pl-3">{card(target)}</div>}
+							</div>
+						);
+					})}
+					{subs.map((sa) => {
+						const row = byId.get(sa.id);
+						if (!row) return null;
+						return (
+							<div key={sa.id} className="flex min-w-0 flex-col gap-2" data-testid={`tree-subagent-${sa.id}`}>
+								{keep(sa.id) && card(row)}
+								{sa.reads.length > 0 && <p className="ml-2 text-xs text-muted-foreground sm:ml-5">Reads standards: {sa.reads.map((r) => r.replace(/^standard\./, "")).join(", ")}</p>}
+								{sa.cards.filter(keep).map((sid) => (
+									<div key={sid} className="ml-2 min-w-0 border-l pl-2 sm:ml-5 sm:pl-3">{card(byId.get(sid)!, { usedBy: standardUsers(rows, sid) })}</div>
+								))}
+							</div>
+						);
+					})}
+				</div>
+			</details>
+		);
+	};
+	const renderTree = () => (
+		<div className="flex flex-col gap-4" data-testid="prompts-tree">
+			<h2 className="text-sm font-semibold">Main wolf (orchestrator)</h2>
+			{buildTree(rows).map((node) => renderTreeNode(node))}
+		</div>
+	);
+
+	const renderStep = (st: FlowStep) => {
+		const stepRows = st.ids.map((id) => ({ id, row: byId.get(id) })).filter((x): x is { id: string; row: PromptRow } => !!x.row);
+		const visible = stepRows.filter((x) => (x.id.startsWith("hub:") ? !group || chipOf(x.row) === group : keep(x.id)));
+		if (group && st.ids.length && !visible.length) return null;
+		return (
+			<li key={st.n} className="flex min-w-0 flex-col gap-2 rounded-md border p-2 sm:p-3" data-testid={`flow-step-${st.n}`}>
+				{st.crossing && <p className="rounded bg-accent px-2 py-1 text-xs font-medium" data-testid="flow-crossing">{st.crossing}</p>}
+				<div className="flex flex-wrap items-center gap-2">
+					<span className="text-sm font-semibold">{st.n}. {st.title}</span>
+					<span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground" data-testid={`flow-host-${st.n}`}>runs on: {HOST_LABEL[st.host]}</span>
+					{stepRows.length > 0 && <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">{stepRows.every((x) => x.row.editable) ? "editable" : stepRows.some((x) => x.row.editable) ? "partly editable" : "read-only"}</span>}
+				</div>
+				{st.note && <p className="text-xs text-muted-foreground">{st.note}</p>}
+				{st.hubMissing && (
+					<p className="text-sm text-muted-foreground" data-testid="flow-hub-missing">Hub not connected, so the sweep prompts cannot be shown{hubNote ? ` (${hubNote})` : ""}. This step runs on the hub with the prompts hubd reports.</p>
+				)}
+				{visible.map((x) => card(x.row, x.id.startsWith("standard.") ? { usedBy: standardUsers(rows, x.id) } : {}, `${st.n}-${x.id}`))}
+			</li>
+		);
+	};
+	const renderFlows = () => (
+		<div className="flex flex-col gap-6" data-testid="prompts-flows">
+			{buildFlows(rows, hubRows).map((f) => {
+				const steps = f.steps.map(renderStep).filter(Boolean);
+				if (group && !steps.length) return null;
+				return (
+					<section key={f.key} className="flex flex-col gap-3" data-testid={`flow-${f.key}`}>
+						<h2 className="text-sm font-semibold">{f.title}</h2>
+						<ol className="flex flex-col gap-3">{steps}</ol>
+					</section>
+				);
 			})}
+		</div>
+	);
+
+	return (
+		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-3 sm:p-6" data-testid="prompts-page">
+			<h1 className="text-lg font-semibold">Prompts</h1>
+			{!SPAWN_GROUPS.has(group) && <p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>}
+			<label className="flex items-center gap-2 text-sm">
+				Wolf
+				<select className="rounded border bg-background px-2 py-1" value={wolf} onChange={(e) => setWolf(e.target.value)} data-testid="prompts-wolf">
+					{wolves.map((w) => (
+						<option key={w} value={w}>{w}</option>
+					))}
+					<option value={HUB}>Hub (KB sweep prompts)</option>
+				</select>
+			</label>
+			{!isHub && (
+				<div className="flex gap-1.5" role="tablist" aria-label="Prompts view" data-testid="prompts-views">
+					{(["tree", "flows"] as const).map((v) => (
+						<button key={v} role="tab" aria-selected={view === v} className={`rounded border px-3 py-1 text-sm ${view === v ? "bg-accent" : ""}`} onClick={() => setView(v)} data-testid={`prompts-view-${v}`}>{v === "tree" ? "Wolf tree" : "Flows"}</button>
+					))}
+				</div>
+			)}
+			{groups.length > 1 && (
+				<nav className="flex flex-wrap gap-1.5" aria-label="Prompt groups" data-testid="prompts-groups">
+					{["", ...groups].map((g) => (
+						<button key={g || "all"} className={`rounded border px-2 py-0.5 text-xs ${group === g ? "bg-accent" : ""}`} onClick={() => setGroup(g)} data-testid={`prompts-group-${g || "all"}`}>
+							{g || "All"} ({g ? rows.filter((r) => r.group === g).length : rows.length})
+						</button>
+					))}
+				</nav>
+			)}
+			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
+			{isHub ? shown.map((row) => card(row)) : view === "tree" ? renderTree() : renderFlows()}
 		</main>
 	);
 }

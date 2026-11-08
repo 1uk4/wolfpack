@@ -20,7 +20,7 @@ function stubHub(): string[] {
 		auth.push(new Headers(init?.headers).get("authorization") ?? "(none)");
 		if (url.pathname === "/v1/wolves") return reply({ wolves: [wolf("local", "mac"), wolf("hal", "sfo-01")] });
 		if (url.pathname === "/v1/settings") return reply({ version: "0.1.0", prompts: [{ id: "sweep", group: "KB", label: "Sweep", text: "sweep text" }], config: { port: 1 } });
-		if (url.pathname === "/v1/wolves/local/prompts") return reply({ prompts: [prompt("orchestrator-rules")] });
+		if (url.pathname === "/v1/wolves/local/prompts") return reply({ prompts: [prompt("orchestrator-rules"), prompt("compaction.pi-durable-system"), prompt("compaction.pi-durable-instructions")] });
 		if (url.pathname === "/v1/wolves/hal/prompts") return reply({ code: "engine_error", message: "host sfo-01 unreachable", retryable: true }, 502);
 		return reply({ code: "not_found", message: "no route", retryable: false }, 404);
 	}) as typeof fetch;
@@ -71,12 +71,13 @@ describe("settings overview API", () => {
 		const auto = byId["console-auto-summarizer"];
 		assert.deepEqual(auto.triggers, ["auto"]);
 		assert.equal(auto.runsIn, "console");
-		assert.match(auto.text, /^You are the session-compaction summarizer for a tutoring agent\./);
+		assert.match(auto.text, /^You are the session-compaction summarizer for a wolfpack console conversation\./);
+		assert.doesNotMatch(auto.text, /tutoring/);
 		assert.match(byId["console-auto-instructions"].text, /^You are compacting the earlier part of a conversation/);
 		const manual = byId["pi-durable-summarizer"];
 		assert.deepEqual(manual.triggers, ["auto", "manual"]);
 		assert.equal(manual.runsIn, "wolf");
-		assert.equal(manual.text, null);
+		assert.equal(manual.text, "text of compaction.pi-durable-system\n\n---\n\ntext of compaction.pi-durable-instructions");
 		assert.match(manual.source, /pi-durable\/dist\/harness\/compaction\.js/);
 	});
 

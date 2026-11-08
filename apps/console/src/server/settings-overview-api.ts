@@ -53,7 +53,17 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 	return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function compactionPrompts(): CompactionPromptInfo[] {
+/** pi-durable's compaction text as a wolf reports it (read from its installed package): system prompt, then the instructions. Null when no wolf answered with it. */
+function piDurableText(wolves: WolfSettings[]): string | null {
+	for (const w of wolves) {
+		const system = w.prompts?.find((p) => p.id === "compaction.pi-durable-system")?.text;
+		const instructions = w.prompts?.find((p) => p.id === "compaction.pi-durable-instructions")?.text;
+		if (system !== undefined && instructions !== undefined) return `${system}\n\n---\n\n${instructions}`;
+	}
+	return null;
+}
+
+export function compactionPrompts(wolves: WolfSettings[] = []): CompactionPromptInfo[] {
 	return [
 		{
 			id: "console-auto-summarizer",
@@ -62,7 +72,7 @@ export function compactionPrompts(): CompactionPromptInfo[] {
 			runsIn: "console",
 			source: "apps/console/src/server/compaction.ts SUMMARIZER_SYSTEM_PROMPT",
 			text: SUMMARIZER_SYSTEM_PROMPT,
-			note: "Used by the console's own chat handler (POST /api/chat: ensureCompacted / kickCompaction). Wolf threads are driven by wolfd, not by this path.",
+			note: "Used by the console's own chat handler (POST /api/chat: ensureCompacted / kickCompaction). That path is not reachable from the current UI (every thread view passes a wolf thread transport); wolf threads are compacted by wolfd.",
 		},
 		{
 			id: "console-auto-instructions",
@@ -79,8 +89,8 @@ export function compactionPrompts(): CompactionPromptInfo[] {
 			triggers: ["auto", "manual"],
 			runsIn: "wolf",
 			source: "@earendil-works/pi-durable/dist/harness/compaction.js (SUMMARIZATION_SYSTEM_PROMPT, SUMMARIZATION_PROMPT)",
-			text: null,
-			note: "wolfd's engine compacts every wolf thread, including hal's: automatically past the thresholds (packages/harness/src/engine/compaction.ts) and on POST /v1/threads/:id/compact (wolfd/server.ts compactThread). The text ships inside pi-durable on the wolf's host; the console does not depend on it, so it cannot read it here.",
+			text: piDurableText(wolves),
+			note: "wolfd's engine compacts every wolf thread, including hal's: automatically past the thresholds (packages/harness/src/engine/compaction.ts) and on POST /v1/threads/:id/compact (wolfd/server.ts compactThread). The text is the one the wolf reads from its installed pi-durable (system prompt, a rule, then the instructions), taken from the wolf's prompts as compaction.pi-durable-system and compaction.pi-durable-instructions; null when no wolf answered.",
 		},
 	];
 }
@@ -111,7 +121,7 @@ export function createSettingsOverviewApi(source: ClientSource, opts: { wolfTime
 			}),
 		);
 		const [hub, wolfList] = await Promise.all([hubP, wolvesP]);
-		return { hub, wolves: wolfList, ...(wolvesError ? { wolvesError } : {}), compaction: { prompts: compactionPrompts() } };
+		return { hub, wolves: wolfList, ...(wolvesError ? { wolvesError } : {}), compaction: { prompts: compactionPrompts(wolfList) } };
 	}
 	return {
 		async overview(): Promise<Response> {

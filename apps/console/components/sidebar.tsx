@@ -7,7 +7,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon, FileTextIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
@@ -1040,6 +1040,19 @@ export function SessionsSidebar() {
 					>
 						<WorkflowIcon className="size-3" />
 						KB activity
+					</Link>
+					<Link
+						href="/prompts"
+						onClick={closeList}
+						data-testid="nav-prompts"
+						aria-current={pathname === "/prompts" ? "page" : undefined}
+						className={cn(
+							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
+							pathname === "/prompts" ? "bg-accent text-foreground" : "text-muted-foreground",
+						)}
+					>
+						<FileTextIcon className="size-3" />
+						Prompts
 					</Link>
 					<WorkNavEntry />
 				</div>

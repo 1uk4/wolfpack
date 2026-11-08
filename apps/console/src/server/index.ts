@@ -49,3 +49,4 @@ export * from "./memory-api.ts";
 export * from "./kb-activity-api.ts";
 export * from "./needs-you-api.ts";
 export * from "./devices-api.ts";
+export * from "./prompts-api.ts";

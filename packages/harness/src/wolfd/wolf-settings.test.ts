@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadWolfConfig } from "@wolfpack/engine";
+import { composeProjectContext } from "./context.js";
 import { ScriptedEngine } from "./scripted-engine.js";
 import { WolfServer } from "./server.js";
 
@@ -108,7 +110,7 @@ describe("wolfd /settings", () => {
     const res = await send(`${url}/restart`, "POST");
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("50");
-    expect(await res.json()).toMatchObject({ code: "rate_limited", details: { retryAfterSeconds: "50" } });
+    expect(await res.json()).toMatchObject({ code: "rate_limited", details: { retryAfterSeconds: 50 }, retryable: true });
     expect((await (await send(url, "GET")).json()).restartAvailableInSeconds).toBe(50);
     await new Promise((r) => setTimeout(r, 50));
     expect(called).toBe(0);
@@ -117,5 +119,26 @@ describe("wolfd /settings", () => {
   it("reports no wait once the process has been up past the cooldown", async () => {
     const { url } = await boot({ restart: () => {}, uptimeMs: () => 61_000 });
     expect((await (await send(url, "GET")).json()).restartAvailableInSeconds).toBe(0);
+  });
+
+  it("sets, removes (false) and clears prompts.structuredOutput; the composed prompt follows after a restart", async () => {
+    const { configFile, wolfHome, url } = await boot();
+    const compose = () => {
+      const cfg = loadWolfConfig(configFile).config;
+      return composeProjectContext({ name: "w", cwd: wolfHome, den: wolfHome, home: wolfHome, structuredOutput: cfg.prompts?.structuredOutput }).blocks.find((b) => b.id === "structured-output")?.text;
+    };
+    const put = async (value: unknown) => {
+      const etag = (await (await send(url, "GET")).json()).etag;
+      return send(url, "PUT", { set: { "prompts.structuredOutput": value } }, { "If-Match": etag });
+    };
+    expect((await (await send(url, "GET")).json()).editable).toContain("prompts.structuredOutput");
+    expect((await put("Use graphs always.")).status).toBe(200);
+    expect(compose()).toBe("# Structured output\n\nUse graphs always.");
+    expect((await put(false)).status).toBe(200);
+    expect(compose()).toBeUndefined();
+    expect((await put(null)).status).toBe(200);
+    expect(compose()).toContain("show_decision");
+    expect(readFileSync(configFile, "utf8")).not.toContain("prompts");
+    expect((await put(5)).status).toBe(400);
   });
 });

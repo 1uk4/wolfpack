@@ -53,6 +53,7 @@ describe("prompt registry", () => {
   it("every id has a non-empty default and declares exactly the {{placeholders}} its default uses", () => {
     expect(PROMPTS.length).toBeGreaterThan(0);
     for (const def of PROMPTS) {
+      if (def.store === "identity") continue; // the wolf's own file: no repo default
       const text = resolvePrompt(def.id).text;
       expect(text.trim().length, def.id).toBeGreaterThan(0);
       const used = [...new Set([...text.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1]))].sort();
@@ -113,5 +114,38 @@ describe("helper profiles and standards as editable prompts", () => {
     writePromptOverride(a, "agent.worker", "---\nname: worker\n---\n1");
     writePromptOverride(a, "agent.worker", "---\nname: worker\n---\n2");
     expect(readdirSync(join(a, "agent", ".backups", "agents"))).toHaveLength(1);
+  });
+});
+
+describe("the wolf's identity as an editable prompt", () => {
+  const file = () => join(a, "agent", "AGENTS.md");
+  const backups = () => (existsSync(join(a, "agent", ".backups", "identity")) ? readdirSync(join(a, "agent", ".backups", "identity")).sort() : []);
+
+  it("an edit is written to agent/AGENTS.md itself, backing up the previous text first", () => {
+    mkdirSync(join(a, "agent"), { recursive: true });
+    writeFileSync(file(), "I am Rex.");
+    const before = resolvePrompt("identity", a);
+    expect(before).toMatchObject({ text: "I am Rex.", source: "override" });
+    writePromptOverride(a, "identity", "I am Rex, v2.", before.etag);
+    expect(readFileSync(file(), "utf8")).toBe("I am Rex, v2.");
+    expect(backups().map((f) => readFileSync(join(a, "agent", ".backups", "identity", f), "utf8"))).toEqual(["I am Rex."]);
+  });
+
+  it("reset restores the newest backup (backing up the current text first) and refuses when there is none", () => {
+    mkdirSync(join(a, "agent"), { recursive: true });
+    writeFileSync(file(), "one");
+    expect(code(() => resetPromptOverride(a, "identity"))).toBe("invalid");
+    expect(readFileSync(file(), "utf8")).toBe("one");
+    writePromptOverride(a, "identity", "two");
+    resetPromptOverride(a, "identity");
+    expect(readFileSync(file(), "utf8")).toBe("one");
+    expect(backups()).toHaveLength(2);
+  });
+
+  it("a wolf without an identity file reads as empty text, and the first save needs no backup", () => {
+    expect(resolvePrompt("identity", a)).toMatchObject({ text: "", source: "default" });
+    writePromptOverride(a, "identity", "new");
+    expect(readFileSync(file(), "utf8")).toBe("new");
+    expect(backups()).toEqual([]);
   });
 });

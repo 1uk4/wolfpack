@@ -55,7 +55,7 @@ export const ErrorCodeSchema = z.enum([
   "conflict",
   /** A request body is over its cap (e.g. a prompt override over 64 KB). */
   "too_large",
-  /** Too soon to repeat this (e.g. a restart within a minute of the last start). `details.retryAfterSeconds` says when. */
+  /** Too soon to repeat this (e.g. a restart within a minute of the last start). `details.retryAfterSeconds` (a number) says when; the error is retryable. */
   "rate_limited",
   /** The actor is authenticated but not allowed this operation (e.g. a wolf committing to the KB). */
 ]);
@@ -66,7 +66,7 @@ export const ErrorEnvelopeSchema = z.object({
   message: z.string(),
   retryable: z.boolean(),
   /** Additive, structured facts about the refusal (a graduation `busy` carries `{kind}`, the kind of job that is running). */
-  details: z.record(z.string(), z.string()).optional(),
+  details: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 

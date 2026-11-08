@@ -84,12 +84,20 @@ export function placeholdersOf(text: string): string[] {
  */
 export function piDurableCompactionPrompts(): { system: string; instructions: string; file: string } {
   const NOT_FOUND = "(not found in the installed @earendil-works/pi-durable)";
-  let file = "@earendil-works/pi-durable/dist/harness/compaction.js";
+  let file = "@earendil-works/pi-durable dist/harness/compaction.js";
   let src = "";
   try {
     const entry = createRequire(import.meta.url).resolve("@earendil-works/pi-durable");
-    file = join(dirname(entry), "harness", "compaction.js");
-    src = readFileSync(file, "utf8");
+    const path = join(dirname(entry), "harness", "compaction.js");
+    src = readFileSync(path, "utf8");
+    // Show the package and version, not the pnpm store path.
+    let version = "";
+    try {
+      version = `@${(JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8")) as { version?: string }).version ?? ""}`;
+    } catch {
+      // no package.json beside dist
+    }
+    file = `@earendil-works/pi-durable${version} dist/harness/compaction.js`;
   } catch {
     // leave src empty
   }
@@ -97,7 +105,7 @@ export function piDurableCompactionPrompts(): { system: string; instructions: st
     const m = new RegExp(`const ${name} = \`([\\s\\S]*?)\`;\\n`).exec(src);
     return m ? m[1]!.replace(/\\`/g, "`").replace(/\\\\/g, "\\") : NOT_FOUND;
   };
-  return { system: grab("SUMMARIZATION_SYSTEM_PROMPT"), instructions: grab("SUMMARIZATION_PROMPT"), file: file.includes("node_modules/") ? `${file.slice(file.indexOf("@earendil-works"))}` : file };
+  return { system: grab("SUMMARIZATION_SYSTEM_PROMPT"), instructions: grab("SUMMARIZATION_PROMPT"), file };
 }
 
 function pipeline(

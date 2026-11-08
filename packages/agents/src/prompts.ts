@@ -30,7 +30,8 @@ export interface PromptDef {
   applies: string;
 }
 
-export type PromptStore = "prompts" | "agents" | "standards";
+/** `identity` is the wolf's own `<wolf-home>/agent/AGENTS.md`: no repo default, and reset restores the newest backup. */
+export type PromptStore = "prompts" | "agents" | "standards" | "identity";
 
 const RESTART = "when the wolf restarts (wolfd builds its system prompt at start-up; threads reopened in a feature workspace pick it up earlier)";
 const prompt = (id: string, group: string, label: string, placeholders: string[], user: string): PromptDef => ({ id, group, label, editable: true, placeholders, user, file: `packages/agents/prompts/${id}.md`, store: "prompts", name: id, applies: RESTART });
@@ -56,6 +57,18 @@ export const PROMPTS: readonly PromptDef[] = [
   prompt("grilling", "Work creation", "Grilling protocol", [], "main wolf (new-work skill)"),
   prompt("to-spec", "Work creation", "To-spec protocol", [], "main wolf (new-work skill)"),
   prompt("to-tickets", "Work creation", "To-tickets protocol", [], "main wolf (new-work skill)"),
+  {
+    id: "identity",
+    group: "Identity",
+    label: "Identity (agent/AGENTS.md)",
+    editable: true,
+    placeholders: [],
+    user: "main wolf (home and feature threads)",
+    file: "<wolf-home>/agent/AGENTS.md",
+    store: "identity",
+    name: "AGENTS",
+    applies: RESTART,
+  },
   ...PROFILES.map(
     ([n, user]): PromptDef => ({ id: `agent.${n}`, group: "Helper profiles", label: `Helper profile: ${n}`, editable: true, placeholders: [], user, file: `packages/agents/agents/${n}.md`, store: "agents", name: n, applies: SPAWN }),
   ),
@@ -90,10 +103,11 @@ export function promptDef(id: string): PromptDef | undefined {
 /** Where a wolf's override of `id` lives: `<wolf-home>/agent/<store>/<name>.md` (the paths discoverAgents and the standards loader read). */
 export function overridePath(wolfHome: string, id: string): string {
   const def = requireDef(id);
-  return join(wolfHome, "agent", def.store, `${def.name}.md`);
+  return def.store === "identity" ? join(wolfHome, "agent", "AGENTS.md") : join(wolfHome, "agent", def.store, `${def.name}.md`);
 }
 
 function defaultPath(def: PromptDef): string {
+  if (def.store === "identity") throw new Error("the identity has no repo default");
   const dir = def.store === "agents" ? bundledAgentsDir() : def.store === "standards" ? bundledStandardsDir() : bundledPromptsDir();
   return join(dir, `${def.name}.md`);
 }
@@ -114,6 +128,15 @@ function backupOverride(wolfHome: string, def: PromptDef): void {
     .filter((f) => f.startsWith(`${def.name}.`) && /^\d+\.md$/.test(f.slice(def.name.length + 1)))
     .sort();
   for (const old of mine.slice(0, Math.max(0, mine.length - BACKUPS_KEPT))) rmSync(join(dir, old), { force: true });
+}
+
+function newestBackup(wolfHome: string, def: PromptDef): string | undefined {
+  const dir = join(wolfHome, "agent", ".backups", def.store);
+  if (!existsSync(dir)) return undefined;
+  const mine = readdirSync(dir)
+    .filter((f) => f.startsWith(`${def.name}.`) && /^\d+\.md$/.test(f.slice(def.name.length + 1)))
+    .sort();
+  return mine.length ? readFileSync(join(dir, mine[mine.length - 1]!), "utf8") : undefined;
 }
 
 /** A profile edit must keep a frontmatter block that parses, with `name:` equal to the id, and valid `standards:` names. Returns the problem, or undefined. */
@@ -155,7 +178,8 @@ export function resolvePrompt(id: string, wolfHome?: string): ResolvedPrompt {
       // no override (or unreadable): the default
     }
   }
-  const text = readFileSync(defaultPath(def), "utf8");
+  // The identity is the wolf's own file: no file means empty text, not a repo default.
+  const text = def.store === "identity" ? "" : readFileSync(defaultPath(def), "utf8");
   return { id, text, source: "default", etag: promptEtag(text) };
 }
 
@@ -200,9 +224,18 @@ export function writePromptOverride(wolfHome: string, id: string, text: string, 
   return resolvePrompt(id, wolfHome);
 }
 
-/** Remove a wolf's override (reset to the repo default). Idempotent. */
+/**
+ * Remove a wolf's override (reset to the repo default). Idempotent. The identity has no default: reset restores the newest
+ * backup (the current text is backed up first, so a reset can be undone) and is refused when there is no backup.
+ */
 export function resetPromptOverride(wolfHome: string, id: string, ifMatch?: string): ResolvedPrompt {
   checkWritable(id, ifMatch, wolfHome);
+  const def = requireDef(id);
+  if (def.store === "identity") {
+    const previous = newestBackup(wolfHome, def);
+    if (previous === undefined) throw new PromptWriteError("invalid", "there is no earlier version of the identity to restore");
+    return writePromptOverride(wolfHome, id, previous);
+  }
   backupOverride(wolfHome, requireDef(id));
   rmSync(overridePath(wolfHome, id), { force: true });
   return resolvePrompt(id, wolfHome);

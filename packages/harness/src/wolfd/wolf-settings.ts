@@ -8,6 +8,7 @@ import { isMap, parse as parseYaml, parseDocument } from "yaml";
 /** wolf.yaml keys an edit may set (dotted). Everything else (memory.live, librarian, identity, serve, sandbox, ...) stays hand-edited. */
 export const EDITABLE_KEYS: readonly string[] = [
   ...(["main", "smart", "fast"] as const).flatMap((t) => [`models.${t}.provider`, `models.${t}.model`, `models.${t}.thinking`, `tiers.${t}.model`, `tiers.${t}.thinking`]),
+  "prompts.structuredOutput",
   "subagents.maxRunning",
   "compaction.enabled",
   "compaction.startAt",

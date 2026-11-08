@@ -39,6 +39,7 @@ describe("read-only prompt catalog", () => {
     const all = catalog();
     expect(all.find((e) => e.id === "compaction.pi-durable-system")?.text).toMatch(/^You are a context summarization assistant\./);
     expect(all.find((e) => e.id === "compaction.pi-durable-instructions")?.text).toContain("Use this EXACT format:");
+    expect(all.find((e) => e.id === "compaction.pi-durable-system")?.file).toMatch(/^@earendil-works\/pi-durable@\d+\.\d+\.\d+ dist\/harness\/compaction\.js SUMMARIZATION_SYSTEM_PROMPT$/);
   });
 
   it("source scan: every *_SYSTEM constant the memory and harness sources use is registered here or is a hub sweep prompt", () => {

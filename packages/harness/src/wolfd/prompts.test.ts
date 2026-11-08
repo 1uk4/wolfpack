@@ -107,4 +107,21 @@ describe("wolfd /prompts", () => {
     expect(existsSync(join(wolfHome, "agent", "agents", "worker.md"))).toBe(false);
     expect(readdirSync(join(wolfHome, "agent", ".backups", "agents"))).toHaveLength(1);
   });
+
+  it("edits the identity in agent/AGENTS.md with a backup on PUT and DELETE, and flags an inline wolf.yaml identity that wins", async () => {
+    const { wolfHome, url } = await boot();
+    mkdirSync(join(wolfHome, "agent"), { recursive: true });
+    writeFileSync(join(wolfHome, "agent", "AGENTS.md"), "I am w.");
+    const got = await (await send(`${url}/identity`, "GET")).json();
+    expect(got).toMatchObject({ editable: true, text: "I am w.", source: "override" });
+    expect(got.inlineIdentity).toBeUndefined();
+    expect((await send(`${url}/identity`, "PUT", { text: "I am w2." }, { "If-Match": got.etag })).status).toBe(200);
+    expect(readFileSync(join(wolfHome, "agent", "AGENTS.md"), "utf8")).toBe("I am w2.");
+    const del = await send(`${url}/identity`, "DELETE");
+    expect(await del.json()).toMatchObject({ text: "I am w." });
+    expect(readdirSync(join(wolfHome, "agent", ".backups", "identity"))).toHaveLength(2);
+
+    const other = await boot({ identityFile: "/elsewhere/ME.md" });
+    expect(await (await send(`${other.url}/identity`, "GET")).json()).toMatchObject({ inlineIdentity: "/elsewhere/ME.md" });
+  });
 });

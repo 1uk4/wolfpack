@@ -235,7 +235,7 @@ export interface ConsoleClient {
 }
 
 export class BusyError extends Error {
-  constructor(public readonly threadId: string, public readonly details?: Record<string, string>) {
+  constructor(public readonly threadId: string, public readonly details?: Record<string, string | number>) {
     super(`thread ${threadId} is busy`);
     this.name = "BusyError";
   }
@@ -255,7 +255,7 @@ export class ProtocolError extends Error {
     message: string,
     public readonly retryable: boolean,
     /** Structured facts from the error envelope (a hub `conflict` carries `{holder}`). */
-    public readonly details?: Record<string, string>,
+    public readonly details?: Record<string, string | number>,
   ) {
     super(message);
     this.name = "ProtocolError";

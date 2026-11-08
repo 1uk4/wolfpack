@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -59,7 +59,7 @@ import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { HttpError } from "./http-error.js";
-import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
+import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import type { PromptBlock } from "./context.js";
 import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
@@ -111,6 +111,8 @@ export interface WolfServerOptions {
   uptimeMs?: () => number;
   /** The wolf's home dir: where `agent/prompts/<id>.md` overrides live. Unset: /prompts answers 404. */
   wolfHome?: string;
+  /** wolf.yaml `identity:` (absolute) when set: the file the running wolf reads its identity from instead of `<wolf-home>/agent/AGENTS.md`. */
+  identityFile?: string;
   /** The system-prompt blocks wolfd built at start-up (read-only in /prompts). */
   promptBlocks?: readonly PromptBlock[];
   /** The tools wolfd registered, with their descriptions (read-only in /prompts). */
@@ -518,7 +520,9 @@ export class WolfServer {
       const ws = this.opts.workspace;
       // A project file (`<workspace>/.pi/agents|standards/<name>.md`) outranks the wolf's edit: the page says so.
       const projectOverride = def.store === "prompts" ? undefined : !!ws && existsSync(join(ws, ".pi", def.store, `${def.name}.md`));
-      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const, ...(projectOverride === undefined ? {} : { projectOverride }) };
+      // An inline wolf.yaml `identity:` outranks agent/AGENTS.md: the card says the edited file is not the one in use.
+      const inline = defId === "identity" && this.opts.identityFile && resolve(this.opts.identityFile) !== resolve(overridePath(home, "identity")) ? this.opts.identityFile : undefined;
+      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const, ...(projectOverride === undefined ? {} : { projectOverride }), ...(inline ? { inlineIdentity: inline } : {}) };
     };
     const readOnly = readOnlyCatalog({ blocks: this.opts.promptBlocks ?? [], tools: this.opts.toolInfos ?? [] }).map((e) => ({
       id: e.id,
@@ -589,7 +593,7 @@ export class WolfServer {
       if (kind === "restart") {
         if (!this.opts.restart) throw new HttpError("conflict", "nothing supervises this wolfd, so it would not come back; restart it from its supervisor");
         const retry = wait();
-        if (retry > 0) throw new HttpError("rate_limited", `this wolfd started less than a minute ago; restart again in ${retry}s`, undefined, { retryAfterSeconds: String(retry) });
+        if (retry > 0) throw new HttpError("rate_limited", `this wolfd started less than a minute ago; restart again in ${retry}s`, undefined, { retryAfterSeconds: retry });
         const restart = this.opts.restart;
         this.json(res, 200, { restarting: true });
         res.once("finish", () => setTimeout(restart, 20));
@@ -1069,8 +1073,8 @@ export class WolfServer {
 
   private sendError(res: ServerResponse, e: HttpError, req?: IncomingMessage): void {
     if (e.drain !== undefined && req) drainBounded(req, e.drain);
-    res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION), ...(e.details?.retryAfterSeconds ? { "Retry-After": e.details.retryAfterSeconds } : {}) });
-    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy", ...(e.details ? { details: e.details } : {}) }));
+    res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION), ...(e.details?.retryAfterSeconds ? { "Retry-After": String(e.details.retryAfterSeconds) } : {}) });
+    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy" || e.code === "rate_limited", ...(e.details ? { details: e.details } : {}) }));
   }
 
   // ------------------------------------------------------------ state

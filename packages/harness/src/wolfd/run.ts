@@ -262,6 +262,7 @@ async function startConfigured(
     const server = new WolfServer({
       name: config.identity.name,
       wolfHome: dirname(config.file),
+      ...(config.identity.file ? { identityFile: config.identity.file } : {}),
       promptBlocks: context.blocks,
       toolInfos: extensions.flatMap((e) => (e.tools ?? []).map((t) => ({ name: t.name, description: t.description, extension: e.name }))),
       configFile: config.file,

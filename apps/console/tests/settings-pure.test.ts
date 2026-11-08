@@ -11,9 +11,9 @@ import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from
 import {
 	PROMPT_IN_USE_HINT,
 	composePromptSwitch,
-	composeSlotModel,
 	sectionedSegments,
 } from "../components/settings/agent-section.tsx";
+import { composeSlotModel } from "../components/model-slot.ts";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
 import type { AgentSettings, AuthKeyStatus, ModelsSettings } from "../src/core";

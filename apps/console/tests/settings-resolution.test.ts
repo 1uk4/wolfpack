@@ -14,7 +14,6 @@ import type { UserSettings } from "../src/core/settings.ts";
 describe("resolveSettings", () => {
 	it("null record (first boot): non-model knobs land on factory defaults; every model view is EMPTY", () => {
 		const eff = resolveSettings(null);
-		assert.deepEqual(eff.general, { autoUpdate: true });
 		assert.deepEqual(eff.agent.prompts, {});
 		// BYOK (owner, 2026-09-22): no factory floor — every slot null. No
 		// phantom ids anywhere.
@@ -33,13 +32,11 @@ describe("resolveSettings", () => {
 	it("explicit record values win over every factory default", () => {
 		const record: UserSettings = {
 			version: 1,
-			general: { autoUpdate: false },
 			agent: { prompts: { "system-prompt.md": true } },
 			appearance: { mode: "light", proseFontSize: 20, mdRendering: { headingWeight: 700 } },
 			compaction: { thresholdTokens: 64_000 },
 		};
 		const eff = resolveSettings(record);
-		assert.equal(eff.general.autoUpdate, false);
 		assert.deepEqual(eff.agent.prompts, { "system-prompt.md": true });
 		assert.equal(eff.appearance.mode, "light");
 		assert.equal(eff.appearance.proseFontSize, 20);

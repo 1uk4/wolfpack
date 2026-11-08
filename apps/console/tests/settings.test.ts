@@ -19,7 +19,6 @@ import {
 describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 	it("pins the owner-decided defaults", () => {
 		assert.equal(CURRENT_SETTINGS_VERSION, 1);
-		assert.deepEqual(FACTORY_SETTINGS.general, { autoUpdate: true });
 		const a = FACTORY_SETTINGS.appearance;
 		assert.equal(a.mode, "dark");
 		assert.equal(a.background, null); // the mode's own default, not a factory hex
@@ -50,7 +49,6 @@ describe("sanitizeUserSettings", () => {
 	it("round-trips a fully valid record field-for-field", () => {
 		const record = {
 			version: 1,
-			general: { autoUpdate: false },
 			agent: {
 				prompts: { "system-prompt.md": true, "assistant/20-style.md": false },
 			},
@@ -78,21 +76,18 @@ describe("sanitizeUserSettings", () => {
 	});
 
 	it("absent version defaults to CURRENT; unknown keys ride along VERBATIM", () => {
-		const out = sanitizeUserSettings({ futureSection: { knob: 3 }, general: { autoUpdate: true } });
+		const out = sanitizeUserSettings({ futureSection: { knob: 3 } });
 		assert.ok(out);
 		assert.equal(out.version, CURRENT_SETTINGS_VERSION);
 		assert.deepEqual((out as Record<string, unknown>).futureSection, { knob: 3 });
-		assert.deepEqual(out.general, { autoUpdate: true });
 	});
 
 	it("wrong-typed fields DROP (resolve to factory), never crash", () => {
 		const out = sanitizeUserSettings({
-			general: { autoUpdate: "yes" },
 			agent: { prompts: { "system-prompt.md": 1 } },
 			appearance: { mode: "sepia", sessionNameSerif: "true" },
 		});
 		assert.ok(out);
-		assert.deepEqual(out.general, {});
 		assert.deepEqual(out.agent, {});
 		assert.deepEqual(out.appearance, {});
 	});

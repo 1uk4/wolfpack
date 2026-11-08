@@ -17,7 +17,6 @@ import type {
 	AgentSettings,
 	AppearanceSettings,
 	CompactionSettings,
-	GeneralSettings,
 	ModelsSettings,
 	RoleModelOverride,
 } from "../core/settings.ts";
@@ -66,20 +65,6 @@ export function parseSettingsBody(body: unknown): SettingsBodyResult<ChatSetting
 function asRecord(body: unknown): Record<string, unknown> | null {
 	if (!body || typeof body !== "object" || Array.isArray(body)) return null;
 	return body as Record<string, unknown>;
-}
-
-/** general: { autoUpdate?: boolean } */
-export function parseGeneralSettingsBody(body: unknown): SettingsBodyResult<GeneralSettings> {
-	const raw = asRecord(body);
-	if (!raw) return { ok: false, error: "Invalid JSON body" };
-	const settings: GeneralSettings = {};
-	if (raw.autoUpdate !== undefined) {
-		if (typeof raw.autoUpdate !== "boolean") {
-			return { ok: false, error: "autoUpdate must be a boolean" };
-		}
-		settings.autoUpdate = raw.autoUpdate;
-	}
-	return { ok: true, settings };
 }
 
 /** A slot override: fields mirror ChatSettings (model pair + independent
@@ -274,7 +259,6 @@ export function parseCompactionSettingsBody(body: unknown): SettingsBodyResult<C
 /** The section→parser map for PUT /api/settings/[section] (the route also
  *  carries the special prompts sub-resource). */
 export const SETTINGS_SECTIONS = {
-	general: parseGeneralSettingsBody,
 	chat: parseSettingsBody,
 	agent: parseAgentSettingsBody,
 	appearance: parseAppearanceSettingsBody,

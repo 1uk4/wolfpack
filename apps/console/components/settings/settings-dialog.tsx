@@ -39,9 +39,8 @@ import {
 	type UserSettings,
 } from "@/src/core";
 import { useAppearance } from "./appearance.tsx";
-import { SettingsSection, SettingsRow, Toggle } from "./controls.tsx";
+import { SettingsSection } from "./controls.tsx";
 import { AgentSection } from "./agent-section.tsx";
-import type { ModelsSettings } from "@/src/core";
 import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
@@ -54,7 +53,6 @@ import { DevicesSection } from "./devices-section.tsx";
  *  prose is out; only the keyboard note stays (storage location is a
  *  real question users ask). */
 const SECTIONS = [
-	{ id: "general", label: "General" },
 	{ id: "keys", label: "Keys" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
@@ -73,17 +71,13 @@ const DialogContext = createContext<{ open: (section?: string, row?: string) => 
 /** AppShell-level mount: the sidebar row and the mod+, chord call this.
  *  `open(section)` lands the dialog on a specific section (the first-run
  *  setup flow deep-links to Keys when no provider key exists yet). */
-/** The auto-update row's hint (tooltip wave): honest user language — no
- *  stream vocabulary. Exported for the copy pin (tooltip-mechanism test). */
-export const AUTO_UPDATE_HINT = "Automatic updates arrive in an upcoming release";
-
 export function SettingsDialogProvider({
 	children,
 }: {
 	children: React.ReactNode;
 }) {
 	const [show, setShow] = useState(false);
-	const [landOn, setLandOn] = useState<SectionId>("general");
+	const [landOn, setLandOn] = useState<SectionId>("keys");
 	const [landOnRow, setLandOnRow] = useState<string | null>(null);
 	const open = useCallback((section?: string, row?: string) => {
 		if (section) setLandOn(section as SectionId);
@@ -133,7 +127,7 @@ function SettingsDialog({
  *  (portals render nothing under renderToStaticMarkup). */
 export function SettingsDialogBody({
 	onClose,
-	initialSection = "general",
+	initialSection = "keys",
 	initialRow = null,
 }: {
 	onClose: () => void;
@@ -226,7 +220,7 @@ export function SettingsDialogBody({
 	 *  schema mistake caught by the validation surface). */
 	const write = useCallback(
 		async (
-			section: "general" | "agent" | "models" | "appearance" | "compaction",
+			section: "agent" | "appearance" | "compaction",
 			body: object,
 		) => {
 			setError(null);
@@ -355,26 +349,6 @@ export function SettingsDialogBody({
 						</p>
 					) : (
 						<div>
-							{active === "general" && (
-								<SettingsSection
-									title="General"
-									testid="section-general"
-								>
-									<SettingsRow
-										label="Auto-update"
-										hint={AUTO_UPDATE_HINT}
-										testid="row-auto-update"
-									>
-										<Toggle
-											checked={record.general?.autoUpdate ?? true}
-											label="auto update"
-											onChange={(on) =>
-												void write("general", { autoUpdate: on })
-											}
-										/>
-									</SettingsRow>
-								</SettingsSection>
-							)}
 							{active === "keys" && (
 								<SettingsSection title="Keys" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
@@ -387,11 +361,7 @@ export function SettingsDialogBody({
 								>
 									<AgentSection
 										agent={record.agent}
-										models={record.models}
 										compaction={record.compaction}
-										onModelsChange={(next: ModelsSettings) =>
-											void write("models", next)
-										}
 										onSectionChange={(next: AgentSettings) =>
 											void write("agent", next)
 										}

@@ -57,7 +57,6 @@ import {
   isIdeasFolder,
   ideaCount,
   isBlocked,
-  newWorkPrompt,
   type SelectorState,
   type SelectorKey,
   type SelectorEffect,
@@ -79,6 +78,7 @@ import {
   BINDING_RULES,
 } from "@wolfpack/memory";
 import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
+import { newWorkPrompt } from "@wolfpack/agents";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -1033,9 +1033,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       if (action === "new") {
         // Conversational flow: let the agent ask questions and create the task
         try {
-          pi.sendUserMessage(newWorkPrompt(listSubscribedDomains(kbBase)));
+          pi.sendUserMessage(newWorkPrompt(listSubscribedDomains(kbBase), process.env.WOLF_HOME));
         } catch {
-          ctx.ui.pasteToEditor(newWorkPrompt(listSubscribedDomains(kbBase)));
+          ctx.ui.pasteToEditor(newWorkPrompt(listSubscribedDomains(kbBase), process.env.WOLF_HOME));
         }
       } else if (action === "bind" && activeItem) {
         await promptTaskIteration(pi, ctx, client, activeItem);

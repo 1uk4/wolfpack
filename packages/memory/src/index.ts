@@ -115,14 +115,6 @@ export * from "./work/index.js";
 export { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidations.js";
 export { fillPromptTemplate } from "./config/prompts/template.js";
 
-// Task prompts
-export {
-  NEW_WORK_PROMPT,
-  newWorkPrompt,
-  GRILLING_PROTOCOL,
-  TO_SPEC_PROTOCOL,
-  TO_TICKETS_PROTOCOL,
-} from "./config/prompts/tasks.js";
 
 // Prompt context — shared rendering for system prompt injection
 export { renderDenContext, renderKbAccess } from "./prompt-context.js";

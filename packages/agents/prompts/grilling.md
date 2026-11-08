@@ -1,18 +1,4 @@
-/**
- * Grilling protocol — stage 1 of the three-stage task-create pipeline.
- *
- * Build a design tree with the user, round by round, until the frontier is
- * empty. Facts are the agent's job (via subagents). Decisions are the user's.
- *
- * Modelled on Pocock's `grilling` skill, adapted for wolfpack's tool shape:
- * - rounds are rendered as plain markdown text in chat (survives both the Pi
- *   TUI and Telegram MarkdownV2 escaping — no `❓` / `➡️` glyphs)
- * - fact-finding dispatches `subagent`, not web/API probes
- * - user answers come as free text (not forced through brief),
- *   since a round is many related questions that read better together
- */
-
-export const GRILLING_PROTOCOL = `# Stage 1 of 3 — Grilling
+# Stage 1 of 3 — Grilling
 
 Interview the user relentlessly until you reach a shared understanding of what to build.
 
@@ -47,7 +33,7 @@ Word each question so a plain "yes" accepts your recommendation. The user may an
 
 ## Facts vs decisions
 
-Facts are YOUR job. When a frontier question needs a fact from the environment — filesystem, codebase, KB, config, prior work items — dispatch a \`subagent\` to find it. Never ask the user for something you could look up.
+Facts are YOUR job. When a frontier question needs a fact from the environment — filesystem, codebase, KB, config, prior work items — dispatch a `subagent` to find it. Never ask the user for something you could look up.
 
 Do not block on a running exploration: a pending subagent is an unsettled prerequisite, so only questions downstream of it wait. Ask the rest of the frontier now.
 
@@ -62,4 +48,3 @@ Keep the design-tree sketch in your working memory. If a user answer contradicts
 ## When to stop
 
 The session is done when the frontier is empty: every branch of the tree visited, nothing left silently assumed. Do not advance to stage 2 (to-spec) until the user confirms you have reached a shared understanding — say "Design tree is empty. Confirm we are aligned?" and wait.
-`;

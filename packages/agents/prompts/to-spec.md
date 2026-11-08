@@ -1,28 +1,15 @@
-/**
- * To-spec protocol — stage 2 of the three-stage task-create pipeline.
- *
- * Takes the design tree from grilling (stage 1) and synthesises a feature
- * spec. Does NOT re-interview the user. Confirms test seams once, then
- * publishes the spec as the feature's body at stage=approved.
- *
- * Modelled on Pocock's `to-spec` skill. The template below becomes the
- * feature body VERBATIM — this is also what graduation will lift into the
- * KB entry (via preserve_body), so write it as the record you'd want months
- * from now.
- */
-
-export const TO_SPEC_PROTOCOL = `# Stage 2 of 3 — To-spec
+# Stage 2 of 3 — To-spec
 
 The grilling is settled. Synthesise what you heard into a feature spec.
 
-Do NOT interview the user again. Fill the gaps you still have with \`subagent\` scouting — never with "actually, one more question".
+Do NOT interview the user again. Fill the gaps you still have with `subagent` scouting — never with "actually, one more question".
 
 ## Process
 
-1. **Scout the codebase.** Dispatch a \`subagent\` to confirm the current state in the area the feature touches. It should surface:
+1. **Scout the codebase.** Dispatch a `subagent` to confirm the current state in the area the feature touches. It should surface:
    - Existing modules and their interfaces
    - Prior art for similar work
-   - ADRs or KB entries in \`~/wolves/knowledge/base/domains/<domain>/\` that constrain the design
+   - ADRs or KB entries in `~/wolves/knowledge/base/domains/<domain>/` that constrain the design
    Use the domain's vocabulary from the KB throughout the spec.
 
 2. **Pick test seams.** Sketch where this feature will be tested. The rules:
@@ -34,19 +21,19 @@ Do NOT interview the user again. Fill the gaps you still have with \`subagent\` 
    Then confirm the seams with the user in a single short message, e.g.
    "Test seams I'd use: <X> (existing), <Y> (new, highest point). Confirm?" and wait for yes/edits. This is the only user interaction in stage 2.
 
-3. **Write the spec.** Follow the template exactly. The spec IS the feature body — once written, you \`task_create\` the feature and \`task_update\` its body to this markdown.
+3. **Write the spec.** Follow the template exactly. The spec IS the feature body — once written, you `task_create` the feature and `task_update` its body to this markdown.
 
 4. **Publish the feature:**
-   \`\`\`
+   ```
    id = task_create kind=feature domain=<...> title=<...>
    task_update <id> body=<the spec markdown>
    task_stage <id> approved
-   \`\`\`
+   ```
    stage=approved signals: the spec is settled, implementation is pending (tasks under it will be stage=plan).
 
 ## Spec template (verbatim — this becomes the feature body)
 
-\`\`\`markdown
+```markdown
 # <feature title>
 
 ## Problem Statement
@@ -108,11 +95,10 @@ grilling (they can block individual tickets later without blocking the spec).
 
 <!-- rollup:children -->
 <!-- /rollup:children -->
-\`\`\`
+```
 
-Copy the \`## Delivered\` section exactly, markers included, and leave it empty. The work system fills it as each ticket ships, and its presence is what makes the feature graduate into the KB verbatim (spec + what was delivered) instead of being rewritten by an LLM.
+Copy the `## Delivered` section exactly, markers included, and leave it empty. The work system fills it as each ticket ships, and its presence is what makes the feature graduate into the KB verbatim (spec + what was delivered) instead of being rewritten by an LLM.
 
 ## Boundary with stage 3
 
 The spec is now the feature body. The feature is at stage=approved. Hand off to stage 3 (to-tickets) with the feature's id — do NOT create any task-level work items in stage 2.
-`;

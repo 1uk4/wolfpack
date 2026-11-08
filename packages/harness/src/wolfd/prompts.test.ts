@@ -31,6 +31,9 @@ describe("wolfd /prompts", () => {
     const rules = listed.prompts.find((p: { id: string }) => p.id === "orchestrator-rules");
     expect(rules).toMatchObject({ group: "Orchestrator", editable: true, source: "default" });
     expect(rules.text).toContain("You are the orchestrator");
+    for (const id of ["new-work", "grilling", "to-spec", "to-tickets"]) {
+      expect(listed.prompts.find((p: { id: string }) => p.id === id)).toMatchObject({ group: "Work creation", editable: true, source: "default" });
+    }
 
     const put = await send(`${url}/orchestrator-rules`, "PUT", { text: "mine" }, { "If-Match": rules.etag });
     expect(put.status).toBe(200);

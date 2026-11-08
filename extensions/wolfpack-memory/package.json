@@ -11,6 +11,7 @@
     "zod": "^3.24.0",
     "@wolfpack/client": "*",
     "@wolfpack/engine": "*",
+    "@wolfpack/agents": "*",
     "@wolfpack/memory": "*",
     "@wolfpack/kb": "*"
   },

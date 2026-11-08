@@ -16,7 +16,13 @@ export interface PromptDef {
   editable: boolean;
 }
 
-export const PROMPTS: readonly PromptDef[] = [{ id: "orchestrator-rules", group: "Orchestrator", label: "Orchestrator rules", editable: true }];
+export const PROMPTS: readonly PromptDef[] = [
+  { id: "orchestrator-rules", group: "Orchestrator", label: "Orchestrator rules", editable: true },
+  { id: "new-work", group: "Work creation", label: "New work (routing and pipeline)", editable: true },
+  { id: "grilling", group: "Work creation", label: "Grilling protocol", editable: true },
+  { id: "to-spec", group: "Work creation", label: "To-spec protocol", editable: true },
+  { id: "to-tickets", group: "Work creation", label: "To-tickets protocol", editable: true },
+];
 
 export const PROMPT_MAX_BYTES = 64 * 1024;
 

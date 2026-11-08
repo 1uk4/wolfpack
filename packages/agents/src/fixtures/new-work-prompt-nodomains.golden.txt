@@ -1,0 +1,265 @@
+The user wants to create a new work item. Work items have this hierarchy:
+- **Idea**: an unformed thought; captured now, promoted later.
+- **Initiative**: a large goal with multiple features (e.g., "Dockerize Wolfpack").
+- **Feature**: a capability to build; standalone or under an initiative.
+- **Task | issue | spike**: a unit of work under a feature.
+
+## Domain and parent — pick carefully
+
+Every work item belongs to exactly ONE domain. The domain names what the item is ABOUT, not who is doing it:
+- (use one of the domains this wolf is subscribed to)
+
+Pick domain by SUBJECT. A change to a tool or skill is a code change in the domain that owns that code, even when the tool is about something else (e.g. a billing skill's bug fix belongs with the code, not with billing). Doing the activity itself belongs to the domain of that activity.
+
+partOf MUST point at a feature in the SAME domain, or omit partOf to land in that domain's Inbox. The system rejects cross-domain parenting.
+
+Use `brief` when the right domain or feature is ambiguous.
+
+## Routing
+
+First, use `brief` to find out what the user is creating. The four paths:
+
+- **Idea**: unformed; just capture title + 1-sentence description via `task_create kind=idea`. Done. Can be promoted to feature/initiative later.
+- **Initiative**: a large goal. Ask for the goal (one sentence) + why it matters, and whether it is **standing**: it never completes and keeps gaining features (Releases gets a new sprint every sprint; Admin keeps its category features open). `task_create kind=initiative`, with `standing=true` if so. Done. Features created under it later get the full pipeline each.
+- **Task | issue | spike** (one-off under the current workspace): quick path — title + `successCriteria` + `task_create` under the bound workspace's feature. No grilling, no spec, no tickets.
+- **Feature**: run the FULL three-stage pipeline below. Grill → spec → tickets.
+
+If a response that started as "task" grows into something richer during the conversation, propose upgrading it to a feature and switch to the pipeline.
+
+## The three-stage pipeline (features only)
+
+Run these three protocols IN ORDER. Do not skip stages. Do not merge rounds across stages.
+
+1. **GRILLING** — build the design tree in rounds until the frontier is empty and the user confirms shared understanding.
+2. **TO-SPEC** — synthesise the grilling into a feature spec. Confirm test seams. Publish the feature at stage=approved with the spec as its body.
+3. **TO-TICKETS** — break the spec into tracer-bullet tickets with blocking edges. Quiz the user. Publish each as a task under the feature with `depends_on` links in topological order.
+
+Each stage's full protocol follows verbatim.
+
+---
+
+# Stage 1 of 3 — Grilling
+
+Interview the user relentlessly until you reach a shared understanding of what to build.
+
+Model the plan as a DESIGN TREE: every decision branches into the decisions that hang off it.
+
+Work in ROUNDS. The FRONTIER is every decision whose prerequisites are settled — questions you can ask NOW without guessing at answers you have not heard yet. Ask the whole frontier in one round, each question numbered with your recommended answer. Then wait.
+
+## Round format
+
+Render each round as one chat message in exactly this shape (ASCII only — no emoji — so it reads cleanly in Pi TUI and Telegram alike):
+
+    Round N
+    ---
+
+    Q1: <short question title>
+    <question body: multiple paragraphs if needed, with any choices spelled out>
+
+    Recommend: <your recommended answer>
+
+    ---
+
+    Q2: <short question title>
+    <question body>
+
+    Recommend: <your recommended answer>
+
+    ---
+
+    (… more questions on the current frontier …)
+
+Word each question so a plain "yes" accepts your recommendation. The user may answer "Q1 yes, Q2 use option B, Q3 skip" in one message; parse all of it.
+
+## Facts vs decisions
+
+Facts are YOUR job. When a frontier question needs a fact from the environment — filesystem, codebase, KB, config, prior work items — dispatch a `subagent` to find it. Never ask the user for something you could look up.
+
+Do not block on a running exploration: a pending subagent is an unsettled prerequisite, so only questions downstream of it wait. Ask the rest of the frontier now.
+
+Decisions are the USER's. Put each clearly and wait.
+
+## Advancing the tree
+
+Each round the user's answers reshape the tree. Settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another still-open question belongs to a LATER round, not this one.
+
+Keep the design-tree sketch in your working memory. If a user answer contradicts an earlier decision, surface it ("That changes Q3 from round 1 — are we rethinking it?") rather than silently proceeding.
+
+## When to stop
+
+The session is done when the frontier is empty: every branch of the tree visited, nothing left silently assumed. Do not advance to stage 2 (to-spec) until the user confirms you have reached a shared understanding — say "Design tree is empty. Confirm we are aligned?" and wait.
+
+
+---
+
+# Stage 2 of 3 — To-spec
+
+The grilling is settled. Synthesise what you heard into a feature spec.
+
+Do NOT interview the user again. Fill the gaps you still have with `subagent` scouting — never with "actually, one more question".
+
+## Process
+
+1. **Scout the codebase.** Dispatch a `subagent` to confirm the current state in the area the feature touches. It should surface:
+   - Existing modules and their interfaces
+   - Prior art for similar work
+   - ADRs or KB entries in `~/wolves/knowledge/base/domains/<domain>/` that constrain the design
+   Use the domain's vocabulary from the KB throughout the spec.
+
+2. **Pick test seams.** Sketch where this feature will be tested. The rules:
+   - Prefer EXISTING seams to new ones.
+   - Use the HIGHEST seam possible — closer to user behaviour, fewer implementation details leaked into tests.
+   - If a new seam is needed, propose it at the HIGHEST point you can.
+   - Fewer seams = better. Ideal = one.
+
+   Then confirm the seams with the user in a single short message, e.g.
+   "Test seams I'd use: <X> (existing), <Y> (new, highest point). Confirm?" and wait for yes/edits. This is the only user interaction in stage 2.
+
+3. **Write the spec.** Follow the template exactly. The spec IS the feature body — once written, you `task_create` the feature and `task_update` its body to this markdown.
+
+4. **Publish the feature:**
+   ```
+   id = task_create kind=feature domain=<...> title=<...>
+   task_update <id> body=<the spec markdown>
+   task_stage <id> approved
+   ```
+   stage=approved signals: the spec is settled, implementation is pending (tasks under it will be stage=plan).
+
+## Spec template (verbatim — this becomes the feature body)
+
+```markdown
+# <feature title>
+
+## Problem Statement
+
+The problem the user is facing, from the user's perspective.
+
+## Solution
+
+The solution to the problem, from the user's perspective.
+
+## User Stories
+
+A LONG, numbered list of user stories. Format:
+
+1. As a <actor>, I want <feature>, so that <benefit>
+
+Example:
+1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending.
+
+Be extensive. Cover all aspects of the feature.
+
+## Implementation Decisions
+
+A list of implementation decisions, including:
+
+- Modules built or modified (names, not paths)
+- Interfaces being added or changed
+- Architectural decisions
+- Schema changes
+- API contracts
+- Specific interactions
+- Technical clarifications the user gave during grilling
+
+Do NOT include specific file paths or code snippets. They go stale fast.
+
+Exception: if a prototype produced a snippet that encodes a decision more
+precisely than prose can (state machine, reducer, schema, type shape), inline
+it in the relevant decision and note briefly that it came from a prototype.
+Trim to the decision-rich parts, not a working demo.
+
+## Testing Decisions
+
+- What makes a good test here (test external behaviour, not implementation details).
+- Which modules will be tested.
+- The test seams (from the step above).
+- Prior art in the codebase (similar types of tests we modelled this after).
+
+## Out of Scope
+
+What this spec explicitly does NOT include. Call out the things a reasonable
+reader might assume are in scope but are not.
+
+## Notes
+
+Context the above misses. Open questions that did not block consensus during
+grilling (they can block individual tickets later without blocking the spec).
+
+## Delivered
+
+<!-- rollup:children -->
+<!-- /rollup:children -->
+```
+
+Copy the `## Delivered` section exactly, markers included, and leave it empty. The work system fills it as each ticket ships, and its presence is what makes the feature graduate into the KB verbatim (spec + what was delivered) instead of being rewritten by an LLM.
+
+## Boundary with stage 3
+
+The spec is now the feature body. The feature is at stage=approved. Hand off to stage 3 (to-tickets) with the feature's id — do NOT create any task-level work items in stage 2.
+
+
+---
+
+# Stage 3 of 3 — To-tickets
+
+The spec is the feature body. Break it into TICKETS: tracer-bullet vertical slices, each declaring the tickets that BLOCK it.
+
+## Rules for a vertical slice
+
+- Each ticket cuts a narrow but COMPLETE path through every layer (schema, API, UI, tests): vertical, NOT a horizontal slice of one layer.
+- A completed ticket is demoable or verifiable on its own.
+- Each ticket is sized to fit in a single fresh context window.
+- Any prefactoring that makes the implementation easier should be done first (its own ticket).
+
+Give each ticket its BLOCKING EDGES: the tickets that must complete before it can start. A ticket with no blockers can start immediately.
+
+## Wide refactors are the exception
+
+A WIDE REFACTOR is one mechanical change (rename a column, retype a shared symbol) whose BLAST RADIUS fans across the whole codebase. A single edit breaks thousands of call sites at once and no vertical slice can land green.
+
+Do not force it into a tracer bullet. Sequence it as EXPAND → MIGRATE → CONTRACT:
+
+1. EXPAND: add the new form beside the old so nothing breaks. One ticket.
+2. MIGRATE: convert call sites in batches sized by blast radius (per package, per directory). Each batch is its own ticket, blocked by the expand. CI stays green batch to batch because the old form still exists.
+3. CONTRACT: delete the old form once no caller remains. One ticket, blocked by every migrate batch.
+
+When even the batches cannot stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
+
+## Quiz the user
+
+Before publishing, present the proposed breakdown as a numbered list in one chat message. For each ticket show:
+
+    N. <short title>
+       Blocked by: <ticket numbers from this list, or "none">
+       Delivers: <one line — the end-to-end behaviour this ticket makes work>
+
+Then ask three questions:
+- Does the granularity feel right? (too coarse / too fine)
+- Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
+- Should any tickets be merged or split further?
+
+Iterate (new round of the list) until the user approves.
+
+## Publish
+
+Publish in TOPOLOGICAL ORDER (blockers first) so each ticket's blocking edges can reference ids that already exist:
+
+    for ticket in topological_order(tickets):
+      result = task_create(
+        kind="task",
+        domain=<feature.domain>,
+        partOf=<feature.id>,
+        title=<ticket.title>,
+        successCriteria=<ticket.delivers>,
+      )
+      for blocker in ticket.blockers:
+        task_link(id=result.id, rel="depends_on", target=blocker.id)
+
+All tickets land at stage=plan (default). The feature at stage=approved + tickets at stage=plan is the right shape: "spec signed off, work queued, nothing started yet". Tasks advance to in_build when a wolf binds and starts work.
+
+Avoid specific file paths or code snippets in titles and successCriteria — they go stale fast. Exception (same as the spec): a prototype-produced snippet that encodes a decision more precisely than prose.
+
+## Done
+
+Report back to the user: feature id + stage, list of ticket ids with their blocker ids, and (if any) the expand-contract sequence you used. The user can then press 'g' on the feature in /task to graduate it when the work is done.
+

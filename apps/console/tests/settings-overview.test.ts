@@ -79,4 +79,26 @@ describe("settings overview API", () => {
 		assert.equal(manual.text, null);
 		assert.match(manual.source, /pi-durable\/dist\/harness\/compaction\.js/);
 	});
+
+	it("still answers 200 with wolvesError, hub and compaction when the wolf list cannot be fetched", async () => {
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+			if (url.pathname === "/v1/settings") return reply({ version: "0.1.0", prompts: [], config: {} });
+			throw new TypeError("fetch failed");
+		}) as typeof fetch;
+		const res = await createSettingsOverviewApi(hubClient).overview();
+		assert.equal(res.status, 200);
+		const body = await res.json();
+		assert.deepEqual(body.wolves, []);
+		assert.match(body.wolvesError, /fetch failed/);
+		assert.equal(body.hub.ok, true);
+		assert.equal(body.compaction.prompts.length, 3);
+	});
+
+	it("keeps answering 401 with the hub-auth marker when the browser is unpaired", async () => {
+		const unpaired = () => createConsoleClient({ WOLFPACK_HUB_URL: "http://hub.test" }, async () => null);
+		const res = await createSettingsOverviewApi(unpaired).overview();
+		assert.equal(res.status, 401);
+		assert.equal(res.headers.get("x-wolfpack-hub-auth"), "required");
+	});
 });

@@ -38,6 +38,8 @@ export interface WolfSettings {
 export interface SettingsOverview {
 	hub: { ok: boolean; settings?: HubSettings; error?: string };
 	wolves: WolfSettings[];
+	/** Set when the wolf list itself could not be fetched (hub or wolf unreachable): `wolves` is then empty. An auth failure is not reported here; it answers 401. */
+	wolvesError?: string;
 	compaction: { prompts: CompactionPromptInfo[] };
 }
 
@@ -89,7 +91,14 @@ export function createSettingsOverviewApi(source: ClientSource, opts: { wolfTime
 		const hubP: Promise<SettingsOverview["hub"]> = c.getHubSettings
 			? withTimeout(c.getHubSettings(), timeoutMs).then((settings) => ({ ok: true, settings }), (e) => ({ ok: false, error: errText(e) }))
 			: Promise.resolve({ ok: false, error: "hub settings are not available on this console (no hub configured)" });
-		const wolves = await c.listWolves();
+		let wolves: Awaited<ReturnType<ConsoleClient["listWolves"]>> = [];
+		let wolvesError: string | undefined;
+		try {
+			wolves = await c.listWolves();
+		} catch (e) {
+			if (e instanceof Error && e.name === "ProtocolError" && (e as Error & { code?: string }).code === "unauthorized") throw e; // unpaired browser: the route answers 401
+			wolvesError = errText(e);
+		}
 		const wolvesP = Promise.all(
 			wolves.map(async (w): Promise<WolfSettings> => {
 				const base: WolfSettings = { name: w.name, host: w.host, online: w.status !== "offline" };
@@ -102,7 +111,7 @@ export function createSettingsOverviewApi(source: ClientSource, opts: { wolfTime
 			}),
 		);
 		const [hub, wolfList] = await Promise.all([hubP, wolvesP]);
-		return { hub, wolves: wolfList, compaction: { prompts: compactionPrompts() } };
+		return { hub, wolves: wolfList, ...(wolvesError ? { wolvesError } : {}), compaction: { prompts: compactionPrompts() } };
 	}
 	return {
 		async overview(): Promise<Response> {

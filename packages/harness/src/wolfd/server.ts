@@ -104,6 +104,10 @@ export interface WolfServerOptions {
   env?: NodeJS.ProcessEnv;
   /** Restart this wolfd (exit so the supervisor starts it again). Unset = nothing supervises it: /settings/restart answers 409. */
   restart?: () => void;
+  /** A restart is refused until the process has been up this long (default 60000): systemd's start limit is 5 per 300s. */
+  restartMinUptimeMs?: number;
+  /** Process uptime in ms. Default process.uptime(); a test seam. */
+  uptimeMs?: () => number;
   /** The wolf's home dir: where `agent/prompts/<id>.md` overrides live. Unset: /prompts answers 404. */
   wolfHome?: string;
   /** The system-prompt blocks wolfd built at start-up (read-only in /prompts). */
@@ -570,11 +574,18 @@ export class WolfServer {
     this.checkWolf(name);
     if (!this.opts.configFile) throw new HttpError("not_found", "this wolf has no wolf.yaml to configure");
     const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env));
-    const view = () => store.view((this.opts.tierModels ?? {}) as Record<string, string>, !!this.opts.restart);
+    const wait = () => {
+      const min = this.opts.restartMinUptimeMs ?? 60_000;
+      const up = this.opts.uptimeMs ? this.opts.uptimeMs() : process.uptime() * 1000;
+      return Math.max(0, Math.ceil((min - up) / 1000));
+    };
+    const view = () => store.view((this.opts.tierModels ?? {}) as Record<string, string>, !!this.opts.restart, wait());
     try {
       if (kind === "get") return this.json(res, 200, view());
       if (kind === "restart") {
         if (!this.opts.restart) throw new HttpError("conflict", "nothing supervises this wolfd, so it would not come back; restart it from its supervisor");
+        const retry = wait();
+        if (retry > 0) throw new HttpError("rate_limited", `this wolfd started less than a minute ago; restart again in ${retry}s`, undefined, { retryAfterSeconds: String(retry) });
         const restart = this.opts.restart;
         this.json(res, 200, { restarting: true });
         res.once("finish", () => setTimeout(restart, 20));
@@ -1054,7 +1065,7 @@ export class WolfServer {
 
   private sendError(res: ServerResponse, e: HttpError, req?: IncomingMessage): void {
     if (e.drain !== undefined && req) drainBounded(req, e.drain);
-    res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) });
+    res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION), ...(e.details?.retryAfterSeconds ? { "Retry-After": e.details.retryAfterSeconds } : {}) });
     res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy", ...(e.details ? { details: e.details } : {}) }));
   }
 

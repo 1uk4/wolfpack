@@ -33,7 +33,7 @@ const server = createServer((req, res) => {
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("hang")) return; // never answers
   // settings: the masked view (the real wolfd never returns a secret here) and a POST reveal that echoes the asked name
   if (p === `/v1/wolves/${name}/settings` && req.method === "GET")
-    return json(res, 200, { etag: "e0", config: { name, memory: { hubToken: { set: true } } }, editable: [], tierModels: {}, env: [{ name: "WORK_TOKEN", set: true, secret: true, purpose: "Work API token" }], restartNeeded: false, restartable: false });
+    return json(res, 200, { etag: "e0", config: { name, memory: { hubToken: { set: true } } }, editable: [], tierModels: {}, env: [{ name: "WORK_TOKEN", set: true, secret: true, purpose: "Work API token" }], restartNeeded: false, restartable: false, restartAvailableInSeconds: 0 });
   if (p === `/v1/wolves/${name}/settings/reveal` && req.method === "POST") {
     const bufs = [];
     req.on("data", (c) => bufs.push(c));

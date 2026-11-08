@@ -27,6 +27,11 @@ export function maskSecrets(value: unknown, key = ""): unknown {
   return value;
 }
 
+/** Whether a config option named by its dotted key is masked by `maskSecrets` (any path segment matches the secret pattern, or the value is a user:pw@ URL). */
+export function isMaskedConfigKey(dotted: string, value: unknown): boolean {
+  return dotted.split(".").some((seg) => SECRET_KEY.test(seg)) || (typeof value === "string" && URL_WITH_USERINFO.test(value));
+}
+
 /** Whether a value (a config option or an environment variable named `key`) is secret and must be masked. */
 export function isSecretValue(key: string, value: unknown): boolean {
   return (SECRET_KEY.test(key) && typeof value !== "object") || (typeof value === "string" && URL_WITH_USERINFO.test(value));
@@ -57,6 +62,8 @@ export const WolfSettingsViewSchema = z.object({
   restartNeeded: z.boolean(),
   /** A supervisor will start this wolfd again after restart; false: `restartWolf` is refused. */
   restartable: z.boolean(),
+  /** Seconds until `restartWolf` is accepted (0 = now). A restart within the first minute of the process is refused. */
+  restartAvailableInSeconds: z.number().int().nonnegative(),
 });
 export type WolfSettingsView = z.infer<typeof WolfSettingsViewSchema>;
 

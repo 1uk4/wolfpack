@@ -251,9 +251,9 @@ export const ROUTES = {
    * Applies on restart: the answer has `restartNeeded: true`.
    */
   putWolfSettings: { method: "PUT", path: "/v1/wolves/:name/settings", body: PutWolfSettingsBodySchema, response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },
-  /** Reveal ONE secret value (an env var listed in the view, or a wolf.yaml key). POST so it is never cached or logged as a read. 404 `not_found` for a name that is not listed. */
+  /** Reveal ONE secret value (an env var listed in the view, or a wolf.yaml key the masked read masks). POST so it is never cached or logged as a read. 404 `not_found` for a name that is not listed. */
   revealWolfSetting: { method: "POST", path: "/v1/wolves/:name/settings/reveal", body: RevealBodySchema, response: { kind: "json", schema: RevealResponseSchema }, status: [200], error: err },
-  /** Restart this wolfd (it exits and its supervisor starts it again). 409 `conflict` when nothing supervises it. Answers before exiting. */
+  /** Restart this wolfd (it exits and its supervisor starts it again). 409 `conflict` when nothing supervises it, 429 `rate_limited` (`details.retryAfterSeconds`, `Retry-After`) within the first 60s of the process. Answers before exiting. */
   restartWolf: { method: "POST", path: "/v1/wolves/:name/settings/restart", response: { kind: "json", schema: RestartResponseSchema }, status: [200], error: err },
   getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   /**

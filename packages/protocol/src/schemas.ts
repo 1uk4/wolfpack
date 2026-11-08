@@ -55,6 +55,8 @@ export const ErrorCodeSchema = z.enum([
   "conflict",
   /** A request body is over its cap (e.g. a prompt override over 64 KB). */
   "too_large",
+  /** Too soon to repeat this (e.g. a restart within a minute of the last start). `details.retryAfterSeconds` says when. */
+  "rate_limited",
   /** The actor is authenticated but not allowed this operation (e.g. a wolf committing to the KB). */
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -93,6 +95,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   preview_stale: 409,
   conflict: 409,
   too_large: 413,
+  rate_limited: 429,
 };
 
 // ---------------------------------------------------------------- cards

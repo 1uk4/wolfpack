@@ -25,7 +25,7 @@ memory:
   hubToken: yaml-secret-value
 `;
 
-async function boot(extra: { restart?: () => void } = {}) {
+async function boot(extra: { restart?: () => void; uptimeMs?: () => number } = {}) {
   const wolfHome = mkdtempSync(join(tmpdir(), "wolfd-settings-"));
   dirs.push(wolfHome);
   const configFile = join(wolfHome, "wolf.yaml");
@@ -61,6 +61,8 @@ describe("wolfd /settings", () => {
     expect(await ok.json()).toEqual({ name: "WORK_TOKEN", value: "env-secret-value" });
     const cfg = await send(`${url}/reveal`, "POST", { source: "config", name: "memory.hubToken" });
     expect(await cfg.json()).toEqual({ name: "memory.hubToken", value: "yaml-secret-value" });
+    // A name the masked read does not mask is already in the GET body: no reveal.
+    expect((await send(`${url}/reveal`, "POST", { source: "config", name: "subagents.maxRunning" })).status).toBe(404);
     expect((await send(`${url}/reveal`, "POST", { source: "env", name: "PATH" })).status).toBe(404);
   });
 
@@ -94,9 +96,26 @@ describe("wolfd /settings", () => {
     expect(refused.status).toBe(409);
     expect((await refused.json()).code).toBe("conflict");
     let called = 0;
-    const on = await boot({ restart: () => void (called += 1) });
+    const on = await boot({ restart: () => void (called += 1), uptimeMs: () => 61_000 });
     expect(await (await send(`${on.url}/restart`, "POST")).json()).toEqual({ restarting: true });
     await new Promise((r) => setTimeout(r, 50));
     expect(called).toBe(1);
+  });
+
+  it("refuses a restart within 60s of start with 429 and a retry time, and reports the wait in the view", async () => {
+    let called = 0;
+    const { url } = await boot({ restart: () => void (called += 1), uptimeMs: () => 10_000 });
+    const res = await send(`${url}/restart`, "POST");
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("50");
+    expect(await res.json()).toMatchObject({ code: "rate_limited", details: { retryAfterSeconds: "50" } });
+    expect((await (await send(url, "GET")).json()).restartAvailableInSeconds).toBe(50);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(called).toBe(0);
+  });
+
+  it("reports no wait once the process has been up past the cooldown", async () => {
+    const { url } = await boot({ restart: () => {}, uptimeMs: () => 61_000 });
+    expect((await (await send(url, "GET")).json()).restartAvailableInSeconds).toBe(0);
   });
 });

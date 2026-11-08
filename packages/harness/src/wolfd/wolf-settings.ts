@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { WolfFileSchema } from "@wolfpack/engine";
-import { isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
+import { isMaskedConfigKey, isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
 import { isMap, parse as parseYaml, parseDocument } from "yaml";
 
 /** wolf.yaml keys an edit may set (dotted). Everything else (memory.live, librarian, identity, serve, sandbox, ...) stays hand-edited. */
@@ -63,7 +63,7 @@ export class WolfSettingsStore {
     return d && typeof d === "object" && !Array.isArray(d) ? (d as Record<string, unknown>) : {};
   }
 
-  view(tierModels: Record<string, string>, restartable: boolean) {
+  view(tierModels: Record<string, string>, restartable: boolean, restartAvailableInSeconds: number) {
     const text = this.text();
     return {
       etag: etagOf(text),
@@ -73,6 +73,7 @@ export class WolfSettingsStore {
       env: this.envNames(),
       restartNeeded: etagOf(text) !== this.bootEtag,
       restartable,
+      restartAvailableInSeconds,
     };
   }
 
@@ -92,6 +93,7 @@ export class WolfSettingsStore {
       cur = (cur as Record<string, unknown>)[part];
     }
     if (cur === null || typeof cur === "object") throw new SettingsError("not_found", `${name} is not a single value`);
+    if (!isMaskedConfigKey(name, cur)) throw new SettingsError("not_found", `${name} is not masked; read it from the settings view`);
     return String(cur);
   }
 

@@ -467,7 +467,11 @@ export function SessionRow({
 				    rule, finally applied to the picker too (owner, typography
 				    round): mono = chrome, Source Sans = human words. */}
 				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
-					{home && <WorkflowIcon data-testid="orchestrator-icon" aria-label="Orchestrator" className="size-[1em] shrink-0 text-muted-foreground" />}
+					{home && (
+						<span data-testid="orchestrator-icon" role="img" aria-label="Orchestrator" className={cn("inline-flex size-[1em] shrink-0", !dotColor && "text-muted-foreground")} style={dotColor ? { color: dotColor } : undefined}>
+							<WolfpackMark className="size-full" />
+						</span>
+					)}
 					<span className="truncate">{chat.title}</span>
 				</span>
 				{(() => {
@@ -557,7 +561,7 @@ export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
 		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
 			<span className="min-w-0 flex-1">
 				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
-					<WorkflowIcon aria-hidden className="size-[1em] shrink-0 text-muted-foreground" />
+					<WolfpackMark className="size-[1em] shrink-0 text-muted-foreground" />
 					<span className="truncate">{wolf.name}</span>
 				</span>
 				<span className="block truncate text-xs text-muted-foreground">orchestrator</span>

@@ -11,12 +11,15 @@ import { formatRehomeReport, kbRehome } from "./kb-rehome.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
+import { parseRebuildArgs, runRebuildCli, type RebuildCliArgs } from "./rebuild-cli.js";
 import { DEFAULT_CURATOR_POLL_MS, type CuratorOptions } from "./curator.js";
 import { assertSocketPath, parseSocketMode } from "./socket.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
-  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans" | "work-import" | "kb-backfill" | "kb-rehome";
+  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens" | "work-orphans" | "work-import" | "kb-backfill" | "kb-rehome" | "rebuild";
+  /** rebuild: the parsed sub-command (see rebuild-cli.ts). */
+  rebuild?: RebuildCliArgs;
   fromDomains?: string;
   fromLedger?: string;
   /** kb-backfill */
@@ -93,6 +96,8 @@ const USAGE = `usage:
                                                               one-off, idempotent: append Dewey's past curation decisions (receipts + _processed, kb-repair via the Dewey ledger's aliased events) to the hub KB ledger so /kb-activity shows history. Run as the hubd user (file ownership); stop hubd or rely on the KB writer lock. Events carry ids starting "bf-".
   hubd kb-rehome --data-dir <dir> --move <entryId>=<sectionId> ... [--remove-section <sectionId> ...] [--apply | --dry-run]
                                                               move entries between sections and remove emptied sections, through the hub write path (commitKb, ledger entry_placed / sections_replaced, _sections.json, digest/INDEX/registry re-rendered). Dry run unless --apply. hubd must be STOPPED (writer lock) and the curator sweep lease free.
+  hubd rebuild preview|apply|restore|list ... --data-dir <dir> [--port 3142]
+                                                              KB section rebuild through the RUNNING hub (no stop needed): preview writes a plan file, apply commits exactly that plan under the hub's KB lock, restore undoes an apply. See the RUNBOOK for the flags.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_POLL_MS (default 60000) / HUBD_CURATOR_MODELS (models.json path) / HUBD_EMBED_URL / HUBD_EMBED_MODEL
@@ -102,6 +107,7 @@ env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_PO
 
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest0] = argv;
+  if (command === "rebuild") return { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [], rebuild: parseRebuildArgs(rest0) };
   if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans" && command !== "work-import" && command !== "kb-backfill" && command !== "kb-rehome") throw new Error(USAGE);
   let rest = rest0;
   let sub: CliArgs["sub"];
@@ -225,6 +231,7 @@ export function parseArgs(argv: string[]): CliArgs {
 
 export async function main(argv: string[], env = process.env, log: (m: string) => void = console.log) {
   const args = parseArgs(argv);
+  if (args.command === "rebuild") return runRebuildCli(args.rebuild!, log);
   if (args.command === "export") {
     const { manifest, skipped } = exportHub({ dataDir: args.dataDir!, out: args.out! });
     log(`hubd export: ${args.out} (${manifest.files.length} files, work events ${manifest.lastEventSequence}, kb ledger lines ${manifest.kbLedgerLines})${skipped.length ? `; not exported: ${skipped.join(", ")}` : ""}`);

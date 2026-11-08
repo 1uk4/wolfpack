@@ -183,6 +183,7 @@ function ThreadChatInner({
 	initialBound,
 	parentThreadId,
 	colorThreads = NO_COLOR_THREADS,
+	wolfColor,
 }: {
 	wolf: string;
 	slug: string;
@@ -207,6 +208,8 @@ function ThreadChatInner({
 	parentThreadId?: string;
 	/** The wolf's threads (id, kind, parent) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
 	colorThreads?: readonly ThreadColorSource[];
+	/** The wolf's chosen color at page load; the live roster (attached-thread provider) overrides it after a Settings change. */
+	wolfColor?: string;
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -221,8 +224,9 @@ function ThreadChatInner({
 	});
 	const threadSettings = useThreadSettings(wolf, slug);
 	// A faint tint of the thread's color (the one its id gives; a subagent's = its parent's) behind the conversation.
+	const colorApi = useAttachedThread();
 	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
-	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads).hex;
+	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads, colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor).hex;
 	const tint = threadTint(tintHex);
 	const tintSolid = threadTintSolid(tintHex);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);

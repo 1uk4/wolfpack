@@ -94,6 +94,23 @@ describe("wolfd /settings", () => {
     expect(existsSync(configFile + ".tmp")).toBe(false);
   });
 
+  it("saves the wolf color only as a palette key, reports it on the wolf summary, and null clears it", async () => {
+    const { url, configFile } = await boot();
+    const summary = async () => (await (await fetch(url.replace("/wolves/w/settings", "/wolves"))).json()).wolves[0].color;
+    const put = async (value: unknown) => {
+      const v = await (await send(url, "GET")).json();
+      return send(url, "PUT", { set: { color: value } }, { "If-Match": v.etag });
+    };
+    expect((await put("pink")).status).toBe(200);
+    expect(readFileSync(configFile, "utf8")).toContain("color: pink");
+    expect(await summary()).toBe("pink");
+    for (const bad of ["chartreuse", 7, ""]) expect((await put(bad)).status).toBe(400);
+    expect(await summary()).toBe("pink");
+    expect((await put(null)).status).toBe(200);
+    expect(await summary()).toBeUndefined();
+    expect(readFileSync(configFile, "utf8")).not.toContain("color");
+  });
+
   it("requires If-Match on a write (400 without it) and leaves the file untouched", async () => {
     const { url, configFile } = await boot();
     const res = await send(url, "PUT", { set: { "subagents.maxRunning": 4 } });

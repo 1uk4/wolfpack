@@ -41,6 +41,7 @@ import {
   type WolfEvent,
   type ThreadSummary,
   type ThreadWorkspace,
+  type ThreadColor,
   type WolfSummary,
 } from "@wolfpack/protocol";
 import {
@@ -1080,8 +1081,16 @@ export class WolfServer {
 
   // ------------------------------------------------------------ state
 
+  /** The wolf's chosen color, read live from wolf.yaml so a Settings change shows without a restart. */
+  private colorField(): { color?: ThreadColor } {
+    if (!this.opts.configFile) return {};
+    const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env, this.opts.wolfHome));
+    const color = store.color() as ThreadColor | undefined;
+    return color ? { color } : {};
+  }
+
   private wolfSummary(): WolfSummary {
-    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true, kbReadable: this.opts.kbRoots !== undefined };
+    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true, kbReadable: this.opts.kbRoots !== undefined, ...this.colorField() };
   }
 
   private checkWolf(name: string): void {

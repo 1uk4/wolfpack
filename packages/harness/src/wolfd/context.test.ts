@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -160,5 +160,30 @@ describe("composeProjectContext", () => {
 
   it("loadSkills tolerates a missing skills dir", () => {
     expect(loadSkills(join(home, "nope"))).toEqual([]);
+  });
+});
+
+describe("orchestrator rules in the system prompt", () => {
+  const golden = readFileSync(join(__dirname, "fixtures", "orchestrator-rules-wolfd.golden.txt"), "utf8");
+  const compose = () => {
+    mkdirSync(join(home, "wolf", "agent"), { recursive: true });
+    const ops = join(home, "ops.md");
+    writeFileSync(ops, "ops");
+    process.env.WOLFPACK_OPS_REF = ops;
+    try {
+      return { ops, text: composeProjectContext({ name: "w", cwd: home, den: join(home, "den"), home, wolfHome: join(home, "wolf") }).instructions };
+    } finally {
+      delete process.env.WOLFPACK_OPS_REF;
+    }
+  };
+
+  it("is byte-identical to the pre-registry rules when the wolf has no override", () => {
+    const { ops, text } = compose();
+    expect(text).toContain(`# Orchestrator rules\n\n${golden.replaceAll("@@OPS@@", ops)}\n\nSubagent roster:`);
+  });
+
+  it("uses the wolf's override instead", () => {
+    put("wolf/agent/prompts/orchestrator-rules.md", "MY RULES");
+    expect(compose().text).toContain("# Orchestrator rules\n\nMY RULES\n\nSubagent roster:");
   });
 });

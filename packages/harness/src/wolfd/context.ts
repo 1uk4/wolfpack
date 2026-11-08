@@ -168,7 +168,7 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
   if (identity) parts.push(`# Identity (${identity.path})\n\n${identity.text.trim()}`);
   if (input.wolfHome) {
     const roster = formatRosterLines(discoverAgents({ cwd: input.cwd, agentDir: join(input.wolfHome, "agent") }));
-    const rules = orchestratorRules({ opsRef: opsRef(), surface: "wolfd" });
+    const rules = orchestratorRules({ opsRef: opsRef(), surface: "wolfd", wolfHome: input.wolfHome });
     parts.push(`# Orchestrator rules\n\n${rules}\n\nSubagent roster:\n${roster.length ? roster.join("\n") : "No subagent definitions found."}`);
   }
   if (agents) parts.push(`# AGENTS.md (${agents.path})\n\n${agents.text.trim()}`);

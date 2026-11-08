@@ -110,7 +110,7 @@ const REBUILDS_ALL = [/^scripts\/(release|build)-[^/]*$/, /^infra\/release\//];
  * computeAffected ignores *.md, so each is reported as a change to its package's package.json: the package and its
  * dependents tag. Only @wolfpack/agents lists such dirs.
  */
-const SHIPPED_ASSETS = /^(packages\/agents)\/(agents|standards)\/.*/;
+const SHIPPED_ASSETS = /^(packages\/agents)\/(agents|standards|prompts)\/.*/;
 
 /** Files to feed computeAffected for a release; null (everything) when a build recipe changed. */
 export function releaseFiles(changed: string[] | null): string[] | null {

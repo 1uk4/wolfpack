@@ -344,6 +344,46 @@ describe("hub curator: failures", () => {
     expect(results).toEqual(["done", "done"]);
   }, 30_000);
 
+  it("pause waits for the tick in flight and blocks new ticks until resumed", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inCall = new Promise<void>((r) => (entered = r));
+    const gated = { ...engine, call: async (...a: [string, any]) => { entered(); await gate; return (engine as any).call(...a); } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => gated }) });
+    drop(dir, 1);
+    const tick = hub.runCuratorOnce();
+    await inCall;
+    let paused = false;
+    const pausing = hub.pauseCurator().then((resume) => { paused = true; return resume; });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(paused).toBe(false); // the tick is still in flight
+    release();
+    const resume = await pausing;
+    expect((await tick)!.outcome).toBe("ran"); // the tick in flight was allowed to finish
+    expect(await hub.runCuratorOnce()).toMatchObject({ outcome: "skipped" });
+    expect(existsSync(leaseFile(contributionsRoot(dir)))).toBe(true); // the lease is kept while paused
+    resume();
+    expect((await hub.runCuratorOnce())!.outcome).not.toBe("skipped");
+  }, 30_000);
+
+  it("pause is refused (busy) when the tick in flight outlives the bounded wait, and ticks resume afterwards", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inCall = new Promise<void>((r) => (entered = r));
+    const gated = { ...engine, call: async (...a: [string, any]) => { entered(); await gate; return (engine as any).call(...a); } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => gated, closeWaitMs: 50 }) });
+    drop(dir, 1);
+    const tick = hub.runCuratorOnce();
+    await inCall;
+    await expect(hub.pauseCurator()).rejects.toMatchObject({ code: "busy" });
+    release();
+    await tick;
+    drop(dir, 1);
+    expect((await hub.runCuratorOnce())!.outcome).not.toBe("skipped"); // the refused pause left no pause count behind
+  }, 30_000);
+
   it("close() while a tick is in flight: nothing is written after the close, the lease stays until the tick ends, then goes", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));

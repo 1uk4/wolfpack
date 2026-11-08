@@ -167,6 +167,8 @@ export interface HubServer {
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
   /** Run one curator tick now (undefined when the curator is off or a tick is already running). */
   runCuratorOnce(): Promise<CuratorRun | undefined>;
+  /** Pause curator ticks (waits for the one in flight); returns the resume function. Used by the KB rebuild apply. */
+  pauseCurator(): Promise<() => void>;
   /**
    * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated.
    */
@@ -969,6 +971,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     commitKb: (actor, req) => kbWriter!.commit(actor, req),
     runCuratorOnce: async () => curator?.runOnce(),
+    pauseCurator: async () => (curator ? curator.pause() : () => undefined),
     scanKb: async (o) => void (await kbWriter!.exclusive(() => revisions.scan(o))),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */

@@ -97,5 +97,6 @@ export * from "./graduate.ts";
 export * from "./work-select.ts";
 export * from "./work-connectors.ts";
 export * from "./branch-graph.ts";
+export { graphKey, newestRequest } from "./graph-fetch.ts";
 export * from "./work-id-link.ts";
 export * from "./wolf-settings-form.ts";

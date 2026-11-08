@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CheckIcon, CopyIcon, GitBranchIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, GitBranchIcon, Loader2Icon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
 import { CARD_FIT_W, FitSwimlanes, MomentList, ScrollEnd, Swimlanes, useRings } from "@/components/branch-graph";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
-import { headerStatus, type GitOverview } from "@/src/core";
+import { graphKey, headerStatus, newestRequest, type GitOverview } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
 
 /** The header's repo · base → branch label (a home thread has no base). */
@@ -80,25 +80,36 @@ export function useWorkspaceStatus(wolf: string, slug: string, threadId: string,
 	return status;
 }
 
-/** The branch graph for the popover: fetched while it is open and again when the git status changes. */
-function useBranchGraph(wolf: string, slug: string, enabled: boolean, status: WorkspaceStatus | undefined): GitOverview | undefined {
+type GraphState = "loading" | "ready" | "error";
+
+/**
+ * The branch graph for the popover: fetched while it is open and again when the git state (`graphKey`) changes, not on
+ * every status refresh. The last good graph stays while a refetch runs; only a superseded response is dropped.
+ */
+function useBranchGraph(wolf: string, slug: string, enabled: boolean, key: string): { graph: GitOverview | undefined; state: GraphState } {
 	const [graph, setGraph] = useState<GitOverview>();
+	const [state, setState] = useState<GraphState>("loading");
+	const ticket = useRef(newestRequest());
 	useEffect(() => {
 		if (!enabled) return;
-		let live = true;
+		const current = ticket.current();
 		void (async () => {
 			try {
 				const res = await fetch(`${threadBase(wolf, slug)}/workspace/graph`);
-				if (res.ok && live) setGraph((await res.json()) as GitOverview);
-			} catch {
-				/* the graph is a preview; the list below still works */
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = (await res.json()) as GitOverview;
+				if (!current()) return;
+				if (!data.main?.name) throw new Error("empty overview (git read failed or timed out)");
+				setGraph(data);
+				setState("ready");
+			} catch (err) {
+				if (!current()) return;
+				console.warn("branch graph failed to load", err);
+				setState("error");
 			}
 		})();
-		return () => {
-			live = false;
-		};
-	}, [wolf, slug, enabled, status]);
-	return graph;
+	}, [wolf, slug, enabled, key]);
+	return { graph, state };
 }
 
 async function copyPath(text: string): Promise<boolean> {
@@ -122,7 +133,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 	const rootRef = useRef<HTMLDivElement>(null);
 	const [full, setFull] = useState(false);
 	const titleId = useId();
-	const graph = useBranchGraph(wolf, slug, open || full, status);
+	const { graph, state: graphState } = useBranchGraph(wolf, slug, open || full, graphKey(status));
 	const nowSec = Math.floor(Date.now() / 1000);
 	const rings = useRings(graph?.main.name ? graph : undefined, nowSec);
 	usePopoverDismiss(rootRef, open, () => setOpen(false));
@@ -222,17 +233,14 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 											<Swimlanes overview={graph} rings={rings} days={7} nowSec={nowSec} fitWidth={CARD_FIT_W} />
 										</ScrollEnd>
 									</section>
+								) : graphState === "error" ? (
+									<div data-testid="git-tree-graph-error" className="text-muted-foreground">
+										Couldn't load the branch graph
+									</div>
 								) : (
-									status.commits.length > 0 && (
-										<section data-testid="git-tree-commits">
-											{status.commits.slice(0, 5).map((c) => (
-												<div key={c.sha} className="flex gap-2">
-													<span className="shrink-0 font-mono text-muted-foreground">{c.sha.slice(0, 7)}</span>
-													<span className="min-w-0 truncate">{c.subject}</span>
-												</div>
-											))}
-										</section>
-									)
+									<div data-testid="git-tree-graph-loading" role="status" aria-label="Loading the branch graph" className="flex h-16 items-center justify-center text-muted-foreground">
+										<Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+									</div>
 								)}
 								{status.dirty.length > 0 && (
 									<section data-testid="git-tree-dirty-files" className="font-mono">

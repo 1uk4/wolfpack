@@ -122,6 +122,7 @@ describe("release filter: only files a component ships make a tag", () => {
   it("shipped Markdown (agent prompts, standards) tags its dependents; plain docs and READMEs tag nothing", () => {
     expect(tagsFor(["packages/agents/agents/x.md"])).toEqual(["wolfd"]);
     expect(tagsFor(["packages/agents/standards/testing.md"])).toEqual(["wolfd"]);
+    expect(tagsFor(["packages/agents/prompts/new-work.md"])).toEqual(["wolfd"]);
     expect(tagsFor(["README.md", "docs/x.md", "packages/client/README.md", "packages/agents/README.md"])).toEqual([]);
   });
   it("a deploy/<component>/ file tags only that component", () => {

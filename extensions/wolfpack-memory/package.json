@@ -20,6 +20,9 @@
       "./index.ts"
     ]
   },
+  "wolfpack": {
+    "assets": ["../../packages/agents/prompts"]
+  },
   "pi-durable": {
     "extensions": [
       "./durable.ts"

@@ -20,7 +20,14 @@ interface PromptRow {
 	user?: string;
 	scope?: "wolf" | "global" | "hub";
 	contract?: string;
+	/** Editable rows: when an edit takes effect (from wolfd). */
+	applies?: string;
+	/** Profiles and standards: a project `.pi` file in the wolf's workspace outranks the wolf's edit. */
+	projectOverride?: boolean;
 }
+
+/** Groups read at every subagent spawn, not at wolf start-up: the global restart note does not apply to them. */
+const SPAWN_GROUPS = new Set(["Helper profiles", "Standards"]);
 
 const HUB = "__hub__";
 /** Past this many characters a read-only text starts collapsed. */
@@ -119,7 +126,7 @@ export function PromptsView() {
 	return (
 		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-6" data-testid="prompts-page">
 			<h1 className="text-lg font-semibold">Prompts</h1>
-			<p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>
+			{!SPAWN_GROUPS.has(group) && <p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>}
 			<label className="flex items-center gap-2 text-sm">
 				Wolf
 				<select className="rounded border bg-background px-2 py-1" value={wolf} onChange={(e) => setWolf(e.target.value)} data-testid="prompts-wolf">
@@ -155,6 +162,10 @@ export function PromptsView() {
 								{row.user && (<><dt>Used by</dt><dd>{row.user}</dd></>)}
 								{row.scope && (<><dt>Scope</dt><dd>{row.scope === "wolf" ? "per wolf" : row.scope}</dd></>)}
 							</dl>
+						)}
+						{row.editable && row.applies && <p className="text-xs text-muted-foreground" data-testid={`prompt-applies-${row.id}`}>An edit applies {row.applies}. The previous version is kept as a backup (last 10).</p>}
+						{row.editable && row.projectOverride && (
+							<p className="text-xs text-destructive" data-testid={`prompt-project-override-${row.id}`}>This workspace has its own .pi file for it, which wins over an edit made here.</p>
 						)}
 						{!row.editable ? (
 							<>

@@ -1,5 +1,5 @@
 /** /v1/wolves/:name/prompts: the per-wolf prompt overrides over HTTP. */
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,5 +80,31 @@ describe("wolfd /prompts", () => {
       expect((await send(`${url}/pipeline.observer`, method, { text: "mine" })).status, method).toBe(403);
     }
     expect(existsSync(join(wolfHome, "agent", "prompts"))).toBe(false);
+  });
+
+  it("lists the helper profiles and standards as editable per-wolf prompts, edits a profile over HTTP, answers 400 for bad frontmatter, and flags a project override", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "wolfd-ws-"));
+    dirs.push(workspace);
+    mkdirSync(join(workspace, ".pi", "agents"), { recursive: true });
+    writeFileSync(join(workspace, ".pi", "agents", "scout.md"), "---\nname: scout\n---\nproject scout");
+    const { url, wolfHome } = await boot({ workspace });
+    const listed = (await (await send(url, "GET")).json()).prompts as Record<string, unknown>[];
+    const ids = listed.filter((p) => p.editable).map((p) => p.id);
+    for (const id of ["investigator", "planner", "researcher", "reviewer", "scout", "visualizer", "worker"].map((n) => `agent.${n}`).concat(["git", "testing", "verify-ui"].map((n) => `standard.${n}`))) expect(ids).toContain(id);
+    const worker = listed.find((p) => p.id === "agent.worker");
+    expect(worker).toMatchObject({ group: "Helper profiles", scope: "wolf", source: "default" });
+    expect(String(worker?.applies)).toContain("next subagent");
+    expect(listed.find((p) => p.id === "agent.scout")).toMatchObject({ projectOverride: true });
+    expect(worker).toMatchObject({ projectOverride: false });
+
+    const good = "---\nname: worker\ndescription: mine\n---\nbody";
+    expect((await send(`${url}/agent.worker`, "PUT", { text: good })).status).toBe(200);
+    const bad = await send(`${url}/agent.worker`, "PUT", { text: "---\nname: nope\n---\nx" });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).message).toContain('frontmatter name must be "worker"');
+    expect(readFileSync(join(wolfHome, "agent", "agents", "worker.md"), "utf8")).toBe(good);
+    expect((await send(`${url}/agent.worker`, "DELETE")).status).toBe(200);
+    expect(existsSync(join(wolfHome, "agent", "agents", "worker.md"))).toBe(false);
+    expect(readdirSync(join(wolfHome, "agent", ".backups", "agents"))).toHaveLength(1);
   });
 });

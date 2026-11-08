@@ -12,7 +12,8 @@
  * Limits: a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -514,7 +515,10 @@ export class WolfServer {
     if (!home) throw new HttpError("not_found", "this wolf has no home dir for prompt overrides");
     const view = (defId: string) => {
       const def = promptDef(defId)!;
-      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const };
+      const ws = this.opts.workspace;
+      // A project file (`<workspace>/.pi/agents|standards/<name>.md`) outranks the wolf's edit: the page says so.
+      const projectOverride = def.store === "prompts" ? undefined : !!ws && existsSync(join(ws, ".pi", def.store, `${def.name}.md`));
+      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const, ...(projectOverride === undefined ? {} : { projectOverride }) };
     };
     const readOnly = readOnlyCatalog({ blocks: this.opts.promptBlocks ?? [], tools: this.opts.toolInfos ?? [] }).map((e) => ({
       id: e.id,
@@ -563,7 +567,7 @@ export class WolfServer {
       }
       return this.json(res, 200, view(id));
     } catch (e) {
-      if (e instanceof PromptWriteError) throw new HttpError({ unknown: "not_found", not_editable: "forbidden", too_large: "too_large", stale: "conflict" }[e.code] as ErrorCode, e.message);
+      if (e instanceof PromptWriteError) throw new HttpError({ unknown: "not_found", not_editable: "forbidden", too_large: "too_large", stale: "conflict", invalid: "invalid_request" }[e.code] as ErrorCode, e.message);
       throw e;
     }
   }

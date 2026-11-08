@@ -211,11 +211,12 @@ export function buildFlows(allRows: FlowRow[], hubRows: FlowRow[] | null): Flow[
 
 // ---- One dependency graph per flow (the Prompts page draws these; the List tab keeps the rows). ----
 
-export type GraphKey = "main" | "work" | "kb" | "crawl" | "compaction";
+export type GraphKey = "system" | "subagents" | "work" | "kb" | "crawl" | "compaction";
 export type PromptsTab = GraphKey | "list";
 /** The tabs, in order: the five graphs, then the flat list. */
 export const PROMPT_TABS: ReadonlyArray<{ key: PromptsTab; title: string }> = [
-	{ key: "main", title: "Main wolf" },
+	{ key: "system", title: "System prompt" },
+	{ key: "subagents", title: "Subagents" },
 	{ key: "work", title: "Work creation" },
 	{ key: "kb", title: "Conversation to KB" },
 	{ key: "crawl", title: "Crawl" },
@@ -261,35 +262,37 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	const leaf = (id: string, extra: Partial<GraphNodeDef> = {}): GraphNodeDef => ({ id, title: byId.get(id)?.label ?? id, host: hostOf(id), marker: markerOf([id]), ids: [id], ...extra });
 	const chain = (ids: string[]): GraphEdgeDef[] => ids.slice(1).map((to, i) => ({ from: ids[i]!, to }));
 
-	// Main wolf: the system-prompt blocks in composition order, then the wolf, its tools and subagents with the standards they read.
+	// System prompt: the blocks in composition order, the editable sources feeding their blocks, and the collapsed Tools node.
 	const tree = buildTree(allRows);
-	const mainNodes: GraphNodeDef[] = [];
-	const mainEdges: GraphEdgeDef[] = [];
+	const sysNodes: GraphNodeDef[] = [];
+	const sysEdges: GraphEdgeDef[] = [];
 	const blocks: string[] = [];
 	for (const it of tree.find((n) => n.key === "system")?.items ?? []) {
-		mainNodes.push(leaf(it.id));
+		sysNodes.push(leaf(it.id));
 		blocks.push(it.id);
 		if (it.editedIn) {
-			mainNodes.push(leaf(it.editedIn, { sub: `edits ${it.id.replace(/^system\./, "")}` }));
-			mainEdges.push({ from: it.editedIn, to: it.id });
+			sysNodes.push(leaf(it.editedIn, { sub: `edits ${it.id.replace(/^system\./, "")}` }));
+			sysEdges.push({ from: it.editedIn, to: it.id });
 		}
 	}
-	mainEdges.push(...chain(blocks));
-	mainNodes.push({ id: "main-wolf", title: "Main wolf", host: "wolf", marker: "no prompt", ids: [], note: "The running wolf: the composed system prompt, the tools it is offered and the subagents it can spawn." });
-	if (blocks.length) mainEdges.push({ from: blocks[blocks.length - 1]!, to: "main-wolf" });
+	sysEdges.push(...chain(blocks));
 	const toolIds = tree.find((n) => n.key === "tools")?.items.map((i) => i.id) ?? [];
-	if (toolIds.length) {
-		mainNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: toolIds, sub: "collapsed: open the list" });
-		mainEdges.push({ from: "tools", to: "main-wolf" });
-	}
+	if (toolIds.length) sysNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: toolIds, sub: "offered alongside; open the list" });
+	const system: PromptGraph = { key: "system", title: "System prompt", nodes: sysNodes, edges: sysEdges };
+
+	// Subagents: the main wolf to each profile to the standards its frontmatter names; a standard no profile names stands apart.
 	const subTree = tree.find((n) => n.key === "subagents");
-	const standardIds = [...new Set([...(subTree?.subagents ?? []).flatMap((s) => s.reads), ...(subTree?.items ?? []).map((i) => i.id)])];
+	const subNodes: GraphNodeDef[] = [{ id: "main-wolf", title: "Main wolf", host: "wolf", marker: "no prompt", ids: [], note: "Spawns the helper profiles; each reads the standards its frontmatter names." }];
+	const subEdges: GraphEdgeDef[] = [];
+	const read = new Set<string>();
 	for (const sa of subTree?.subagents ?? []) {
-		mainNodes.push(leaf(sa.id, { sub: "subagent profile" }));
-		mainEdges.push({ from: "main-wolf", to: sa.id }, ...sa.reads.map((to) => ({ from: sa.id, to })));
+		subNodes.push(leaf(sa.id, { sub: "subagent profile" }));
+		subEdges.push({ from: "main-wolf", to: sa.id }, ...sa.reads.map((to) => ({ from: sa.id, to })));
+		for (const r of sa.reads) read.add(r);
 	}
-	mainNodes.push(...standardIds.map((id) => leaf(id, { sub: "standard" })));
-	const main: PromptGraph = { key: "main", title: "Main wolf", nodes: mainNodes, edges: mainEdges };
+	subNodes.push(...[...read].map((id) => leaf(id, { sub: "standard" })));
+	subNodes.push(...(subTree?.items ?? []).map((i) => leaf(i.id, { sub: "not read by any profile" })));
+	const subagents: PromptGraph = { key: "subagents", title: "Subagents", nodes: subNodes, edges: subEdges };
 
 	// The flows A-D become chains of their steps.
 	const flows = buildFlows(allRows, hubRows);
@@ -328,10 +331,10 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	};
 
 	// Anything no graph places lands in an Other node on the main graph, so a new prompt never vanishes.
-	const graphs = [main, work, kb, crawl, compaction];
+	const graphs = [system, subagents, work, kb, crawl, compaction];
 	const placed = new Set(graphs.flatMap((g) => g.nodes.flatMap((n) => n.ids)));
 	const otherIds = rows.filter((r) => !placed.has(r.id)).map((r) => r.id);
-	if (otherIds.length) main.nodes.push({ id: "other", title: `Other (${otherIds.length})`, host: "wolf", marker: markerOf(otherIds), ids: otherIds, sub: "not placed in a flow" });
+	if (otherIds.length) system.nodes.push({ id: "other", title: `Other (${otherIds.length})`, host: "wolf", marker: markerOf(otherIds), ids: otherIds, sub: "not placed in a flow" });
 	return graphs;
 }
 
@@ -342,17 +345,17 @@ export interface PromptsUrlState {
 	graph: PromptsTab;
 	node?: string;
 }
-/** `?graph=kb&node=pipeline.observer`; an unknown graph is the main one, and `main` / no node add nothing. */
+/** `?graph=kb&node=pipeline.observer`; an unknown graph (and an old `main`) is the System prompt tab, which adds nothing to the URL. */
 export function parsePromptsUrl(search: string): PromptsUrlState {
 	const p = new URLSearchParams(search);
 	const g = p.get("graph");
-	const graph = PROMPT_TABS.find((t) => t.key === g)?.key ?? "main";
+	const graph = PROMPT_TABS.find((t) => t.key === (g === "main" ? "system" : g))?.key ?? "system";
 	const node = p.get("node");
 	return { graph, ...(node ? { node } : {}) };
 }
 export function promptsUrlSearch(s: PromptsUrlState): string {
 	const p = new URLSearchParams();
-	if (s.graph !== "main") p.set("graph", s.graph);
+	if (s.graph !== "system") p.set("graph", s.graph);
 	if (s.node) p.set("node", s.node);
 	const q = p.toString();
 	return q ? `?${q}` : "";

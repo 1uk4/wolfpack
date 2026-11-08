@@ -98,7 +98,7 @@ const edgeSet = (g: PromptGraph) => g.edges.map((e) => `${e.from}>${e.to}`);
 describe("prompt graphs", () => {
 	it("offers one graph per tab, in order, with no dangling edge and no cycle", () => {
 		const gs = graphs();
-		assert.deepEqual(gs.map((g) => g.key), ["main", "work", "kb", "crawl", "compaction"]);
+		assert.deepEqual(gs.map((g) => g.key), ["system", "subagents", "work", "kb", "crawl", "compaction"]);
 		for (const g of gs) {
 			const ids = new Set(g.nodes.map((n) => n.id));
 			assert.equal(ids.size, g.nodes.length, `${g.key}: unique node ids`);
@@ -117,18 +117,29 @@ describe("prompt graphs", () => {
 		}
 	});
 
-	it("draws the main wolf graph: blocks in composition order, sources feeding blocks, one collapsed Tools node, subagents to their frontmatter standards", () => {
-		const main = graphOf(graphs(), "main");
-		const e = edgeSet(main);
-		for (const x of ["system.header>system.identity", "system.identity>system.orchestrator", "system.orchestrator>system.structured-output", "system.structured-output>system.brief", "system.brief>main-wolf", "identity>system.identity", "orchestrator-rules>system.orchestrator", "tools>main-wolf"]) assert.ok(e.includes(x), x);
-		const tools = main.nodes.find((n) => n.id === "tools")!;
+	it("draws the System prompt graph: blocks in composition order, sources feeding blocks, one collapsed Tools node", () => {
+		const sys = graphOf(graphs(), "system");
+		const e = edgeSet(sys);
+		for (const x of ["system.header>system.identity", "system.identity>system.orchestrator", "system.orchestrator>system.structured-output", "system.structured-output>system.brief", "identity>system.identity", "orchestrator-rules>system.orchestrator"]) assert.ok(e.includes(x), x);
+		const tools = sys.nodes.find((n) => n.id === "tools")!;
 		assert.equal(tools.title, "Tools (3)");
 		assert.deepEqual(tools.ids, ["tool.read", "tool.bash", "tool.subagent"]);
-		assert.equal(main.nodes.filter((n) => n.id.startsWith("tool.")).length, 0);
+		assert.equal(sys.nodes.filter((n) => n.id.startsWith("tool.")).length, 0);
+		assert.ok(!sys.nodes.some((n) => n.id.startsWith("agent.") || n.id.startsWith("standard.")));
+		assert.equal(sys.nodes.find((n) => n.id === "identity")!.marker, "editable");
+		assert.equal(sys.nodes.find((n) => n.id === "system.header")!.marker, "read-only");
+	});
+
+	it("draws the Subagents graph: the main wolf to each profile to the standards its frontmatter names, and an unread standard apart", () => {
+		const sub = graphOf(graphs(), "subagents");
+		const e = edgeSet(sub);
 		assert.deepEqual(e.filter((x) => x.startsWith("agent.") && x.includes(">standard.")).sort(), ["agent.planner>standard.testing", "agent.reviewer>standard.git", "agent.reviewer>standard.testing", "agent.worker>standard.testing"]);
 		assert.ok(e.includes("main-wolf>agent.scout"));
-		assert.equal(main.nodes.find((n) => n.id === "identity")!.marker, "editable");
-		assert.equal(main.nodes.find((n) => n.id === "system.header")!.marker, "read-only");
+		assert.equal(e.filter((x) => x.startsWith("main-wolf>agent.")).length, 7);
+		const lonely = sub.nodes.find((n) => n.id === "standard.verify-ui")!;
+		assert.equal(lonely.sub, "not read by any profile");
+		assert.equal(e.filter((x) => x.endsWith(">standard.verify-ui")).length, 0);
+		assert.equal(sub.nodes.find((n) => n.id === "standard.git")!.sub, "standard");
 	});
 
 	it("draws the flow graphs: steps in order, the wolf-to-hub hop, and the crawl joining at hub curation", () => {
@@ -155,17 +166,19 @@ describe("prompt graphs", () => {
 		const covered = new Set(graphs().flatMap((g) => g.nodes.flatMap((n) => n.ids)));
 		for (const id of IDS.filter((i) => i !== "pipeline.breakdown-suggestion")) assert.ok(covered.has(id), id);
 		assert.ok(!covered.has("pipeline.breakdown-suggestion"));
-		const other = graphOf(graphs(rows([...IDS, "pipeline.brand-new"])), "main").nodes.find((n) => n.id === "other");
+		const other = graphOf(graphs(rows([...IDS, "pipeline.brand-new"])), "system").nodes.find((n) => n.id === "other");
 		assert.deepEqual(other?.ids, ["pipeline.brand-new"]);
-		assert.equal(graphOf(graphs(), "main").nodes.find((n) => n.id === "other"), undefined);
+		assert.equal(graphOf(graphs(), "system").nodes.find((n) => n.id === "other"), undefined);
 	});
 
 	it("round-trips the selected graph and node through the URL", () => {
 		assert.deepEqual(parsePromptsUrl("?graph=kb&node=pipeline.observer"), { graph: "kb", node: "pipeline.observer" });
 		assert.equal(promptsUrlSearch({ graph: "kb", node: "pipeline.observer" }), "?graph=kb&node=pipeline.observer");
 		assert.deepEqual(parsePromptsUrl(promptsUrlSearch({ graph: "list" })), { graph: "list" });
-		assert.deepEqual(parsePromptsUrl(""), { graph: "main" });
-		assert.deepEqual(parsePromptsUrl("?graph=bogus&node="), { graph: "main" });
-		assert.equal(promptsUrlSearch({ graph: "main" }), "");
+		assert.deepEqual(parsePromptsUrl("?graph=subagents&node=agent.worker"), { graph: "subagents", node: "agent.worker" });
+		assert.deepEqual(parsePromptsUrl(""), { graph: "system" });
+		assert.deepEqual(parsePromptsUrl("?graph=bogus&node="), { graph: "system" });
+		assert.deepEqual(parsePromptsUrl("?graph=main&node=identity"), { graph: "system", node: "identity" }, "an old ?graph=main link lands on the System prompt tab");
+		assert.equal(promptsUrlSearch({ graph: "system" }), "");
 	});
 });

@@ -103,6 +103,21 @@ export interface SplitVerdict {
   cached?: boolean;
 }
 
+/**
+ * Map the model's ids back to member indexes. Entry ids are "kb-<domain>-<short>" and the model sometimes answers with only the
+ * short part ("h18Dpg5"); an exact match wins, else a bare id that is the unique "-"-suffix of a member id. Unknown or ambiguous
+ * ids are dropped (they were silently dropped before too, which turned a whole section's answer into "0 proposed").
+ */
+function idResolver(ids: string[]): (xs: string[]) => number[] {
+  const exact = new Map(ids.map((id, i) => [id, i]));
+  const bySuffix = new Map<string, number | null>();
+  ids.forEach((id, i) => {
+    const short = id.slice(id.lastIndexOf("-") + 1);
+    bySuffix.set(short, bySuffix.has(short) ? null : i);
+  });
+  return (xs) => xs.map((x) => exact.get(x) ?? bySuffix.get(x.trim()) ?? undefined).filter((i): i is number => i !== undefined);
+}
+
 /** Decide whether and how one oversized section splits. */
 export async function judgeSplit(
   deps: JudgeDeps,
@@ -140,8 +155,7 @@ export async function judgeSplit(
       return fromKmeans(kmeans(), why);
     }
   }
-  const index = new Map(ids.map((id, i) => [id, i]));
-  const asIdx = (xs: string[]) => xs.map((x) => index.get(x)).filter((i): i is number => i !== undefined);
+  const asIdx = idResolver(ids);
   const result = validatePartition(vectors, {
     names: proposal.categories.map((c) => c.name),
     members: proposal.categories.map((c) => asIdx(c.ids)),

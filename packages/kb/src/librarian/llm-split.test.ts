@@ -106,6 +106,32 @@ describe("judgeSplit", () => {
     expect(v.categories?.every((c) => c.kept)).toBe(true);
   });
 
+  it("maps the model's ids back to entries when it drops the kb-<domain>- prefix (the 'no-coherent-category' bug)", async () => {
+    const prefixed = es.map((e) => ({ ...e, id: `kb-wp-${e.id}` }));
+    const short = ideal(es); // the model answered with the bare short ids: "e000", not "kb-wp-e000"
+    const v = await judgeSplit({ partitioner: async () => short }, { domain: "wp", parentTitle: "P", members: members(prefixed) });
+    expect(v.decision?.k).toBe(3);
+    expect(v.decision?.leftovers).toEqual([]);
+  });
+
+  it("a partly coherent category is kept as a group of its coherent members (>= minGroup); the strays become leftovers", async () => {
+    const e4 = make([6, 6, 6]);
+    const c = (k: number) => e4.filter((e) => cluster(e.id, SIZES) === k);
+    // "Mixed" holds 4 entries of cluster 2 plus 2 of cluster 1 (which also sit coherent in "B"? no: they are only listed here)
+    const mixed = [...c(2).slice(0, 4), ...c(1).slice(0, 2)];
+    const v = await judgeSplit({ partitioner: async () => ({
+      categories: [
+        { name: "A", ids: c(0).map((e) => e.id) },
+        { name: "B", ids: c(1).slice(2).map((e) => e.id) },
+        { name: "Mixed", ids: mixed.map((e) => e.id) },
+      ], doesntFit: c(2).slice(4).map((e) => e.id),
+    }) }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    expect(v.decision?.names).toEqual(["A", "B", "Mixed"]);
+    const ids = e4.map((e) => e.id).sort();
+    const left = (v.decision?.leftovers ?? []).map((i) => ids[i]).sort();
+    expect(left).toEqual([...c(1).slice(0, 2), ...c(2).slice(4)].map((e) => e.id).sort());
+  });
+
   it("a category dropped for incoherence is reported, and its members are leftovers", async () => {
     const e4 = make([6, 6, 6, 6]);
     const c2 = e4.filter((e) => cluster(e.id, [6, 6, 6, 6]) === 2), c3 = e4.filter((e) => cluster(e.id, [6, 6, 6, 6]) === 3);

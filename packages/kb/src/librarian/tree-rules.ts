@@ -401,7 +401,7 @@ export interface CategoryReport {
   coherent: number;
   share: number;
   kept: boolean;
-  why?: "too-few-coherent" | "low-share" | "over-limit";
+  why?: "too-few-coherent" | "low-share" | "over-limit" | "partial";
 }
 export interface PartitionDecision {
   /** Group index per input vector (-1 = leftover: stays in the parent). */
@@ -418,8 +418,9 @@ export interface PartitionRejected { split: null; reason: string; categories: Ca
  * Vectors VALIDATE a proposed partition; they never assign. The section's vectors are centred (the shared
  * direction removed), then for every member: it is coherent if it is closer to its own category's centroid
  * (leave-one-out) than to every other category's. Incoherent members become leftovers. A category survives
- * only with >= minGroup coherent members and a coherent share >= llmMinCoherence; the members of a dropped
- * category become leftovers too, as do "doesn't fit" members. Fewer than two surviving categories: no split.
+ * with >= minGroup coherent members, keeping just those (a partly coherent category is kept as a smaller group,
+ * flagged "partial" below llmMinCoherence); the rest of it become leftovers, as do the members of a dropped
+ * category and "doesn't fit" members. Fewer than two surviving categories: no split.
  * A member listed in several categories counts for the first; one listed nowhere is "doesn't fit".
  */
 export function validatePartition(
@@ -453,10 +454,11 @@ export function validatePartition(
     }
     const share = ms.length ? good.length / ms.length : 0;
     const overLimit = !honoured.has(c);
-    const kept = !overLimit && good.length >= rules.minGroup && share >= rules.llmMinCoherence;
+    // A category survives with >= minGroup coherent members; its incoherent members are dropped to leftovers (share is reported only).
+    const kept = !overLimit && good.length >= rules.minGroup;
     reports.push({
       name: proposal.names[c] ?? `Category ${c + 1}`, size: ms.length || (proposal.members[c]?.length ?? 0), coherent: good.length, share, kept,
-      why: kept ? undefined : overLimit ? "over-limit" : good.length < rules.minGroup ? "too-few-coherent" : "low-share",
+      why: kept ? (share < rules.llmMinCoherence ? "partial" : undefined) : overLimit ? "over-limit" : "too-few-coherent",
     });
     coherentSets.push(kept ? good : []);
   });

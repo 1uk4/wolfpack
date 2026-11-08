@@ -47,6 +47,14 @@ describe("console relay through the hub", () => {
     await expect(c.putPrompt!("alpha", "orchestrator-rules", "x", "stale")).rejects.toMatchObject({ code: "conflict" });
   });
 
+  it("wolf settings and the secret reveal cross the hub and the worker link", async () => {
+    const { r, token } = await rig();
+    const c = new HttpConsoleClient({ baseUrl: r.hub.url, hub: { baseUrl: r.hub.url, token, relay: true } });
+    const v = await c.getWolfSettings!("alpha");
+    expect(v).toMatchObject({ etag: "e0", config: { memory: { hubToken: { set: true } } }, env: [{ name: "WORK_TOKEN", set: true, secret: true }] });
+    expect(await c.revealWolfSetting!("alpha", "env", "WORK_TOKEN")).toEqual({ name: "WORK_TOKEN", value: "revealed" });
+  });
+
   it("a large response is split into bounded chunk frames and arrives intact", async () => {
     const { r, get } = await rig();
     const sizes: number[] = [];

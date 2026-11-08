@@ -8,5 +8,6 @@ export * from "./kb-sync.js";
 export * from "./pairing.js";
 export * from "./hub-settings.js";
 export * from "./prompts.js";
+export * from "./wolf-settings.js";
 export * from "./link.js";
 export * from "./ledger-time.js";

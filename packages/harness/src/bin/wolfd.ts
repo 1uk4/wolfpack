@@ -7,7 +7,7 @@
  */
 import { parseArgs } from "node:util";
 import { loadWolfConfig } from "@wolfpack/engine";
-import { startWolf } from "../wolfd/run.js";
+import { isSupervised, startWolf } from "../wolfd/run.js";
 
 const USAGE = "usage: wolfd --config <wolf.yaml> [--socket <path> | --port N]";
 
@@ -36,7 +36,9 @@ async function main(): Promise<void> {
     const { config } = loadWolfConfig(values.config);
     if (config.serve.port === undefined) socket = config.serve.socket;
   }
-  const wolf = await startWolf({ configPath: values.config, port: socket ? undefined : port, socket, log: (l) => console.error(`[wolfd] ${l}`) });
+  // Restart = a graceful close, then a non-zero exit: workerd's supervisor restarts on any exit, systemd's Restart=on-failure only on non-zero.
+  const restart = isSupervised() ? () => void wolf.close().finally(() => process.exit(75)) : undefined;
+  const wolf = await startWolf({ configPath: values.config, port: socket ? undefined : port, socket, log: (l) => console.error(`[wolfd] ${l}`), ...(restart ? { restart } : {}) });
   console.log(`wolfd: ${wolf.config.identity.name} serving ${wolf.url}`);
   let stopping = false;
   const stop = () => {

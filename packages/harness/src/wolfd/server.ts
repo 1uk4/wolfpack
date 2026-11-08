@@ -55,6 +55,8 @@ import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
+import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
+import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { HttpError } from "./http-error.js";
 import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import type { PromptBlock } from "./context.js";
@@ -96,6 +98,12 @@ export interface WolfServerOptions {
   /** The Work API client settings (effective WORK_ENDPOINT / WORK_TOKEN) behind the work Record route. */
   work?: { endpoint?: string; token?: string };
   // ---- header git tree ----
+  /** The wolf.yaml this wolfd runs from: the /settings routes read and edit it. Unset: they answer 404. */
+  configFile?: string;
+  /** The environment the wolf runs with, for the /settings env-name report. Default process.env. */
+  env?: NodeJS.ProcessEnv;
+  /** Restart this wolfd (exit so the supervisor starts it again). Unset = nothing supervises it: /settings/restart answers 409. */
+  restart?: () => void;
   /** The wolf's home dir: where `agent/prompts/<id>.md` overrides live. Unset: /prompts answers 404. */
   wolfHome?: string;
   /** The system-prompt blocks wolfd built at start-up (read-only in /prompts). */
@@ -556,6 +564,39 @@ export class WolfServer {
     }
   }
 
+  private settingsStore?: WolfSettingsStore;
+  /** The settings routes (getWolfSettings, putWolfSettings, revealWolfSetting, restartWolf). Secrets only leave through reveal. */
+  private async handleSettings(req: IncomingMessage, res: ServerResponse, kind: "get" | "put" | "reveal" | "restart", name: string): Promise<void> {
+    this.checkWolf(name);
+    if (!this.opts.configFile) throw new HttpError("not_found", "this wolf has no wolf.yaml to configure");
+    const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env));
+    const view = () => store.view((this.opts.tierModels ?? {}) as Record<string, string>, !!this.opts.restart);
+    try {
+      if (kind === "get") return this.json(res, 200, view());
+      if (kind === "restart") {
+        if (!this.opts.restart) throw new HttpError("conflict", "nothing supervises this wolfd, so it would not come back; restart it from its supervisor");
+        const restart = this.opts.restart;
+        this.json(res, 200, { restarting: true });
+        res.once("finish", () => setTimeout(restart, 20));
+        return;
+      }
+      const raw = await readJson(req);
+      if (kind === "reveal") {
+        const body = RevealBodySchema.safeParse(raw);
+        if (!body.success) throw new HttpError("invalid_request", "body must be {source: env|config, name}");
+        return this.json(res, 200, { name: body.data.name, value: store.reveal(body.data.source, body.data.name) });
+      }
+      const body = PutWolfSettingsBodySchema.safeParse(raw);
+      if (!body.success) throw new HttpError("invalid_request", "body must be {set: {<dotted key>: value|null}}");
+      const ifMatch = typeof req.headers["if-match"] === "string" ? req.headers["if-match"].replace(/^"|"$/g, "") : undefined;
+      store.write(body.data.set, ifMatch);
+      return this.json(res, 200, view());
+    } catch (e) {
+      if (e instanceof SettingsError) throw new HttpError(e.code, e.message);
+      throw e;
+    }
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://wolfd");
     res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
@@ -573,6 +614,14 @@ export class WolfServer {
 
     const { params } = m;
     switch (m.name) {
+      case "getWolfSettings":
+        return this.handleSettings(req, res, "get", params.name);
+      case "putWolfSettings":
+        return this.handleSettings(req, res, "put", params.name);
+      case "revealWolfSetting":
+        return this.handleSettings(req, res, "reveal", params.name);
+      case "restartWolf":
+        return this.handleSettings(req, res, "restart", params.name);
       case "listPrompts":
         return this.handlePrompt(req, res, params.name, undefined);
       case "getPrompt":

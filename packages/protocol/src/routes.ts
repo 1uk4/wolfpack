@@ -45,6 +45,7 @@ import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffReques
 
 import * as R from "./registry.js";
 import { HubSettingsSchema } from "./hub-settings.js";
+import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
@@ -239,6 +240,21 @@ export const ROUTES = {
   putPrompt: { method: "PUT", path: "/v1/wolves/:name/prompts/:id", body: PutPromptBodySchema, response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
   /** Remove the override (reset to the repo default); same `If-Match` / 403 / 409 rules. Idempotent. Answers the default view. */
   resetPrompt: { method: "DELETE", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
+  /**
+   * The wolf's settings: wolf.yaml as parsed now with secrets masked (`{set}`), the env var NAMES it reads (+ whether set), the editable keys,
+   * `restartNeeded` and `restartable`. Never carries a secret value. 404 `not_found` for an unknown wolf.
+   */
+  getWolfSettings: { method: "GET", path: "/v1/wolves/:name/settings", response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },
+  /**
+   * Edit wolf.yaml (validated against the wolf.yaml schema, atomic). Body `{set: {"<dotted key>": value|null}}`; header `If-Match: <etag>`
+   * (stale: 409 `conflict`). 400 `invalid_request` for an unknown/non-editable key or a value the schema refuses, 413 `too_large`.
+   * Applies on restart: the answer has `restartNeeded: true`.
+   */
+  putWolfSettings: { method: "PUT", path: "/v1/wolves/:name/settings", body: PutWolfSettingsBodySchema, response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },
+  /** Reveal ONE secret value (an env var listed in the view, or a wolf.yaml key). POST so it is never cached or logged as a read. 404 `not_found` for a name that is not listed. */
+  revealWolfSetting: { method: "POST", path: "/v1/wolves/:name/settings/reveal", body: RevealBodySchema, response: { kind: "json", schema: RevealResponseSchema }, status: [200], error: err },
+  /** Restart this wolfd (it exits and its supervisor starts it again). 409 `conflict` when nothing supervises it. Answers before exiting. */
+  restartWolf: { method: "POST", path: "/v1/wolves/:name/settings/restart", response: { kind: "json", schema: RestartResponseSchema }, status: [200], error: err },
   getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   /**
    * Change the thread's settings (body: `tier`, `autoShip` and/or `color` (a palette key; null = automatic); the rest is kept). Persisted: survives a wolf restart.

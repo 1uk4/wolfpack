@@ -17,7 +17,9 @@ import {
   SECTION_SUMMARY_SYSTEM,
   SPLIT_SECTION_SYSTEM,
 } from "@wolfpack/engine";
-import type { HubPrompt, HubSettings } from "@wolfpack/protocol";
+import { maskSecrets, type HubPrompt, type HubSettings } from "@wolfpack/protocol";
+
+export { maskSecrets };
 
 const GROUP = "KB sweep";
 
@@ -33,29 +35,6 @@ export function hubPrompts(): HubPrompt[] {
     { id: "sweep.label-section", group: GROUP, label: "Section label", text: LABEL_SECTION_SYSTEM },
     { id: "sweep.split-section", group: GROUP, label: "Split an oversized section", text: SPLIT_SECTION_SYSTEM },
   ];
-}
-
-/** Option names that hold a credential (key, token, secret, password, ...). */
-const SECRET_KEY = /token|secret|passw(or)?d|passphrase|credential|api[-_]?key|bearer|private[-_]?key|cookie/i;
-/** A URL with userinfo (`https://user:pw@host`) is a credential too. */
-const URL_WITH_USERINFO = /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]*@/i;
-
-/** Copy `value` with every secret replaced by `{ set: boolean }`; functions and undefined are dropped (test seams, absent options). */
-export function maskSecrets(value: unknown, key = ""): unknown {
-  if (typeof value === "function" || value === undefined) return undefined;
-  if (key && SECRET_KEY.test(key) && (value === null || typeof value !== "object")) return { set: value !== null && value !== "" && value !== false };
-  if (typeof value === "string" && URL_WITH_USERINFO.test(value)) return { set: true };
-  if (Array.isArray(value)) return value.map((v) => maskSecrets(v));
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      if (SECRET_KEY.test(k) && v && typeof v === "object" && !Array.isArray(v)) { out[k] = { set: true }; continue; }
-      const m = maskSecrets(v, k);
-      if (m !== undefined) out[k] = m;
-    }
-    return out;
-  }
-  return value;
 }
 
 let cachedVersion: string | undefined;

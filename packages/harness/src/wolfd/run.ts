@@ -52,6 +52,8 @@ import { loadHomeSettings, loadThreads, setThreadWorkspace, settingsOfSaved } fr
 export interface StartWolfOptions {
   /** Path to wolf.yaml. */
   configPath: string;
+  /** Restart hook for the settings API (bin/wolfd.ts passes it only when a supervisor will start wolfd again). */
+  restart?: () => void;
   /** Overrides serve.port. 0 = ephemeral. */
   port?: number;
   /** Listen on this unix socket instead of TCP (wins over port). */
@@ -99,6 +101,11 @@ export interface RunningWolf {
   /** Set when WOLFPACK_HUB_KB=1: the hub KB mirror sync + contribution feeder. */
   hubKb?: RunningHubKb;
   close(): Promise<void>;
+}
+
+/** Set by the supervisor that starts wolfd again after an exit (workerd's supervisor sets it; systemd's INVOCATION_ID also counts). */
+export function isSupervised(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!env.WOLFPACK_SUPERVISED || !!env.INVOCATION_ID;
 }
 
 export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
@@ -257,6 +264,9 @@ async function startConfigured(
       wolfHome: dirname(config.file),
       promptBlocks: context.blocks,
       toolInfos: extensions.flatMap((e) => (e.tools ?? []).map((t) => ({ name: t.name, description: t.description, extension: e.name }))),
+      configFile: config.file,
+      env,
+      ...(opts.restart ? { restart: opts.restart } : {}),
       ...(env.WOLFPACK_STALL_TIMEOUT_MS !== undefined && Number.isFinite(stallEnv) && stallEnv >= 0 ? { stallTimeoutMs: stallEnv } : {}),
       workspace: cwd, // header git tree: the home thread's git workspace
       conversation,

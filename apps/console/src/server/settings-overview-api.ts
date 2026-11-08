@@ -5,7 +5,7 @@
  * device token; WOLFPACK_HUB_TOKEN is never used. Wolves are fetched in parallel, each under a timeout; one that fails, is offline or
  * times out carries `error` and the response still succeeds. A per-wolf `config` field is reserved for wolfd's /settings (not built yet).
  */
-import type { ConsoleClient, HubSettings, PromptView } from "@wolfpack/client";
+import type { ConsoleClient, HubSettings, PromptView, WolfSettingsView } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { buildCompactionPrompt } from "../core/compaction.ts";
 import { SUMMARIZER_SYSTEM_PROMPT } from "./compaction.ts";
@@ -32,7 +32,9 @@ export interface WolfSettings {
 	online?: boolean;
 	prompts?: PromptView[];
 	error?: string;
-	// config?: reserved for wolfd GET /settings (work-wolfpack-MrpUI1m)
+	/** The wolf's wolfd GET /settings (secrets masked, env names only). */
+	config?: WolfSettingsView;
+	configError?: string;
 }
 
 export interface SettingsOverview {
@@ -112,11 +114,15 @@ export function createSettingsOverviewApi(source: ClientSource, opts: { wolfTime
 		const wolvesP = Promise.all(
 			wolves.map(async (w): Promise<WolfSettings> => {
 				const base: WolfSettings = { name: w.name, host: w.host, online: w.status !== "offline" };
-				if (!c.listPrompts) return { ...base, error: "prompts are not available on this console" };
+				const cfgP = c.getWolfSettings
+					? withTimeout(c.getWolfSettings(w.name), timeoutMs).then((config) => ({ config }), (e) => ({ configError: errText(e) }))
+					: Promise.resolve({ configError: "wolf settings are not available on this console" });
+				if (!c.listPrompts) return { ...base, ...(await cfgP), error: "prompts are not available on this console" };
 				try {
-					return { ...base, prompts: await withTimeout(c.listPrompts(w.name), timeoutMs) };
+					const [prompts, cfg] = await Promise.all([withTimeout(c.listPrompts(w.name), timeoutMs), cfgP]);
+					return { ...base, prompts, ...cfg };
 				} catch (e) {
-					return { ...base, error: errText(e) };
+					return { ...base, ...(await cfgP), error: errText(e) };
 				}
 			}),
 		);

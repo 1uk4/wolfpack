@@ -18,6 +18,9 @@ import {
   type ThreadSettingsResponse,
   type PromptView,
   type ListPromptsResponse,
+  type WolfSettingsView,
+  type RevealResponse,
+  type RestartResponse,
   type RouteName,
   type KbCommitRequest,
   type KbCommitResponse,
@@ -192,6 +195,22 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async resetPrompt(wolf: string, id: string, ifMatch?: string): Promise<PromptView> {
     return (await this.json("resetPrompt", { name: wolf, id }, ROUTES.resetPrompt.response.schema, undefined, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as PromptView;
+  }
+
+  async getWolfSettings(wolf: string): Promise<WolfSettingsView> {
+    return (await this.json("getWolfSettings", { name: wolf }, ROUTES.getWolfSettings.response.schema, undefined, wolf)) as WolfSettingsView;
+  }
+
+  async putWolfSettings(wolf: string, set: Record<string, unknown>, ifMatch?: string): Promise<WolfSettingsView> {
+    return (await this.json("putWolfSettings", { name: wolf }, ROUTES.putWolfSettings.response.schema, { set }, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as WolfSettingsView;
+  }
+
+  async revealWolfSetting(wolf: string, source: "env" | "config", name: string): Promise<RevealResponse> {
+    return (await this.json("revealWolfSetting", { name: wolf }, ROUTES.revealWolfSetting.response.schema, { source, name }, wolf)) as RevealResponse;
+  }
+
+  async restartWolf(wolf: string): Promise<RestartResponse> {
+    return (await this.json("restartWolf", { name: wolf }, ROUTES.restartWolf.response.schema, undefined, wolf)) as RestartResponse;
   }
 
   async getThreadSettings(threadId: string): Promise<ThreadSettingsResponse> {

@@ -31,6 +31,14 @@ const server = createServer((req, res) => {
     return res.end("{}");
   }
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("hang")) return; // never answers
+  // settings: the masked view (the real wolfd never returns a secret here) and a POST reveal that echoes the asked name
+  if (p === `/v1/wolves/${name}/settings` && req.method === "GET")
+    return json(res, 200, { etag: "e0", config: { name, memory: { hubToken: { set: true } } }, editable: [], tierModels: {}, env: [{ name: "WORK_TOKEN", set: true, secret: true, purpose: "Work API token" }], restartNeeded: false, restartable: false });
+  if (p === `/v1/wolves/${name}/settings/reveal` && req.method === "POST") {
+    const bufs = [];
+    req.on("data", (c) => bufs.push(c));
+    return req.on("end", () => json(res, 200, { name: JSON.parse(Buffer.concat(bufs).toString("utf8")).name, value: "revealed" }));
+  }
   // prompt overrides: reflect the If-Match header and the body back as the prompt view; "stale" is the conflict case
   if (p === `/v1/wolves/${name}/prompts/orchestrator-rules` && (req.method === "PUT" || req.method === "DELETE")) {
     const bufs = [];

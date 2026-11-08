@@ -205,7 +205,7 @@ function ThreadChatInner({
 	initialBound?: string;
 	/** A subagent thread: the thread that spawned it (it shows that thread's color). */
 	parentThreadId?: string;
-	/** The wolf's threads (id, parent, settings) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
+	/** The wolf's threads (id, kind, parent) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
 	colorThreads?: readonly ThreadColorSource[];
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
@@ -219,8 +219,8 @@ function ThreadChatInner({
 		initiallyInFlight,
 		transport,
 	});
-	const threadSettings = useThreadSettings(wolf, slug, threadId);
-	// A faint tint of the thread's color (its override, else the one its id gives; a subagent's = its parent's) behind the conversation.
+	const threadSettings = useThreadSettings(wolf, slug);
+	// A faint tint of the thread's color (the one its id gives; a subagent's = its parent's) behind the conversation.
 	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
 	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads).hex;
 	const tint = threadTint(tintHex);
@@ -795,7 +795,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
+											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

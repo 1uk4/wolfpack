@@ -369,8 +369,6 @@ export function threadListItem(
 		// A graduated feature's thread is read-only history: the sidebar files it under "Archived".
 		...(thread.closed ? { archived: true } : {}),
 		...(thread.kind !== undefined ? { kind: thread.kind } : {}),
-		// The owner's color override (a palette key); absent = automatic.
-		...(thread.settings?.color ? { color: thread.settings.color } : {}),
 		// The git branch the thread works on (a feature row shows it as its meta line).
 		...(thread.workspace?.branch ? { branch: thread.workspace.branch } : {}),
 		// A subagent's fields ride the row (the sidebar nests it under its parent, the job list reads its state).

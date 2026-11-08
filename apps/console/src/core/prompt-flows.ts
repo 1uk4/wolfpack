@@ -208,3 +208,152 @@ export function buildFlows(allRows: FlowRow[], hubRows: FlowRow[] | null): Flow[
 	if (other.length) flows.push({ key: "other", title: "Other", steps: [{ n: 1, title: "Not placed in a flow", host: "wolf", ids: other }] });
 	return flows;
 }
+
+// ---- One dependency graph per flow (the Prompts page draws these; the List tab keeps the rows). ----
+
+export type GraphKey = "main" | "work" | "kb" | "crawl" | "compaction";
+export type PromptsTab = GraphKey | "list";
+/** The tabs, in order: the five graphs, then the flat list. */
+export const PROMPT_TABS: ReadonlyArray<{ key: PromptsTab; title: string }> = [
+	{ key: "main", title: "Main wolf" },
+	{ key: "work", title: "Work creation" },
+	{ key: "kb", title: "Conversation to KB" },
+	{ key: "crawl", title: "Crawl" },
+	{ key: "compaction", title: "Compaction" },
+	{ key: "list", title: "List" },
+];
+
+export type NodeMarker = "editable" | "partly editable" | "read-only" | "no prompt";
+export interface GraphNodeDef {
+	/** Unique within its graph; the prompt id for a one-prompt node, so `?node=pipeline.observer` works. */
+	id: string;
+	title: string;
+	host: Host;
+	marker: NodeMarker;
+	/** The prompt ids the node's side panel opens (hub rows are `hub:<id>`); empty for a step that runs no prompt. */
+	ids: string[];
+	/** A small second line on the node. */
+	sub?: string;
+	note?: string;
+	hubMissing?: boolean;
+}
+/** `from` feeds `to`: it is read, or runs, before it (left to right in the drawing). */
+export interface GraphEdgeDef {
+	from: string;
+	to: string;
+}
+export interface PromptGraph {
+	key: GraphKey;
+	title: string;
+	nodes: GraphNodeDef[];
+	edges: GraphEdgeDef[];
+}
+
+/** `hubRows` null: the hub is not connected. */
+export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): PromptGraph[] {
+	const rows = visibleRows(allRows);
+	const byId = new Map<string, FlowRow>(rows.map((r) => [r.id, r]));
+	for (const h of hubRows ?? []) byId.set(hubId(h.id), { ...h, editable: false });
+	const markerOf = (ids: string[]): NodeMarker => {
+		const es = ids.map((i) => byId.get(i)?.editable).filter((e): e is boolean => e !== undefined);
+		return !es.length ? "no prompt" : es.every(Boolean) ? "editable" : es.some(Boolean) ? "partly editable" : "read-only";
+	};
+	const leaf = (id: string, extra: Partial<GraphNodeDef> = {}): GraphNodeDef => ({ id, title: byId.get(id)?.label ?? id, host: hostOf(id), marker: markerOf([id]), ids: [id], ...extra });
+	const chain = (ids: string[]): GraphEdgeDef[] => ids.slice(1).map((to, i) => ({ from: ids[i]!, to }));
+
+	// Main wolf: the system-prompt blocks in composition order, then the wolf, its tools and subagents with the standards they read.
+	const tree = buildTree(allRows);
+	const mainNodes: GraphNodeDef[] = [];
+	const mainEdges: GraphEdgeDef[] = [];
+	const blocks: string[] = [];
+	for (const it of tree.find((n) => n.key === "system")?.items ?? []) {
+		mainNodes.push(leaf(it.id));
+		blocks.push(it.id);
+		if (it.editedIn) {
+			mainNodes.push(leaf(it.editedIn, { sub: `edits ${it.id.replace(/^system\./, "")}` }));
+			mainEdges.push({ from: it.editedIn, to: it.id });
+		}
+	}
+	mainEdges.push(...chain(blocks));
+	mainNodes.push({ id: "main-wolf", title: "Main wolf", host: "wolf", marker: "no prompt", ids: [], note: "The running wolf: the composed system prompt, the tools it is offered and the subagents it can spawn." });
+	if (blocks.length) mainEdges.push({ from: blocks[blocks.length - 1]!, to: "main-wolf" });
+	const toolIds = tree.find((n) => n.key === "tools")?.items.map((i) => i.id) ?? [];
+	if (toolIds.length) {
+		mainNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: toolIds, sub: "collapsed: open the list" });
+		mainEdges.push({ from: "tools", to: "main-wolf" });
+	}
+	const subTree = tree.find((n) => n.key === "subagents");
+	const standardIds = [...new Set([...(subTree?.subagents ?? []).flatMap((s) => s.reads), ...(subTree?.items ?? []).map((i) => i.id)])];
+	for (const sa of subTree?.subagents ?? []) {
+		mainNodes.push(leaf(sa.id, { sub: "subagent profile" }));
+		mainEdges.push({ from: "main-wolf", to: sa.id }, ...sa.reads.map((to) => ({ from: sa.id, to })));
+	}
+	mainNodes.push(...standardIds.map((id) => leaf(id, { sub: "standard" })));
+	const main: PromptGraph = { key: "main", title: "Main wolf", nodes: mainNodes, edges: mainEdges };
+
+	// The flows A-D become chains of their steps.
+	const flows = buildFlows(allRows, hubRows);
+	const flowOf = (k: string) => flows.find((f) => f.key === k)!;
+	const stepNode = (fk: string, st: FlowStep): GraphNodeDef => {
+		const hub = st.host === "hub";
+		const id = hub ? "hub-curation" : (st.ids[0] ?? `step:${fk}:${st.n}`);
+		return {
+			id, title: st.title, host: st.host, marker: markerOf(st.ids), ids: st.ids,
+			...(hub ? { sub: "wolf → hub", note: st.crossing } : st.note ? { note: st.note } : {}),
+			...(st.hubMissing ? { hubMissing: true } : {}),
+		};
+	};
+	const chained = (key: GraphKey, title: string, fk: string): PromptGraph => {
+		const nodes = flowOf(fk).steps.map((st) => stepNode(fk, st));
+		return { key, title, nodes, edges: chain(nodes.map((n) => n.id)) };
+	};
+	const work = chained("work", "Work creation", "work");
+	const kb = chained("kb", "Conversation to KB", "conversation");
+	const crawl = chained("crawl", "Crawl", "crawl");
+	const hubNode = kb.nodes.find((n) => n.id === "hub-curation");
+	if (hubNode) {
+		crawl.nodes.push({ ...hubNode, sub: "joins Conversation to KB" });
+		crawl.edges.push({ from: crawl.nodes[crawl.nodes.length - 2]!.id, to: "hub-curation" });
+	}
+
+	const compNodes: GraphNodeDef[] = [
+		{ id: "step:compaction:auto", title: "Automatic compaction", host: "wolfd-pi-durable", marker: "no prompt", ids: [], sub: "context nearly full" },
+		{ id: "step:compaction:manual", title: "Manual compaction", host: "wolfd-pi-durable", marker: "no prompt", ids: [], sub: "the owner asks", note: "Runs the same two prompts as the automatic step." },
+		...["compaction.pi-durable-system", "compaction.pi-durable-instructions"].filter((id) => byId.has(id)).map((id) => leaf(id)),
+	];
+	const compPrompts = compNodes.slice(2).map((n) => n.id);
+	const compaction: PromptGraph = {
+		key: "compaction", title: "Compaction", nodes: compNodes,
+		edges: [...(compPrompts[0] ? [{ from: "step:compaction:auto", to: compPrompts[0] }, { from: "step:compaction:manual", to: compPrompts[0] }] : []), ...chain(compPrompts)],
+	};
+
+	// Anything no graph places lands in an Other node on the main graph, so a new prompt never vanishes.
+	const graphs = [main, work, kb, crawl, compaction];
+	const placed = new Set(graphs.flatMap((g) => g.nodes.flatMap((n) => n.ids)));
+	const otherIds = rows.filter((r) => !placed.has(r.id)).map((r) => r.id);
+	if (otherIds.length) main.nodes.push({ id: "other", title: `Other (${otherIds.length})`, host: "wolf", marker: markerOf(otherIds), ids: otherIds, sub: "not placed in a flow" });
+	return graphs;
+}
+
+/** The layout component reads an edge as "from depends on to": prerequisites sit left. A feed a→b is that edge reversed. */
+export const dependencyEdges = (edges: GraphEdgeDef[]): GraphEdgeDef[] => edges.map((e) => ({ from: e.to, to: e.from }));
+
+export interface PromptsUrlState {
+	graph: PromptsTab;
+	node?: string;
+}
+/** `?graph=kb&node=pipeline.observer`; an unknown graph is the main one, and `main` / no node add nothing. */
+export function parsePromptsUrl(search: string): PromptsUrlState {
+	const p = new URLSearchParams(search);
+	const g = p.get("graph");
+	const graph = PROMPT_TABS.find((t) => t.key === g)?.key ?? "main";
+	const node = p.get("node");
+	return { graph, ...(node ? { node } : {}) };
+}
+export function promptsUrlSearch(s: PromptsUrlState): string {
+	const p = new URLSearchParams();
+	if (s.graph !== "main") p.set("graph", s.graph);
+	if (s.node) p.set("node", s.node);
+	const q = p.toString();
+	return q ? `?${q}` : "";
+}

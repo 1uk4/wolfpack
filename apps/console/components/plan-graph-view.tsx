@@ -49,6 +49,9 @@ export function PlanGraphView({
 	orderByStatus = false,
 	fill = false,
 	toolbar,
+	renderNode,
+	nodeSize,
+	recenterOnResize = false,
 }: {
 	graph: GraphData;
 	onNodeClick?: (id: string) => void;
@@ -59,12 +62,17 @@ export function PlanGraphView({
 	orderByStatus?: boolean;
 	fill?: boolean;
 	toolbar?: ReactNode;
+	/** Another page's own node look (the Prompts graphs): replaces the status header and label, the card colours and the accessible name. Unset: the plan-graph look, unchanged. */
+	renderNode?: (n: GraphData["nodes"][number]) => { name: string; className?: string; body: ReactNode };
+	nodeSize?: { width: number; height: number };
+	/** Draggable only: re-centre whenever the box is resized (its first measure can precede the final width). Unset: unchanged. */
+	recenterOnResize?: boolean;
 }) {
 	const pan = usePan(draggable);
 	const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const slim = new Set(collapseDone ? graph.nodes.filter((n) => (n.status === "done" || n.status === "skipped") && n.id !== highlightId).map((n) => n.id) : []);
 	const orderClass = orderByStatus ? new Map(graph.nodes.map((n) => [n.id, STATUS_ORDER[n.status]] as const)) : undefined;
-	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass });
+	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass, nodeWidth: nodeSize?.width, nodeHeight: nodeSize?.height });
 	const labelOf = new Map(graph.nodes.map((n) => [n.id, n.label] as const));
 	const dependsOn = new Map<string, string[]>();
 	for (const e of graph.edges) {
@@ -91,6 +99,14 @@ export function PlanGraphView({
 		if (draggable) pan.setOffset(centreRef.current());
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draggable]);
+	useEffect(() => {
+		const box = pan.ref.current;
+		if (!draggable || !recenterOnResize || !box || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => pan.setOffset(centreRef.current()));
+		ro.observe(box);
+		return () => ro.disconnect();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [draggable, recenterOnResize]);
 	const clickNode = (id: string) => {
 		if (!pan.consumeDrag()) onNodeClick?.(id);
 	};
@@ -135,7 +151,8 @@ export function PlanGraphView({
 							if (!p) return null;
 							const hi = highlightId === n.id;
 							const sliver = slim.has(n.id);
-							const name = `${n.label} (${sliver && n.status === "skipped" ? "Archived" : STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
+							const custom = renderNode?.(n);
+							const name = custom?.name ?? `${n.label} (${sliver && n.status === "skipped" ? "Archived" : STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
 							return (
 								<li
 									key={n.id}
@@ -150,7 +167,7 @@ export function PlanGraphView({
 									aria-label={sliver && !onNodeClick ? name : undefined}
 									className={cn(
 										sliver ? cn("absolute flex items-center justify-center gap-0.5 rounded-full text-[10px] font-medium leading-none", n.status === "done" ? "bg-emerald-500/70 text-emerald-950 dark:text-emerald-50" : "bg-muted-foreground/40 text-foreground/80") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
-										!sliver && CARD[n.status],
+										!sliver && (custom?.className ?? CARD[n.status]),
 										hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70",
 									)}
 									style={{ left: p.x, top: p.y, width: p.width, height: p.height }}
@@ -162,7 +179,8 @@ export function PlanGraphView({
 											{n.status === "done" ? "Done" : "Archived"}
 										</span>
 									)}
-									{!sliver && (
+									{!sliver && custom && custom.body}
+									{!sliver && !custom && (
 										<>
 											<div className="flex items-center gap-1.5 text-[10px] leading-none">
 												{n.status === "done" ? <CheckIcon className="size-3 shrink-0 text-emerald-500" aria-hidden /> : <span className={cn("size-2 shrink-0 rounded-full", DOT[n.status])} aria-hidden />}

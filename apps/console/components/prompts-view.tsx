@@ -6,8 +6,11 @@
  * repo default. Overrides live in the wolf's home; other wolves keep the default.
  */
 import { useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { XIcon } from "lucide-react";
 import { SidebarToggle } from "@/components/sidebar";
-import { buildFlows, buildTree, chipGroup, HOST_LABEL, hostOf, hubId, standardUsers, treeCardIds, visibleRows, type FlowStep, type TreeNode } from "../src/core/prompt-flows.ts";
+import { PromptGraphCanvas } from "@/components/prompt-graph-view";
+import { buildFlows, buildGraphs, buildTree, chipGroup, EDITED_IN, parsePromptsUrl, PROMPT_TABS, promptsUrlSearch, type PromptsUrlState, HOST_LABEL, hostOf, hubId, standardUsers, treeCardIds, visibleRows, type FlowStep, type TreeNode } from "../src/core/prompt-flows.ts";
 
 interface PromptRow {
 	id: string;
@@ -87,6 +90,12 @@ export function PromptsView() {
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [nodeOpen, setNodeOpen] = useState<Record<string, boolean>>({});
 	const [view, setView] = useState<"tree" | "flows">("tree");
+	// The selected graph (or "list") and node live in the URL, so a link or reload lands on the same view.
+	const router = useRouter();
+	const pathname = usePathname();
+	const searchParams = useSearchParams();
+	const urlState = parsePromptsUrl(searchParams.toString());
+	const setUrl = (next: PromptsUrlState) => router.replace(`${pathname}${promptsUrlSearch(next)}`, { scroll: false });
 	/** The hub's KB-sweep prompts for flow B step 4; null when the hub is not connected (hubNote says why). */
 	const [hubRows, setHubRows] = useState<PromptRow[] | null>(null);
 	const [hubNote, setHubNote] = useState("");
@@ -192,6 +201,7 @@ export function PromptsView() {
 	};
 
 	const isHub = wolf === HUB;
+	const graphMode = !isHub && urlState.graph !== "list";
 	const listed = isHub ? rows : visibleRows(rows);
 	const chipOf = (r: PromptRow) => (isHub ? r.group : chipGroup(r));
 	const groups = [...new Set(listed.map(chipOf))];
@@ -292,6 +302,7 @@ export function PromptsView() {
 	const toggle = (k: string) => setExpanded((e) => ({ ...e, [k]: !isOpen(k) }));
 	/** Open a card and bring it into view (the "Edited in" links and Expand all use it). */
 	const reveal = (id: string) => {
+		if (graphMode) return setUrl({ graph: urlState.graph, node: id });
 		setExpanded((e) => ({ ...e, [id]: true }));
 		requestAnimationFrame(() => document.getElementById(`leaf-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
 	};
@@ -360,6 +371,43 @@ export function PromptsView() {
 		);
 	};
 	const tree = buildTree(rows);
+	const graphs = buildGraphs(rows, hubRows);
+	const activeGraph = graphMode ? graphs.find((g) => g.key === urlState.graph) : undefined;
+	const activeNode = activeGraph?.nodes.find((n) => n.id === urlState.node);
+	/** The side panel: the clicked node's existing editor cards, next to the graph. A bottom-up full-screen overlay on a narrow screen. */
+	const renderPanel = () => {
+		if (!activeGraph || !activeNode) return null;
+		const many = activeNode.ids.length > 3;
+		const panelRows = activeNode.ids.map((id) => byId.get(id)).filter((r): r is PromptRow => !!r);
+		const ctxOf = (r: PromptRow) => (r.id.startsWith("standard.") ? { usedBy: standardUsers(rows, r.id) } : EDITED_IN[r.id] ? { editedIn: EDITED_IN[r.id]! } : {});
+		return (
+			<aside className="fixed inset-0 z-40 flex min-w-0 flex-col gap-3 overflow-y-auto bg-background p-3 md:static md:z-auto md:max-h-[70vh] md:w-[28rem] md:shrink-0 md:rounded-md md:border" data-testid="prompt-panel" aria-label={`${activeNode.title} prompt`}>
+				<header className="flex items-start gap-2">
+					<div className="min-w-0 flex-1">
+						<h2 className="text-sm font-semibold">{activeNode.title}</h2>
+						<p className="mt-1 flex flex-wrap gap-1.5">
+							<span className={badge}>{HOST_LABEL[activeNode.host]}</span>
+							<span className={badge}>{activeNode.marker}</span>
+						</p>
+					</div>
+					<button type="button" className="inline-flex size-8 shrink-0 items-center justify-center rounded border hover:bg-accent" aria-label="Close panel" onClick={() => setUrl({ graph: urlState.graph })} data-testid="prompt-panel-close"><XIcon className="size-4" aria-hidden /></button>
+				</header>
+				{activeNode.note && <p className="text-xs text-muted-foreground">{activeNode.note}</p>}
+				{activeNode.hubMissing && <p className="text-xs text-muted-foreground" data-testid="flow-hub-missing">Hub not connected, so the sweep prompts cannot be shown{hubNote ? ` (${hubNote})` : ""}. This step runs on the hub with the prompts hubd reports.</p>}
+				{!panelRows.length && !activeNode.hubMissing && <p className="text-xs text-muted-foreground">No prompt runs at this step.</p>}
+				{panelRows.map((r) =>
+					many ? (
+						<details key={r.id} className="rounded-md border">
+							<summary className="cursor-pointer px-2 py-1.5 text-sm">{r.label} <span className="text-xs text-muted-foreground">{r.editable ? "editable" : "read-only"}</span></summary>
+							<div className="p-2">{card(r, ctxOf(r))}</div>
+						</details>
+					) : (
+						card(r, ctxOf(r), `${activeNode.id}-${r.id}`)
+					),
+				)}
+			</aside>
+		);
+	};
 	const renderTree = () => (
 		<div className="flex flex-col gap-3" data-testid="prompts-tree">
 			<h2 className="text-sm font-semibold">Main wolf (orchestrator)</h2>
@@ -424,7 +472,7 @@ export function PromptsView() {
 	};
 
 	return (
-		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-3 sm:p-6" data-testid="prompts-page">
+		<main className={`mx-auto flex ${graphMode ? "max-w-7xl" : "max-w-4xl"} flex-col gap-4 p-3 sm:p-6`} data-testid="prompts-page">
 			<header className="flex items-center gap-2">
 				<SidebarToggle />
 				<h1 className="text-lg font-semibold">Prompts</h1>
@@ -440,19 +488,26 @@ export function PromptsView() {
 				</select>
 			</label>
 			{!isHub && (
+				<div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Prompt graphs" data-testid="prompts-tabs">
+					{PROMPT_TABS.map((t) => (
+						<button key={t.key} role="tab" aria-selected={urlState.graph === t.key} className={`rounded border px-3 py-1 text-sm ${urlState.graph === t.key ? "bg-accent" : ""}`} onClick={() => setUrl({ graph: t.key })} data-testid={`prompts-tab-${t.key}`}>{t.title}</button>
+					))}
+				</div>
+			)}
+			{!isHub && !graphMode && (
 				<div className="flex gap-1.5" role="tablist" aria-label="Prompts view" data-testid="prompts-views">
 					{(["tree", "flows"] as const).map((v) => (
 						<button key={v} role="tab" aria-selected={view === v} className={`rounded border px-3 py-1 text-sm ${view === v ? "bg-accent" : ""}`} onClick={() => setView(v)} data-testid={`prompts-view-${v}`}>{v === "tree" ? "Wolf tree" : "Flows"}</button>
 					))}
 				</div>
 			)}
-			{!isHub && (
+			{!isHub && !graphMode && (
 				<div className="flex gap-1.5" data-testid="prompts-expand-controls">
 					<button className="rounded border px-2 py-0.5 text-xs" onClick={expandAll} data-testid="prompts-expand-all">Expand all</button>
 					<button className="rounded border px-2 py-0.5 text-xs" onClick={collapseAll} data-testid="prompts-collapse-all">Collapse all</button>
 				</div>
 			)}
-			{groups.length > 1 && (
+			{groups.length > 1 && !graphMode && (
 				<nav className="flex flex-wrap gap-1.5" aria-label="Prompt groups" data-testid="prompts-groups">
 					{["", ...groups].map((g) => (
 						<button key={g || "all"} className={`rounded border px-2 py-0.5 text-xs ${group === g ? "bg-accent" : ""}`} onClick={() => setGroup(g)} data-testid={`prompts-group-${g || "all"}`}>
@@ -462,7 +517,14 @@ export function PromptsView() {
 				</nav>
 			)}
 			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
-			{isHub ? shown.map((row) => card(row)) : view === "tree" ? renderTree() : renderFlows()}
+			{activeGraph ? (
+				<div className="flex min-w-0 flex-col gap-3 md:flex-row" data-testid={`prompt-graph-${activeGraph.key}`}>
+					<div className="h-[60vh] min-h-[320px] min-w-0 flex-1 rounded-md border">
+						<PromptGraphCanvas graph={activeGraph} selected={activeNode?.id ?? null} onSelect={(id) => setUrl({ graph: activeGraph.key, node: id })} />
+					</div>
+					{renderPanel()}
+				</div>
+			) : isHub ? shown.map((row) => card(row)) : view === "tree" ? renderTree() : renderFlows()}
 		</main>
 	);
 }

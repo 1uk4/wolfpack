@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildFlows, buildTree, hostOf, standardsOf, treeCardIds, type FlowRow } from "../src/core/prompt-flows.ts";
+import { buildFlows, buildGraphs, buildTree, hostOf, parsePromptsUrl, promptsUrlSearch, standardsOf, treeCardIds, type FlowRow, type PromptGraph } from "../src/core/prompt-flows.ts";
 
 /** The ids a real wolf returns from GET /prompts (a wolf with an identity file and project AGENTS.md/CLAUDE.md/skills would add system.agents-md, .claude-md, .skills). */
 const IDS = [
@@ -87,5 +87,85 @@ describe("prompt tree and flows", () => {
 		assert.equal(hostOf("compaction.pi-durable-system"), "wolfd-pi-durable");
 		assert.equal(hostOf("pipeline.observer"), "wolf");
 		assert.equal(hostOf("identity"), "wolf");
+	});
+});
+
+const HUB_ROWS: FlowRow[] = [{ id: "sweep.merge", group: "KB sweep", label: "merge", editable: false, text: "t" }];
+const graphs = (all = rows(), hub: FlowRow[] | null = HUB_ROWS) => buildGraphs(all, hub);
+const graphOf = (gs: PromptGraph[], key: string) => gs.find((g) => g.key === key)!;
+const edgeSet = (g: PromptGraph) => g.edges.map((e) => `${e.from}>${e.to}`);
+
+describe("prompt graphs", () => {
+	it("offers one graph per tab, in order, with no dangling edge and no cycle", () => {
+		const gs = graphs();
+		assert.deepEqual(gs.map((g) => g.key), ["main", "work", "kb", "crawl", "compaction"]);
+		for (const g of gs) {
+			const ids = new Set(g.nodes.map((n) => n.id));
+			assert.equal(ids.size, g.nodes.length, `${g.key}: unique node ids`);
+			for (const e of g.edges) assert.ok(ids.has(e.from) && ids.has(e.to), `${g.key}: ${e.from}>${e.to}`);
+			// Kahn: every node can be removed, so there is no cycle.
+			const indeg = new Map([...ids].map((i) => [i, 0]));
+			for (const e of g.edges) indeg.set(e.to, indeg.get(e.to)! + 1);
+			const queue = [...indeg].filter(([, d]) => d === 0).map(([i]) => i);
+			let seen = 0;
+			while (queue.length) {
+				const n = queue.pop()!;
+				seen++;
+				for (const e of g.edges.filter((x) => x.from === n)) if (indeg.set(e.to, indeg.get(e.to)! - 1).get(e.to) === 0) queue.push(e.to);
+			}
+			assert.equal(seen, ids.size, `${g.key}: acyclic`);
+		}
+	});
+
+	it("draws the main wolf graph: blocks in composition order, sources feeding blocks, one collapsed Tools node, subagents to their frontmatter standards", () => {
+		const main = graphOf(graphs(), "main");
+		const e = edgeSet(main);
+		for (const x of ["system.header>system.identity", "system.identity>system.orchestrator", "system.orchestrator>system.structured-output", "system.structured-output>system.brief", "system.brief>main-wolf", "identity>system.identity", "orchestrator-rules>system.orchestrator", "tools>main-wolf"]) assert.ok(e.includes(x), x);
+		const tools = main.nodes.find((n) => n.id === "tools")!;
+		assert.equal(tools.title, "Tools (3)");
+		assert.deepEqual(tools.ids, ["tool.read", "tool.bash", "tool.subagent"]);
+		assert.equal(main.nodes.filter((n) => n.id.startsWith("tool.")).length, 0);
+		assert.deepEqual(e.filter((x) => x.startsWith("agent.") && x.includes(">standard.")).sort(), ["agent.planner>standard.testing", "agent.reviewer>standard.git", "agent.reviewer>standard.testing", "agent.worker>standard.testing"]);
+		assert.ok(e.includes("main-wolf>agent.scout"));
+		assert.equal(main.nodes.find((n) => n.id === "identity")!.marker, "editable");
+		assert.equal(main.nodes.find((n) => n.id === "system.header")!.marker, "read-only");
+	});
+
+	it("draws the flow graphs: steps in order, the wolf-to-hub hop, and the crawl joining at hub curation", () => {
+		const gs = graphs();
+		const kb = graphOf(gs, "kb");
+		assert.deepEqual(edgeSet(kb), ["pipeline.observer>pipeline.consolidate", "pipeline.consolidate>pipeline.distill", "pipeline.distill>hub-curation"]);
+		const hub = kb.nodes.find((n) => n.id === "hub-curation")!;
+		assert.equal(hub.host, "hub");
+		assert.deepEqual(hub.ids, ["hub:sweep.merge"]);
+		const crawl = graphOf(gs, "crawl");
+		assert.deepEqual(edgeSet(crawl), ["pipeline.crawl-observer>pipeline.crawl-consolidate", "pipeline.crawl-consolidate>pipeline.crawl-journey", "pipeline.crawl-journey>step:crawl:4", "step:crawl:4>hub-curation"]);
+		assert.equal(crawl.nodes.find((n) => n.id === "step:crawl:4")!.marker, "no prompt");
+		assert.deepEqual(graphOf(gs, "compaction").nodes.map((n) => n.id).slice(-2), ["compaction.pi-durable-system", "compaction.pi-durable-instructions"]);
+		assert.equal(graphOf(gs, "work").nodes[0]!.id, "new-work");
+	});
+
+	it("keeps the hub-not-connected state on the hub curation node", () => {
+		const hub = graphOf(graphs(rows(), null), "kb").nodes.find((n) => n.id === "hub-curation")!;
+		assert.equal(hub.hubMissing, true);
+		assert.deepEqual(hub.ids, []);
+	});
+
+	it("covers every prompt id in some graph, and an unknown id lands in an Other node", () => {
+		const covered = new Set(graphs().flatMap((g) => g.nodes.flatMap((n) => n.ids)));
+		for (const id of IDS.filter((i) => i !== "pipeline.breakdown-suggestion")) assert.ok(covered.has(id), id);
+		assert.ok(!covered.has("pipeline.breakdown-suggestion"));
+		const other = graphOf(graphs(rows([...IDS, "pipeline.brand-new"])), "main").nodes.find((n) => n.id === "other");
+		assert.deepEqual(other?.ids, ["pipeline.brand-new"]);
+		assert.equal(graphOf(graphs(), "main").nodes.find((n) => n.id === "other"), undefined);
+	});
+
+	it("round-trips the selected graph and node through the URL", () => {
+		assert.deepEqual(parsePromptsUrl("?graph=kb&node=pipeline.observer"), { graph: "kb", node: "pipeline.observer" });
+		assert.equal(promptsUrlSearch({ graph: "kb", node: "pipeline.observer" }), "?graph=kb&node=pipeline.observer");
+		assert.deepEqual(parsePromptsUrl(promptsUrlSearch({ graph: "list" })), { graph: "list" });
+		assert.deepEqual(parsePromptsUrl(""), { graph: "main" });
+		assert.deepEqual(parsePromptsUrl("?graph=bogus&node="), { graph: "main" });
+		assert.equal(promptsUrlSearch({ graph: "main" }), "");
 	});
 });

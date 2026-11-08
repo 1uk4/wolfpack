@@ -463,6 +463,18 @@ function ThreadChatInner({
 	const dismissedChecklist = useChecklistDismissed(threadId, active?.objectId);
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	// The composer dock overlays the list (absolute, bottom-0) and its height varies (controls wrap on a phone, chips, dictation bar,
+	// subagent strip, safe-area inset). Measure it so the tail spacer clears the dock and its gradient glow exactly.
+	const [dockEl, setDockEl] = useState<HTMLDivElement | null>(null);
+	const [dockHeight, setDockHeight] = useState<number | null>(null);
+	useEffect(() => {
+		if (!dockEl || typeof ResizeObserver !== "function") return;
+		const read = () => setDockHeight(Math.ceil(dockEl.getBoundingClientRect().height));
+		read();
+		const ro = new ResizeObserver(read);
+		ro.observe(dockEl);
+		return () => ro.disconnect();
+	}, [dockEl]);
 	const busy = status === "submitted" || status === "streaming";
 	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
@@ -743,9 +755,14 @@ function ThreadChatInner({
 								)}
 							</div>
 							{/* Reserve the composer's height so the tail scrolls clear of it. */}
-							<div aria-hidden className="h-40" style={stripReserve ? { marginTop: stripReserve } : undefined} />
+							<div
+								aria-hidden
+								data-testid="thread-tail-spacer"
+								className={dockHeight === null ? "h-40" : undefined}
+								style={dockHeight !== null ? { height: dockHeight } : stripReserve ? { marginTop: stripReserve } : undefined}
+							/>
 						</ConversationContent>
-						<div className="pointer-events-none absolute inset-x-0 bottom-0">
+						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0">
 							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>

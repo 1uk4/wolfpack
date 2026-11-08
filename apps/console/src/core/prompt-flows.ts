@@ -233,7 +233,7 @@ export interface GraphNodeDef {
 	marker: NodeMarker;
 	/** The prompt ids the node's side panel opens (hub rows are `hub:<id>`); empty for a step that runs no prompt. */
 	ids: string[];
-	/** A small second line on the node. */
+	/** A small second line on the node; only where it says something the title and markers do not. */
 	sub?: string;
 	note?: string;
 	hubMissing?: boolean;
@@ -271,13 +271,13 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 		sysNodes.push(leaf(it.id));
 		blocks.push(it.id);
 		if (it.editedIn) {
-			sysNodes.push(leaf(it.editedIn, { sub: `edits ${it.id.replace(/^system\./, "")}` }));
+			sysNodes.push(leaf(it.editedIn));
 			sysEdges.push({ from: it.editedIn, to: it.id });
 		}
 	}
 	sysEdges.push(...chain(blocks));
 	const toolIds = tree.find((n) => n.key === "tools")?.items.map((i) => i.id) ?? [];
-	if (toolIds.length) sysNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: toolIds, sub: "offered alongside; open the list" });
+	if (toolIds.length) sysNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: toolIds });
 	const system: PromptGraph = { key: "system", title: "System prompt", nodes: sysNodes, edges: sysEdges };
 
 	// Subagents: the main wolf to each profile to the standards its frontmatter names; a standard no profile names stands apart.
@@ -286,11 +286,11 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	const subEdges: GraphEdgeDef[] = [];
 	const read = new Set<string>();
 	for (const sa of subTree?.subagents ?? []) {
-		subNodes.push(leaf(sa.id, { sub: "subagent profile" }));
+		subNodes.push(leaf(sa.id));
 		subEdges.push({ from: "main-wolf", to: sa.id }, ...sa.reads.map((to) => ({ from: sa.id, to })));
 		for (const r of sa.reads) read.add(r);
 	}
-	subNodes.push(...[...read].map((id) => leaf(id, { sub: "standard" })));
+	subNodes.push(...[...read].map((id) => leaf(id)));
 	subNodes.push(...(subTree?.items ?? []).map((i) => leaf(i.id, { sub: "not read by any profile" })));
 	const subagents: PromptGraph = { key: "subagents", title: "Subagents", nodes: subNodes, edges: subEdges };
 
@@ -302,7 +302,7 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 		const id = hub ? "hub-curation" : (st.ids[0] ?? `step:${fk}:${st.n}`);
 		return {
 			id, title: st.title, host: st.host, marker: markerOf(st.ids), ids: st.ids,
-			...(hub ? { sub: "wolf → hub", note: st.crossing } : st.note ? { note: st.note } : {}),
+			...(hub ? { note: st.crossing } : st.note ? { note: st.note } : {}),
 			...(st.hubMissing ? { hubMissing: true } : {}),
 		};
 	};
@@ -320,8 +320,8 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	}
 
 	const compNodes: GraphNodeDef[] = [
-		{ id: "step:compaction:auto", title: "Automatic compaction", host: "wolfd-pi-durable", marker: "no prompt", ids: [], sub: "context nearly full" },
-		{ id: "step:compaction:manual", title: "Manual compaction", host: "wolfd-pi-durable", marker: "no prompt", ids: [], sub: "the owner asks", note: "Runs the same two prompts as the automatic step." },
+		{ id: "step:compaction:auto", title: "Automatic compaction", host: "wolfd-pi-durable", marker: "no prompt", ids: [] },
+		{ id: "step:compaction:manual", title: "Manual compaction", host: "wolfd-pi-durable", marker: "no prompt", ids: [], note: "Runs the same two prompts as the automatic step." },
 		...["compaction.pi-durable-system", "compaction.pi-durable-instructions"].filter((id) => byId.has(id)).map((id) => leaf(id)),
 	];
 	const compPrompts = compNodes.slice(2).map((n) => n.id);

@@ -139,7 +139,8 @@ describe("prompt graphs", () => {
 		const lonely = sub.nodes.find((n) => n.id === "standard.verify-ui")!;
 		assert.equal(lonely.sub, "not read by any profile");
 		assert.equal(e.filter((x) => x.endsWith(">standard.verify-ui")).length, 0);
-		assert.equal(sub.nodes.find((n) => n.id === "standard.git")!.sub, "standard");
+		assert.equal(sub.nodes.find((n) => n.id === "standard.git")!.sub, undefined, "read standards carry no subtitle");
+		assert.equal(graphOf(graphs(), "system").nodes.find((n) => n.id === "identity")!.sub, undefined);
 	});
 
 	it("draws the flow graphs: steps in order, the wolf-to-hub hop, and the crawl joining at hub curation", () => {

@@ -10,6 +10,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { XIcon } from "lucide-react";
 import { SidebarToggle } from "@/components/sidebar";
 import { PromptGraphCanvas } from "@/components/prompt-graph-view";
+import { PromptReader, ToolsReader } from "@/components/prompt-reader";
 import { buildFlows, buildGraphs, buildTree, chipGroup, EDITED_IN, parsePromptsUrl, PROMPT_TABS, promptsUrlSearch, type PromptsUrlState, HOST_LABEL, hostOf, hubId, standardUsers, treeCardIds, visibleRows, type FlowStep, type TreeNode } from "../src/core/prompt-flows.ts";
 
 interface PromptRow {
@@ -166,7 +167,7 @@ export function PromptsView() {
 		return () => cancelAnimationFrame(t);
 	}, [group, view]);
 
-	const send = async (row: PromptRow, method: "PUT" | "DELETE") => {
+	const send = async (row: PromptRow, method: "PUT" | "DELETE"): Promise<boolean> => {
 		const r = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/prompts/${encodeURIComponent(row.id)}`, {
 			method,
 			headers: { "If-Match": row.etag, ...(method === "PUT" ? { "Content-Type": "application/json" } : {}) },
@@ -174,7 +175,8 @@ export function PromptsView() {
 		});
 		if (!r.ok) {
 			const m = await readError(r);
-			return setErrors((e) => ({ ...e, [row.id]: m }));
+			setErrors((e) => ({ ...e, [row.id]: m }));
+			return false;
 		}
 		const next = (await r.json()) as PromptRow;
 		setRows((rs) => rs.map((x) => (x.id === next.id ? next : x)));
@@ -183,6 +185,7 @@ export function PromptsView() {
 			return rest;
 		});
 		setErrors((e) => ({ ...e, [row.id]: "" }));
+		return true;
 	};
 
 	/** Save wolf.yaml prompts.structuredOutput through the settings PUT (not a prompt override file): a string, false (no guidance) or null (the default). */
@@ -208,6 +211,27 @@ export function PromptsView() {
 	const shown = group ? listed.filter((r) => chipOf(r) === group) : listed;
 	const shownIds = new Set(shown.map((r) => r.id));
 	const byId = new Map<string, PromptRow>([...rows.map((r) => [r.id, r] as [string, PromptRow]), ...(hubRows ?? []).map((r) => [hubId(r.id), r] as [string, PromptRow])]);
+
+	/** The wolf.yaml-backed editor of the structured-output block (shared by the cards and the reader). */
+	const structuredEditor = (row: PromptRow) => (
+						<div className="flex flex-col gap-2" data-testid="structured-output-edit">
+							<p className="text-xs text-muted-foreground" data-testid="structured-output-state">
+								Applies when the wolf restarts. In wolf.yaml now:{" "}
+								{!settings ? "unknown (settings not available)" : settings.value === undefined ? "nothing, so the default guidance is used" : settings.value === false ? "false, so the guidance is removed" : "a custom text"}
+								{settings?.restartNeeded ? " (restart needed)" : ""}. Saved to wolf.yaml prompts.structuredOutput, not to a prompt file.
+							</p>
+							{settings && (
+								<>
+									<textarea className="h-40 w-full rounded border bg-background p-2 font-mono text-xs" value={soDraft ?? (typeof settings.value === "string" ? settings.value : row.text.replace(/^# Structured output\n\n/, ""))} onChange={(e) => setSoDraft(e.target.value)} data-testid="structured-output-text" />
+									<div className="flex gap-2">
+										<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={soDraft === null} onClick={() => void saveStructured(soDraft ?? "")} data-testid="structured-output-save">Save custom text</button>
+										<button className="rounded border px-3 py-1 text-sm" onClick={() => void saveStructured(false)} data-testid="structured-output-remove">Remove the guidance</button>
+										<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={settings.value === undefined} onClick={() => void saveStructured(null)} data-testid="structured-output-default">Use the default</button>
+									</div>
+								</>
+							)}
+						</div>
+	);
 
 	/** One prompt's card: the same editor in every view. `ctx` adds the view-specific lines (edited-in link, used-by). */
 	const card = (row: PromptRow, ctx: { editedIn?: string; usedBy?: string[] } = {}, key = row.id) => {
@@ -237,25 +261,7 @@ export function PromptsView() {
 						{row.editable && row.inlineIdentity && (
 							<p className="text-xs text-destructive" data-testid={`prompt-inline-identity-${row.id}`}>wolf.yaml sets <span className="font-mono">identity: {row.inlineIdentity}</span>, which the running wolf reads instead of this file. An edit here is saved but has no effect until that line is removed.</p>
 						)}
-						{row.id === STRUCTURED && (
-							<div className="flex flex-col gap-2" data-testid="structured-output-edit">
-								<p className="text-xs text-muted-foreground" data-testid="structured-output-state">
-									Applies when the wolf restarts. In wolf.yaml now:{" "}
-									{!settings ? "unknown (settings not available)" : settings.value === undefined ? "nothing, so the default guidance is used" : settings.value === false ? "false, so the guidance is removed" : "a custom text"}
-									{settings?.restartNeeded ? " (restart needed)" : ""}. Saved to wolf.yaml prompts.structuredOutput, not to a prompt file.
-								</p>
-								{settings && (
-									<>
-										<textarea className="h-40 w-full rounded border bg-background p-2 font-mono text-xs" value={soDraft ?? (typeof settings.value === "string" ? settings.value : row.text.replace(/^# Structured output\n\n/, ""))} onChange={(e) => setSoDraft(e.target.value)} data-testid="structured-output-text" />
-										<div className="flex gap-2">
-											<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={soDraft === null} onClick={() => void saveStructured(soDraft ?? "")} data-testid="structured-output-save">Save custom text</button>
-											<button className="rounded border px-3 py-1 text-sm" onClick={() => void saveStructured(false)} data-testid="structured-output-remove">Remove the guidance</button>
-											<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={settings.value === undefined} onClick={() => void saveStructured(null)} data-testid="structured-output-default">Use the default</button>
-										</div>
-									</>
-								)}
-							</div>
-						)}
+						{row.id === STRUCTURED && structuredEditor(row)}
 						{row.editable && row.projectOverride && (
 							<p className="text-xs text-destructive" data-testid={`prompt-project-override-${row.id}`}>This workspace has its own .pi file for it, which wins over an edit made here.</p>
 						)}
@@ -389,33 +395,48 @@ export function PromptsView() {
 	}, [panelOpen, closeGraph, pathname]);
 	const renderPanel = () => {
 		if (!activeGraph || !activeNode) return null;
-		const many = activeNode.ids.length > 3;
 		const panelRows = activeNode.ids.map((id) => byId.get(id)).filter((r): r is PromptRow => !!r);
-		const ctxOf = (r: PromptRow) => (r.id.startsWith("standard.") ? { usedBy: standardUsers(rows, r.id) } : EDITED_IN[r.id] ? { editedIn: EDITED_IN[r.id]! } : {});
+		const close = () => setUrl({ graph: urlState.graph });
+		const openNode = (id: string) => setUrl({ graph: urlState.graph, node: id });
+		const isTools = activeNode.id === "tools";
+		const single = panelRows.length === 1 && !isTools;
+		const closeButton = (
+			<button type="button" className="inline-flex size-7 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label="Close panel" onClick={close} data-testid="prompt-panel-close"><XIcon className="size-4" aria-hidden /></button>
+		);
+		const readerFor = (r: PromptRow, withClose: boolean, withTitle: boolean) => (
+			<PromptReader
+				key={`${activeNode.id}-${r.id}`}
+				row={r}
+				host={hostOf(r.id)}
+				hideHeader={!withTitle}
+				closeButton={withClose ? closeButton : undefined}
+				editedIn={EDITED_IN[r.id] ? { id: EDITED_IN[r.id]!, label: byId.get(EDITED_IN[r.id]!)?.label ?? EDITED_IN[r.id]! } : undefined}
+				onOpenNode={openNode}
+				usedBy={r.id.startsWith("standard.") ? standardUsers(rows, r.id) : undefined}
+				draft={drafts[r.id]}
+				setDraft={(t) => setDrafts((d) => ({ ...d, [r.id]: t }))}
+				clearDraft={() => setDrafts((d) => { const { [r.id]: _gone, ...rest } = d; return rest; })}
+				error={errors[r.id] ?? ""}
+				onSave={() => send(r, "PUT")}
+				onReset={() => send(r, "DELETE")}
+				structuredEditor={r.id === STRUCTURED ? structuredEditor(r) : undefined}
+			/>
+		);
 		return (
-			<aside className="fixed inset-0 z-40 flex min-w-0 flex-col gap-3 overflow-y-auto bg-background p-3 md:static md:z-auto md:max-h-[70vh] md:w-[28rem] md:shrink-0 md:rounded-md md:border" data-testid="prompt-panel" aria-label={`${activeNode.title} prompt`}>
-				<header className="flex items-start gap-2">
-					<div className="min-w-0 flex-1">
-						<h2 className="text-sm font-semibold">{activeNode.title}</h2>
-						<p className="mt-1 flex flex-wrap gap-1.5">
-							<span className={badge}>{HOST_LABEL[activeNode.host]}</span>
-							<span className={badge}>{activeNode.marker}</span>
-						</p>
-					</div>
-					<button type="button" className="inline-flex size-8 shrink-0 items-center justify-center rounded border hover:bg-accent" aria-label="Close panel" onClick={() => setUrl({ graph: urlState.graph })} data-testid="prompt-panel-close"><XIcon className="size-4" aria-hidden /></button>
-				</header>
-				{activeNode.note && <p className="text-xs text-muted-foreground">{activeNode.note}</p>}
-				{activeNode.hubMissing && <p className="text-xs text-muted-foreground" data-testid="flow-hub-missing">Hub not connected, so the sweep prompts cannot be shown{hubNote ? ` (${hubNote})` : ""}. This step runs on the hub with the prompts hubd reports.</p>}
-				{!panelRows.length && !activeNode.hubMissing && <p className="text-xs text-muted-foreground">No prompt runs at this step.</p>}
-				{panelRows.map((r) =>
-					many ? (
-						<details key={r.id} className="rounded-md border">
-							<summary className="cursor-pointer px-2 py-1.5 text-sm">{r.label} <span className="text-xs text-muted-foreground">{r.editable ? "editable" : "read-only"}</span></summary>
-							<div className="p-2">{card(r, ctxOf(r))}</div>
-						</details>
-					) : (
-						card(r, ctxOf(r), `${activeNode.id}-${r.id}`)
-					),
+			<aside className="fixed inset-0 z-40 flex min-w-0 flex-col gap-4 overflow-y-auto bg-background p-4 md:static md:z-auto md:h-[70vh] md:w-1/2 md:shrink-0 md:rounded-md md:border" data-testid="prompt-panel" aria-label={`${activeNode.title} prompt`}>
+				{single ? (
+					readerFor(panelRows[0]!, true, true)
+				) : (
+					<>
+						<header className="flex items-center gap-2">
+							<h2 className="min-w-0 flex-1 text-sm font-semibold">{activeNode.title}</h2>
+							{activeNode.host !== "wolf" && <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">{HOST_LABEL[activeNode.host]}</span>}
+							{closeButton}
+						</header>
+						{activeNode.hubMissing && <p className="text-xs text-muted-foreground" data-testid="flow-hub-missing">Hub not connected, so the sweep prompts cannot be shown{hubNote ? ` (${hubNote})` : ""}.</p>}
+						{!panelRows.length && !activeNode.hubMissing && <p className="text-xs text-muted-foreground">No prompt runs at this step.</p>}
+						{isTools ? <ToolsReader rows={panelRows} /> : panelRows.map((r) => readerFor(r, false, true))}
+					</>
 				)}
 			</aside>
 		);
@@ -489,7 +510,7 @@ export function PromptsView() {
 				<SidebarToggle />
 				<h1 className="text-lg font-semibold">Prompts</h1>
 			</header>
-			{!SPAWN_GROUPS.has(group) && <p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>}
+			{!graphMode && !SPAWN_GROUPS.has(group) && <p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>}
 			<label className="flex items-center gap-2 text-sm">
 				Wolf
 				<select className="rounded border bg-background px-2 py-1" value={wolf} onChange={(e) => setWolf(e.target.value)} data-testid="prompts-wolf">
@@ -531,7 +552,7 @@ export function PromptsView() {
 			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
 			{activeGraph ? (
 				<div className="flex min-w-0 flex-col gap-3 md:flex-row" data-testid={`prompt-graph-${activeGraph.key}`}>
-					<div className="h-[60vh] min-h-[320px] min-w-0 flex-1 rounded-md border">
+					<div className="h-[70vh] min-h-[320px] min-w-0 flex-1 rounded-md border">
 						<PromptGraphCanvas graph={activeGraph} selected={activeNode?.id ?? null} onSelect={(id) => setUrl({ graph: activeGraph.key, node: id })} />
 					</div>
 					{renderPanel()}

@@ -37,7 +37,17 @@ async function main(): Promise<void> {
     if (config.serve.port === undefined) socket = config.serve.socket;
   }
   // Restart = a graceful close, then a non-zero exit: workerd's supervisor restarts on any exit, systemd's Restart=on-failure only on non-zero.
-  const restart = isSupervised() ? () => void wolf.close().finally(() => process.exit(75)) : undefined;
+  // A close that hangs is cut off after 10s: the supervisor must still get its exit.
+  const restart = isSupervised()
+    ? () => {
+        const force = setTimeout(() => {
+          console.error("[wolfd] close did not finish in 10s; exiting 75 anyway");
+          process.exit(75);
+        }, 10_000);
+        force.unref();
+        void wolf.close().finally(() => process.exit(75));
+      }
+    : undefined;
   const wolf = await startWolf({ configPath: values.config, port: socket ? undefined : port, socket, log: (l) => console.error(`[wolfd] ${l}`), ...(restart ? { restart } : {}) });
   console.log(`wolfd: ${wolf.config.identity.name} serving ${wolf.url}`);
   let stopping = false;

@@ -195,20 +195,20 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** `ifMatch`: the etag the caller loaded; a stale one is a ProtocolError `conflict`. */
-  async putPrompt(wolf: string, id: string, text: string, ifMatch?: string): Promise<PromptView> {
-    return (await this.json("putPrompt", { name: wolf, id }, ROUTES.putPrompt.response.schema, { text }, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as PromptView;
+  async putPrompt(wolf: string, id: string, text: string, ifMatch: string): Promise<PromptView> {
+    return (await this.json("putPrompt", { name: wolf, id }, ROUTES.putPrompt.response.schema, { text }, wolf, "", { "If-Match": ifMatch })) as PromptView;
   }
 
-  async resetPrompt(wolf: string, id: string, ifMatch?: string): Promise<PromptView> {
-    return (await this.json("resetPrompt", { name: wolf, id }, ROUTES.resetPrompt.response.schema, undefined, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as PromptView;
+  async resetPrompt(wolf: string, id: string, ifMatch: string): Promise<PromptView> {
+    return (await this.json("resetPrompt", { name: wolf, id }, ROUTES.resetPrompt.response.schema, undefined, wolf, "", { "If-Match": ifMatch })) as PromptView;
   }
 
   async getWolfSettings(wolf: string): Promise<WolfSettingsView> {
     return (await this.json("getWolfSettings", { name: wolf }, ROUTES.getWolfSettings.response.schema, undefined, wolf)) as WolfSettingsView;
   }
 
-  async putWolfSettings(wolf: string, set: Record<string, unknown>, ifMatch?: string): Promise<WolfSettingsView> {
-    return (await this.json("putWolfSettings", { name: wolf }, ROUTES.putWolfSettings.response.schema, { set }, wolf, "", ifMatch ? { "If-Match": ifMatch } : {})) as WolfSettingsView;
+  async putWolfSettings(wolf: string, set: Record<string, unknown>, ifMatch: string): Promise<WolfSettingsView> {
+    return (await this.json("putWolfSettings", { name: wolf }, ROUTES.putWolfSettings.response.schema, { set }, wolf, "", { "If-Match": ifMatch })) as WolfSettingsView;
   }
 
   async revealWolfSetting(wolf: string, source: "env" | "config", name: string): Promise<RevealResponse> {

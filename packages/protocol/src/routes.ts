@@ -235,11 +235,11 @@ export const ROUTES = {
   listPrompts: { method: "GET", path: "/v1/wolves/:name/prompts", response: { kind: "json", schema: ListPromptsResponseSchema }, status: [200], error: err },
   getPrompt: { method: "GET", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
   /**
-   * Write the wolf's override (atomic). Header `If-Match: <etag>` makes it conditional: a stale etag is 409 `conflict`. 403 `forbidden` for a
+   * Write the wolf's override (atomic). Header `If-Match: <etag>` is required (missing: 400 `invalid_request`): a stale etag is 409 `conflict`. 403 `forbidden` for a
    * prompt that is not wolf-editable, 413 `too_large` over 64 KB, 400 `invalid_request` for a bad body. Answers the new view.
    */
   putPrompt: { method: "PUT", path: "/v1/wolves/:name/prompts/:id", body: PutPromptBodySchema, response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
-  /** Remove the override (reset to the repo default); same `If-Match` / 403 / 409 rules. Idempotent. Answers the default view. */
+  /** Remove the override (reset to the repo default); same required `If-Match` / 403 / 409 rules. Idempotent. Answers the default view. */
   resetPrompt: { method: "DELETE", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
   /**
    * The wolf's settings: wolf.yaml as parsed now with secrets masked (`{set}`), the env var NAMES it reads (+ whether set), the editable keys,
@@ -247,8 +247,8 @@ export const ROUTES = {
    */
   getWolfSettings: { method: "GET", path: "/v1/wolves/:name/settings", response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },
   /**
-   * Edit wolf.yaml (validated against the wolf.yaml schema, atomic). Body `{set: {"<dotted key>": value|null}}`; header `If-Match: <etag>`
-   * (stale: 409 `conflict`). 400 `invalid_request` for an unknown/non-editable key or a value the schema refuses, 413 `too_large`.
+   * Edit wolf.yaml (validated against the wolf.yaml schema, atomic). Body `{set: {"<dotted key>": value|null}}`; header `If-Match: <etag>` is required
+   * (missing: 400 `invalid_request`; stale: 409 `conflict`). 400 `invalid_request` for an unknown/non-editable key or a value the schema refuses, 413 `too_large`.
    * Applies on restart: the answer has `restartNeeded: true`.
    */
   putWolfSettings: { method: "PUT", path: "/v1/wolves/:name/settings", body: PutWolfSettingsBodySchema, response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },

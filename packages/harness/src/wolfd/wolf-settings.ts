@@ -1,6 +1,8 @@
 /** The per-wolf settings store behind /v1/wolves/:name/settings: reads wolf.yaml, validates and atomically writes edits, names env vars. */
-import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { atomicWrite, backupFile } from "@wolfpack/agents";
 import { WolfFileSchema } from "@wolfpack/engine";
 import { isMaskedConfigKey, isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
 import { isMap, parse as parseYaml, parseDocument } from "yaml";
@@ -49,7 +51,7 @@ const etagOf = (text: string) => createHash("sha256").update(text).digest("hex")
 
 export class WolfSettingsStore {
   private readonly bootEtag: string;
-  constructor(private readonly file: string, private readonly env: NodeJS.ProcessEnv = process.env) {
+  constructor(private readonly file: string, private readonly env: NodeJS.ProcessEnv = process.env, private readonly wolfHome: string = dirname(file)) {
     this.bootEtag = etagOf(this.text());
   }
   private text(): string {
@@ -60,7 +62,12 @@ export class WolfSettingsStore {
     }
   }
   private doc(): Record<string, unknown> {
-    const d = parseYaml(this.text());
+    let d: unknown;
+    try {
+      d = parseYaml(this.text());
+    } catch {
+      return {}; // a syntax error: the view still answers (with its etag); a write is refused
+    }
     return d && typeof d === "object" && !Array.isArray(d) ? (d as Record<string, unknown>) : {};
   }
 
@@ -90,7 +97,7 @@ export class WolfSettingsStore {
     }
     let cur: unknown = this.doc();
     for (const part of name.split(".")) {
-      if (!cur || typeof cur !== "object" || !(part in cur)) throw new SettingsError("not_found", `no setting ${name}`);
+      if (!cur || typeof cur !== "object" || !Object.hasOwn(cur, part)) throw new SettingsError("not_found", `no setting ${name}`);
       cur = (cur as Record<string, unknown>)[part];
     }
     if (cur === null || typeof cur === "object") throw new SettingsError("not_found", `${name} is not a single value`);
@@ -100,9 +107,11 @@ export class WolfSettingsStore {
 
   /** Apply `set` (dotted key -> value; null removes) after validating; atomic temp file + rename. */
   write(set: Record<string, unknown>, ifMatch: string | undefined): void {
+    if (ifMatch === undefined) throw new SettingsError("invalid_request", "If-Match is required: send the etag from the settings you loaded");
     const text = this.text();
-    if (ifMatch !== undefined && ifMatch !== etagOf(text)) throw new SettingsError("conflict", "wolf.yaml changed since you loaded it");
+    if (ifMatch !== etagOf(text)) throw new SettingsError("conflict", "wolf.yaml changed since you loaded it");
     const doc = parseDocument(text);
+    if (doc.errors.length > 0) throw new SettingsError("invalid_request", "wolf.yaml has a syntax error; fix it by hand");
     if (doc.contents === null || !isMap(doc.contents)) throw new SettingsError("invalid_request", "wolf.yaml is not a mapping");
     for (const [key, value] of Object.entries(set)) {
       if (!EDITABLE_KEYS.includes(key)) throw new SettingsError("invalid_request", `"${key}" is not an editable setting`);
@@ -120,13 +129,7 @@ export class WolfSettingsStore {
     if (!parsed.success) {
       throw new SettingsError("invalid_request", parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; "));
     }
-    const tmp = `${this.file}.${randomBytes(4).toString("hex")}.tmp`;
-    try {
-      writeFileSync(tmp, next);
-      renameSync(tmp, this.file);
-    } catch (e) {
-      rmSync(tmp, { force: true });
-      throw e;
-    }
+    backupFile(this.file, join(this.wolfHome, "agent", ".backups", "config"), "wolf", "yaml");
+    atomicWrite(this.file, next);
   }
 }

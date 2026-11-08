@@ -1,5 +1,5 @@
 /** /v1/wolves/:name/settings: masked read, env names, reveal, validated atomic write, restart. */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -66,6 +66,8 @@ describe("wolfd /settings", () => {
     // A name the masked read does not mask is already in the GET body: no reveal.
     expect((await send(`${url}/reveal`, "POST", { source: "config", name: "subagents.maxRunning" })).status).toBe(404);
     expect((await send(`${url}/reveal`, "POST", { source: "env", name: "PATH" })).status).toBe(404);
+    // Inherited properties are not settings.
+    expect((await send(`${url}/reveal`, "POST", { source: "config", name: "constructor" })).status).toBe(404);
   });
 
   it("writes a validated edit atomically, says a restart is needed and keeps comments out of the way of other keys", async () => {
@@ -78,7 +80,7 @@ describe("wolfd /settings", () => {
     expect(after.config.subagents.maxRunning).toBe(5);
     expect(after.config.compaction).toBeUndefined();
     expect(readFileSync(configFile, "utf8")).toContain("maxRunning: 5");
-    expect(readdirSync(wolfHome).filter((f) => f !== "wolf.yaml")).toEqual([]);
+    expect(readdirSync(wolfHome).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
   it("answers 400 for a bad value or a non-editable key, 409 for a stale etag, and leaves the file untouched", async () => {
@@ -90,6 +92,51 @@ describe("wolfd /settings", () => {
     expect((await send(url, "PUT", { set: { "subagents.maxRunning": 4 } }, { "If-Match": "stale" })).status).toBe(409);
     expect(readFileSync(configFile, "utf8")).toBe(YAML);
     expect(existsSync(configFile + ".tmp")).toBe(false);
+  });
+
+  it("requires If-Match on a write (400 without it) and leaves the file untouched", async () => {
+    const { url, configFile } = await boot();
+    const res = await send(url, "PUT", { set: { "subagents.maxRunning": 4 } });
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("invalid_request");
+    expect(readFileSync(configFile, "utf8")).toBe(YAML);
+  });
+
+  it("answers 400 for a wolf.yaml with a syntax error and does not echo its content", async () => {
+    const { url, configFile } = await boot();
+    const v = await (await send(url, "GET")).json();
+    writeFileSync(configFile, "name: [unclosed\nsecret-line: hunter2: x\n");
+    const res = await send(url, "PUT", { set: { "subagents.maxRunning": 4 } }, { "If-Match": (await (await send(url, "GET")).json()).etag });
+    expect(v.etag).toBeDefined();
+    expect(res.status).toBe(400);
+    expect(await res.text()).not.toContain("hunter2");
+  });
+
+  it("backs up wolf.yaml before each write and keeps the newest 10", async () => {
+    const { url, wolfHome } = await boot();
+    for (let i = 1; i <= 12; i++) {
+      const v = await (await send(url, "GET")).json();
+      expect((await send(url, "PUT", { set: { "subagents.maxRunning": i } }, { "If-Match": v.etag })).status).toBe(200);
+    }
+    const dir = join(wolfHome, "agent", ".backups", "config");
+    const files = readdirSync(dir).sort();
+    expect(files).toHaveLength(10);
+    expect(files.every((f) => /^wolf\.\d{17,}\.yaml$/.test(f))).toBe(true);
+    expect(readFileSync(join(dir, files[0]!), "utf8")).toContain("maxRunning: 2");
+    expect(readFileSync(join(dir, files[9]!), "utf8")).toContain("maxRunning: 11");
+  });
+
+  it("keeps the file mode and writes through a symlink instead of replacing it", async () => {
+    const { url, configFile, wolfHome } = await boot();
+    const real = join(wolfHome, "real.yaml");
+    renameSync(configFile, real);
+    chmodSync(real, 0o640);
+    symlinkSync(real, configFile);
+    const v = await (await send(url, "GET")).json();
+    expect((await send(url, "PUT", { set: { "subagents.maxRunning": 6 } }, { "If-Match": v.etag })).status).toBe(200);
+    expect(lstatSync(configFile).isSymbolicLink()).toBe(true);
+    expect(statSync(real).mode & 0o777).toBe(0o640);
+    expect(readFileSync(real, "utf8")).toContain("maxRunning: 6");
   });
 
   it("refuses restart when nothing supervises wolfd, and restarts when something does", async () => {

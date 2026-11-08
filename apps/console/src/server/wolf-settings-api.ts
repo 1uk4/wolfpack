@@ -2,7 +2,7 @@
  * THE WOLF SETTINGS API: Response-returning handlers over a ConsoleClient for the Settings page (view, save with If-Match, reveal,
  * restart). Same shape as prompts-api.ts: the request-scoped client carries the browser's own device token (never the hub token),
  * and in relay mode the hub tunnels the call to the wolf's host. Errors keep the protocol's status per `code` (400, 409, 429...) and
- * pass `details` through (a 429 carries `retryAfterSeconds`, possibly as a string).
+ * pass `details` through (a 429 carries `retryAfterSeconds`, a number).
  */
 import type { ConsoleClient } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
@@ -26,7 +26,7 @@ const json = (body: unknown, status = 200): Response => Response.json(body, { st
 function failure(err: unknown): Response {
 	if (err instanceof Error && err.name === "NotFoundError") return json({ error: err.message, code: "not_found" }, 404);
 	if (err instanceof Error && err.name === "ProtocolError") {
-		const e = err as Error & { code?: string; hubAuth?: boolean; details?: Record<string, string> };
+		const e = err as Error & { code?: string; hubAuth?: boolean; details?: Record<string, string | number> };
 		const code = e.code ?? "engine_error";
 		return Response.json(
 			{ error: err.message, code, ...(e.details ? { details: e.details } : {}) },
@@ -53,7 +53,9 @@ export function createWolfSettingsApi(source: ClientSource) {
 			const body = (await req.json().catch(() => null)) as { set?: unknown } | null;
 			if (!body || !body.set || typeof body.set !== "object" || Array.isArray(body.set)) return json({ error: "body must be {set: {key: value|null}}", code: "invalid_request" }, 400);
 			const set = body.set as Record<string, unknown>;
-			return run(async (c) => (c.putWolfSettings ? json(await c.putWolfSettings(wolf, set, req.headers.get("if-match") ?? undefined)) : unsupported()));
+			const ifMatch = req.headers.get("if-match");
+			if (!ifMatch) return json({ error: "If-Match is required: send the etag of the settings you loaded", code: "invalid_request" }, 400);
+			return run(async (c) => (c.putWolfSettings ? json(await c.putWolfSettings(wolf, set, ifMatch)) : unsupported()));
 		},
 		async reveal(wolf: string, req: Request): Promise<Response> {
 			const body = (await req.json().catch(() => null)) as { source?: unknown; name?: unknown } | null;

@@ -50,9 +50,15 @@ export function createPromptsApi(source: ClientSource) {
 			const body = (await req.json().catch(() => null)) as { text?: unknown } | null;
 			if (!body || typeof body.text !== "string") return json({ error: "body must be {text: string}", code: "invalid_request" }, 400);
 			const text = body.text;
-			return run(async (c) => (c.putPrompt ? json(await c.putPrompt(wolf, id, text, req.headers.get("if-match") ?? undefined)) : unsupported()));
+			const ifMatch = req.headers.get("if-match");
+			if (!ifMatch) return json({ error: "If-Match is required: send the etag of the prompt you loaded", code: "invalid_request" }, 400);
+			return run(async (c) => (c.putPrompt ? json(await c.putPrompt(wolf, id, text, ifMatch)) : unsupported()));
 		},
-		reset: (wolf: string, id: string, req: Request) => run(async (c) => (c.resetPrompt ? json(await c.resetPrompt(wolf, id, req.headers.get("if-match") ?? undefined)) : unsupported())),
+		reset: (wolf: string, id: string, req: Request) => {
+			const ifMatch = req.headers.get("if-match");
+			if (!ifMatch) return Promise.resolve(json({ error: "If-Match is required: send the etag of the prompt you loaded", code: "invalid_request" }, 400));
+			return run(async (c) => (c.resetPrompt ? json(await c.resetPrompt(wolf, id, ifMatch)) : unsupported()));
+		},
 	};
 }
 

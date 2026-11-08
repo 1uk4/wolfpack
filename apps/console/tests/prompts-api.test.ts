@@ -15,11 +15,18 @@ describe("prompts API", () => {
 		assert.deepEqual(calls, [["hal", "orchestrator-rules", "t", "e1"]]);
 	});
 	it("maps a stale etag to 409 and an oversized text to 413 with the protocol code", async () => {
-		const fail = (code: "conflict" | "too_large") => createPromptsApi(stub({ resetPrompt: async () => { throw new ProtocolError(code, "nope", false); } })).reset("hal", "p", new Request("http://c/x", { method: "DELETE" }));
+		const fail = (code: "conflict" | "too_large") => createPromptsApi(stub({ resetPrompt: async () => { throw new ProtocolError(code, "nope", false); } })).reset("hal", "p", new Request("http://c/x", { method: "DELETE", headers: { "If-Match": "e1" } }));
 		const stale = await fail("conflict");
 		assert.equal(stale.status, 409);
 		assert.equal((await stale.json()).code, "conflict");
 		assert.equal((await fail("too_large")).status, 413);
+	});
+	it("refuses a save or reset without If-Match (400) before reaching the client", async () => {
+		const api = createPromptsApi(stub({ putPrompt: async () => { throw new Error("must not be called"); }, resetPrompt: async () => { throw new Error("must not be called"); } }));
+		const saved = await api.save("hal", "p", new Request("http://c/x", { method: "PUT", body: JSON.stringify({ text: "t" }) }));
+		assert.equal(saved.status, 400);
+		assert.equal((await saved.json()).code, "invalid_request");
+		assert.equal((await api.reset("hal", "p", new Request("http://c/x", { method: "DELETE" }))).status, 400);
 	});
 	it("answers 503 when the client has no prompts support (mock mode)", async () => {
 		assert.equal((await createPromptsApi(stub({})).list("hal")).status, 503);

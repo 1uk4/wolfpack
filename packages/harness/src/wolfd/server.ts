@@ -510,8 +510,8 @@ export class WolfServer {
   // ------------------------------------------------------------- http
 
   /**
-   * The prompt routes (listPrompts, getPrompt, putPrompt, resetPrompt): this wolf's prompt registry. PUT/DELETE take `If-Match: <etag>`
-   * (a stale one is 409 `conflict`); only wolf-editable prompts are writable (403 `forbidden`); text over the cap is 413 `too_large`.
+   * The prompt routes (listPrompts, getPrompt, putPrompt, resetPrompt): this wolf's prompt registry. PUT/DELETE require `If-Match: <etag>`
+   * (missing: 400 `invalid_request`; a stale one is 409 `conflict`); only wolf-editable prompts are writable (403 `forbidden`); text over the cap is 413 `too_large`.
    */
   private async handlePrompt(req: IncomingMessage, res: ServerResponse, name: string, id: string | undefined): Promise<void> {
     this.checkWolf(name);
@@ -550,6 +550,7 @@ export class WolfServer {
     if (!promptDef(id)) throw new HttpError("not_found", `unknown prompt "${id}"`);
     if (req.method === "GET") return this.json(res, 200, view(id));
     const ifMatch = typeof req.headers["if-match"] === "string" ? req.headers["if-match"].replace(/^"|"$/g, "") : undefined;
+    if (ifMatch === undefined) throw new HttpError("invalid_request", "If-Match is required: send the etag of the prompt you loaded");
     try {
       if (req.method === "DELETE") resetPromptOverride(home, id, ifMatch);
       else {
@@ -583,7 +584,7 @@ export class WolfServer {
   private async handleSettings(req: IncomingMessage, res: ServerResponse, kind: "get" | "put" | "reveal" | "restart", name: string): Promise<void> {
     this.checkWolf(name);
     if (!this.opts.configFile) throw new HttpError("not_found", "this wolf has no wolf.yaml to configure");
-    const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env));
+    const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env, this.opts.wolfHome));
     const wait = () => {
       const min = this.opts.restartMinUptimeMs ?? 60_000;
       const up = this.opts.uptimeMs ? this.opts.uptimeMs() : process.uptime() * 1000;

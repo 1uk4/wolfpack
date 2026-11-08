@@ -16,14 +16,20 @@ describe("wolf settings API", () => {
 		assert.deepEqual(calls, [["hal", { "subagents.maxRunning": 3 }, "e1"]]);
 	});
 	it("passes 400, 409 and 429 (with retryAfterSeconds) through with the protocol code", async () => {
-		const fail = (code: "invalid_request" | "conflict" | "rate_limited", details?: Record<string, string>) =>
-			createWolfSettingsApi(stub({ putWolfSettings: async () => { throw new ProtocolError(code, "nope", false, details); } })).save("hal", put({ set: {} }));
+		const fail = (code: "invalid_request" | "conflict" | "rate_limited", details?: Record<string, string | number>) =>
+			createWolfSettingsApi(stub({ putWolfSettings: async () => { throw new ProtocolError(code, "nope", false, details); } })).save("hal", put({ set: {} }, "e1"));
 		const bad = await fail("invalid_request");
 		assert.equal(bad.status, 400);
 		assert.equal((await fail("conflict")).status, 409);
-		const slow = await fail("rate_limited", { retryAfterSeconds: "42" });
+		const slow = await fail("rate_limited", { retryAfterSeconds: 42 });
 		assert.equal(slow.status, 429);
-		assert.deepEqual((await slow.json()).details, { retryAfterSeconds: "42" });
+		assert.deepEqual((await slow.json()).details, { retryAfterSeconds: 42 });
+	});
+	it("refuses a save without If-Match (400) before reaching the client", async () => {
+		const api = createWolfSettingsApi(stub({ putWolfSettings: async () => { throw new Error("must not be called"); } }));
+		const res = await api.save("hal", put({ set: { "subagents.maxRunning": 3 } }));
+		assert.equal(res.status, 400);
+		assert.equal((await res.json()).code, "invalid_request");
 	});
 	it("reveal and restart go to the client for the named wolf", async () => {
 		const calls: unknown[][] = [];

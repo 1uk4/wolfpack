@@ -3,7 +3,7 @@
  * (GET /v1/wolves/:name/prompts, tunnelled to remote hosts by the hubd relay) it collects what each answers, plus the compaction
  * prompts and where they run. Every call goes through the request-scoped client (getConsoleClient), so it carries the browser's own
  * device token; WOLFPACK_HUB_TOKEN is never used. Wolves are fetched in parallel, each under a timeout; one that fails, is offline or
- * times out carries `error` and the response still succeeds. A per-wolf `config` field is reserved for wolfd's /settings (not built yet).
+ * times out carries `error` and the response still succeeds.
  */
 import type { ConsoleClient, HubSettings, PromptView, WolfSettingsView } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";

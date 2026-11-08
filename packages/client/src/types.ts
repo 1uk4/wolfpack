@@ -123,14 +123,14 @@ export interface ConsoleClient {
   skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
   /** The wolf's prompt registry with effective text, source, etag and editable flag. Optional: the mock has none. */
   listPrompts?(wolf: string): Promise<PromptView[]>;
-  /** Write the wolf's override of an editable prompt. `ifMatch` = the etag loaded; a stale one rejects ProtocolError `conflict`; non-editable `forbidden`; over 64 KB `too_large`. */
-  putPrompt?(wolf: string, id: string, text: string, ifMatch?: string): Promise<PromptView>;
+  /** Write the wolf's override of an editable prompt. `ifMatch` (required) = the etag loaded; a stale one rejects ProtocolError `conflict`; non-editable `forbidden`; over 64 KB `too_large`. */
+  putPrompt?(wolf: string, id: string, text: string, ifMatch: string): Promise<PromptView>;
   /** Remove the override (reset to the repo default). Errors as `putPrompt`. */
-  resetPrompt?(wolf: string, id: string, ifMatch?: string): Promise<PromptView>;
+  resetPrompt?(wolf: string, id: string, ifMatch: string): Promise<PromptView>;
   /** The wolf's settings: wolf.yaml (secrets masked), env var names, editable keys, restart state. Never a secret value. Optional: the mock has none. */
   getWolfSettings?(wolf: string): Promise<WolfSettingsView>;
   /** Edit wolf.yaml (`set`: dotted key -> value|null). `ifMatch` = the etag loaded; stale: ProtocolError `conflict`; bad value / key: `invalid_request`. Applies on restart. */
-  putWolfSettings?(wolf: string, set: Record<string, unknown>, ifMatch?: string): Promise<WolfSettingsView>;
+  putWolfSettings?(wolf: string, set: Record<string, unknown>, ifMatch: string): Promise<WolfSettingsView>;
   /** Reveal ONE secret: an env var listed in the view or a wolf.yaml key. */
   revealWolfSetting?(wolf: string, source: "env" | "config", name: string): Promise<RevealResponse>;
   /** Start the work-creation flow on the wolf's home thread with the wolf's own resolved prompts. */

@@ -24,7 +24,20 @@ async function boot(extra: Record<string, unknown> = {}) {
 const send = (url: string, method: string, body?: unknown, headers: Record<string, string> = {}) =>
   fetch(url, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
+/** The current etag of a prompt: what a client sends as If-Match. */
+const etagOf = async (url: string, id: string): Promise<{ "If-Match": string }> => ({ "If-Match": (await (await send(`${url}/${id}`, "GET")).json()).etag });
+
 describe("wolfd /prompts", () => {
+  it("requires If-Match on PUT and DELETE (400) and changes nothing without it", async () => {
+    const { url, wolfHome } = await boot();
+    for (const [method, body] of [["PUT", { text: "mine" }], ["DELETE", undefined]] as const) {
+      const res = await send(`${url}/orchestrator-rules`, method, body);
+      expect(res.status, method).toBe(400);
+      expect((await res.json()).code).toBe("invalid_request");
+    }
+    expect(existsSync(join(wolfHome, "agent", "prompts"))).toBe(false);
+  });
+
   it("lists the registry with the repo default, then serves an override, then resets it", async () => {
     const { url } = await boot();
     const listed = await (await send(url, "GET")).json();
@@ -39,14 +52,14 @@ describe("wolfd /prompts", () => {
     expect(put.status).toBe(200);
     expect(await put.json()).toMatchObject({ source: "override", text: "mine" });
 
-    const del = await send(`${url}/orchestrator-rules`, "DELETE");
+    const del = await send(`${url}/orchestrator-rules`, "DELETE", undefined, await etagOf(url, "orchestrator-rules"));
     expect(await del.json()).toMatchObject({ source: "default", etag: rules.etag });
   });
 
   it("answers 409 for a stale etag and keeps the current text", async () => {
     const { url } = await boot();
     const first = await (await send(`${url}/orchestrator-rules`, "GET")).json();
-    await send(`${url}/orchestrator-rules`, "PUT", { text: "one" });
+    await send(`${url}/orchestrator-rules`, "PUT", { text: "one" }, { "If-Match": first.etag });
     const stale = await send(`${url}/orchestrator-rules`, "PUT", { text: "two" }, { "If-Match": first.etag });
     expect(stale.status).toBe(409);
     expect((await (await send(`${url}/orchestrator-rules`, "GET")).json()).text).toBe("one");
@@ -54,10 +67,10 @@ describe("wolfd /prompts", () => {
 
   it("answers 413 over the size cap, 404 for an unknown prompt, and writes atomically", async () => {
     const { url, wolfHome } = await boot();
-    expect((await send(`${url}/orchestrator-rules`, "PUT", { text: "x".repeat(64 * 1024 + 1) })).status).toBe(413);
-    expect((await send(`${url}/nope`, "PUT", { text: "x" })).status).toBe(404);
+    expect((await send(`${url}/orchestrator-rules`, "PUT", { text: "x".repeat(64 * 1024 + 1) }, await etagOf(url, "orchestrator-rules"))).status).toBe(413);
+    expect((await send(`${url}/nope`, "PUT", { text: "x" }, { "If-Match": "any" })).status).toBe(404);
     expect(existsSync(join(wolfHome, "agent", "prompts"))).toBe(false);
-    await send(`${url}/orchestrator-rules`, "PUT", { text: "ok" });
+    await send(`${url}/orchestrator-rules`, "PUT", { text: "ok" }, await etagOf(url, "orchestrator-rules"));
     expect(readdirSync(join(wolfHome, "agent", "prompts"))).toEqual(["orchestrator-rules.md"]);
   });
 
@@ -98,12 +111,12 @@ describe("wolfd /prompts", () => {
     expect(worker).toMatchObject({ projectOverride: false });
 
     const good = "---\nname: worker\ndescription: mine\n---\nbody";
-    expect((await send(`${url}/agent.worker`, "PUT", { text: good })).status).toBe(200);
-    const bad = await send(`${url}/agent.worker`, "PUT", { text: "---\nname: nope\n---\nx" });
+    expect((await send(`${url}/agent.worker`, "PUT", { text: good }, await etagOf(url, "agent.worker"))).status).toBe(200);
+    const bad = await send(`${url}/agent.worker`, "PUT", { text: "---\nname: nope\n---\nx" }, await etagOf(url, "agent.worker"));
     expect(bad.status).toBe(400);
     expect((await bad.json()).message).toContain('frontmatter name must be "worker"');
     expect(readFileSync(join(wolfHome, "agent", "agents", "worker.md"), "utf8")).toBe(good);
-    expect((await send(`${url}/agent.worker`, "DELETE")).status).toBe(200);
+    expect((await send(`${url}/agent.worker`, "DELETE", undefined, await etagOf(url, "agent.worker"))).status).toBe(200);
     expect(existsSync(join(wolfHome, "agent", "agents", "worker.md"))).toBe(false);
     expect(readdirSync(join(wolfHome, "agent", ".backups", "agents"))).toHaveLength(1);
   });
@@ -117,9 +130,9 @@ describe("wolfd /prompts", () => {
     expect(got.inlineIdentity).toBeUndefined();
     expect((await send(`${url}/identity`, "PUT", { text: "I am w2." }, { "If-Match": got.etag })).status).toBe(200);
     expect(readFileSync(join(wolfHome, "agent", "AGENTS.md"), "utf8")).toBe("I am w2.");
-    const del = await send(`${url}/identity`, "DELETE");
+    const del = await send(`${url}/identity`, "DELETE", undefined, await etagOf(url, "identity"));
     expect(await del.json()).toMatchObject({ text: "I am w." });
-    expect(readdirSync(join(wolfHome, "agent", ".backups", "identity"))).toHaveLength(2);
+    expect(readdirSync(join(wolfHome, "agent", ".backups", "identity")).sort()).toHaveLength(3); // two timestamped backups and the pristine original
 
     const other = await boot({ identityFile: "/elsewhere/ME.md" });
     expect(await (await send(`${other.url}/identity`, "GET")).json()).toMatchObject({ inlineIdentity: "/elsewhere/ME.md" });

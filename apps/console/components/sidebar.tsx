@@ -1042,19 +1042,6 @@ export function SessionsSidebar() {
 						KB activity
 					</Link>
 					<Link
-						href="/new-feature"
-						onClick={closeList}
-						data-testid="nav-new-feature"
-						aria-current={pathname === "/new-feature" ? "page" : undefined}
-						className={cn(
-							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
-							pathname === "/new-feature" ? "bg-accent text-foreground" : "text-muted-foreground",
-						)}
-					>
-						<PlusIcon className="size-3" />
-						New feature
-					</Link>
-					<Link
 						href="/prompts"
 						onClick={closeList}
 						data-testid="nav-prompts"

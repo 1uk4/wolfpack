@@ -22,7 +22,6 @@ import {
   AnswerCardBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
-  NewFeatureBodySchema,
   GraduationConfirmBodySchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
@@ -50,7 +49,6 @@ import {
 import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { listSubscribedDomains } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
 import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
@@ -61,7 +59,7 @@ import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { HttpError } from "./http-error.js";
-import { newWorkPrompt, PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
+import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import type { PromptBlock } from "./context.js";
 import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
@@ -682,17 +680,6 @@ export class WolfServer {
         const status = this.homeCreated ? 200 : 201;
         this.homeCreated = true;
         return this.json(res, status, await this.withWorkspace(this.home.threadSummary()));
-      }
-      case "newFeature": {
-        this.checkWolf(params.name);
-        const body = NewFeatureBodySchema.safeParse((await readJson(req)) ?? {});
-        if (!body.success) throw new HttpError("invalid_request", "body must be {idea?: string}");
-        // Resolved here, on the wolf's host: its overrides win over the repo defaults.
-        const domains = this.opts.kbRoots ? listSubscribedDomains(this.opts.kbRoots.kbBase) : [];
-        const idea = body.data.idea?.trim();
-        const text = newWorkPrompt(domains, this.opts.wolfHome) + (idea ? `\n\nThe idea: ${idea}` : "");
-        const ack = await this.home.submit(text, "reject", []);
-        return this.json(res, 200, { ...ack, threadId: this.home.summary.id });
       }
       case "getThreadSettings":
         return this.json(res, 200, this.settingsResponse(this.checkThread(params.id)));

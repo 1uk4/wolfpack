@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView, HubSettings, WolfSettingsView, RevealResponse, RestartResponse, NewFeatureResponse } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView, HubSettings, WolfSettingsView, RevealResponse, RestartResponse } from "@wolfpack/protocol";
 export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
@@ -134,7 +134,6 @@ export interface ConsoleClient {
   /** Reveal ONE secret: an env var listed in the view or a wolf.yaml key. */
   revealWolfSetting?(wolf: string, source: "env" | "config", name: string): Promise<RevealResponse>;
   /** Start the work-creation flow on the wolf's home thread with the wolf's own resolved prompts. */
-  newFeature?(wolf: string, idea?: string): Promise<NewFeatureResponse>;
   /** Restart the wolf's wolfd. ProtocolError `conflict` when nothing supervises it. */
   restartWolf?(wolf: string): Promise<RestartResponse>;
   /** The thread's composer settings (model tier, auto-ship) and the model each tier resolves to. Optional: the mock keeps them in memory. */

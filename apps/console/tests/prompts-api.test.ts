@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ProtocolError, type ConsoleClient } from "@wolfpack/client";
+import { HttpConsoleClient, ProtocolError, type ConsoleClient } from "@wolfpack/client";
 import { createPromptsApi } from "../src/server/prompts-api.ts";
 
 const view = { id: "orchestrator-rules", group: "Orchestrator", label: "Orchestrator rules", editable: true, text: "t", source: "override", etag: "e2" };
@@ -23,5 +23,14 @@ describe("prompts API", () => {
 	});
 	it("answers 503 when the client has no prompts support (mock mode)", async () => {
 		assert.equal((await createPromptsApi(stub({})).list("hal")).status, 503);
+	});
+	it("list carries wolfd's applies and projectOverride through the real client parse to the browser", async () => {
+		const row = { ...view, id: "agent.scout", group: "Helper profiles", kind: "editable", scope: "wolf", store: "agents", name: "scout", applies: "on the next subagent spawned", projectOverride: true, placeholders: [] };
+		const fetchStub = (async () => Response.json({ prompts: [row] })) as unknown as typeof fetch;
+		const client = new HttpConsoleClient({ baseUrl: "http://wolfd", fetch: fetchStub });
+		const res = await createPromptsApi(() => client).list("hal");
+		const [out] = (await res.json()).prompts;
+		assert.equal(out.applies, "on the next subagent spawned");
+		assert.equal(out.projectOverride, true);
 	});
 });

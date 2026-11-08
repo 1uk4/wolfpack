@@ -24,6 +24,13 @@ export const PromptViewSchema = z.object({
   contract: z.string().optional(),
   /** The {{name}} placeholders the text declares. */
   placeholders: z.array(z.string()).optional(),
+  /** Editable prompts: where the override lives (`prompts`, `agents` for helper profiles, `standards`) and the file name in it. */
+  store: z.enum(["prompts", "agents", "standards"]).optional(),
+  name: z.string().optional(),
+  /** Editable prompts: when an edit takes effect (wolf restart, or the next subagent spawn). */
+  applies: z.string().optional(),
+  /** Profiles and standards: a project `.pi` file in the wolf's workspace outranks the wolf's edit. */
+  projectOverride: z.boolean().optional(),
 });
 export type PromptView = z.infer<typeof PromptViewSchema>;
 

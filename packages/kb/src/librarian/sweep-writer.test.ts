@@ -6,7 +6,7 @@ import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
 import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 import { readLedger } from "./ledger.js";
-import { acquireLease, freshLease, freshLeaseIn, leaseFile, LEASE_STALE_MS, MUTEX_STALE_MS } from "./curator-lease.js";
+import { acquireLease, assertNoLiveHub, freshLease, freshLeaseIn, leaseFile, LEASE_STALE_MS, MUTEX_STALE_MS } from "./curator-lease.js";
 import { runSweepTick } from "./tick.js";
 import { countPending } from "./intake.js";
 import type { KbRoots } from "../shared/index.js";
@@ -89,6 +89,25 @@ describe("curator lease", () => {
     writeFileSync(leaseFile(d), JSON.stringify({ owner: "wolf", pid: 2147483000, host: require("node:os").hostname(), at: "x" }));
     expect(freshLease(d)).toBeNull();
     h.release();
+  });
+
+  it("a standalone KB write command refuses while a fresh hub lease exists on the roots, and says to use hubd rebuild", () => {
+    const r = setup("inbox");
+    expect(() => assertNoLiveHub(r)).not.toThrow();
+    const hub = acquireLease([join(r.opsRoot, "contributions")], "hub")!;
+    expect(() => assertNoLiveHub(r)).toThrow(/use `hubd rebuild`/);
+    hub.release();
+    expect(() => assertNoLiveHub(r)).not.toThrow();
+  });
+
+  it("a standalone KB write command also refuses while the hub's kb-writer lock is held by a live process (curator enabled or not), not by a dead one", () => {
+    const r = setup("inbox");
+    mkdirSync(join(r.denLocal, "run"), { recursive: true });
+    const lock = join(r.denLocal, "run", "kb-writer.lock");
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, startedAt: "x" }));
+    expect(() => assertNoLiveHub(r)).toThrow(/use `hubd rebuild`/);
+    writeFileSync(lock, JSON.stringify({ pid: 2147483000, startedAt: "x" }));
+    expect(() => assertNoLiveHub(r)).not.toThrow();
   });
 
   it("a wolf-side tick skips while a fresh hub lease exists, and holds a wolf lease while it runs", async () => {

@@ -150,6 +150,9 @@ describe("prompt graphs", () => {
 		assert.deepEqual(edgeSet(t).sort(), ["main-wolf>tools:coding-tools", "main-wolf>tools:wolfd-subagents", "tools:coding-tools>tool.bash", "tools:coding-tools>tool.read", "tools:wolfd-subagents>tool.subagent"]);
 		assert.deepEqual(t.nodes.find((n) => n.id === "tools:coding-tools")!.ids, ["tool.read", "tool.bash"]);
 		assert.equal(t.nodes.find((n) => n.id === "tool.read")!.title, "tool.read");
+		// the tool nodes follow their group's order, so the layout can keep each group's edges apart
+		const order = t.nodes.map((n) => n.id).filter((id) => id.startsWith("tool") );
+		assert.deepEqual(order, ["tools:coding-tools", "tool.read", "tool.bash", "tools:wolfd-subagents", "tool.subagent"]);
 	});
 
 	it("draws the KB sweep graph in the order the sweep runs it, with the new-vs-merge fork and the maintenance pass", () => {

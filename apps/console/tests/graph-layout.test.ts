@@ -90,3 +90,23 @@ describe("layoutGraph orderClass drives the barycenter rows", () => {
 		assert.equal(y("u") > y("p2"), true);
 	});
 });
+
+describe("layoutGraph alignToDependents", () => {
+	// root feeds groups A (3 tools) and B (1 tool); an edge reads "from depends on to".
+	const nodes = ids("root", "A", "B", "a1", "a2", "a3", "b1");
+	const edges = [
+		{ from: "A", to: "root" }, { from: "B", to: "root" },
+		{ from: "a1", to: "A" }, { from: "a2", to: "A" }, { from: "a3", to: "A" }, { from: "b1", to: "B" },
+	];
+	it("centres a node beside its dependents instead of the top of its column, and leaves the default layout alone", () => {
+		const plain = layoutGraph(nodes, edges);
+		assert.equal(plain.nodes.find((n) => n.id === "A")!.y, 0);
+		const l = layoutGraph(nodes, edges, { alignToDependents: true });
+		const y = (id: string) => l.nodes.find((n) => n.id === id)!.y;
+		assert.equal(y("A"), y("a2"), "A sits level with the middle of its three tools");
+		assert.equal(y("B"), y("b1"));
+		assert.ok(y("B") >= y("A") + H + GY, "B is below A without overlapping");
+		assert.ok(l.nodes.every((n) => n.y >= 0));
+		assert.equal(y("root"), (y("A") + y("B")) / 2);
+	});
+});

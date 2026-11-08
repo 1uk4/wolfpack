@@ -57,6 +57,8 @@ export function PlanGraphView({
 	renderNode,
 	nodeSize,
 	zoomable = false,
+	toolbarAbove = false,
+	alignToDependents = false,
 }: {
 	graph: GraphData;
 	onNodeClick?: (id: string) => void;
@@ -72,12 +74,16 @@ export function PlanGraphView({
 	nodeSize?: { width: number; height: number };
 	/** Draggable only: the graph scales to fit its box on first paint and whenever the box resizes (side panel opening, a new graph), with zoom +/- and Fit buttons and wheel / pinch zoom. Unset: no zoom, unchanged. */
 	zoomable?: boolean;
+	/** Draggable + fill: the zoom / fit buttons sit in a row above the canvas instead of over it (so they never cover a node). Unset: unchanged. */
+	toolbarAbove?: boolean;
+	/** Passed to the layout: nodes sit level with the middle of what depends on them. Unset: unchanged. */
+	alignToDependents?: boolean;
 }) {
 	const pan = usePan(draggable);
 	const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const slim = new Set(collapseDone ? graph.nodes.filter((n) => (n.status === "done" || n.status === "skipped") && n.id !== highlightId).map((n) => n.id) : []);
 	const orderClass = orderByStatus ? new Map(graph.nodes.map((n) => [n.id, STATUS_ORDER[n.status]] as const)) : undefined;
-	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass, nodeWidth: nodeSize?.width, nodeHeight: nodeSize?.height });
+	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass, nodeWidth: nodeSize?.width, nodeHeight: nodeSize?.height, alignToDependents });
 	const labelOf = new Map(graph.nodes.map((n) => [n.id, n.label] as const));
 	const dependsOn = new Map<string, string[]>();
 	for (const e of graph.edges) {
@@ -141,9 +147,31 @@ export function PlanGraphView({
 	const clickNode = (id: string) => {
 		if (!pan.consumeDrag()) onNodeClick?.(id);
 	};
-	return (
+	const above = toolbarAbove && draggable && fill;
+	const bar = draggable ? (
+	<div className={above ? "flex items-center justify-end gap-1 p-1" : "absolute right-1 top-1 z-10 flex items-center gap-1"} data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+					{toolbar}
+					{zoomable && (
+						<>
+							<button type="button" data-testid="graph-zoom-out" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.8)} className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><MinusIcon className="size-3.5" aria-hidden /></button>
+							<button type="button" data-testid="graph-zoom-in" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.25)} className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><PlusIcon className="size-3.5" aria-hidden /></button>
+						</>
+					)}
+					<button
+						type="button"
+						data-testid="graph-recenter"
+						aria-label={zoomable ? "Fit graph to view" : "Re-center graph"}
+						title={zoomable ? "Fit to view" : "Re-center graph"}
+						onClick={recenter}
+						className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+					>
+						<FocusIcon className="size-3.5" aria-hidden />
+					</button>
+				</div>
+	) : null;
+	const view = (
 		<div
-			className={draggable ? cn("relative touch-none select-none overflow-hidden", fill ? "h-full" : "max-h-[calc(40vh-1.5rem)]", pan.dragging ? "cursor-grabbing" : "cursor-grab") : "overflow-x-auto pb-1"}
+			className={draggable ? cn("relative touch-none select-none overflow-hidden", above ? "min-h-0 flex-1" : fill ? "h-full" : "max-h-[calc(40vh-1.5rem)]", pan.dragging ? "cursor-grabbing" : "cursor-grab") : "overflow-x-auto pb-1"}
 			style={draggable && !fill ? { height: layout.height } : undefined}
 			data-testid="graph-scroll"
 			data-draggable={draggable ? "true" : undefined}
@@ -240,28 +268,16 @@ export function PlanGraphView({
 					</ul>
 				</div>
 			</div>
-			{draggable && (
-				<div className="absolute right-1 top-1 z-10 flex items-center gap-1" data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
-					{toolbar}
-					{zoomable && (
-						<>
-							<button type="button" data-testid="graph-zoom-out" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.8)} className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><MinusIcon className="size-3.5" aria-hidden /></button>
-							<button type="button" data-testid="graph-zoom-in" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.25)} className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><PlusIcon className="size-3.5" aria-hidden /></button>
-						</>
-					)}
-					<button
-						type="button"
-						data-testid="graph-recenter"
-						aria-label={zoomable ? "Fit graph to view" : "Re-center graph"}
-						title={zoomable ? "Fit to view" : "Re-center graph"}
-						onClick={recenter}
-						className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-					>
-						<FocusIcon className="size-3.5" aria-hidden />
-					</button>
-				</div>
-			)}
+			{draggable && !above && bar}
 		</div>
+	);
+	return above ? (
+		<div className="flex h-full min-w-0 flex-col">
+			{bar}
+			{view}
+		</div>
+	) : (
+		view
 	);
 }
 

@@ -27,6 +27,8 @@ export function PromptGraphCanvas({ graph, selected, onSelect }: { graph: Prompt
 		}),
 		[graph],
 	);
+	// The Tools graph has 17+ leaves: one-line nodes and rows level with their group, so it fits the box at a readable scale.
+	const compact = graph.key === "tools";
 	return (
 		<PlanGraphView
 			key={`${graph.key}:${graph.nodes.length}`}
@@ -35,15 +37,22 @@ export function PromptGraphCanvas({ graph, selected, onSelect }: { graph: Prompt
 			draggable
 			zoomable
 			fill
+			toolbarAbove
+			alignToDependents={compact}
 			highlightId={selected}
 			onNodeClick={onSelect}
-			nodeSize={{ width: 176, height: 68 }}
+			nodeSize={{ width: 176, height: compact ? 26 : 68 }}
 			renderNode={(gn) => {
 				const n = byId.get(gn.id)!;
 				return {
 					name: `${n.title} (${n.host === "wolf" ? "" : `${HOST_LABEL[n.host]}, `}${n.marker}${n.hubMissing ? ", hub not connected" : ""})`,
 					className: cn("border-border bg-card text-foreground", n.host === "hub" && "border-sky-400/70", n.host === "wolfd-pi-durable" && "border-violet-400/70"),
-					body: (
+					body: compact ? (
+						<div className="flex items-center gap-1.5 text-xs leading-none" data-testid={`pnode-${n.id}`}>
+							<span className="min-w-0 flex-1 truncate">{n.title}</span>
+							<MarkerIcon marker={n.marker} />
+						</div>
+					) : (
 						<>
 							{(n.host !== "wolf" || n.hubMissing || n.marker !== "no prompt") && (
 								<div className="flex items-center gap-1.5 text-[10px] leading-none" data-testid={`pnode-${n.id}`}>

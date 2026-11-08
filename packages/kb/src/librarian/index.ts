@@ -127,3 +127,7 @@ export {
   type IncomingWolf,
 } from "./activity.js";
 export { oneLine } from "./redact.js";
+export { previewToFile, applyPlanFile, loadPlanFile, serializePlan, entrySetFingerprint, PLAN_FILE_VERSION, PlanRefusedError, type PlanFile, type PlanFlags, type PreviewOptions, type ApplyOptions } from "./rebuild-plan-file.js";
+export { commitRebuild, restoreRebuild, loadRebuildEntries, listRebuildBackups, engineNamer } from "./rebuild.js";
+export { restoreAndRender } from "./rebuild-recover.js";
+export { enginePartitioner, fileSplitCache } from "./llm-split.js";

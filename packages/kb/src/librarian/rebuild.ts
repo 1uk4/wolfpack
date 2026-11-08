@@ -387,6 +387,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
     for (const sec of todo) {
       const id = String(sec.id);
       judged.add(id);
+      await new Promise<void>((r) => setImmediate(r)); // a fast-failing engine must not starve the host's event loop
       const members = t.direct(id);
       if (members.length <= rules.splitAbove) { plan.judged.push({ id, n: members.length, outcome: "below-threshold" }); continue; }
       const verdict = await judgeSplit(judgeDeps, {
@@ -553,6 +554,7 @@ async function labelTree(
     const done: string[] = [];
     const ask = async (sec: Section, forbidden?: string[]) => {
       const members = sample(sec);
+      await new Promise<void>((r) => setImmediate(r));
       try {
         if (sec.depth > SECTION_TREE.llmNamingMaxDepth) throw new Error("auto");
         const r = await namer({ members, depth: sec.depth, maxDepth, domain: plan.domain, parentTitle: parent?.title, siblingSummaries: done.slice(), forbidden, fixedTitle: forbidden ? undefined : plan.initialTitles.get(String(sec.id)) });

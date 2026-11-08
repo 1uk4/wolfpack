@@ -6,7 +6,8 @@
  * repo default. Overrides live in the wolf's home; other wolves keep the default.
  */
 import { useCallback, useEffect, useState } from "react";
-import { buildFlows, buildTree, chipGroup, HOST_LABEL, hubId, standardUsers, visibleRows, type FlowStep, type TreeNode } from "../src/core/prompt-flows.ts";
+import { SidebarToggle } from "@/components/sidebar";
+import { buildFlows, buildTree, chipGroup, HOST_LABEL, hostOf, hubId, standardUsers, treeCardIds, visibleRows, type FlowStep, type TreeNode } from "../src/core/prompt-flows.ts";
 
 interface PromptRow {
 	id: string;
@@ -82,6 +83,9 @@ export function PromptsView() {
 	const [open, setOpen] = useState<Record<string, boolean>>({});
 	const [settings, setSettings] = useState<SettingsInfo | null>(null);
 	const [soDraft, setSoDraft] = useState<string | null>(null);
+	/** Open cards and steps by key; a key not listed follows the filter (open while a chip is chosen). */
+	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+	const [nodeOpen, setNodeOpen] = useState<Record<string, boolean>>({});
 	const [view, setView] = useState<"tree" | "flows">("tree");
 	/** The hub's KB-sweep prompts for flow B step 4; null when the hub is not connected (hubNote says why). */
 	const [hubRows, setHubRows] = useState<PromptRow[] | null>(null);
@@ -145,6 +149,13 @@ export function PromptsView() {
 	useEffect(() => {
 		void load();
 	}, [load]);
+	// A chip opens what it shows (a key not set follows the filter) and scrolls to the first match.
+	useEffect(() => {
+		setExpanded({});
+		if (!group) return;
+		const t = requestAnimationFrame(() => document.querySelector("[data-leaf], [data-step]")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+		return () => cancelAnimationFrame(t);
+	}, [group, view]);
 
 	const send = async (row: PromptRow, method: "PUT" | "DELETE") => {
 		const r = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/prompts/${encodeURIComponent(row.id)}`, {
@@ -192,7 +203,7 @@ export function PromptsView() {
 	const card = (row: PromptRow, ctx: { editedIn?: string; usedBy?: string[] } = {}, key = row.id) => {
 				const draft = drafts[row.id] ?? row.text;
 				return (
-					<section key={key} id={`prompt-card-${row.id}`} className="flex min-w-0 flex-col gap-2 rounded-md border p-3" data-testid={`prompt-${row.id}`}>
+					<section key={key} className="flex min-w-0 flex-col gap-2 rounded-md border p-3" data-testid={`prompt-${row.id}`}>
 						<header className="flex items-center gap-2">
 							<span className="text-xs uppercase tracking-wider text-muted-foreground">{row.group}</span>
 							<h2 className="text-sm font-medium">{row.label}</h2>
@@ -207,7 +218,7 @@ export function PromptsView() {
 							</dl>
 						)}
 						{ctx.editedIn && (
-							<p className="text-xs" data-testid={`prompt-edited-in-${row.id}`}>Edited in: <a className="underline" href={`#prompt-card-${ctx.editedIn}`}>{byId.get(ctx.editedIn)?.label ?? ctx.editedIn}</a></p>
+							<p className="text-xs" data-testid={`prompt-edited-in-${row.id}`}>Edited in: <a className="underline" href={`#leaf-${ctx.editedIn}`} onClick={(e) => { e.preventDefault(); reveal(ctx.editedIn!); }}>{byId.get(ctx.editedIn)?.label ?? ctx.editedIn}</a></p>
 						)}
 						{row.id === STRUCTURED && <p className="text-xs" data-testid="prompt-edited-in-structured">Edited in: the box below (saved to wolf.yaml).</p>}
 						{!row.editable && row.kind === "system-block" && row.id !== STRUCTURED && !ctx.editedIn && <p className="text-xs text-muted-foreground" data-testid={`prompt-edited-in-${row.id}`}>Edited in: nowhere; read-only.</p>}
@@ -277,16 +288,48 @@ export function PromptsView() {
 				);
 	};
 
+	const isOpen = (k: string) => expanded[k] ?? !!group;
+	const toggle = (k: string) => setExpanded((e) => ({ ...e, [k]: !isOpen(k) }));
+	/** Open a card and bring it into view (the "Edited in" links and Expand all use it). */
+	const reveal = (id: string) => {
+		setExpanded((e) => ({ ...e, [id]: true }));
+		requestAnimationFrame(() => document.getElementById(`leaf-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+	};
 	const keep = (id: string) => shownIds.has(id);
+
+	const badge = "rounded border px-1.5 py-0.5 text-xs text-muted-foreground";
+	/** The collapsed one-line header of a leaf or a step: chevron, title, badges, source in muted text. */
+	const rowButton = (k: string, title: string, badges: React.ReactNode, source: string | undefined, testid: string) => (
+		<button type="button" aria-expanded={isOpen(k)} onClick={() => toggle(k)} className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2 py-1.5 text-left hover:bg-accent/50" data-testid={testid}>
+			<span aria-hidden className="w-3 text-xs text-muted-foreground">{isOpen(k) ? "▾" : "▸"}</span>
+			<span className="min-w-0 text-sm font-medium">{title}</span>
+			{badges}
+			{source && <span className="min-w-0 break-all text-xs text-muted-foreground sm:ml-auto sm:max-w-[45%] sm:text-right">{source}</span>}
+		</button>
+	);
+	const rowBadges = (row: PromptRow, host = hostOf(row.id)) => (
+		<>
+			<span className={badge}>{HOST_LABEL[host]}</span>
+			<span className={badge}>{row.editable ? "editable" : "read-only"}</span>
+			{row.source === "override" && <span className="rounded bg-accent px-1.5 py-0.5 text-xs">overridden</span>}
+		</>
+	);
+	/** A tree leaf: ONE compact row; clicking expands the full card inline. */
+	const leaf = (row: PromptRow, ctx: { editedIn?: string; usedBy?: string[] } = {}) => (
+		<div key={row.id} id={`leaf-${row.id}`} className="flex min-w-0 flex-col gap-2 scroll-mt-4" data-leaf data-testid={`leaf-${row.id}`}>
+			{rowButton(row.id, row.label, rowBadges(row), row.file, `leaf-toggle-${row.id}`)}
+			{isOpen(row.id) && card(row, ctx, row.id)}
+		</div>
+	);
 
 	const renderTreeNode = (node: TreeNode) => {
 		const items = node.items.filter((i) => keep(i.id) || (i.editedIn && keep(i.editedIn)));
 		const subs = (node.subagents ?? []).filter((sa) => keep(sa.id) || sa.cards.some(keep));
 		if (!items.length && !subs.length) return null;
 		return (
-			<details key={node.key} open={!node.collapsed || !!group} className="flex flex-col gap-2" data-testid={`tree-node-${node.key}`}>
+			<details key={node.key} open={nodeOpen[node.key] ?? (!node.collapsed || !!group)} onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; setNodeOpen((n) => (n[node.key] === o ? n : { ...n, [node.key]: o })); }} className="flex flex-col gap-2" data-testid={`tree-node-${node.key}`}>
 				<summary className="cursor-pointer text-sm font-semibold">{node.title}</summary>
-				<div className="flex min-w-0 flex-col gap-3 border-l pl-2 sm:pl-5">
+				<div className="mt-2 flex min-w-0 flex-col gap-2 border-l pl-2 sm:pl-5">
 					{node.note && <p className="text-xs text-muted-foreground">{node.note}</p>}
 					{items.map((i) => {
 						const row = byId.get(i.id);
@@ -294,8 +337,8 @@ export function PromptsView() {
 						const target = i.editedIn ? byId.get(i.editedIn) : undefined;
 						return (
 							<div key={i.id} className="flex min-w-0 flex-col gap-2" data-testid={`tree-item-${i.id}`}>
-								{keep(i.id) && card(row, i.editedIn ? { editedIn: i.editedIn } : {})}
-								{target && keep(i.editedIn!) && <div className="ml-2 min-w-0 border-l pl-2 sm:ml-5 sm:pl-3">{card(target)}</div>}
+								{keep(i.id) && leaf(row, i.editedIn ? { editedIn: i.editedIn } : {})}
+								{target && keep(i.editedIn!) && <div className="ml-2 min-w-0 border-l pl-2 sm:ml-5 sm:pl-3">{leaf(target)}</div>}
 							</div>
 						);
 					})}
@@ -304,10 +347,10 @@ export function PromptsView() {
 						if (!row) return null;
 						return (
 							<div key={sa.id} className="flex min-w-0 flex-col gap-2" data-testid={`tree-subagent-${sa.id}`}>
-								{keep(sa.id) && card(row)}
+								{keep(sa.id) && leaf(row)}
 								{sa.reads.length > 0 && <p className="ml-2 text-xs text-muted-foreground sm:ml-5">Reads standards: {sa.reads.map((r) => r.replace(/^standard\./, "")).join(", ")}</p>}
 								{sa.cards.filter(keep).map((sid) => (
-									<div key={sid} className="ml-2 min-w-0 border-l pl-2 sm:ml-5 sm:pl-3">{card(byId.get(sid)!, { usedBy: standardUsers(rows, sid) })}</div>
+									<div key={sid} className="ml-2 min-w-0 border-l pl-2 sm:ml-5 sm:pl-3">{leaf(byId.get(sid)!, { usedBy: standardUsers(rows, sid) })}</div>
 								))}
 							</div>
 						);
@@ -316,51 +359,76 @@ export function PromptsView() {
 			</details>
 		);
 	};
+	const tree = buildTree(rows);
 	const renderTree = () => (
-		<div className="flex flex-col gap-4" data-testid="prompts-tree">
+		<div className="flex flex-col gap-3" data-testid="prompts-tree">
 			<h2 className="text-sm font-semibold">Main wolf (orchestrator)</h2>
-			{buildTree(rows).map((node) => renderTreeNode(node))}
+			{tree.map((node) => renderTreeNode(node))}
 		</div>
 	);
 
-	const renderStep = (st: FlowStep) => {
+	const stepKey = (fk: string, n: number) => `step:${fk}:${n}`;
+	const renderStep = (fk: string, st: FlowStep) => {
 		const stepRows = st.ids.map((id) => ({ id, row: byId.get(id) })).filter((x): x is { id: string; row: PromptRow } => !!x.row);
 		const visible = stepRows.filter((x) => (x.id.startsWith("hub:") ? !group || chipOf(x.row) === group : keep(x.id)));
 		if (group && st.ids.length && !visible.length) return null;
+		const k = stepKey(fk, st.n);
+		const fileList = [...new Set(stepRows.map((x) => x.row.file).filter((f): f is string => !!f))];
+		const files = fileList.length > 2 ? `${fileList[0]} and ${fileList.length - 1} more` : fileList.join(", ");
+		const badges = (
+			<>
+				<span className={badge} data-testid={`flow-host-${fk}-${st.n}`}>{HOST_LABEL[st.host]}</span>
+				{stepRows.length > 0 && <span className={badge}>{stepRows.every((x) => x.row.editable) ? "editable" : stepRows.some((x) => x.row.editable) ? "partly editable" : "read-only"}</span>}
+				{st.hubMissing && <span className="rounded bg-accent px-1.5 py-0.5 text-xs">hub not connected</span>}
+			</>
+		);
 		return (
-			<li key={st.n} className="flex min-w-0 flex-col gap-2 rounded-md border p-2 sm:p-3" data-testid={`flow-step-${st.n}`}>
+			<li key={st.n} className="flex min-w-0 flex-col gap-2" data-step data-testid={`flow-step-${fk}-${st.n}`}>
 				{st.crossing && <p className="rounded bg-accent px-2 py-1 text-xs font-medium" data-testid="flow-crossing">{st.crossing}</p>}
-				<div className="flex flex-wrap items-center gap-2">
-					<span className="text-sm font-semibold">{st.n}. {st.title}</span>
-					<span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground" data-testid={`flow-host-${st.n}`}>runs on: {HOST_LABEL[st.host]}</span>
-					{stepRows.length > 0 && <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">{stepRows.every((x) => x.row.editable) ? "editable" : stepRows.some((x) => x.row.editable) ? "partly editable" : "read-only"}</span>}
-				</div>
-				{st.note && <p className="text-xs text-muted-foreground">{st.note}</p>}
+				{rowButton(k, `${st.n}. ${st.title}`, badges, files || undefined, `step-toggle-${fk}-${st.n}`)}
 				{st.hubMissing && (
-					<p className="text-sm text-muted-foreground" data-testid="flow-hub-missing">Hub not connected, so the sweep prompts cannot be shown{hubNote ? ` (${hubNote})` : ""}. This step runs on the hub with the prompts hubd reports.</p>
+					<p className="text-xs text-muted-foreground" data-testid="flow-hub-missing">Hub not connected, so the sweep prompts cannot be shown{hubNote ? ` (${hubNote})` : ""}. This step runs on the hub with the prompts hubd reports.</p>
 				)}
-				{visible.map((x) => card(x.row, x.id.startsWith("standard.") ? { usedBy: standardUsers(rows, x.id) } : {}, `${st.n}-${x.id}`))}
+				{isOpen(k) && (
+					<div className="ml-2 flex min-w-0 flex-col gap-2 border-l pl-2 sm:ml-5 sm:pl-3">
+						{st.note && <p className="text-xs text-muted-foreground">{st.note}</p>}
+						{visible.map((x) => card(x.row, x.id.startsWith("standard.") ? { usedBy: standardUsers(rows, x.id) } : {}, `${st.n}-${x.id}`))}
+					</div>
+				)}
 			</li>
 		);
 	};
+	const flows = buildFlows(rows, hubRows);
 	const renderFlows = () => (
 		<div className="flex flex-col gap-6" data-testid="prompts-flows">
-			{buildFlows(rows, hubRows).map((f) => {
-				const steps = f.steps.map(renderStep).filter(Boolean);
+			{flows.map((f) => {
+				const steps = f.steps.map((st) => renderStep(f.key, st)).filter(Boolean);
 				if (group && !steps.length) return null;
 				return (
-					<section key={f.key} className="flex flex-col gap-3" data-testid={`flow-${f.key}`}>
+					<section key={f.key} className="flex flex-col gap-2" data-testid={`flow-${f.key}`}>
 						<h2 className="text-sm font-semibold">{f.title}</h2>
-						<ol className="flex flex-col gap-3">{steps}</ol>
+						<ol className="flex flex-col gap-2">{steps}</ol>
 					</section>
 				);
 			})}
 		</div>
 	);
+	/** Expand all / Collapse all for the view shown. */
+	const allKeys = (): string[] => (view === "tree" ? treeCardIds(tree).filter(keep) : flows.flatMap((f) => f.steps.map((st) => stepKey(f.key, st.n))));
+	const expandAll = () => {
+		setExpanded(Object.fromEntries(allKeys().map((k) => [k, true])));
+		if (view === "tree") setNodeOpen(Object.fromEntries(tree.map((n) => [n.key, true])));
+	};
+	const collapseAll = () => {
+		setExpanded(Object.fromEntries(allKeys().map((k) => [k, false])));
+	};
 
 	return (
 		<main className="mx-auto flex max-w-4xl flex-col gap-4 p-3 sm:p-6" data-testid="prompts-page">
-			<h1 className="text-lg font-semibold">Prompts</h1>
+			<header className="flex items-center gap-2">
+				<SidebarToggle />
+				<h1 className="text-lg font-semibold">Prompts</h1>
+			</header>
 			{!SPAWN_GROUPS.has(group) && <p className="text-sm text-muted-foreground" data-testid="prompts-applies-note">{APPLIES_NOTE}</p>}
 			<label className="flex items-center gap-2 text-sm">
 				Wolf
@@ -376,6 +444,12 @@ export function PromptsView() {
 					{(["tree", "flows"] as const).map((v) => (
 						<button key={v} role="tab" aria-selected={view === v} className={`rounded border px-3 py-1 text-sm ${view === v ? "bg-accent" : ""}`} onClick={() => setView(v)} data-testid={`prompts-view-${v}`}>{v === "tree" ? "Wolf tree" : "Flows"}</button>
 					))}
+				</div>
+			)}
+			{!isHub && (
+				<div className="flex gap-1.5" data-testid="prompts-expand-controls">
+					<button className="rounded border px-2 py-0.5 text-xs" onClick={expandAll} data-testid="prompts-expand-all">Expand all</button>
+					<button className="rounded border px-2 py-0.5 text-xs" onClick={collapseAll} data-testid="prompts-collapse-all">Collapse all</button>
 				</div>
 			)}
 			{groups.length > 1 && (

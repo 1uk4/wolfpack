@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildFlows, buildTree, standardsOf, treeCardIds, type FlowRow } from "../src/core/prompt-flows.ts";
+import { buildFlows, buildTree, hostOf, standardsOf, treeCardIds, type FlowRow } from "../src/core/prompt-flows.ts";
 
 /** The ids a real wolf returns from GET /prompts (a wolf with an identity file and project AGENTS.md/CLAUDE.md/skills would add system.agents-md, .claude-md, .skills). */
 const IDS = [
@@ -80,5 +80,12 @@ describe("prompt tree and flows", () => {
 		const system = tree.find((n) => n.key === "system")!;
 		assert.equal(system.items.find((i) => i.id === "system.identity")?.editedIn, "identity");
 		assert.equal(system.items.find((i) => i.id === "system.orchestrator")?.editedIn, "orchestrator-rules");
+	});
+
+	it("names the host each prompt runs on: the hub for sweep rows, pi-durable for compaction, the wolf otherwise", () => {
+		assert.equal(hostOf("hub:sweep.merge"), "hub");
+		assert.equal(hostOf("compaction.pi-durable-system"), "wolfd-pi-durable");
+		assert.equal(hostOf("pipeline.observer"), "wolf");
+		assert.equal(hostOf("identity"), "wolf");
 	});
 });

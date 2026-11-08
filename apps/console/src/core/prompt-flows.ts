@@ -145,6 +145,9 @@ export interface Flow {
 
 export const HOST_LABEL: Record<Host, string> = { wolf: "wolf", hub: "hub", "wolfd-pi-durable": "wolfd (pi-durable)" };
 
+/** The host a prompt id runs on (for a tree leaf; flow steps carry their own). */
+export const hostOf = (id: string): Host => (id.startsWith("hub:") ? "hub" : id.startsWith("compaction.") ? "wolfd-pi-durable" : "wolf");
+
 /** Hub rows (hubd GET /v1/settings) as prefixed ids so they cannot collide with a wolf's. */
 export const hubId = (id: string): string => `hub:${id}`;
 

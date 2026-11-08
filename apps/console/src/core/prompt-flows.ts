@@ -1,6 +1,6 @@
 /**
- * The Prompts page layout as data: where each prompt id sits in the Wolf tree and in the Flows. The page is only a renderer of
- * this. Ids the layout does not know fall into an "Other" node, so a new prompt never vanishes. Pure: no DOM, no fetch.
+ * The Prompts page layout as data: one dependency graph per system (buildGraphs). The page is only a renderer of this. Ids the
+ * layout does not know get their own node under an "Other" node, so a new prompt never vanishes. Pure: no DOM, no fetch.
  */
 
 export interface FlowRow {
@@ -9,6 +9,8 @@ export interface FlowRow {
 	label: string;
 	editable: boolean;
 	text: string;
+	/** Where it is defined; a tool's is `extension <name>` (the Tools graph groups by it). */
+	file?: string;
 }
 
 /** Defined in the registry but never called by any engine step: hidden from both views and the filter. */
@@ -30,11 +32,6 @@ const BACKGROUND_IDS = new Set([
 ]);
 
 const STAGES = ["idea", "plan", "feasibility", "approved", "in_build", "shipped", "live"];
-
-/** The chip a row filters under: the duplicate Orchestrator / Identity / System prompt groups are one. */
-export function chipGroup(row: Pick<FlowRow, "group">): string {
-	return row.group === "Orchestrator" || row.group === "Identity" ? "System prompt" : row.group;
-}
 
 /** The `standards:` names in a profile's frontmatter, in order. */
 export function standardsOf(profileText: string): string[] {
@@ -119,11 +116,6 @@ export function buildTree(allRows: FlowRow[]): TreeNode[] {
 	return nodes.filter((n) => n.key === "other" || n.items.length > 0 || (n.subagents?.length ?? 0) > 0);
 }
 
-/** Every id that renders a card in the tree (for the exactly-once guarantee). */
-export function treeCardIds(tree: TreeNode[]): string[] {
-	return tree.flatMap((n) => [...n.items.flatMap((i) => (i.editedIn ? [i.id, i.editedIn] : [i.id])), ...(n.subagents ?? []).flatMap((s) => [s.id, ...s.cards])]);
-}
-
 export type Host = "wolf" | "hub" | "wolfd-pi-durable";
 export interface FlowStep {
 	n: number;
@@ -151,19 +143,17 @@ export const hostOf = (id: string): Host => (id.startsWith("hub:") ? "hub" : id.
 /** Hub rows (hubd GET /v1/settings) as prefixed ids so they cannot collide with a wolf's. */
 export const hubId = (id: string): string => `hub:${id}`;
 
-/** `hubRows` null: the hub is not connected. */
-export function buildFlows(allRows: FlowRow[], hubRows: FlowRow[] | null): Flow[] {
+/** The step lists of flows A-D (the graph builder chains them). */
+function buildFlows(allRows: FlowRow[]): Flow[] {
 	const rows = visibleRows(allRows);
 	const have = new Set(rows.map((r) => r.id));
-	const used = new Set<string>();
-	const ids = (...want: string[]): string[] => want.filter((id) => have.has(id)).map((id) => (used.add(id), id));
+	const ids = (...want: string[]): string[] => want.filter((id) => have.has(id));
 	let n = 0;
 	const step = (s: Omit<FlowStep, "n">): FlowStep => ({ n: ++n, ...s });
 	const flow = (key: string, title: string, steps: FlowStep[]): Flow => {
 		n = 0;
 		return { key, title, steps };
 	};
-	const startsWith = (p: string) => rows.filter((r) => r.id.startsWith(p)).map((r) => r.id);
 
 	// Each flow's steps are built after n is reset, so numbering restarts per flow.
 	n = 0;
@@ -183,7 +173,7 @@ export function buildFlows(allRows: FlowRow[], hubRows: FlowRow[] | null): Flow[
 		step({ title: "Observer", host: "wolf", ids: ids("pipeline.observer", "pipeline.observer-user") }),
 		step({ title: "Consolidation", host: "wolf", ids: ids("pipeline.consolidate", "pipeline.consolidate-user", "pipeline.pack-digest") }),
 		step({ title: "Promote (distill) to the KB inbox", host: "wolf", ids: ids("pipeline.distill"), note: "Ends on the wolf: the contribution lands in the KB inbox, which syncs to the hub." }),
-		step({ title: "Hub curation (KB sweep)", host: "hub", ids: (hubRows ?? []).map((r) => hubId(r.id)), crossing: "The flow crosses from the wolf's host to the hub here.", ...(hubRows === null ? { hubMissing: true } : {}) }),
+		step({ title: "Hub curation (KB sweep)", host: "hub", ids: [], crossing: "The flow crosses from the wolf's host to the hub here. Open the KB sweep tab for the hub's prompts." }),
 	]);
 	n = 0;
 	const crawl = flow("crawl", "C. Crawl", [
@@ -197,31 +187,23 @@ export function buildFlows(allRows: FlowRow[], hubRows: FlowRow[] | null): Flow[
 		step({ title: "Automatic compaction (context nearly full)", host: "wolfd-pi-durable", ids: ids("compaction.pi-durable-system", "compaction.pi-durable-instructions") }),
 		step({ title: "Manual compaction (the owner asks)", host: "wolfd-pi-durable", ids: [], note: "Runs the same two prompts as the automatic step." }),
 	]);
-	n = 0;
-	const standing = flow("standing", "E. Loaded in every flow", [
-		step({ title: "System prompt blocks", host: "wolf", ids: ids(...startsWith("system."), "identity", "orchestrator-rules") }),
-		step({ title: "Tools offered", host: "wolf", ids: ids(...startsWith("tool.")) }),
-		step({ title: "Subagent profiles and standards", host: "wolf", ids: ids(...startsWith("agent."), ...startsWith("standard.")), note: "Read at every subagent spawn." }),
-	]);
-	const flows = [work, convo, crawl, compaction, standing];
-	const other = rows.filter((r) => !used.has(r.id)).map((r) => r.id);
-	if (other.length) flows.push({ key: "other", title: "Other", steps: [{ n: 1, title: "Not placed in a flow", host: "wolf", ids: other }] });
-	return flows;
+	return [work, convo, crawl, compaction];
 }
 
-// ---- One dependency graph per flow (the Prompts page draws these; the List tab keeps the rows). ----
+// ---- One dependency graph per flow (the Prompts page draws these; there is no list view). ----
 
-export type GraphKey = "system" | "subagents" | "work" | "kb" | "crawl" | "compaction";
-export type PromptsTab = GraphKey | "list";
-/** The tabs, in order: the five graphs, then the flat list. */
+export type GraphKey = "system" | "subagents" | "tools" | "work" | "kb" | "crawl" | "sweep" | "compaction";
+export type PromptsTab = GraphKey;
+/** The tabs, in order. */
 export const PROMPT_TABS: ReadonlyArray<{ key: PromptsTab; title: string }> = [
 	{ key: "system", title: "System prompt" },
 	{ key: "subagents", title: "Subagents" },
+	{ key: "tools", title: "Tools" },
 	{ key: "work", title: "Work creation" },
 	{ key: "kb", title: "Conversation to KB" },
 	{ key: "crawl", title: "Crawl" },
+	{ key: "sweep", title: "KB sweep" },
 	{ key: "compaction", title: "Compaction" },
-	{ key: "list", title: "List" },
 ];
 
 export type NodeMarker = "editable" | "partly editable" | "read-only" | "no prompt";
@@ -237,6 +219,8 @@ export interface GraphNodeDef {
 	sub?: string;
 	note?: string;
 	hubMissing?: boolean;
+	/** Clicking the node opens this graph's tab instead of a reader. */
+	link?: GraphKey;
 }
 /** `from` feeds `to`: it is read, or runs, before it (left to right in the drawing). */
 export interface GraphEdgeDef {
@@ -277,7 +261,7 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	}
 	sysEdges.push(...chain(blocks));
 	const toolIds = tree.find((n) => n.key === "tools")?.items.map((i) => i.id) ?? [];
-	if (toolIds.length) sysNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: toolIds });
+	if (toolIds.length) sysNodes.push({ id: "tools", title: `Tools (${toolIds.length})`, host: "wolf", marker: markerOf(toolIds), ids: [], link: "tools" });
 	const system: PromptGraph = { key: "system", title: "System prompt", nodes: sysNodes, edges: sysEdges };
 
 	// Subagents: the main wolf to each profile to the standards its frontmatter names; a standard no profile names stands apart.
@@ -294,16 +278,31 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	subNodes.push(...(subTree?.items ?? []).map((i) => leaf(i.id, { sub: "not read by any profile" })));
 	const subagents: PromptGraph = { key: "subagents", title: "Subagents", nodes: subNodes, edges: subEdges };
 
+	// Tools: the wolf to one node per extension (as the catalog groups them) to each tool.
+	const toolNodes: GraphNodeDef[] = [{ id: "main-wolf", title: "Main wolf", host: "wolf", marker: "no prompt", ids: [] }];
+	const toolEdges: GraphEdgeDef[] = [];
+	const groups = new Map<string, string[]>();
+	for (const id of toolIds) {
+		const ext = /^extension (.+)$/.exec(byId.get(id)?.file ?? "")?.[1] ?? "wolfd";
+		(groups.get(ext) ?? groups.set(ext, []).get(ext)!).push(id);
+	}
+	for (const [ext, ids] of groups) {
+		const gid = `tools:${ext}`;
+		toolNodes.push({ id: gid, title: ext === "wolfd" ? "wolfd (built in)" : ext, host: "wolf", marker: markerOf(ids), ids });
+		toolEdges.push({ from: "main-wolf", to: gid }, ...ids.map((to) => ({ from: gid, to })));
+		toolNodes.push(...ids.map((id) => leaf(id)));
+	}
+	const tools: PromptGraph = { key: "tools", title: "Tools", nodes: toolNodes, edges: toolEdges };
+
 	// The flows A-D become chains of their steps.
-	const flows = buildFlows(allRows, hubRows);
+	const flows = buildFlows(allRows);
 	const flowOf = (k: string) => flows.find((f) => f.key === k)!;
 	const stepNode = (fk: string, st: FlowStep): GraphNodeDef => {
 		const hub = st.host === "hub";
 		const id = hub ? "hub-curation" : (st.ids[0] ?? `step:${fk}:${st.n}`);
 		return {
 			id, title: st.title, host: st.host, marker: markerOf(st.ids), ids: st.ids,
-			...(hub ? { note: st.crossing } : st.note ? { note: st.note } : {}),
-			...(st.hubMissing ? { hubMissing: true } : {}),
+			...(hub ? { note: st.crossing, link: "sweep" as const, ...(hubRows === null ? { hubMissing: true } : {}) } : st.note ? { note: st.note } : {}),
 		};
 	};
 	const chained = (key: GraphKey, title: string, fk: string): PromptGraph => {
@@ -330,11 +329,52 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 		edges: [...(compPrompts[0] ? [{ from: "step:compaction:auto", to: compPrompts[0] }, { from: "step:compaction:manual", to: compPrompts[0] }] : []), ...chain(compPrompts)],
 	};
 
-	// Anything no graph places lands in an Other node on the main graph, so a new prompt never vanishes.
-	const graphs = [system, subagents, work, kb, crawl, compaction];
+	// KB sweep (hub): the order kb/src/librarian/sweep.ts runs the oracles (subject match, near-miss confirm, section pick when the
+	// entry is placed, produce), then the reorg maintenance (reorg.ts: split an oversized section, then summarise and label it).
+	const SWEEP: Array<{ id: string; label: string; note?: string }> = [
+		{ id: "sweep.match-subject", label: "Match the subject" },
+		{ id: "sweep.confirm-subject", label: "Confirm the subject", note: "Only for a near miss: the nearest entry scored high but the first check said new." },
+		{ id: "sweep.section-pick", label: "Pick the section", note: "The fallback when tree placement cannot place the entry; a merge keeps its entry's section." },
+		{ id: "sweep.produce", label: "Write the entry (produce)" },
+		{ id: "sweep.contradict", label: "Contradiction check", note: "Defined in the librarian's oracles; the sweep path has no call site for it today." },
+		{ id: "sweep.split-section", label: "Split an oversized section", note: "Maintenance pass (post-sweep reorg, off by default, and rebuild)." },
+		{ id: "sweep.section-summary", label: "Section summary", note: "Maintenance pass: runs for a section whose members changed." },
+		{ id: "sweep.label-section", label: "Section label", note: "Maintenance pass: titles the section from its summary." },
+	];
+	const hubLabel = (id: string) => byId.get(hubId(id))?.label ?? SWEEP.find((x) => x.id === id)?.label ?? id;
+	const hubLeaf = (id: string, note?: string): GraphNodeDef => ({ id: hubId(id), title: hubLabel(id), host: "hub", marker: "read-only", ids: [hubId(id)], ...(note ? { note } : {}) });
+	const sweepIds = new Set(SWEEP.map((x) => x.id));
+	const sweepNodes: GraphNodeDef[] = [
+		{ id: "inbox", title: "Inbox (contributions from every wolf)", host: "hub", marker: "no prompt", ids: [], note: "Every wolf's promoted contributions arrive here; the sweep drains them one at a time." },
+		...SWEEP.map((x) => hubLeaf(x.id, x.note)),
+	];
+	const sw = (id: string) => hubId(id);
+	const sweepEdges: GraphEdgeDef[] = [
+		{ from: "inbox", to: sw("sweep.match-subject") },
+		{ from: sw("sweep.match-subject"), to: sw("sweep.confirm-subject") },
+		{ from: sw("sweep.match-subject"), to: sw("sweep.section-pick") },
+		{ from: sw("sweep.confirm-subject"), to: sw("sweep.section-pick") },
+		{ from: sw("sweep.section-pick"), to: sw("sweep.produce") },
+		{ from: sw("sweep.produce"), to: sw("sweep.contradict") },
+		{ from: sw("sweep.produce"), to: sw("sweep.split-section") },
+		{ from: sw("sweep.split-section"), to: sw("sweep.section-summary") },
+		{ from: sw("sweep.section-summary"), to: sw("sweep.label-section") },
+	];
+	const unknownHub = (hubRows ?? []).map((h) => h.id).filter((id) => !sweepIds.has(id));
+	if (unknownHub.length) {
+		sweepNodes.push({ id: "other", title: "Other (not placed in the sweep)", host: "hub", marker: "no prompt", ids: [] }, ...unknownHub.map((id) => hubLeaf(id)));
+		sweepEdges.push(...unknownHub.map((id) => ({ from: "other", to: hubId(id) })));
+	}
+	const sweep: PromptGraph = { key: "sweep", title: "KB sweep", nodes: sweepNodes, edges: sweepEdges };
+
+	// Anything no graph places gets its own node under Other on the System prompt graph, so a new prompt never vanishes.
+	const graphs = [system, subagents, tools, work, kb, crawl, sweep, compaction];
 	const placed = new Set(graphs.flatMap((g) => g.nodes.flatMap((n) => n.ids)));
 	const otherIds = rows.filter((r) => !placed.has(r.id)).map((r) => r.id);
-	if (otherIds.length) system.nodes.push({ id: "other", title: `Other (${otherIds.length})`, host: "wolf", marker: markerOf(otherIds), ids: otherIds, sub: "not placed in a flow" });
+	if (otherIds.length) {
+		system.nodes.push({ id: "other", title: "Other (not placed in a flow)", host: "wolf", marker: "no prompt", ids: [] }, ...otherIds.map((id) => leaf(id)));
+		system.edges.push(...otherIds.map((id) => ({ from: "other", to: id })));
+	}
 	return graphs;
 }
 

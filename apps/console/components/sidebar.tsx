@@ -454,7 +454,7 @@ export function SessionRow({
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
 		>
-			{dotColor && <span data-testid="thread-color-dot" aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />}
+			{dotColor && !home && <span data-testid="thread-color-dot" aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />}
 			<SessionStatus busy={chat.busy || chat.compacting || chat.state === "running"} />
 			{chat.needsYou && !chat.busy && (
 				// A wolf is waiting on an answer: the one resting state that earns a mark (it needs the operator).

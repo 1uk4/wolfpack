@@ -61,7 +61,7 @@ import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { HttpError } from "./http-error.js";
-import { newWorkPrompt, PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
+import { newWorkPrompt, PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import type { PromptBlock } from "./context.js";
 import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
@@ -524,7 +524,7 @@ export class WolfServer {
       const projectOverride = def.store === "prompts" ? undefined : !!ws && existsSync(join(ws, ".pi", def.store, `${def.name}.md`));
       // An inline wolf.yaml `identity:` outranks agent/AGENTS.md: the card says the edited file is not the one in use.
       const inline = defId === "identity" && this.opts.identityFile && resolve(this.opts.identityFile) !== resolve(overridePath(home, "identity")) ? this.opts.identityFile : undefined;
-      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const, ...(projectOverride === undefined ? {} : { projectOverride }), ...(inline ? { inlineIdentity: inline } : {}) };
+      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const, ...(projectOverride === undefined ? {} : { projectOverride }), ...(inline ? { inlineIdentity: inline } : {}), ...(defId === "identity" ? { hasOriginal: hasOriginalIdentity(home) } : {}) };
     };
     const readOnly = readOnlyCatalog({ blocks: this.opts.promptBlocks ?? [], tools: this.opts.toolInfos ?? [] }).map((e) => ({
       id: e.id,

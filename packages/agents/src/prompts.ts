@@ -155,6 +155,9 @@ function backupOverride(wolfHome: string, def: PromptDef): void {
 const ORIGINAL = "AGENTS.original.md";
 const originalIdentityPath = (wolfHome: string) => join(wolfHome, "agent", ".backups", "identity", ORIGINAL);
 
+/** Identity only: whether a pristine original exists for reset to restore. */
+export const hasOriginalIdentity = (wolfHome: string): boolean => existsSync(originalIdentityPath(wolfHome));
+
 /** A profile edit must keep a frontmatter block that parses, with `name:` equal to the id, and valid `standards:` names. Returns the problem, or undefined. */
 function profileProblem(name: string, text: string): string | undefined {
   const m = text.match(/^---\n([\s\S]*?)\n---/);

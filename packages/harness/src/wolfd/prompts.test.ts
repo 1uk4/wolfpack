@@ -128,8 +128,11 @@ describe("wolfd /prompts", () => {
     const got = await (await send(`${url}/identity`, "GET")).json();
     expect(got).toMatchObject({ editable: true, text: "I am w.", source: "override" });
     expect(got.inlineIdentity).toBeUndefined();
+    expect(got.hasOriginal).toBe(false); // nothing edited from the console yet: nothing to restore
     expect((await send(`${url}/identity`, "PUT", { text: "I am w2." }, { "If-Match": got.etag })).status).toBe(200);
     expect(readFileSync(join(wolfHome, "agent", "AGENTS.md"), "utf8")).toBe("I am w2.");
+    expect((await (await send(`${url}/identity`, "GET")).json()).hasOriginal).toBe(true);
+    expect((await (await send(`${url}/orchestrator-rules`, "GET")).json()).hasOriginal).toBeUndefined();
     const del = await send(`${url}/identity`, "DELETE", undefined, await etagOf(url, "identity"));
     expect(await del.json()).toMatchObject({ text: "I am w." });
     expect(readdirSync(join(wolfHome, "agent", ".backups", "identity")).sort()).toHaveLength(3); // two timestamped backups and the pristine original

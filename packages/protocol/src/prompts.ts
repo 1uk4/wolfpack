@@ -33,6 +33,8 @@ export const PromptViewSchema = z.object({
   projectOverride: z.boolean().optional(),
   /** Identity only: wolf.yaml `identity:` points at this file, so the running wolf ignores agent/AGENTS.md (the file this entry edits). */
   inlineIdentity: z.string().optional(),
+  /** Identity only: a pristine copy from before the first console edit exists, so Restore original works. */
+  hasOriginal: z.boolean().optional(),
 });
 export type PromptView = z.infer<typeof PromptViewSchema>;
 

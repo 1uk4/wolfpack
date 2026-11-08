@@ -26,6 +26,8 @@ interface PromptRow {
 	projectOverride?: boolean;
 	/** Identity only: wolf.yaml `identity:` points at this other file, so the running wolf ignores agent/AGENTS.md. */
 	inlineIdentity?: string;
+	/** Identity only: a pristine original exists, so Restore original works. */
+	hasOriginal?: boolean;
 }
 
 /** wolf.yaml `prompts.structuredOutput` as the settings view reports it. */
@@ -199,7 +201,7 @@ export function PromptsView() {
 								{row.scope && (<><dt>Scope</dt><dd>{row.scope === "wolf" ? "per wolf" : row.scope}</dd></>)}
 							</dl>
 						)}
-						{row.editable && row.applies && <p className="text-xs text-muted-foreground" data-testid={`prompt-applies-${row.id}`}>An edit applies {row.applies}. The previous version is kept as a backup (last 10).{row.id === "identity" ? " This is the wolf's own agent/AGENTS.md; Reset restores the newest backup (there is no repo default)." : ""}</p>}
+						{row.editable && row.applies && <p className="text-xs text-muted-foreground" data-testid={`prompt-applies-${row.id}`}>An edit applies {row.applies}. {row.id === "identity" ? "Restore original puts back the identity as it was before its first edit here; every edit is also kept as a backup (last 10). This is the wolf's own agent/AGENTS.md (there is no repo default)." : "The previous version is kept as a backup (last 10)."}</p>}
 						{row.editable && row.inlineIdentity && (
 							<p className="text-xs text-destructive" data-testid={`prompt-inline-identity-${row.id}`}>wolf.yaml sets <span className="font-mono">identity: {row.inlineIdentity}</span>, which the running wolf reads instead of this file. An edit here is saved but has no effect until that line is removed.</p>
 						)}
@@ -256,7 +258,7 @@ export function PromptsView() {
 						{row.editable && (
 							<div className="flex gap-2">
 								<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={draft === row.text} onClick={() => void send(row, "PUT")} data-testid={`prompt-save-${row.id}`}>Save</button>
-								<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={row.id === "identity" ? false : row.source === "default"} onClick={() => void send(row, "DELETE")} data-testid={`prompt-reset-${row.id}`}>{row.id === "identity" ? "Restore previous version" : "Reset to default"}</button>
+								<button className="rounded border px-3 py-1 text-sm disabled:opacity-50" disabled={row.id === "identity" ? row.hasOriginal !== true : row.source === "default"} title={row.id === "identity" && row.hasOriginal !== true ? "No original to restore: the identity has not been edited here yet" : undefined} onClick={() => void send(row, "DELETE")} data-testid={`prompt-reset-${row.id}`}>{row.id === "identity" ? "Restore original" : "Reset to default"}</button>
 								<button className="rounded border px-3 py-1 text-sm" onClick={() => void load()}>Reload</button>
 							</div>
 						)}

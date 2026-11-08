@@ -49,6 +49,7 @@ import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, Rev
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
+import { RebuildApplyRequestSchema, RebuildApplyResponseSchema, RebuildListResponseSchema, RebuildPreviewRequestSchema, RebuildPreviewResponseSchema, RebuildRestoreRequestSchema, RebuildRestoreResponseSchema } from "./kb-rebuild.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
@@ -455,6 +456,17 @@ export const ROUTES = {
    * `before` (cursor), `limit` (1..200, default 50), `domain`. Console/browser tokens only.
    */
   hubKbActivity: { scope: "hub", method: "GET", path: "/v1/kb/activity", response: { kind: "json", schema: KbActivityResponseSchema }, status: [200], error: err },
+  /**
+   * KB section rebuild (operator token only; a worker or wolf token is 403). `preview` starts a background job (202 `{jobId}`) that plans the
+   * domain (model calls happen here, no KB lock held) and writes a plan file; poll `plans` for the job and the plan. `apply` commits EXACTLY that
+   * plan file under the hub's KB lock with the curator paused: no model call, hubd keeps answering. It refuses (409 `conflict`) if the domain's
+   * entries changed since the plan or `expectFlags` differs from the plan's flags, backs the domain up first, and bumps the KB revision.
+   * `restore` puts back the state before an apply (by its `stamp`). 404 for an unknown plan or stamp.
+   */
+  hubKbRebuildPreview: { scope: "hub", method: "POST", path: "/v1/admin/kb/rebuild/preview", body: RebuildPreviewRequestSchema, response: { kind: "json", schema: RebuildPreviewResponseSchema }, status: [202], error: err },
+  hubKbRebuildApply: { scope: "hub", method: "POST", path: "/v1/admin/kb/rebuild/apply", body: RebuildApplyRequestSchema, response: { kind: "json", schema: RebuildApplyResponseSchema }, status: [200], error: err },
+  hubKbRebuildRestore: { scope: "hub", method: "POST", path: "/v1/admin/kb/rebuild/restore", body: RebuildRestoreRequestSchema, response: { kind: "json", schema: RebuildRestoreResponseSchema }, status: [200], error: err },
+  hubKbRebuildList: { scope: "hub", method: "GET", path: "/v1/admin/kb/rebuild/plans", response: { kind: "json", schema: RebuildListResponseSchema }, status: [200], error: err },
   hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
   /**
    * The hub's settings (read-only): `prompts` (every engine prompt hubd's KB sweep uses, `{id, group, label, text}`, raw text), `config`

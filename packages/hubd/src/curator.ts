@@ -131,6 +131,15 @@ export interface CuratorDeps {
   options?: CuratorOptions;
 }
 
+/** The engine the curator (and the rebuild preview) use: the test seam, else the librarian engine on the model table. */
+export function curatorEngineFactory(o: CuratorOptions): () => Engine {
+  return o.createEngine ?? (() => createLibrarianEngine(loadModelTable(o.modelsFile ? { file: o.modelsFile } : {}).table));
+}
+/** The embedder the curator (and the rebuild) use: the test seam, else the KB's cached embedder on embedUrl / embedModel / the process defaults. */
+export function curatorEmbedderFactory(roots: KbRoots, o: CuratorOptions): () => CachedEmbedder {
+  return o.getEmbedder ?? (() => createEmbedder(roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }));
+}
+
 const err1 = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
 
 /**
@@ -344,7 +353,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         roots: deps.roots,
         lane: CONTRIBUTIONS_LANE,
         writer,
-        createEngine: o.createEngine ?? (() => createLibrarianEngine(loadModelTable(o.modelsFile ? { file: o.modelsFile } : {}).table)),
+        createEngine: curatorEngineFactory(o),
         leaseOwner: "none", // the hub lease is held by this curator for its whole life
         ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : o.embedUrl || o.embedModel ? { getEmbedder: () => createEmbedder(deps.roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }) } : {}),
         budgetMs: o.budgetMs,

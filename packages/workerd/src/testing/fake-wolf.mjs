@@ -39,6 +39,12 @@ const server = createServer((req, res) => {
     req.on("data", (c) => bufs.push(c));
     return req.on("end", () => json(res, 200, { name: JSON.parse(Buffer.concat(bufs).toString("utf8")).name, value: "revealed" }));
   }
+  // new feature: echo the wolf that served it and the idea it was given
+  if (p === `/v1/wolves/${name}/new-feature` && req.method === "POST") {
+    const bufs = [];
+    req.on("data", (c) => bufs.push(c));
+    return req.on("end", () => json(res, 200, { messageId: `${name}:${JSON.parse(Buffer.concat(bufs).toString("utf8")).idea ?? ""}`, disposition: "started", threadId: `${name}/home` }));
+  }
   // prompt overrides: reflect the If-Match header and the body back as the prompt view; "stale" is the conflict case
   if (p === `/v1/wolves/${name}/prompts/orchestrator-rules` && (req.method === "PUT" || req.method === "DELETE")) {
     const bufs = [];

@@ -55,6 +55,12 @@ describe("console relay through the hub", () => {
     expect(await c.revealWolfSetting!("alpha", "env", "WORK_TOKEN")).toEqual({ name: "WORK_TOKEN", value: "revealed" });
   });
 
+  it("new feature starts on the named wolf across the hub and the worker link, carrying the idea", async () => {
+    const { r, token } = await rig();
+    const c = new HttpConsoleClient({ baseUrl: r.hub.url, hub: { baseUrl: r.hub.url, token, relay: true } });
+    expect(await c.newFeature!("alpha", "dark mode")).toEqual({ messageId: "alpha:dark mode", disposition: "started", threadId: "alpha/home" });
+  });
+
   it("a large response is split into bounded chunk frames and arrives intact", async () => {
     const { r, get } = await rig();
     const sizes: number[] = [];

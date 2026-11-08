@@ -1,11 +1,8 @@
-import { redirect } from "next/navigation";
+import { WolfSettingsView } from "@/components/wolf-settings-view";
 
-/**
- * The settings surface graduated into a centered dialog over the app
- * (settings-app wave, 2026-09-20 — owner decision: modal-only, no page).
- * The URL stays routed but redirects: nothing should land on a dead
- * page; the dialog opens via the sidebar row or mod+,.
- */
+export const dynamic = "force-dynamic";
+
+/** The per-wolf Settings page. The dialog (Keys, Agent, Appearance...) stays reachable from the sidebar's Settings row. */
 export default function SettingsPage() {
-	redirect("/chat/new");
+	return <WolfSettingsView />;
 }

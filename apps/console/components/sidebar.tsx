@@ -1054,6 +1054,19 @@ export function SessionsSidebar() {
 						<FileTextIcon className="size-3" />
 						Prompts
 					</Link>
+					<Link
+						href="/settings"
+						onClick={closeList}
+						data-testid="nav-wolf-settings"
+						aria-current={pathname === "/settings" ? "page" : undefined}
+						className={cn(
+							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
+							pathname === "/settings" ? "bg-accent text-foreground" : "text-muted-foreground",
+						)}
+					>
+						<SettingsIcon className="size-3" />
+						Wolf settings
+					</Link>
 					<WorkNavEntry />
 				</div>
 

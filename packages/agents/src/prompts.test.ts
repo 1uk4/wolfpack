@@ -119,7 +119,7 @@ describe("helper profiles and standards as editable prompts", () => {
 
 describe("the wolf's identity as an editable prompt", () => {
   const file = () => join(a, "agent", "AGENTS.md");
-  const backups = () => (existsSync(join(a, "agent", ".backups", "identity")) ? readdirSync(join(a, "agent", ".backups", "identity")).sort() : []);
+  const backups = () => (existsSync(join(a, "agent", ".backups", "identity")) ? readdirSync(join(a, "agent", ".backups", "identity")).filter((f) => f !== "AGENTS.original.md").sort() : []);
 
   it("an edit is written to agent/AGENTS.md itself, backing up the previous text first", () => {
     mkdirSync(join(a, "agent"), { recursive: true });
@@ -131,15 +131,28 @@ describe("the wolf's identity as an editable prompt", () => {
     expect(backups().map((f) => readFileSync(join(a, "agent", ".backups", "identity", f), "utf8"))).toEqual(["I am Rex."]);
   });
 
-  it("reset restores the newest backup (backing up the current text first) and refuses when there is none", () => {
+  it("reset restores the pristine identity from before the first console edit, every time, and refuses when there is none", () => {
     mkdirSync(join(a, "agent"), { recursive: true });
     writeFileSync(file(), "one");
     expect(code(() => resetPromptOverride(a, "identity"))).toBe("invalid");
     expect(readFileSync(file(), "utf8")).toBe("one");
     writePromptOverride(a, "identity", "two");
+    writePromptOverride(a, "identity", "three");
     resetPromptOverride(a, "identity");
     expect(readFileSync(file(), "utf8")).toBe("one");
-    expect(backups()).toHaveLength(2);
+    writePromptOverride(a, "identity", "four");
+    resetPromptOverride(a, "identity");
+    resetPromptOverride(a, "identity");
+    expect(readFileSync(file(), "utf8")).toBe("one"); // a second reset does not flip to the previous version
+    expect(readFileSync(join(a, "agent", ".backups", "identity", "AGENTS.original.md"), "utf8")).toBe("one");
+  });
+
+  it("refuses an empty or whitespace-only identity and leaves the file untouched", () => {
+    mkdirSync(join(a, "agent"), { recursive: true });
+    writeFileSync(file(), "I am Rex.");
+    for (const bad of ["", "  \n\t "]) expect(code(() => writePromptOverride(a, "identity", bad))).toBe("invalid");
+    expect(readFileSync(file(), "utf8")).toBe("I am Rex.");
+    expect(backups()).toEqual([]);
   });
 
   it("a wolf without an identity file reads as empty text, and the first save needs no backup", () => {

@@ -4,7 +4,7 @@
  * every resolve reads the files, so an edit is seen by the next prompt assembly.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundledAgentsDir, bundledStandardsDir, standardsFor } from "./discover.js";
@@ -30,7 +30,7 @@ export interface PromptDef {
   applies: string;
 }
 
-/** `identity` is the wolf's own `<wolf-home>/agent/AGENTS.md`: no repo default, and reset restores the newest backup. */
+/** `identity` is the wolf's own `<wolf-home>/agent/AGENTS.md`: no repo default, and reset restores the original. */
 export type PromptStore = "prompts" | "agents" | "standards" | "identity";
 
 const RESTART = "when the wolf restarts (wolfd builds its system prompt at start-up; threads reopened in a feature workspace pick it up earlier)";
@@ -114,30 +114,46 @@ function defaultPath(def: PromptDef): string {
 
 const BACKUPS_KEPT = 10;
 
-/** Copy the current override to `<wolf-home>/agent/.backups/<store>/<name>.<timestamp>.md` and prune to the newest 10 per file. No override: nothing to back up. */
-function backupOverride(wolfHome: string, def: PromptDef): void {
-  const file = overridePath(wolfHome, def.id);
+/** Copy `file` to `<dir>/<name>.<timestamp>.<ext>` and prune to the newest `kept` per name. A missing file: nothing to back up. */
+export function backupFile(file: string, dir: string, name: string, ext = "md", kept = BACKUPS_KEPT): void {
   if (!existsSync(file)) return;
-  const dir = join(wolfHome, "agent", ".backups", def.store);
   mkdirSync(dir, { recursive: true });
   let t = Date.now();
   const stamp = (ms: number) => new Date(ms).toISOString().replace(/\D/g, "");
-  while (existsSync(join(dir, `${def.name}.${stamp(t)}.md`))) t++;
-  copyFileSync(file, join(dir, `${def.name}.${stamp(t)}.md`));
+  while (existsSync(join(dir, `${name}.${stamp(t)}.${ext}`))) t++;
+  copyFileSync(file, join(dir, `${name}.${stamp(t)}.${ext}`));
   const mine = readdirSync(dir)
-    .filter((f) => f.startsWith(`${def.name}.`) && /^\d+\.md$/.test(f.slice(def.name.length + 1)))
+    .filter((f) => f.startsWith(`${name}.`) && new RegExp(`^\\d+\\.${ext}$`).test(f.slice(name.length + 1)))
     .sort();
-  for (const old of mine.slice(0, Math.max(0, mine.length - BACKUPS_KEPT))) rmSync(join(dir, old), { force: true });
+  for (const old of mine.slice(0, Math.max(0, mine.length - kept))) rmSync(join(dir, old), { force: true });
 }
 
-function newestBackup(wolfHome: string, def: PromptDef): string | undefined {
-  const dir = join(wolfHome, "agent", ".backups", def.store);
-  if (!existsSync(dir)) return undefined;
-  const mine = readdirSync(dir)
-    .filter((f) => f.startsWith(`${def.name}.`) && /^\d+\.md$/.test(f.slice(def.name.length + 1)))
-    .sort();
-  return mine.length ? readFileSync(join(dir, mine[mine.length - 1]!), "utf8") : undefined;
+/** Replace `file` atomically (temp file + rename), keeping its mode; a symlink is followed so the link itself stays. */
+export function atomicWrite(file: string, text: string): void {
+  let target = file;
+  try {
+    target = realpathSync(file);
+  } catch {
+    // new file
+  }
+  const tmp = `${target}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, text, existsSync(target) ? { mode: statSync(target).mode & 0o7777 } : undefined);
+    renameSync(tmp, target);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
 }
+
+/** Copy the current override to `<wolf-home>/agent/.backups/<store>/<name>.<timestamp>.md` and prune to the newest 10 per file. No override: nothing to back up. */
+function backupOverride(wolfHome: string, def: PromptDef): void {
+  backupFile(overridePath(wolfHome, def.id), join(wolfHome, "agent", ".backups", def.store), def.name);
+}
+
+/** The identity as it was before the first edit through the console; never pruned. */
+const ORIGINAL = "AGENTS.original.md";
+const originalIdentityPath = (wolfHome: string) => join(wolfHome, "agent", ".backups", "identity", ORIGINAL);
 
 /** A profile edit must keep a frontmatter block that parses, with `name:` equal to the id, and valid `standards:` names. Returns the problem, or undefined. */
 function profileProblem(name: string, text: string): string | undefined {
@@ -206,35 +222,32 @@ export function writePromptOverride(wolfHome: string, id: string, text: string, 
   checkWritable(id, ifMatch, wolfHome);
   if (Buffer.byteLength(text, "utf8") > PROMPT_MAX_BYTES) throw new PromptWriteError("too_large", `prompt text is over ${PROMPT_MAX_BYTES} bytes`);
   const def = requireDef(id);
+  if (def.store === "identity" && text.trim() === "") throw new PromptWriteError("invalid", "the identity cannot be empty");
   if (def.store === "agents") {
     const problem = profileProblem(def.name, text);
     if (problem) throw new PromptWriteError("invalid", problem);
   }
   const file = overridePath(wolfHome, id);
+  if (def.store === "identity" && existsSync(file) && !existsSync(originalIdentityPath(wolfHome))) {
+    mkdirSync(dirname(originalIdentityPath(wolfHome)), { recursive: true });
+    copyFileSync(file, originalIdentityPath(wolfHome));
+  }
   backupOverride(wolfHome, def);
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    writeFileSync(tmp, text);
-    renameSync(tmp, file);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    throw e;
-  }
+  atomicWrite(file, text);
   return resolvePrompt(id, wolfHome);
 }
 
 /**
- * Remove a wolf's override (reset to the repo default). Idempotent. The identity has no default: reset restores the newest
- * backup (the current text is backed up first, so a reset can be undone) and is refused when there is no backup.
+ * Remove a wolf's override (reset to the repo default). Idempotent. The identity has no default: reset restores the copy kept
+ * from before its first console edit (the current text is backed up first) and is refused when there is none.
  */
 export function resetPromptOverride(wolfHome: string, id: string, ifMatch?: string): ResolvedPrompt {
   checkWritable(id, ifMatch, wolfHome);
   const def = requireDef(id);
   if (def.store === "identity") {
-    const previous = newestBackup(wolfHome, def);
-    if (previous === undefined) throw new PromptWriteError("invalid", "there is no earlier version of the identity to restore");
-    return writePromptOverride(wolfHome, id, previous);
+    if (!existsSync(originalIdentityPath(wolfHome))) throw new PromptWriteError("invalid", "there is no original identity to restore (it has not been edited from the console)");
+    return writePromptOverride(wolfHome, id, readFileSync(originalIdentityPath(wolfHome), "utf8"));
   }
   backupOverride(wolfHome, requireDef(id));
   rmSync(overridePath(wolfHome, id), { force: true });

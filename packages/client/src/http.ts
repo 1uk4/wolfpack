@@ -26,6 +26,7 @@ import {
   type KbCommitResponse,
   DeviceList,
   MintPairingCodeResponse,
+  NewFeatureResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -182,6 +183,11 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
     return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
+  }
+
+  /** Start the work-creation flow on the wolf's home thread with the wolf's own resolved prompts. */
+  async newFeature(wolf: string, idea?: string): Promise<NewFeatureResponse> {
+    return (await this.json("newFeature", { name: wolf }, ROUTES.newFeature.response.schema, idea ? { idea } : {}, wolf)) as NewFeatureResponse;
   }
 
   async listPrompts(wolf: string): Promise<PromptView[]> {

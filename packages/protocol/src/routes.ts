@@ -44,6 +44,7 @@ import {
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
+import { NewFeatureBodySchema, NewFeatureResponseSchema } from "./schemas.js";
 import { HubSettingsSchema } from "./hub-settings.js";
 import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
@@ -255,6 +256,12 @@ export const ROUTES = {
   revealWolfSetting: { method: "POST", path: "/v1/wolves/:name/settings/reveal", body: RevealBodySchema, response: { kind: "json", schema: RevealResponseSchema }, status: [200], error: err },
   /** Restart this wolfd (it exits and its supervisor starts it again). 409 `conflict` when nothing supervises it, 429 `rate_limited` (`details.retryAfterSeconds`, `Retry-After`) within the first 60s of the process. Answers before exiting. */
   restartWolf: { method: "POST", path: "/v1/wolves/:name/settings/restart", response: { kind: "json", schema: RestartResponseSchema }, status: [200], error: err },
+  /**
+   * Start the grilling -> spec -> tickets flow: the wolf resolves its own `new-work` prompt (its overrides of new-work, grilling, to-spec,
+   * to-tickets) on its host and submits it, plus the optional idea, as the first message of its home thread. Answers the submit ack and
+   * the thread id. 409 `busy` when the home thread is mid-turn.
+   */
+  newFeature: { method: "POST", path: "/v1/wolves/:name/new-feature", body: NewFeatureBodySchema, response: { kind: "json", schema: NewFeatureResponseSchema }, status: [200], error: err },
   getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   /**
    * Change the thread's settings (body: `tier`, `autoShip` and/or `color` (a palette key; null = automatic); the rest is kept). Persisted: survives a wolf restart.

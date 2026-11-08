@@ -1568,6 +1568,12 @@ export const SubmitAckSchema = z.object({
 });
 export type SubmitAck = z.infer<typeof SubmitAckSchema>;
 
+/** Start the work-creation flow on a wolf: body `{idea?}`; the wolf sends its own resolved new-work prompt into its home thread. */
+export const NewFeatureBodySchema = z.object({ idea: z.string().max(2000).optional() });
+export type NewFeatureBody = z.infer<typeof NewFeatureBodySchema>;
+export const NewFeatureResponseSchema = SubmitAckSchema.extend({ threadId: z.string() });
+export type NewFeatureResponse = z.infer<typeof NewFeatureResponseSchema>;
+
 // --- feature progress: bind a thread to a work item ---
 /** Bind the thread's conversation to a work item (a task, issue or spike). Wire: the thread id rides the path. */
 export const BindThreadRequestSchema = z.object({ workItemId: z.string().min(1) });

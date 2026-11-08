@@ -37,6 +37,24 @@ describe("den extension bundle", () => {
   }, 30_000);
 });
 
+describe("den bundle default prompts", () => {
+  it("lets the bundled memory extension read the work-creation prompts with no repo checkout beside it", async () => {
+    const dir = fs.mkdtempSync(path.join(tmp, "prompts-"));
+    const built = await buildRemoteBundle({ name: "p", role: "tester", extensions: ["memory"] });
+    fs.writeFileSync(path.join(dir, "agent.tgz"), Buffer.from(built.bundleB64, "base64"));
+    execFileSync("tar", ["-xzf", path.join(dir, "agent.tgz"), "-C", dir]);
+    const extDir = path.join(dir, "extensions", "wolfpack-memory");
+    const probe = path.join(extDir, "probe.mjs");
+    await esbuild.build({
+      stdin: { contents: `import { newWorkPrompt } from ${JSON.stringify(agentsSrc)};\nconsole.log(newWorkPrompt([{ name: "demo", description: "d" }]));`, resolveDir: dir },
+      outfile: probe, bundle: true, platform: "node", format: "esm", logLevel: "silent",
+    });
+    const out = execFileSync("node", [probe], { encoding: "utf8" });
+    expect(out).toContain("- **demo** — d");
+    expect(out).not.toContain("{{");
+  }, 30_000);
+});
+
 describe("extension build with shipped standards", () => {
   // A small extension: one agent profile (worker, which always gets the testing and git standards) and optional assets.
   const fixture = (name: string, standardText?: string) => {

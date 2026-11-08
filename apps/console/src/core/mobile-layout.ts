@@ -28,10 +28,15 @@ export function initialListOpen(mobile: boolean, stored: string | null, path = "
 	return mobile ? path === "/" : storedListOpen(stored);
 }
 
-/** Height of the visible area above the on-screen keyboard (visualViewport), px; falls back to the layout height. */
-export function visibleHeight(vv: { height: number; offsetTop?: number } | null | undefined, innerHeight: number): number {
-	const h = vv?.height ?? innerHeight;
-	return Math.max(0, Math.round(h));
+/** Smallest gap between the layout height and the visualViewport that counts as an open on-screen keyboard. iOS keyboards are 250px+;
+ *  a smaller gap is browser chrome / a stale value left after the keyboard closed, and must not shrink the shell. */
+export const KEYBOARD_MIN_GAP = 150;
+
+/** Height the phone shell should take, px, or null for "use 100dvh". Only an open keyboard (a gap >= KEYBOARD_MIN_GAP) shrinks it. */
+export function keyboardShellHeight(vv: { height: number } | null | undefined, innerHeight: number): number | null {
+	if (!vv) return null;
+	const h = Math.max(0, Math.round(vv.height));
+	return innerHeight - h >= KEYBOARD_MIN_GAP ? h : null;
 }
 
 /** Label for the control that returns to the list on a phone. */

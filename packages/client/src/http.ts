@@ -16,6 +16,11 @@ import {
   type ThreadContext,
   type ThreadSettingsPatch,
   type ThreadSettingsResponse,
+  type PromptView,
+  type ListPromptsResponse,
+  type WolfSettingsView,
+  type RevealResponse,
+  type RestartResponse,
   type RouteName,
   type KbCommitRequest,
   type KbCommitResponse,
@@ -41,6 +46,7 @@ import {
   type GraduationObservations,
   type GraduationStatus,
   type WorkListResponse,
+  type HubSettings,
   type KbActivityResponse,
   type KbActivityQuery,
   type PendingCard,
@@ -176,6 +182,37 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
     return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
+  }
+
+  /** Start the work-creation flow on the wolf's home thread with the wolf's own resolved prompts. */
+
+  async listPrompts(wolf: string): Promise<PromptView[]> {
+    return ((await this.json("listPrompts", { name: wolf }, ROUTES.listPrompts.response.schema, undefined, wolf)) as ListPromptsResponse).prompts;
+  }
+
+  /** `ifMatch`: the etag the caller loaded; a stale one is a ProtocolError `conflict`. */
+  async putPrompt(wolf: string, id: string, text: string, ifMatch: string): Promise<PromptView> {
+    return (await this.json("putPrompt", { name: wolf, id }, ROUTES.putPrompt.response.schema, { text }, wolf, "", { "If-Match": ifMatch })) as PromptView;
+  }
+
+  async resetPrompt(wolf: string, id: string, ifMatch: string): Promise<PromptView> {
+    return (await this.json("resetPrompt", { name: wolf, id }, ROUTES.resetPrompt.response.schema, undefined, wolf, "", { "If-Match": ifMatch })) as PromptView;
+  }
+
+  async getWolfSettings(wolf: string): Promise<WolfSettingsView> {
+    return (await this.json("getWolfSettings", { name: wolf }, ROUTES.getWolfSettings.response.schema, undefined, wolf)) as WolfSettingsView;
+  }
+
+  async putWolfSettings(wolf: string, set: Record<string, unknown>, ifMatch: string): Promise<WolfSettingsView> {
+    return (await this.json("putWolfSettings", { name: wolf }, ROUTES.putWolfSettings.response.schema, { set }, wolf, "", { "If-Match": ifMatch })) as WolfSettingsView;
+  }
+
+  async revealWolfSetting(wolf: string, source: "env" | "config", name: string): Promise<RevealResponse> {
+    return (await this.json("revealWolfSetting", { name: wolf }, ROUTES.revealWolfSetting.response.schema, { source, name }, wolf)) as RevealResponse;
+  }
+
+  async restartWolf(wolf: string): Promise<RestartResponse> {
+    return (await this.json("restartWolf", { name: wolf }, ROUTES.restartWolf.response.schema, undefined, wolf)) as RestartResponse;
   }
 
   async getThreadSettings(threadId: string): Promise<ThreadSettingsResponse> {
@@ -491,6 +528,11 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** The hub curator's KB activity from the hub's own ledger (GET /v1/kb/activity). Hub clients only. */
+  async getHubSettings(): Promise<HubSettings> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "getHubSettings needs a hub client", false);
+    return (await this.json("hubSettings", {}, ROUTES.hubSettings.response.schema)) as HubSettings;
+  }
+
   async getKbActivity(query: KbActivityQuery = {}): Promise<KbActivityResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "getKbActivity needs a hub client", false);
     const q = new URLSearchParams();
@@ -578,8 +620,8 @@ export class HttpConsoleClient implements ConsoleClient {
     throw await this.toError(res, threadId);
   }
 
-  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = ""): Promise<unknown> {
-    const headers: Record<string, string> = {};
+  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = "", extraHeaders: Record<string, string> = {}): Promise<unknown> {
+    const headers: Record<string, string> = { ...extraHeaders };
     const init: RequestInit & { headers: Record<string, string> } = { headers };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";

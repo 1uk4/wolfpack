@@ -44,6 +44,9 @@ import {
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
+import { HubSettingsSchema } from "./hub-settings.js";
+import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
+import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
@@ -222,6 +225,40 @@ export const ROUTES = {
   /**
    * The thread's composer settings: model tier (`main|smart|fast`) and auto-ship. `models` hints which model each tier
    * resolves to on this wolf. Defaults `{tier: "main", autoShip: false}`. 404 `not_found` for an unknown thread.
+   */
+  /**
+   * The wolf's prompt registry, each with its effective text (`source` default|override), `etag` and `editable` flag. Overrides live in the
+   * wolf's home (`agent/prompts/<id>.md`); an edit applies when the wolf's system prompt is next built (wolfd builds it at start-up).
+   * 404 `not_found` for an unknown wolf or prompt.
+   */
+  listPrompts: { method: "GET", path: "/v1/wolves/:name/prompts", response: { kind: "json", schema: ListPromptsResponseSchema }, status: [200], error: err },
+  getPrompt: { method: "GET", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
+  /**
+   * Write the wolf's override (atomic). Header `If-Match: <etag>` is required (missing: 400 `invalid_request`): a stale etag is 409 `conflict`. 403 `forbidden` for a
+   * prompt that is not wolf-editable, 413 `too_large` over 64 KB, 400 `invalid_request` for a bad body. Answers the new view.
+   */
+  putPrompt: { method: "PUT", path: "/v1/wolves/:name/prompts/:id", body: PutPromptBodySchema, response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
+  /** Remove the override (reset to the repo default); same required `If-Match` / 403 / 409 rules. Idempotent. Answers the default view. */
+  resetPrompt: { method: "DELETE", path: "/v1/wolves/:name/prompts/:id", response: { kind: "json", schema: PromptViewSchema }, status: [200], error: err },
+  /**
+   * The wolf's settings: wolf.yaml as parsed now with secrets masked (`{set}`), the env var NAMES it reads (+ whether set), the editable keys,
+   * `restartNeeded` and `restartable`. Never carries a secret value. 404 `not_found` for an unknown wolf.
+   */
+  getWolfSettings: { method: "GET", path: "/v1/wolves/:name/settings", response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },
+  /**
+   * Edit wolf.yaml (validated against the wolf.yaml schema, atomic). Body `{set: {"<dotted key>": value|null}}`; header `If-Match: <etag>` is required
+   * (missing: 400 `invalid_request`; stale: 409 `conflict`). 400 `invalid_request` for an unknown/non-editable key or a value the schema refuses, 413 `too_large`.
+   * Applies on restart: the answer has `restartNeeded: true`.
+   */
+  putWolfSettings: { method: "PUT", path: "/v1/wolves/:name/settings", body: PutWolfSettingsBodySchema, response: { kind: "json", schema: WolfSettingsViewSchema }, status: [200], error: err },
+  /** Reveal ONE secret value (an env var listed in the view, or a wolf.yaml key the masked read masks). POST so it is never cached or logged as a read. 404 `not_found` for a name that is not listed. */
+  revealWolfSetting: { method: "POST", path: "/v1/wolves/:name/settings/reveal", body: RevealBodySchema, response: { kind: "json", schema: RevealResponseSchema }, status: [200], error: err },
+  /** Restart this wolfd (it exits and its supervisor starts it again). 409 `conflict` when nothing supervises it, 429 `rate_limited` (`details.retryAfterSeconds`, `Retry-After`) within the first 60s of the process. Answers before exiting. */
+  restartWolf: { method: "POST", path: "/v1/wolves/:name/settings/restart", response: { kind: "json", schema: RestartResponseSchema }, status: [200], error: err },
+  /**
+   * Start the grilling -> spec -> tickets flow: the wolf resolves its own `new-work` prompt (its overrides of new-work, grilling, to-spec,
+   * to-tickets) on its host and submits it, plus the optional idea, as the first message of its home thread. Answers the submit ack and
+   * the thread id. 409 `busy` when the home thread is mid-turn.
    */
   getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   /**
@@ -419,6 +456,11 @@ export const ROUTES = {
    */
   hubKbActivity: { scope: "hub", method: "GET", path: "/v1/kb/activity", response: { kind: "json", schema: KbActivityResponseSchema }, status: [200], error: err },
   hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
+  /**
+   * The hub's settings (read-only): `prompts` (every engine prompt hubd's KB sweep uses, `{id, group, label, text}`, raw text), `config`
+   * (hubd's effective config; credentials come back as `{set: true}`, never the value) and `version`. Console/browser tokens only (a worker token gets 403).
+   */
+  hubSettings: { scope: "hub", method: "GET", path: "/v1/settings", response: { kind: "json", schema: HubSettingsSchema }, status: [200], error: err },
   /**
    * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker
    * token: the domains its host's wolves subscribe to). Query `domain` (one domain; 403 when the token may not read it, 404 when unknown),

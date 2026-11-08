@@ -115,14 +115,6 @@ export * from "./work/index.js";
 export { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidations.js";
 export { fillPromptTemplate } from "./config/prompts/template.js";
 
-// Task prompts
-export {
-  NEW_WORK_PROMPT,
-  newWorkPrompt,
-  GRILLING_PROTOCOL,
-  TO_SPEC_PROTOCOL,
-  TO_TICKETS_PROTOCOL,
-} from "./config/prompts/tasks.js";
 
 // Prompt context — shared rendering for system prompt injection
 export { renderDenContext, renderKbAccess } from "./prompt-context.js";
@@ -211,3 +203,6 @@ export {
 export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
 export { CHILDREN_CAP, LOG_TAIL, shapeWorkList, shapeWorkRecord, toWorkChild, withoutLog, logTail, type ShapeWorkItem, type ShapedWorkChild, type ShapedWorkListItem, type ShapedWorkRecord } from "./work-shape.js";
 export { parseRecordLines, stripSources, lineRef, numberRecordLines, formatSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
+
+// Every memory prompt template and stage text (the Prompts page lists them read-only)
+export * from "./config/prompts/index.js";

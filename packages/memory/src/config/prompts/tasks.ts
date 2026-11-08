@@ -88,14 +88,4 @@ RULES:
 5. Keep titles short and action-oriented
 6. Max 10 suggestions per breakdown`;
 
-// The task-create flow lives in ./task-create/*. One orchestrator prompt
-// (NEW_WORK_PROMPT) routes by kind; features run the full three-stage
-// pipeline (grilling -> to-spec -> to-tickets). Re-exported here so the rest
-// of the package keeps its import surface (`@wolfpack/memory`).
-export {
-  NEW_WORK_PROMPT,
-  newWorkPrompt,
-  GRILLING_PROTOCOL,
-  TO_SPEC_PROTOCOL,
-  TO_TICKETS_PROTOCOL,
-} from "./task-create/index.js";
+// The task-create prompts (new-work, grilling, to-spec, to-tickets) are registry prompts in @wolfpack/agents (packages/agents/prompts/*.md).

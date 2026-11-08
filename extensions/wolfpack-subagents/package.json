@@ -16,7 +16,7 @@
     "typebox": "*"
   },
   "wolfpack": {
-    "assets": ["../../packages/agents/standards"]
+    "assets": ["../../packages/agents/standards", "../../packages/agents/prompts"]
   },
   "pi": {
     "extensions": ["./index.ts"],

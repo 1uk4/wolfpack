@@ -19,6 +19,8 @@ export interface GraphLayoutOptions {
 	slimWidth?: number;
 	/** Optional sort class per id (lower sits higher). Within each column nodes are ordered by it first, the barycenter / input order breaking ties (unknown ids last). */
 	orderClass?: ReadonlyMap<string, number>;
+	/** Opt-in: after the grid is placed, each column (right to left) is moved so a node sits level with the middle of what depends on it, keeping the column's order and gap. Untangles a tree whose leaf column is taller than its parents. */
+	alignToDependents?: boolean;
 }
 
 export interface PlacedGraphNode {
@@ -120,6 +122,22 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 		});
 		totalHeight = Math.max(totalHeight, y);
 	});
+	if (opts.alignToDependents) {
+		const byId = new Map(placed.map((p) => [p.id, p] as const));
+		const dependentsOf = new Map<string, string[]>();
+		for (const e of edges) if (byId.has(e.from) && byId.has(e.to)) (dependentsOf.get(e.to) ?? dependentsOf.set(e.to, []).get(e.to)!).push(e.from);
+		for (let rank = columns.length - 2; rank >= 0; rank--) {
+			const col = placed.filter((p) => p.rank === rank).sort((a, b) => a.y - b.y);
+			let floor = 0;
+			for (const p of col) {
+				const ds = (dependentsOf.get(p.id) ?? []).map((d) => byId.get(d)!).filter((d) => d.rank > rank);
+				const want = ds.length ? ds.reduce((sum, d) => sum + d.y + d.height / 2, 0) / ds.length - p.height / 2 : p.y;
+				p.y = Math.max(floor, Math.round(want));
+				floor = p.y + p.height + gapY;
+			}
+		}
+		totalHeight = Math.max(0, ...placed.map((p) => p.y + p.height));
+	}
 	const order = new Map(nodes.map((n, i) => [n.id, i] as const));
 	placed.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
 	const at = new Map(placed.map((p) => [p.id, p] as const));

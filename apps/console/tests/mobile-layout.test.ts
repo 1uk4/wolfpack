@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, visibleHeight } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -39,9 +39,11 @@ test("the floating back control shows only on a phone, list closed, with no Side
 	assert.equal(needsFloatingBack(false, false, 0), false);
 });
 
-test("visibleHeight prefers the visualViewport (keyboard) and falls back to innerHeight", () => {
-	assert.equal(visibleHeight({ height: 500.4 }, 844), 500);
-	assert.equal(visibleHeight(null, 844), 844);
+test("keyboardShellHeight shrinks the shell only for an open keyboard, not a small or stale viewport gap", () => {
+	assert.equal(keyboardShellHeight({ height: 500.4 }, 852), 500); // keyboard open
+	assert.equal(keyboardShellHeight({ height: 740 }, 852), null); // 112px short: stale/chrome, use 100dvh
+	assert.equal(keyboardShellHeight({ height: 852 }, 852), null);
+	assert.equal(keyboardShellHeight(null, 852), null);
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

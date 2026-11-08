@@ -1,19 +1,7 @@
 "use client";
 /**
- * The Agent section: the THREE MODEL SLOTS, the compaction threshold, and
- * the prompt override switches — groups Models / Context / System prompts.
- *
- * Model slots: each slot row carries the shared dropdown (fuzzy search,
- * arrow-walk, Enter pick — ModelMenuList/ThinkingMenuList from
- * ./model-menu.tsx) over the FEDERATED catalog (/api/models serves only
- * keyed providers, fresh per call — saving a key in Keys immediately
- * widens this picker). The vision slot filters to image-capable models
- * (Model.input). The slots live in the `models` settings section (PUT
- * /api/settings/models — slot pins are engine-level, not per-chat); the
- * rest of the section writes the `agent` section. A stored id stays
- * VISIBLE even when its provider's key lapsed out of the catalog — a
- * trigger showing "Default" over a live override would lie about the
- * record.
+ * The Agent section: the compaction threshold and the prompt override switches. The model slots are gone: per-wolf models are
+ * edited on the wolf Settings page (/settings).
  *
  * Prompts: GET /api/settings/prompts segments — the assistant's one
  * section (sectionedSegments). The row rulings: only the TOGGLE grays
@@ -26,37 +14,18 @@
  * view's enabled flags derive from the record's switches.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { MenuShell } from "@/components/menu-shell";
 import { InlineMic, joinDictation, useFieldMic } from "@/components/dictation";
 import { useSettingsSaved } from "@/components/settings-signal";
-import { defaultOrderLevel, populateLevel } from "@/components/thinking-default";
 import type React from "react";
 import {
 	COMPACTION_THRESHOLD_FLOOR,
-	MODEL_SLOTS,
 	resolveSettings,
 	type AgentSettings,
 	type CompactionSettings,
-	type ModelCatalogEntry,
-	type ModelSlotName,
-	type ModelsSettings,
 } from "@/src/core";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { prettyModel } from "@/components/usage-format";
-import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow, Toggle, CommitInput } from "./controls.tsx";
-import { ModelMenuList, ThinkingMenuList } from "./model-menu";
-
-/** One slot's display identity — the tier's roster as the row hint rides
- *  with the resolved default (owner: the hint ALWAYS names the default). */
-const SLOT_META: Record<ModelSlotName, { label: string; roster: string }> = {
-	strong: { label: "Strong", roster: "The main model for your sessions" },
-	cheap: { label: "Cheap", roster: "Reserved for lightweight background work" },
-	vision: { label: "Vision", roster: "Reserved for image-capable work" },
-};
-
-const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** SegmentInfo as GET /api/settings/prompts returns it. */
 interface SegmentInfo {
@@ -65,39 +34,6 @@ interface SegmentInfo {
 	overrideText: string | null;
 	enabled: boolean;
 	shared: boolean;
-}
-
-/** The GET /api/models response fields this section consumes. */
-interface ModelsBody {
-	models: ModelCatalogEntry[];
-	/** The three tiers' RESOLVED pins (BYOK: NULL per unset tier — no
-	 *  factory floor) — machinery only (the thinking list fallback); the
-	 *  rows' displays read the record override, never a phantom pin. */
-	slots: Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: string } | null>;
-}
-
-/** Compose: one slot's model/thinking override. Empty model = absent
- *  override (Default — falls to the factory pin); empty thinking = the
- *  tier keeps its resolved thinking budget. Per-field independence, same
- *  as the schema's ModelSlot. Pure — exported for tests. */
-export function composeSlotModel(
-	models: ModelsSettings | undefined,
-	slot: ModelSlotName,
-	provider: string,
-	id: string,
-	thinking: string,
-): ModelsSettings {
-	const prev = models?.[slot];
-	const next = { ...models };
-	if (!provider && !id && !thinking) {
-		delete next[slot];
-		return next;
-	}
-	next[slot] = {
-		...(provider && id ? { model: { provider, id } } : prev?.model ? { model: prev.model } : {}),
-		...(thinking ? { thinkingLevel: thinking as ThinkingLevel } : {}),
-	};
-	return next;
 }
 
 /** The indicator under a row whose override IS the version in use (owner
@@ -186,36 +122,23 @@ function MenuTrigger({
 
 export function AgentSection({
 	agent,
-	models,
 	compaction,
 	onSectionChange,
-	onModelsChange,
 	onCompactionChange,
 }: {
 	agent: AgentSettings | undefined;
-	/** The `models` section (slot pins — engine-level, PUT /api/settings/models). */
-	models: ModelsSettings | undefined;
 	/** The `compaction` section — its own PUT (the threshold is engine
 	 *  behavior, not an agent-section key; owner round 14, Agent tab). */
 	compaction: CompactionSettings | undefined;
 	/** Writes the composed WHOLE agent section (replace-PUT discipline). */
 	onSectionChange: (next: AgentSettings) => void;
-	/** Writes the composed models section (slots — replace-PUT discipline). */
-	onModelsChange: (next: ModelsSettings) => void;
 	/** Writes the whole compaction section (replace-PUT discipline). */
 	onCompactionChange: (next: CompactionSettings) => void;
 }) {
-	const [catalog, setCatalog] = useState<ModelCatalogEntry[] | null>(null);
-	/** The three tiers' resolved pins — GET /api/models `slots`. The rows'
-	 *  Default hints and thinking lists resolve from it. */
-	const [slots, setSlots] = useState<ModelsBody["slots"] | null>(null);
 	const [prompts, setPrompts] = useState<{ assistant: SegmentInfo[] } | null>(null);
 	const [openSegment, setOpenSegment] = useState<string | null>(null);
 	const [segmentDraft, setSegmentDraft] = useState<Record<string, string>>({});
 	const [segmentStatus, setSegmentStatus] = useState<string | null>(null);
-	/** One open dropdown for the whole section: which slot, which kind. */
-	const [openMenu, setOpenMenu] = useState<{ target: ModelSlotName; kind: "model" | "thinking" } | null>(null);
-	const menuAnchorRef = useRef<HTMLSpanElement>(null);
 
 	/** Re-read the prompt-segment view — the signal seam for the
 	 *  2026-09-26 state-echo fix: the view's `enabled` flags DERIVE from
@@ -231,23 +154,7 @@ export function AgentSection({
 			.catch(() => {});
 	}, []);
 
-	// The catalog (federated: keyed providers only), the resolved slots,
-	// the prompt segments, and the search engines' key presence — one
-	// fetch each per section mount. The models read ALSO re-runs on the
-	// cross-surface signal (fix wave: another surface's write re-reads
-	// into the slot rows live).
-	const readModels = useCallback(() => {
-		fetch("/api/models")
-			.then((r) => r.json())
-			.then((body: ModelsBody) => {
-				setCatalog(body.models);
-				setSlots(body.slots);
-			})
-			.catch(() => setCatalog(null));
-	}, []);
-
 	useSettingsSaved((section) => {
-		if (section === "models") readModels();
 		// THE state-echo root cause: the prompt switches write through the
 		// agent section, but this view (the toggles' truth) never re-read —
 		// the settings-saved law (every reader re-reads) was missing this
@@ -256,42 +163,11 @@ export function AgentSection({
 	});
 
 	useEffect(() => {
-		readModels();
 		fetch("/api/settings/prompts")
 			.then((r) => r.json())
 			.then((body: { assistant: SegmentInfo[] }) => setPrompts(body))
 			.catch(() => setPrompts(null));
 	}, []);
-
-	// The dropdown contract (the chat model selector's, mirrored): any
-	// click outside the open menu — or an Esc — closes it. Esc is CLAIMED
-	// with stopPropagation so the settings dialog behind does NOT also
-	// close. A pointerdown on the backdrop is left for the dialog (its own
-	// click closes everything); a click inside the dialog just closes us.
-	useEffect(() => {
-		if (openMenu === null) return;
-		const onPointerDown = (e: PointerEvent) => {
-			const target = e.target as Node;
-			if (menuAnchorRef.current?.contains(target)) return;
-			if (target instanceof Element && target.closest("[data-wp-menu]")) return;
-			if (target instanceof Element && target.closest('[role="dialog"]')) {
-				setOpenMenu(null);
-			}
-			// else: outside the dialog — the dialog's own close handles it.
-		};
-		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.stopPropagation();
-				setOpenMenu(null);
-			}
-		};
-		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKeyDown);
-		};
-	}, [openMenu]);
 
 	async function saveSegment(path: string, text: string) {
 		setSegmentStatus(null);
@@ -452,114 +328,6 @@ export function AgentSection({
 
 	return (
 		<>
-			<SettingsGroup label="Models" testid="group-models">
-				{MODEL_SLOTS.map((slot) => {
-					const override = models?.[slot];
-					const modelId = override?.model?.id ?? "";
-					const provider = override?.model?.provider ?? "";
-					const thinking = override?.thinkingLevel ?? "";
-					// The tier's resolved pin is machinery only now (owner, fix
-					// wave): the UI never names the factory fallback — the hint
-					// carries the roster, the triggers read "—" when unpicked — but
-					// the pin still governs the thinking level LIST when no override
-					// names a model to read levels from.
-					const pin = slots?.[slot];
-					// The model whose levels govern the thinking list: the
-					// override, else the resolved pin (when it's in the federated
-					// catalog); the standard ladder as the last fallback.
-					const coord = override?.model ?? pin?.model;
-					const chosen = coord ? catalog?.find((m) => m.id === coord.id && m.provider === coord.provider) : undefined;
-					const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
-					const thisMenuOpen = openMenu?.target === slot ? openMenu.kind : null;
-					// Vision slots pick from image-capable models only.
-					const slotCatalog =
-						slot === "vision" ? catalog?.filter((m) => m.input.includes("image")) : catalog;
-					return (
-						<SettingsRow
-							key={slot}
-							label={SLOT_META[slot].label}
-							hint={SLOT_META[slot].roster}
-							testid={`slot-row-${slot}`}
-						>
-							{/* The anchor for the outside-click contract is the
-							    span holding BOTH triggers of the open menu. */}
-							<span
-								ref={thisMenuOpen ? menuAnchorRef : undefined}
-								className="relative flex items-center gap-2"
-							>
-								<MenuTrigger
-									value={modelId ? prettyModel(modelId) : ""}
-									emptyLabel="—"
-									ariaLabel={`${SLOT_META[slot].label} model`}
-									testid={`slot-model-${slot}`}
-									open={thisMenuOpen === "model"}
-									onClick={() => setOpenMenu(thisMenuOpen === "model" ? null : { target: slot, kind: "model" })}
-									widthClass="min-w-20"
-								/>
-								<MenuTrigger
-									// Legacy display (chunk 2 item 4): no stored level + a known
-									// model → the RESOLVED level (the ordering's first supported —
-									// what the engine build runs). Display-only until a pick writes.
-									value={thinking || (chosen ? defaultOrderLevel(levels) : "")}
-									emptyLabel="—"
-									ariaLabel={`${SLOT_META[slot].label} thinking`}
-									testid={`slot-thinking-${slot}`}
-									open={thisMenuOpen === "thinking"}
-									onClick={() => setOpenMenu(thisMenuOpen === "thinking" ? null : { target: slot, kind: "thinking" })}
-									widthClass="w-20"
-								/>
-								{thisMenuOpen === "model" && (
-									<MenuShell
-										preferredSide="down"
-											anchorTestid={`slot-model-${slot}`}
-										testid={`slot-model-menu-${slot}`}
-										menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
-									>
-										<ModelMenuList
-											models={slotCatalog ?? undefined}
-											effectiveId={modelId}
-											effectiveProvider={provider}
-											onPick={(entry) => {
-												// Auto-populate (chunk 2, owner: "populate everywhere"): the
-												// fresh pick writes a level — the stored one rides as-is
-												// (the write clamps server-side), else the ordering's level.
-												const next = populateLevel(thinking || undefined, entry.supportedLevels);
-												onModelsChange(composeSlotModel(models, slot, entry.provider, entry.id, next));
-												setOpenMenu(null);
-											}}
-											footer={
-												catalog && catalog.length === 0
-													? "No models — add a provider key in Keys"
-													: "Runs every agent of this tier"
-											}
-										/>
-									</MenuShell>
-								)}
-								{thisMenuOpen === "thinking" && (
-									<MenuShell
-										preferredSide="down"
-											anchorTestid={`slot-thinking-${slot}`}
-										testid={`slot-thinking-menu-${slot}`}
-										menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
-									>
-										<ThinkingMenuList
-											levels={levels.map(String)}
-											// The ✓ sits on the RESOLVED level for legacy unset records —
-											// the same one the trigger shows.
-											effectiveLevel={thinking || (chosen ? defaultOrderLevel(levels) : undefined)}
-											onPick={(level) => {
-												onModelsChange(composeSlotModel(models, slot, provider, modelId, level));
-												setOpenMenu(null);
-											}}
-										/>
-									</MenuShell>
-								)}
-							</span>
-						</SettingsRow>
-					);
-				})}
-			</SettingsGroup>
-
 			<SettingsGroup label="Context" testid="group-context">
 				<SettingsRow
 					label="Compaction threshold"

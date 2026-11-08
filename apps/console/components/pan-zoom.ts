@@ -53,3 +53,18 @@ export function zoomedGraphView(
 	const k = zoom / view.zoom;
 	return { zoom, x: focus.x - (focus.x - view.x) * k, y: focus.y - (focus.y - view.y) * k };
 }
+
+/**
+ * Fit with a readable floor (the Prompts graphs): the scale that fits the whole box, never above 1. If that is below `minScale`
+ * the graph would be unreadable, so it fits the HEIGHT instead (never below `minScale`) and starts at the left edge so the rest
+ * pans. An axis that fits is centred; one that overflows starts at the padded edge. Pure.
+ */
+export function fitFloorView(box: { w: number; h: number }, viewport: { w: number; h: number }, minScale: number): Viewport {
+	if (!viewport.w || !viewport.h || !box.w || !box.h) return { zoom: 1, x: 0, y: 0 };
+	const wFit = (viewport.w - FIT_PAD) / box.w;
+	const hFit = (viewport.h - FIT_PAD) / box.h;
+	const whole = Math.min(wFit, hFit, 1);
+	const zoom = whole >= minScale ? whole : Math.max(minScale, Math.min(hFit, 1));
+	const place = (b: number, v: number, z: number) => (b * z <= v ? (v - b * z) / 2 : FIT_PAD / 2);
+	return { zoom, x: place(box.w, viewport.w, zoom), y: place(box.h, viewport.h, zoom) };
+}

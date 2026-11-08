@@ -158,6 +158,24 @@ describe("standards", () => {
     expect(loadAgent("worker", opts)?.body).toMatch(/^my worker/);
   });
 
+  it("a wolf's standards override wins over the shipped one and is read fresh on every load (no cache); another wolf keeps the default", () => {
+    const standardsDir = fixtureStandards();
+    const agentDir = tmp();
+    const otherAgentDir = tmp();
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    put(join(otherAgentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    const opts = { cwd: tmp(), agentDir, standardsDir };
+    expect(count(loadAgent("worker", opts)?.body, MARK)).toBe(1);
+    put(join(agentDir, "standards"), "testing.md", "# Wolf testing\n");
+    const edited = loadAgent("worker", opts)?.body;
+    expect(edited).toContain("# Wolf testing");
+    expect(edited).not.toContain(MARK);
+    expect(edited).toContain(GIT_MARK);
+    put(join(agentDir, "standards"), "testing.md", "# Wolf testing v2\n");
+    expect(discoverAgents(opts).find((a) => a.name === "worker")?.body).toContain("# Wolf testing v2");
+    expect(count(loadAgent("worker", { ...opts, agentDir: otherAgentDir })?.body, MARK)).toBe(1);
+  });
+
   it("matches the always-on names case-insensitively, by frontmatter name and by the requested name", () => {
     const agentDir = tmp();
     put(join(agentDir, "agents"), "worker.md", "---\nname: Worker\n---\nbody");

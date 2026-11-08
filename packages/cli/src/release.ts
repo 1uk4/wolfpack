@@ -59,8 +59,10 @@ export const FIRST_VERSION: Semver = { major: 0, minor: 1, patch: 0 };
 export interface ReleaseDeps {
   /** All tags in the repo. */
   tags(): string[];
-  /** Components changed in <base>..HEAD (computeAffected(...).components); base null = everything. */
-  affected(base: string | null): string[];
+  /** Files changed in <base>..HEAD (changedFiles from scripts/affected.mjs); null = unknown, which marks everything. */
+  changedFiles(base: string | null): string[] | null;
+  /** Components affected by these files (computeAffected(files, ...).components). */
+  affected(files: string[] | null): string[];
   /** One-line commits in <base>..HEAD (all history when base is null). */
   commits(base: string | null): string[];
   /** Tags that point at the commit being released (HEAD). A component with one is already released there. */
@@ -83,6 +85,39 @@ export interface ReleaseItem {
   first: boolean;
 }
 
+/**
+ * Files that cannot change a shipped artifact: CI config and scripts, tests, test/turbo config, the CLI and auto-tagger
+ * (no component bundles them: nothing depends on @wolfpack/cli and the release build stages only the wolfd closure).
+ * Docs need no rule here: computeAffected already ignores them. Lockfiles, root package.json/tsconfig, workspace config,
+ * build/release recipes (scripts/release-*, scripts/build-*, infra/release/**) mark everything.
+ * CI keeps using the unfiltered computeAffected.
+ */
+const NOT_SHIPPED = [
+  /^\.github\//,
+  /^scripts\/(auto-tag|affected)\./,
+  /^packages\/cli\//,
+  /\.(test|spec)\.[^/]+$/,
+  /(^|\/)(tests|__tests__)\//,
+  /^vitest\.[^/]+$/,
+  /^turbo\.json$/,
+];
+
+/** Build and release recipes: computeAffected ignores them, but a change can alter every artifact. */
+const REBUILDS_ALL = [/^scripts\/(release|build)-[^/]*$/, /^infra\/release\//];
+
+/**
+ * Non-code runtime assets a package ships (read relative to dist; infra/release/Dockerfile copies package.json "files").
+ * computeAffected ignores *.md, so each is reported as a change to its package's package.json: the package and its
+ * dependents tag. Only @wolfpack/agents lists such dirs.
+ */
+const SHIPPED_ASSETS = /^(packages\/agents)\/(agents|standards|prompts)\/.*/;
+
+/** Files to feed computeAffected for a release; null (everything) when a build recipe changed. */
+export function releaseFiles(changed: string[] | null): string[] | null {
+  if (!changed || changed.some((f) => REBUILDS_ALL.some((r) => r.test(f)))) return null;
+  return changed.filter((f) => !NOT_SHIPPED.some((r) => r.test(f))).map((f) => f.replace(SHIPPED_ASSETS, "$1/package.json"));
+}
+
 /** Changed components with their commits and the suggested next tag. Unchanged components are omitted. */
 export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseItem[] {
   const tags = deps.tags();
@@ -95,7 +130,12 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
     if (headTags.some((t) => parseTag(t)?.component === component)) continue;
     const prev = lastTag(component, tags) ?? null;
     // No tag yet counts as changed.
-    if (prev && !deps.affected(prev).includes(component)) continue;
+    if (prev) {
+      const changed = deps.changedFiles(prev);
+      // deploy/<component>/ (setup.sh, service, env example, runbook) is copied into that component's bundle, but is no workspace.
+      const shipsDeploy = changed?.some((f) => f.startsWith(`deploy/${component}/`));
+      if (!shipsDeploy && !deps.affected(releaseFiles(changed)).includes(component)) continue;
+    }
     const prevV = prev ? parseTag(prev)!.version : undefined;
     const next = explicit ?? (prevV ? bumpVersion(prevV, opts.bump ?? "patch") : FIRST_VERSION);
     if (prevV && compareSemver(next, prevV) <= 0) throw new Error(`${component}: version ${formatVersion(next)} is not above ${prev}`);

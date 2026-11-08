@@ -43,7 +43,7 @@ const afterBarDictation = (then?: () => void) => {
 const BarCardSurface = dynamic(() => import("@/components/bar-card-surface").then((m) => m.BarCardSurface), { ssr: false });
 
 /** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
-const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings)(\/|$)|^\/wolf\/[^/]+$/;
+const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings|prompts)(\/|$)|^\/wolf\/[^/]+$/;
 
 /** md+ (768px): the floating pill. Below it the bar is a full-width dock at the bottom (phone layout). */
 const WIDE_QUERY = "(min-width: 768px)";

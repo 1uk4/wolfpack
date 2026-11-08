@@ -49,8 +49,8 @@ import { runSubagent } from "../agent/subagents/pi-run.ts";
 
 /** The summarizer's system prompt — server-owned operational framing,
  *  not model-facing doctrine (buildCompactionPrompt carries the shape). */
-const SUMMARIZER_SYSTEM_PROMPT =
-	"You are the session-compaction summarizer for a tutoring agent. You receive the transcript span to summarize and write exactly the summary the instructions demand — nothing else, no preamble, no meta-commentary.";
+export const SUMMARIZER_SYSTEM_PROMPT =
+	"You are the session-compaction summarizer for a wolfpack console conversation. You receive the transcript span to summarize and write exactly the summary the instructions demand — nothing else, no preamble, no meta-commentary.";
 
 /** The one-shot summary call: zero tools, one turn, text out. The engine
  *  is the chat's own conversation engine (owner ruling: the session's

@@ -99,3 +99,4 @@ export * from "./work-select.ts";
 export * from "./work-connectors.ts";
 export * from "./branch-graph.ts";
 export * from "./work-id-link.ts";
+export * from "./wolf-settings-form.ts";

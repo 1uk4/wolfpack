@@ -53,6 +53,10 @@ export const ErrorCodeSchema = z.enum([
   "preview_stale",
   /** Hub claim: the item (or its feature) is held by another wolf; `details.holder` names it. */
   "conflict",
+  /** A request body is over its cap (e.g. a prompt override over 64 KB). */
+  "too_large",
+  /** Too soon to repeat this (e.g. a restart within a minute of the last start). `details.retryAfterSeconds` (a number) says when; the error is retryable. */
+  "rate_limited",
   /** The actor is authenticated but not allowed this operation (e.g. a wolf committing to the KB). */
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -62,7 +66,7 @@ export const ErrorEnvelopeSchema = z.object({
   message: z.string(),
   retryable: z.boolean(),
   /** Additive, structured facts about the refusal (a graduation `busy` carries `{kind}`, the kind of job that is running). */
-  details: z.record(z.string(), z.string()).optional(),
+  details: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
@@ -90,6 +94,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   not_ready: 409,
   preview_stale: 409,
   conflict: 409,
+  too_large: 413,
+  rate_limited: 429,
 };
 
 // ---------------------------------------------------------------- cards

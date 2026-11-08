@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView, HubSettings, WolfSettingsView, RevealResponse, RestartResponse } from "@wolfpack/protocol";
 export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
@@ -42,6 +42,7 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
+export type { PromptView, HubSettings, WolfSettingsView, RevealResponse, RestartResponse } from "@wolfpack/protocol";
 export type { ThreadContext, CreateThreadBody, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, ThreadTier } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, HubEvent, HubEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, CardBrief, PendingCard, ThreadStatus } from "@wolfpack/protocol";
@@ -120,6 +121,21 @@ export interface ConsoleClient {
   answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
   /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
   skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
+  /** The wolf's prompt registry with effective text, source, etag and editable flag. Optional: the mock has none. */
+  listPrompts?(wolf: string): Promise<PromptView[]>;
+  /** Write the wolf's override of an editable prompt. `ifMatch` (required) = the etag loaded; a stale one rejects ProtocolError `conflict`; non-editable `forbidden`; over 64 KB `too_large`. */
+  putPrompt?(wolf: string, id: string, text: string, ifMatch: string): Promise<PromptView>;
+  /** Remove the override (reset to the repo default). Errors as `putPrompt`. */
+  resetPrompt?(wolf: string, id: string, ifMatch: string): Promise<PromptView>;
+  /** The wolf's settings: wolf.yaml (secrets masked), env var names, editable keys, restart state. Never a secret value. Optional: the mock has none. */
+  getWolfSettings?(wolf: string): Promise<WolfSettingsView>;
+  /** Edit wolf.yaml (`set`: dotted key -> value|null). `ifMatch` = the etag loaded; stale: ProtocolError `conflict`; bad value / key: `invalid_request`. Applies on restart. */
+  putWolfSettings?(wolf: string, set: Record<string, unknown>, ifMatch: string): Promise<WolfSettingsView>;
+  /** Reveal ONE secret: an env var listed in the view or a wolf.yaml key. */
+  revealWolfSetting?(wolf: string, source: "env" | "config", name: string): Promise<RevealResponse>;
+  /** Start the work-creation flow on the wolf's home thread with the wolf's own resolved prompts. */
+  /** Restart the wolf's wolfd. ProtocolError `conflict` when nothing supervises it. */
+  restartWolf?(wolf: string): Promise<RestartResponse>;
   /** The thread's composer settings (model tier, auto-ship) and the model each tier resolves to. Optional: the mock keeps them in memory. */
   getThreadSettings?(threadId: string): Promise<ThreadSettingsResponse>;
   /** Change the thread's settings (persisted by the wolf; a tier change applies from the next turn). Rejects ProtocolError `invalid_request`, NotFoundError. */
@@ -210,6 +226,8 @@ export interface ConsoleClient {
   /** The KB graph from the hub's read-only KB copy, limited to the domains the token may read. */
   getHubKbGraph?(opts?: { domain?: string; archivedWork?: boolean }): Promise<KbGraph>;
   /** The hub curator's activity (GET /v1/kb/activity): incoming, decisions, recent changes. Hub clients only. */
+  /** The hub's prompts, effective config (secrets masked) and package version. Console/browser tokens only. Optional: needs a hub. */
+  getHubSettings?(): Promise<HubSettings>;
   getKbActivity?(query?: KbActivityQuery): Promise<KbActivityResponse>;
   /** One KB entry from the hub's read-only KB copy, scoped to the token's readable domains. */
   getHubKbEntry?(id: string): Promise<KbEntryDetail>;
@@ -218,7 +236,7 @@ export interface ConsoleClient {
 }
 
 export class BusyError extends Error {
-  constructor(public readonly threadId: string, public readonly details?: Record<string, string>) {
+  constructor(public readonly threadId: string, public readonly details?: Record<string, string | number>) {
     super(`thread ${threadId} is busy`);
     this.name = "BusyError";
   }
@@ -238,7 +256,7 @@ export class ProtocolError extends Error {
     message: string,
     public readonly retryable: boolean,
     /** Structured facts from the error envelope (a hub `conflict` carries `{holder}`). */
-    public readonly details?: Record<string, string>,
+    public readonly details?: Record<string, string | number>,
   ) {
     super(message);
     this.name = "ProtocolError";

@@ -13,26 +13,9 @@ import {
 	parseAgentSettingsBody,
 	parseModelsSettingsBody,
 	parseAppearanceSettingsBody,
-	parseGeneralSettingsBody,
 	parseCompactionSettingsBody,
 	SETTINGS_SECTIONS,
 } from "../src/server/settings-body.ts";
-
-describe("parseGeneralSettingsBody", () => {
-	it("parses {} and {autoUpdate} replace-whole", () => {
-		const empty = parseGeneralSettingsBody({});
-		assert.ok(empty.ok);
-		assert.deepEqual(empty.settings, {});
-		const on = parseGeneralSettingsBody({ autoUpdate: true });
-		assert.ok(on.ok);
-		assert.deepEqual(on.settings, { autoUpdate: true });
-	});
-
-	it("rejects non-objects and non-boolean autoUpdate", () => {
-		assert.equal(parseGeneralSettingsBody("x").ok, false);
-		assert.equal(parseGeneralSettingsBody({ autoUpdate: "yes" }).ok, false);
-	});
-});
 
 describe("parseAgentSettingsBody", () => {
 	it("prompts: a boolean map; non-boolean values are 400s", () => {
@@ -138,12 +121,12 @@ describe("parseCompactionSettingsBody (owner round 14)", () => {
 });
 
 describe("SETTINGS_SECTIONS (the route's section map)", () => {
-	it("maps exactly the six record sections", () => {
+	it("maps exactly the five record sections", () => {
 		// compaction joined (owner round 14): its own section PUT — the
 		// threshold is engine behavior, not an agent-section key.
 		assert.deepEqual(
 			Object.keys(SETTINGS_SECTIONS),
-			["general", "chat", "agent", "appearance", "compaction", "models"],
+			["chat", "agent", "appearance", "compaction", "models"],
 		);
 	});
 });

@@ -1,15 +1,4 @@
-/**
- * To-tickets protocol — stage 3 of the three-stage task-create pipeline.
- *
- * Breaks the spec from stage 2 into tracer-bullet tickets with blocking
- * edges, quizzes the user, and publishes each ticket as a wolfpack task
- * under the feature. Depends_on edges are set via task_link.
- *
- * Modelled on Pocock's `to-tickets` skill, adapted for wolfpack's work
- * model (feature → tasks, depends_on native).
- */
-
-export const TO_TICKETS_PROTOCOL = `# Stage 3 of 3 — To-tickets
+# Stage 3 of 3 — To-tickets
 
 The spec is the feature body. Break it into TICKETS: tracer-bullet vertical slices, each declaring the tickets that BLOCK it.
 
@@ -71,4 +60,3 @@ Avoid specific file paths or code snippets in titles and successCriteria — the
 ## Done
 
 Report back to the user: feature id + stage, list of ticket ids with their blocker ids, and (if any) the expand-contract sequence you used. The user can then press 'g' on the feature in /task to graduate it when the work is done.
-`;

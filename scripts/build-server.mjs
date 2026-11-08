@@ -93,7 +93,7 @@ scan(path.join(APP, ".next", "server"), false);
 // /manifest.webmanifest is app/manifest.ts: a constant object (name, icons, colours), no env or hub read, and it must be public.
 // /icon.png is the static app/icon.png file convention (a fixed public brand image, no env or hub read).
 // Any new prerendered route (a page that forgot `dynamic = "force-dynamic"`) fails the build until it is reviewed and added here.
-const PRERENDER_ALLOWLIST = new Set(["/", "/pair", "/pipeline", "/settings", "/_not-found", "/_global-error", "/manifest.webmanifest", "/icon.png"]);
+const PRERENDER_ALLOWLIST = new Set(["/", "/pair", "/pipeline", "/settings", "/prompts", "/_not-found", "/_global-error", "/manifest.webmanifest", "/icon.png"]);
 {
 	const mf = path.join(APP, ".next", "prerender-manifest.json");
 	if (!fs.existsSync(mf)) die(".next/prerender-manifest.json missing");

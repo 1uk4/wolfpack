@@ -292,7 +292,7 @@ export class Supervisor implements WolfRegistry {
   private launch(c: Child, listenArgs: string[]): void {
     const [cmd, ...lead] = this.command;
     const proc = spawn(cmd, [...lead, "--config", c.config.file, ...listenArgs], {
-      env: this.opts.env ?? process.env,
+      env: { ...(this.opts.env ?? process.env), WOLFPACK_SUPERVISED: "workerd" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     c.proc = proc;

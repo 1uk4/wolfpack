@@ -12,7 +12,8 @@
  * Limits: a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -55,7 +56,12 @@ import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
+import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
+import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { HttpError } from "./http-error.js";
+import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
+import type { PromptBlock } from "./context.js";
+import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
@@ -93,6 +99,24 @@ export interface WolfServerOptions {
   /** The Work API client settings (effective WORK_ENDPOINT / WORK_TOKEN) behind the work Record route. */
   work?: { endpoint?: string; token?: string };
   // ---- header git tree ----
+  /** The wolf.yaml this wolfd runs from: the /settings routes read and edit it. Unset: they answer 404. */
+  configFile?: string;
+  /** The environment the wolf runs with, for the /settings env-name report. Default process.env. */
+  env?: NodeJS.ProcessEnv;
+  /** Restart this wolfd (exit so the supervisor starts it again). Unset = nothing supervises it: /settings/restart answers 409. */
+  restart?: () => void;
+  /** A restart is refused until the process has been up this long (default 60000): systemd's start limit is 5 per 300s. */
+  restartMinUptimeMs?: number;
+  /** Process uptime in ms. Default process.uptime(); a test seam. */
+  uptimeMs?: () => number;
+  /** The wolf's home dir: where `agent/prompts/<id>.md` overrides live. Unset: /prompts answers 404. */
+  wolfHome?: string;
+  /** wolf.yaml `identity:` (absolute) when set: the file the running wolf reads its identity from instead of `<wolf-home>/agent/AGENTS.md`. */
+  identityFile?: string;
+  /** The system-prompt blocks wolfd built at start-up (read-only in /prompts). */
+  promptBlocks?: readonly PromptBlock[];
+  /** The tools wolfd registered, with their descriptions (read-only in /prompts). */
+  toolInfos?: readonly ToolInfo[];
   /** The wolf's workspace (the home thread's cwd): its git state is the home thread's `workspace`. Unset: home reports none. */
   workspace?: string;
   /** How long git answers behind `workspace` stay cached. Default 5000. */
@@ -483,6 +507,116 @@ export class WolfServer {
 
   // ------------------------------------------------------------- http
 
+  /**
+   * The prompt routes (listPrompts, getPrompt, putPrompt, resetPrompt): this wolf's prompt registry. PUT/DELETE require `If-Match: <etag>`
+   * (missing: 400 `invalid_request`; a stale one is 409 `conflict`); only wolf-editable prompts are writable (403 `forbidden`); text over the cap is 413 `too_large`.
+   */
+  private async handlePrompt(req: IncomingMessage, res: ServerResponse, name: string, id: string | undefined): Promise<void> {
+    this.checkWolf(name);
+    const home = this.opts.wolfHome;
+    if (!home) throw new HttpError("not_found", "this wolf has no home dir for prompt overrides");
+    const view = (defId: string) => {
+      const def = promptDef(defId)!;
+      const ws = this.opts.workspace;
+      // A project file (`<workspace>/.pi/agents|standards/<name>.md`) outranks the wolf's edit: the page says so.
+      const projectOverride = def.store === "prompts" ? undefined : !!ws && existsSync(join(ws, ".pi", def.store, `${def.name}.md`));
+      // An inline wolf.yaml `identity:` outranks agent/AGENTS.md: the card says the edited file is not the one in use.
+      const inline = defId === "identity" && this.opts.identityFile && resolve(this.opts.identityFile) !== resolve(overridePath(home, "identity")) ? this.opts.identityFile : undefined;
+      return { ...def, ...resolvePrompt(defId, home), kind: "editable" as const, scope: "wolf" as const, ...(projectOverride === undefined ? {} : { projectOverride }), ...(inline ? { inlineIdentity: inline } : {}), ...(defId === "identity" ? { hasOriginal: hasOriginalIdentity(home) } : {}) };
+    };
+    const readOnly = readOnlyCatalog({ blocks: this.opts.promptBlocks ?? [], tools: this.opts.toolInfos ?? [] }).map((e) => ({
+      id: e.id,
+      group: e.group,
+      label: e.label,
+      editable: false as const,
+      text: e.text,
+      source: "default" as const,
+      etag: promptEtag(e.text),
+      kind: e.kind,
+      file: e.file,
+      user: e.user,
+      scope: e.scope,
+      ...(e.contract ? { contract: e.contract } : {}),
+      placeholders: e.placeholders,
+    }));
+    if (id === undefined) return this.json(res, 200, { prompts: [...PROMPTS.map((p) => view(p.id)), ...readOnly] });
+    const ro = readOnly.find((p) => p.id === id);
+    if (ro) {
+      if (req.method === "GET") return this.json(res, 200, ro);
+      throw new HttpError("forbidden", `prompt "${id}" is not editable per wolf`);
+    }
+    if (!promptDef(id)) throw new HttpError("not_found", `unknown prompt "${id}"`);
+    if (req.method === "GET") return this.json(res, 200, view(id));
+    const ifMatch = typeof req.headers["if-match"] === "string" ? req.headers["if-match"].replace(/^"|"$/g, "") : undefined;
+    if (ifMatch === undefined) throw new HttpError("invalid_request", "If-Match is required: send the etag of the prompt you loaded");
+    try {
+      if (req.method === "DELETE") resetPromptOverride(home, id, ifMatch);
+      else {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const c of req) {
+          size += (c as Buffer).length;
+          // JSON escaping can inflate the text, so allow the cap times six plus slack; the exact cap is checked on the decoded text.
+          if (size > PROMPT_MAX_BYTES * 6 + 1024) throw new HttpError("too_large", `prompt text is over ${PROMPT_MAX_BYTES} bytes`, size);
+          chunks.push(c as Buffer);
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          body = undefined;
+        }
+        const text = (body as { text?: unknown } | undefined)?.text;
+        if (typeof text !== "string") throw new HttpError("invalid_request", "body must be {text: string}");
+        writePromptOverride(home, id, text, ifMatch);
+      }
+      return this.json(res, 200, view(id));
+    } catch (e) {
+      if (e instanceof PromptWriteError) throw new HttpError({ unknown: "not_found", not_editable: "forbidden", too_large: "too_large", stale: "conflict", invalid: "invalid_request" }[e.code] as ErrorCode, e.message);
+      throw e;
+    }
+  }
+
+  private settingsStore?: WolfSettingsStore;
+  /** The settings routes (getWolfSettings, putWolfSettings, revealWolfSetting, restartWolf). Secrets only leave through reveal. */
+  private async handleSettings(req: IncomingMessage, res: ServerResponse, kind: "get" | "put" | "reveal" | "restart", name: string): Promise<void> {
+    this.checkWolf(name);
+    if (!this.opts.configFile) throw new HttpError("not_found", "this wolf has no wolf.yaml to configure");
+    const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env, this.opts.wolfHome));
+    const wait = () => {
+      const min = this.opts.restartMinUptimeMs ?? 60_000;
+      const up = this.opts.uptimeMs ? this.opts.uptimeMs() : process.uptime() * 1000;
+      return Math.max(0, Math.ceil((min - up) / 1000));
+    };
+    const view = () => store.view((this.opts.tierModels ?? {}) as Record<string, string>, !!this.opts.restart, wait());
+    try {
+      if (kind === "get") return this.json(res, 200, view());
+      if (kind === "restart") {
+        if (!this.opts.restart) throw new HttpError("conflict", "nothing supervises this wolfd, so it would not come back; restart it from its supervisor");
+        const retry = wait();
+        if (retry > 0) throw new HttpError("rate_limited", `this wolfd started less than a minute ago; restart again in ${retry}s`, undefined, { retryAfterSeconds: retry });
+        const restart = this.opts.restart;
+        this.json(res, 200, { restarting: true });
+        res.once("finish", () => setTimeout(restart, 20));
+        return;
+      }
+      const raw = await readJson(req);
+      if (kind === "reveal") {
+        const body = RevealBodySchema.safeParse(raw);
+        if (!body.success) throw new HttpError("invalid_request", "body must be {source: env|config, name}");
+        return this.json(res, 200, { name: body.data.name, value: store.reveal(body.data.source, body.data.name) });
+      }
+      const body = PutWolfSettingsBodySchema.safeParse(raw);
+      if (!body.success) throw new HttpError("invalid_request", "body must be {set: {<dotted key>: value|null}}");
+      const ifMatch = typeof req.headers["if-match"] === "string" ? req.headers["if-match"].replace(/^"|"$/g, "") : undefined;
+      store.write(body.data.set, ifMatch);
+      return this.json(res, 200, view());
+    } catch (e) {
+      if (e instanceof SettingsError) throw new HttpError(e.code, e.message);
+      throw e;
+    }
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://wolfd");
     res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
@@ -500,6 +634,20 @@ export class WolfServer {
 
     const { params } = m;
     switch (m.name) {
+      case "getWolfSettings":
+        return this.handleSettings(req, res, "get", params.name);
+      case "putWolfSettings":
+        return this.handleSettings(req, res, "put", params.name);
+      case "revealWolfSetting":
+        return this.handleSettings(req, res, "reveal", params.name);
+      case "restartWolf":
+        return this.handleSettings(req, res, "restart", params.name);
+      case "listPrompts":
+        return this.handlePrompt(req, res, params.name, undefined);
+      case "getPrompt":
+      case "putPrompt":
+      case "resetPrompt":
+        return this.handlePrompt(req, res, params.name, params.id);
       case "listWolves":
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
@@ -926,8 +1074,8 @@ export class WolfServer {
 
   private sendError(res: ServerResponse, e: HttpError, req?: IncomingMessage): void {
     if (e.drain !== undefined && req) drainBounded(req, e.drain);
-    res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) });
-    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy", ...(e.details ? { details: e.details } : {}) }));
+    res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION), ...(e.details?.retryAfterSeconds ? { "Retry-After": String(e.details.retryAfterSeconds) } : {}) });
+    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy" || e.code === "rate_limited", ...(e.details ? { details: e.details } : {}) }));
   }
 
   // ------------------------------------------------------------ state

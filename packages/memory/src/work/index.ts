@@ -111,6 +111,7 @@ export {
   addStageChange,
   getWorkSession,
   summarizeTask,
+  TaskSummaryResult,
   embedTaskInParent,
   areAllChildrenComplete,
   processWorkEvent,

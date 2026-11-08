@@ -25,7 +25,6 @@ import type { ChatSettings } from "./contracts/chat.ts";
 import {
 	FACTORY_SETTINGS,
 	type FactorySettings,
-	type GeneralSettings,
 	type CompactionSettings,
 	type ModelSlot,
 	type ModelSlotName,
@@ -57,7 +56,6 @@ export type EffectiveAppearance = FactorySettings["appearance"];
 
 /** The concrete view: every knob resolved, no absent fields. */
 export interface EffectiveSettings {
-	general: Required<GeneralSettings>;
 	agent: {
 		/** Delta map as stored — absent key → override off. */
 		prompts: Record<string, boolean>;
@@ -111,9 +109,6 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 	const factoryAppearance = FACTORY_SETTINGS.appearance;
 	const factoryMd = factoryAppearance.mdRendering;
 	return {
-		general: {
-			autoUpdate: record?.general?.autoUpdate ?? FACTORY_SETTINGS.general.autoUpdate,
-		},
 		agent: {
 			prompts: agent.prompts ?? {},
 		},

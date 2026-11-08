@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { MOBILE_QUERY, visibleHeight } from "@/src/core";
+import { MOBILE_QUERY, keyboardShellHeight } from "@/src/core";
 
 /** Publishes --wp-vvh (the visible height above the on-screen keyboard) on <html>, phones only. iOS Safari does not shrink the layout
  *  viewport when the keyboard opens, so `dvh` alone leaves the composer under it; globals.css sizes the thread to this var. */
@@ -17,8 +17,9 @@ export function ViewportVars() {
 				last = "";
 				return void root.style.removeProperty("--wp-vvh");
 			}
-			const next = `${visibleHeight(vv, window.innerHeight)}px`;
-			if (next !== last) root.style.setProperty("--wp-vvh", next); // skip no-op writes (scroll events fire often)
+			const h = keyboardShellHeight(vv, window.innerHeight);
+			const next = h === null ? "" : `${h}px`; // no keyboard: no var, the shell is 100dvh (a stale vv.height left a dead band under the composer)
+			if (next !== last) next ? root.style.setProperty("--wp-vvh", next) : root.style.removeProperty("--wp-vvh"); // skip no-op writes
 			last = next;
 			if (vv && vv.offsetTop > 0) window.scrollTo(0, 0); // iOS pans the page under the keyboard; the shell is fixed-height
 		};

@@ -1,9 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { CheckIcon, FocusIcon } from "lucide-react";
+import { CheckIcon, FocusIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { GraphData, GraphNodeStatus } from "@wolfpack/protocol/objects";
 import { CLICK_SLOP } from "@/components/graph-canvas";
 import { layoutGraph } from "@/src/core";
+import { fitFloorView, zoomedGraphView } from "@/components/pan-zoom";
+
+/** Zoomable graphs never fit smaller than this (below it they fit the height and pan), and never zoom out past ZOOM_FLOOR. */
+const FIT_MIN_SCALE = 0.5;
+const ZOOM_FLOOR = 0.1;
 
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -49,6 +54,11 @@ export function PlanGraphView({
 	orderByStatus = false,
 	fill = false,
 	toolbar,
+	renderNode,
+	nodeSize,
+	zoomable = false,
+	toolbarAbove = false,
+	alignToDependents = false,
 }: {
 	graph: GraphData;
 	onNodeClick?: (id: string) => void;
@@ -59,12 +69,21 @@ export function PlanGraphView({
 	orderByStatus?: boolean;
 	fill?: boolean;
 	toolbar?: ReactNode;
+	/** Another page's own node look (the Prompts graphs): replaces the status header and label, the card colours and the accessible name. Unset: the plan-graph look, unchanged. */
+	renderNode?: (n: GraphData["nodes"][number]) => { name: string; className?: string; body: ReactNode };
+	nodeSize?: { width: number; height: number };
+	/** Draggable only: the graph scales to fit its box on first paint and whenever the box resizes (side panel opening, a new graph), with zoom +/- and Fit buttons and wheel / pinch zoom. Unset: no zoom, unchanged. */
+	zoomable?: boolean;
+	/** Draggable + fill: the zoom / fit buttons sit in a row above the canvas instead of over it (so they never cover a node). Unset: unchanged. */
+	toolbarAbove?: boolean;
+	/** Passed to the layout: nodes sit level with the middle of what depends on them. Unset: unchanged. */
+	alignToDependents?: boolean;
 }) {
 	const pan = usePan(draggable);
 	const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const slim = new Set(collapseDone ? graph.nodes.filter((n) => (n.status === "done" || n.status === "skipped") && n.id !== highlightId).map((n) => n.id) : []);
 	const orderClass = orderByStatus ? new Map(graph.nodes.map((n) => [n.id, STATUS_ORDER[n.status]] as const)) : undefined;
-	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass });
+	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass, nodeWidth: nodeSize?.width, nodeHeight: nodeSize?.height, alignToDependents });
 	const labelOf = new Map(graph.nodes.map((n) => [n.id, n.label] as const));
 	const dependsOn = new Map<string, string[]>();
 	for (const e of graph.edges) {
@@ -85,25 +104,81 @@ export function PlanGraphView({
 		// the whole graph: centred when it fits an axis, else its start is at the edge
 		return { x: layout.width <= vw ? Math.round((vw - layout.width) / 2) : 0, y: layout.height <= vh ? Math.round((vh - layout.height) / 2) : 0 };
 	};
-	const centreRef = useRef(centreOffset);
-	centreRef.current = centreOffset;
+	const [zoom, setZoom] = useState(1);
+	const viewport = () => ({ w: pan.ref.current?.clientWidth || 0, h: pan.ref.current?.clientHeight || 0 });
+	const fit = () => {
+		const v = fitFloorView({ w: layout.width, h: layout.height }, viewport(), FIT_MIN_SCALE);
+		setZoom(v.zoom);
+		pan.setOffset({ x: v.x, y: v.y });
+	};
+	const recenter = () => (zoomable ? fit() : pan.setOffset(centreOffset()));
+	const centreRef = useRef(recenter);
+	centreRef.current = recenter;
+	const zoomBy = (factor: number, focus?: { x: number; y: number }) => {
+		const vp = viewport();
+		const next = zoomedGraphView({ zoom, x: pan.offset.x, y: pan.offset.y }, factor, ZOOM_FLOOR, focus ?? { x: vp.w / 2, y: vp.h / 2 }, { w: layout.width, h: layout.height }, vp);
+		setZoom(next.zoom);
+		pan.setOffset({ x: next.x, y: next.y });
+	};
+	const zoomByRef = useRef(zoomBy);
+	zoomByRef.current = zoomBy;
 	useIsoLayoutEffect(() => {
-		if (draggable) pan.setOffset(centreRef.current());
+		if (draggable) centreRef.current();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draggable]);
+	useEffect(() => {
+		const box = pan.ref.current;
+		if (!draggable || !zoomable || !box || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => centreRef.current());
+		ro.observe(box);
+		// wheel and trackpad pinch (ctrl + wheel) zoom to the cursor; a native listener so the page does not scroll or zoom
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault();
+			const r = box.getBoundingClientRect();
+			zoomByRef.current(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002)), { x: e.clientX - r.left, y: e.clientY - r.top });
+		};
+		box.addEventListener("wheel", onWheel, { passive: false });
+		return () => {
+			ro.disconnect();
+			box.removeEventListener("wheel", onWheel);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [draggable, zoomable]);
 	const clickNode = (id: string) => {
 		if (!pan.consumeDrag()) onNodeClick?.(id);
 	};
-	return (
+	const above = toolbarAbove && draggable && fill;
+	const bar = draggable ? (
+	<div className={above ? "flex items-center justify-end gap-1 p-1" : "absolute right-1 top-1 z-10 flex items-center gap-1"} data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+					{toolbar}
+					{zoomable && (
+						<>
+							<button type="button" data-testid="graph-zoom-out" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.8)} className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><MinusIcon className="size-3.5" aria-hidden /></button>
+							<button type="button" data-testid="graph-zoom-in" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.25)} className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><PlusIcon className="size-3.5" aria-hidden /></button>
+						</>
+					)}
+					<button
+						type="button"
+						data-testid="graph-recenter"
+						aria-label={zoomable ? "Fit graph to view" : "Re-center graph"}
+						title={zoomable ? "Fit to view" : "Re-center graph"}
+						onClick={recenter}
+						className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+					>
+						<FocusIcon className="size-3.5" aria-hidden />
+					</button>
+				</div>
+	) : null;
+	const view = (
 		<div
-			className={draggable ? cn("relative touch-none select-none overflow-hidden", fill ? "h-full" : "max-h-[calc(40vh-1.5rem)]", pan.dragging ? "cursor-grabbing" : "cursor-grab") : "overflow-x-auto pb-1"}
+			className={draggable ? cn("relative touch-none select-none overflow-hidden", above ? "min-h-0 flex-1" : fill ? "h-full" : "max-h-[calc(40vh-1.5rem)]", pan.dragging ? "cursor-grabbing" : "cursor-grab") : "overflow-x-auto pb-1"}
 			style={draggable && !fill ? { height: layout.height } : undefined}
 			data-testid="graph-scroll"
 			data-draggable={draggable ? "true" : undefined}
 			{...pan.handlers}
 			ref={pan.ref}
 		>
-			<div className="relative" style={draggable ? { transform: `translate(${pan.offset.x}px, ${pan.offset.y}px)`, width: layout.width, height: layout.height } : undefined} data-testid="graph-pan" data-pan-x={pan.offset.x} data-pan-y={pan.offset.y}>
+			<div className="relative" style={draggable ? { transform: `translate(${pan.offset.x}px, ${pan.offset.y}px)${zoomable ? ` scale(${zoom})` : ""}`, transformOrigin: "0 0", width: layout.width, height: layout.height } : undefined} data-testid="graph-pan" data-zoom={zoomable ? zoom : undefined} data-pan-x={pan.offset.x} data-pan-y={pan.offset.y}>
 				<div className="relative" role="group" aria-label={`${label ?? `Plan graph${graph.title ? `: ${graph.title}` : ""}`}, ${graph.nodes.length} nodes, ${done} done`} style={{ width: layout.width, height: layout.height }}>
 					<svg className="pointer-events-none absolute inset-0 text-muted-foreground" width={layout.width} height={layout.height} aria-hidden>
 						<defs>
@@ -135,7 +210,8 @@ export function PlanGraphView({
 							if (!p) return null;
 							const hi = highlightId === n.id;
 							const sliver = slim.has(n.id);
-							const name = `${n.label} (${sliver && n.status === "skipped" ? "Archived" : STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
+							const custom = renderNode?.(n);
+							const name = custom?.name ?? `${n.label} (${sliver && n.status === "skipped" ? "Archived" : STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
 							return (
 								<li
 									key={n.id}
@@ -150,7 +226,7 @@ export function PlanGraphView({
 									aria-label={sliver && !onNodeClick ? name : undefined}
 									className={cn(
 										sliver ? cn("absolute flex items-center justify-center gap-0.5 rounded-full text-[10px] font-medium leading-none", n.status === "done" ? "bg-emerald-500/70 text-emerald-950 dark:text-emerald-50" : "bg-muted-foreground/40 text-foreground/80") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
-										!sliver && CARD[n.status],
+										!sliver && (custom?.className ?? CARD[n.status]),
 										hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70",
 									)}
 									style={{ left: p.x, top: p.y, width: p.width, height: p.height }}
@@ -162,7 +238,8 @@ export function PlanGraphView({
 											{n.status === "done" ? "Done" : "Archived"}
 										</span>
 									)}
-									{!sliver && (
+									{!sliver && custom && custom.body}
+									{!sliver && !custom && (
 										<>
 											<div className="flex items-center gap-1.5 text-[10px] leading-none">
 												{n.status === "done" ? <CheckIcon className="size-3 shrink-0 text-emerald-500" aria-hidden /> : <span className={cn("size-2 shrink-0 rounded-full", DOT[n.status])} aria-hidden />}
@@ -191,22 +268,16 @@ export function PlanGraphView({
 					</ul>
 				</div>
 			</div>
-			{draggable && (
-				<div className="absolute right-1 top-1 z-10 flex items-center gap-1" data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
-					{toolbar}
-					<button
-						type="button"
-						data-testid="graph-recenter"
-						aria-label="Re-center graph"
-						title="Re-center graph"
-						onClick={() => pan.setOffset(centreOffset())}
-						className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-					>
-						<FocusIcon className="size-3.5" aria-hidden />
-					</button>
-				</div>
-			)}
+			{draggable && !above && bar}
 		</div>
+	);
+	return above ? (
+		<div className="flex h-full min-w-0 flex-col">
+			{bar}
+			{view}
+		</div>
+	) : (
+		view
 	);
 }
 

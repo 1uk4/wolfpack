@@ -11,10 +11,8 @@ export function bundledAgentsDir(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "agents");
 }
 
-// Resolved once and cached for the life of the process (wolfd calls discoverAgents on every spawn and for the roster),
-// so an edit to a standard takes effect on restart/redeploy.
+// The shipped standards folder is resolved once (it never moves); standard TEXT is not cached: an override edit applies on the next load.
 let standardsDir: string | undefined;
-const standardCache = new Map<string, string>();
 // Files already reported as unreadable: the roster is rebuilt often, so each is logged once per process.
 const reportedUnreadable = new Set<string>();
 
@@ -22,7 +20,7 @@ const reportedUnreadable = new Set<string>();
  * The standards shipped with wolfpack. From source and dist this is `packages/agents/standards`; in the den extension bundle
  * (discover.ts inlined into `wolfpack-subagents/index.js`) it is the `standards` folder copied next to the bundle (`wolfpack.assets`).
  */
-function bundledStandardsDir(): string {
+export function bundledStandardsDir(): string {
   if (standardsDir === undefined) {
     const here = dirname(fileURLToPath(import.meta.url));
     const beside = join(here, "standards");
@@ -53,23 +51,29 @@ export function standardsFor(agentName: string, declared: readonly string[] = []
   return names;
 }
 
-/** One shipped standard's text, read once; undefined (with a loud error naming the agent, standard and path) when it cannot be read. */
-function readStandard(agent: string, name: string, dir: string): string | undefined {
-  const file = join(dir, `${name}.md`);
-  let text = standardCache.get(file);
-  if (text === undefined) {
+/**
+ * One standard's text, read fresh each time. Precedence, highest first: the project's `<cwd>/.pi/standards/<name>.md`, the wolf's
+ * `<agentDir>/standards/<name>.md`, the shipped default. Undefined (with a loud error naming the agent, standard and path) when
+ * the shipped default cannot be read either.
+ */
+function readStandard(agent: string, name: string, opts: DiscoverOptions): string | undefined {
+  for (const dir of [join(opts.cwd, ".pi", "standards"), join(opts.agentDir, "standards")]) {
     try {
-      text = readFileSync(file, "utf8").trim();
-    } catch (err) {
-      if (!reportedUnreadable.has(file)) {
-        reportedUnreadable.add(file);
-        console.error(`Agent "${agent}" loads WITHOUT standard "${name}": cannot read ${file}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      return undefined;
+      return readFileSync(join(dir, `${name}.md`), "utf8").trim();
+    } catch {
+      // no override here
     }
-    standardCache.set(file, text);
   }
-  return text;
+  const file = join(opts.standardsDir ?? bundledStandardsDir(), `${name}.md`);
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch (err) {
+    if (!reportedUnreadable.has(file)) {
+      reportedUnreadable.add(file);
+      console.error(`Agent "${agent}" loads WITHOUT standard "${name}": cannot read ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return undefined;
+  }
 }
 
 /**
@@ -79,8 +83,7 @@ function readStandard(agent: string, name: string, dir: string): string | undefi
 function withStandards<T extends AgentDefinition>(def: T, opts: DiscoverOptions, requestedName?: string): T {
   const names = standardsFor(def.name, def.standards, requestedName);
   if (!names.length) return def;
-  const dir = opts.standardsDir ?? bundledStandardsDir();
-  const texts = names.map((n) => readStandard(def.name, n, dir)).filter((t): t is string => t !== undefined);
+  const texts = names.map((n) => readStandard(def.name, n, opts)).filter((t): t is string => t !== undefined);
   return { ...def, body: [def.body, ...texts].filter(Boolean).join("\n\n---\n\n") };
 }
 

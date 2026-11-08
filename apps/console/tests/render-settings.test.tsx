@@ -39,76 +39,44 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		assert.ok(!html.includes("settings-dialog"));
 	});
 
-	it("the dialog frame: role=dialog + the ✕ + the five-section nav, General active", () => {
+	it("the dialog frame: role=dialog + the ✕ + the four-section nav, Keys active", () => {
 		const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} />);
 		assert.ok(html.includes('role="dialog"'));
 		assert.ok(html.includes('aria-modal="true"'));
 		assert.ok(html.includes('aria-label="Close settings"'));
-		for (const id of ["general", "keys", "agent", "appearance", "keyboard"]) {
+		for (const id of ["keys", "agent", "appearance", "devices", "keyboard"]) {
 			assert.ok(html.includes(`data-testid="settings-nav-${id}"`), id);
 		}
-		// General is the landing section; the others are not current.
-		assert.ok(tagOf(html, "settings-nav-general").includes('aria-current="true"'));
+		// Keys is the landing section; the others are not current.
+		assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'));
 		assert.ok(tagOf(html, "settings-nav-keyboard").includes('aria-current="false"'));
 		// Fetches don't run under SSR — the loading state IS the SSR state.
 		assert.ok(html.includes("Loading settings…"));
 		// Modal-only doctrine: no link back to /settings anywhere in it.
 		assert.ok(!html.includes('href="/settings"'));
+		// Removed (wolf Settings page owns models): no General/Auto-update section.
+		assert.ok(!html.includes("settings-nav-general") && !html.includes("Auto-update"));
 	});
 });
 
 describe("AgentSection (thin SSR)", () => {
-	it("renders the three model SLOT rows (slots-only, fix wave: unpicked reads —, no Default option)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
-		for (const slot of ["strong", "cheap", "vision"]) {
-			assert.ok(html.includes(`data-testid="slot-row-${slot}"`), slot);
-			// The shared model-picker dropdown as the opened menu (owner,
-			// 2026-09-20), the thin trigger as the collapsed look.
-			assert.ok(html.includes(`data-testid="slot-model-${slot}"`), `${slot} model trigger`);
-			assert.ok(html.includes(`data-testid="slot-thinking-${slot}"`), `${slot} thinking trigger`);
-			// the roster hint rides every row
-			assert.ok(html.includes("The main model for your sessions") || slot !== "strong", "strong roster");
-		}
-		// Fix wave: no Default anywhere — an unpicked slot reads "—"
-		// (the owner's no-factory-fallback language), and no menu
-		// carries a Default row (menu-default testid is retired).
-		assert.equal((html.match(/>Default<\/span>/g) ?? []).length, 0, "no Default trigger");
-		assert.ok(!html.includes('data-testid="menu-default"'), "no Default row");
-		assert.equal((html.match(/>—<\/span>/g) ?? []).length, 6, "three slots × two — triggers");
-		// the per-role rows are GONE (slots-only)
-		for (const role of ["researcher", "demoBuilder", "visualMaker"]) {
-			assert.ok(!html.includes(`data-testid="role-row-${role}"`), `${role} retired`);
-		}
-		assert.ok(html.includes('data-testid="group-models"'), "Models sub-group");
+	it("has no model slot rows: Strong/Cheap/Vision and the Models group are gone", () => {
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
+		for (const slot of ["strong", "cheap", "vision"]) assert.ok(!html.includes(`data-testid="slot-row-${slot}"`), slot);
+		assert.ok(!html.includes('data-testid="group-models"'), "Models sub-group removed");
 		assert.ok(html.includes('data-testid="group-context"'), "Context sub-group");
 		assert.ok(html.includes('data-testid="group-prompts"'), "System prompts sub-group");
 	});
 
-	it("an overridden SLOT shows its model in the trigger", () => {
-		const html = renderToStaticMarkup(
-			<AgentSection
-				agent={undefined}
-				models={{ strong: { model: { provider: "zai", id: "glm-4.7-flash" } } }}
-				compaction={undefined}
-				onSectionChange={() => {}}
-				onModelsChange={() => {}}
-				onCompactionChange={() => {}}
-			/>,
-		);
-		// The trigger shows the stored id even with no catalog loaded (a
-		// trigger reading "Default" over a live override would lie).
-		assert.ok(html.includes("glm-4.7-flash"), "the override id is visible (prettyModel form, no auto-caps)");
-	});
-
 	it("the retired Tools group renders nothing (no tool toggles, quiz mechanics, search engine)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
 		for (const id of ["group-tools", "search-engine-row", "graph-tools-row", "quiz-mechanics-row"]) {
 			assert.ok(!html.includes(`data-testid="${id}"`), id);
 		}
 	});
 
 	it("prompts show the loading state under SSR (effects never fire)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
 		assert.ok(html.includes("Loading prompt segments"));
 	});
 });

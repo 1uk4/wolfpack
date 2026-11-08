@@ -6,5 +6,6 @@ export * from "./registry.js";
 export * from "./kb-commits.js";
 export * from "./kb-sync.js";
 export * from "./pairing.js";
+export * from "./hub-settings.js";
 export * from "./link.js";
 export * from "./ledger-time.js";

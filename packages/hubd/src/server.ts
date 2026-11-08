@@ -38,7 +38,7 @@ import { HubError } from "./errors.js";
 import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
-import { createCurator, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
+import { createCurator, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
@@ -70,6 +70,7 @@ import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
 import { createRelay, type Relay } from "./relay.js";
 import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
+import { buildHubSettings } from "./settings.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
 type RegRoute = { c: Collection; op: "list" | "get" | "create" | "update" | "delete" | "retire" };
@@ -829,6 +830,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const mb = q.get("maxBytes");
           if (mb !== null && !/^[1-9]\d{0,12}$/.test(mb)) throw new HubError("invalid_request", "maxBytes must be a positive integer");
           return send(res, 200, revisions.changesSince(params.domain, sinceRaw === null ? 0 : Number(sinceRaw), q.get("epoch") ?? undefined, mb === null ? undefined : Math.min(Number(mb), KB_COMMIT_BODY_LIMIT)));
+        }
+        case "hubSettings": {
+          deviceCaller(identity); // console / browser tokens only
+          return send(res, 200, buildHubSettings({
+            dataDir: opts.dataDir, host, port: opts.socketPath === undefined ? port : undefined, socketPath: opts.socketPath, socketMode: opts.socketMode,
+            consoleUrl, inboxRoot, receiptsRoot, kbPollMs: opts.kbPollMs, kbSettleMs: opts.kbSettleMs, receiptPollMs: opts.receiptPollMs,
+            eventBufferSize: opts.eventBufferSize, maxEventStreams: opts.maxEventStreams, linkContributionMaxBytes: opts.linkContributionMaxBytes,
+            curator: { enabled: false, pollMs: DEFAULT_CURATOR_POLL_MS, ...opts.curator },
+            ollama: opts.ollama ?? ollamaFromEnv(),
+          }));
         }
         case "hubKbGraph": {
           const q = url.searchParams;

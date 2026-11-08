@@ -44,6 +44,7 @@ import {
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
+import { HubSettingsSchema } from "./hub-settings.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
@@ -419,6 +420,11 @@ export const ROUTES = {
    */
   hubKbActivity: { scope: "hub", method: "GET", path: "/v1/kb/activity", response: { kind: "json", schema: KbActivityResponseSchema }, status: [200], error: err },
   hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
+  /**
+   * The hub's settings (read-only): `prompts` (every engine prompt hubd's KB sweep uses, `{id, group, label, text}`, raw text), `config`
+   * (hubd's effective config; credentials come back as `{set: true}`, never the value) and `version`. Console/browser tokens only (a worker token gets 403).
+   */
+  hubSettings: { scope: "hub", method: "GET", path: "/v1/settings", response: { kind: "json", schema: HubSettingsSchema }, status: [200], error: err },
   /**
    * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker
    * token: the domains its host's wolves subscribe to). Query `domain` (one domain; 403 when the token may not read it, 404 when unknown),

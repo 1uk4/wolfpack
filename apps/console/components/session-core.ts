@@ -38,9 +38,7 @@ export const TURN_WAIT_MAX_MS = 30_000;
 
 /**
  * THE WIRE SEAM: where a session's turn traffic goes and how its events are
- * read. The default (LEGACY_TRANSPORT) is the pi-agent-core route family —
- * POST /api/chat + /api/chats/[id] + the verbatim AgentEvent SSE. A thread
- * session (ConsoleClient-backed) supplies its own routes and a `createWire`
+ * read. A thread session (ConsoleClient-backed) supplies its routes and a `createWire`
  * that maps each raw SSE payload to AgentEvent-shaped events (fresh per
  * consume: the adapter is stateful).
  */
@@ -77,28 +75,13 @@ function hasMoreOf(json: unknown): boolean | undefined {
 	return typeof v === "boolean" ? v : undefined;
 }
 
-export function legacyTransport(chatId: string): SessionTransport {
-	return {
-		submitUrl: "/api/chat",
-		submitBody: (input) => JSON.stringify({ chatId, input }),
-		recordUrl: `/api/chats/${encodeURIComponent(chatId)}`,
-		parseRecord: (json) => {
-			const messages = (json as { messages?: LhMessage[] }).messages;
-			return Array.isArray(messages) ? messages : null;
-		},
-		streamUrl: `/api/chats/${encodeURIComponent(chatId)}/stream`,
-		retryOnBusy: true,
-		createWire: () => (raw) => [raw],
-	};
-}
-
 export interface SessionModelDeps {
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch?: typeof globalThis.fetch;
 	/** Injectable retry timing (tests). */
 	pollMs?: number;
-	/** Where the turn traffic goes (default: the legacy pi routes). */
-	transport?: SessionTransport;
+	/** Where the turn traffic goes (the wolf thread routes). */
+	transport: SessionTransport;
 	waitMaxMs?: number;
 }
 
@@ -353,7 +336,7 @@ export class SessionModel {
 
 	constructor(opts: SessionModelOptions) {
 		this.chatId = opts.chatId;
-		this.transport = opts.transport ?? legacyTransport(opts.chatId);
+		this.transport = opts.transport;
 		this.base = opts.initialMessages;
 		this.hasMoreValue = opts.initialHasMore ?? false;
 		// BOUND: the browser's native fetch is a Window method — storing it

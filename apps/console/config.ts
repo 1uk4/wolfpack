@@ -70,21 +70,6 @@ export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json
 export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
 
 /**
- * User prompt-override files (settings-storage wave, 2026-09-19): the
- * per-segment system-prompt overrides mirroring the SOURCE layout
- * (src/agent/prompts/) — the shared base as prompts/system-prompt.md,
- * fragments as prompts/teacher/<file> / prompts/prober/<file>. File
- * PRESENCE alone is not the override: settings.json's agent.prompts map
- * (segmentPath → boolean) is the explicit switch, so a user can keep a
- * customized file on disk but run the source default to compare. The
- * segment list itself is ALWAYS derived from source at runtime (the
- * loader in src/store/prompt-overrides.ts) — code updates that add,
- * remove, or reorder fragments adapt automatically; an override keyed to
- * a vanished segment stops composing but stays on disk.
- */
-export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
-
-/**
  * THE AUTH/KEY STORE (auth-keys wave, 2026-09-19): BYOK provider keys in a
  * flat {VAR: value} JSON map — the SAME file the Electron app has always
  * hand-edited (owner decision: option A, zero migration). Desktop main.cjs

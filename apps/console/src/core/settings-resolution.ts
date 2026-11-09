@@ -25,7 +25,6 @@ import type { ChatSettings } from "./contracts/chat.ts";
 import {
 	FACTORY_SETTINGS,
 	type FactorySettings,
-	type CompactionSettings,
 	type ModelSlot,
 	type ModelSlotName,
 	type UserSettings,
@@ -56,19 +55,12 @@ export type EffectiveAppearance = FactorySettings["appearance"];
 
 /** The concrete view: every knob resolved, no absent fields. */
 export interface EffectiveSettings {
-	agent: {
-		/** Delta map as stored — absent key → override off. */
-		prompts: Record<string, boolean>;
-	};
 	/** The resolved strong/cheap/vision slots: each tier's concrete model or
 	 *  NULL when the tier holds no model (no factory floor — BYOK all the
 	 *  way down, owner 2026-09-22). These are the tier-level views the
 	 *  picker captions and the per-need refusal gates read. */
 	models: Record<ModelSlotName, EffectiveSlot | null>;
 	appearance: EffectiveAppearance;
-	/** Compaction (owner round 14): resolved concrete — absent record
-	 *  section resolves to the factory 150k. */
-	compaction: Required<CompactionSettings>;
 }
 
 /** The conversation agent's chain (BYOK, owner 2026-09-22): the chat's own
@@ -102,16 +94,12 @@ export function resolveSlot(slot: ModelSlot | undefined): EffectiveSlot | null {
  *  null/undefined when unset (no factory pins exist — BYOK all the way
  *  down, owner 2026-09-22). */
 export function resolveSettings(record: UserSettings | null): EffectiveSettings {
-	const agent = record?.agent ?? {};
 	const modelsSection = record?.models ?? {};
 	const appearance = record?.appearance ?? {};
 	const md = appearance.mdRendering ?? {};
 	const factoryAppearance = FACTORY_SETTINGS.appearance;
 	const factoryMd = factoryAppearance.mdRendering;
 	return {
-		agent: {
-			prompts: agent.prompts ?? {},
-		},
 		models: {
 			strong: resolveSlot(modelsSection.strong),
 			cheap: resolveSlot(modelsSection.cheap),
@@ -128,9 +116,6 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 				boldColor: md.boldColor ?? factoryMd.boldColor,
 				italicColor: md.italicColor ?? factoryMd.italicColor,
 			},
-		},
-		compaction: {
-			thresholdTokens: record?.compaction?.thresholdTokens ?? FACTORY_SETTINGS.compaction.thresholdTokens,
 		},
 	};
 }

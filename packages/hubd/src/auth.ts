@@ -41,6 +41,8 @@ export interface TokenRecord {
   createdAt: string;
   /** Id of the device token whose pairing-code mint produced this token (absent: minted on the host CLI, or predates provenance). */
   mintedBy?: string;
+  /** The hub owner: may revoke any non-worker device (server.ts ownerCaller). Set only on the host CLI (`hubd pair --owner`, `hubd tokens owner`), never over HTTP and never inherited through a pairing code. Absent on older records. */
+  isOwner?: boolean;
 }
 /** A token as shown by `tokens list` (no hash); lastUsedAt merged from last-used.json. */
 export type TokenView = Omit<TokenRecord, "hash"> & { lastUsedAt: string | null };
@@ -53,6 +55,8 @@ interface PairingRecord {
   label?: string;
   /** Id of the device token that minted this code (POST /v1/tokens/pairing-codes); absent for `hubd pair`. */
   mintedBy?: string;
+  /** `hubd pair --owner`: the redeemed token is an owner. */
+  isOwner?: boolean;
   createdAt: string;
   expiresAt: string;
 }
@@ -268,7 +272,7 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
       return withLock(file, fn, lockOpts);
     },
     /** Mint a single-use pairing code (valid PAIRING_TTL_MS). Expired codes are pruned. */
-    mintPairingCode(bind: { kind: TokenKind; hostId?: string; label?: string; mintedBy?: string }): { code: string; expiresAt: string } {
+    mintPairingCode(bind: { kind: TokenKind; hostId?: string; label?: string; mintedBy?: string; isOwner?: boolean }): { code: string; expiresAt: string } {
       if (bind.kind === "worker" && !bind.hostId) throw new HubError("invalid_request", "a worker pairing code needs a hostId");
       if (bind.kind !== "worker" && bind.hostId) throw new HubError("invalid_request", "only a worker pairing code takes a hostId");
       if (bind.hostId && !HOST_ID.test(bind.hostId)) throw new HubError("invalid_request", "hostId must be lower-case letters, digits and hyphens");
@@ -277,7 +281,7 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
       const expiresAt = new Date(now() + PAIRING_TTL_MS).toISOString();
       mutate((s) => {
         s.pairings = s.pairings.filter((p) => Date.parse(p.expiresAt) > now());
-        s.pairings.push({ hash: sha256(code), kind: bind.kind, ...(bind.hostId ? { hostId: bind.hostId } : {}), ...(label ? { label } : {}), ...(bind.mintedBy ? { mintedBy: bind.mintedBy } : {}), createdAt: new Date(now()).toISOString(), expiresAt });
+        s.pairings.push({ hash: sha256(code), kind: bind.kind, ...(bind.hostId ? { hostId: bind.hostId } : {}), ...(label ? { label } : {}), ...(bind.mintedBy ? { mintedBy: bind.mintedBy } : {}), ...(bind.isOwner && bind.kind !== "worker" ? { isOwner: true } : {}), createdAt: new Date(now()).toISOString(), expiresAt });
       });
       return { code, expiresAt };
     },
@@ -298,7 +302,7 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
         if ((kind !== undefined && kind !== hit.kind) || (hostId !== undefined && hostId !== hit.hostId))
           throw new HubError("unauthorized", "this pairing code was issued for a different kind or host");
         s.pairings = live.filter((p) => p !== hit);
-        s.tokens.push({ id: tokenId, hash: sha256(token), label: hit.label ?? label, kind: hit.kind, ...(hit.hostId ? { hostId: hit.hostId } : {}), owner: OWNER, createdAt: new Date(now()).toISOString(), ...(hit.mintedBy ? { mintedBy: hit.mintedBy } : {}) });
+        s.tokens.push({ id: tokenId, hash: sha256(token), label: hit.label ?? label, kind: hit.kind, ...(hit.hostId ? { hostId: hit.hostId } : {}), owner: OWNER, createdAt: new Date(now()).toISOString(), ...(hit.mintedBy ? { mintedBy: hit.mintedBy } : {}), ...(hit.isOwner ? { isOwner: true } : {}) });
         return { token, tokenId, kind: hit.kind, label: hit.label ?? label, ...(hit.hostId ? { hostId: hit.hostId } : {}) };
       });
     },
@@ -337,6 +341,16 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
         return s.tokens.length < n;
       });
     },
+    /** Set or clear the owner flag on a console/browser token (host CLI only). Throws for an unknown or worker token. */
+    setOwner(id: string, on: boolean): void {
+      mutate((s) => {
+        const t = s.tokens.find((x) => x.id === id);
+        if (!t) throw new HubError("not_found", `no token ${id}`);
+        if (t.kind === "worker") throw new HubError("invalid_request", "a worker token cannot be an owner");
+        if (on) t.isOwner = true;
+        else delete t.isOwner;
+      });
+    },
     /**
      * Revoke a device (and with `cascade` every device it added, transitively through `mintedBy`), atomically under the lock. Refuses
      * (`conflict`, 409) when that would leave NO console-kind token: a stray tap must never need the host CLI to recover. Returns the
@@ -354,6 +368,8 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
         const gone = s.tokens.filter((t) => doomed.has(t.id));
         if (gone.some((t) => t.kind === "console") && !s.tokens.some((t) => t.kind === "console" && !doomed.has(t.id)))
           throw new HubError("conflict", "refusing to revoke the last console token: the console would lose its hub access and only the host CLI could recover it. Pair another console token first.");
+        if (gone.some((t) => t.isOwner) && !s.tokens.some((t) => t.isOwner && !doomed.has(t.id)))
+          throw new HubError("conflict", "refusing to revoke the last owner token: nothing could revoke other devices afterwards. Mark another token as owner on the host first (hubd tokens owner <id>).");
         s.tokens = s.tokens.filter((t) => !doomed.has(t.id));
         return gone;
       });

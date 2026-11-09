@@ -286,6 +286,8 @@ export interface WorkRecordItem {
   /** Holding container (the domain Inbox): never a Record's home. */
   container?: boolean;
   successCriteria?: string;
+  /** The wolf the item is assigned to, when the API says. */
+  assignee?: string;
   /** The working document ("" when none written yet). */
   body: string;
 }
@@ -300,6 +302,13 @@ export interface WorkRecordStore {
 }
 
 /** The Work API over HTTP (WORK_ENDPOINT / WORK_TOKEN, like the extensions' client). */
+/** The Work API refused the write (403): the item belongs to another wolf or host. Not an outage. */
+export class WorkForbiddenError extends Error {
+  constructor(message: string, public assignee?: string) {
+    super(message);
+  }
+}
+
 export class HttpWorkRecordStore implements WorkRecordStore {
   private endpoint: string;
   private token: string;
@@ -344,6 +353,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       kind: String(it.kind ?? ""),
       stage: String(it.stage ?? ""),
       container: it.container === true,
+      ...(typeof it.assignee === "string" && it.assignee ? { assignee: it.assignee } : {}),
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
       body: data.body ?? "",
     };
@@ -351,6 +361,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
 
   async setBody(id: string, body: string): Promise<void> {
     const res = await this.call("PATCH", id, { body });
+    if (res.status === 403) throw new WorkForbiddenError(`Work API PATCH ${id}: HTTP 403 (not allowed from this host)`);
     if (!res.ok) throw new Error(`Work API PATCH ${id}: HTTP ${res.status}`);
   }
 }
@@ -379,7 +390,7 @@ export type WorkRecordOutcome =
   /** Item archived or deleted: the observations are discarded (logged by the caller), never sent to the den. */
   | { work: string; ids: string[]; status: "discarded"; reason: string }
   /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
-  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause };
+  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause; /** Next attempt (ms epoch) while the group backs off. */ retryAt?: number; assignee?: string };
 
 /** The reason a pending outcome carries when the Work API is missing or unreachable. */
 export const WORK_API_UNAVAILABLE = "work-api-unavailable";
@@ -391,6 +402,8 @@ export interface ConsolidateWorkOptions {
   observations: WorkObservation[];
   /** Retry backoff and the 404 grace period. Absent: every group is tried now and a 404 discards at once. */
   state?: WorkPendingState;
+  /** Try groups still inside their backoff (a manual Consolidate). A failure still updates the state. */
+  ignoreBackoff?: boolean;
   onProgress?: (msg: string) => void;
 }
 
@@ -455,14 +468,16 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       outcomes.push({ work, ids, status: "pending", reason: WORK_API_UNAVAILABLE, cause: "work-api-unavailable" });
       continue;
     }
-    if (state && !state.due(work)) {
+    if (state && !opts.ignoreBackoff && !state.due(work)) {
       onProgress?.(`  work ${work}: backing off, ${obs.length} observation(s) stay pending`);
-      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable" });
+      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable", retryAt: state.entry(work)?.nextAttemptAt, ...(state.entry(work)?.assignee ? { assignee: state.entry(work)!.assignee } : {}) });
       continue;
     }
     let phase: PendingCause = "work-api-unavailable";
+    let assignee: string | undefined;
     try {
       const item = await store.get(work);
+      assignee = item?.assignee;
       if (!item && store.healthy && !(await store.healthy())) throw new Error("Work API unhealthy: a 404 proves nothing");
       if (!item && state && !state.missing(work)) {
         onProgress?.(`  work ${work}: not found, waiting to confirm before discarding ${obs.length} observation(s)`);
@@ -510,8 +525,11 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
-      state?.pending(work, phase);
-      outcomes.push({ work, ids, status: "pending", reason, cause: phase });
+      const cause: PendingCause = err instanceof WorkForbiddenError ? "forbidden" : phase;
+      const who = err instanceof WorkForbiddenError ? (err.assignee ?? assignee) : undefined;
+      state?.pending(work, cause, who);
+      const retryAt = state?.entry(work)?.nextAttemptAt;
+      outcomes.push({ work, ids, status: "pending", reason, cause, ...(retryAt ? { retryAt } : {}), ...(who ? { assignee: who } : {}) });
     }
   }
   state?.save();

@@ -198,7 +198,8 @@ const DIRECT_STREAMS_WITH_SIGNAL: Record<string, number> = { watch: 1, watchMemo
 const isUnreachable = (e: unknown): boolean => {
 	if (!(e instanceof Error)) return true;
 	if (e instanceof HubAuthError || e.name === "AbortError") return false;
-	if (e.name === "ProtocolError") return (e as Error & { code?: string }).code === "engine_error" && e.message.startsWith("stream lost:");
+	// The client's own timeout (HttpConsoleClient requestTimeoutMs, `timedOut`) is the hub not answering, like a stream whose reconnects all failed.
+	if (e.name === "ProtocolError") return (e as Error & { timedOut?: boolean }).timedOut === true || ((e as Error & { code?: string }).code === "engine_error" && e.message.startsWith("stream lost:"));
 	return e.name !== "NotFoundError" && e.name !== "BusyError";
 };
 

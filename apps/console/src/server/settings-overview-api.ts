@@ -7,8 +7,6 @@
  */
 import type { ConsoleClient, HubSettings, PromptView, WolfSettingsView } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
-import { buildCompactionPrompt } from "../core/compaction.ts";
-import { SUMMARIZER_SYSTEM_PROMPT } from "./compaction.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
@@ -67,24 +65,6 @@ function piDurableText(wolves: WolfSettings[]): string | null {
 
 export function compactionPrompts(wolves: WolfSettings[] = []): CompactionPromptInfo[] {
 	return [
-		{
-			id: "console-auto-summarizer",
-			label: "Console auto-compaction: summarizer system prompt",
-			triggers: ["auto"],
-			runsIn: "console",
-			source: "apps/console/src/server/compaction.ts SUMMARIZER_SYSTEM_PROMPT",
-			text: SUMMARIZER_SYSTEM_PROMPT,
-			note: "Used by the console's own chat handler (POST /api/chat: ensureCompacted / kickCompaction). That path is not reachable from the current UI (every thread view passes a wolf thread transport); wolf threads are compacted by wolfd.",
-		},
-		{
-			id: "console-auto-instructions",
-			label: "Console auto-compaction: summary instructions ({{span}} = the transcript span)",
-			triggers: ["auto"],
-			runsIn: "console",
-			source: "apps/console/src/core/compaction.ts buildCompactionPrompt",
-			text: buildCompactionPrompt({ spanText: "{{span}}" }),
-			note: "The user message of the console summarizer call, with the span placeholder left in.",
-		},
 		{
 			id: "pi-durable-summarizer",
 			label: "Wolf compaction (pi-durable): summarization system prompt and instructions",

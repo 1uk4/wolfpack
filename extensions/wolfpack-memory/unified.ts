@@ -602,7 +602,7 @@ export default function createMemoryExtension(
   }
 
   /** Pool → session topics (pi's consolidation), unserialized: callers hold the queue. poolTarget undefined: the whole pool. */
-  async function consolidateInner(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+  async function consolidateInner(opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }): Promise<ConsolidationResult> {
     const before = new Set(await readPoolLines(wolfDen));
     const result = await consolidatePoolRaw(opts);
     // Marker rule: remember the post-run pool (what the run left behind) as "already saved", unless a line appeared
@@ -617,7 +617,7 @@ export default function createMemoryExtension(
     }
     return result; // a failed run threw above, leaving the old marker
   }
-  function consolidatePoolRaw(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+  function consolidatePoolRaw(opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }): Promise<ConsolidationResult> {
     return consolidatePool({
       wolfDen,
       wolfName,
@@ -631,13 +631,14 @@ export default function createMemoryExtension(
       sessionTopics: durableSessionTopics(wolfDen),
       ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
       minObservations: opts.minObservations,
+      ...(opts.ignoreBackoff ? { ignoreBackoff: true } : {}),
       onProgress: (msg) => console.log(`[memory] ${msg}`),
       onTopic: mem.topic,
       onRecord: (r) => mem.recordWritten(r),
       onArchive: mem.topicArchived,
     });
   }
-  const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number }) => serialized(() => consolidateInner(opts));
+  const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }) => serialized(() => consolidateInner(opts));
 
   /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
   function runConsolidation(opts: { drain?: boolean } = {}): Promise<void> {
@@ -663,7 +664,9 @@ export default function createMemoryExtension(
   const actions: MemoryActions = {
     promoteEnabled: kbRoots !== null,
     isBusy: () => promoting !== null,
-    consolidate: () => consolidateToSessions({ minObservations: 1 }),
+    promotingJob: () => promoting,
+    // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
+    consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
     promote() {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;

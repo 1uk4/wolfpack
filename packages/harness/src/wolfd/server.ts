@@ -873,6 +873,7 @@ export class WolfServer {
           claimsSubmitted: r.claimsSubmitted,
           ...(r.recordsWritten !== undefined ? { recordsWritten: r.recordsWritten } : {}),
           ...(r.observationsPending !== undefined ? { observationsPending: r.observationsPending } : {}),
+          ...(r.retryAt !== undefined ? { retryAt: r.retryAt } : {}),
           topicIds: r.topicIds ?? [],
         };
         return this.json(res, 200, body);
@@ -883,7 +884,7 @@ export class WolfServer {
         // The binding is per conversation: the asked thread's, else home's.
         const t = thread !== null ? this.checkThread(thread) : this.home;
         const bound = this.opts.den ? await readBound(this.opts.den, t.conv.id, this.opts.work ?? {}) : null;
-        return this.json(res, 200, await readMemoryStatus(this.memoryReadInput(), this.lastPromote(), bound));
+        return this.json(res, 200, await readMemoryStatus(this.memoryReadInput(), this.lastPromote(), bound, (this.opts.den ? memoryActionsFor(this.opts.den)?.promotingJob?.() : null) ?? null));
       }
       case "getMemoryTopic": {
         this.checkWolf(params.name);

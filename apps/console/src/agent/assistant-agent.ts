@@ -3,7 +3,8 @@ import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-age
 import type { Usage } from "@earendil-works/pi-ai";
 import { providerEventObserver } from "./provider-events.ts";
 import { APP_IDENTITY, type PiEngine } from "./models.ts";
-import { effectivePromptSegments } from "./prompt-segments.ts";
+import fs from "node:fs";
+import { PATHS } from "../../config.ts";
 import { toLlmMessages } from "../core/native-messages.ts";
 
 /**
@@ -12,32 +13,15 @@ import { toLlmMessages } from "../core/native-messages.ts";
  * source of truth, the agent is rebuilt from it every POST and discarded at
  * turn end. Engines are injectable so tests can pass a scripted faux engine.
  *
- * The system prompt is COMPOSED from src/agent/system-prompt.md (the only
- * source segment) through effectivePromptSegments, so per-segment user
- * overrides keep riding the same path.
+ * The system prompt is src/agent/system-prompt.md, read once at module load.
  */
-
-/** Which agent's prompt to compose. */
-export type AgentKind = "assistant";
-
-/** Exported for tests: assert what composes into the model's prompt. A
- *  segment whose switch is ON and whose override file exists composes the
- *  override text instead of the source; `switches` is the settings
- *  record's agent.prompts map (absent key = off). */
-export function composeInstructions(kind: AgentKind, switches?: Record<string, boolean>): string {
-	const segments = effectivePromptSegments(kind, switches ?? {});
-	return segments
-		.map((s) => (s.enabled ? s.overrideText! : s.sourceText))
-		.map((t) => t.trim())
-		.filter(Boolean)
-		.join("\n\n---\n\n");
-}
-
-// The switch-free source composition (module-load once). With
-// promptSwitches provided, baseAgentOptions composes FRESH per turn.
-const composedInstructions: Record<AgentKind, string> = {
-	assistant: composeInstructions("assistant"),
-};
+const systemPromptText = (() => {
+	try {
+		return fs.readFileSync(PATHS.systemPrompt, "utf-8").trim();
+	} catch {
+		return ""; // source unreadable — same empty fallback the segment loader had
+	}
+})();
 
 // Money channel (wave 4): the chat-handler passes a per-turn collector;
 // every model call's usage lands in the chat record's turns log
@@ -54,12 +38,6 @@ export interface AgentBuildOptions {
 	onUsage?: StepUsageCollector;
 	/** Tests may pass a bare tool registry to drive deterministic flows. */
 	tools?: Record<string, AgentTool<any>>;
-	/** Per-segment system-prompt override SWITCHES (the settings record's
-	 *  agent.prompts map, absent key = off — same keys the settings routes
-	 *  and effectivePromptSegments use). Provided → the prompt composes
-	 *  fresh per turn, honoring enabled overrides (switch on + file
-	 *  exists); absent → the cached pure-source composition. */
-	promptSwitches?: Record<string, boolean>;
 	/** Native conversation identity: the existing persisted chat id.
 	 * Debug: when set AND WOLFPACK_PROVIDER_EVENTS=1, raw provider stream events
 	 *  (pre-normalization) append to data/debug/provider-events/
@@ -75,9 +53,7 @@ export interface AgentBuildOptions {
 export function createAssistantAgent(opts: AgentBuildOptions = {}) {
 	const engine = opts.engine;
 	if (!engine) throw new Error("createAssistantAgent: no engine — the turn gate resolves one from the model slots");
-	const systemPrompt = opts.promptSwitches
-		? composeInstructions("assistant", opts.promptSwitches)
-		: composedInstructions.assistant;
+	const systemPrompt = systemPromptText;
 	// Debug recorder: raw provider events when WOLFPACK_PROVIDER_EVENTS=1 and the
 	// caller handed a chatId; undefined is the normal no-observer path.
 	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, "assistant") : undefined;

@@ -40,6 +40,14 @@ describe("domain add/rm with a hub configured", () => {
     expect(existsSync(join(kbBaseDir(loadConfig()), "domains.yaml"))).toBe(false);
   });
 
+  it("add refuses a hyphenated name before calling the hub, saying why", async () => {
+    hubEnv();
+    const f = respond(201); vi.stubGlobal("fetch", f);
+    await expect(domainCmd(["add", "my-docs"], { yes: true } as any)).rejects.toThrow(/lowercase letters and digits only/);
+    expect(f).not.toHaveBeenCalled();
+    expect(loadRegistry().domains).toEqual({});
+  });
+
   it("add: a hub 409 means already registered and continues", async () => {
     hubEnv(); vi.stubGlobal("fetch", respond(409, { error: "domain newdom exists" }));
     await domainCmd(["add", "newdom"], { yes: true } as any);

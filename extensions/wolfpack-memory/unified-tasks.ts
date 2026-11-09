@@ -73,7 +73,7 @@ import {
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
-import { WorkClient, GRADUATION_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
+import { WorkClient, WorkQueuedError, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
@@ -235,9 +235,22 @@ function formatHierarchy(
   return lines.join("\n");
 }
 
-/** With an explicit context.env (sandbox) the client never falls back to process.env. */
-function makeClient(env?: NodeJS.ProcessEnv): WorkClient {
-  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "") : new WorkClient();
+/**
+ * With an explicit context.env (sandbox) the client never falls back to process.env. Writes that cannot reach the hub wait in
+ * <den>/factory/work-outbox and are sent in order once it is back (see WorkClient.flush).
+ */
+function makeClient(wolfDen: string, env?: NodeJS.ProcessEnv): WorkClient {
+  const outbox = join(wolfDen, "factory", "work-outbox");
+  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox);
+}
+
+/** How often saved writes are retried when no new write comes along to push them. */
+const OUTBOX_FLUSH_MS = 30_000;
+
+/** A tool's error reply; a write saved in the outbox is not an error: the model is told it is queued and must not retry. */
+function failed(err: unknown, prefix = "Failed"): ToolResult {
+  if (err instanceof WorkQueuedError) return { content: [{ type: "text", text: err.message }] };
+  return { content: [{ type: "text", text: `${prefix}: ${err instanceof Error ? err.message : err}` }], isError: true };
 }
 
 /** The hub (WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN, as the console and crawl release read them), or null when none is configured. */
@@ -272,7 +285,9 @@ export default function createTasksExtension(
   // <den>/factory/conversations/<cid>/thread-settings.json, so a flip applies to the very next task_done).
   const envAuto = resolveShipPolicy(env) === "auto";
   const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
-  const client = makeClient(context.env);
+  const client = makeClient(wolfDen, context.env);
+  // Drain the outbox while the wolf is idle too; unref'd so it never keeps a process alive.
+  setInterval(() => { if (client.queued) client.flush().catch(() => {}); }, OUTBOX_FLUSH_MS).unref();
 
   /** Hub client acting as this wolf (bearer token), or an error text. Read per call so a config change applies at once. */
   function hubFor(): { hub: HttpConsoleClient; url: string; key?: string } | { error: string } {
@@ -689,7 +704,7 @@ export default function createTasksExtension(
                 content: [{ type: "text", text: heads(shippedLine(id), { id: id, title: shippedOther.title }, boundRef(binding)) + unbindNote }],
               };
             } catch (err) {
-              return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
+              return failed(err);
             }
           }
     if (!binding) return { content: [{ type: "text", text: "No task bound. Use task_bind first." }], isError: true };
@@ -759,10 +774,7 @@ export default function createTasksExtension(
               content: [{ type: "text", text: result.join("\n") }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
   }
 
@@ -1234,10 +1246,9 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             });
             return { content: [{ type: "text", text: reply }] };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed to create: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            // Queued: the hub mints the id when the create lands, so there is none to report or bind yet.
+            if (err instanceof WorkQueuedError) return { content: [{ type: "text", text: `${err.message} The new item has no ID until then and is not bound; find it with task_query once the hub is back.` }] };
+            return failed(err, "Failed to create");
           }
         },
       }),
@@ -1267,10 +1278,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: heads(`Note added to ${target}.`, { id: target, title: noted.title }, boundRef(binding)) }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1312,10 +1320,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: heads(`Updated working document for: ${found.item.title}`, { id: found.item.id, title: found.item.title }, boundRef(binding)) }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1357,10 +1362,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: heads(reply, { id: target, title: moved.title }, boundRef(binding)) }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1449,10 +1451,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1498,10 +1497,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: `${sourceId} ${args.rel} ${args.target}` }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1547,10 +1543,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1580,10 +1573,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}` }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1677,6 +1667,8 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             } catch { /* advisory */ }
             return { content: [{ type: "text", text: result.join("\n") }] };
           } catch (err) {
+            // Queued mid-graduation (the hub went away after the KB send): the rest replays in order once it is back.
+            if (err instanceof WorkQueuedError) return failed(err);
             return fail(`Graduation failed: ${err instanceof Error ? err.message : err}`);
           }
         },

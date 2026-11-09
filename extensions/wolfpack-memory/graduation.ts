@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import type { WorkItem } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { WorkQueuedError } from "./work-client.js";
 import {
   confirmGraduation,
   drainScope,
@@ -63,8 +64,10 @@ export function createGraduation(deps: GraduationDeps) {
   }
 
   /** Refusals keep their code; anything else stops the graduation with nothing archived. */
-  const asFailure = (err: unknown): GraduationError => {
+  const asFailure = (err: unknown): Error => {
     if (err instanceof GraduationError || (err as { name?: string })?.name === "GraduationError") return err as GraduationError;
+    // A write saved in the outbox (hub unreachable) is not a failure: the caller reports it as queued.
+    if (err instanceof WorkQueuedError) return err;
     const message = err instanceof Error ? err.message : String(err);
     // previewGraduation / confirmGraduation throw plain Errors: the not-ready and blocked ones are the owner's to fix.
     return new GraduationError(/is (no longer|not) ready to graduate|^cannot send:/.test(message) ? "not_ready" : "failed", message);

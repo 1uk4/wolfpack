@@ -21,7 +21,6 @@ import { applyParkedDismissal } from "./dismissal-park.ts";
 import { registerTurn, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn } from "./turn-service.ts";
 import { danglingQuestionOf } from "../core/native-messages.ts";
-import { composeInstructions } from "../agent/assistant-agent.ts";
 import { emit } from "../core/events.ts";
 import { settledTurnResponse } from "./turn-runs.ts";
 import { asAgentMessages } from "../core/native-messages.ts";
@@ -233,11 +232,6 @@ export async function handleChatInput(
 		onUsage: collectUsage,
 		// Debug (owner, 2026-10-04): raw provider events under
 		// WOLFPACK_PROVIDER_EVENTS=1 (provider-events.ts); no-op otherwise.
-		chatId,
-		// The prompt-override switches (P2, 2026-09-19): same resolution
-		// point as the tool delta — the agent layer composes the system
-		// prompt fresh per turn, swapping in any enabled override segments.
-		promptSwitches: effective.agent.prompts,
 	};
 	const constructed: AssistantAgent = (buildAgent ?? createAssistantAgent)(agentOpts);
 

@@ -1,0 +1,10 @@
+// Pack health (work-wolfpack-LUQ7C2B): the console user may RESTART hubd, the workerd units and wolfd@<name>, and nothing else.
+// No start, no stop, no other unit, no other verb. Installed to /etc/polkit-1/rules.d/ by deploy/console/setup.sh.
+// The console (apps/console/src/server/pack-health.ts) runs `systemctl --no-ask-password --no-block restart <unit>.service` with no shell,
+// and only for names it validated against the links it knows.
+polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "console") {
+    var unit = action.lookup("unit"), verb = action.lookup("verb");
+    if (verb == "restart" && /^(hubd|workerd(-[a-z0-9]+)*|wolfd@[a-z0-9][a-z0-9-]*)\.service$/.test(unit)) return polkit.Result.YES;
+  }
+});

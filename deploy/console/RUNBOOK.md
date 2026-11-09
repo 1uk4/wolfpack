@@ -13,7 +13,11 @@ Files: `deploy/console/{setup.sh,console.service,console.env.example}`, `deploy/
 | `WOLFPACK_HUB_URL` | where the **server** reaches hubd (today `http://100.120.154.69:3150`) |
 | `HUBD_PUBLIC_URL` | `https://<host>.ts.net/hub`, for the `/pair` link and the Devices panel's pairing link. Read **at runtime** (`/api/hub-url`, `src/server/hub-public-url.ts`); `NEXT_PUBLIC_WOLFPACK_HUB_URL` is no longer needed at build time (still honoured as a last fallback) |
 | `WOLFPACK_DATA_DIR` | `/var/lib/console/data`: the console's own state (settings, KB graph cache). `setup.sh` creates it `console:console 0700` if missing (the `/var/lib/console` home is created the same way) |
-| `WOLFPACK_HUB_TOKEN` | optional, `/api/health` hub probe only. The console forwards only the browser's device token |
+| `WOLFPACK_HEALTH_HUB_URL` | optional; hubd's `/healthz` for pack health. Its origin is also where the restart's live token check goes. Default: the origin of `WOLFPACK_HUB_URL` |
+| `WOLFPACK_HEALTH_WORKERDS` | optional; `<unit>=<url>,...` workerd units to probe (unit `workerd` or `workerd-<x>`). Default `workerd=http://127.0.0.1:7141`. sfo-01: `workerd=http://127.0.0.1:7142,workerd-wolves=http://127.0.0.1:7143` |
+| `WOLFPACK_HEALTH_WOLVES` | optional; `<name>=<url>,...` wolfd `/healthz` URLs to probe directly. Normally empty: wolves come from their workerd's `/healthz` |
+| `WOLFPACK_HEALTH_INTERVAL_MS` | optional; probe interval, default 5000 (minimum 1000) |
+| `WOLFPACK_HEALTH_SESSION_TTL_H` | optional; how long a device the hub accepted may restart units while the hub is down, default 72. While the hub is up it is not used: the hub is asked live (see Pack-health restarts) |
 
 hubd's own `/etc/wolfpack/hubd.env` gets the same two public values: `HUBD_PUBLIC_URL=https://<host>.ts.net/hub` (pairing QR) and `HUBD_CONSOLE_URL=https://<host>.ts.net` (where the pairing page redirects with `#token=`), then `systemctl restart hubd`.
 
@@ -59,6 +63,18 @@ Nothing has to move: the Mac's workerd links to `http://100.120.154.69:3150`, wh
 ## Operate
 
 - Logs: `journalctl -u console -n 100 --no-pager`. Restart: `systemctl restart console`.
-- Health: `curl -s http://127.0.0.1:3200/api/health` (`{"ok":true}`, 200 when its hub link works; with no token configured it reports on the console only).
+- Health: `curl -s http://127.0.0.1:3200/api/health`: a JSON snapshot of hubd, the workerd units and the wolves, probed by the console itself (no hub call, so it answers with hubd stopped or frozen). Always 200 while the console runs. Live: `GET /api/health/stream` (SSE).
+  **Changed:** `/api/health` no longer answers 503 when the hub is down. It is always 200 with a per-link snapshot, so an external monitor keyed on 503 must read `links[]` instead (e.g. `jq -e '.links[] | select(.id=="hubd") | .status=="ok"'`). Each link's `error` is a short code (`timeout`, `refused`, `http_<status>`, `wrong_service`, `bad_body`, `unreachable`, `slow`, `reports_not_ok`, `wolf_<state>`, `workerd_unavailable`, `not_reported`); the raw error is only in the console's journal (`journalctl -u console | grep 'console: health'`).
+
+## Pack-health restarts (polkit)
+
+`POST /api/health/restart {"service":"hubd"|"workerd"|"workerd-wolves"|"wolfd@<name>"}` runs `systemctl --no-ask-password --no-block restart <unit>.service` (argv, no shell) as the `console` user. The permission is the polkit rule `deploy/console/50-console-restart.rules`: user `console` may **restart** `hubd`, `workerd*` and `wolfd@<name>` and nothing else (no start/stop, no other unit). Polkit rather than sudoers because the unit runs with `NoNewPrivileges=yes`, which makes sudo unusable; polkit asks PID 1 over D-Bus, the same mechanism `workerd-wolves` already uses for `wolfd@` (infra/wolves/50-workerd-wolves.rules).
+
+- Install (part of `setup.sh setup`, owner approval first): `install -o root -g root -m 0644 deploy/console/50-console-restart.rules /etc/polkit-1/rules.d/` (polkit reloads rules by itself). Needs polkit (`/etc/polkit-1/rules.d`); present on sfo-01 since H5.
+- Check (as root): `runuser -u console -- systemctl --no-ask-password restart hubd.service` works; `runuser -u console -- systemctl --no-ask-password stop hubd.service` and `... restart ssh.service` are refused (**UNVERIFIED** until run).
+- The console allows a name only if it is a link it knows (hubd, a configured workerd unit, a wolf a workerd reported); one restart per service per 60 s (429 + `Retry-After`). The live checks are capped across all callers: at most 2 in flight (beyond: 429, `Retry-After: 5`) and 30 per minute (beyond: 429 until the window frees a slot). Auth: `Authorization: Bearer <device token>`, decided by the hub whenever it can:
+  - **Live check first, always** (whatever pack health currently shows for hubd): the console checks the bearer with `GET <hub>/v1/wolves` using that same token, 3 s timeout. `<hub>` is the same hub pack health probes (the origin of `WOLFPACK_HEALTH_HUB_URL`, else of `WOLFPACK_HUB_URL`, else `127.0.0.1:3150`, plus `WOLFPACK_HUB_URL`'s path prefix). 2xx allows it. 401, 403 or any other 4xx except 408/429 refuses it and drops the token from the witness, so **a device revoked on the hub loses restart rights immediately while the hub answers** (hubd answers 401 for a revoked token).
+  - **No verdict** (408, 429, 5xx, network error, timeout): only then the session witness decides. The bearer must have been accepted by the hub through this console within `WOLFPACK_HEALTH_SESSION_TTL_H` (default 72 h; SHA-256 hashes only, in `$WOLFPACK_DATA_DIR/health-sessions.json`, mode 0600). So **a device revoked while the hub is down keeps restart rights for at most 72 h** after its last successful hub call. To cut that short: `rm $WOLFPACK_DATA_DIR/health-sessions.json && systemctl restart console` (every device then needs the hub up once more before it can restart anything). Every attempt is logged: `journalctl -u console | grep 'health restart'` (device = first 12 hex of the token's SHA-256).
+- Rollback: `rm /etc/polkit-1/rules.d/50-console-restart.rules` (restarts then answer 502; health reads are unaffected).
 - Release layout: `/opt/wolfpack-console/{releases,current,previous}`, 5 releases kept.
 - The console is served at the origin root only (absolute `/api/...` URLs, no `basePath`).

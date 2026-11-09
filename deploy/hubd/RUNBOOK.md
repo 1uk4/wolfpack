@@ -182,7 +182,7 @@ runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs tokens revo
 ```
 **Pair rate limit and the proxy:** failed exchanges are limited per socket peer address (10 failures per minute, then 429). Behind `tailscale serve` (or any local reverse proxy) every request arrives from 127.0.0.1, so the bucket is GLOBAL: someone guessing codes can lock out your own pairing for a minute. Codes are 96-bit random, so guessing is not a real risk; just retry after a minute. `X-Forwarded-For` / `Tailscale-User-Login` are deliberately not trusted (no trusted-proxy flag yet).
 The hub warns at startup when `HUBD_CONSOLE_URL` is plain http on a non-loopback host.
-The console forwards each browser's own token verbatim; its own `WOLFPACK_HUB_TOKEN` is used only by `GET /api/health`. A browser without (or with a revoked) token gets 401 and is sent to `/pair`.
+The console forwards each browser's own token verbatim. It no longer uses a `WOLFPACK_HUB_TOKEN` of its own: `GET /api/health` probes hubd's unauthenticated `/healthz`, so leave the variable unset in `console.env` (it is read only by resolver-less scripts and tests). A browser without (or with a revoked) token gets 401 and is sent to `/pair`.
 
 ## 6. Rollback / removal
 - Bad release: `./setup.sh rollback` (swaps `current` and `previous`). If the `Type=notify` unit is installed and `previous` predates the watchdog, revert the unit FIRST and `daemon-reload` before running `rollback` (section 4b, Rollback): `rollback` restarts an active hubd under whatever unit is loaded.

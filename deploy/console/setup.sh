@@ -15,6 +15,7 @@ DATA_DIR=/var/lib/console
 ENV_DIR=/etc/wolfpack
 ENV_FILE=$ENV_DIR/console.env
 UNIT=/etc/systemd/system/console.service
+POLKIT_RULE=/etc/polkit-1/rules.d/50-console-restart.rules
 KEEP_RELEASES=5
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -98,6 +99,13 @@ cmd_setup() {
   if ((DRY)); then echo "DRY-RUN: install $UNIT from console.service with @NODE@=$node"; else
     sed "s|@NODE@|$node|" "$HERE/console.service" >"$UNIT.tmp" && chmod 644 "$UNIT.tmp" && mv "$UNIT.tmp" "$UNIT"
   fi
+  log "pack-health restart permission (polkit: restart hubd / workerd* / wolfd@* only)"
+  if [[ -d /etc/polkit-1/rules.d ]] || ((DRY)); then
+    run install -o root -g root -m 0644 "$HERE/50-console-restart.rules" "$POLKIT_RULE"
+  else
+    echo "NOTICE: /etc/polkit-1/rules.d missing (polkit not installed): the console's restart action will answer 502 until it is"
+  fi
+
   run systemctl daemon-reload
   run systemctl enable console.service
   echo "setup done. Next: edit $ENV_FILE (CHANGE-ME host names), 'setup.sh install --bundle <dir>', then 'systemctl start console'."
@@ -150,7 +158,7 @@ cmd_rollback() {
 cmd_uninstall() {
   log "uninstall console"
   if ((DRY)) || systemctl cat console.service >/dev/null 2>&1; then run systemctl disable --now console.service; else echo "console.service not installed; skipping disable"; fi
-  run rm -f "$UNIT"
+  run rm -f "$UNIT" "$POLKIT_RULE"
   run systemctl daemon-reload
   run rm -rf "$OPT"
   if ((PURGE)); then

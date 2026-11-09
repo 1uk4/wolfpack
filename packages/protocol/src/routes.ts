@@ -244,8 +244,17 @@ export const ROUTES = {
   /**
    * "Answering Qn": hold typed text as the free-text / Other answer of question `:qid` on the current page of a paged
    * card. Not a chat message: nothing is superseded and no turn starts. Answers `{accepted: true}`; the card's
-   * `draft` (card-pending event) then shows it. 400 for a slider/confirm question, one not on the current page, or a
-   * single/multi with `noOther`; 404 for an unknown card.
+   * `draft` (card-pending event) then shows it.
+   * Body `{text?, attachments?: string[]}`: at least one is required (blank text with no attachments is 400).
+   * Attachment ids come from `uploadAttachment` on this thread; an id that is not an upload of this thread is 400.
+   * At most ATTACHMENT_MAX_PER_SUBMIT images across all drafts of the card (400 above that).
+   * Draft per kind: free `{value: text, attachments?}`; single Other `{value: text, other: true, attachments?}`;
+   * multi Other `{value: [text], other: [text], attachments?}`. With images only there is no text: free/single
+   * `{value: "", attachments}`, multi `{value: [], attachments}` (no `other`, nothing counts toward `max`).
+   * A later bind replaces the earlier draft of that question. Picking an option for the question when the page is
+   * submitted keeps the draft's images. Direct answers to a page never carry attachments (400).
+   * 400 for a slider/confirm question, one not on the current page, or a single/multi with `noOther`; 404 for an
+   * unknown card.
    */
   bindCardText: {
     method: "POST",

@@ -129,6 +129,23 @@ describe("card field kind validation (pure)", () => {
     expect(validateAnswers(card, { m: { value: ["a", "mine", "mine"], other: ["mine", "mine"] } })).toMatch(/duplicate entries/);
     expect(validateAnswers(card, { m: { value: ["a", "mine"], other: ["mine"] } })).toBeUndefined();
   });
+
+  it("an image-only answer counts as exactly one Other entry: it satisfies required, needs Other, and counts toward min and max", () => {
+    const img = ["00000000-0000-4000-8000-000000000001"];
+    const field = (over: object) => ({ tool: "t", fields: [{ label: "Q", options: OPTS, ...over }] }) as unknown as Card;
+    // free and single: required is satisfied by the images; a single without Other refuses them
+    expect(validateAnswers(field({ id: "f", kind: "free-text" }), { f: { value: "", attachments: img } })).toBeUndefined();
+    expect(validateAnswers(field({ id: "s", kind: "single" }), { s: { value: "", attachments: img } })).toBeUndefined();
+    expect(validateAnswers(field({ id: "s", kind: "single", allowOther: false }), { s: { value: "", attachments: img } })).toMatch(/custom answer/);
+    // multi: needs allowOther; counts 1 toward min, so min 2 fails alone and passes with one pick
+    const multi = (over: object) => field({ id: "m", kind: "multi", allowOther: true, ...over });
+    expect(validateAnswers(multi({ allowOther: false }), { m: { value: [], attachments: img } })).toMatch(/custom entries/);
+    expect(validateAnswers(multi({ min: 2 }), { m: { value: [], attachments: img } })).toMatch(/pick at least 2/);
+    expect(validateAnswers(multi({ min: 2 }), { m: { value: ["a"], attachments: img } })).toMatch(/pick at least 2/);
+    expect(validateAnswers(multi({}), { m: { value: [], attachments: img } })).toBeUndefined();
+    // images riding on a picked option add nothing: max 1 with one pick plus images passes
+    expect(validateAnswers(multi({ max: 1 }), { m: { value: ["a"], attachments: img } })).toBeUndefined();
+  });
 });
 
 describe("card schema", () => {

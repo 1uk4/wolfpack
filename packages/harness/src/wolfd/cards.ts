@@ -15,8 +15,9 @@
  * with `bindText`) live in memory only and are lost on a restart: persisting them would need a new transcript entry
  * kind for little gain (the owner retypes a line).
  */
-import { BIND_TEXT_MAX, pageCard, reviseCard, visibleFields, type AnyField, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type PendingCard } from "@wolfpack/protocol";
+import { ATTACHMENT_MAX_PER_SUBMIT, BIND_TEXT_MAX, pageCard, reviseCard, visibleFields, type AnyField, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type PendingCard } from "@wolfpack/protocol";
 import { fieldKind, type AnyAnswer } from "./card-kinds/index.js";
+import { attachmentIds } from "./card-kinds/types.js";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -236,21 +237,31 @@ export class CardTracker {
    * Free text takes it as the value; single and multi take it as their Other entry unless the question has `allowOther:
    * false` (`noOther`); slider and confirm take no text. Blank text and text over BIND_TEXT_MAX are refused.
    */
-  bindText(callId: string, qid: string, text: string): string | undefined {
+  bindText(callId: string, qid: string, text: string, attachments: readonly string[] = [], owned?: (id: string) => boolean): string | undefined {
     const p = this.get(callId);
     if (!p) return "not_found";
     if (!p.card.paged) return "this card is not a questionnaire";
-    if (text.trim() === "") return "text must not be blank";
+    if (text.trim() === "" && attachments.length === 0) return "give non-blank text or at least one attachment";
     if (text.length > BIND_TEXT_MAX) return `text is over ${BIND_TEXT_MAX} characters`;
     const st = this.paged.get(callId) ?? { pagesDone: 0, answers: {}, draft: {} };
     const page = pageCard(p.card, st.pagesDone);
     const f = page?.fields.find((x) => x.id === qid);
     if (!f) return `question "${qid}" is not on the current page`;
+    const typed = text.trim() !== "";
+    // Images only: no text, so no fake Other entry: `{value: ""}` (multi `{value: []}`) plus the attachments.
     let a: CardFieldAnswer;
     if (f.kind === "free-text") a = { value: text };
-    else if (f.kind === "single" && f.allowOther !== false) a = { value: text, other: true };
-    else if (f.kind === "multi" && f.allowOther !== false) a = { value: [text], other: [text] };
+    else if (f.kind === "single" && f.allowOther !== false) a = typed ? { value: text, other: true } : { value: "" };
+    else if (f.kind === "multi" && f.allowOther !== false) a = typed ? { value: [text], other: [text] } : { value: [] };
     else return `question "${qid}" takes no typed answer`;
+    if (attachments.length) {
+      // Kind checks are done: now the images. Cap is over the drafts of every question of the card (a rebind replaces its own).
+      const others = Object.entries(st.draft).filter(([id]) => id !== qid).reduce((n, [, d]) => n + attachmentIds(d as AnyAnswer).length, 0);
+      if (others + attachments.length > ATTACHMENT_MAX_PER_SUBMIT) return `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${others} already attached to other questions)`;
+      const bad = owned ? attachments.find((id) => !owned(id)) : undefined;
+      if (bad !== undefined) return `unknown attachment ${bad}`;
+      a = { ...a, attachments: [...attachments] } as CardFieldAnswer;
+    }
     this.paged.set(callId, { ...st, draft: { ...st.draft, [qid]: a } });
     return undefined;
   }
@@ -264,7 +275,12 @@ export class CardTracker {
     const p = this.get(callId);
     if (!p || !p.card.paged) return undefined;
     const st = this.paged.get(callId) ?? { pagesDone: 0, answers: {}, draft: {} };
-    const merged = { ...st.draft, ...answers };
+    // A question's drafted images stay attached when the submitted answer replaces its value (the pick is the answer).
+    const merged: CardAnswers = { ...st.draft, ...answers };
+    for (const [id, d] of Object.entries(st.draft)) {
+      const imgs = attachmentIds(d as AnyAnswer);
+      if (imgs.length && id in answers) merged[id] = { ...answers[id], attachments: imgs } as CardFieldAnswer;
+    }
     const final = st.pagesDone >= (p.card.steps?.length ?? 1) - 1;
     const note = this.reviseRejected.get(callId);
     this.reviseRejected.delete(callId);
@@ -371,10 +387,15 @@ function isSkipped(field: Card["fields"][number], a: CardFieldAnswer | undefined
 
 /** The model-facing text of one answer, by field kind (the kind's own `answerText`). */
 export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | undefined): string {
+  // An image-only answer whose files are all gone (set by the thread when it delivers the answer).
+  if ((a as { imagesGone?: boolean } | undefined)?.imagesGone) return "(image no longer available)";
   if (field.optional && isSkipped(field, a)) return SKIPPED;
   if (!a) return "(no answer)";
-  return fieldKind(field.kind).answerText(asField(field), a as AnyAnswer);
+  const n = attachmentIds(a).length;
+  return fieldKind(field.kind).answerText(asField(field), a as AnyAnswer) + (n ? ` [${n} image${n === 1 ? "" : "s"} attached below]` : "");
 }
+
+export { attachmentIds };
 
 /** The model-facing user message for an answer submission: every card's questions with their answers (or skip), in raise order. */
 export function answerText(cards: readonly ReadyAnswer[]): string {

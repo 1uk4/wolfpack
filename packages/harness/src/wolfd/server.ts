@@ -708,8 +708,8 @@ export class WolfServer {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);
         const body = BindCardTextBodySchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", "body must be {text}");
-        t.bindCardText(params.callId, params.qid, body.data.text);
+        if (!body.success) throw new HttpError("invalid_request", "body must be {text?, attachments?: string[]} with at least one non-blank");
+        t.bindCardText(params.callId, params.qid, body.data.text ?? "", body.data.attachments);
         return this.json(res, 200, { accepted: true });
       }
       case "skipCard": {

@@ -32,10 +32,14 @@ const pagesOf = (card: Card): string[][] => (card.steps ?? [{ fields: card.field
 /** Plain-text rendering of one answer (no option labels: the record keeps the answer value). */
 export function plainAnswer(field: CardField, a: CardFieldAnswer): string {
   const v = (a as { value: unknown }).value;
-  if (Array.isArray(v)) return v.join(", ");
-  if (typeof v === "boolean") return v ? "yes" : "no";
-  if (typeof v === "string") return (a as { other?: boolean }).other === true ? `other: ${JSON.stringify(v)}` : v;
-  return String(v);
+  const imgs = (a as { attachments?: string[] }).attachments;
+  const tail = imgs?.length ? " [images attached below]" : "";
+  // An image-only draft has an empty value: the images are the answer.
+  const text = (s: string) => (s === "" && tail ? "(image only)" : s) + tail;
+  if (Array.isArray(v)) return text(v.join(", "));
+  if (typeof v === "boolean") return (v ? "yes" : "no") + tail;
+  if (typeof v === "string") return text((a as { other?: boolean }).other === true ? `other: ${JSON.stringify(v)}` : v);
+  return String(v) + tail;
 }
 
 /**

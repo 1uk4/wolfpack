@@ -43,11 +43,12 @@ import {
   type ThreadEventDraft,
 } from "../engine/index.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
-import { AttachmentError, attachmentsInText, inlineAttachments, recordSubmission } from "./attachments.js";
+import { AttachmentError, attachmentExists, attachmentsInText, imageParts, inlineAttachments, recordSubmission } from "./attachments.js";
 import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
-import { askSupersedeDetail, pageCard } from "@wolfpack/protocol";
-import { CardTracker, answerText, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
+import { ATTACHMENT_MAX_PER_SUBMIT, askSupersedeDetail, pageCard } from "@wolfpack/protocol";
+import { isImageOnly } from "./card-kinds/types.js";
+import { CardTracker, answerText, attachmentIds, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
 
@@ -392,7 +393,7 @@ export class ThreadRuntime {
   }
 
   private async resubmitCardAnswers(ready: ReadyAnswer[]): Promise<void> {
-    const r = await this.conv.submit({ input: answerText(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
+    const r = await this.conv.submit({ input: this.answerInput(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
     this.trackQueued(r, { text: "", refs: [], cardAnswers: ready });
   }
 
@@ -695,10 +696,15 @@ export class ThreadRuntime {
       text = supersededNotes(this.cards.pending().map((p) => this.supersededOf(p))) + withTaskNotice(notice?.text ?? "", text);
     }
     let input: SubmitOptions["input"] = text;
+    // The questionnaires this message supersedes: their drafted images ride along (the note only says they are below).
+    // The message's own images come first and are never repeated as drafts; together they stay within one turn's cap.
+    const ownIds = new Set(refs.map((r) => r.id));
+    const draftParts = this.draftImages(this.running ? this.cards.pending().filter((p) => p.card.paged) : this.cards.pending(), ownIds, ATTACHMENT_MAX_PER_SUBMIT - ownIds.size);
+    if (draftParts.length) input = [{ type: "text", text }, ...draftParts];
     if (refs.length > 0) {
       if (!this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
       try {
-        input = inlineAttachments(this.host.den, this.summary.id, text, refs);
+        input = [...inlineAttachments(this.host.den, this.summary.id, text, refs), ...draftParts];
       } catch (e) {
         if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
         throw e;
@@ -730,7 +736,14 @@ export class ThreadRuntime {
   private supersededOf(p: PendingCard): { tool: string; callId: string; detail?: string; paged?: true } {
     const base = { tool: p.card.tool, callId: p.callId };
     // The partial answers AND the text typed for the current page (draft) travel with the note: a draft is not "unanswered".
-    return p.card.paged ? { ...base, paged: true, detail: askSupersedeDetail(p.card, p.pageAnswers, p.pageIndex ?? 0, p.draft) } : base;
+    if (!p.card.paged) return base;
+    // Only images that will actually travel with the message are mentioned in the note.
+    const draft = p.draft && Object.fromEntries(Object.entries(p.draft).map(([id, a]) => {
+      const { attachments: _drop, ...rest } = a as { attachments?: string[] };
+      const live = this.liveAttachments(attachmentIds(a));
+      return [id, live.length ? { ...rest, attachments: live } : rest];
+    })) as CardAnswers | undefined;
+    return { ...base, paged: true, detail: askSupersedeDetail(p.card, p.pageAnswers, p.pageIndex ?? 0, draft) };
   }
 
   /** Hold-your-turn: set while a paged questionnaire has answered pages and is not complete (derived from the tracker). */
@@ -771,7 +784,7 @@ export class ThreadRuntime {
       let r;
       const ready = this.cards.foldLateNote(claim.ready);
       try {
-        r = await this.conv.submit({ input: answerText([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
+        r = await this.conv.submit({ input: this.answerInput([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
       } catch (e) {
         this.cards.release([callId]);
         if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
@@ -798,9 +811,73 @@ export class ThreadRuntime {
     }
   }
 
-  /** "Answering Qn": hold typed text as that question's answer (not a chat message, supersedes nothing). */
-  bindCardText(callId: string, qid: string, text: string): void {
-    const problem = this.cards.bindText(callId, qid, text);
+  /**
+   * The model input for card answers: the answer text, plus the images bound to questions (`bindCardText` attachments).
+   * HOW IMAGES REACH THE MODEL: a card answer is delivered as a user message (the engine places it as a card-answer entry
+   * whose content is this input), and a user message can carry image parts, exactly like a chat message with attachments
+   * (`inlineAttachments`). So the images ride that same user turn, each preceded by a text label naming its question.
+   * (A tool result is not used: the `ask` call already returned when the card was raised.)
+   */
+  private answerInput(ready: readonly ReadyAnswer[]): SubmitOptions["input"] {
+    const parts: Exclude<SubmitOptions["input"], string> = [];
+    // Each page's drafted images ride only that page's submission (the draft is cleared when the page is accepted), so every image is sent once.
+    const sendable = ready.map((r) => {
+      if (r.page === undefined) return r;
+      const answers = { ...r.answers };
+      for (const f of r.card.fields) {
+        const a = answers[f.id];
+        const ids = this.liveAttachments(attachmentIds(a));
+        if (!a) continue;
+        // Images that cannot be delivered are not mentioned in the text either; an answer that was only images says so.
+        const { attachments: _drop, ...rest } = a as { attachments?: string[] };
+        const gone = ids.length === 0 && isImageOnly(a as never);
+        answers[f.id] = (ids.length ? { ...rest, attachments: ids } : gone ? { ...rest, imagesGone: true } : rest) as typeof a;
+        if (ids.length) parts.push(...this.imagesFor(`Images the user attached to the answer of "${f.label}" (call ${r.callId}, question ${f.id}):`, ids));
+      }
+      return { ...r, answers };
+    });
+    const text = answerText(sendable);
+    return parts.length ? [{ type: "text", text }, ...parts] : text;
+  }
+
+  /** Of these upload ids, the ones still stored for this thread (a stat each). */
+  private liveAttachments(ids: readonly string[]): string[] {
+    const den = this.host.den;
+    return den ? ids.filter((id) => attachmentExists(den, this.summary.id, id)) : [];
+  }
+
+  /** A text label plus the image parts of these (existing) uploads. */
+  private imagesFor(label: string, ids: readonly string[]) {
+    return this.host.den ? imageParts(this.host.den, this.summary.id, ids, label) : [];
+  }
+
+  /** The image parts of the questionnaires' drafted images, labelled per question (a plain message that supersedes them carries these). */
+  private draftImages(cards: readonly PendingCard[], exclude: ReadonlySet<string>, budget: number) {
+    const parts: ReturnType<ThreadRuntime["imagesFor"]> = [];
+    const seen = new Set(exclude);
+    let left = Math.max(0, budget);
+    let omitted = 0;
+    for (const p of cards) {
+      if (!p.card.paged) continue;
+      for (const f of p.card.fields) {
+        const fresh = this.liveAttachments(attachmentIds(p.draft?.[f.id])).filter((id) => !seen.has(id));
+        const ids = fresh.slice(0, left);
+        omitted += fresh.length - ids.length;
+        left -= ids.length;
+        for (const id of ids) seen.add(id);
+        if (ids.length) parts.push(...this.imagesFor(`Images the user attached to the unsubmitted answer of "${f.label}" (call ${p.callId}, question ${f.id}):`, ids));
+      }
+    }
+    if (omitted > 0) parts.push({ type: "text" as const, text: `${omitted} more image${omitted === 1 ? " was" : "s were"} not sent (the limit is ${ATTACHMENT_MAX_PER_SUBMIT} per message).` });
+    return parts;
+  }
+
+  /** "Answering Qn": hold typed text and/or uploaded images as that question's answer (not a chat message, supersedes nothing). */
+  bindCardText(callId: string, qid: string, text: string, attachments: readonly string[] = []): void {
+    const ids = [...new Set(attachments)];
+    if (ids.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+    // The tracker checks card, question and kind first, then calls `owned`: the id must be an upload of THIS thread (a stat).
+    const problem = this.cards.bindText(callId, qid, text, ids, (id) => attachmentExists(this.host.den!, this.summary.id, id));
     if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
     if (problem) throw new HttpError("invalid_request", problem);
     this.announceHeld(callId);
@@ -870,7 +947,7 @@ export class ThreadRuntime {
     try {
       // Mid-turn the answer is steered like a chat message typed then (the engine queues it for the turn's next
       // boundary or its end); idle it starts the turn. "reject" would only matter if a turn began between the two.
-      r = await this.conv.submit({ input: answerText(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
+      r = await this.conv.submit({ input: this.answerInput(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
     } catch (e) {
       this.cards.release(ids);
       // Safety net: with whenBusy "steer" the engine never answers busy, so this should be unreachable.

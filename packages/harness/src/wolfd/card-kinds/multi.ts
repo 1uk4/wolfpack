@@ -1,5 +1,5 @@
 import type { AnyField, CardOption } from "@wolfpack/protocol";
-import { NO_ANSWER, optionEntry, type FieldKind } from "./types.js";
+import { NO_ANSWER, optionEntry, type FieldKind, IMAGE_ONLY_TEXT, isImageOnly } from "./types.js";
 
 const optionsOf = (f: AnyField): CardOption[] => (Array.isArray(f.options) ? (f.options as CardOption[]) : []);
 
@@ -10,6 +10,9 @@ export const multiFieldKind: FieldKind = {
     if (!Array.isArray(a.value)) return `field "${id}": the answer must be a list of strings`;
     const picked = a.value as string[];
     const options = optionsOf(f);
+    // Images alone (no pick) count as exactly one Other entry; images riding on picked options add nothing.
+    const imagesAlone = isImageOnly(a);
+    if (imagesAlone && f.allowOther !== true) return `field "${id}" does not accept custom entries (images alone count as one)`;
     const other = "other" in a && Array.isArray(a.other) ? (a.other as string[]) : [];
     if (new Set(picked).size !== picked.length) return `field "${id}": duplicate entries`;
     if (other.length > 0 && f.allowOther !== true) return `field "${id}" does not accept custom entries`;
@@ -22,14 +25,16 @@ export const multiFieldKind: FieldKind = {
       if (!other.includes(v) && !options.some((o) => o.value === v)) return `"${v}" is not an option of field "${id}"`;
     }
     // A required multi needs at least one pick, whatever its min (an optional one may be blank, which never reaches here).
+    const count = imagesAlone ? 1 : picked.length;
     const fmin = typeof f.min === "number" ? f.min : 0;
     const min = Math.max(fmin, f.optional ? 0 : 1);
-    if (min > 0 && picked.length < min) return `field "${id}": pick at least ${min}`;
-    if (typeof f.max === "number" && picked.length > f.max) return `field "${id}": pick at most ${f.max}`;
+    if (min > 0 && count < min) return `field "${id}": pick at least ${min}`;
+    if (typeof f.max === "number" && count > f.max) return `field "${id}": pick at most ${f.max}`;
     return undefined;
   },
-  isEmpty: (_f, a) => Array.isArray(a.value) && a.value.length === 0,
+  isEmpty: (_f, a) => !isImageOnly(a) && Array.isArray(a.value) && a.value.length === 0,
   answerText(f, a) {
+    if (isImageOnly(a)) return IMAGE_ONLY_TEXT;
     if (!Array.isArray(a.value)) return NO_ANSWER;
     if (a.value.length === 0) return "(none selected)";
     const custom = "other" in a && Array.isArray(a.other) ? (a.other as string[]) : [];

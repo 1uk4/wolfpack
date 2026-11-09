@@ -1632,7 +1632,12 @@ export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
  * Submit one page of a paged (`ask`) card. `answers` covers the questions of that page (a skippable question may be
  * omitted = skipped). Wire: thread id, `callId` and `page` (0-based, must be the next unanswered page) ride the path.
  */
-export const AnswerCardPageBodySchema = z.object({ answers: CardAnswersSchema });
+export const AnswerCardPageBodySchema = z.object({
+  // Images reach a question only through bindCardText (the draft): a direct answer with `attachments` is refused.
+  answers: CardAnswersSchema.refine((a) => Object.values(a).every((x) => (x as { attachments?: unknown }).attachments === undefined), {
+    message: "answers carry no attachments: attach images with bindCardText",
+  }),
+});
 export type AnswerCardPageBody = z.infer<typeof AnswerCardPageBodySchema>;
 
 /**
@@ -1640,7 +1645,13 @@ export type AnswerCardPageBody = z.infer<typeof AnswerCardPageBodySchema>;
  * answer held as a draft, NOT a chat message, so it supersedes nothing. Wire: thread id, `callId`, `qid` ride the path.
  */
 export const BIND_TEXT_MAX = 4000;
-export const BindCardTextBodySchema = z.object({ text: z.string().max(BIND_TEXT_MAX).refine((t) => t.trim() !== "", { message: "text must not be blank" }) });
+export const BindCardTextBodySchema = z
+  .object({
+    text: z.string().max(BIND_TEXT_MAX).optional(),
+    /** Ids from `uploadAttachment` on this thread (same rules as `SubmitRequest.attachments`: at most ATTACHMENT_MAX_PER_SUBMIT). */
+    attachments: z.array(z.string()).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
+  })
+  .refine((b) => (b.text ?? "").trim() !== "" || (b.attachments?.length ?? 0) > 0, { message: "give non-blank text or at least one attachment" });
 export type BindCardTextBody = z.infer<typeof BindCardTextBodySchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */

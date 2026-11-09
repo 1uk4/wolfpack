@@ -13,3 +13,4 @@ export * from "./wolf-settings.js";
 export * from "./link.js";
 export * from "./ledger-time.js";
 export * from "./health.js";
+export * from "./updates.js";

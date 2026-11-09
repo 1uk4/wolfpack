@@ -1,6 +1,7 @@
 # Auto-release: every push to stable tags each component changed since its last <component>/vX.Y.Z tag at +1 patch
 # (scripts/auto-tag.mjs, same planner as `wolfpack release`), pushing each tag separately, then builds each tag by
-# calling release.yml directly (tags pushed with GITHUB_TOKEN trigger no workflows). No PAT, no new secrets.
+# calling release.yml directly (tags pushed with GITHUB_TOKEN trigger no workflows), then rewrites the stable.json update manifest.
+# No PAT, no new secrets.
 # Deploying stays manual.
 name: release-stable
 on:
@@ -45,3 +46,35 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ matrix.tag }}
+
+  # Update notices: after the builds (even if one failed), publish the latest PUBLISHED release per component as stable.json on the
+  # fixed `stable-manifest` release: https://github.com/<repo>/releases/download/stable-manifest/stable.json (no auth on a public
+  # repo; read by @wolfpack/protocol createManifestFetcher). Logic: scripts/stable-manifest.mjs (unit-tested); this job is glue.
+  manifest:
+    needs: [tag, build]
+    if: ${{ always() && needs.tag.result == 'success' && needs.tag.outputs.tags != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # all tags, including the ones the tag job just pushed
+          fetch-tags: true
+          persist-credentials: false   # gh uses GH_TOKEN
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: build stable.json from the published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/stable-manifest.mjs --repo "$GITHUB_REPOSITORY" --check-releases --out "$RUNNER_TEMP/stable.json"
+          cat "$RUNNER_TEMP/stable.json"
+      - name: publish to the stable-manifest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view stable-manifest >/dev/null 2>&1 || gh release create stable-manifest --target "$GITHUB_SHA" --latest=false \
+            --title "stable manifest" --notes "Machine-readable latest stable version per component (stable.json). Rewritten by release-stable.yml on every stable release."
+          gh release upload stable-manifest "$RUNNER_TEMP/stable.json" --clobber

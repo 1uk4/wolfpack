@@ -11,6 +11,7 @@ import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, Workflow
 import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
+import { UpdateNotice } from "@/components/update-notice";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ChatBar } from "@/components/chat-bar";
@@ -1124,6 +1125,7 @@ export function SessionsSidebar() {
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
 					<div className="px-3 pb-3 pt-1">
+						<UpdateNotice />
 						<NotifyToggle />
 						<Hint label="Settings" action="open-settings" side="right">
 							<button

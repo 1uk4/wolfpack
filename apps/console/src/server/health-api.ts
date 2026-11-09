@@ -103,7 +103,7 @@ export function createHealthApi(d: HealthApiDeps) {
 	};
 
 	/** The shared gate of every action: the bearer header, checked as in RESTART AUTH. Returns who asked, or the error response. */
-	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback"): Promise<string | Response> => {
+	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "domain change"): Promise<string | Response> => {
 		const token = bearerOf(req.headers.get("authorization"));
 		const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
 		if (!auth.ok && auth.busy !== undefined) {
@@ -125,6 +125,9 @@ export function createHealthApi(d: HealthApiDeps) {
 		Response.json({ error: out.message, code: out.code, service: out.service }, { status, headers: { ...NO_STORE, ...(out.retryAfterS ? { "Retry-After": String(out.retryAfterS) } : {}) } });
 
 	return {
+		/** The owner gate (same as restart) for other console actions: who asked, or the 401/429 response. */
+		gate: gateOf,
+
 		/** The current snapshot; before the first round has finished, waits for it so the first answer is real. */
 		async get(): Promise<Response> {
 			const s = d.health.snapshot().checkedAt === null ? await d.health.tick() : d.health.snapshot();

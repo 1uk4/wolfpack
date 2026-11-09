@@ -1011,8 +1011,6 @@ export function SessionsSidebar() {
 						KB activity
 					</Link>
 					<WorkNavEntry />
-					{/* Pack health at a glance (work-wolfpack-6imFEq7): works with the hub down; opens the health modal. */}
-					<PackHealthBar onOpen={closeList} />
 				</div>
 
 				{/* Headless: raises OS/browser notifications for newly waiting cards. The rows carry the visible needs-you mark. */}
@@ -1130,6 +1128,8 @@ export function SessionsSidebar() {
 					<div className="px-3 pb-3 pt-1">
 						<UpdateNotice />
 						<NotifyToggle />
+						{/* Pack health at a glance (work-wolfpack-6imFEq7): works with the hub down; opens the health modal. */}
+						<PackHealthBar onOpen={closeList} />
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"

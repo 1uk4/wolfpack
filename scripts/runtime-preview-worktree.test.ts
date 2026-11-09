@@ -1108,6 +1108,39 @@ describe("agent slots through `wolfpack preview slot`", () => {
 			expect(fs.readFileSync(slotsFile(), "utf8")).not.toContain("SLOT-BROWSER-TOKEN");
 		});
 
+		it("a second pair revokes the first token id before minting, so one live token per port; a failed revoke warns and still pairs; release revokes the last one", async () => {
+			await slot("get", "wt-a");
+			fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+			fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: "http://100.64.0.9:3150" }));
+			fs.writeFileSync(tokenFile(), "FILE-TOKEN-0123456789", { mode: 0o600 });
+			const events: string[] = [];
+			const warnings: string[] = [];
+			let revokeStatus = 200;
+			let n = 0;
+			const hub = async (url: string, init: { method?: string }) => {
+				if (init.method === "DELETE") {
+					events.push(`revoke ${url.split("/").pop()}`);
+					return { status: revokeStatus, json: {} };
+				}
+				if (url.endsWith("/v1/tokens/pairing-codes")) return { status: 200, json: { code: "C" } };
+				events.push("mint");
+				return { status: 200, json: { token: "SLOT-BROWSER-TOKEN", tokenId: `tok_${++n}` } };
+			};
+			const slots = (o: object) => fakeSlots({ ...o, hubFetch: hub, warn: (m: string) => warnings.push(m) });
+			const run = (argv: string[]) => runPreview({ argv, env: { HOME: home }, cwd: main, steps: { slots, open: () => 0, hubFetch: hub }, log: () => {}, warn: (m: string) => warnings.push(m) });
+			expect((await run(["slot", "pair", "3231"])).exitCode).toBe(0);
+			expect((await run(["slot", "pair", "3231"])).exitCode).toBe(0);
+			expect(events).toEqual(["mint", "revoke tok_1", "mint"]);
+			revokeStatus = 0; // hub down for the revoke: pairing still works
+			expect((await run(["slot", "pair", "3231"])).exitCode).toBe(0);
+			expect(events.slice(3)).toEqual(["revoke tok_2", "mint"]);
+			expect(warnings.join("\n")).toContain("tok_2");
+			expect(warnings.join("\n")).not.toContain("SLOT-BROWSER-TOKEN");
+			revokeStatus = 200;
+			expect((await run(["slot", "release", "3231"])).exitCode).toBe(0);
+			expect(events.slice(5)).toEqual(["revoke tok_3"]);
+		});
+
 		it("--print-url writes only the URL to stdout, opens nothing, and keeps messages on stderr", async () => {
 			await slot("get", "wt-a");
 			const r = await pair(["3231", "--print-url"]);

@@ -702,6 +702,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				const fromEnv = env.WOLFPACK_HUB_TOKEN?.trim();
 				if (fromEnv && !tokens.includes(fromEnv)) tokens.push(fromEnv);
 				const label = `preview slot ${port} ${os.hostname()}`.slice(0, 64);
+				await slots.revokeToken(port); // the previous browser token for this port (a failure only warns), so the hub keeps one live token per port
 				let paired;
 				let redeemFailed;
 				for (const token of tokens) {
@@ -720,6 +721,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 					const setup = tokenSetup();
 					return fail(`no token on this Mac can mint a browser pairing code for the slot. One-time setup:\n  ${setup[0]}\n  ${setup[1]}`);
 				}
+				if (typeof paired.tokenId === "string" && paired.tokenId) await slots.recordToken(port, paired.tokenId); // the id only, never the token
 				const target = `http://127.0.0.1:${port}/pair#token=${encodeURIComponent(paired.token)}`;
 				const done = `signed in your browser on :${port} (token id ${paired.tokenId ?? "unknown"})`;
 				if (argv.includes("--print-url")) {

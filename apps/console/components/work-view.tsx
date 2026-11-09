@@ -50,6 +50,16 @@ import { useGraduated } from "./graduation-signal";
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
 export const DEFAULT_WORK_DOMAIN = "wolfpack";
 export const WORK_POLL_MS = 30_000;
+/** How long the move notification (with its Undo) stays. */
+export const WORK_UNDO_MS = 8000;
+
+/** The one move notification. `undo` reverses the move; `from` is the assignee to give back after a handoff. */
+interface MoveToast {
+	kind: "moved" | "undone" | "error";
+	text: string;
+	undo?: { id: string; prev: string | null; from: string | null };
+	busy?: boolean;
+}
 
 function readDomain(): string {
 	try {
@@ -449,7 +459,7 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 	{ col: "created", label: "Created", cls: `${COLS.created} justify-end` },
 ];
 
-export function WorkList({ client: injected, graduate: injectedGraduate }: { client?: WorkClient; graduate?: GraduateClient }) {
+export function WorkList({ client: injected, graduate: injectedGraduate, undoMs = WORK_UNDO_MS }: { client?: WorkClient; graduate?: GraduateClient; undoMs?: number }) {
 	const { open: openItem, itemId } = useWorkReader();
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
@@ -465,6 +475,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [assignErrors, setAssignErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [busyMove, setBusyMove] = useState<ReadonlySet<string>>(() => new Set());
 	const [moveMsgs, setMoveMsgs] = useState<ReadonlyMap<string, MoveMsg>>(() => new Map());
+	const [toast, setToast] = useState<MoveToast | null>(null);
 	const loads = useRef(0);
 	const [dragId, setDragId] = useState<string | null>(null);
 	const mounted = useRef(true);
@@ -539,6 +550,10 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 				else next.set(id, m);
 				return next;
 			});
+		// The parent before the move, from the loaded items (not the row label). Undo is offered only when it is known and still exists.
+		const before = items?.find((x) => x.id === id);
+		const prevParent = before && (before.partOf !== undefined || before.kind === "feature") ? (before.partOf ?? null) : undefined;
+		const prevOk = prevParent !== undefined && (prevParent === null || !!items?.some((x) => x.id === prevParent));
 		setBusyMove((prev) => new Set(prev).add(id));
 		say(null);
 		try {
@@ -547,7 +562,14 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 			if (!res.ok) say({ kind: "error", text: res.message });
 			else {
 				const handoff = res.data.reassigned?.find((r) => r.id === id);
-				const parent = items?.find((x) => x.id === to)?.title ?? to;
+				const target = items?.find((x) => x.id === to);
+				const parent = target?.title ?? to;
+				const where = to === null ? "no initiative" : target?.container ? "Inbox" : String(parent);
+				setToast({
+					kind: "moved",
+					text: `Moved ${before?.title ?? id} to ${where}${handoff ? ` and assigned to ${handoff.to}` : ""}`,
+					...(prevOk ? { undo: { id, prev: prevParent as string | null, from: handoff?.from ?? null } } : {}),
+				});
 				if (handoff) say({ kind: "handoff", text: `Moved under ${parent}; now assigned to ${handoff.to}`, until: loads.current + 1 });
 				const fresh = await reload();
 				if (!mounted.current) return;
@@ -564,6 +586,39 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 				});
 		}
 	};
+
+	// Undo: move back with the same client path (no new notification), then give the old assignee back unless the move-back already did.
+	const onUndo = async (): Promise<void> => {
+		const u = toast?.undo;
+		if (!u || !client.move || toast?.busy) return;
+		setToast({ ...toast!, busy: true });
+		const fail = (text: string, keepUndo: boolean) => {
+			if (mounted.current) setToast({ kind: "error", text, ...(keepUndo ? { undo: u } : {}) });
+		};
+		try {
+			const res = await client.move(u.id, u.prev);
+			if (!mounted.current) return;
+			if (!res.ok) return fail(res.message, true);
+			const back = res.data.reassigned?.find((r) => r.id === u.id);
+			if (u.from !== null && client.assign && back?.to !== u.from) {
+				const a = await client.assign(u.id, u.from);
+				if (!a.ok) {
+					await reload();
+					return fail(`moved back, but couldn't restore the assignee: ${a.message}`, false);
+				}
+			}
+			await reload();
+			if (mounted.current) setToast({ kind: "undone", text: "Move undone" });
+		} catch (err) {
+			fail(err instanceof Error ? err.message : "undo failed", true);
+		}
+	};
+	// The notification goes after `undoMs`, unless it is an error or an undo is running.
+	useEffect(() => {
+		if (!toast || toast.kind === "error" || toast.busy) return;
+		const t = setTimeout(() => setToast(null), undoMs);
+		return () => clearTimeout(t);
+	}, [toast, undoMs]);
 
 	const setDomain = (next: string) => {
 		setDomainState(next);
@@ -685,6 +740,18 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 						))}
 					</div>
 				</div>
+			{toast && (
+				<div data-testid="work-move-toast" data-kind={toast.kind} role={toast.kind === "error" ? "alert" : "status"} className="fixed bottom-4 left-1/2 z-50 flex max-w-[90vw] -translate-x-1/2 items-center gap-3 rounded-lg border bg-popover px-3 py-2 text-xs shadow-lg">
+					<span data-testid="work-move-toast-msg" className={`min-w-0 truncate ${toast.kind === "error" ? "text-destructive" : ""}`} title={toast.text}>
+						{toast.text}
+					</span>
+					{toast.undo && (
+						<button type="button" data-testid="work-move-undo" disabled={toast.busy} onClick={() => void onUndo()} className="shrink-0 rounded border px-2 py-0.5 font-medium hover:bg-accent disabled:opacity-50">
+							Undo
+						</button>
+					)}
+				</div>
+			)}
 		</div>
 	);
 }

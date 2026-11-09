@@ -78,14 +78,14 @@ afterEach(() => {
 	document.body.innerHTML = "";
 });
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 10)); });
-const mount = async (client: WorkClient, start = "/work") => {
+const mount = async (client: WorkClient, start = "/work", extra: { undoMs?: number } = {}) => {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	await act(async () => {
 		root!.render(
 			<FakeNav start={start}>
-				<WorkList client={client} />
+				<WorkList client={client} {...extra} />
 				<WorkReaderHost />
 			</FakeNav>,
 		);
@@ -611,5 +611,112 @@ describe("moving items", () => {
 		release();
 		await settle();
 		assert.equal(sel("t1").disabled, false);
+	});
+});
+
+describe("undoing a move", () => {
+	const UI = [
+		item("i1", "initiative", { title: "Phase 1" }),
+		item("f1", "feature", { partOf: "i1", assignee: "hal", title: "F1" }),
+		item("f2", "feature", { partOf: "i1", assignee: "luka", title: "F2" }),
+		item("t1", "task", { partOf: "f1", title: "T1" }),
+		item("lt", "task", { title: "LT" }),
+		item("lf", "feature", { title: "LF" }),
+		item("it", "task", { partOf: "inbox", title: "IT" }),
+		item("inbox", "feature", { container: true, title: "Inbox" }),
+	];
+	type Call = [string, string | null];
+	interface Rec { moves: Call[]; assigns: Call[] }
+	const setup = async (opts: { move?: (id: string, to: string | null, n: number) => ReturnType<NonNullable<WorkClient["move"]>>; assign?: NonNullable<WorkClient["assign"]>; items?: WorkListItem[]; undoMs?: number } = {}): Promise<Rec & { c: Fake }> => {
+		if (root) { act(() => root!.unmount()); root = null; document.body.innerHTML = ""; }
+		const rec: Rec = { moves: [], assigns: [] };
+		const c = fake({
+			items: opts.items ?? UI,
+			move: async (id, to) => (rec.moves.push([id, to]), opts.move ? opts.move(id, to, rec.moves.length) : { ok: true, data: {} }),
+			assign: async (id, w) => (rec.assigns.push([id, w]), opts.assign ? opts.assign(id, w) : { ok: true, data: {} }),
+		});
+		await mount(c, "/work", opts.undoMs === undefined ? {} : { undoMs: opts.undoMs });
+		await settle();
+		for (const k of ["i1", "f1", "no-initiative"]) await click(q(`work-toggle-${k}`)!);
+		return Object.assign(rec, { c });
+	};
+	const pick = async (key: string, i: number) => {
+		await change(q(`work-move-${key}`)!, { value: String(i) });
+		await settle();
+	};
+	const text = () => q("work-move-toast-msg")?.textContent;
+	const handoff = (id: string, from: string | null) => async () => ({ ok: true as const, data: { reassigned: [{ id, from, to: "luka" }] } });
+
+	it("announces a move with an Undo, adding the new assignee after a handoff", async () => {
+		await setup();
+		await pick("t1", 0);
+		assert.equal(text(), "Moved T1 to F2");
+		assert.ok(q("work-move-undo"));
+		await setup({ move: handoff("t1", "hal") });
+		await pick("t1", 0);
+		assert.equal(text(), "Moved T1 to F2 and assigned to luka");
+	});
+	it("undo moves back to the old parent: a feature to no initiative (null), a task to its Inbox container", async () => {
+		const r = await setup();
+		await pick("lf", 0);
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r.moves, [["lf", "i1"], ["lf", null]]);
+		assert.equal(text(), "Move undone");
+		assert.equal(q("work-move-undo"), null, "no redo chain");
+		await pick("it", 0);
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r.moves.slice(2), [["it", "f1"], ["it", "inbox"]]);
+	});
+	it("undo after a handoff gives the old assignee back, unless the move-back already did", async () => {
+		const r = await setup({ move: (id, _to, n) => handoff(id, "hal")().then((x) => (n === 2 ? { ok: true as const, data: { reassigned: [{ id, from: "luka", to: "hal" }] } } : x)) });
+		await pick("t1", 0);
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r.moves, [["t1", "f2"], ["t1", "f1"]]);
+		assert.deepEqual(r.assigns, [], "the move-back handed it to hal already");
+		const r2 = await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()) });
+		await pick("t1", 0);
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r2.assigns, [["t1", "hal"]]);
+	});
+	it("a failed undo shows the hub's message, keeps the notification and leaves the list alone", async () => {
+		const r = await setup({ move: (_id, _to, n) => Promise.resolve(n === 1 ? { ok: true as const, data: {} } : { ok: false as const, reason: "error" as const, message: "hub says no" }) });
+		await pick("t1", 0);
+		const before = rows();
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.equal(text(), "hub says no");
+		assert.ok(q("work-move-undo"));
+		assert.deepEqual(rows(), before);
+		assert.equal(r.assigns.length, 0);
+	});
+	it("says so when the move-back worked but the assignee could not be restored", async () => {
+		await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()), assign: async () => ({ ok: false, reason: "error", message: "hal is offline" }) });
+		await pick("t1", 0);
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.equal(text(), "moved back, but couldn't restore the assignee: hal is offline");
+	});
+	it("the notification goes after its timeout, and a second move replaces it", async () => {
+		await setup({ undoMs: 60 });
+		await pick("t1", 0);
+		await pick("lf", 0);
+		assert.equal(qa('[data-testid="work-move-toast"]').length, 1);
+		assert.equal(text(), "Moved LF to Phase 1");
+		await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
+		assert.equal(q("work-move-toast"), null);
+	});
+	it("offers no Undo when the previous parent is unknown or its Inbox container is gone", async () => {
+		await setup();
+		await pick("lt", 0);
+		assert.equal(text(), "Moved LT to F1");
+		assert.equal(q("work-move-undo"), null);
+		await setup({ items: UI.filter((x) => x.id !== "inbox") });
+		await pick("it", 0);
+		assert.ok(q("work-move-toast"));
+		assert.equal(q("work-move-undo"), null);
 	});
 });

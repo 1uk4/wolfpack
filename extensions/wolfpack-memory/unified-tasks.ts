@@ -1160,9 +1160,11 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
           "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. " +
           "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
-          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else.",
+          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. " +
+          "Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.",
         parameters: Type.Object({
           kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
+          assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature." })),
           domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
           title: Type.String({ description: "Short title" }),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
@@ -1178,6 +1180,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           successCriteria?: string;
           standing?: boolean;
           bind?: boolean;
+          assignee?: string;
         }, ctx: ToolContext): Promise<ToolResult> {
           if (!domains.includes(args.domain)) {
             return {
@@ -1226,13 +1229,15 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               partOf: partOf || undefined,
               successCriteria: args.successCriteria,
               standing: args.standing,
-              assignee: ctx.wolfName,
+              assignee: args.assignee || ctx.wolfName,
             };
             
             const result = await client.create(input);
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
             if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
+            const got = result.item.assignee as string | undefined;
+            if (args.assignee && got && got !== args.assignee) reply += `; the feature's assignee ${got} applies, not ${args.assignee}`;
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
@@ -1552,12 +1557,14 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_move ───────────────────────────────────────────────────────
       defineTool({
         name: "task_move",
-        description: "Move the active task under a different parent.",
+        description: "Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it.",
         parameters: Type.Object({
           to: Type.String({ description: "New parent ID, 'inbox', or 'none'" }),
+          id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
         }),
-        async execute(args: { to: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx);
+        async execute(args: { to: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
+          const bound = await readBinding(ctx);
+          const binding = args.id ? { taskId: args.id } : bound;
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],

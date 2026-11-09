@@ -1452,7 +1452,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         title: Type.String({ description: "Short title for the work item" }),
         area: Type.Optional(Type.String({ description: "Horizontal area: marketing, engineering, analysis…" })),
         successCriteria: Type.Optional(Type.String({ description: "Done-condition (required for tasks)" })),
-        assignee: Type.Optional(Type.String({ description: "Wolf to assign (default: current wolf)" })),
+        assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature: the feature's assignee wins." })),
         partOf: Type.Optional(Type.String({ description: "Parent work item ID (a feature for task/issue/spike; an initiative or none for a feature)" })),
         standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
         bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
@@ -1500,6 +1500,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           const result = await client.create(input);
           let reply = `Created ${result.id}: ${result.item.title} [${result.item.stage}]`;
           if (result.assignedTo) reply += handoffText([{ id: result.id, from: null, to: result.assignedTo }]);
+          const got = result.item.assignee as string | undefined;
+          if (params.assignee && got && got !== params.assignee) reply += `; the feature's assignee ${got} applies, not ${params.assignee}`;
           // One at a time, from the binding as it is now: the first task created binds, the rest see it.
           reply += await bindSerial(async () => {
             await syncBinding(ctx);

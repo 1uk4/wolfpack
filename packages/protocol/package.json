@@ -11,7 +11,8 @@
     "./ledger-time": "./dist/ledger-time.js",
     "./objects": "./dist/objects.js",
     "./stub": "./dist/stub/index.js",
-    "./contract": "./dist/contract/index.js"
+    "./contract": "./dist/contract/index.js",
+    "./health-lag": "./dist/health-lag.js"
   },
   "scripts": {
     "build": "tsc --build",

@@ -59,6 +59,7 @@ import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
+import { baseHealth, createLagMonitor, packageVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import { HttpError } from "./http-error.js";
 import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import type { PromptBlock } from "./context.js";
@@ -137,6 +138,8 @@ export interface ThreadConversations {
   setTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
 }
 
+/** The @wolfpack/harness version (src/wolfd and dist/wolfd both sit two levels below package.json). */
+const WOLFD_VERSION = packageVersion(new URL("../../package.json", import.meta.url));
 const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
@@ -166,6 +169,8 @@ export class WolfServer {
   private wolfBuffer: WolfEvent[] = [];
   private readonly wolfSubs = new Set<(ev: WolfEvent) => void>();
   private closing = false;
+  /** Started once listening succeeds (a failed start leaves nothing running); stopped in close(). */
+  private lag: LagMonitor | undefined;
   // ---- header git tree ----
   private readonly gitInfo: GitInfo;
   // ---- /header git tree ----
@@ -278,6 +283,7 @@ export class WolfServer {
       this.http.once("error", reject);
       this.http.listen(port, "127.0.0.1", () => resolve());
     });
+    this.lag ??= createLagMonitor();
     this.baseUrl = `http://127.0.0.1:${(this.http.address() as AddressInfo).port}`;
     return this.baseUrl;
   }
@@ -289,6 +295,7 @@ export class WolfServer {
       this.http.once("error", reject);
       this.http.listen(path, () => resolve());
     });
+    this.lag ??= createLagMonitor();
     this.socketPath = path;
     this.baseUrl = `unix:${path}`;
     return this.baseUrl;
@@ -296,6 +303,7 @@ export class WolfServer {
 
   async close(): Promise<void> {
     this.closing = true;
+    this.lag?.stop();
     this.http.closeAllConnections();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
     if (this.socketPath) rmSync(this.socketPath, { force: true });
@@ -621,6 +629,7 @@ export class WolfServer {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://wolfd");
     res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
+    if (url.pathname === "/healthz" && req.method === "GET") return this.json(res, 200, { ...baseHealth("wolfd", (this.lag ??= createLagMonitor()), WOLFD_VERSION), wolf: this.name }); // no auth, in-memory only
     const m = matchRoute(req.method ?? "GET", url.pathname);
     if (m === undefined) throw new HttpError("not_found", `no route ${url.pathname}`);
     if (m === "method") throw new HttpError("invalid_request", `method ${req.method} not allowed`);

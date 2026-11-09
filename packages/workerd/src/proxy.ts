@@ -1,6 +1,7 @@
 import { request as httpRequest, createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { ERROR_HTTP_STATUS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, matchRoute, type ErrorCode, type WolfSummary } from "@wolfpack/protocol";
+import { baseHealth, createLagMonitor, packageVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import type { WolfRegistry } from "./registry.js";
 import { getJson, socketOf } from "./socket.js";
 
@@ -10,6 +11,21 @@ export interface WorkerdServerOptions {
   health?: () => unknown;
   /** Timeout for the per-wolf /v1/wolves probe during aggregation. Default 1000. */
   probeTimeoutMs?: number;
+}
+
+const VERSION = packageVersion(new URL("../package.json", import.meta.url));
+
+/**
+ * The /healthz body is unauthenticated, so it carries names, states and counts only: per-wolf socket `url` and `logFile` paths
+ * and per-domain kb `lastError` text (which can quote filesystem paths) are dropped. No field here ever held a token.
+ */
+function publicHealth(extra: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...extra };
+  if (Array.isArray(out.wolves)) out.wolves = out.wolves.map((w) => (w && typeof w === "object" ? (({ url: _u, logFile: _l, ...rest }) => rest)(w as Record<string, unknown>) : w));
+  if (out.kb && typeof out.kb === "object") {
+    out.kb = Object.fromEntries(Object.entries(out.kb as Record<string, unknown>).map(([d, s]) => [d, s && typeof s === "object" ? (({ lastError: _e, ...rest }) => rest)(s as Record<string, unknown>) : s]));
+  }
+  return out;
 }
 
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "host"]);
@@ -44,6 +60,8 @@ export function wolfForRoute(params: Record<string, string>): string | undefined
 export class WorkerdServer {
   private readonly http: Server;
   private baseUrl = "";
+  /** Started once listening succeeds (a failed start leaves nothing running); stopped in close(). */
+  private lag: LagMonitor | undefined;
 
   constructor(private readonly opts: WorkerdServerOptions) {
     this.http = createServer((req, res) => {
@@ -60,11 +78,13 @@ export class WorkerdServer {
       this.http.once("error", reject);
       this.http.listen(port, host, () => resolve());
     });
+    this.lag ??= createLagMonitor();
     this.baseUrl = `http://${host}:${(this.http.address() as AddressInfo).port}`;
     return this.baseUrl;
   }
 
   close(): Promise<void> {
+    this.lag?.stop();
     this.http.closeAllConnections();
     return new Promise((resolve) => this.http.close(() => resolve()));
   }
@@ -73,7 +93,10 @@ export class WorkerdServer {
     const url = new URL(req.url ?? "/", "http://workerd");
     const method = req.method ?? "GET";
     if (url.pathname === "/healthz" && method === "GET") {
-      const body = JSON.stringify(this.opts.health?.() ?? { ok: true });
+      // Deliberately unauthenticated and deliberately rich: the pack-health wolves light (work-wolfpack-LUQ7C2B) needs per-wolf state.
+      // workerd listens on loopback or the tailnet only, and publicHealth() keeps it to names, states and restart counts (no secrets, no paths).
+      const extra = this.opts.health?.();
+      const body = JSON.stringify({ ...baseHealth("workerd", (this.lag ??= createLagMonitor()), VERSION), ...(extra && typeof extra === "object" ? publicHealth(extra as Record<string, unknown>) : {}) }); // base fields first: an existing `ok`/`wolves` body keeps winning
       res.writeHead(200, { "content-type": "application/json" });
       res.end(body);
       return;

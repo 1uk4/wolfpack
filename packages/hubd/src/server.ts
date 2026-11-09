@@ -42,6 +42,7 @@ import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { createRebuildService, type RebuildService } from "./kb-rebuild.js";
+import { createHubHealth, type HubHealth } from "./health.js";
 import { createCurator, curatorEmbedderFactory, curatorEngineFactory, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
@@ -310,6 +311,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
+  let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
@@ -393,6 +395,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
+    health = createHubHealth();
     kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
     // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
     await kbWriter.exclusive(() => revisions.init());
@@ -636,6 +639,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
+      if (url.pathname === "/healthz" && req.method === "GET") return send(res, 200, health!.body()); // no auth, no KB/disk (health.ts)
       // Hub-proxied Work API for VPS wolves (work-proxy.ts): the wolf's own hub token arrives as X-API-Key (what the Work clients send).
       // Mapped to a bearer for THIS prefix only; everything else still needs Authorization: Bearer.
       if (isWorkProxyPath(url.pathname)) {
@@ -978,6 +982,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
+    health?.stop();
     if (opts.socketPath !== undefined) removeSocket(opts.socketPath, socketId);
     stopWatcher();
     revisions.stop();
@@ -1005,6 +1010,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
+        health?.stop();
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         revisions.stop(); // before the KB writer closes
         // The curator drains first (bounded): a tick in flight commits through the KB writer, which must still be open.

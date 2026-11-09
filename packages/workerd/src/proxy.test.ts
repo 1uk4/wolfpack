@@ -1,5 +1,6 @@
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { healthShapeProblems } from "@wolfpack/protocol/stub";
 import { WorkerdServer } from "./proxy.js";
 import { Supervisor } from "./supervisor.js";
 import { FAKE_COMMAND, makeWolves } from "./testing/helpers.js";
@@ -95,6 +96,8 @@ describe("workerd proxy", () => {
   it("/healthz lists children with restart counts", async () => {
     const h = await (await fetch(`${base}/healthz`)).json();
     expect(h.wolves.map((w: { name: string; restarts: number }) => [w.name, w.restarts])).toEqual([["alpha", 0], ["beta", 0], ["gamma", 0]]);
+    expect(healthShapeProblems(h, "workerd", (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version)).toEqual([]); // pack-health fields ride along, old fields kept
+    for (const w of h.wolves) expect(Object.keys(w).filter((k) => k === "url" || k === "logFile")).toEqual([]); // unauthenticated: no socket or log paths
   });
 
   it("offline wolf: listed offline, requests 502 engine_error retryable; recovers on restart", async () => {

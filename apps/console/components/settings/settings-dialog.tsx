@@ -61,14 +61,19 @@ import { parseSettingsRoute, settingsTabHref } from "./settings-route.ts";
 const SECTIONS = [
 	{ id: "keys", label: "Keys" },
 	{ id: "agent", label: "Agent" },
-	{ id: "appearance", label: "Appearance" },
+	{ id: "appearance", label: "Appearance", hidden: true },
 	{ id: "devices", label: "Devices" },
-	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
+	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device", hidden: true },
 	// The last two are routed: /settings and /prompts open the dialog on them (settings-route.ts).
 	{ id: "wolf", label: "Wolf settings" },
 	{ id: "prompts", label: "Prompts" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
+
+/** Hidden tabs (Appearance, Keyboard) keep their components and saved settings; dropping `hidden: true` brings a tab back. */
+const VISIBLE_SECTIONS = SECTIONS.filter((s) => !("hidden" in s && s.hidden));
+/** A deep link to a hidden or unknown tab lands on Keys. */
+const landing = (id: string): SectionId => (VISIBLE_SECTIONS.some((s) => s.id === id) ? (id as SectionId) : "keys");
 
 /** `open(section?, row?)` — the optional ROW deep-links into the Keys
  *  section with that row unfolded (zero-keys wave: the dictation error's
@@ -233,14 +238,14 @@ export function SettingsDialogBody({
 			window.removeEventListener(MENU_CLOSE_EVENT, onClose);
 		};
 	}, []);
-	const [active, setActive] = useState<SectionId>(initialSection);
+	const [active, setActive] = useState<SectionId>(landing(initialSection));
 	// A deep-link fired while the dialog is ALREADY open (first exercised by
 	// the wave-6 embedding picker's "Add a provider key first…" link — the
 	// picker itself died with wave 7, the mechanism is general) changes
 	// initialSection under our feet — follow it, or the link silently does
 	// nothing.
 	useEffect(() => {
-		setActive(initialSection);
+		setActive(landing(initialSection));
 	}, [initialSection]);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
@@ -361,7 +366,7 @@ export function SettingsDialogBody({
 					data-testid="settings-nav"
 					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:border-b max-md:border-r-0"
 				>
-					{SECTIONS.map((s) => (
+					{VISIBLE_SECTIONS.map((s) => (
 						<button
 							key={s.id}
 							type="button"

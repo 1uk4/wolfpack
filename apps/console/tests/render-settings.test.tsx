@@ -27,6 +27,13 @@ function tagOf(html: string, testid: string): string {
 	return html.slice(html.lastIndexOf("<", i), html.indexOf(">", i) + 1);
 }
 
+describe("SettingsDialog hidden tabs", () => {
+	it("a deep link to a hidden tab lands on Keys", () => {
+		const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} initialSection="keyboard" />);
+		assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'));
+	});
+});
+
 describe("SettingsDialog (the designed surface, SSR)", () => {
 	it("provider CLOSED: children only — no dialog, no portal content", () => {
 		const html = renderToStaticMarkup(
@@ -44,12 +51,16 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		assert.ok(html.includes('role="dialog"'));
 		assert.ok(html.includes('aria-modal="true"'));
 		assert.ok(html.includes('aria-label="Close settings"'));
-		for (const id of ["keys", "agent", "appearance", "devices", "keyboard"]) {
+		for (const id of ["keys", "agent", "devices"]) {
 			assert.ok(html.includes(`data-testid="settings-nav-${id}"`), id);
+		}
+		// Keyboard and Appearance are hidden for now (flag in SECTIONS).
+		for (const id of ["appearance", "keyboard"]) {
+			assert.ok(!html.includes(`data-testid="settings-nav-${id}"`), id);
 		}
 		// Keys is the landing section; the others are not current.
 		assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'));
-		assert.ok(tagOf(html, "settings-nav-keyboard").includes('aria-current="false"'));
+		assert.ok(tagOf(html, "settings-nav-devices").includes('aria-current="false"'));
 		// Fetches don't run under SSR — the loading state IS the SSR state.
 		assert.ok(html.includes("Loading settings…"));
 		// Modal-only doctrine: no link back to /settings anywhere in it.

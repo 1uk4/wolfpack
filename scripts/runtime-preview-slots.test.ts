@@ -377,3 +377,69 @@ describe("agent slots: safety and readiness", () => {
 		await expect(s.get("/wt/a")).rejects.toThrow(/Error: port in use/);
 	});
 });
+
+describe("agent slots: browser tokens", () => {
+	type Call = { url: string; method?: string; auth?: string };
+	let calls: Call[], warnings: string[], hubStatus: number;
+	const withHub = (over: Record<string, unknown> = {}) => {
+		fs.mkdirSync(path.join(home, ".wolfpack", "workerd"), { recursive: true });
+		fs.writeFileSync(path.join(home, ".wolfpack", "workerd", "hub.json"), JSON.stringify({ hubUrl: "http://100.64.0.9:3150" }));
+		return mk({
+			hubFetch: async (url: string, init: { method?: string; headers?: Record<string, string> }) => (calls.push({ url, method: init.method, auth: init.headers?.Authorization }), { status: hubStatus, json: {} }),
+			warn: (m: string) => warnings.push(m),
+			...over,
+		});
+	};
+	beforeEach(() => {
+		calls = [];
+		warnings = [];
+		hubStatus = 200;
+	});
+
+	it("release revokes the port's recorded token id with the minting token and forgets it; a second release has nothing to revoke", async () => {
+		const s = withHub();
+		await s.get("/wt/a");
+		await s.recordToken(3231, "tok_a1");
+		await s.release("3231");
+		expect(calls).toEqual([{ url: "http://100.64.0.9:3150/v1/tokens/tok_a1", method: "DELETE", auth: "Bearer tok-1" }]);
+		await s.get("/wt/a");
+		await s.release("3231");
+		expect(calls).toHaveLength(1);
+	});
+
+	it("the idle stop revokes the token of the slot it stops, and only that one", async () => {
+		const s = withHub({ idleMs: 20 * 60_000 });
+		await s.get("/wt/a");
+		await s.get("/wt/b");
+		await s.recordToken(3231, "tok_a1");
+		await s.recordToken(3232, "tok_b1");
+		clock += 15 * 60_000;
+		await s.get("/wt/b");
+		clock += 10 * 60_000;
+		expect(await s.reap()).toEqual([3231]);
+		expect(calls.map((c) => c.url)).toEqual(["http://100.64.0.9:3150/v1/tokens/tok_a1"]);
+	});
+
+	it("a hub that is down does not stop the release: it warns with the token id (never a token value) and still frees the slot", async () => {
+		hubStatus = 0;
+		const s = withHub();
+		await s.get("/wt/a");
+		await s.recordToken(3231, "tok_a1");
+		expect(await s.release("3231")).toBe(3231);
+		expect(await s.list()).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("tok_a1");
+		expect(warnings[0]).not.toContain("tok-1");
+	});
+
+	it("revokeToken revokes and clears the port's id; an already-revoked id (404) is not a warning", async () => {
+		hubStatus = 404;
+		const s = withHub();
+		await s.get("/wt/a");
+		await s.recordToken(3231, "tok_a1");
+		await s.revokeToken(3231);
+		await s.revokeToken(3231);
+		expect(calls.map((c) => c.url)).toEqual(["http://100.64.0.9:3150/v1/tokens/tok_a1"]);
+		expect(warnings).toEqual([]);
+	});
+});

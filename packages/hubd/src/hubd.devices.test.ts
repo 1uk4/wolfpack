@@ -150,6 +150,16 @@ describe("device management routes", () => {
     expect((await devs(b.token)).find((d) => d.id === b.tokenId)).toMatchObject({ addedBy: null, addedById: a.tokenId });
   });
 
+  it("the token that minted a device can revoke it by id (what `slot pair` relies on); the minter keeps working", async () => {
+    const minter = await device("browser", "Mac");
+    const child = await redeem(((await (await mint(minter.token, { label: "preview slot 3231" })).json()) as { code: string }).code, "x");
+    expect((await list(child.token)).status).toBe(200);
+    const r = await del(minter.token, child.tokenId);
+    expect(r.status).toBe(200);
+    expect((await list(child.token)).status).toBe(401);
+    expect((await list(minter.token)).status).toBe(200);
+  });
+
   it("cascade revokes the devices it added, transitively, only when asked", async () => {
     const root = await device("browser", "Root");
     const child = await redeem(((await (await mint(root.token, { label: "Child" })).json()) as { code: string }).code, "x");

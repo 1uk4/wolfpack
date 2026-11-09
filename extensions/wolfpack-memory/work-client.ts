@@ -161,6 +161,11 @@ export function tryOutboxLock(dir: string, hooks: { beforeTakeover?: () => void 
   return undefined;
 }
 
+/** The wolf-facing words for a handoff or an inherited assignee: "; now assigned to hal" (empty when nothing was reassigned). */
+export function handoffText(reassigned: { id: string; from: string | null; to: string }[]): string {
+  return reassigned.map((r) => `; now assigned to ${r.to}`).join("");
+}
+
 export class WorkClient {
   private endpoint: string;
   private token: string;
@@ -417,7 +422,7 @@ export class WorkClient {
     return r.data as T;
   }
 
-  async create(input: CreateWorkInput): Promise<{ id: string; item: WorkItem }> {
+  async create(input: CreateWorkInput): Promise<{ id: string; item: WorkItem; assignedTo?: string }> {
     return this.request("POST", "", input);
   }
 

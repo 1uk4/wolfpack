@@ -73,7 +73,7 @@ import {
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
-import { WorkClient, WorkQueuedError, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
+import { WorkClient, WorkQueuedError, handoffText, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
@@ -239,11 +239,6 @@ function formatHierarchy(
  * With an explicit context.env (sandbox) the client never falls back to process.env. Writes that cannot reach the hub wait in
  * <den>/factory/work-outbox and are sent in order once it is back (see WorkClient.flush).
  */
-/** The wolf-facing words for a move-handoff: "; now assigned to hal" (empty when nothing was reassigned). */
-export function handoffText(reassigned: { id: string; from: string | null; to: string }[]): string {
-  return reassigned.map((r) => `; now assigned to ${r.to}`).join("");
-}
-
 function makeClient(wolfDen: string, wolfName: string, env?: NodeJS.ProcessEnv): WorkClient {
   const outbox = join(wolfDen, "factory", "work-outbox");
   return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox, wolfName) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox, wolfName);
@@ -648,7 +643,7 @@ export default function createTasksExtension(
   /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
   const drain = (workIds: string[]) => {
     // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
-    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN) : undefined;
+    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN, undefined, context.wolfName) : undefined;
     return drainWorkObservations({
       wolfDen,
       engine: graduationEngine(),
@@ -1237,6 +1232,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             const result = await client.create(input);
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
+            if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };

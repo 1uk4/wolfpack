@@ -311,6 +311,14 @@ describe("hub work proxy", () => {
     expect((await g.as("wa", "POST", "", { kind: "feature", domain: "personal", title: "L", assignee: "wa2", body: "x" })).status).toBe(403);
   });
 
+  it("creating under a feature held by an unknown wolf is refused", async () => {
+    const g = await gateRig();
+    const featG = await g.mk({ kind: "feature", title: "Ghost's", body: "x", assignee: "ghost" });
+    const r = await g.as("wa", "POST", "", { kind: "task", domain: "personal", title: "N", assignee: "wa", partOf: featG, successCriteria: "ok" });
+    expect(r.status).toBe(400);
+    expect((await g.json(r)).error).toContain("\"ghost\"");
+  });
+
   it("an operator token is unrestricted over the whitelist", async () => {
     const { call, A } = await rig();
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;

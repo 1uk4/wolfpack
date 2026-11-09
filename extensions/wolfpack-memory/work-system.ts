@@ -26,7 +26,7 @@ import {
   type WorkItem,
   type WorkId,
 } from "@wolfpack/kb/client";
-import { WorkClient, shipAndRollup } from "./work-client.js";
+import { WorkClient, handoffText, shipAndRollup } from "./work-client.js";
 import {
   startFileTracking,
   stopFileTracking,
@@ -340,7 +340,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return;
   }
 
-  const client = new WorkClient(undefined, undefined, undefined, undefined, process.env.WOLF_NAME);
+  const client = new WorkClient(undefined, undefined, undefined, undefined, wolfName);
 
   /**
    * A subagent child (PI_SUBAGENT_AGENT) never binds: the binding belongs to the
@@ -1428,8 +1428,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           updateWidget(ctx);
           let where = "no parent";
           if (moved.partOf) { try { where = (await client.get(moved.partOf as string)).title; } catch {} }
-          const handoff = reassigned.map((r) => `; now assigned to ${r.to}`).join("");
-          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}${handoff}` }] };
+          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}${handoffText(reassigned)}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }
@@ -1500,6 +1499,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           const result = await client.create(input);
           let reply = `Created ${result.id}: ${result.item.title} [${result.item.stage}]`;
+          if (result.assignedTo) reply += handoffText([{ id: result.id, from: null, to: result.assignedTo }]);
           // One at a time, from the binding as it is now: the first task created binds, the rest see it.
           reply += await bindSerial(async () => {
             await syncBinding(ctx);

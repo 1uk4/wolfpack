@@ -304,7 +304,11 @@ export class HttpWorkRecordStore implements WorkRecordStore {
   private endpoint: string;
   private token: string;
 
-  constructor(endpoint?: string, token?: string, private fetchImpl: typeof fetch = fetch) {
+  private wolf: string | undefined;
+
+  /** `wolf`: the acting wolf sent as X-Wolf; defaults to WOLF_NAME (always set in a wolf's process, see wolf-manager writeEnv). */
+  constructor(endpoint?: string, token?: string, private fetchImpl: typeof fetch = fetch, wolf?: string) {
+    this.wolf = wolf ?? process.env.WOLF_NAME;
     this.endpoint = (endpoint ?? process.env.WORK_ENDPOINT ?? "").replace(/\/$/, "");
     this.token = token ?? process.env.WORK_TOKEN ?? "";
   }
@@ -317,7 +321,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
     return this.fetchImpl(`${this.endpoint}/work/${encodeURIComponent(id)}`, {
       method,
-      headers: { "X-API-Key": this.token, ...(process.env.WOLF_NAME ? { "X-Wolf": process.env.WOLF_NAME } : {}), ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
   }

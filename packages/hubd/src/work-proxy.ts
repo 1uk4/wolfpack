@@ -14,6 +14,10 @@
  *           an unassigned item can only be changed by the owner);
  *   move    under a feature held by another wolf X is a handoff: the task is also assigned to X in the same write (`reassigned` in the answer);
  *   create  assigned to W (no parent, or the Inbox), or under any feature (the item takes that feature's assignee); in a subscribed domain.
+ * Decisions: write checks use the assignee only, so a worker can get 403 (or note) on items in domains it cannot read; this is accepted.
+ * Create keeps the domain check on purpose, so a worker cannot create into a domain its host does not subscribe to.
+ * Only TASKS hand off on a move; a feature moved under another feature keeps its assignee.
+ * The item read, the gate and the handoff lookup of PATCH/graduate run inside the write queue, so they cannot race another write.
  * `assign` (any caller) must name an active wolf of the registry. Assigning a feature also reassigns its open child tasks (not shipped,
  * live or archived): all for the owner, only those held by W for a worker; the others are left alone.
  * Console/operator tokens can do anything (same whitelist). Errors are `{error: string}` like the agent's.
@@ -132,6 +136,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         if (parent && parent.kind === "feature" && !parent.container) {
           // Under any feature the new item takes that feature's assignee (the same rule as a move-handoff).
           if (!parent.assignee) forbid(NO_ASSIGNEE);
+          knownWolf(String(parent.assignee)); // a retired or unknown wolf cannot be given new work
           body.data.assignee = String(parent.assignee);
         } else if (body.data.assignee !== w) forbid("a worker token can only create work assigned to the acting wolf, or under a feature");
       }
@@ -146,45 +151,53 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     }
     if (rest.length === 1 && method === "PATCH") {
       const id = rest[0]!;
-      const item = writeItemOf(id);
+      writeItemOf(id); // fast 400/404 before the body is read; the authoritative read happens in the queue below
       const raw = await d.readBody(req);
       const isBatch = typeof raw === "object" && raw !== null && "ops" in raw;
       const parsed = (isBatch ? PatchWorkBatchSchema : PatchWorkOpSchema).safeParse(raw);
       if (!parsed.success) throw new HubError("invalid_request", parsed.error.issues.map((i) => `${i.path.map(String).join(".") || "body"}: ${i.message}`).join("; "));
       const ops = normalisePatch(parsed.data as never);
-      // A request of only notes is open to any item; anything else goes through the full gate.
       const actor = actorOf();
-      if (worker && !ops.every((o) => o.op === "note")) gate(item, actor.id);
-      const state = loadWorkState(d.roots);
-      const finalOps: WorkOp[] = [];
-      const reassigned: { id: string; from: string | null; to: string }[] = [];
-      let current = item.assignee ? String(item.assignee) : null;
-      for (const o of ops) {
-        finalOps.push(o);
-        if (o.op === "assign") {
-          knownWolf(o.to);
-          current = o.to;
-        } else if (o.op === "moveTo" && item.kind === "task" && o.partOf) {
-          // A move under a feature held by another wolf is a handoff: the task goes to that wolf in the same write.
-          const target = state.get(o.partOf.trim() as never);
-          if (target && target.kind === "feature" && !target.container && target.assignee && String(target.assignee) !== current) {
-            const to = String(target.assignee);
-            knownWolf(to);
-            finalOps.push({ op: "assign", to });
-            reassigned.push({ id, from: current, to });
-            current = to;
+      // The item, the gate and the handoff lookup run INSIDE the write queue: a reassignment that lands between check and write is seen.
+      return await once(actor, 200, () => {
+        const state = loadWorkState(d.roots);
+        const item = state.get(id as never);
+        if (!item) throw new HubError("not_found", `Work item not found: ${id}`);
+        // A request of only notes is open to any item; anything else goes through the full gate.
+        if (worker && !ops.every((o) => o.op === "note")) gate(item, actor.id);
+        const finalOps: WorkOp[] = [];
+        const reassigned: { id: string; from: string | null; to: string }[] = [];
+        let current = item.assignee ? String(item.assignee) : null;
+        for (const o of ops) {
+          finalOps.push(o);
+          if (o.op === "assign") {
+            knownWolf(o.to);
+            current = o.to;
+          } else if (o.op === "moveTo" && item.kind === "task" && o.partOf) {
+            // A move under a feature held by another wolf is a handoff: the task goes to that wolf in the same write.
+            const target = state.get(o.partOf.trim() as never);
+            if (target && target.kind === "feature" && !target.container && target.assignee && String(target.assignee) !== current) {
+              const to = String(target.assignee);
+              knownWolf(to);
+              finalOps.push({ op: "assign", to });
+              reassigned.push({ id, from: current, to });
+              current = to;
+            }
           }
         }
-      }
-      // A worker's feature cascade is limited to the children it holds; the owner's reaches every open child.
-      const holder = worker ? actor.id : undefined;
-      return await once(actor, 200, () => ({ item: applyOps(d.roots, id, finalOps, {}, { holder }), ...(reassigned.length ? { reassigned } : {}) }));
+        // A worker's feature cascade is limited to the children it holds; the owner's reaches every open child.
+        const holder = worker ? actor.id : undefined;
+        return { item: applyOps(d.roots, id, finalOps, {}, { holder }), ...(reassigned.length ? { reassigned } : {}) };
+      });
     }
     if (rest.length === 2 && rest[1] === "graduate" && method === "POST") {
       const id = rest[0]!;
-      if (worker) gate(writeItemOf(id), actorOf().id);
+      writeItemOf(id);
       const actor = actorOf();
-      return await once(actor, 200, () => ({ item: graduateItem(d.roots, id) }));
+      return await once(actor, 200, () => {
+        if (worker) gate(writeItemOf(id), actor.id); // re-read inside the queue
+        return { item: graduateItem(d.roots, id) };
+      });
     }
     // Known path shape with a method outside the whitelist (DELETE, ...) or an unknown path.
     throw new HubError(rest.length <= 2 ? "invalid_request" : "not_found", rest.length <= 2 ? `method ${method} is not available through the work proxy` : `no route ${url.pathname}`);

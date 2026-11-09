@@ -1224,7 +1224,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   let orchestrator: MemoryOrchestrator | null = null;
   /** The work system's view of the bound task (set when it initialises, below). */
   let workHandle: WorkSystemHandle | null = null;
-  const workRecordStore = new HttpWorkRecordStore();
+  const workRecordStore = new HttpWorkRecordStore(undefined, undefined, undefined, wolfName);
   /** Graduation folds this session's pending tagged observations first (memory off: none were recorded). */
   const piDrain = async (ids: string[]) => (orchestrator ? orchestrator.drainWork(ids) : { folded: 0 });
   let engine: Engine | null = null;
@@ -1560,7 +1560,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
               summary,
               new Date().toISOString().split("T")[0]
             );
-            await writeParentBody(kbRoots, parent, updatedBody, { notify: (m, level) => runtime?.notify(m, level) });
+            await writeParentBody(kbRoots, parent, updatedBody, { wolf: wolfName, notify: (m, level) => runtime?.notify(m, level) });
 
             // Graduating the feature is manual: `g` in /task once all its
             // tasks are done (work-system.ts).
@@ -1578,11 +1578,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
+        return previewGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-        const done = await confirmGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
+        const done = await confirmGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
         unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;

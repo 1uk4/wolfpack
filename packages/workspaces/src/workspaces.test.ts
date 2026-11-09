@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -288,5 +288,162 @@ describe("createHomeChildWorkspace", () => {
     expect(a.path).toBe(join(t.root, "demo", "feat-home--w-1"));
     expect(t.git(["rev-parse", a.branch])).toBe(t.git(["rev-parse", "HEAD"]));
     expect(await createHomeChildWorkspace({ root: t.root, repo, childSlug: "w-1", baseDir: t.dir })).toEqual(a);
+  });
+});
+
+describe("mergeChild fixup fold (workspaces.autosquash)", () => {
+  const on = { autosquash: true };
+  const subjects = (cwd: string, n = 10) => t.git(["log", "--format=%s", `-${n}`], cwd).split("\n");
+  async function withFixup() {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("a.txt", "1\n", "add a", child.path);
+    t.commitFile("b.txt", "b\n", "add b", child.path);
+    t.commitFile("a.txt", "2\n", "fixup! add a", child.path);
+    return { feat, child };
+  }
+
+  it("leaves fixup! commits alone with the flag off", async () => {
+    const { feat, child } = await withFixup();
+    expect(await mergeChild(child, feat)).toEqual({ ok: true });
+    expect(subjects(feat.path, 4)).toEqual(["fixup! add a", "add b", "add a", "initial"]);
+  });
+  it("folds fixup! commits into their targets and removes the backup ref", async () => {
+    const { feat, child } = await withFixup();
+    t.commitFile("f.txt", "f", "feature moved", feat.path);
+    expect(await mergeChild(child, feat, {}, on)).toEqual({ ok: true });
+    expect(subjects(feat.path, 4)).toEqual(["add b", "add a", "feature moved", "initial"]);
+    expect(readFileSync(join(feat.path, "a.txt"), "utf8")).toBe("2\n");
+    expect(t.git(["for-each-ref", "refs/wolfpack/backup"])).toBe("");
+  });
+  it("merges unfolded, with the reason, when a fixup! targets a commit outside the task", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("a.txt", "1\n", "add a", child.path);
+    t.commitFile("README.md", "# demo2\n", "fixup! initial", child.path);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({ ok: true, notes: ['fixup! commits not folded: "fixup! initial" targets no commit of this task; merged unfolded.'] });
+    expect(subjects(feat.path, 3)).toEqual(["fixup! initial", "add a", "initial"]);
+  });
+  it("restores the branch and merges unfolded when the fold conflicts", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("a.txt", "1\n", "add a", child.path);
+    t.commitFile("a.txt", "2\n", "change a", child.path);
+    t.commitFile("a.txt", "3\n", "fixup! add a", child.path);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({ ok: true, notes: ["fixup! commits not folded: the fold hit a conflict; the branch was restored and merged unfolded."] });
+    expect(subjects(feat.path, 4)).toEqual(["fixup! add a", "change a", "add a", "initial"]);
+    expect(readFileSync(join(feat.path, "a.txt"), "utf8")).toBe("3\n");
+    expect(t.git(["for-each-ref", "refs/wolfpack/backup"])).toBe("");
+  });
+  it("restores the branch when the folded tree differs from the unfolded tree", async () => {
+    const { feat, child } = await withFixup();
+    const r = await mergeChild(child, feat, { afterFold: async () => { t.commitFile("extra.txt", "x", "sneaky", child.path); } }, on);
+    expect(r).toEqual({ ok: true, notes: ["fixup! commits not folded: the folded tree differs from the unfolded tree; the branch was restored and merged unfolded."] });
+    expect(subjects(feat.path, 4)).toEqual(["fixup! add a", "add b", "add a", "initial"]);
+    expect(existsSync(join(feat.path, "extra.txt"))).toBe(false);
+  });
+  it("does not re-run the fold on the fast-forward retry", async () => {
+    const { feat, child } = await withFixup();
+    const r = await mergeChild(child, feat, {
+      beforeFastForward: async (n) => {
+        if (n === 0) {
+          t.commitFile("late.txt", "l", "late", feat.path);
+          t.commitFile("b.txt", "b2\n", "fixup! add b", child.path);
+        }
+      },
+    }, on);
+    expect(r).toEqual({ ok: true });
+    expect(subjects(feat.path, 5)).toEqual(["fixup! add b", "add b", "add a", "late", "initial"]);
+  });
+  it("keeps the backup ref when the merge conflicts after a fold", async () => {
+    const { feat, child } = await withFixup();
+    t.commitFile("a.txt", "feature\n", "feature a", feat.path);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({ ok: false, conflict: true, files: ["a.txt"] });
+    const refs = t.git(["for-each-ref", "--format=%(refname)", "refs/wolfpack/backup"]);
+    expect(refs).toMatch(/^refs\/wolfpack\/backup\/feat\/f1--c1\/\d+$/);
+    expect(subjects(child.path, 3)).toEqual(["add b", "add a", "initial"]);
+  });
+  it("merges unfolded, with the reason, when a fixup! comes before the commit it targets", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("b.txt", "b\n", "fixup! add a", child.path);
+    t.commitFile("a.txt", "1\n", "add a", child.path);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({ ok: true, notes: ['fixup! commits not folded: "fixup! add a" comes before the commit it targets; merged unfolded.'] });
+    expect(subjects(feat.path, 3)).toEqual(["add a", "fixup! add a", "initial"]);
+  });
+  it("names a fixup! that targets a sha instead of a subject", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    const sha = t.commitFile("a.txt", "1\n", "add a", child.path);
+    t.commitFile("a.txt", "2\n", `fixup! ${sha.slice(0, 8)}`, child.path);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({ ok: true, notes: [`fixup! commits not folded: "fixup! ${sha.slice(0, 8)}" targets a sha or ref, not a commit subject of this task; merged unfolded.`] });
+  });
+  it("restores the branch when a fixup!, squash! or amend! commit remains after the fold", async () => {
+    const { feat, child } = await withFixup();
+    const r = await mergeChild(child, feat, {
+      afterFold: async () => { t.git(["commit", "--allow-empty", "-m", "fixup! nothing"], child.path); },
+    }, on);
+    expect(r).toEqual({ ok: true, notes: ["fixup! commits not folded: a fixup!, squash! or amend! commit remained after the fold; the branch was restored and merged unfolded."] });
+    expect(subjects(feat.path, 4)).toEqual(["fixup! add a", "add b", "add a", "initial"]);
+  });
+  it("merges unfolded, with a note, when the fold rebase cannot start (pre-rebase hook rejects it)", async () => {
+    const { feat, child } = await withFixup();
+    const hook = join(t.dir, ".git", "hooks", "pre-rebase");
+    const marker = join(t.root, "hook-ran");
+    writeFileSync(hook, `#!/bin/sh\nif [ ! -e '${marker}' ]; then touch '${marker}'; exit 1; fi\nexit 0\n`);
+    chmodSync(hook, 0o755);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({ ok: true, notes: ["fixup! commits not folded: the fold rebase could not start; the branch was restored and merged unfolded."] });
+    expect(subjects(feat.path, 4)).toEqual(["fixup! add a", "add b", "add a", "initial"]);
+    expect(t.git(["for-each-ref", "refs/wolfpack/backup"])).toBe("");
+  });
+  it("keeps the notes on a conflict result when the fold failed and the merge then conflicts", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("a.txt", "1\n", "add a", child.path);
+    t.commitFile("a.txt", "2\n", "change a", child.path);
+    t.commitFile("a.txt", "3\n", "fixup! add a", child.path);
+    t.commitFile("a.txt", "feature\n", "feature a", feat.path);
+    const r = await mergeChild(child, feat, {}, on);
+    expect(r).toEqual({
+      ok: false, conflict: true, files: ["a.txt"],
+      notes: ["fixup! commits not folded: the fold hit a conflict; the branch was restored and merged unfolded."],
+    });
+  });
+  it("returns exactly { ok: true } with the flag on, no fixup! commits and nothing oversized", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("a.txt", "1\n", "add a", child.path);
+    expect(await mergeChild(child, feat, {}, on)).toEqual({ ok: true });
+  });
+  it("prunes the backup refs once a retried merge succeeds", async () => {
+    const { feat, child } = await withFixup();
+    t.commitFile("a.txt", "feature\n", "feature a", feat.path);
+    expect((await mergeChild(child, feat, {}, on)).ok).toBe(false);
+    expect(t.git(["for-each-ref", "refs/wolfpack/backup"])).not.toBe("");
+    t.git(["revert", "--no-edit", "HEAD"], feat.path);
+    expect(await mergeChild(child, feat, {}, on)).toEqual({ ok: true });
+    expect(t.git(["for-each-ref", "refs/wolfpack/backup"])).toBe("");
+  });
+  it("prunes the backup refs when the child is abandoned", async () => {
+    const { feat, child } = await withFixup();
+    t.commitFile("a.txt", "feature\n", "feature a", feat.path);
+    expect((await mergeChild(child, feat, {}, on)).ok).toBe(false);
+    await abandonChild(child);
+    expect(t.git(["for-each-ref", "refs/wolfpack/backup"])).toBe("");
+  });
+  it("adds a size note for an oversized task commit and still merges", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    const sha = t.commitFile("big.txt", "1\n2\n3\n4\n5\n", "big change", child.path);
+    t.commitFile("small.txt", "s\n", "small change", child.path);
+    const r = await mergeChild(child, feat, {}, { ...on, sizeTrigger: 3 });
+    expect(r).toEqual({ ok: true, notes: [`Commit ${sha.slice(0, 8)} "big change" changes 5 lines (over 3); consider asking for it to be split.`] });
+    expect(existsSync(join(feat.path, "big.txt"))).toBe(true);
   });
 });

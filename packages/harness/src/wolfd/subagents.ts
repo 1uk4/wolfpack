@@ -62,6 +62,8 @@ export interface SubagentOptions {
   instructionsFor?(cwd: string): string;
   /** Where worktrees go (wolf.yaml `workspaces.root`). Default `<wolfHome>/workspaces`. */
   workspacesRoot?: string;
+  /** wolf.yaml `workspaces.autosquash`: fold a task branch's fixup! commits at merge. Default false. */
+  autosquash?: boolean;
   /** An existing conversation as it is stored (no reconciling with the home configuration: a child keeps its own). */
   getConversation(id: string): Promise<EngineConversation | undefined>;
   /** Terminate a child's owner task (the parked task its conversation hangs under). */
@@ -1119,14 +1121,16 @@ ${text}`;
       const held = this.heldBy(rec);
       if (held) return say(`Not merged: ${held}. When it finishes the branch is merged again.`);
       let n = 0;
+      let notes: string[] | undefined;
       try {
         n = Number(await gitOk(feature.path, ["rev-list", "--count", `${feature.branch}..${ws.branch}`]));
-        const res = await mergeChild(ws, feature);
+        const res = await mergeChild(ws, feature, {}, { autosquash: this.opts.autosquash === true });
         if (!res.ok) {
           this.ledger(rec, "system", "parent", "error", `merge conflict: ${res.files.join(", ")}`);
           tried();
-          return say(conflictText(rec, ws, feature, res.files));
+          return say(conflictText(rec, ws, feature, res.files, res.notes));
         }
+        notes = res.notes;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         this.ledger(rec, "system", "parent", "error", `merge refused: ${msg}`);
@@ -1138,7 +1142,7 @@ ${text}`;
       this.guard.releaseAll(rec.id);
       this.persist();
       this.ledger(rec, "system", "parent", "result", `merged ${ws.branch} into ${feature.branch}`);
-      return say(mergedText(ws, feature, n));
+      return say(mergedText(ws, feature, n, notes));
     } finally {
       this.merging.delete(rec.id);
     }

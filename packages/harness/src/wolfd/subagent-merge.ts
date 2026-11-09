@@ -27,8 +27,11 @@ export class ShipEvents {
   }
 }
 
-export const mergedText = (ws: Workspace, feature: Workspace, commits: number): string =>
-  `Merged ${ws.branch} into ${feature.branch} (${commits} commit${commits === 1 ? "" : "s"}); its worktree and branch are removed.`;
+/** Fold failures and size prompts from mergeChild, as a trailing paragraph for the parent. */
+export const notesText = (notes?: string[]): string => (notes?.length ? `\n\n${notes.join("\n")}` : "");
+
+export const mergedText = (ws: Workspace, feature: Workspace, commits: number, notes?: string[]): string =>
+  `Merged ${ws.branch} into ${feature.branch} (${commits} commit${commits === 1 ? "" : "s"}); its worktree and branch are removed.${notesText(notes)}`;
 
 export function homeText(rec: ChildRecord, ws: Workspace): string {
   return (
@@ -44,7 +47,7 @@ export function dirtyText(rec: ChildRecord, ws: Workspace, reason: string): stri
   );
 }
 
-export function conflictText(rec: ChildRecord, ws: Workspace, feature: Workspace, files: string[]): string {
+export function conflictText(rec: ChildRecord, ws: Workspace, feature: Workspace, files: string[], notes?: string[]): string {
   const title = `Merge conflict merging ${ws.branch} into ${feature.branch}: ${files.join(", ")}`;
   const options = [
     { label: "Resolve with a worker", value: "resolve", note: "A worker subagent rebases the branch onto the feature branch, resolves and commits; then it is merged again." },
@@ -56,7 +59,8 @@ export function conflictText(rec: ChildRecord, ws: Workspace, feature: Workspace
     `Ask the user what to do with ONE brief call: headline "Merge conflict", with a single question (kind "single") whose \`ask\` is ${JSON.stringify(title)} and whose \`choices\` are ${JSON.stringify(options)}. Then act on the answer:\n` +
     `- resolve: subagent_merge({ name: "${rec.name}", action: "resolve" })\n` +
     `- manual: subagent_merge({ name: "${rec.name}", action: "manual" }) and pass its steps on to the user\n` +
-    `- abandon: subagent_merge({ name: "${rec.name}", action: "abandon" })`
+    `- abandon: subagent_merge({ name: "${rec.name}", action: "abandon" })` +
+    notesText(notes)
   );
 }
 

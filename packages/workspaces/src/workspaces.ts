@@ -7,7 +7,7 @@ import { git, gitOk } from "./git.js";
 const realpath = (p: string) => realpathSync.native(p);
 
 export interface WorkspacesConfig {
-  workspaces?: { root?: string };
+  workspaces?: { root?: string; autosquash?: boolean };
 }
 
 export interface RepoInfo {
@@ -25,7 +25,23 @@ export interface Workspace {
   path: string;
 }
 
-export type MergeResult = { ok: true } | { ok: false; conflict: true; files: string[] };
+/** `notes` (only when there is something to say) are for the parent: why a fold was skipped, oversized commits. */
+export type MergeResult = { ok: true; notes?: string[] } | { ok: false; conflict: true; files: string[]; notes?: string[] };
+
+/** workspaces.autosquash from a parsed wolf.yaml; default false. */
+export function resolveAutosquash(config?: WorkspacesConfig | null): boolean {
+  return config?.workspaces?.autosquash === true;
+}
+
+/** A task commit changing more lines than this gets a prompt to the parent (never a block). */
+export const SIZE_TRIGGER_LINES = 400;
+
+export interface MergeOptions {
+  /** Fold the task branch's fixup! commits before merging (workspaces.autosquash). Default off. */
+  autosquash?: boolean;
+  /** Changed lines per commit above which a size note is added. Default SIZE_TRIGGER_LINES. */
+  sizeTrigger?: number;
+}
 
 /** workspaces.root from a parsed wolf.yaml, else <wolfHome>/workspaces. */
 export function resolveWorkspacesRoot(wolfHome: string, config?: WorkspacesConfig | null): string {
@@ -205,6 +221,8 @@ function serialised<T>(key: string, fn: () => Promise<T>): Promise<T> {
 export interface MergeHooks {
   /** Runs after the rebase succeeds and before each fast-forward attempt. */
   beforeFastForward?: (attempt: number) => Promise<void>;
+  /** Test seam: runs after the fold rebase and before the post-fold checks, so a test can tamper with the folded branch. */
+  afterFold?: () => Promise<void>;
 }
 
 async function rebaseOnto(child: Workspace, featureWs: Workspace): Promise<MergeResult | null> {
@@ -220,6 +238,110 @@ async function rebaseOnto(child: Workspace, featureWs: Workspace): Promise<Merge
   return { ok: false, conflict: true, files };
 }
 
+const FIXUP = "fixup! ";
+const LEFTOVER = /^(fixup|squash|amend)! /;
+const BACKUP_PREFIX = "refs/wolfpack/backup";
+
+/**
+ * Why the fixups cannot be folded, or null when every fixup! in base..HEAD targets an EARLIER commit of base..HEAD
+ * (git only folds a fixup into an earlier commit). `subjects` is newest first, so the target must have a larger index.
+ */
+function scopeProblem(subjects: string[]): string | null {
+  for (let i = 0; i < subjects.length; i++) {
+    const s = subjects[i]!;
+    if (!s.startsWith(FIXUP)) continue;
+    let t = s;
+    while (t.startsWith(FIXUP)) t = t.slice(FIXUP.length);
+    const matches = (x: string) => !x.startsWith(FIXUP) && t !== "" && (x === t || x.startsWith(t));
+    if (subjects.slice(i + 1).some(matches)) continue;
+    if (subjects.slice(0, i).some(matches)) return `"${s}" comes before the commit it targets`;
+    if (/^[0-9a-f]{7,40}$/i.test(t) || /[~^/]|^HEAD$/.test(t)) return `"${s}" targets a sha or ref, not a commit subject of this task`;
+    return `"${s}" targets no commit of this task`;
+  }
+  return null;
+}
+
+/** True when a rebase is in progress in `dir` (its rebase-merge or rebase-apply state dir exists). */
+async function rebaseInProgress(dir: string): Promise<boolean> {
+  for (const name of ["rebase-merge", "rebase-apply"]) {
+    const p = (await git(dir, ["rev-parse", "--git-path", name])).stdout.trim();
+    if (p && (await exists(resolve(dir, p)))) return true;
+  }
+  return false;
+}
+
+/** Delete every backup ref of `branch` (refs/wolfpack/backup/<branch>/*). */
+async function pruneBackups(dir: string, branch: string): Promise<void> {
+  const refs = (await gitOk(dir, ["for-each-ref", "--format=%(refname)", `${BACKUP_PREFIX}/${branch}/`])).split("\n").filter(Boolean);
+  for (const ref of refs) await git(dir, ["update-ref", "-d", ref]);
+}
+
+/**
+ * Fold the task's fixup! commits (once). Returns a note when it did not fold (the branch is then as it was), else null.
+ * The backup ref refs/wolfpack/backup/<branch>/<ms timestamp> is written before the fold. It is deleted after a
+ * restore; otherwise it stays until the merge succeeds or the child is abandoned (pruneBackups), so a merge stopped
+ * on a conflict after a fold keeps it.
+ */
+async function foldFixups(child: Workspace, base: string, hooks: MergeHooks): Promise<string | null> {
+  const log = (await gitOk(child.path, ["log", "--format=%s", `${base}..HEAD`])).split("\n").filter(Boolean);
+  if (!log.some((s) => s.startsWith(FIXUP))) return null;
+  const problem = scopeProblem(log);
+  if (problem) return `fixup! commits not folded: ${problem}; merged unfolded.`;
+  const before = await gitOk(child.path, ["rev-parse", "HEAD"]);
+  const beforeTree = await gitOk(child.path, ["rev-parse", "HEAD^{tree}"]);
+  const backup = `${BACKUP_PREFIX}/${child.branch}/${Date.now()}`;
+  await gitOk(child.path, ["update-ref", backup, before]);
+  let why: string | null = null;
+  const r = await git(child.path, ["rebase", "-i", "--autosquash", base], { GIT_SEQUENCE_EDITOR: "true" });
+  if (r.code !== 0) {
+    if (await rebaseInProgress(child.path)) {
+      why = "the fold hit a conflict";
+      const abort = await git(child.path, ["rebase", "--abort"]);
+      if (abort.code !== 0) {
+        throw new Error(`fold of ${child.branch} failed and could not be aborted in ${child.path} (backup ref ${backup}): ${abort.stderr.trim()}`);
+      }
+    } else {
+      why = "the fold rebase could not start";
+    }
+  } else {
+    await hooks.afterFold?.();
+    const after = (await gitOk(child.path, ["log", "--format=%s", `${base}..HEAD`])).split("\n");
+    if (after.some((s) => LEFTOVER.test(s))) why = "a fixup!, squash! or amend! commit remained after the fold";
+    else if ((await gitOk(child.path, ["rev-parse", "HEAD^{tree}"])) !== beforeTree) why = "the folded tree differs from the unfolded tree";
+  }
+  if (why) {
+    await gitOk(child.path, ["reset", "--hard", backup]);
+    await gitOk(child.path, ["update-ref", "-d", backup]);
+    return `fixup! commits not folded: ${why}; the branch was restored and merged unfolded.`;
+  }
+  return null;
+}
+
+async function sizeNotes(child: Workspace, base: string, trigger: number): Promise<string[]> {
+  // One log: a "commit <sha> <subject>" header per commit, then its numstat rows.
+  const out = await gitOk(child.path, ["log", "--numstat", "--format=commit %H %s", `${base}..HEAD`]);
+  const notes: string[] = [];
+  const flush = (head: string | null, lines: number) => {
+    if (!head || lines <= trigger) return;
+    const sha = head.slice(0, 40);
+    notes.push(`Commit ${sha.slice(0, 8)} "${head.slice(41)}" changes ${lines} lines (over ${trigger}); consider asking for it to be split.`);
+  };
+  let head: string | null = null;
+  let lines = 0;
+  for (const row of out.split("\n")) {
+    if (row.startsWith("commit ")) {
+      flush(head, lines);
+      head = row.slice("commit ".length);
+      lines = 0;
+    } else if (row.includes("\t")) {
+      const [a, d] = row.split("\t");
+      lines += (Number(a) || 0) + (Number(d) || 0);
+    }
+  }
+  flush(head, lines);
+  return notes;
+}
+
 /**
  * Rebase the child branch onto the feature branch, fast-forward the feature branch in its
  * worktree, then remove the child's worktree and branch. On conflict the rebase is aborted and
@@ -227,7 +349,7 @@ async function rebaseOnto(child: Workspace, featureWs: Workspace): Promise<Merge
  * refused with an error. Merges into the same feature worktree run one at a time; if the
  * fast-forward fails (the feature moved), the rebase is re-run once before giving up.
  */
-export function mergeChild(child: Workspace, featureWs: Workspace, hooks: MergeHooks = {}): Promise<MergeResult> {
+export function mergeChild(child: Workspace, featureWs: Workspace, hooks: MergeHooks = {}, opts: MergeOptions = {}): Promise<MergeResult> {
   return serialised(featureWs.path, async () => {
     await assertOnBranch(child, "child");
     await assertOnBranch(featureWs, "feature");
@@ -237,15 +359,24 @@ export function mergeChild(child: Workspace, featureWs: Workspace, hooks: MergeH
     if (await isDirty(featureWs.path)) {
       throw new Error(`feature workspace ${featureWs.path} has uncommitted changes; refusing to merge into it`);
     }
+    const notes: string[] = [];
+    if (opts.autosquash) {
+      const base = await gitOk(child.path, ["merge-base", child.branch, featureWs.branch]);
+      const foldNote = await foldFixups(child, base, hooks);
+      if (foldNote) notes.push(foldNote);
+      notes.push(...(await sizeNotes(child, base, opts.sizeTrigger ?? SIZE_TRIGGER_LINES)));
+    }
+    const extra = notes.length ? { notes } : {};
     let lastErr = "";
     for (let attempt = 0; attempt < 2; attempt++) {
       const conflict = await rebaseOnto(child, featureWs);
-      if (conflict) return conflict;
+      if (conflict) return { ...conflict, ...extra };
       await hooks.beforeFastForward?.(attempt);
       const ff = await git(featureWs.path, ["merge", "--ff-only", child.branch]);
       if (ff.code === 0) {
         await removeWorkspace(child, true);
-        return { ok: true };
+        await pruneBackups(featureWs.repo.mainDir, child.branch);
+        return { ok: true, ...extra };
       }
       lastErr = ff.stderr.trim();
     }
@@ -256,4 +387,5 @@ export function mergeChild(child: Workspace, featureWs: Workspace, hooks: MergeH
 /** Discard a child: force-remove its worktree and delete its branch. */
 export async function abandonChild(child: Workspace): Promise<void> {
   await removeWorkspace(child, true);
+  await pruneBackups(child.repo.mainDir, child.branch);
 }

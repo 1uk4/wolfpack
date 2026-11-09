@@ -237,6 +237,38 @@ describe("device management routes", () => {
     expect((await del(o2.token, o1.tokenId)).status).toBe(200);
   });
 
+  it("a non-owner ancestor cannot revoke an owner descendant, directly or through a cascade; nothing is revoked", async () => {
+    await owner("Boss"); // a second owner, so the last-owner guard cannot be what refuses
+    const root = await device("browser", "Root");
+    const kid = await child(root, "Kid");
+    const grand = await child(kid, "Grand");
+    store.setOwner(kid.tokenId, true);
+    const direct = await del(root.token, kid.tokenId);
+    expect(direct.status).toBe(403);
+    expect((await direct.json()).message).toMatch(/only an owner device can revoke an owner device/);
+    store.setOwner(kid.tokenId, false);
+    store.setOwner(grand.tokenId, true);
+    expect((await del(root.token, kid.tokenId, "?cascade=1")).status).toBe(403); // the cascade would reach the owner grandchild
+    for (const t of [root, kid, grand]) expect((await list(t.token)).status).toBe(200);
+  });
+
+  it("a legacy token without mintedBy cannot be revoked by a non-owner", async () => {
+    const legacy = await device("browser", "Legacy");
+    const other = await device("browser", "Other");
+    expect((await del(other.token, legacy.tokenId)).status).toBe(403);
+    expect((await list(legacy.token)).status).toBe(200);
+  });
+
+  it("the last-owner guard fires through a cascade (409)", async () => {
+    const anc = await device("browser", "Ancestor");
+    const o = await child(anc, "Owner");
+    store.setOwner(o.tokenId, true);
+    const r = await del(o.token, anc.tokenId, "?cascade=1"); // the cascade removes the caller, the only owner
+    expect(r.status).toBe(409);
+    expect((await r.json()).message).toMatch(/last owner/);
+    expect((await list(o.token)).status).toBe(200);
+  });
+
   it("mints and revokes share ONE per-token budget of 10 a minute", async () => {
     const a = await device("browser", "A");
     store.setOwner(a.tokenId, true);

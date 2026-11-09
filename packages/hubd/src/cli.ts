@@ -103,7 +103,7 @@ const USAGE = `usage:
   hubd rebuild preview|apply|restore|list ... --data-dir <dir> [--port 3142]
                                                               KB section rebuild through the RUNNING hub (no stop needed): preview writes a plan file, apply commits exactly that plan under the hub's KB lock, restore undoes an apply. See the RUNBOOK for the flags.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
-  hubd tokens owner <id> [--unset] --data-dir <dir>           mark a console/browser token as the hub owner (may revoke any device); --unset clears it. 'hubd pair --owner' mints one directly. Host CLI only
+  hubd tokens owner <id> [--unset] --data-dir <dir>           mark a console/browser token as the hub owner (may revoke any device); --unset clears it (allowed even for the last owner, from the host CLI). 'hubd pair --owner' mints one directly. Host CLI only
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_POLL_MS (default 60000) / HUBD_CURATOR_MODELS (models.json path) / HUBD_EMBED_URL / HUBD_EMBED_MODEL
      HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)

@@ -200,6 +200,10 @@ const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const PAIR_FAILS_PER_MIN = 10;
 const DEVICE_MUTATIONS_PER_MIN = 10;
+/** True when the token `tokenId` in `all` carries the owner flag (shared by ownerCaller and hubRevokeDevice). */
+function callerIsOwner(all: readonly { id: string; isOwner?: boolean }[], tokenId: string): boolean {
+  return all.some((t) => t.id === tokenId && !!t.isOwner);
+}
 const PAIR_LIMITER_MAX_KEYS = 10_000;
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
@@ -638,7 +642,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     /** Owner-only calls: the caller must be a console/browser token flagged isOwner (set on the host CLI). Else 403. */
     function ownerCaller(identity: AuthIdentity | undefined): AuthIdentity & { tokenId: string } {
       const caller = deviceCaller(identity);
-      if (!tokens.list().some((t) => t.id === caller.tokenId && t.isOwner)) throw new HubError("forbidden", "only an owner device can do this");
+      if (!callerIsOwner(tokens.list(), caller.tokenId)) throw new HubError("forbidden", "only an owner device can do this");
       return caller;
     }
     /** A label for a log line: bounded, JSON-escaped (no control characters or line breaks reach the log). */
@@ -734,10 +738,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const caller = deviceCaller(identity);
           deviceMutationLimit(caller.tokenId, (opts.now ?? Date.now)());
           const cascade = url.searchParams.get("cascade") === "1";
-          const target = tokens.list().find((t) => t.id === params.id && t.kind !== "worker");
-          if (!target) throw new HubError("not_found", "no such device");
           const all = tokens.list();
-          if (!all.some((t) => t.id === caller.tokenId && t.isOwner)) {
+          const target = all.find((t) => t.id === params.id && t.kind !== "worker");
+          if (!target) throw new HubError("not_found", "no such device");
+          if (!callerIsOwner(all, caller.tokenId)) {
             // not an owner: only itself and the devices descended from it through mintedBy
             const mine = new Set([caller.tokenId]);
             for (let grew = true; grew; ) {
@@ -745,6 +749,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
               for (const t of all) if (t.mintedBy && mine.has(t.mintedBy) && !mine.has(t.id)) (mine.add(t.id), (grew = true));
             }
             if (!mine.has(target.id)) throw new HubError("forbidden", "you can revoke only this device and the devices it added; only an owner device can revoke it");
+            // what the revoke would remove (the target, plus its descendants on a cascade) must hold no owner
+            const doomed = new Set([target.id]);
+            if (cascade) for (let grew = true; grew; ) {
+              grew = false;
+              for (const t of all) if (t.mintedBy && doomed.has(t.mintedBy) && !doomed.has(t.id) && t.kind !== "worker") (doomed.add(t.id), (grew = true));
+            }
+            if (all.some((t) => doomed.has(t.id) && t.isOwner)) throw new HubError("forbidden", "only an owner device can revoke an owner device");
           }
           const gone = tokens.revokeDevice(target.id, cascade); // 409 conflict when it would remove the last console token
           const ids = gone.map((t) => t.id);

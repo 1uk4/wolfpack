@@ -30,10 +30,13 @@ import {
 	laneKey,
 	lanePath,
 	laneState,
+	INBOX_KEY,
+	moveOptions,
 	nextWorkSort,
 	rowHeight,
 	rowTops,
 	type Chip,
+	type MoveOption,
 	type TableRow,
 	type WorkListItem,
 	type WorkSort,
@@ -149,6 +152,64 @@ interface RowCtx {
 	graduate: GraduateClient;
 	/** The owner's assignee control (absent: assignees show as plain text). */
 	assign?: { wolves: readonly string[]; wolvesError: string | null; busy: ReadonlySet<string>; errors: ReadonlyMap<string, string>; onAssign: (id: string, wolf: string) => void };
+	/** The owner's move controls (absent: no drag, no menu). Drag and the menu both end in `onMove`. */
+	move?: {
+		options: (id: string) => MoveOption[];
+		busy: ReadonlySet<string>;
+		messages: ReadonlyMap<string, { kind: "error" | "handoff"; text: string }>;
+		dragId: string | null;
+		onDragStart: (id: string) => void;
+		onDragEnd: () => void;
+		onMove: (id: string, to: string | null) => void;
+	};
+}
+
+/** The option a drop on this row would pick for the dragged item: a feature/initiative row by id, the Inbox group for the inbox option. */
+function dropOption(row: TableRow, ctx: RowCtx): MoveOption | null {
+	const m = ctx.move;
+	if (!m || m.dragId === null || m.dragId === row.id) return null;
+	const opts = m.options(m.dragId);
+	return (row.key === INBOX_KEY ? opts.find((o) => o.inbox) : opts.find((o) => !o.inbox && o.to === row.id)) ?? null;
+}
+
+/** The "Move to…" menu of a movable row, and the row's move message (error, or the handoff note). */
+function MoveCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const m = ctx.move;
+	if (!m || !row.id) return null;
+	const opts = m.options(row.id);
+	const msg = m.messages.get(row.id);
+	if (opts.length === 0 && !msg) return null;
+	return (
+		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+			{opts.length > 0 && (
+				<select
+					data-testid={`work-move-${row.key}`}
+					aria-label={`Move ${row.title} to`}
+					value=""
+					disabled={m.busy.has(row.id)}
+					onChange={(e) => {
+						const o = opts[Number(e.target.value)];
+						if (o) m.onMove(row.id, o.to);
+					}}
+					className="h-6 w-20 rounded border bg-background px-1 text-[11px] outline-none focus:border-ring disabled:opacity-50"
+				>
+					<option value="" disabled>
+						Move to…
+					</option>
+					{opts.map((o, i) => (
+						<option key={i} value={i}>
+							{o.label}
+						</option>
+					))}
+				</select>
+			)}
+			{msg && (
+				<span data-testid={`work-move-msg-${row.key}`} data-kind={msg.kind} role={msg.kind === "error" ? "alert" : "status"} className={`max-w-64 truncate text-[11px] ${msg.kind === "error" ? "text-destructive" : "text-emerald-500"}`} title={msg.text}>
+					{msg.text}
+				</span>
+			)}
+		</span>
+	);
 }
 
 /** A feature or loose task: a dropdown of the active wolves, disabled while its change runs; any other row: the assignee as text. */
@@ -211,6 +272,9 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 		if (hasKids) onToggle(row.key);
 		else if (row.id) onSelect(row.id);
 	};
+	const mv = ctx.move;
+	const target = dropOption(row, ctx);
+	const draggable = !!mv && !!row.id && !mv.busy.has(row.id) && mv.options(row.id).length > 0;
 	return (
 		<>
 			<div
@@ -218,6 +282,22 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				data-kind={row.kind}
 				data-graduated={row.graduated || undefined}
 				data-selected={ctx.openId === row.id || undefined}
+				data-drop-target={target ? true : undefined}
+				draggable={draggable || undefined}
+				onDragStart={draggable ? (e) => {
+					e.stopPropagation();
+					e.dataTransfer?.setData?.("text/plain", row.id);
+					mv!.onDragStart(row.id);
+				} : undefined}
+				onDragEnd={draggable ? () => mv!.onDragEnd() : undefined}
+				onDragOver={target ? (e) => { e.preventDefault(); e.stopPropagation(); } : undefined}
+				onDrop={target ? (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					const id = mv!.dragId!;
+					mv!.onDragEnd();
+					mv!.onMove(id, target.to);
+				} : undefined}
 				onClick={hasKids || row.id ? activate : undefined}
 				onKeyDown={(e) => {
 					if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
@@ -227,7 +307,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				tabIndex={hasKids || row.id ? 0 : undefined}
 				aria-expanded={hasKids ? open : undefined}
 				style={{ height: rowHeight(row), paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
-				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
+				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${target ? "bg-primary/15 outline outline-1 outline-primary" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
 				<div style={{ height: WORK_ROW_H }} className="flex shrink-0 items-center gap-1">
 					{hasKids ? (
@@ -254,6 +334,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 							<RowTitle row={row} />
 						)}
 					</span>
+					<MoveCell row={row} ctx={ctx} />
 					<AssigneeCell row={row} ctx={ctx} />
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -361,6 +442,9 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [wolvesError, setWolvesError] = useState<string | null>(null);
 	const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
 	const [assignErrors, setAssignErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+	const [busyMove, setBusyMove] = useState<ReadonlySet<string>>(() => new Set());
+	const [moveMsgs, setMoveMsgs] = useState<ReadonlyMap<string, { kind: "error" | "handoff"; text: string }>>(() => new Map());
+	const [dragId, setDragId] = useState<string | null>(null);
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -423,6 +507,42 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 		}
 	};
 
+	// Drag and the menu share this one path; no optimistic update: the hub answers, then the list is read again. The message stays until the next move of that row.
+	const onMove = async (id: string, to: string | null): Promise<void> => {
+		if (!client.move || busyMove.has(id)) return;
+		const say = (m: { kind: "error" | "handoff"; text: string } | null) =>
+			setMoveMsgs((prev) => {
+				const next = new Map(prev);
+				if (m === null) next.delete(id);
+				else next.set(id, m);
+				return next;
+			});
+		setBusyMove((prev) => new Set(prev).add(id));
+		say(null);
+		try {
+			const res = await client.move(id, to);
+			if (!mounted.current) return;
+			if (!res.ok) say({ kind: "error", text: res.message });
+			else {
+				const handoff = res.data.reassigned?.find((r) => r.id === id);
+				const parent = items?.find((x) => x.id === to)?.title ?? to;
+				const fresh = await reload();
+				if (!mounted.current) return;
+				if (!fresh) say({ kind: "error", text: "moved, but the list couldn't refresh" });
+				else if (handoff) say({ kind: "handoff", text: `Moved under ${parent}; now assigned to ${handoff.to}` });
+			}
+		} catch (err) {
+			if (mounted.current) say({ kind: "error", text: err instanceof Error ? err.message : "move failed" });
+		} finally {
+			if (mounted.current)
+				setBusyMove((prev) => {
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				});
+		}
+	};
+
 	const setDomain = (next: string) => {
 		setDomainState(next);
 		setExpanded(new Set());
@@ -442,7 +562,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 
 	const items = load.state === "ready" ? load.items : null;
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.move && items ? { move: { options: (id: string) => moveOptions(items, id), busy: busyMove, messages: moveMsgs, dragId, onDragStart: setDragId, onDragEnd: () => setDragId(null), onMove: (id: string, to: string | null) => void onMove(id, to) } } : {}), ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 

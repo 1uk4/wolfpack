@@ -136,7 +136,7 @@ export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbRes
 }
 
 /** Owner work op through the hub (console route PATCH /api/work/:id): `{assignee}` now, `{moveTo}` for moves. */
-export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<{ item: { id: string; assignee?: string } }>> {
+export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<{ item: { id: string; assignee?: string }; reassigned?: { id: string; from: string | null; to: string }[] }>> {
 	return request(`/api/work/${seg(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op) });
 }
 

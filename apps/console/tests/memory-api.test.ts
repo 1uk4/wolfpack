@@ -95,6 +95,14 @@ describe("memory API: pass-through", () => {
 		assert.deepEqual(await body(res), { error: "only the owner can change it", code: "forbidden" });
 	});
 
+	it("workOp returns the hub's reassigned list on a move, so the page can say the task was handed over", async () => {
+		const reassigned = [{ id: "work-x-1", from: "hal", to: "luka" }];
+		const api = createMemoryApi(stub({ patchWork: async () => ({ item: { id: "work-x-1" }, reassigned }) }));
+		const res = await api.workOp("work-x-1", { moveTo: "work-x-2" });
+		assert.equal(res.status, 200);
+		assert.deepEqual((await body(res)).reassigned, reassigned);
+	});
+
 	it("workOp refuses an assignee that is not in the hub's wolf list, and fails closed when the list is missing, without calling the hub", async () => {
 		const calls: unknown[][] = [];
 		const patchWork = async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } });

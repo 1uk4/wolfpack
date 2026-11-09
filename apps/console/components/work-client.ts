@@ -22,6 +22,14 @@ export interface WorkClient {
 	assignees?(): Promise<KbResult<string[]>>;
 	/** Set the item's assignee through the hub; a failure carries the hub's message. */
 	assign?(id: string, wolf: string): Promise<KbResult<unknown>>;
+	/** Move the item under `to` (a work id; null = no parent) through the hub; `reassigned` is set when a task was handed to another wolf. A failure carries the hub's message. */
+	move?(id: string, to: string | null): Promise<KbResult<{ reassigned?: WorkReassignment[] }>>;
+}
+
+export interface WorkReassignment {
+	id: string;
+	from: string | null;
+	to: string;
 }
 
 export function createWorkClient(): WorkClient {
@@ -35,6 +43,7 @@ export function createWorkClient(): WorkClient {
 			return res.ok ? { ok: true, data: res.data.wolves.map((w) => w.name) } : res;
 		},
 		assign: (id, wolf) => patchWorkItem(id, { assignee: wolf }),
+		move: (id, to) => patchWorkItem(id, { moveTo: to }),
 		async domains() {
 			const res = await fetchKbGraph();
 			return res.ok ? res.data.domains.map((d) => ({ name: d.name, label: d.label })) : [];

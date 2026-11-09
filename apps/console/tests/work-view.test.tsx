@@ -513,3 +513,86 @@ describe("the assignee dropdown", () => {
 		assert.match(q("work-assignee-error-f1")!.textContent ?? "", /HTTP 502/);
 	});
 });
+
+describe("moving items", () => {
+	const MV = [
+		item("i1", "initiative", { title: "Phase 1" }),
+		item("f1", "feature", { partOf: "i1", assignee: "hal", title: "F1" }),
+		item("f2", "feature", { partOf: "i1", assignee: "luka", title: "F2" }),
+		item("t1", "task", { partOf: "f1" }),
+		item("lt", "task", { title: "LT" }),
+	];
+	type Moves = [string, string | null][];
+	const withMove = (move: NonNullable<WorkClient["move"]>, over: Partial<Fake> = {}) => fake({ items: MV, move, ...over });
+	const openAll = async (c: Fake) => {
+		await open(c);
+		await click(q("work-toggle-i1")!);
+		await click(q("work-toggle-f1")!);
+		await click(q("work-toggle-no-initiative")!);
+	};
+	const sel = (key: string) => q(`work-move-${key}`) as HTMLSelectElement;
+	const fire = (el: HTMLElement, name: string) => act(async () => {
+		const key = Object.keys(el).find((k) => k.startsWith("__reactProps"))!;
+		(el as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]![name]!({ preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {} } });
+	});
+	const labels = (s: HTMLSelectElement) => [...s.querySelectorAll("option")].map((o) => o.textContent);
+
+	it("the menu lists valid parents without the current one, and picking one calls move with that id", async () => {
+		const moves: Moves = [];
+		await openAll(withMove(async (id, to) => (moves.push([id, to]), { ok: true, data: {} })));
+		assert.deepEqual(labels(sel("t1")), ["Move to…", "F2", "Inbox (no feature)"]);
+		assert.deepEqual(labels(sel("f1")), ["Move to…", "No initiative"]);
+		assert.equal(q("work-move-i1"), null, "initiatives do not move");
+		await change(sel("t1"), { value: "0" });
+		await settle();
+		assert.deepEqual(moves, [["t1", "f2"]]);
+	});
+	it("dragging shows only valid targets, and dropping on one calls move; a drop elsewhere does nothing", async () => {
+		const moves: Moves = [];
+		await openAll(withMove(async (id, to) => (moves.push([id, to]), { ok: true, data: {} })));
+		await fire(q("work-row-t1")!, "onDragStart");
+		const marked = qa("[data-drop-target]").map((r) => r.getAttribute("data-testid"));
+		assert.deepEqual(marked, ["work-row-f2", "work-row-no-initiative"]);
+		const props = (el: HTMLElement) => (el as unknown as Record<string, Record<string, unknown>>)[Object.keys(el).find((k) => k.startsWith("__reactProps"))!]!;
+		assert.equal(props(q("work-row-lt")!).onDrop, undefined, "a non-target row ignores drops");
+		assert.equal(props(q("work-row-f1")!).onDrop, undefined, "so does the item's own parent");
+		assert.deepEqual(moves, []);
+		await fire(q("work-row-f2")!, "onDrop");
+		await settle();
+		assert.deepEqual(moves, [["t1", "f2"]]);
+		assert.equal(qa("[data-drop-target]").length, 0, "highlight ends with the drop");
+	});
+	it("says the task was handed to the other wolf only when the hub reports it, and keeps it after the reload", async () => {
+		let reassigned = true;
+		await openAll(withMove(async (id) => ({ ok: true, data: reassigned ? { reassigned: [{ id, from: "hal", to: "luka" }] } : {} })));
+		await change(sel("t1"), { value: "0" });
+		await settle();
+		assert.equal(q("work-move-msg-t1")!.textContent, "Moved under F2; now assigned to luka");
+		reassigned = false;
+		await change(sel("t1"), { value: "0" });
+		await settle();
+		assert.equal(q("work-move-msg-t1"), null);
+	});
+	it("a refused move shows the hub message on that row and leaves the list as it was", async () => {
+		const c = withMove(async () => ({ ok: false, reason: "error", message: "wolf luka is not here" }));
+		await openAll(c);
+		const before = rows();
+		await change(sel("t1"), { value: "0" });
+		await settle();
+		assert.equal(q("work-move-msg-t1")!.textContent, "wolf luka is not here");
+		assert.equal(q("work-move-msg-t1")!.getAttribute("data-kind"), "error");
+		assert.deepEqual(rows(), before);
+		assert.equal(sel("t1").disabled, false);
+	});
+	it("disables only the moving row while its move runs, then re-enables it", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		await openAll(withMove(async () => (await gate, { ok: true, data: {} })));
+		await change(sel("t1"), { value: "0" });
+		assert.equal(sel("t1").disabled, true);
+		assert.equal(sel("lt").disabled, false);
+		release();
+		await settle();
+		assert.equal(sel("t1").disabled, false);
+	});
+});

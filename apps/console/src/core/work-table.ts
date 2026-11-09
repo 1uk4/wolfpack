@@ -122,6 +122,38 @@ export const isInboxContainer = (it: WorkListItem): boolean =>
 
 const isGraduated = (it: WorkListItem): boolean => it.graduated !== undefined || it.stage === "archived";
 
+export interface MoveOption {
+	/** The new parent's id; null = no parent. */
+	to: string | null;
+	label: string;
+	/** The drop target is the Inbox group (tasks: the Inbox; features: no initiative), not a row. */
+	inbox: boolean;
+}
+
+/**
+ * Where the owner may move an item (the drop targets and the "Move to…" menu, one rule): a live task goes to another live feature or
+ * the Inbox (the Inbox container's id, or null when the domain has none); a live feature goes under another live initiative, or to none.
+ * The current parent is left out. Nothing else moves (initiatives, issues, spikes, ideas, graduated or archived items).
+ */
+export function moveOptions(items: readonly WorkListItem[], id: string): MoveOption[] {
+	const it = items.find((x) => x.id === id);
+	if (!it || isGraduated(it) || isInboxContainer(it)) return [];
+	const live = (x: WorkListItem): boolean => !isGraduated(x) && !isInboxContainer(x);
+	if (it.kind === "task") {
+		const out: MoveOption[] = items.filter((x) => x.kind === "feature" && live(x) && x.id !== it.partOf).map((x) => ({ to: x.id, label: x.title, inbox: false }));
+		const parent = it.partOf ? items.find((x) => x.id === it.partOf) : undefined;
+		if (parent && !isInboxContainer(parent)) out.push({ to: items.find(isInboxContainer)?.id ?? null, label: "Inbox (no feature)", inbox: true });
+		return out;
+	}
+	if (it.kind === "feature") {
+		const out: MoveOption[] = items.filter((x) => x.kind === "initiative" && live(x) && x.id !== it.partOf).map((x) => ({ to: x.id, label: x.title, inbox: false }));
+		const parent = it.partOf ? items.find((x) => x.id === it.partOf) : undefined;
+		if (parent && !isInboxContainer(parent)) out.push({ to: null, label: "No initiative", inbox: true });
+		return out;
+	}
+	return [];
+}
+
 function chipOf(it: WorkListItem, blocked: ReadonlySet<string>): Chip {
 	let state: ChipState = "plain";
 	if (it.kind === "feature" && it.stage === "shipped") state = "ready";

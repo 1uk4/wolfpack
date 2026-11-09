@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_WORK_SORT, NO_INITIATIVE_KEY, buildWorkTable, nextWorkSort, stageRank, type WorkSort } from "../src/core/work-table.ts";
+import { DEFAULT_WORK_SORT, NO_INITIATIVE_KEY, buildWorkTable, moveOptions, nextWorkSort, stageRank, type WorkSort } from "../src/core/work-table.ts";
 import type { WorkListItem } from "../src/core/kb.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "d", dependsOn: [], ...over });
@@ -322,5 +322,27 @@ describe("buildWorkTable: search", () => {
 	});
 	it("the Inbox group never matches by its own name", () => {
 		assert.deepEqual(buildWorkTable(items, { query: "initiative" }).groups, []);
+	});
+});
+
+describe("moveOptions", () => {
+	const all = [...items, item("is1", "issue", { partOf: "f1" }), item("tu", "task", { partOf: "i1" }), item("tl", "task", { partOf: "inbox" })];
+	const to = (id: string) => moveOptions(all, id).map((o) => o.to);
+	it("a task may go to any other live feature or the Inbox, never its own parent, a graduated feature or the Inbox container as a feature", () => {
+		assert.deepEqual(to("t1"), ["f2", "f3", "f4", "inbox"]);
+		assert.deepEqual(to("tu"), ["f1", "f2", "f3", "f4", "inbox"]);
+		assert.deepEqual(to("tl"), ["f1", "f2", "f3", "f4"], "already in the Inbox");
+	});
+	it("a feature may go under another initiative, or to none when it has one", () => {
+		assert.deepEqual(to("f3"), ["i1"]);
+		assert.deepEqual(to("f1"), [null]);
+	});
+	it("nothing else moves: initiatives, issues, graduated items, unknown ids", () => {
+		for (const id of ["i1", "is1", "old", "oldt", "nope"]) assert.deepEqual(to(id), [], id);
+	});
+	it("labels name the target", () => {
+		assert.deepEqual(moveOptions(all, "f3"), [{ to: "i1", label: "Phase 1", inbox: false }]);
+		assert.deepEqual(moveOptions(all, "f1"), [{ to: null, label: "No initiative", inbox: true }]);
+		assert.equal(moveOptions(all, "t1").at(-1)!.label, "Inbox (no feature)");
 	});
 });

@@ -63,7 +63,8 @@ export const PATCH_BATCH_MAX = 50;
 export const PatchWorkBatchSchema = z.object({ ops: z.array(PatchWorkOpSchema).min(1).max(PATCH_BATCH_MAX) }).strict();
 export const PatchWorkRequestSchema = z.union([PatchWorkBatchSchema, PatchWorkOpSchema]);
 export type PatchWorkRequest = z.infer<typeof PatchWorkRequestSchema>;
-export const WorkItemResponseSchema = z.object({ item: WorkWriteItemSchema });
+/** `reassigned`: set by a move that handed a task to another wolf (the task's new holder). Without it zod would strip the field from the client's parse. */
+export const WorkItemResponseSchema = z.object({ item: WorkWriteItemSchema, reassigned: z.array(z.object({ id: z.string(), from: z.string().nullable(), to: z.string() })).optional() });
 export type WorkItemResponse = z.infer<typeof WorkItemResponseSchema>;
 
 export const DeleteWorkResponseSchema = z.object({ deleted: z.array(z.string()) });

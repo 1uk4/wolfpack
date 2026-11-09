@@ -19,6 +19,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type Actor } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
+import { idempotencyKeyOf, type WorkIdempotency } from "./work-idempotency.js";
 import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
@@ -38,6 +39,8 @@ export interface WorkProxyDeps {
   writeWork: <T>(actor: Actor, fn: () => T) => Promise<T>;
   /** The actor a worker token acts as for the named wolf (403 for a wolf of another host). Non-worker tokens: unchanged. */
   wolfActor: (tokenActor: Actor, named?: string) => Actor;
+  /** First answers by `Idempotency-Key`: a resent write (a wolf's outbox replay) gets that answer and is not applied again. */
+  idempotency?: WorkIdempotency;
 }
 
 const respond = (res: ServerResponse, status: number, body: unknown): void => {
@@ -66,6 +69,20 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
       throw new HubError("forbidden", m);
     };
     const named = typeof req.headers["x-wolf"] === "string" ? (req.headers["x-wolf"] as string) : undefined;
+    // A write with a key runs at most once: checked and recorded inside the write queue, so two resends cannot both apply.
+    // Only writes use a key: a read with a malformed one is answered, not refused.
+    const rawKey = ["POST", "PATCH", "PUT", "DELETE"].includes(method) ? idempotencyKeyOf(req.headers["idempotency-key"]) : undefined;
+    const key = rawKey && d.idempotency ? `${identity.tokenId}:${rawKey}` : undefined;
+    const once = async (actor: Actor, status: number, fn: () => unknown): Promise<void> => {
+      const out = await d.writeWork(actor, () => {
+        const seen = key ? d.idempotency!.get(key) : undefined;
+        if (seen) return seen;
+        const answer = { status, body: fn() };
+        if (key) d.idempotency!.add(key, answer);
+        return answer;
+      });
+      respond(res, out.status, out.body);
+    };
     const itemOf = (id: string) => {
       if (!WORK_ID.test(id)) throw new HubError("invalid_request", "malformed work item id");
       const item = loadWorkState(d.roots).get(id as never);
@@ -90,8 +107,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         if (!myNames.has(body.data.assignee)) forbid("a worker token can only create work assigned to a wolf of its own host");
       }
       const actor = d.wolfActor(tokenActor, named);
-      const out = await d.writeWork(actor, () => createItem(d.roots, body.data as CreateWorkInput));
-      return respond(res, 201, out);
+      return await once(actor, 201, () => createItem(d.roots, body.data as CreateWorkInput));
     }
     if (rest.length === 1 && method === "GET") {
       const item = itemOf(rest[0]!);
@@ -108,15 +124,13 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
       const ops = normalisePatch(parsed.data as never);
       if (ops.some((o) => o.op === "assign")) forbid("assigning work is not available through the work proxy");
       const actor = d.wolfActor(tokenActor, named);
-      const item = await d.writeWork(actor, () => applyOps(d.roots, id, ops));
-      return respond(res, 200, { item });
+      return await once(actor, 200, () => ({ item: applyOps(d.roots, id, ops) }));
     }
     if (rest.length === 2 && rest[1] === "graduate" && method === "POST") {
       const id = rest[0]!;
       ownerOk0(itemOf(id), ownerOk, forbid);
       const actor = d.wolfActor(tokenActor, named);
-      const item = await d.writeWork(actor, () => graduateItem(d.roots, id));
-      return respond(res, 200, { item });
+      return await once(actor, 200, () => ({ item: graduateItem(d.roots, id) }));
     }
     // Known path shape with a method outside the whitelist (DELETE, ...) or an unknown path.
     throw new HubError(rest.length <= 2 ? "invalid_request" : "not_found", rest.length <= 2 ? `method ${method} is not available through the work proxy` : `no route ${url.pathname}`);

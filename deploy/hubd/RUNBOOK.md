@@ -194,6 +194,7 @@ systemctl start hubd
 [ "$rc" -eq 0 ] && echo "backup ok" || echo "BACKUP FAILED (tar rc=$rc); hubd restarted" >&2
 ```
 (GNU tar stores the `domains` symlink as a link, not its contents; the tar holds tokens, so it is created 0600.) Restore, with hubd stopped and `/var/lib/hubd` moved aside: `tar -xpf /root/hubd-state.tar -C /var/lib` as root (`-p` and root's default `--same-owner` keep owner hubd:hubd and the 0700/0600 modes), then `systemctl start hubd`.
+- **Work write idempotency is not exported.** `hubd export` skips `link/`, so `link/work-idempotency.jsonl` (the first answer per `Idempotency-Key`, kept 7 days, `work-idempotency.ts`) is lost on export/import or a move to a new data dir. A wolf whose outbox (`<den>/factory/work-outbox`) still holds a write that already landed before the move would then apply it a second time. Before exporting or migrating, check every wolf's outbox is empty (hub reachable, no `*.json` left in it). The tar backup above keeps `link/`, so a restore from it keeps the keys.
 - Setup sets no ACLs and touches no wolf dirs, so there is nothing outside `/var/lib/hubd`, `/opt/wolfpack-hubd` and `/etc/wolfpack` to undo.
 
 ## 7. Merge the legacy work store into hubd (`hubd work-import`, ticket work-wolfpack-MMeb8jJ)

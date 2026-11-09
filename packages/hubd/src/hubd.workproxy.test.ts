@@ -1,5 +1,5 @@
 /** The hub-proxied Work API (work-proxy.ts): shapes of the agent's /work routes, whitelist, and worker-token scoping. */
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -107,6 +107,70 @@ describe("hub work proxy", () => {
     expect((await call(A, "PATCH", `/${id}`, { bogus: 1 })).status).toBe(400);
     expect((await fetch(`${hub.url}/v1/workapi/other`, { headers: { Authorization: `Bearer ${A}` } })).status).toBe(404);
     expect((await fetch(`${hub.url}/v1/workapi/other`, { headers: { "X-API-Key": A } })).status).toBe(401); // the key header only works under /work
+  });
+
+  it("a write resent with the same Idempotency-Key gets the first answer and is not applied again, also after a restart", async () => {
+    const { hub, A } = await rig();
+    const keyed = (url: string, key: string, method: string, path: string, body: unknown) =>
+      fetch(`${url}/v1/workapi/work${path}`, { method, headers: { "X-API-Key": A, "Idempotency-Key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const first = await keyed(hub.url, "k-create-1", "POST", "", feature);
+    expect(first.status).toBe(201);
+    const { id } = (await first.json()) as { id: string };
+    const again = await keyed(hub.url, "k-create-1", "POST", "", feature);
+    expect(again.status).toBe(201);
+    expect(((await again.json()) as { id: string }).id).toBe(id);
+    expect((await keyed(hub.url, "k-note-1", "PATCH", `/${id}`, { note: "only-once-marker" })).status).toBe(200);
+
+    const dataDir = hub.dataDir;
+    await servers.pop()!.close();
+    const hub2 = await createRaw({ dataDir });
+    servers.push(hub2);
+    expect((await keyed(hub2.url, "k-note-1", "PATCH", `/${id}`, { note: "only-once-marker" })).status).toBe(200);
+    // a key the hub cannot store is refused, not silently ignored (the write would then not be deduplicated)
+    expect((await keyed(hub2.url, "bad key with spaces", "POST", "", feature)).status).toBe(400);
+    // a read never uses a key, so a malformed one on a GET is ignored, not refused
+    expect((await fetch(`${hub2.url}/v1/workapi/work/${id}`, { headers: { "X-API-Key": A, "Idempotency-Key": "bad key with spaces" } })).status).toBe(200);
+    const list = (await (await fetch(`${hub2.url}/v1/workapi/work?domain=personal`, { headers: { "X-API-Key": A } })).json()) as { items: { id: string }[] };
+    expect(list.items.map((i) => i.id)).toEqual([id]);
+    const got = (await (await fetch(`${hub2.url}/v1/workapi/work/${id}`, { headers: { "X-API-Key": A } })).json()) as { item: { log: { text: string }[] } };
+    expect(got.item.log.filter((l) => l.text === "only-once-marker")).toHaveLength(1);
+  });
+
+  it("a torn last line of the key store (a crash mid-append) is skipped: earlier keys still dedup and new keys are stored", async () => {
+    const { hub, A } = await rig();
+    const keyed = (url: string, key: string, body: unknown) =>
+      fetch(`${url}/v1/workapi/work`, { method: "POST", headers: { "X-API-Key": A, "Idempotency-Key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const id = ((await (await keyed(hub.url, "k-a", feature)).json()) as { id: string }).id;
+    const dataDir = hub.dataDir;
+    await servers.pop()!.close();
+    appendFileSync(join(dataDir, "link", "work-idempotency.jsonl"), '{"k":"torn');
+    const hub2 = await createRaw({ dataDir });
+    servers.push(hub2);
+    expect(((await (await keyed(hub2.url, "k-a", feature)).json()) as { id: string }).id).toBe(id);
+    const id2 = ((await (await keyed(hub2.url, "k-b", { ...feature, title: "Second" })).json()) as { id: string }).id;
+    await servers.pop()!.close();
+    const hub3 = await createRaw({ dataDir });
+    servers.push(hub3);
+    expect(((await (await keyed(hub3.url, "k-b", { ...feature, title: "Second" })).json()) as { id: string }).id).toBe(id2);
+    const list = (await (await fetch(`${hub3.url}/v1/workapi/work?domain=personal`, { headers: { "X-API-Key": A } })).json()) as { items: { id: string }[] };
+    expect(list.items.map((i) => i.id).sort()).toEqual([id, id2].sort());
+  });
+
+  it("a key is remembered for 7 days whatever happens in between, and forgotten after", async () => {
+    const { hub, A } = await rig();
+    const dataDir = hub.dataDir;
+    await servers.pop()!.close();
+    let t = Date.parse("2026-11-01T00:00:00Z");
+    const day = 24 * 60 * 60 * 1000;
+    const hubT = await createRaw({ dataDir, now: () => t });
+    servers.push(hubT);
+    const keyed = (key: string) =>
+      fetch(`${hubT.url}/v1/workapi/work`, { method: "POST", headers: { "X-API-Key": A, "Idempotency-Key": key, "Content-Type": "application/json" }, body: JSON.stringify(feature) });
+    const id = ((await (await keyed("k-old")).json()) as { id: string }).id;
+    t += 6 * day;
+    expect(((await (await keyed("k-old")).json()) as { id: string }).id).toBe(id);
+    t += 2 * day;
+    expect(((await (await keyed("k-old")).json()) as { id: string }).id).not.toBe(id);
   });
 
   it("an operator token is unrestricted over the whitelist", async () => {

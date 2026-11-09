@@ -75,6 +75,7 @@ import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
 import { createRelay, type Relay } from "./relay.js";
 import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
+import { WorkIdempotency } from "./work-idempotency.js";
 import { buildHubSettings } from "./settings.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
@@ -360,6 +361,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
+  const workIdempotency = new WorkIdempotency(join(opts.dataDir, "link", "work-idempotency.jsonl"), { now: opts.now });
   let registry: ReturnType<typeof createRegistry>;
   try {
     registry = createRegistry({
@@ -648,7 +650,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         const id = authenticate(req);
         if (!id) throw new HubError("unauthorized", "missing or invalid token");
         return handleWorkProxy(
-          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n) },
+          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n), idempotency: workIdempotency },
           req, res, url, id, writeActor(req),
         );
       }

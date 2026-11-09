@@ -15,10 +15,12 @@
  * returns to it with its scroll, filters and domain intact.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/top-bar";
 import { useWorkReader } from "./work-reader";
+import { MenuShell } from "@/components/menu-shell";
+import { WolfpackMark } from "@/components/wolfpack-mark";
 import {
 	DEFAULT_WORK_SORT,
 	LANE_COLOR,
@@ -144,6 +146,7 @@ function RowLinks({ row }: { row: TableRow }) {
 }
 
 const COLS = {
+	assignee: "w-24 shrink-0 md:w-32",
 	status: "w-24 shrink-0 md:w-56",
 	created: "w-24 shrink-0 max-md:hidden",
 	open: "flex w-6 shrink-0 justify-end md:w-16",
@@ -189,41 +192,6 @@ function dropOption(row: TableRow, ctx: RowCtx): MoveOption | null {
 	return (row.key === INBOX_KEY ? opts.find((o) => o.inbox) : opts.find((o) => !o.inbox && o.to === row.id)) ?? null;
 }
 
-/** The "Move to…" menu of a movable row, and the row's move message (error, or the handoff note). */
-function MoveCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
-	const m = ctx.move;
-	if (!m || !row.id) return null;
-	const opts = m.options(row.id);
-	if (opts.length === 0) return null;
-	return (
-		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-			{opts.length > 0 && (
-				<select
-					data-testid={`work-move-${row.key}`}
-					title={`Move to: ${opts.map((o) => o.label).join(", ")}`}
-					aria-label={`Move ${row.title} to`}
-					value=""
-					disabled={m.busy.has(row.id)}
-					onChange={(e) => {
-						const o = opts[Number(e.target.value)];
-						if (o) m.onMove(row.id, o.to);
-					}}
-					className="h-6 w-20 rounded border bg-background px-1 text-[11px] outline-none focus:border-ring disabled:opacity-50"
-				>
-					<option value="" disabled>
-						Move to…
-					</option>
-					{opts.map((o, i) => (
-						<option key={i} value={i}>
-							{o.label}
-						</option>
-					))}
-				</select>
-			)}
-		</span>
-	);
-}
-
 /** A failed assignee change, on its own line under the title. */
 function AssignError({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const a = ctx.assign;
@@ -247,42 +215,97 @@ function MoveMessage({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	);
 }
 
-/** A feature or loose task: a dropdown of the active wolves, disabled while its change runs; any other row: the assignee as text. */
+/** The assignee column: wolf icon + name (muted "—" when none). On an assignable row it is a button opening a menu of the other wolves; elsewhere it is static. */
 function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const a = ctx.assign;
-	if (!row.assignee && !(a && row.assignable)) return null;
+	const [open, setOpen] = useState(false);
+	const btn = useRef<HTMLButtonElement>(null);
+	const menuHost = useRef<HTMLSpanElement>(null);
+	const close = useCallback(() => setOpen(false), []);
+	// Escape and a pointer-down outside the button and the (portaled) menu close it; Escape hands focus back to the button.
+	useEffect(() => {
+		if (!open) return;
+		const down = (e: PointerEvent) => {
+			const t = e.target as Node;
+			if (btn.current?.contains(t) || (t as Element).closest?.('[data-assignee-menu]')) return;
+			close();
+		};
+		const key = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			close();
+			btn.current?.focus();
+		};
+		document.addEventListener("pointerdown", down);
+		document.addEventListener("keydown", key);
+		return () => {
+			document.removeEventListener("pointerdown", down);
+			document.removeEventListener("keydown", key);
+		};
+	}, [open, close]);
+	const face = row.assignee ? (
+		<>
+			<span className="inline-flex size-3 shrink-0">
+				<WolfpackMark className="size-full" />
+			</span>
+			<span className="truncate">{row.assignee}</span>
+		</>
+	) : (
+		<span aria-label="unassigned">—</span>
+	);
 	if (!a || !row.assignable || !row.id) {
 		return (
-			<span data-testid={`work-assignee-text-${row.key}`} className="max-w-24 shrink-0 truncate text-[11px] text-muted-foreground">
-				{row.assignee}
+			<span data-testid={`work-assignee-${row.key}`} className={`${COLS.assignee} flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground`}>
+				{face}
 			</span>
 		);
 	}
-	if (a.wolvesError !== null) {
-		return (
-			<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="max-w-64 shrink-0 truncate text-[11px] text-destructive" title={a.wolvesError}>
-				can't load wolves: {a.wolvesError}
-			</span>
-		);
-	}
-	const options = row.assignee && !a.wolves.includes(row.assignee) ? [row.assignee, ...a.wolves] : a.wolves;
+	const id = row.id;
+	const others = a.wolves.filter((w) => w !== row.assignee);
 	return (
-		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-			<select
+		<span ref={menuHost} className={`${COLS.assignee} flex min-w-0 items-center`} onClick={(e) => e.stopPropagation()}>
+			<button
+				ref={btn}
+				type="button"
 				data-testid={`work-assignee-${row.key}`}
-				aria-label={`Assignee of ${row.title}`}
-				value={row.assignee}
-				disabled={a.busy.has(row.id)}
-				onChange={(e) => a.onAssign(row.id, e.target.value)}
-				className="h-6 max-w-28 rounded border bg-background px-1 text-[11px] outline-none focus:border-ring disabled:opacity-50"
+				aria-haspopup="menu"
+				aria-expanded={open}
+				aria-label={`Assignee of ${row.title}: ${row.assignee || "none"}`}
+				disabled={a.busy.has(id)}
+				onClick={() => setOpen((o) => !o)}
+				className="flex min-w-0 max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
 			>
-				{!row.assignee && <option value="">unassigned</option>}
-				{options.map((w) => (
-					<option key={w} value={w}>
-						{w}
-					</option>
-				))}
-			</select>
+				{face}
+			</button>
+			{open && (
+				<MenuShell anchorRef={btn} testid={`work-assignee-menu-${row.key}`} preferredSide="down" align="left" menuClass="flex w-48 flex-col gap-0.5 rounded-xl border bg-card p-1.5 text-xs shadow-xl">
+					<span data-assignee-menu className="flex flex-col gap-0.5">
+						{a.wolvesError !== null ? (
+							<span role="alert" className="px-2 py-1 text-destructive">
+								can't load wolves: {a.wolvesError}
+							</span>
+						) : (
+							others.map((w) => (
+								<button
+									key={w}
+									type="button"
+									data-testid={`work-assignee-option-${row.key}-${w}`}
+									onClick={() => {
+										close();
+										a.onAssign(id, w);
+									}}
+									className="flex items-center gap-2 rounded-lg px-2 py-1 text-left hover:bg-muted focus:bg-muted focus:outline-none"
+								>
+									<span className="inline-flex size-3 shrink-0">
+										<WolfpackMark className="size-full" />
+									</span>
+									<span className="truncate">{w}</span>
+								</button>
+							))
+						)}
+					</span>
+				</MenuShell>
+			)}
 		</span>
 	);
 }
@@ -365,12 +388,11 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 						<MoveMessage row={row} ctx={ctx} />
 						<AssignError row={row} ctx={ctx} />
 					</span>
-					<MoveCell row={row} ctx={ctx} />
-					<AssigneeCell row={row} ctx={ctx} />
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
 					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
 					</span>
+					<AssigneeCell row={row} ctx={ctx} />
 					<span className={`${COLS.status} flex min-w-0 flex-col md:flex-row md:items-center md:gap-2`}>
 						<span
 							data-testid={`work-stage-${row.key}`}
@@ -707,6 +729,12 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 					<div className="min-h-0 flex-1 overflow-y-auto">
 						<div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background/80 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
 							{HEADERS.map((h) => (
+								<Fragment key={h.col}>
+								{h.col === "stage" && (
+									<span data-testid="work-header-assignee" className={COLS.assignee}>
+										Assignee
+									</span>
+								)}
 								<button
 									key={h.col}
 									type="button"
@@ -717,6 +745,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 								>
 									{h.label} {chevron(h.col)}
 								</button>
+								</Fragment>
 							))}
 							<span aria-hidden className={COLS.open} />
 						</div>

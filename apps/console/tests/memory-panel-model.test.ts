@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary, triggerText,
-	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
+	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, groupObservations, blockedLabel, consolidateMessage, reconcilePromote, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
 const base = { wolf: "w", timestamp: "2026-10-26T00:00:00Z", domain: "d" };
@@ -144,6 +144,29 @@ describe("memory panel model", () => {
 		assert.equal(recordStale(rw({ kind: "work", workId: "x", featureId: "p" }), ["a", "p"]), true);
 		assert.equal(recordStale(rw({ kind: "work", workId: "x" }), ["a", null]), false);
 		assert.equal(recordStale(obs("t", { kind: "work", workId: "a" }), ["a"]), false);
+	});
+	it("a group counts every blocked observation and says who blocks it", () => {
+		const o = (id: string, extra: object) => ({ id, timestamp: "t", recordedAt: `2026-11-0${id}`, content: "c", tokenCount: 1, work: "w1", feature: "f1", ...extra });
+		const blocked = { blocked: "forbidden" as const, blockedKey: "f1", assignee: "hal" };
+		const g = groupObservations([o("1", blocked), o("2", blocked), o("3", {})])[0]!;
+		assert.equal(g.blockedCount, 2);
+		assert.equal(g.assignee, "hal");
+		assert.equal(blockedLabel(g, { f1: { title: "Polish (November)" } }), "not allowed: assigned to hal · waiting on Polish (November)'s Record");
+		assert.equal(blockedLabel({ ...g, assignee: undefined, blockedKey: g.key }, {}), "not allowed (another host)");
+		assert.equal(blockedLabel({ ...g, blocked: "work-api-unavailable", blockedKey: g.key }, {}), "waiting for Work API");
+	});
+	it("the consolidate result reports pending observations and the retry time", () => {
+		const r = { observationsProcessed: 4, topicsCreated: 1, topicsMerged: 2, topicsSkipped: 0, claimsSubmitted: 0, topicIds: [] };
+		assert.equal(consolidateMessage({ ...r, recordsWritten: 1, observationsPending: 3 }), "Consolidated 4 observations → 1 new, 2 merged topics, 1 Record written, 3 still pending");
+		assert.match(consolidateMessage({ ...r, observationsPending: 3, retryAt: Date.now() + 600_000 }), /3 still pending, retrying at \d\d:\d\d$/);
+	});
+	it("a promote running in wolfd shows as running on mount, and its result when it ends", () => {
+		const running = { ...st("live"), promoting: { jobId: "j1" } };
+		const s = reconcilePromote(PROMOTE_IDLE, running);
+		assert.deepEqual(s, { phase: "running", jobId: "j1" });
+		const done = { ...st("live"), lastPromote: { jobId: "j1", at: "x", result: "finished" as const, consolidated: 3, contributions: 2 } };
+		assert.match(promoteLine(reconcilePromote(s, done)) ?? "", /3 consolidated, 2 contributed/);
+		assert.deepEqual(reconcilePromote(PROMOTE_IDLE, st("live")), PROMOTE_IDLE);
 	});
 	it("record falls back to the parent's when empty", () => {
 		const own = rec({ partOf: "p" });

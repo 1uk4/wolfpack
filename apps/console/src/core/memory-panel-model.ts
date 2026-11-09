@@ -8,7 +8,7 @@
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
 import "./legacy-storage-boot.ts";
-import type { MemoryEventFrame, MemoryPoolStatus, MemoryStatus, WorkRecordResponse } from "./kb.ts";
+import type { ConsolidateResponse, MemoryEventFrame, MemoryPoolStatus, MemoryStatus, WorkRecordResponse } from "./kb.ts";
 
 export const FEED_CAP = 100;
 export const MEMORY_PANEL_OPEN_KEY = "wolfpack.memory-panel.open.v1";
@@ -206,6 +206,21 @@ export function applyPromoteEvent(s: PromoteState, e: MemoryEventFrame): Promote
 	}
 }
 
+/**
+ * Fold the wolfd status into the local promote state: a job wolfd says is running shows as running (a page that
+ * mounted mid-run, no click needed); a running job that wolfd now reports as last promote shows its result.
+ */
+export function reconcilePromote(s: PromoteState, status: Pick<MemoryStatus, "promoting" | "lastPromote">): PromoteState {
+	if (status.promoting) return s.phase === "running" && s.jobId === status.promoting.jobId ? s : { phase: "running", jobId: status.promoting.jobId };
+	const last = status.lastPromote;
+	if (s.phase === "running" && last && last.jobId === s.jobId) {
+		return last.result === "finished"
+			? { phase: "finished", jobId: last.jobId, consolidated: last.consolidated ?? 0, contributions: last.contributions ?? 0, pending: 0 }
+			: { phase: "failed", jobId: last.jobId, message: last.message ?? "promote failed" };
+	}
+	return s;
+}
+
 /** The POST /promote answer → state ("already_running" adopts the job in flight). */
 export function promoteStartedState(r: { jobId: string }): PromoteState {
 	return { phase: "running", jobId: r.jobId };
@@ -310,17 +325,28 @@ export interface PoolObservation {
 	tokenCount: number;
 	work?: string;
 	feature?: string;
-	/** Pending because the Work API is unavailable (consolidation never sends tagged observations to the den). */
-	blocked?: "work-api-unavailable" | "consolidation-failed";
+	/** Pending because the Work API is unavailable, the write was refused, or the model failed (consolidation never sends tagged observations to the den). */
+	blocked?: BlockedCause;
+	/** The feature or work item whose pending entry blocks it. */
+	blockedKey?: string;
+	/** Cause forbidden: the wolf the blocking item is assigned to. */
+	assignee?: string;
 }
+
+export type BlockedCause = "work-api-unavailable" | "consolidation-failed" | "forbidden";
 
 /** One row of the grouped list: the den, or a work item (id = its key). */
 export interface ObservationGroup {
 	key: string;
 	kind: "den" | "work";
 	count: number;
-	/** Waiting for the Work API: some of the group's observations are blocked on it. */
-	blocked?: "work-api-unavailable" | "consolidation-failed";
+	/** Some of the group's observations are blocked, for this cause. */
+	blocked?: BlockedCause;
+	/** How many of them. */
+	blockedCount?: number;
+	/** The key that blocks them (the feature, when it is not the group's own key). */
+	blockedKey?: string;
+	assignee?: string;
 	/** Sort stamp of the group's newest observation. */
 	latest: string;
 }
@@ -349,11 +375,15 @@ export function groupObservations(obs: readonly PoolObservation[]): ObservationG
 	for (const o of obs) {
 		const key = groupKeyOf(o);
 		const g = groups.get(key);
-		if (!g) groups.set(key, { key, kind: key === DEN_GROUP ? "den" : "work", count: 1, latest: stampOf(o), ...(o.blocked ? { blocked: o.blocked } : {}) });
-		else {
-			if (o.blocked) g.blocked = o.blocked;
-			g.count++;
-			if (stampOf(o) > g.latest) g.latest = stampOf(o);
+		const g2 = g ?? { key, kind: key === DEN_GROUP ? ("den" as const) : ("work" as const), count: 0, latest: stampOf(o) };
+		if (!g) groups.set(key, g2);
+		g2.count++;
+		if (stampOf(o) > g2.latest) g2.latest = stampOf(o);
+		if (o.blocked) {
+			g2.blocked = o.blocked;
+			g2.blockedCount = (g2.blockedCount ?? 0) + 1;
+			if (o.blockedKey) g2.blockedKey = o.blockedKey;
+			if (o.assignee) g2.assignee = o.assignee;
 		}
 	}
 	const rows = [...groups.values()];
@@ -366,7 +396,26 @@ export const observationsInGroup = (obs: readonly PoolObservation[], key: string
 
 /** The note a blocked group shows. */
 export const BLOCKED_LABEL = "waiting for Work API";
-export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying" } as const;
+export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying", forbidden: "not allowed (another host)" } as const;
+
+/** What a blocked group shows: the cause, and the feature's Record when that (not the group's own item) is what blocks it. */
+export function blockedLabel(g: Pick<ObservationGroup, "key" | "blocked" | "blockedKey" | "assignee">, info: Readonly<Record<string, GroupInfo | undefined>>): string {
+	if (!g.blocked) return "";
+	const cause = g.blocked === "forbidden" && g.assignee ? `not allowed: assigned to ${g.assignee}` : BLOCKED_LABELS[g.blocked];
+	const via = g.blockedKey && g.blockedKey !== g.key ? ` \u00b7 waiting on ${info[g.blockedKey]?.title || g.blockedKey}'s Record` : "";
+	return cause + via;
+}
+
+/** The line after a manual Consolidate: counts, Records written, what is still pending, and when a backing-off group is retried. */
+export function consolidateMessage(r: Pick<ConsolidateResponse, "observationsProcessed" | "topicsCreated" | "topicsMerged" | "recordsWritten" | "observationsPending" | "retryAt">): string {
+	let m = `Consolidated ${r.observationsProcessed} observations \u2192 ${r.topicsCreated} new, ${r.topicsMerged} merged topics`;
+	if (r.recordsWritten) m += `, ${r.recordsWritten} Record${r.recordsWritten === 1 ? "" : "s"} written`;
+	if (r.observationsPending) {
+		m += `, ${r.observationsPending} still pending`;
+		if (r.retryAt) m += `, retrying at ${new Date(r.retryAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+	}
+	return m;
+}
 
 /** Pending observations older than this, or more than PENDING_WARN_COUNT of them, raise a warning in the panel. */
 export const PENDING_WARN_AGE_MS = 24 * 3_600_000;

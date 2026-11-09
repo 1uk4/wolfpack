@@ -36,14 +36,11 @@ import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import {
 	CURRENT_SETTINGS_VERSION,
-	type AgentSettings,
 	type AppearanceSettings,
-	type CompactionSettings,
 	type UserSettings,
 } from "@/src/core";
 import { useAppearance } from "./appearance.tsx";
 import { SettingsSection } from "./controls.tsx";
-import { AgentSection } from "./agent-section.tsx";
 import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
@@ -60,7 +57,6 @@ import { parseSettingsRoute, settingsTabHref } from "./settings-route.ts";
  *  real question users ask). */
 const SECTIONS = [
 	{ id: "keys", label: "Keys" },
-	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance", hidden: true },
 	{ id: "devices", label: "Devices" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device", hidden: true },
@@ -285,7 +281,7 @@ export function SettingsDialogBody({
 	 *  schema mistake caught by the validation surface). */
 	const write = useCallback(
 		async (
-			section: "agent" | "appearance" | "compaction",
+			section: "appearance",
 			body: object,
 		) => {
 			setError(null);
@@ -424,23 +420,6 @@ export function SettingsDialogBody({
 							{active === "keys" && (
 								<SettingsSection title="Keys" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
-								</SettingsSection>
-							)}
-							{active === "agent" && (
-								<SettingsSection
-									title="Agent"
-									testid="section-agent"
-								>
-									<AgentSection
-										agent={record.agent}
-										compaction={record.compaction}
-										onSectionChange={(next: AgentSettings) =>
-											void write("agent", next)
-										}
-										onCompactionChange={(next: CompactionSettings) =>
-											void write("compaction", next)
-										}
-									/>
 								</SettingsSection>
 							)}
 							{active === "appearance" && (

@@ -8,11 +8,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
-import {
-	PROMPT_IN_USE_HINT,
-	composePromptSwitch,
-	sectionedSegments,
-} from "../components/settings/agent-section.tsx";
 import { composeSlotModel } from "../components/model-slot.ts";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, visibleKeyGroups, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
@@ -172,11 +167,6 @@ describe("agent section compose helpers — the replace-whole PUT body", () => {
 		const after2 = composeSlotModel(prev, "strong", "zai", "glm-4.7-flash", "");
 		assert.deepEqual(after2.strong, { model: { provider: "zai", id: "glm-4.7-flash" } }, "thinking dropped, model kept");
 	});
-
-	it("composePromptSwitch: on = explicit true, off = key REMOVED (absent = off)", () => {
-		assert.deepEqual(composePromptSwitch({ prompts: { a: true } }, "b", true).prompts, { a: true, b: true });
-		assert.deepEqual(composePromptSwitch({ prompts: { a: true, b: true } }, "b", false).prompts, { a: true });
-	});
 });
 
 describe("nextOverrides — the rebind persistence map", () => {
@@ -324,21 +314,3 @@ describe("first-run gate — slotsConfigured + setupStage (model-slots wave)", (
 	});
 });
 
-describe("sectionedSegments — the prompts view", () => {
-	const view = {
-		assistant: [
-			{ path: "system-prompt.md", sourceText: "b", overrideText: null, enabled: false, shared: true },
-			{ path: "shared/10-style.md", sourceText: "s1", overrideText: "custom", enabled: true, shared: true },
-		],
-	};
-
-	it("one Assistant section holding every segment in assembly order", () => {
-		const sections = sectionedSegments(view);
-		assert.deepEqual(sections.map((s) => s.id), ["assistant"]);
-		assert.deepEqual(sections[0]!.segments.map((s) => s.path), ["system-prompt.md", "shared/10-style.md"]);
-	});
-
-	it("the indicator copy is pinned — it states WHICH VERSION IS IN USE (refined 2026-09-26)", () => {
-		assert.equal(PROMPT_IN_USE_HINT, "Your version is in use");
-	});
-});

@@ -11,7 +11,6 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentSection } from "../components/settings/agent-section.tsx";
 import { AppearanceSection } from "../components/settings/appearance-section.tsx";
 import { KeysSection } from "../components/settings/keys-section.tsx";
 import { KeyboardSection } from "../components/settings/keyboard-section.tsx";
@@ -28,9 +27,11 @@ function tagOf(html: string, testid: string): string {
 }
 
 describe("SettingsDialog hidden tabs", () => {
-	it("a deep link to a hidden tab lands on Keys", () => {
-		const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} initialSection="keyboard" />);
-		assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'));
+	it("a deep link to a hidden or removed tab lands on Keys", () => {
+		for (const section of ["keyboard", "agent"]) {
+			const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} initialSection={section as never} />);
+			assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'), section);
+		}
 	});
 });
 
@@ -51,11 +52,11 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		assert.ok(html.includes('role="dialog"'));
 		assert.ok(html.includes('aria-modal="true"'));
 		assert.ok(html.includes('aria-label="Close settings"'));
-		for (const id of ["keys", "agent", "devices"]) {
+		for (const id of ["keys", "devices"]) {
 			assert.ok(html.includes(`data-testid="settings-nav-${id}"`), id);
 		}
-		// Keyboard and Appearance are hidden for now (flag in SECTIONS).
-		for (const id of ["appearance", "keyboard"]) {
+		// Agent is gone; Keyboard and Appearance are hidden for now (flag in SECTIONS).
+		for (const id of ["agent", "appearance", "keyboard"]) {
 			assert.ok(!html.includes(`data-testid="settings-nav-${id}"`), id);
 		}
 		// Keys is the landing section; the others are not current.
@@ -67,28 +68,6 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		assert.ok(!html.includes('href="/settings"'));
 		// Removed (wolf Settings page owns models): no General/Auto-update section.
 		assert.ok(!html.includes("settings-nav-general") && !html.includes("Auto-update"));
-	});
-});
-
-describe("AgentSection (thin SSR)", () => {
-	it("has no model slot rows: Strong/Cheap/Vision and the Models group are gone", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
-		for (const slot of ["strong", "cheap", "vision"]) assert.ok(!html.includes(`data-testid="slot-row-${slot}"`), slot);
-		assert.ok(!html.includes('data-testid="group-models"'), "Models sub-group removed");
-		assert.ok(html.includes('data-testid="group-context"'), "Context sub-group");
-		assert.ok(html.includes('data-testid="group-prompts"'), "System prompts sub-group");
-	});
-
-	it("the retired Tools group renders nothing (no tool toggles, quiz mechanics, search engine)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
-		for (const id of ["group-tools", "search-engine-row", "graph-tools-row", "quiz-mechanics-row"]) {
-			assert.ok(!html.includes(`data-testid="${id}"`), id);
-		}
-	});
-
-	it("prompts show the loading state under SSR (effects never fire)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
-		assert.ok(html.includes("Loading prompt segments"));
 	});
 });
 

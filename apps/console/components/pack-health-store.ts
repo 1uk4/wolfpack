@@ -5,7 +5,7 @@
  * useSyncExternalStore; the first subscriber opens the connection (src/core/pack-health-connection.ts) and the last one to
  * leave closes it, so the desktop and phone sidebars share one stream. The modal's open state lives here too, so the modal
  * survives the phone list layer closing under it.
- *   dev: ?healthFixture=<name> / ?healthRestart=<status> load components/pack-health-fixtures.ts with a dynamic import, only
+ *   dev: ?healthFixture=<name> / ?healthRestart= / ?healthLogs= / ?healthRollback=<status> load components/pack-health-fixtures.ts with a dynamic import, only
  *        outside production, so the fixtures stay out of the production bundle.
  */
 import { createHealthConnection, type HealthConnectionDeps } from "@/src/core/pack-health-connection";
@@ -20,10 +20,13 @@ export interface PackHealthState {
 	updatedAt: number;
 	/** Dev only: answer restarts with this status instead of calling the server. */
 	fakeRestart: number | null;
+	/** Dev only: answer logs / rollbacks with this status instead of calling the server. */
+	fakeLogs: number | null;
+	fakeRollback: number | null;
 	modalOpen: boolean;
 }
 
-const INITIAL: PackHealthState = { snapshot: null, reachable: true, lastSeenAt: null, updatedAt: 0, fakeRestart: null, modalOpen: false };
+const INITIAL: PackHealthState = { snapshot: null, reachable: true, lastSeenAt: null, updatedAt: 0, fakeRestart: null, fakeLogs: null, fakeRollback: null, modalOpen: false };
 let state = INITIAL;
 const listeners = new Set<() => void>();
 let stopSource: (() => void) | null = null;
@@ -53,13 +56,13 @@ function startLive(): () => void {
 function startSource(): () => void {
 	if (typeof window === "undefined") return () => {};
 	const search = window.location?.search ?? ""; // location is absent in the DOM test shims
-	if (process.env.NODE_ENV === "production" || !/[?&]health(Fixture|Restart)=/.test(search)) return startLive();
+	if (process.env.NODE_ENV === "production" || !/[?&]health(Fixture|Restart|Logs|Rollback)=/.test(search)) return startLive();
 	let stopped = false;
 	let stop = () => {};
 	void import("@/components/pack-health-fixtures").then(({ fixtureFromUrl, fixtureSnapshot }) => {
 		if (stopped) return;
-		const { fixture, restartStatus } = fixtureFromUrl(search);
-		set({ fakeRestart: restartStatus });
+		const { fixture, restartStatus, logsStatus, rollbackStatus } = fixtureFromUrl(search);
+		set({ fakeRestart: restartStatus, fakeLogs: logsStatus, fakeRollback: rollbackStatus });
 		if (!fixture) return void (stop = startLive());
 		const apply = () => {
 			const t = Date.now();

@@ -6,6 +6,11 @@
  *   GET  /api/health/stream   SSE: the snapshot now and after every probe round (`data: <HealthSnapshot>`), `: ping` every 25 s
  *   POST /api/health/restart  {service: "hubd" | "workerd" | "wolfd@<name>"}; needs `Authorization: Bearer <device token>`.
  *                             202 {ok, service, at} | 400 invalid_request | 401 unauthorized | 429 rate_limited (+Retry-After) | 502 failed
+ *   GET  /api/health/logs     ?service=<restartable id>&lines=<1..200, default 100>; same auth (work-wolfpack-yM3uTlj, pack-actions.ts).
+ *                             200 {ok, service, lines, truncated} | 400 invalid_request | 401 | 429 | 501 unsupported (no journalctl)
+ *                             | 502 journal_denied (console user not in systemd-journal) | 502 failed
+ *   POST /api/health/rollback {service: "hubd" | "workerd" | "console"}; same auth; one per service per 10 min. Owner-initiated only.
+ *                             202 {ok, service, at, to} | 400 | 401 | 409 no_previous / previous_is_newer | 429 (+Retry-After) | 502 failed
  *
  * RESTART AUTH. The hub decides whenever it can: every attempt first checks the bearer LIVE, whatever the monitor currently thinks
  * of hubd, with the cheap authenticated call the console's hub client already makes (GET <hub>/v1/wolves: hubTarget().wolvesUrl,
@@ -24,6 +29,7 @@
  */
 import { bearerOf } from "../core/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
+import { createLogReader, createReleaseReader, createRollbacker, type LogReader, type ReleaseReader, type Rollbacker } from "./pack-actions.ts";
 import { sessionWitness, type SessionWitness } from "./session-witness.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -54,6 +60,8 @@ export function hubTokenCheck(wolvesUrl: string | undefined, o: { timeoutMs?: nu
 export interface HealthApiDeps {
 	health: PackHealth;
 	restarter: Restarter;
+	logs: LogReader;
+	rollbacker: Rollbacker;
 	witness: SessionWitness;
 	/** Live bearer check against the hub, tried first on every restart (see RESTART AUTH). */
 	checkToken: HubTokenCheck;
@@ -93,6 +101,28 @@ export function createHealthApi(d: HealthApiDeps) {
 		}
 		return d.witness.isRecent(token) ? { ok: true } : { ok: false };
 	};
+
+	/** The shared gate of every action: the bearer header, checked as in RESTART AUTH. Returns who asked, or the error response. */
+	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback"): Promise<string | Response> => {
+		const token = bearerOf(req.headers.get("authorization"));
+		const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
+		if (!auth.ok && auth.busy !== undefined) {
+			return Response.json({ error: `too many ${what} attempts right now; try again shortly`, code: "rate_limited" }, { status: 429, headers: { ...NO_STORE, "Retry-After": String(auth.busy) } });
+		}
+		if (!token || !auth.ok) {
+			return Response.json({ error: "sign in on this device first (no recently verified device token)", code: "unauthorized" }, { status: 401, headers: NO_STORE });
+		}
+		return `device ${d.witness.fingerprint(token)}`;
+	};
+	const serviceOf = async (req: Request): Promise<unknown | Response> => {
+		try {
+			return ((await req.json()) as { service?: unknown } | null)?.service;
+		} catch {
+			return Response.json({ error: "body must be JSON {service}", code: "invalid_request" }, { status: 400, headers: NO_STORE });
+		}
+	};
+	const failure = (out: { message: string; code: string; service: string; retryAfterS?: number }, status: number): Response =>
+		Response.json({ error: out.message, code: out.code, service: out.service }, { status, headers: { ...NO_STORE, ...(out.retryAfterS ? { "Retry-After": String(out.retryAfterS) } : {}) } });
 
 	return {
 		/** The current snapshot; before the first round has finished, waits for it so the first answer is real. */
@@ -139,38 +169,59 @@ export function createHealthApi(d: HealthApiDeps) {
 		},
 
 		async restart(req: Request): Promise<Response> {
-			const token = bearerOf(req.headers.get("authorization"));
-			const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
-			if (!auth.ok && auth.busy !== undefined) {
-				return Response.json({ error: "too many restart attempts right now; try again shortly", code: "rate_limited" }, { status: 429, headers: { ...NO_STORE, "Retry-After": String(auth.busy) } });
-			}
-			if (!token || !auth.ok) {
-				return Response.json({ error: "sign in on this device first (no recently verified device token)", code: "unauthorized" }, { status: 401, headers: NO_STORE });
-			}
-			let service: unknown;
-			try {
-				service = ((await req.json()) as { service?: unknown } | null)?.service;
-			} catch {
-				return Response.json({ error: "body must be JSON {service}", code: "invalid_request" }, { status: 400, headers: NO_STORE });
-			}
-			const out = await d.restarter.restart(service, `device ${d.witness.fingerprint(token)}`);
+			const gate = await gateOf(req, "restart");
+			if (gate instanceof Response) return gate;
+			const service = await serviceOf(req);
+			if (service instanceof Response) return service;
+			const out = await d.restarter.restart(service, gate);
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
-			const status = out.code === "invalid_request" ? 400 : out.code === "rate_limited" ? 429 : 502;
-			return Response.json({ error: out.message, code: out.code, service: out.service }, { status, headers: { ...NO_STORE, ...(out.retryAfterS ? { "Retry-After": String(out.retryAfterS) } : {}) } });
+			return failure(out, out.code === "invalid_request" ? 400 : out.code === "rate_limited" ? 429 : 502);
+		},
+
+		/** GET /api/health/logs?service=<id>&lines=<n>: the unit's recent journal, redacted (pack-actions.ts). Same auth as restart. */
+		async logs(req: Request): Promise<Response> {
+			const gate = await gateOf(req, "log read");
+			if (gate instanceof Response) return gate;
+			const q = new URL(req.url).searchParams;
+			const out = await d.logs.read(q.get("service"), q.get("lines"), gate);
+			if (out.ok) return Response.json(out, { headers: NO_STORE });
+			const status = { invalid_request: 400, rate_limited: 429, unsupported: 501, journal_denied: 502, too_large: 502, failed: 502 }[out.code];
+			return failure(out, status);
+		},
+
+		/** POST /api/health/rollback {service}: start the root oneshot wolfpack-rollback@<service> (pack-actions.ts). Same auth as restart. */
+		async rollback(req: Request): Promise<Response> {
+			const gate = await gateOf(req, "rollback");
+			if (gate instanceof Response) return gate;
+			const service = await serviceOf(req);
+			if (service instanceof Response) return service;
+			const out = await d.rollbacker.rollback(service, gate);
+			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
+			return failure(out, { invalid_request: 400, no_previous: 409, previous_is_newer: 409, rate_limited: 429, failed: 502 }[out.code]);
 		},
 	};
 }
 
 const KEY = Symbol.for("wolfpack.console.packHealth");
 const MONITOR = Symbol.for("wolfpack.console.packHealthMonitor");
-type Holder = { [KEY]?: ReturnType<typeof createHealthApi>; [MONITOR]?: PackHealth };
+const RELEASES = Symbol.for("wolfpack.console.packHealthReleases");
+type Holder = { [KEY]?: ReturnType<typeof createHealthApi>; [MONITOR]?: PackHealth; [RELEASES]?: ReleaseReader };
+
+/** The process-wide rollback-target reader: the monitor's snapshot `actions` and the rollbacker read the same one. */
+const releaseReader = (): ReleaseReader => ((globalThis as Holder)[RELEASES] ??= createReleaseReader());
+const SYSTEMD = process.platform === "linux";
 
 /** The process-wide monitor (started on first use; probes every WOLFPACK_HEALTH_INTERVAL_MS, default 5000). The API and the client's direct route share it. */
 export function packHealth(env: Record<string, string | undefined> = process.env): PackHealth {
 	const h = globalThis as Holder;
 	if (!h[MONITOR]) {
 		const interval = Number(env.WOLFPACK_HEALTH_INTERVAL_MS);
-		h[MONITOR] = createPackHealth({ targets: healthTargets(env), ...(interval >= 1000 ? { intervalMs: interval } : {}) });
+		const releases = releaseReader();
+		h[MONITOR] = createPackHealth({
+			targets: healthTargets(env),
+			...(interval >= 1000 ? { intervalMs: interval } : {}),
+			actions: () => ({ systemd: SYSTEMD, rollback: SYSTEMD ? releases() : [] }),
+		});
 		h[MONITOR].start();
 	}
 	return h[MONITOR];
@@ -181,7 +232,14 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 	const h = globalThis as Holder;
 	if (!h[KEY]) {
 		const health = packHealth(env);
-		h[KEY] = createHealthApi({ health, restarter: createRestarter({ health }), witness: sessionWitness(env), checkToken: hubTokenCheck(hubTarget(env).wolvesUrl) });
+		h[KEY] = createHealthApi({
+			health,
+			restarter: createRestarter({ health }),
+			logs: createLogReader({ health }),
+			rollbacker: createRollbacker({ releases: releaseReader() }),
+			witness: sessionWitness(env),
+			checkToken: hubTokenCheck(hubTarget(env).wolvesUrl),
+		});
 	}
 	return h[KEY];
 }

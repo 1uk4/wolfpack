@@ -122,12 +122,21 @@ export interface LinkSnapshot {
 	restartable: boolean;
 }
 
+/** What the modal may offer besides restart (work-wolfpack-yM3uTlj; pack-actions.ts). */
+export interface HealthActions {
+	/** The console runs under systemd (journal logs, rollback units). False on the Mac: the modal shows copyable stack commands instead. */
+	systemd: boolean;
+	/** Services with a kept previous release: what a rollback goes back to. */
+	rollback: { service: string; from: string | null; to: string | null; last?: { result: string; exitStatus: number | null; at: string | null } | null }[];
+}
+
 export interface HealthSnapshot {
 	checkedAt: string | null;
 	intervalMs: number;
 	/** Where the console's client goes right now (see DIRECT PATH). */
 	route: Route;
 	links: LinkSnapshot[];
+	actions: HealthActions;
 }
 
 export interface HealthTargets {
@@ -321,6 +330,8 @@ export interface PackHealthOptions {
 	fetch?: typeof fetch;
 	/** Where raw probe errors go (server log only). Default console.warn. */
 	log?: (m: string) => void;
+	/** The service actions to advertise (default: no systemd, nothing to roll back). */
+	actions?: () => HealthActions;
 }
 
 export interface PackHealth {
@@ -411,10 +422,17 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 
 	const snapshot = (): HealthSnapshot => {
 		const can = restartable();
+		let actions: HealthActions = { systemd: false, rollback: [] };
+		try {
+			if (o.actions) actions = o.actions();
+		} catch {
+			/* the snapshot never fails over its extras */
+		}
 		return {
 			checkedAt,
 			intervalMs,
 			route,
+			actions,
 			links: [...links.values()].map((l) => ({
 				id: l.id,
 				kind: l.kind,
@@ -568,14 +586,19 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 
 // ─── Restart ───────────────────────────────────────────────────────────────
 
-/** Runs one argv (no shell). Resolves with the exit code; never rejects. */
-export type CommandRunner = (file: string, args: string[]) => Promise<{ code: number; stderr: string }>;
+/**
+ * Runs one argv (no shell). Resolves with the exit code (127 when the program is missing); never rejects. `overflow`: the output passed
+ * maxBuffer (4 MiB) and the program was stopped, so stdout is cut short.
+ */
+export type CommandRunner = (file: string, args: string[]) => Promise<{ code: number; stderr: string; stdout?: string; overflow?: boolean }>;
 
 export const execRunner: CommandRunner = (file, args) =>
 	new Promise((resolve) => {
-		execFile(file, args, { timeout: 15_000, shell: false }, (err, _stdout, stderr) => {
-			const code = err ? (typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : 1) : 0;
-			resolve({ code, stderr: String(stderr ?? "").slice(0, 500) });
+		execFile(file, args, { timeout: 15_000, shell: false, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+			const c = (err as { code?: unknown } | null)?.code;
+			const code = err ? (typeof c === "number" ? c : c === "ENOENT" ? 127 : 1) : 0;
+			const overflow = c === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+			resolve({ code, stderr: String(stderr ?? "").slice(0, 2000), stdout: String(stdout ?? ""), ...(overflow ? { overflow } : {}) });
 		});
 	});
 

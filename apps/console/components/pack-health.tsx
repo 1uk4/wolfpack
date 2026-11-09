@@ -8,7 +8,10 @@
  *          the desktop and phone sidebars share one stream.
  *   modal: rendered once by <PackHealthHost/> (in the app shell), its open state in the store, so closing the phone list
  *          layer under it doesn't unmount it.
- *   dev:   ?healthFixture=<name> and ?healthRestart=<status> (components/pack-health-fixtures.ts; not in production).
+ *   actions (work-wolfpack-yM3uTlj): per row Restart, Logs (inline panel: refresh, copy) and Roll back (hubd, the workerd link unit; the
+ *          console itself in its own row), all through this console server (/api/health/{restart,logs,rollback}), never a wolf. Off systemd
+ *          (the Mac stack) a row shows copyable `pnpm stack` commands instead.
+ *   dev:   ?healthFixture=<name>, ?healthRestart= / ?healthLogs= / ?healthRollback=<status> (components/pack-health-fixtures.ts; not in production).
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -33,12 +36,20 @@ import {
 	historySummary,
 	isBack,
 	linkName,
+	logsOutcome,
 	packSummary,
 	restartOutcome,
+	rollbackFinished,
+	rollbackOffered,
+	rollbackOutcome,
+	rollbackQuestion,
+	rowActions,
 	statusWord,
 	toneOf,
+	type HealthActionsView,
 	type HealthLink,
 	type HealthSnapshotView,
+	type RestartOutcome,
 	type Tone,
 } from "@/src/core/pack-health-view";
 
@@ -189,13 +200,14 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 								<h3 className="mb-1.5 text-xs uppercase tracking-widest text-muted-foreground/70">{g.title}</h3>
 								<div className="flex flex-col gap-1.5">
 									{rows.map((l) => (
-										<LinkRow key={l.id} link={l} now={now} canRestart={reachable} fakeRestart={health.fakeRestart} />
+										<LinkRow key={l.id} link={l} now={now} canRestart={reachable} actions={snapshot.actions} fakes={health} />
 									))}
 								</div>
 							</section>
 						);
 					})
 				)}
+				{snapshot?.actions?.rollback.some((r) => r.service === "console") && <ConsoleRow actions={snapshot.actions} canAct={reachable} fakes={health} />}
 				<PackMap />
 				{snapshot?.checkedAt && <p className="mt-3 text-muted-foreground/70">Checked {ageText(now - Date.parse(snapshot.checkedAt))} · every {Math.round(snapshot.intervalMs / 1000)} s</p>}
 			</div>
@@ -212,52 +224,95 @@ function durationText(s: number): string {
 	return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-type RestartUi = { phase: "idle" } | { phase: "confirm" } | { phase: "sending" } | { phase: "issued"; at: number } | { phase: "wait"; until: number } | { phase: "error"; message: string };
+type ActionUi = { phase: "idle" } | { phase: "confirm" } | { phase: "sending" } | { phase: "issued"; at: number } | { phase: "wait"; until: number } | { phase: "error"; message: string };
+type Fakes = Pick<PackHealthState, "fakeRestart" | "fakeLogs" | "fakeRollback">;
 
-function LinkRow({ link, now, canRestart, fakeRestart }: { link: HealthLink; now: number; canRestart: boolean; fakeRestart: number | null }) {
-	const [ui, setUi] = useState<RestartUi>({ phase: "idle" });
+/** Clipboard with a fallback for contexts without the async clipboard API. */
+async function copyText(text: string): Promise<boolean> {
+	try {
+		await navigator.clipboard.writeText(text);
+		return true;
+	} catch {
+		try {
+			const ta = document.createElement("textarea");
+			ta.value = text;
+			ta.style.position = "fixed";
+			ta.style.opacity = "0";
+			document.body.appendChild(ta);
+			ta.select();
+			const ok = document.execCommand("copy");
+			ta.remove();
+			return ok;
+		} catch {
+			return false;
+		}
+	}
+}
+
+/**
+ * One confirmable POST action (restart or roll back): confirm, send, then "sent", a 429 countdown, or an error line. `fake` answers with a
+ * status instead of calling the server (dev fixtures).
+ */
+function useAction(url: string, service: string, outcome: (status: number, retryAfter: string | null, body?: unknown) => RestartOutcome, fake: number | null) {
+	const [ui, setUi] = useState<ActionUi>({ phase: "idle" });
 	const [tick, setTick] = useState(0);
-	const back = isBack(link, now);
-	const tone = toneOf(link.status);
-	const word = back ? "back" : statusWord(link.status);
-	const err = link.status === "ok" ? null : errorText(link.error);
-	const story = historySummary(link.history, 5);
 	const waitS = ui.phase === "wait" ? Math.max(0, Math.ceil((ui.until - Date.now()) / 1000)) : 0;
-
-	// The 429 countdown ticks every second, then the button comes back.
 	useEffect(() => {
 		if (ui.phase !== "wait") return;
 		if (waitS <= 0) return setUi({ phase: "idle" });
 		const t = setTimeout(() => setTick((n) => n + 1), 1000);
 		return () => clearTimeout(t);
 	}, [ui, waitS, tick]);
-	// "Restart sent" gives way once the monitor reports the row as restarting (or after 15 s).
-	useEffect(() => {
-		if (ui.phase === "issued" && (link.status === "restarting" || now - ui.at > 15_000)) setUi({ phase: "idle" });
-	}, [ui, link.status, now]);
-
-	const restart = useCallback(async () => {
+	const send = useCallback(async () => {
 		setUi({ phase: "sending" });
 		let status = 0;
 		let retry: string | null = null;
-		if (fakeRestart !== null) {
-			status = fakeRestart;
-			retry = fakeRestart === 429 ? "8" : null;
+		let body: unknown = null;
+		if (fake !== null) {
+			status = fake;
+			retry = fake === 429 ? "8" : null;
 		} else {
 			try {
 				// The hub-auth fetch wrapper (components/hub-auth.tsx) adds the device bearer to every /api/ call.
-				const r = await fetch("/api/health/restart", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service: link.id }) });
+				const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service }) });
 				status = r.status;
 				retry = r.headers.get("Retry-After");
+				if (status !== 202) body = await r.json().catch(() => null);
 			} catch {
 				status = 0;
 			}
 		}
-		const out = restartOutcome(status, retry);
+		const out = outcome(status, retry, body);
 		if (out.kind === "issued") setUi({ phase: "issued", at: Date.now() });
 		else if (out.kind === "wait") setUi({ phase: "wait", until: Date.now() + out.retryS * 1000 });
 		else setUi({ phase: "error", message: out.message });
-	}, [fakeRestart, link.id]);
+	}, [fake, url, service, outcome]);
+	return { ui, setUi, waitS, send };
+}
+
+const BTN = "rounded-sm px-2.5 py-1 text-xs transition-colors max-md:px-3 max-md:py-2";
+const QUIET_BTN = cn(BTN, "border text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50");
+
+function LinkRow({ link, now, canRestart, actions, fakes }: { link: HealthLink; now: number; canRestart: boolean; actions: HealthActionsView | undefined; fakes: Fakes }) {
+	const restart = useAction("/api/health/restart", link.id, restartOutcome, fakes.fakeRestart);
+	const can = rowActions(link, actions);
+	const rollback = useAction("/api/health/rollback", can.rollback?.service ?? "", rollbackOutcome, fakes.fakeRollback);
+	const [logsOpen, setLogsOpen] = useState(false);
+	const back = isBack(link, now);
+	const tone = toneOf(link.status);
+	const word = back ? "back" : statusWord(link.status);
+	const err = link.status === "ok" ? null : errorText(link.error);
+	const story = historySummary(link.history, 5);
+	const { ui, setUi } = restart;
+
+	// "Restart sent" gives way once the monitor reports the row as restarting (or after 15 s).
+	useEffect(() => {
+		if (ui.phase === "issued" && (link.status === "restarting" || now - ui.at > 15_000)) setUi({ phase: "idle" });
+	}, [ui, link.status, now, setUi]);
+	const rbUi = rollback.ui;
+	const rbSetUi = rollback.setUi;
+	const rbInfo = can.rollback ? actions?.rollback.find((r) => r.service === can.rollback!.service) : undefined;
+	useRollbackProgress(rollback, rbInfo?.last, link.version, now);
 
 	const stats = [
 		link.responseMs !== null ? `${link.responseMs} ms` : null,
@@ -266,6 +321,7 @@ function LinkRow({ link, now, canRestart, fakeRestart }: { link: HealthLink; now
 		link.uptimeS !== null ? `up ${durationText(link.uptimeS)}` : null,
 		link.via ? `via ${link.via}` : null,
 	].filter(Boolean);
+	const busy = ui.phase !== "idle" || rbUi.phase !== "idle";
 
 	return (
 		<div data-testid="pack-health-row" data-link={link.id} data-status={link.status} className="rounded-lg border bg-card px-3 py-2">
@@ -277,8 +333,30 @@ function LinkRow({ link, now, canRestart, fakeRestart }: { link: HealthLink; now
 					{link.status === "restarting" && <BrailleSpinner className="h-[1.25em] text-current" label="restarting" />}
 					{word}
 				</span>
-				<span className="ml-auto flex items-center gap-2">
-					{link.restartable && <RestartControl ui={ui} waitS={waitS} disabled={!canRestart || link.status === "restarting"} onAsk={() => setUi({ phase: "confirm" })} onCancel={() => setUi({ phase: "idle" })} onConfirm={() => void restart()} name={linkName(link)} />}
+				<span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+					{ui.phase !== "idle" ? (
+						<ActionControl verb="Restart" sentText="Restart sent" testId="pack-health-restart" ui={ui} waitS={restart.waitS} disabled={false} question={`Restart ${linkName(link)}?`} onAsk={() => setUi({ phase: "confirm" })} onCancel={() => setUi({ phase: "idle" })} onConfirm={() => void restart.send()} />
+					) : rbUi.phase !== "idle" ? (
+						<ActionControl verb="Roll back" sentText="Rollback started" testId="pack-health-rollback" ui={rbUi} waitS={rollback.waitS} disabled={false} question={`${rollbackQuestion(linkName(link), rbInfo?.from ?? null, can.rollback?.to ?? null)}${link.id === "workerd" ? " Only the link unit: workerd-wolves keeps its own release." : ""}`} onAsk={() => rbSetUi({ phase: "confirm" })} onCancel={() => rbSetUi({ phase: "idle" })} onConfirm={() => void rollback.send()} />
+					) : (
+						<>
+							{can.logs && (
+								<button type="button" data-testid="pack-health-logs" aria-expanded={logsOpen} onClick={() => setLogsOpen((o) => !o)} className={QUIET_BTN}>
+									Logs
+								</button>
+							)}
+							{can.rollback && (
+								<button type="button" data-testid="pack-health-rollback" disabled={!canRestart || busy} onClick={() => rbSetUi({ phase: "confirm" })} className={QUIET_BTN}>
+									Roll back
+								</button>
+							)}
+							{link.restartable && (
+								<button type="button" data-testid="pack-health-restart" disabled={!canRestart || link.status === "restarting"} onClick={() => setUi({ phase: "confirm" })} className={QUIET_BTN}>
+									Restart
+								</button>
+							)}
+						</>
+					)}
 				</span>
 			</div>
 			{err && <p className="mt-1 text-muted-foreground">{err}</p>}
@@ -290,27 +368,185 @@ function LinkRow({ link, now, canRestart, fakeRestart }: { link: HealthLink; now
 			</p>
 			{story && <p data-testid="pack-health-history" className="mt-1 break-words text-muted-foreground/70">{story}</p>}
 			{ui.phase === "error" && <p data-testid="pack-health-restart-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
+			{rbUi.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rbUi.message}</p>}
+			{can.macCommands && <MacCommands commands={can.macCommands} />}
+			{logsOpen && <LogsPanel service={link.id} fake={fakes.fakeLogs} canFetch={canRestart} />}
 		</div>
 	);
 }
 
-function RestartControl({ ui, waitS, disabled, name, onAsk, onCancel, onConfirm }: { ui: RestartUi; waitS: number; disabled: boolean; name: string; onAsk: () => void; onCancel: () => void; onConfirm: () => void }) {
-	const btn = "rounded-sm px-2.5 py-1 text-xs transition-colors max-md:px-3 max-md:py-2";
+type RollbackLastView = NonNullable<HealthActionsView["rollback"][number]["last"]>;
+
+/**
+ * "Rollback started" until the rollback unit reports a run newer than the one seen at send (actions.rollback[svc].last). A failed run
+ * turns into its error line (exit code in words, see Logs). A finished run clears once the running version changes (full string, so a
+ * build-only rollback counts), or 2 min after it finished. Nothing reported at all: cleared after 5 min.
+ */
+function useRollbackProgress(rollback: ReturnType<typeof useAction>, last: RollbackLastView | null | undefined, version: string | null, now: number) {
+	const { ui, setUi } = rollback;
+	const [sent, setSent] = useState<{ after: string | null; version: string | null; doneAt: number | null } | null>(null);
+	useEffect(() => {
+		if (ui.phase !== "issued") {
+			if (sent) setSent(null);
+			return;
+		}
+		if (!sent) return void setSent({ after: last?.at ?? null, version, doneAt: null });
+		const done = rollbackFinished(last, sent.after);
+		if (done && !done.ok) return void setUi({ phase: "error", message: done.message });
+		if (done?.ok && sent.doneAt === null) return void setSent({ ...sent, doneAt: now });
+		const moved = version !== null && version !== sent.version;
+		if ((sent.doneAt !== null && (moved || now - sent.doneAt > 120_000)) || now - ui.at > 300_000) setUi({ phase: "idle" });
+	}, [ui, sent, last, version, now, setUi]);
+}
+
+/** The console's own row (it is not a probed link): only roll back, since it is the thing serving this page. */
+function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView; canAct: boolean; fakes: Fakes }) {
+	const rb = actions.rollback.find((r) => r.service === "console");
+	const rollback = useAction("/api/health/rollback", "console", rollbackOutcome, fakes.fakeRollback);
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (rollback.ui.phase !== "issued") return;
+		const t = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(t);
+	}, [rollback.ui.phase]);
+	useRollbackProgress(rollback, rb?.last, rb?.from ?? null, now);
+	if (!rb) return null;
+	// A console row whose kept previous release is newer (it was just rolled back) has nothing to offer; a running rollback still shows.
+	if (!rollbackOffered(rb) && rollback.ui.phase === "idle") return null;
+	return (
+		<section className="mb-4">
+			<h3 className="mb-1.5 text-xs uppercase tracking-widest text-muted-foreground/70">This console</h3>
+			<div data-testid="pack-health-row" data-link="console" className="rounded-lg border bg-card px-3 py-2">
+				<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+					<span className="font-medium text-foreground">Console</span>
+					{rb.from && <span className="text-muted-foreground/80">v{rb.from}</span>}
+					<span className="ml-auto flex items-center gap-1.5">
+						<ActionControl
+							verb="Roll back"
+							sentText="Rollback started; this page reconnects when the console is back"
+							testId="pack-health-rollback"
+							ui={rollback.ui}
+							waitS={rollback.waitS}
+							disabled={!canAct}
+							question={rollbackQuestion("the console", rb.from, rb.to)}
+							onAsk={() => rollback.setUi({ phase: "confirm" })}
+							onCancel={() => rollback.setUi({ phase: "idle" })}
+							onConfirm={() => void rollback.send()}
+						/>
+					</span>
+				</div>
+				{rollback.ui.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rollback.ui.message}</p>}
+			</div>
+		</section>
+	);
+}
+
+function ActionControl(p: { verb: string; sentText: string; testId: string; ui: ActionUi; waitS: number; disabled: boolean; question: string; onAsk: () => void; onCancel: () => void; onConfirm: () => void }) {
+	const { ui } = p;
 	if (ui.phase === "confirm")
 		return (
-			<span className="flex items-center gap-1" data-testid="pack-health-confirm">
-				<span className="text-muted-foreground">Restart {name}?</span>
-				<button type="button" onClick={onCancel} className={cn(btn, "text-muted-foreground hover:text-foreground")}>Cancel</button>
-				<button type="button" data-testid="pack-health-restart-confirm" onClick={onConfirm} className={cn(btn, "border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20")}>Restart</button>
+			<span className="flex flex-wrap items-center justify-end gap-1" data-testid="pack-health-confirm">
+				<span className="text-muted-foreground">{p.question}</span>
+				<button type="button" onClick={p.onCancel} className={cn(BTN, "text-muted-foreground hover:text-foreground")}>Cancel</button>
+				<button type="button" data-testid={`${p.testId}-confirm`} onClick={p.onConfirm} className={cn(BTN, "border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20")}>{p.verb}</button>
 			</span>
 		);
-	if (ui.phase === "sending") return <BrailleSpinner className="h-[1.25em]" label="Sending restart" />;
-	if (ui.phase === "issued") return <span className="text-muted-foreground">Restart sent</span>;
-	if (ui.phase === "wait") return <span data-testid="pack-health-wait" className="text-amber-600 dark:text-amber-400">Too many tries · retry in {waitS}s</span>;
+	if (ui.phase === "sending") return <BrailleSpinner className="h-[1.25em]" label={`Sending ${p.verb.toLowerCase()}`} />;
+	if (ui.phase === "issued") return <span className="text-muted-foreground">{p.sentText}</span>;
+	if (ui.phase === "wait") return <span data-testid="pack-health-wait" className="text-amber-600 dark:text-amber-400">Too many tries · retry in {p.waitS >= 120 ? `${Math.ceil(p.waitS / 60)} min` : `${p.waitS}s`}</span>;
 	return (
-		<button type="button" data-testid="pack-health-restart" disabled={disabled} onClick={onAsk} className={cn(btn, "border text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50")}>
-			Restart
+		<button type="button" data-testid={p.testId} disabled={p.disabled} onClick={p.onAsk} className={QUIET_BTN}>
+			{p.verb}
 		</button>
+	);
+}
+
+type LogsUi = { phase: "loading" } | { phase: "lines"; lines: string[]; truncated: boolean; at: number } | { phase: "wait"; retryS: number } | { phase: "error"; message: string };
+
+/** The unit's recent journal (GET /api/health/logs), redacted server-side. Refresh and copy; wraps instead of scrolling sideways. */
+function LogsPanel({ service, fake, canFetch }: { service: string; fake: number | null; canFetch: boolean }) {
+	const [ui, setUi] = useState<LogsUi>({ phase: "loading" });
+	const [copied, setCopied] = useState<boolean | null>(null);
+	const box = useRef<HTMLPreElement>(null);
+	const load = useCallback(async () => {
+		setUi({ phase: "loading" });
+		setCopied(null);
+		let status = 0;
+		let body: unknown = null;
+		let retry: string | null = null;
+		if (fake !== null) {
+			status = fake;
+			const { fixtureLogs } = await import("@/components/pack-health-fixtures");
+			body = fake === 200 ? fixtureLogs(service, Date.now()) : { code: fake === 501 ? "unsupported" : fake === 502 ? "journal_denied" : "failed" };
+			retry = fake === 429 ? "3" : null;
+		} else {
+			try {
+				const r = await fetch(`/api/health/logs?service=${encodeURIComponent(service)}&lines=100`, { cache: "no-store" });
+				status = r.status;
+				retry = r.headers.get("Retry-After");
+				body = await r.json().catch(() => null);
+			} catch {
+				status = 0;
+			}
+		}
+		const out = logsOutcome(status, body, retry);
+		if (out.kind === "lines") setUi({ phase: "lines", lines: out.lines, truncated: out.truncated, at: Date.now() });
+		else if (out.kind === "wait") setUi({ phase: "wait", retryS: out.retryS });
+		else setUi({ phase: "error", message: out.message });
+	}, [service, fake]);
+	useEffect(() => {
+		if (canFetch) void load();
+		else setUi({ phase: "error", message: "Console unreachable; logs not loaded" });
+	}, [load, canFetch]);
+	useEffect(() => {
+		if (ui.phase === "lines" && box.current) box.current.scrollTop = box.current.scrollHeight; // newest at the bottom, in view
+	}, [ui]);
+	return (
+		<div data-testid="pack-health-logs-panel" className="mt-2 rounded-md border bg-muted/40">
+			<div className="flex flex-wrap items-center gap-2 border-b px-2 py-1">
+				<span className="text-muted-foreground">
+					Recent logs{ui.phase === "lines" ? ` · ${ui.lines.length} lines${ui.truncated ? " (newest)" : ""}` : ""}
+				</span>
+				<span className="ml-auto flex items-center gap-1.5">
+					{copied !== null && <span className="text-muted-foreground">{copied ? "Copied" : "Copy failed"}</span>}
+					<button type="button" data-testid="pack-health-logs-copy" disabled={ui.phase !== "lines"} onClick={() => ui.phase === "lines" && void copyText(ui.lines.join("\n")).then(setCopied)} className={QUIET_BTN}>
+						Copy
+					</button>
+					<button type="button" data-testid="pack-health-logs-refresh" disabled={ui.phase === "loading" || !canFetch} onClick={() => void load()} className={QUIET_BTN}>
+						Refresh
+					</button>
+				</span>
+			</div>
+			{ui.phase === "loading" && <div className="px-2 py-2"><BrailleSpinner className="h-[1.25em]" label="Loading logs" /></div>}
+			{ui.phase === "wait" && <p className="px-2 py-2 text-amber-600 dark:text-amber-400">Busy · try again in {ui.retryS}s</p>}
+			{ui.phase === "error" && <p data-testid="pack-health-logs-error" className="px-2 py-2 text-red-600 dark:text-red-400">{ui.message}</p>}
+			{ui.phase === "lines" &&
+				(ui.lines.length === 0 ? (
+					<p className="px-2 py-2 text-muted-foreground">No journal entries.</p>
+				) : (
+					<pre ref={box} className="max-h-72 overflow-y-auto whitespace-pre-wrap break-all px-2 py-1.5 font-mono text-[11px] leading-snug text-foreground/90">
+						{ui.lines.join("\n")}
+					</pre>
+				))}
+		</div>
+	);
+}
+
+/** Off systemd (the Mac live stack): no restart path from here, just the commands to run by hand, copyable. */
+function MacCommands({ commands }: { commands: string[] }) {
+	const [copied, setCopied] = useState<string | null>(null);
+	return (
+		<div data-testid="pack-health-mac" className="mt-1.5 flex flex-col gap-1">
+			<span className="text-muted-foreground/80">On the Mac, run:</span>
+			{commands.map((c) => (
+				<span key={c} className="flex min-w-0 items-center gap-1.5">
+					<code className="min-w-0 flex-1 truncate rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px]">{c}</code>
+					<button type="button" onClick={() => void copyText(c).then((ok) => setCopied(ok ? c : null))} className={QUIET_BTN} aria-label={`Copy ${c}`}>
+						{copied === c ? "Copied" : "Copy"}
+					</button>
+				</span>
+			))}
+		</div>
 	);
 }
 

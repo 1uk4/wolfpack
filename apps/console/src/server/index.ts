@@ -55,4 +55,5 @@ export * from "./wolf-settings-api.ts";
 // Pack health (work-wolfpack-LUQ7C2B): probes + restarts that never go through the hub.
 export * from "./health-api.ts";
 export * from "./pack-health.ts";
+export * from "./pack-actions.ts";
 export * from "./session-witness.ts";

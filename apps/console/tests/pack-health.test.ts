@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type CommandRunner, type HealthSnapshot, type LinkSnapshot } from "../src/server/pack-health.ts";
 import { createSessionWitness, setSessionWitness } from "../src/server/session-witness.ts";
+import { createLogReader, createReleaseReader, createRollbacker } from "../src/server/pack-actions.ts";
 import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 
 type Mode = "ok" | "hang" | "slow-lag" | "http500" | "http401" | "wrong-service" | "bad-body" | "legacy";
@@ -79,24 +80,43 @@ const linkOf = (s: HealthSnapshot, id: string): LinkSnapshot => {
 const cleanups: (() => Promise<void>)[] = [];
 after(async () => { for (const c of cleanups) await c().catch(() => {}); });
 
-async function setup(o: { wolves?: () => unknown[] } = {}) {
+async function setup(o: { wolves?: () => unknown[]; optRoot?: string } = {}) {
 	const hub = await fakeService("hubd");
 	const workerd = await fakeService("workerd", () => ({ wolves: o.wolves?.() ?? [] }));
 	cleanups.push(hub.close, workerd.close);
 	let t = T0;
 	const clock = { now: () => t, set: (ms: number) => { t = ms; } };
 	const env = { WOLFPACK_HUB_URL: hub.url, WOLFPACK_HEALTH_WORKERDS: `workerd=${workerd.url}` };
-	const health = createPackHealth({ targets: healthTargets(env), timeoutMs: 300, now: clock.now });
+	// The rollback units' status reads (systemctl show) go to their own fake, so `runs` holds only the actions a request caused.
+	const shows: string[][] = [];
+	const showOut = new Map<string, string>();
+	const showRun: CommandRunner = async (file, args) => {
+		shows.push([file, ...args]);
+		const unit = args.find((a) => a.startsWith("wolfpack-rollback@")) ?? "";
+		return { code: 0, stderr: "", stdout: showOut.get(unit) ?? "" };
+	};
+	const releases = createReleaseReader({ optRoot: o.optRoot ?? path.join(os.tmpdir(), "wolfpack-no-opt"), ttlMs: 0, statusTtlMs: 5_000, run: showRun, now: clock.now });
+	const health = createPackHealth({ targets: healthTargets(env), timeoutMs: 300, now: clock.now, actions: () => ({ systemd: true, rollback: releases() }) });
 	const runs: string[][] = [];
 	let exit = 0;
-	const run: CommandRunner = async (file, args) => { runs.push([file, ...args]); return { code: exit, stderr: "" }; };
+	let stdout = "";
+	let overflow = false;
+	const run: CommandRunner = async (file, args) => { runs.push([file, ...args]); return { code: exit, stderr: "", stdout, ...(overflow ? { overflow: true } : {}) }; };
 	const logs: string[] = [];
 	const restarter = createRestarter({ health, run, now: clock.now, minIntervalMs: 60_000, log: (m) => logs.push(m) });
 	const witness = createSessionWitness({ now: clock.now });
-	const api = createHealthApi({ health, restarter, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
+	const logReader = createLogReader({ health, run, log: (m) => logs.push(m) });
+	const rollbacker = createRollbacker({ releases, run, now: clock.now, log: (m) => logs.push(m) });
+	const api = createHealthApi({ health, restarter, logs: logReader, rollbacker, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
 	const get = async () => (await (await api.get()).json()) as HealthSnapshot;
 	const tick = async (at: number) => { clock.set(at); return health.tick(); };
-	return { hub, workerd, clock, health, api, get, tick, runs, logs, witness, setExit: (c: number) => { exit = c; } };
+	return {
+		hub, workerd, clock, health, api, get, tick, runs, logs, witness, releases, shows,
+		setExit: (c: number) => { exit = c; },
+		setStdout: (o: string) => { stdout = o; },
+		setOverflow: (v: boolean) => { overflow = v; },
+		setShow: (unit: string, out: string) => { showOut.set(unit, out); },
+	};
 }
 
 describe("pack health: GET /api/health", () => {
@@ -415,5 +435,217 @@ describe("pack health: POST /api/health/restart", () => {
 		} finally {
 			setSessionWitness(undefined);
 		}
+	});
+});
+
+const logsReq = (query: string, token?: string) => new Request(`http://c/api/health/logs?${query}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+
+describe("pack health: GET /api/health/logs", () => {
+	it("reads a known unit's journal via argv journalctl (default 100 lines, at most 200) with secrets redacted; unknown units and no token run nothing", async () => {
+		const s = await setup({ wolves: () => [{ name: "hal", state: "online", restarts: 0 }] });
+		await s.tick(T0);
+		assert.equal((await s.api.logs(logsReq("service=hubd"))).status, 401);
+		s.witness.verified("tok");
+		for (const bad of ["service=ssh", "service=hubd%3B%20rm", "service=wolfd%40ghost", "service=hubd&lines=abc", "service=hubd&lines=0"]) {
+			const r = await s.api.logs(logsReq(bad, "tok"));
+			assert.equal(r.status, 400, bad);
+			assert.equal(((await r.json()) as { code: string }).code, "invalid_request");
+		}
+		assert.deepEqual(s.runs, []);
+		s.setStdout(
+			[
+				"2026-11-08T10:00:00+0000 sfo-01 hubd[1]: listening on 100.120.154.69:3150",
+				"2026-11-08T10:00:01+0000 sfo-01 hubd[1]: Authorization: Bearer abc.DEF-123_xyz",
+				"2026-11-08T10:00:02+0000 sfo-01 hubd[1]: retry token=s3cr3t-value password=hunter2 api_key=K1 secret: shh",
+				"2026-11-08T10:00:03+0000 sfo-01 hubd[1]: digest 0123456789abcdef0123456789abcdef0123456789 blob QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZn",
+				"",
+			].join("\n"),
+		);
+		const r = await s.api.logs(logsReq("service=hubd", "tok"));
+		assert.equal(r.status, 200);
+		const body = (await r.json()) as { service: string; lines: string[] };
+		assert.equal(body.service, "hubd");
+		assert.deepEqual(body.lines, [
+			"2026-11-08T10:00:00+0000 sfo-01 hubd[1]: listening on 100.120.154.69:3150",
+			"2026-11-08T10:00:01+0000 sfo-01 hubd[1]: Authorization: Bearer [redacted]",
+			"2026-11-08T10:00:02+0000 sfo-01 hubd[1]: retry token=[redacted] password=[redacted] api_key=[redacted] secret: [redacted]",
+			"2026-11-08T10:00:03+0000 sfo-01 hubd[1]: digest [redacted] blob [redacted]",
+		]);
+		assert.equal((await s.api.logs(logsReq("service=workerd&lines=500", "tok"))).status, 200);
+		assert.equal((await s.api.logs(logsReq("service=wolfd%40hal&lines=7", "tok"))).status, 200);
+		// hubd and workerd can be rolled back, so their logs include the rollback unit's output
+		assert.deepEqual(s.runs, [
+			["journalctl", "-u", "hubd.service", "-u", "wolfpack-rollback@hubd.service", "-n", "100", "-o", "short-iso", "--no-pager"],
+			["journalctl", "-u", "workerd.service", "-u", "wolfpack-rollback@workerd.service", "-n", "200", "-o", "short-iso", "--no-pager"],
+			["journalctl", "-u", "wolfd@hal.service", "-n", "7", "-o", "short-iso", "--no-pager"],
+		]);
+	});
+
+	it("redacts every value of a cookie header and short prefixed tokens in a URL path, and leaves git and sha256 hashes, paths and UUIDs intact", async () => {
+		const s = await setup();
+		s.witness.verified("tok");
+		await s.tick(T0);
+		s.setStdout(
+			[
+				"h hubd[1]: Cookie: sid=abc123; csrf=xyz789; theme=dark",
+				"h hubd[1]: Set-Cookie: wp_session=Qm9vb3Q; Path=/; HttpOnly",
+				"h hubd[1]: GET https://api.github.com/repos/x/ghp_Ab12Cd34Ef56/hooks -> 401",
+				"h hubd[1]: POST /bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawy/sendMessage",
+				"h hubd[1]: deployed 0123456789abcdef0123456789abcdef01234567 sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+				"h hubd[1]: paired device tok-a1b2c3d4e5 with jVx-c_9Qp2LmA7-Rt4_Kw8sZ-e1N0yHb_U6fD3gW-Io",
+				"h systemd[1]: Starting /usr/local/lib/wolfpack/console-rollback-release.sh in /home/wolf-hal2/workspaces/wolfpack/feat-A1Yps0p-pack-health",
+				"h hubd[1]: invocation 3f2a9c1e-7b4d-4e8a-9f01-2c3d4e5f6a7b requestId=0c9e8d7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f done",
+				"h hubd[1]: GET /api/devices/Zk3qT9xLmW2vR8yN4pB7sD1fH6jK0gC5aE-uI_oQ2zY/status 200",
+			].join("\n"),
+		);
+		const body = (await (await s.api.logs(logsReq("service=hubd", "tok"))).json()) as { lines: string[] };
+		assert.deepEqual(body.lines, [
+			"h hubd[1]: Cookie: [redacted]",
+			"h hubd[1]: Set-Cookie: [redacted]",
+			"h hubd[1]: GET https://api.github.com/repos/x/[redacted]/hooks -> 401",
+			"h hubd[1]: POST /bot[redacted]/sendMessage",
+			"h hubd[1]: deployed 0123456789abcdef0123456789abcdef01234567 sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+			"h hubd[1]: paired device tok-a1b2c3d4e5 with [redacted]",
+			"h systemd[1]: Starting /usr/local/lib/wolfpack/console-rollback-release.sh in /home/wolf-hal2/workspaces/wolfpack/feat-A1Yps0p-pack-health",
+			"h hubd[1]: invocation 3f2a9c1e-7b4d-4e8a-9f01-2c3d4e5f6a7b requestId=0c9e8d7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f done",
+			"h hubd[1]: GET /api/devices/[redacted]/status 200",
+		]);
+	});
+
+	it("keeps only the newest lines within 64 KiB and names a denied journal or a host without journalctl by a short code", async () => {
+		const s = await setup();
+		s.witness.verified("tok");
+		await s.tick(T0);
+		const line = (i: number) => `2026-11-08T10:00:00+0000 h hubd[1]: line ${String(i).padStart(4, "0")} ${"word ".repeat(100)}`;
+		s.setStdout(Array.from({ length: 200 }, (_, i) => line(i)).join("\n"));
+		const big = (await (await s.api.logs(logsReq("service=hubd&lines=200", "tok"))).json()) as { lines: string[]; truncated: boolean };
+		assert.equal(big.truncated, true);
+		assert.equal(big.lines.at(-1), line(199));
+		assert.ok(big.lines.join("\n").length <= 64 * 1024, String(big.lines.join("\n").length));
+		assert.equal(big.lines[0], line(200 - big.lines.length));
+		s.setStdout("Hint: You are currently not seeing messages from other users and the system.\n      Users in groups 'adm', 'systemd-journal' can see all messages.\n-- No entries --\n");
+		const denied = await s.api.logs(logsReq("service=hubd", "tok"));
+		assert.equal(denied.status, 502);
+		assert.equal(((await denied.json()) as { code: string }).code, "journal_denied");
+		s.setStdout("");
+		s.setExit(127);
+		const missing = await s.api.logs(logsReq("service=hubd", "tok"));
+		assert.equal(missing.status, 501);
+		assert.equal(((await missing.json()) as { code: string }).code, "unsupported");
+		s.setExit(1);
+		s.setOverflow(true);
+		const huge = await s.api.logs(logsReq("service=hubd", "tok"));
+		assert.equal(huge.status, 502);
+		assert.equal(((await huge.json()) as { code: string }).code, "too_large");
+	});
+});
+
+const rollbackReq = (service: unknown, token?: string) =>
+	new Request("http://c/api/health/rollback", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ service }) });
+
+/** An /opt with hubd at 0.1.14+abc keeping 0.1.13 as previous (swapped with `previousNewer`), and a workerd install with nothing kept. */
+function optWithHubdPrevious(o: { previousNewer?: boolean } = {}): string {
+	const opt = fs.mkdtempSync(path.join(os.tmpdir(), "rollback-opt-"));
+	cleanups.push(async () => fs.rmSync(opt, { recursive: true, force: true }));
+	const hubd = path.join(opt, "wolfpack-hubd");
+	for (const [rel, ver] of [["r1", "0.1.13"], ["r2", "0.1.14+abc"]] as const) {
+		fs.mkdirSync(path.join(hubd, "releases", rel), { recursive: true });
+		fs.writeFileSync(path.join(hubd, "releases", rel, "VERSION"), `${ver}\n`);
+	}
+	const [cur, prev] = o.previousNewer ? ["r1", "r2"] : ["r2", "r1"];
+	fs.symlinkSync(path.join(hubd, "releases", cur), path.join(hubd, "current"));
+	fs.symlinkSync(path.join(hubd, "releases", prev), path.join(hubd, "previous"));
+	fs.mkdirSync(path.join(opt, "wolfpack-workerd", "releases", "only"), { recursive: true }); // installed, nothing kept to go back to
+	fs.symlinkSync(path.join(opt, "wolfpack-workerd", "releases", "only"), path.join(opt, "wolfpack-workerd", "current"));
+	return opt;
+}
+
+describe("pack health: POST /api/health/rollback", () => {
+	it("starts the rollback unit for a service with a kept previous release, names the version it goes back to, and allows one per service per 10 min", async () => {
+		const opt = optWithHubdPrevious();
+		const s = await setup({ optRoot: opt, wolves: () => [{ name: "hal", state: "online", restarts: 0 }] });
+		await s.tick(T0);
+		assert.deepEqual((await s.get()).actions.rollback, [{ service: "hubd", from: "0.1.14+abc", to: "0.1.13", last: null }]);
+		assert.equal((await s.api.rollback(rollbackReq("hubd"))).status, 401);
+		s.witness.verified("tok");
+		for (const bad of ["wolfd@hal", "ssh", "hubd; rm -rf /", "hubd --now", "", null]) {
+			const r = await s.api.rollback(rollbackReq(bad, "tok"));
+			assert.equal(r.status, 400, String(bad));
+		}
+		const none = await s.api.rollback(rollbackReq("workerd", "tok"));
+		assert.equal(none.status, 409);
+		assert.equal(((await none.json()) as { code: string }).code, "no_previous");
+		assert.deepEqual(s.runs, []);
+
+		const ok = await s.api.rollback(rollbackReq("hubd", "tok"));
+		assert.equal(ok.status, 202);
+		assert.equal(((await ok.json()) as { to: string }).to, "0.1.13");
+		assert.deepEqual(s.runs, [["systemctl", "--no-ask-password", "--no-block", "start", "wolfpack-rollback@hubd.service"]]);
+		s.clock.set(T0 + 4 * 60_000);
+		const limited = await s.api.rollback(rollbackReq("hubd", "tok"));
+		assert.equal(limited.status, 429);
+		assert.equal(limited.headers.get("retry-after"), "360");
+		s.clock.set(T0 + 10 * 60_000);
+		assert.equal((await s.api.rollback(rollbackReq("hubd", "tok"))).status, 202);
+		assert.equal(s.runs.length, 2);
+	});
+
+	it("refuses with 409 previous_is_newer when the kept release is newer than the running one, without calling systemctl", async () => {
+		const s = await setup({ optRoot: optWithHubdPrevious({ previousNewer: true }) });
+		await s.tick(T0);
+		s.witness.verified("tok");
+		const r = await s.api.rollback(rollbackReq("hubd", "tok"));
+		assert.equal(r.status, 409);
+		assert.equal(((await r.json()) as { code: string }).code, "previous_is_newer");
+		assert.deepEqual(s.runs, []);
+	});
+
+	it("a rollback systemctl refuses (502) does not use up the service's 10 min slot", async () => {
+		const s = await setup({ optRoot: optWithHubdPrevious() });
+		await s.tick(T0);
+		s.witness.verified("tok");
+		s.setExit(1);
+		assert.equal((await s.api.rollback(rollbackReq("hubd", "tok"))).status, 502);
+		s.setExit(0);
+		assert.equal((await s.api.rollback(rollbackReq("hubd", "tok"))).status, 202);
+	});
+
+	it("reports each rollback unit's last result from systemctl show (argv, cached): a failure with its exit status and time, running while active, null before it ever ran", async () => {
+		const s = await setup({ optRoot: optWithHubdPrevious() });
+		await s.tick(T0);
+		const lastOf = async () => (await s.get()).actions.rollback.find((r) => r.service === "hubd")?.last;
+		s.setShow("wolfpack-rollback@hubd.service", "ActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainExitTimestamp=\n");
+		await s.releases.refresh();
+		assert.equal(await lastOf(), null);
+		assert.deepEqual(s.shows, [["systemctl", "show", "wolfpack-rollback@hubd.service", "-p", "Result,ExecMainStatus,ActiveState,ExecMainExitTimestamp,AssertResult,AssertTimestamp", "--timestamp=unix"]]);
+
+		s.setShow("wolfpack-rollback@hubd.service", "Result=exit-code\nExecMainStatus=4\nActiveState=failed\nExecMainExitTimestamp=@1794218400\n");
+		await s.releases.refresh();
+		assert.equal(await lastOf(), null, "read again only after the cache time");
+		assert.equal(s.shows.length, 1);
+		s.clock.set(T0 + 5_000);
+		await s.releases.refresh();
+		assert.deepEqual(await lastOf(), { result: "exit-code", exitStatus: 4, at: "2026-11-09T10:00:00.000Z" });
+
+		s.setShow("wolfpack-rollback@hubd.service", "Result=success\nExecMainStatus=0\nActiveState=activating\nExecMainExitTimestamp=@1794218400\n");
+		s.clock.set(T0 + 10_000);
+		await s.releases.refresh();
+		assert.deepEqual(await lastOf(), { result: "running", exitStatus: null, at: null });
+	});
+
+	it("reports a start refused by the unit's assert (nothing ran, the exit time did not move) as a new assert failure at the assert time", async () => {
+		const s = await setup({ optRoot: optWithHubdPrevious() });
+		const lastOf = async () => (await s.get()).actions.rollback.find((r) => r.service === "hubd")?.last;
+		const old = "ActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainExitTimestamp=@1794218400\n";
+		s.setShow("wolfpack-rollback@hubd.service", `${old}AssertResult=yes\nAssertTimestamp=@1794218390\n`);
+		await s.tick(T0);
+		await s.releases.refresh();
+		assert.deepEqual(await lastOf(), { result: "success", exitStatus: 0, at: "2026-11-09T10:00:00.000Z" });
+
+		// systemd on a failed AssertPathExists: only AssertResult/AssertTimestamp change; Result, ActiveState and the exec times stay.
+		s.setShow("wolfpack-rollback@hubd.service", `${old}AssertResult=no\nAssertTimestamp=@1794222000\n`);
+		s.clock.set(T0 + 5_000);
+		await s.releases.refresh();
+		assert.deepEqual(await lastOf(), { result: "assert", exitStatus: null, at: "2026-11-09T11:00:00.000Z" });
 	});
 });

@@ -21,10 +21,86 @@ export interface HealthLink {
 	restartable: boolean;
 }
 
+/** What the console offers besides restart (src/server/pack-health.ts HealthActions; absent from older servers). */
+export interface HealthActionsView {
+	systemd: boolean;
+	rollback: { service: string; from: string | null; to: string | null; last?: { result: string; exitStatus: number | null; at: string | null } | null }[];
+}
+
 export interface HealthSnapshotView {
 	checkedAt: string | null;
 	intervalMs: number;
 	links: HealthLink[];
+	actions?: HealthActionsView;
+}
+
+/** The Mac live stack has no systemd: these are what the owner can run by hand (scripts/stack.mjs). */
+export const MAC_STACK_COMMANDS = ["pnpm stack restart", "tail -n 100 ~/wolves/local/logs/stack.log"];
+
+/** The rollback targets, by the link that represents them (hubd; the link-only workerd unit). The console row is the modal's own. */
+const ROLLBACK_LINK: Record<string, string> = { hubd: "hubd", workerd: "workerd" };
+
+/**
+ * What a row offers besides restart (work-wolfpack-yM3uTlj). Under systemd: Logs for a unit the console may restart, Roll back for hubd and
+ * the workerd link unit when a previous release is kept. Off systemd (the Mac stack, or an older server without `actions`): nothing that
+ * would fail, just the stack commands to copy on the workerd and wolf rows (the hub runs elsewhere).
+ */
+export function rowActions(
+	l: Pick<HealthLink, "id" | "kind" | "restartable">,
+	actions: HealthActionsView | undefined,
+): { logs: boolean; rollback: { service: string; to: string | null } | null; macCommands: string[] | null } {
+	if (!actions?.systemd) return { logs: false, rollback: null, macCommands: l.kind === "hubd" ? null : [...MAC_STACK_COMMANDS] };
+	const svc = ROLLBACK_LINK[l.id];
+	const rb = svc ? actions.rollback.find((r) => r.service === svc) : undefined;
+	return { logs: l.restartable, rollback: rb && rollbackOffered(rb) ? { service: rb.service, to: rb.to } : null, macCommands: null };
+}
+
+/** The X.Y.Z core of a version as numbers, or null when it has none. */
+const coreOf = (v: string | null): [number, number, number] | null => {
+	const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
+	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+};
+const cmpCore = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+/**
+ * Whether Roll back is offered: never when `to` is newer than `from` on the X.Y.Z core (after a rollback, `previous` is the release just
+ * left, so "rolling back" would go forward). Equal cores (another build) and unknown versions stay offered.
+ */
+export function rollbackOffered(r: { from: string | null; to: string | null }): boolean {
+	const a = coreOf(r.from);
+	const b = coreOf(r.to);
+	return !(a && b && cmpCore(b, a) > 0);
+}
+
+/** The confirm text: the target's X.Y.Z, with the build only when both cores are equal; says when a version is unknown. */
+export function rollbackQuestion(name: string, from: string | null, to: string | null): string {
+	if (!to) return `Roll ${name} back to the previous release (its version is unknown)?`;
+	const a = coreOf(from);
+	const b = coreOf(to);
+	const shown = a && b && cmpCore(a, b) === 0 ? to : (/^\d+\.\d+\.\d+/.exec(to)?.[0] ?? to);
+	return from ? `Roll ${name} back to v${shown}?` : `Roll ${name} back to v${shown} (the running version is unknown)?`;
+}
+
+/** deploy-release.sh --rollback's documented exit codes. */
+const ROLLBACK_EXIT: Record<number, string> = { 1: "refused, nothing changed", 2: "usage error", 4: "needs a person" };
+const RESULT_TEXT: Record<string, string> = { assert: "rollback script or previous release missing on the host", timeout: "timed out", signal: "killed", "core-dump": "crashed", "start-limit-hit": "started too often" };
+
+/**
+ * Whether a rollback sent from this page has finished, read off the rollback unit's last run (`actions.rollback[svc].last`). `sentAfter`:
+ * the `last.at` seen when it was sent (null: none), so an older run never counts. null: still running (or not reported yet).
+ */
+export function rollbackFinished(
+	last: { result: string; exitStatus: number | null; at: string | null } | null | undefined,
+	sentAfter: string | null,
+): { ok: true } | { ok: false; message: string } | null {
+	if (!last || last.result === "running" || !last.at) return null;
+	if (sentAfter !== null && Date.parse(last.at) <= Date.parse(sentAfter)) return null;
+	if (last.result === "success" && last.exitStatus === 0) return { ok: true };
+	const why =
+		last.result === "exit-code" && last.exitStatus !== null
+			? `exit ${last.exitStatus}${ROLLBACK_EXIT[last.exitStatus] ? `: ${ROLLBACK_EXIT[last.exitStatus]}` : ""}`
+			: (RESULT_TEXT[last.result] ?? last.result);
+	return { ok: false, message: `Rollback failed (${why}) — see Logs` };
 }
 
 export function toneOf(s: HealthStatus): Tone {
@@ -99,6 +175,43 @@ export function restartOutcome(status: number, retryAfter: string | null): Resta
 	if (status === 400) return { kind: "error", message: "The console doesn't know this service" };
 	if (status === 0) return { kind: "error", message: "Console unreachable; restart not sent" };
 	return { kind: "error", message: `Restart failed (HTTP ${status})` };
+}
+
+const SIGN_IN = "Sign in with the console once while the hub is up";
+const waitOf = (retryAfter: string | null, cap: number) => {
+	const n = Number(retryAfter);
+	return Number.isFinite(n) && n > 0 ? Math.min(Math.ceil(n), cap) : 5;
+};
+
+export type LogsOutcome = { kind: "lines"; lines: string[]; truncated: boolean } | { kind: "wait"; retryS: number } | { kind: "error"; message: string };
+
+/** What the logs panel shows after GET /api/health/logs (`body` its JSON, null when unreadable; `status` 0 = never reached the console). */
+export function logsOutcome(status: number, body: unknown, retryAfter: string | null): LogsOutcome {
+	const b = (body ?? {}) as { lines?: unknown; truncated?: unknown; code?: unknown };
+	if (status === 200 && Array.isArray(b.lines)) return { kind: "lines", lines: b.lines.filter((x): x is string => typeof x === "string"), truncated: b.truncated === true };
+	if (status === 429) return { kind: "wait", retryS: waitOf(retryAfter, 60) };
+	if (status === 401) return { kind: "error", message: SIGN_IN };
+	if (b.code === "journal_denied") return { kind: "error", message: "The console cannot read the system journal (add its user to systemd-journal)" };
+	if (b.code === "unsupported") return { kind: "error", message: "No system journal on this host" };
+	if (status === 400) return { kind: "error", message: "The console doesn't know this service" };
+	if (status === 0) return { kind: "error", message: "Console unreachable; logs not loaded" };
+	return { kind: "error", message: `Logs failed (HTTP ${status})` };
+}
+
+/**
+ * What a row shows after POST /api/health/rollback (`body` its JSON when read). A 429 can ask for up to 10 min (one rollback per service per
+ * 10 min). A 409 is no_previous, or previous_is_newer when the kept release is newer than the running one.
+ */
+export function rollbackOutcome(status: number, retryAfter: string | null, body?: unknown): RestartOutcome {
+	if (status === 202) return { kind: "issued" };
+	if (status === 429) return { kind: "wait", retryS: waitOf(retryAfter, 600) };
+	if (status === 401) return { kind: "error", message: SIGN_IN };
+	if (status === 409 && (body as { code?: unknown } | null | undefined)?.code === "previous_is_newer") return { kind: "error", message: "The kept release is newer; deploy instead of rolling back" };
+	if (status === 409) return { kind: "error", message: "No previous release is kept on this host" };
+	if (status === 502) return { kind: "error", message: "systemctl refused the rollback (is the rollback unit and polkit rule installed?)" };
+	if (status === 400) return { kind: "error", message: "This service can't be rolled back from here" };
+	if (status === 0) return { kind: "error", message: "Console unreachable; rollback not sent" };
+	return { kind: "error", message: `Rollback failed (HTTP ${status})` };
 }
 
 /** How long "back" shows after a link returns to ok. */

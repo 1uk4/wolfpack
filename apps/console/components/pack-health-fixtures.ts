@@ -1,11 +1,13 @@
 /**
  * DEV ONLY (work-wolfpack-6imFEq7): canned pack-health snapshots so every state can be seen in a browser without breaking a real
  * service. `?healthFixture=<name>` replaces the live stream; `?healthRestart=<status>` makes the Restart button answer with that status
- * without calling the server. Both are ignored in a production build (see fixtureFromUrl).
+ * without calling the server. `?healthLogs=<status>` and `?healthRollback=<status>` do the same for Logs (200 shows canned, redacted-looking
+ * lines; 502 = journal_denied, 501 = no journal) and Roll back (work-wolfpack-yM3uTlj). The fixtures advertise systemd and a kept previous
+ * hubd (0.1.13) and console (0.1.17) release; `?healthFixture=mac` shows the Mac stack (no systemd). All ignored in a production build.
  */
 import type { HealthLink, HealthSnapshotView } from "@/src/core/pack-health-view";
 
-export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable"] as const;
+export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac"] as const;
 export type HealthFixture = (typeof HEALTH_FIXTURES)[number];
 
 const iso = (msAgo: number, now: number) => new Date(now - msAgo).toISOString();
@@ -64,15 +66,42 @@ export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapsho
 			break;
 		case "unreachable":
 			return null;
+		case "mac":
+			return { checkedAt: at(2_000), intervalMs: 5000, links: links.filter((l) => l.id !== "workerd-wolves").map((l) => (l.kind === "wolfd" ? { ...l, via: "workerd" } : l)), actions: { systemd: false, rollback: [] } };
 	}
-	return { checkedAt: at(2_000), intervalMs: 5000, links };
+	return { checkedAt: at(2_000), intervalMs: 5000, links, actions: { systemd: true, rollback: [{ service: "hubd", from: "0.1.14", to: "0.1.13" }, { service: "console", from: "0.1.18", to: "0.1.17" }] } };
+}
+
+/** Canned journal lines for `?healthLogs=200`. */
+export function fixtureLogs(service: string, now: number): { lines: string[]; truncated: boolean } {
+	const t = (msAgo: number) => new Date(now - msAgo).toISOString().replace(/\.\d+Z$/, "+0000");
+	const unit = service.replace(/@.*/, "");
+	return {
+		truncated: true,
+		lines: Array.from({ length: 40 }, (_, i) => {
+			const n = 40 - i;
+			if (i === 37) return `${t(n * 15_000)} sfo-01 ${unit}[812]: link up; Authorization: Bearer [redacted]`;
+			if (i === 38) return `${t(n * 15_000)} sfo-01 ${unit}[812]: slow request /v1/work took 912 ms (a very long line that has to wrap on a 390 px phone screen without pushing the panel sideways)`;
+			return `${t(n * 15_000)} sfo-01 ${unit}[812]: tick ${i} ok`;
+		}),
+	};
+}
+
+export interface FixtureSwitches {
+	fixture: HealthFixture | null;
+	restartStatus: number | null;
+	logsStatus: number | null;
+	rollbackStatus: number | null;
 }
 
 /** Read the dev fixture switches from the page URL; always off in production. */
-export function fixtureFromUrl(search: string): { fixture: HealthFixture | null; restartStatus: number | null } {
-	if (process.env.NODE_ENV === "production") return { fixture: null, restartStatus: null };
+export function fixtureFromUrl(search: string): FixtureSwitches {
+	if (process.env.NODE_ENV === "production") return { fixture: null, restartStatus: null, logsStatus: null, rollbackStatus: null };
 	const p = new URLSearchParams(search);
 	const f = p.get("healthFixture");
-	const r = Number(p.get("healthRestart"));
-	return { fixture: (HEALTH_FIXTURES as readonly string[]).includes(f ?? "") ? (f as HealthFixture) : null, restartStatus: Number.isInteger(r) && r > 0 ? r : null };
+	const num = (k: string) => {
+		const r = Number(p.get(k));
+		return Number.isInteger(r) && r > 0 ? r : null;
+	};
+	return { fixture: (HEALTH_FIXTURES as readonly string[]).includes(f ?? "") ? (f as HealthFixture) : null, restartStatus: num("healthRestart"), logsStatus: num("healthLogs"), rollbackStatus: num("healthRollback") };
 }

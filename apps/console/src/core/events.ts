@@ -64,7 +64,7 @@ export interface ServerEvents {
 	 *  new summary so open views patch in place; consumers that only list refetch. */
 	"thread-updated": {
 		wolf: string;
-		thread: import("./subagents.ts").ChildThread & { wolf?: string; kind?: string; status?: "idle" | "busy" | "needs-you" };
+		thread: import("./subagents.ts").ChildThread & { wolf?: string; kind?: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; closedReason?: string };
 		chatId?: undefined;
 	};
 	/** NEVER emit on the bus; per-connection only. (Listed here because the browser's SSE dispatch and useServerEvent are typed by this map.)

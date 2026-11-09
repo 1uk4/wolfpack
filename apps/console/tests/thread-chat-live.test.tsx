@@ -96,12 +96,14 @@ class ServerTurnClient extends MockConsoleClient {
 
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
+let posts: string[] = [];
 
 function routeFetch(client: ServerTurnClient): typeof fetch {
 	const api = createThreadApi(() => client);
 	const ref = { wolf: "1uk4", slug: "home" };
 	return (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(String(input), "http://t");
+		if (init?.method === "POST") posts.push(url.pathname);
 		const req = new Request(url, init);
 		if (url.pathname.endsWith("/stream")) return api.stream(ref, req);
 		if (url.pathname.endsWith("/threads/home")) return api.thread(ref);
@@ -141,6 +143,7 @@ after(() => {
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	root = null;
+	posts = [];
 	document.body.innerHTML = "";
 });
 
@@ -214,5 +217,40 @@ describe("ThreadChat follows a server-started turn", () => {
 		await busy("1uk4/other");
 		await settle();
 		assert.equal(client.watches, 0);
+	});
+
+	it("a thread-updated event that closes this thread swaps the composer for the graduated notice with no message sent", async () => {
+		const client = new ServerTurnClient();
+		await mount(client);
+		assert.equal(q('[data-testid="thread-closed"]'), null);
+		await act(async () => frames.get("thread-updated")!(JSON.stringify({ wolf: "1uk4", thread: { id: FIXTURE_THREAD.id, title: "Home", closed: true, closedReason: "This feature has graduated." } })));
+		await settle();
+		assert.match(q('[data-testid="thread-closed"]')!.textContent ?? "", /This feature has graduated\./);
+	});
+
+	it("a thread-updated for another thread or another wolf leaves the composer in place", async () => {
+		const client = new ServerTurnClient();
+		await mount(client);
+		const closed = (wolf: string, id: string) => act(async () => frames.get("thread-updated")!(JSON.stringify({ wolf, thread: { id, title: "x", closed: true, closedReason: "gone" } })));
+		await closed("1uk4", "1uk4/other");
+		await closed("other-wolf", FIXTURE_THREAD.id);
+		await settle();
+		assert.equal(q('[data-testid="thread-closed"]'), null);
+		assert.ok(q('[data-testid="thread-composer-card"]'), "composer stays");
+	});
+
+	it("a turn still running when the thread closes keeps a Stop control in the notice", async () => {
+		const client = new ServerTurnClient();
+		await mount(client);
+		client.push({ type: "turn-start" });
+		await busy();
+		await settle();
+		await act(async () => frames.get("thread-updated")!(JSON.stringify({ wolf: "1uk4", thread: { id: FIXTURE_THREAD.id, title: "Home", closed: true, closedReason: "gone" } })));
+		await settle();
+		assert.equal(q('[data-testid="thread-composer-card"]'), null);
+		const stop = q('[data-testid="thread-closed-stop"]')!;
+		assert.ok(stop, "Stop stays reachable");
+		await act(async () => void (stop as any)[Object.keys(stop).find((k) => k.startsWith("__reactProps$"))!].onClick());
+		assert.deepEqual(posts, ["/api/wolves/1uk4/threads/home/abort"]);
 	});
 });

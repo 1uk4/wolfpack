@@ -262,7 +262,7 @@ export class WolfServer {
         const t = this.makeThread(summary, conv);
         this.mirrorAutoShip(t);
         const reason = saved.closedReason ?? (await this.closedReasonOf(saved.workItemId, Number(saved.conversationId)));
-        if (reason) this.markClosed(t, reason);
+        if (reason) this.markClosed(t, reason, false);
         try {
           await t.attach();
         } catch (e) {
@@ -365,12 +365,21 @@ export class WolfServer {
     else if (!setThreadSettings(den, t.summary.id, s, (e) => this.opts.onError?.(e))) throw new HttpError("invalid_request", `thread ${t.summary.id} keeps no settings`);
   }
 
-  /** Read-only history: a graduated feature's thread keeps its messages, refuses new ones. */
-  private markClosed(t: ThreadRuntime, reason: string): void {
+  /**
+   * Read-only history: a closed feature thread keeps its messages, refuses new ones. The one place every close path
+   * uses: the first close pushes `thread-updated` (open views archive it at once) and closes its settled sub-agent
+   * threads (running ones close as they settle). `announce: false` (startup restore) stays silent. Returns the closed child ids.
+   */
+  private markClosed(t: ThreadRuntime, reason: string, announce = true): string[] {
+    const wasOpen = !t.summary.closed;
     t.summary = { ...t.summary, closed: true, closedReason: reason };
     const den = this.opts.den;
     const saved = den ? loadThreads(den).find((s) => s.id === t.summary.id) : undefined;
     if (den && saved && saved.closedReason !== reason) saveThread(den, { ...saved, closedReason: reason }, (e) => this.opts.onError?.(e));
+    if (!announce) return [];
+    // A thread already closed (wasOpen false) still re-closes its children, idempotently, and returns their ids.
+    if (wasOpen) this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
+    return this.subagents?.closeChildrenOf(t.summary.id) ?? [];
   }
 
   /** Why a feature thread is closed: the graduation marker the unbind leaves, or the feature's stage in the Work API. Undefined when open or unknown. */
@@ -390,9 +399,8 @@ export class WolfServer {
     const closed: string[] = [];
     for (const t of this.threads.values()) {
       if (t.summary.kind === "feature" && t.summary.boundWorkItem && workItemIds.includes(t.summary.boundWorkItem)) {
-        this.markClosed(t, GRADUATED_MESSAGE);
-        closed.push(t.summary.id);
-        closed.push(...(this.subagents?.closeChildrenOf(t.summary.id) ?? []));
+        const children = this.markClosed(t, GRADUATED_MESSAGE);
+        closed.push(t.summary.id, ...children);
       }
     }
     return closed;

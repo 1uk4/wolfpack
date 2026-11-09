@@ -17,7 +17,8 @@ import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPi
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useAttachedThread } from "@/components/attached-thread";
-import { onOwnThreadPage } from "@/components/chat-bar-io";
+import { FEATURE_GRADUATED } from "@/components/thread-closed";
+import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { useThreadColor } from "@/components/use-thread-color";
@@ -29,6 +30,19 @@ export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/com
 
 const loadComposer = () => import("@/components/chat-bar-composer");
 const BarComposer = dynamic(loadComposer, { ssr: false });
+
+/** The bar's stand-in for its composer once the attached thread has closed but a turn still runs: the same notice and Stop the thread page shows. The bar docks when the turn settles. */
+function BarClosedNotice({ target, reason }: { target: AttachedRef; reason: string }) {
+	return (
+		<div data-testid="chat-bar-closed" className="px-3 py-2 text-sm">
+			<div className="font-medium">{FEATURE_GRADUATED}</div>
+			<div className="text-muted-foreground">{reason}</div>
+			<button type="button" data-testid="chat-bar-closed-stop" onClick={() => void abortBarThread(target)} className="mt-2 rounded-md border px-3 py-1 text-sm">
+				Stop the running turn
+			</button>
+		</div>
+	);
+}
 /**
  * Finish the floating chat's own dictation run first (the words land in its draft), then run `then` (dock or navigate).
  * A page composer's run is not touched. A second call while one is pending is a no-op.
@@ -497,7 +511,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
@@ -539,7 +553,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						<ChevronDownIcon className="size-4" />
 					</button>
 				</div>
-				<BarComposer target={target} title={title} cardOpen={cards.pending.length > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : <BarComposer target={target} title={title} cardOpen={cards.pending.length > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>

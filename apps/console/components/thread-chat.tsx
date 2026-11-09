@@ -1,5 +1,6 @@
 "use client";
 
+import { FEATURE_GRADUATED } from "@/components/thread-closed";
 import { createEarlierScroll } from "@/components/earlier-scroll";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
@@ -182,7 +183,7 @@ function ThreadChatInner({
 	initialHasMore,
 	initiallyInFlight,
 	initialCards = NO_CARDS,
-	closedReason,
+	closedReason: closedReasonProp,
 	initialBound,
 	parentThreadId,
 	colorThreads = NO_COLOR_THREADS,
@@ -214,6 +215,12 @@ function ThreadChatInner({
 	/** The wolf's chosen color at page load; the live roster (attached-thread provider) overrides it after a Settings change. */
 	wolfColor?: string;
 }) {
+	// A graduation closes the thread: the wolf pushes thread-updated {closed}, so the notice shows with no message sent.
+	const [closedLive, setClosedLive] = useState<string | undefined>(undefined);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf === wolf && p.thread.id === threadId && p.thread.closed) setClosedLive(p.thread.closedReason ?? FEATURE_GRADUATED);
+	});
+	const closedReason = closedReasonProp ?? closedLive;
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
 	const pageRef = useRef<(json: unknown) => void>(() => {});
@@ -784,8 +791,13 @@ function ThreadChatInner({
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} attached={attachedRow} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
-											<div className="font-medium">Feature graduated</div>
+											<div className="font-medium">{FEATURE_GRADUATED}</div>
 											<div className="text-muted-foreground">{closedReason}</div>
+											{busy ? (
+												<button type="button" data-testid="thread-closed-stop" onClick={onStop} className="mt-2 rounded-md border px-3 py-1 text-sm">
+													Stop the running turn
+												</button>
+											) : null}
 										</div>
 									) : barOwnsInput ? null : (
 									<div

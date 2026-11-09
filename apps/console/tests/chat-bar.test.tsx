@@ -355,6 +355,36 @@ describe("ChatBar behaviours", () => {
 		await wait();
 		assert.equal(mem.get(ATTACHED_KEY), undefined);
 	});
+
+	it("a thread-updated that closes the popped-out thread docks the bar at once, without waiting for the list; another thread closing does not", async () => {
+		await mount("/kb", A);
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/b", closed: true } });
+		await emit("thread-updated", { wolf: "other", thread: { id: "w/a", closed: true } });
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a");
+		assert.ok(ta(), "still has its composer");
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", closed: true } });
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(ta(), null);
+	});
+});
+
+describe("a close while the popped-out thread's turn runs", () => {
+	it("keeps the bar with the closed notice and a working Stop, and docks it once the turn settles", async () => {
+		status = "busy";
+		await mount("/kb", A);
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", closed: true, closedReason: "This feature has graduated." } });
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "still attached");
+		assert.equal(ta(), null, "no composer");
+		assert.match(q('[data-testid="chat-bar-closed"]')!.textContent ?? "", /This feature has graduated\./);
+		calls = [];
+		await click(q('[data-testid="chat-bar-closed-stop"]'));
+		assert.ok(calls.some((c) => c.url.endsWith("/threads/a/abort")), "Stop reaches the abort route");
+		status = "idle";
+		await emit("needs-you-changed", { wolf: "w", threadId: "w/a", status: "idle" });
+		await wait();
+		assert.equal(mem.get(ATTACHED_KEY), undefined, "docked after the turn settled");
+		assert.equal(q('[data-testid="chat-bar-closed"]'), null);
+	});
 });
 
 describe("real keydown through KeyboardShortcuts", () => {

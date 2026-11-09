@@ -164,7 +164,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		else kidsOf.set(p, [it]);
 	}
 
-	const rowOf = (it: WorkListItem, depth: 1 | 2, kind: RowKind, sibIds: ReadonlySet<string>): TableRow => {
+	const rowOf = (it: WorkListItem, depth: 1 | 2, kind: RowKind, sibIds: ReadonlySet<string>, underInitiative = false): TableRow => {
 		const dependsOn = it.dependsOn.filter((d) => sibIds.has(d) && d !== it.id);
 		const notes: DepNote[] = [];
 		for (const d of it.dependsOn) {
@@ -187,7 +187,8 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 			stage: it.stage,
 			stageLabel: stageLabel(it.stage, it.kind),
 			assignee: it.assignee ?? "",
-			assignable: depth === 1,
+			// The owner can reassign features, and tasks that belong to no feature; not issues/spikes/ideas, a task directly under an initiative, or finished items.
+			assignable: depth === 1 && (it.kind === "feature" || (it.kind === "task" && !underInitiative)) && !isGraduated(it),
 			created: it.created ?? "",
 			progress: kind === "feature" && tasks.length > 0 ? { shipped, total: tasks.length, label: `${shipped}/${tasks.length} shipped` } : null,
 			dependsOn,
@@ -200,14 +201,14 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		};
 	};
 
-	const featureRows = (list: WorkListItem[]): TableRow[] => {
+	const featureRows = (list: WorkListItem[], underInitiative = false): TableRow[] => {
 		const sibIds = new Set(list.map((f) => f.id));
-		return list.map((f) => rowOf(f, 1, f.kind === "feature" ? "feature" : "task", sibIds));
+		return list.map((f) => rowOf(f, 1, f.kind === "feature" ? "feature" : "task", sibIds, underInitiative));
 	};
 
 	const groups: TableRow[] = [];
 	for (const init of live.filter((it) => it.kind === "initiative")) {
-		const rows = featureRows(kidsOf.get(init.id) ?? []);
+		const rows = featureRows(kidsOf.get(init.id) ?? [], true);
 		groups.push(groupOf(items, init, rows, init.title, init.id, init.id));
 	}
 	// Everything not under a live feature or initiative: loose features, and loose tasks/ideas as leaf rows.

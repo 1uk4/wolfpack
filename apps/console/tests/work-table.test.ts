@@ -76,6 +76,14 @@ describe("buildWorkTable: assignee control", () => {
 		assert.equal(inbox!.children.find((r) => r.id === "lt")!.assignable, true);
 		assert.equal(inbox!.children.find((r) => r.id === "f3")!.assignable, true);
 	});
+	it("keeps it off Inbox issues, spikes and ideas, a task directly under an initiative, and graduated features", () => {
+		const t = buildWorkTable(
+			[item("i1", "initiative"), item("ti", "task", { partOf: "i1" }), item("fg", "feature", { partOf: "i1", graduated: "2026-10-03" }), item("is", "issue"), item("sp", "spike"), item("id", "idea")],
+			{ showGraduated: true },
+		);
+		const flat = t.groups.flatMap((g) => g.children);
+		assert.deepEqual(flat.map((r) => [r.id, r.assignable]).sort(), [["fg", false], ["id", false], ["is", false], ["sp", false], ["ti", false]]);
+	});
 });
 
 describe("buildWorkTable: dependencies", () => {

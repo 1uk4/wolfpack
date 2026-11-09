@@ -61,16 +61,17 @@ function readDomain(): string {
 type Load = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; items: WorkListItem[] };
 
 /** Fetches the domain's items; refetches on focus, on a poll and on `reload`, keeping the last good list while it does. */
-function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => Promise<void> } {
+function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => Promise<boolean> } {
 	const [load, setLoad] = useState<Load>({ state: "loading" });
 	const seq = useRef(0);
-	const refresh = useCallback(async () => {
+	const refresh = useCallback(async (): Promise<boolean> => {
 		const mine = ++seq.current;
 		// Always with the graduated ones: an initiative is ready when its features all graduated; the table hides them unless the toggle is on.
 		const res = await client.list(domain, true);
-		if (mine !== seq.current) return; // a newer request (another domain, the toggle) owns the answer
+		if (mine !== seq.current) return true; // a newer request (another domain, the toggle) owns the answer
 		if (res.ok) setLoad({ state: "ready", items: res.data.items });
 		else setLoad((cur) => (cur.state === "ready" ? cur : { state: "error", message: res.message }));
+		return res.ok;
 	}, [client, domain]);
 	useEffect(() => {
 		setLoad((cur) => (cur.state === "ready" ? cur : { state: "loading" }));
@@ -147,7 +148,7 @@ interface RowCtx {
 	/** The graduation seam: each feature row's control reads and drives its job through it. */
 	graduate: GraduateClient;
 	/** The owner's assignee control (absent: assignees show as plain text). */
-	assign?: { wolves: readonly string[]; busyId: string | null; error: { id: string; message: string } | null; onAssign: (id: string, wolf: string) => void };
+	assign?: { wolves: readonly string[]; wolvesError: string | null; busy: ReadonlySet<string>; errors: ReadonlyMap<string, string>; onAssign: (id: string, wolf: string) => void };
 }
 
 /** A feature or loose task: a dropdown of the active wolves, disabled while its change runs; any other row: the assignee as text. */
@@ -161,14 +162,22 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 			</span>
 		);
 	}
+	if (a.wolvesError !== null) {
+		return (
+			<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="max-w-64 shrink-0 truncate text-[11px] text-destructive" title={a.wolvesError}>
+				can't load wolves: {a.wolvesError}
+			</span>
+		);
+	}
 	const options = row.assignee && !a.wolves.includes(row.assignee) ? [row.assignee, ...a.wolves] : a.wolves;
+	const error = a.errors.get(row.id);
 	return (
 		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
 			<select
 				data-testid={`work-assignee-${row.key}`}
 				aria-label={`Assignee of ${row.title}`}
 				value={row.assignee}
-				disabled={a.busyId === row.id}
+				disabled={a.busy.has(row.id)}
 				onChange={(e) => a.onAssign(row.id, e.target.value)}
 				className="h-6 max-w-28 rounded border bg-background px-1 text-[11px] outline-none focus:border-ring disabled:opacity-50"
 			>
@@ -179,9 +188,9 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					</option>
 				))}
 			</select>
-			{a.error?.id === row.id && (
-				<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="max-w-64 truncate text-[11px] text-destructive" title={a.error.message}>
-					{a.error.message}
+			{error !== undefined && (
+				<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="max-w-64 truncate text-[11px] text-destructive" title={error}>
+					{error}
 				</span>
 			)}
 		</span>
@@ -349,8 +358,16 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 	const { load, reload } = useWorkItems(client, domain);
 	const [wolves, setWolves] = useState<string[]>([]);
-	const [busyId, setBusyId] = useState<string | null>(null);
-	const [assignError, setAssignError] = useState<{ id: string; message: string } | null>(null);
+	const [wolvesError, setWolvesError] = useState<string | null>(null);
+	const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+	const [assignErrors, setAssignErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
 	const graduateClient = useMemo(() => injectedGraduate ?? createGraduateClient(), [injectedGraduate]);
 
 	useEffect(() => {
@@ -364,8 +381,12 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	}, [client]);
 	useEffect(() => {
 		let cancelled = false;
-		void client.assignees?.().then((w) => {
-			if (!cancelled) setWolves(w);
+		void client.assignees?.().then((res) => {
+			if (cancelled) return;
+			if (res.ok) {
+				setWolves(res.data);
+				setWolvesError(null);
+			} else setWolvesError(res.message);
 		});
 		return () => {
 			cancelled = true;
@@ -374,12 +395,32 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	// No optimistic update: the hub answers, then the list is read again.
 	const onAssign = async (id: string, wolf: string): Promise<void> => {
 		if (!client.assign) return;
-		setBusyId(id);
-		setAssignError(null);
-		const res = await client.assign(id, wolf);
-		if (res.ok) await reload();
-		else setAssignError({ id, message: res.message });
-		setBusyId(null);
+		const setErr = (message: string | null) =>
+			setAssignErrors((prev) => {
+				const next = new Map(prev);
+				if (message === null) next.delete(id);
+				else next.set(id, message);
+				return next;
+			});
+		setBusy((prev) => new Set(prev).add(id));
+		try {
+			const res = await client.assign(id, wolf);
+			if (!mounted.current) return;
+			if (!res.ok) setErr(res.message);
+			else {
+				const fresh = await reload();
+				if (mounted.current) setErr(fresh ? null : "assigned, but the list couldn't refresh");
+			}
+		} catch (err) {
+			if (mounted.current) setErr(err instanceof Error ? err.message : "assign failed");
+		} finally {
+			if (mounted.current)
+				setBusy((prev) => {
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				});
+		}
 	};
 
 	const setDomain = (next: string) => {
@@ -401,7 +442,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 
 	const items = load.state === "ready" ? load.items : null;
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.assign ? { assign: { wolves, busyId, error: assignError, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 

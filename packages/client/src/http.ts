@@ -474,7 +474,7 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** Hub only: one single-field PATCH of a work item (the caller passes the op; the hub gates it by the token's identity). */
-  async patchWork(workId: string, op: Record<string, unknown>): Promise<WorkItemResponse> {
+  async patchWork(workId: string, op: { assignee: string } | { moveTo: string | null }): Promise<WorkItemResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "patchWork needs a hub client", false);
     return (await this.json("hubPatchWork", { id: workId }, ROUTES.hubPatchWork.response.schema, op)) as WorkItemResponse;
   }

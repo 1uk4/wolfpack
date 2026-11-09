@@ -414,38 +414,102 @@ describe("graduated toggle, refresh and select", () => {
 });
 
 describe("the assignee dropdown", () => {
-	const withOwner = (over: Partial<Fake> = {}) => fake({ assignees: async () => ["hal", "luka"], assign: async () => ({ ok: true, data: {} }), ...over });
-	it("sits on features and loose tasks, shows child tasks' assignee as text, and a failed change leaves the list with the hub's message", async () => {
-		const items = [
-			item("f1", "feature", { assignee: "hal", title: "F1" }),
-			item("t1", "task", { partOf: "f1", assignee: "hal" }),
-			item("lt", "task", { assignee: "luka" }),
-		];
-		const c = withOwner({ items, assign: async () => ({ ok: false, reason: "error", message: 'unknown assignee "zed"' }) });
+	const ok = async () => ({ ok: true as const, data: {} });
+	const withOwner = (over: Partial<Fake> = {}) => fake({ assignees: async () => ({ ok: true, data: ["hal", "luka"] }), assign: ok, ...over });
+	const sel = (key: string) => q(`work-assignee-${key}`) as HTMLSelectElement;
+	const deferred = <T,>() => {
+		let resolve!: (v: T) => void;
+		const promise = new Promise<T>((r) => (resolve = r));
+		return { promise, resolve };
+	};
+	const TREE = [
+		item("f1", "feature", { assignee: "hal", title: "F1" }),
+		item("t1", "task", { partOf: "f1", assignee: "hal" }),
+		item("lt", "task", { assignee: "luka" }),
+	];
+	const openTree = async (c: Fake) => {
 		await open(c);
 		await click(q("work-toggle-no-initiative")!);
 		await click(q("work-toggle-f1")!);
-		assert.equal((q("work-assignee-f1") as HTMLSelectElement).value, "hal");
-		assert.ok(q("work-assignee-lt"));
+	};
+
+	it("sits on features and loose tasks; a feature's child tasks show their assignee as text", async () => {
+		await openTree(withOwner({ items: TREE }));
+		assert.equal(sel("f1").value, "hal");
+		assert.equal(sel("lt").value, "luka");
 		assert.equal(q("work-assignee-t1"), null);
 		assert.equal(q("work-assignee-text-t1")!.textContent, "hal");
-		const listCalls = c.calls.length;
-		await change(q("work-assignee-f1")!, { value: "luka" });
+	});
+	it("a refused change shows the hub's message on that row and leaves the old assignee", async () => {
+		await openTree(withOwner({ items: TREE, assign: async () => ({ ok: false, reason: "error", message: 'unknown assignee "zed"' }) }));
+		await change(sel("f1"), { value: "luka" });
 		await settle();
 		assert.equal(q("work-assignee-error-f1")!.textContent, 'unknown assignee "zed"');
-		assert.equal(c.calls.length, listCalls, "no reload after a failure");
-		assert.equal((q("work-assignee-f1") as HTMLSelectElement).value, "hal");
+		assert.equal(q("work-assignee-error-lt"), null);
+		assert.equal(sel("f1").value, "hal");
+		assert.equal(sel("f1").disabled, false);
 	});
-	it("reloads the list from the hub after a successful change", async () => {
-		const c = withOwner({ items: [item("f1", "feature", { assignee: "hal" })] });
+	it("after a successful change the reloaded list shows the new assignee on the feature and on its child tasks", async () => {
+		const c = withOwner({ items: TREE });
 		c.assign = async (id, wolf) => {
-			c.items = [item(id, "feature", { assignee: wolf })];
+			c.items = [item(id, "feature", { assignee: wolf, title: "F1" }), item("t1", "task", { partOf: id, assignee: wolf }), TREE[2]!];
 			return { ok: true, data: {} };
 		};
-		await open(c);
-		await click(q("work-toggle-no-initiative")!);
-		await change(q("work-assignee-f1")!, { value: "luka" });
+		await openTree(c);
+		await change(sel("f1"), { value: "luka" });
 		await settle();
-		assert.equal((q("work-assignee-f1") as HTMLSelectElement).value, "luka");
+		assert.equal(sel("f1").value, "luka");
+		assert.equal(q("work-assignee-text-t1")!.textContent, "luka");
+	});
+	it("disables only the row being changed, and one row finishing neither re-enables the other nor clears its error", async () => {
+		const a = deferred<{ ok: false; reason: "error"; message: string }>();
+		const b = deferred<{ ok: true; data: object }>();
+		const c = withOwner({ items: TREE, assign: (id) => (id === "f1" ? a.promise : b.promise) });
+		await openTree(c);
+		await change(sel("f1"), { value: "luka" });
+		await change(sel("lt"), { value: "hal" });
+		assert.deepEqual([sel("f1").disabled, sel("lt").disabled], [true, true]);
+		await act(async () => a.resolve({ ok: false, reason: "error", message: "f1 refused" }));
+		assert.deepEqual([sel("f1").disabled, sel("lt").disabled], [false, true]);
+		assert.equal(q("work-assignee-error-f1")!.textContent, "f1 refused");
+		await act(async () => b.resolve({ ok: true, data: {} }));
+		await settle();
+		assert.equal(sel("lt").disabled, false);
+		assert.equal(q("work-assignee-error-f1")!.textContent, "f1 refused", "row B's success leaves row A's error");
+	});
+	it("a row's error clears on its next successful change", async () => {
+		let fail = true;
+		const c = withOwner({ items: TREE, assign: async () => (fail ? { ok: false, reason: "error", message: "nope" } : { ok: true, data: {} }) });
+		await openTree(c);
+		await change(sel("f1"), { value: "luka" });
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, "nope");
+		fail = false;
+		await change(sel("f1"), { value: "luka" });
+		await settle();
+		assert.equal(q("work-assignee-error-f1"), null);
+	});
+	it("a thrown assign shows an error and re-enables the select", async () => {
+		await openTree(withOwner({ items: TREE, assign: async () => { throw new Error("boom"); } }));
+		await change(sel("f1"), { value: "luka" });
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, "boom");
+		assert.equal(sel("f1").disabled, false);
+	});
+	it("says so when the change worked but the list could not be read again", async () => {
+		const c = withOwner({ items: TREE });
+		c.assign = async () => {
+			c.list = async () => ({ ok: false, reason: "error", message: "down" });
+			return { ok: true, data: {} };
+		};
+		await openTree(c);
+		await change(sel("f1"), { value: "luka" });
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, "assigned, but the list couldn't refresh");
+	});
+	it("shows an error in the row instead of a dropdown when the wolves cannot be loaded", async () => {
+		await openTree(withOwner({ items: TREE, assignees: async () => ({ ok: false, reason: "error", message: "HTTP 502" }) }));
+		assert.equal(q("work-assignee-f1"), null);
+		assert.match(q("work-assignee-error-f1")!.textContent ?? "", /HTTP 502/);
 	});
 });

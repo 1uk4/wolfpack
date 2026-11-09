@@ -16,12 +16,10 @@ export interface WorkClient {
 	domains(): Promise<WorkDomain[]>;
 	/** The domain's work items; graduated and archived ones only with `graduated`. */
 	list(domain: string, graduated: boolean): Promise<KbResult<WorkListResponse>>;
-	/**
-	 * Owner controls (absent = no assignee dropdowns). Every console session is an owner session today (its hub bearer is the paired
-	 * console token; the hub still gates), so the real client always provides them.
-	 */
-	/** The wolves the dropdown offers. */
-	assignees?(): Promise<string[]>;
+	// Owner controls (absent = no assignee dropdowns). Every console session is an owner session today (its hub bearer is the paired
+	// console token; the hub still gates), so the real client always provides them.
+	/** The wolves the dropdown offers: the hub's wolf list (registered, non-retired; online or not). A failure carries the message. */
+	assignees?(): Promise<KbResult<string[]>>;
 	/** Set the item's assignee through the hub; a failure carries the hub's message. */
 	assign?(id: string, wolf: string): Promise<KbResult<unknown>>;
 }
@@ -33,7 +31,8 @@ export function createWorkClient(): WorkClient {
 	};
 	return {
 		async assignees() {
-			return (await wolves()).map((w) => w.name);
+			const res = await fetchWolves();
+			return res.ok ? { ok: true, data: res.data.wolves.map((w) => w.name) } : res;
 		},
 		assign: (id, wolf) => patchWorkItem(id, { assignee: wolf }),
 		async domains() {

@@ -81,20 +81,42 @@ describe("memory API: pass-through", () => {
 
 	it("workOp passes assign and move to the hub, refuses any other op, and returns the hub's message on failure", async () => {
 		const calls: unknown[][] = [];
-		const api = createMemoryApi(stub({ patchWork: async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } }) }));
+		const api = createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }, { name: "luka" }], patchWork: async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } }) }));
 		assert.equal((await api.workOp("work-x-1", { assignee: "hal" })).status, 200);
 		assert.equal((await api.workOp("work-x-1", { moveTo: null })).status, 200);
 		assert.deepEqual(calls, [["work-x-1", { assignee: "hal" }], ["work-x-1", { moveTo: null }]]);
-		for (const bad of [{ title: "x" }, { body: "## Plan" }, { assignee: "hal", note: "x" }, { assignee: "" }, null, ["assignee"]]) {
+		for (const bad of [{ title: "x" }, { body: "## Plan" }, { assignee: "hal", note: "x" }, { assignee: "" }, { ops: [] }, JSON.parse('{"__proto__":{"assignee":"hal"}}'), { moveTo: "" }, { moveTo: 5 }, null, ["assignee"]]) {
 			assert.equal((await api.workOp("work-x-1", bad)).status, 400, JSON.stringify(bad));
 		}
 		assert.equal(calls.length, 2, "refused ops never reach the hub");
-		const refused = createMemoryApi(stub({ patchWork: async () => { throw new ProtocolError("invalid_request", 'unknown assignee "zed": not an active wolf known to this hub', false); } }));
-		const res = await refused.workOp("work-x-1", { assignee: "zed" });
+		const forbidden = createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }], patchWork: async () => { throw new ProtocolError("forbidden", "only the owner can change it", false); } }));
+		const res = await forbidden.workOp("work-x-1", { assignee: "hal" });
+		assert.equal(res.status, 403);
+		assert.deepEqual(await body(res), { error: "only the owner can change it", code: "forbidden" });
+	});
+
+	it("workOp refuses an assignee that is not in the hub's wolf list, and fails closed when the list is missing, without calling the hub", async () => {
+		const calls: unknown[][] = [];
+		const patchWork = async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } });
+		const res = await createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }], patchWork })).workOp("work-x-1", { assignee: "nope-not-a-wolf" });
 		assert.equal(res.status, 400);
-		assert.deepEqual(await body(res), { error: 'unknown assignee "zed": not an active wolf known to this hub', code: "invalid_request" });
-		const forbidden = createMemoryApi(stub({ patchWork: async () => { throw new ProtocolError("forbidden", "only the owner can change it", false); } }));
-		assert.equal((await forbidden.workOp("work-x-1", { assignee: "hal" })).status, 403);
+		assert.match(String((await body(res)).error), /nope-not-a-wolf/);
+		const failed = await createMemoryApi(stub({ listWolves: async () => { throw new Error("fetch failed"); }, patchWork })).workOp("work-x-1", { assignee: "hal" });
+		assert.equal(failed.status, 502);
+		const empty = await createMemoryApi(stub({ listWolves: async () => [], patchWork })).workOp("work-x-1", { assignee: "hal" });
+		assert.equal(empty.status, 502);
+		assert.equal(calls.length, 0, "no refused assign reaches the hub");
+	});
+
+	it("workOp rejects a malformed id (dot segments) before any call, and answers 502 'hub unreachable' when the hub cannot be reached", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }], patchWork: async (...a: unknown[]) => (calls.push(a), { item: {} }) }));
+		for (const id of ["..", ".", "work-x", "work-x-1/../y", ""]) assert.equal((await api.workOp(id, { moveTo: null })).status, 400, id);
+		assert.equal(calls.length, 0);
+		const down = createMemoryApi(stub({ patchWork: async () => { throw new TypeError("fetch failed"); } }));
+		const res = await down.workOp("work-x-1", { moveTo: null });
+		assert.equal(res.status, 502);
+		assert.deepEqual(await body(res), { error: "hub unreachable", code: "engine_error" });
 	});
 
 	it("kbGraph maps query params to options", async () => {

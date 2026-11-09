@@ -14,6 +14,7 @@ import { createHubServer } from "./server.js";
 import { parseRebuildArgs, runRebuildCli, type RebuildCliArgs } from "./rebuild-cli.js";
 import { DEFAULT_CURATOR_POLL_MS, type CuratorOptions } from "./curator.js";
 import { assertSocketPath, parseSocketMode } from "./socket.js";
+import { startSdNotify } from "./sd-notify.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
@@ -331,7 +332,11 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   const hub = await createHubServer({ dataDir, ...listen, curator, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
-  const stop = () => void hub.close().then(() => process.exit(0));
+  const notifier = startSdNotify({ env }); // systemd READY=1 + watchdog pings (work-wolfpack-94pN3co); no-op without NOTIFY_SOCKET
+  const stop = () => {
+    notifier.stop();
+    void hub.close().then(() => process.exit(0));
+  };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   return hub;

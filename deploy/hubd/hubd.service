@@ -7,11 +7,28 @@ Documentation=file:///opt/wolfpack-hubd/current/RUNBOOK.md
 # tailscaled first: HUBD_HOST is the Tailscale IP. ExecStartPre also waits for the address; Restart=on-failure covers the rest.
 After=network-online.target tailscaled.service
 Wants=network-online.target tailscaled.service
+# Restart forever is intended (owner decision: self-healing is restart only). Watchdog and start-timeout restarts never trip this
+# limit: a watchdog kill comes at least WatchdogSec (30 s) after READY, plus RestartSec=5, so starts are >= 35 s apart (at most ~8 per
+# 300 s, under the burst of 10); a missing READY costs TimeoutStartSec=300 per attempt. So a broken notify path means endless
+# restarts, never a unit stuck in "failed"; the journal says why ("Watchdog timeout" / "start operation timed out", plus hubd's
+# once-only "systemd-notify ... failed" line).
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
 [Service]
-Type=simple
+# notify + watchdog (work-wolfpack-94pN3co): hubd sends READY=1 once it listens and WATCHDOG=1 every WatchdogSec/2 from its main event
+# loop, so a frozen loop is killed and restarted by Restart=on-failure (a watchdog kill counts as a failure).
+Type=notify
+# The messages come from a spawned `systemd-notify` child, not from hubd's own PID (node has no unix datagram sockets), so
+# NotifyAccess=main or exec would reject them; all accepts any process in the unit's cgroup. Cost: any process in that cgroup,
+# curator children included, could send the manager READY/WATCHDOG/STATUS for this unit. They all run as user hubd under
+# NoNewPrivileges, so this only lets hubd's own code mislead systemd about hubd, nothing more.
+NotifyAccess=all
+WatchdogSec=30s
+# SIGKILL instead of the default SIGABRT: a frozen hub is restarted without writing a core dump (node heap, tokens in memory).
+WatchdogSignal=SIGKILL
+# Covers ExecStartPre (up to 30 s waiting for the Tailscale address) plus the KB recovery and startup scan before hubd listens.
+TimeoutStartSec=300
 User=hubd
 Group=hubd
 # Root-owned, mode 600; systemd reads it as root before dropping privileges.

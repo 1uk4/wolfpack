@@ -7,7 +7,7 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 |---|---|
 | user / group | `hubd` / `hubd` (system, nologin). Never a wolf user |
 | bind | Tailscale IP `100.120.154.69` only, port **3150** (3141 was the legacy wolfpack-agent, retired 2026-11-06; never use 3141) |
-| unit | `/etc/systemd/system/hubd.service`: `After=tailscaled`, `Restart=on-failure`, hardened (see file) |
+| unit | `/etc/systemd/system/hubd.service`: `After=tailscaled`, `Type=notify` with `WatchdogSec=30s` (a hub whose event loop stops pinging is killed and restarted), `Restart=on-failure`, hardened (see file). Install the bundle that sends READY=1 BEFORE this unit: an older hubd never sends it, so its start times out after `TimeoutStartSec=300`. Order and rollback: section 4b |
 | env | `/etc/wolfpack/hubd.env`, root:root 600 |
 | code | `/opt/wolfpack-hubd/releases/<ts>-<sha>/hubd.mjs`, symlinks `current` and `previous` (node: `/usr/bin/node` v22) |
 | data | `/var/lib/hubd` (0700): ledger, registry, tokens, `kb-rev`, `run`, hub-owned `kb/base`, `kb/ops` |
@@ -88,6 +88,60 @@ systemctl is-active wolf-W1hOrJ                                     # unit gone 
 ```
 After the first contribution: `stat -c '%U %a' /var/lib/hubd/kb/ops/contributions/1uk4/*` (or `_processed/`) is `hubd 644`.
 
+## 4b. Notify/watchdog deploy and rollback (ticket work-wolfpack-94pN3co)
+The unit moves from `Type=simple` to `Type=notify` + `WatchdogSec=30s` + `WatchdogSignal=SIGKILL` + `NotifyAccess=all`. hubd spawns `systemd-notify READY=1` once it listens, then `systemd-notify WATCHDOG=1` every 15 s from its main event loop. A frozen loop stops the pings and systemd kills hubd and restarts it. Restarts repeat forever by design (see the unit comments). On sfo-01 as root, in this order.
+
+**Which setup.sh.** Every `setup.sh` call in this section, deploy and rollback, uses the staged copy from section 2: `D=/root/hubd-stage/deploy` (copied from the NEW checkout), never a `setup.sh` lying around in `/opt/wolfpack-hubd/`. Reason: `setup` writes the unit from `$HERE/hubd.service`, the template in the same directory as the `setup.sh` you run (`HERE` at setup.sh line 25, `write_unit "$HERE/hubd.service"` at line 170). `install` copies only `hubd.mjs`, `RUNBOOK.md` and `VERSION` into a release, so nothing keeps `/opt/wolfpack-hubd/setup.sh` up to date: it can be stale and would write the old `Type=simple` unit. `rollback` reads no template (it only swaps the `current`/`previous` symlinks), so any copy would do. The staged one is used there too, so there is only one copy to think about.
+
+**Deploy**
+1. **Staged check first** (the live hub is untouched). `systemd-notify` must exist, and a throwaway unit with the same user and the same hardening as `hubd.service` must be able to notify from a child process. The `-p` list below is every `[Service]` sandboxing line of `deploy/hubd/hubd.service` (user, capabilities, filesystem, devices, kernel, namespaces, address families, syscall filter). Left out on purpose: `ReadWritePaths=/var/lib/hubd`, `StateDirectory`, `EnvironmentFile`, `UMask` and the `ExecStartPre` guards, because none of them affects how `systemd-notify` reaches `/run/systemd/notify`. If the unit gains a hardening line, add it here too.
+   ```
+   command -v systemd-notify && systemd-notify --version | head -1    # systemd >= 246 (sd_notify_barrier)
+   systemd-run --unit=notify-check -p Type=notify -p NotifyAccess=all -p WatchdogSec=30s -p User=hubd -p Group=hubd \
+     -p NoNewPrivileges=yes -p CapabilityBoundingSet= -p AmbientCapabilities= \
+     -p ProtectSystem=strict -p ProtectHome=tmpfs -p PrivateTmp=yes -p PrivateDevices=yes \
+     -p ProtectKernelTunables=yes -p ProtectKernelModules=yes -p ProtectKernelLogs=yes -p ProtectControlGroups=yes \
+     -p ProtectClock=yes -p ProtectHostname=yes -p RestrictSUIDSGID=yes -p RestrictNamespaces=yes -p RestrictRealtime=yes \
+     -p LockPersonality=yes -p 'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX' -p SystemCallArchitectures=native \
+     -p SystemCallFilter=@system-service -p SystemCallErrorNumber=EPERM \
+     sh -c 'systemd-notify READY=1; sleep 5'
+   systemctl is-active notify-check     # "active" within the 5 s; systemd-run itself returns only once READY arrived
+   journalctl -u notify-check --no-pager   # no "Got notification message from PID ..., but reception only permitted for ...", no EPERM
+   ```
+   Check the `-p` names against `man systemd-run` / `man systemd.exec` / `man systemd.service` on the host before running (written on a Mac, not run). If the unit hangs in `activating` and then times out, stop: the notify path is broken, and installing this unit would make hubd restart forever. The unit cleans itself up after `sleep 5`.
+2. **Install the bundle:** `$D/setup.sh install --bundle /root/hubd-stage/bundle` (the new hubd sends READY only when it runs under `Type=notify`; under the old `Type=simple` unit it has no `NOTIFY_SOCKET` and sends nothing, so this step is safe on its own). `install` does **NOT** refresh the unit. `migrate_old_unit` (`setup.sh` lines 178-196) rewrites the unit only when it still has a `/home` path in `BindReadOnlyPaths=` / `BindPaths=` / `ReadWritePaths=` (the grep at line 181). It returns early for the current unit, so the unit stays `Type=simple` after `install` (the calls are at lines 207 and 216).
+3. **Back up the unit, confirm the template, then rewrite the unit** with the staged `setup.sh` (see "Which setup.sh" above):
+   ```
+   D=/root/hubd-stage/deploy
+   grep '^Type=' "$D/hubd.service"                                  # must print Type=notify; anything else is a stale copy: stop
+   cp -a /etc/systemd/system/hubd.service /root/hubd.service.bak-$(date -u +%Y%m%dT%H%M%SZ)
+   "$D/setup.sh" --dry-run setup --bind 100.120.154.69 --port 3150  # review: it must name $D/hubd.service as the template
+   "$D/setup.sh" setup --bind 100.120.154.69 --port 3150            # rewrites the unit from $D/hubd.service, runs daemon-reload
+   grep '^Type=' /etc/systemd/system/hubd.service                   # Type=notify
+   ```
+4. **Reload and restart:** `systemctl daemon-reload && systemctl restart hubd`. With `Type=notify` the restart returns only once hubd sent READY, or once 300 s have passed.
+5. **Verify:**
+   ```
+   systemctl show hubd -p Type,WatchdogUSec,NotifyAccess,WatchdogSignal   # notify, 30s, all, 9 (SIGKILL)
+   systemctl status hubd --no-pager                                          # active (running)
+   journalctl -u hubd -n 30 --no-pager | grep -E 'listening|systemd notify'  # "hubd: systemd notify: READY=1 sent; watchdog every 15s"
+   ```
+   hubd logs that line once, after the first notify that succeeded. A `hubd: systemd-notify ... failed: ...` line means the path is broken: roll back (below).
+6. **Start time against `TimeoutStartSec=300`.** Measure from the journal of recent deploys: the time from systemd's `Starting ...` line to `hubd listening on`, e.g. `journalctl -u hubd -o short-precise --since -14d | grep -E 'Starting .*Wolfpack hub|hubd listening on'` (older systemd logs `Starting Wolfpack hub (hubd)...`, newer `Starting hubd.service - Wolfpack hub (hubd)...`; the pattern matches both). Write the worst case here: **start-to-listening: unmeasured** (not run yet; replace with the measured seconds). If it gets anywhere near 300 s, raise `TimeoutStartSec` before deploying.
+7. Optional freeze test: `kill -STOP $(systemctl show -p MainPID --value hubd)`. Within ~30 s the journal shows `Watchdog timeout (limit 30s)!`, then `Killing process ... with signal SIGKILL` and a restart. `systemctl is-active hubd` is back to `active`.
+
+**Rollback** (the unit and the bundle together). An older bundle never sends READY. Under the new unit every start then waits the full 300 s, times out, restarts and loops. So never roll back only the bundle while the notify unit is installed, and keep this order: unit first, then `daemon-reload`, then the bundle. `setup.sh rollback` restarts hubd itself when it is active (setup.sh lines 227-236). Run before the reload, that restart would still use the loaded notify unit: the old bundle never sends READY, the start hangs 300 s and loops.
+```
+D=/root/hubd-stage/deploy                                              # same staged setup.sh as the deploy (see "Which setup.sh")
+cp -a /root/hubd.service.bak-<ts> /etc/systemd/system/hubd.service     # 1. the Type=simple unit saved in step 3
+systemctl daemon-reload                                                 # 2. load it BEFORE anything restarts hubd
+systemctl show hubd -p Type                                             #    simple
+"$D/setup.sh" rollback                                                  # 3. bundle: swap current and previous; restarts hubd only if active
+systemctl is-active hubd || systemctl start hubd                        # 4. rollback skips the restart when hubd is not active: start it by hand
+```
+If only the unit is the problem (keep the new bundle), skip step 3 and run `systemctl restart hubd` after step 2. A hub caught in the start loop shows `activating`, not `active`, so `rollback` will not restart it; step 4 covers that.
+The other way round works: a notify-aware bundle under the old `Type=simple` unit runs fine, because without `NOTIFY_SOCKET` it sends nothing.
+
 ## 5. Register, pair, go online (host `mac-1uk4`, wolf `1uk4`, domains personal, snapjack, wolfpack)
 workerd announces wolves by **name** (`1uk4`), not by id (ddkyhT). Wolves must be registered, with their domains, before the Mac connects; order: domains → host → wolves → pair → workerd.
 
@@ -131,7 +185,7 @@ The hub warns at startup when `HUBD_CONSOLE_URL` is plain http on a non-loopback
 The console forwards each browser's own token verbatim; its own `WOLFPACK_HUB_TOKEN` is used only by `GET /api/health`. A browser without (or with a revoked) token gets 401 and is sent to `/pair`.
 
 ## 6. Rollback / removal
-- Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
+- Bad release: `./setup.sh rollback` (swaps `current` and `previous`). If the `Type=notify` unit is installed and `previous` predates the watchdog, revert the unit FIRST and `daemon-reload` before running `rollback` (section 4b, Rollback): `rollback` restarts an active hubd under whatever unit is loaded.
 - Remove hubd (no wolf dirs are involved): `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. It keeps `/var/lib/hubd`, the env file and the user; `uninstall --purge` removes them too (stop first and back the state up if it matters). **`hubd export` does not work on sfo-01**: its tree walk refuses symlinks (`refusing to export a symlink: kb/base/domains`, `export.ts walk`), so it fails safely and never reads Dewey's KB, but it also produces no backup. Back up with the service stopped; hubd is always restarted, even if tar fails:
 ```
 systemctl stop hubd

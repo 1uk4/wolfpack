@@ -31,6 +31,11 @@ describe("foldWolfThreads", () => {
 });
 
 describe("foldWolfRoster", () => {
+	it("carries a wolf's chosen color, and keeps it while the wolf is offline", () => {
+		const a = foldWolfRoster(null, [{ name: "w", status: "online", color: "pink" }, { name: "x", status: "online" }]);
+		assert.deepEqual(a, [{ name: "w", online: true, color: "pink" }, { name: "x", online: true }]);
+		assert.deepEqual(foldWolfRoster(a, undefined), [{ name: "w", online: false, color: "pink" }, { name: "x", online: false }]);
+	});
 	it("an offline wolf is listed after a fresh load with no threads", () => {
 		const r = foldWolfRoster(null, [{ name: "1uk4", status: "online" }, { name: "hal2", status: "offline" }]);
 		assert.deepEqual(r, [{ name: "1uk4", online: true }, { name: "hal2", online: false }]);

@@ -16,33 +16,24 @@ describe("threadColor", () => {
 		const keys = new Set(Array.from({ length: 200 }, (_, i) => autoThreadColor(`w/feature-${i}`)));
 		assert.equal(keys.size, 8);
 	});
-	it("a subagent gets its parent's color (override first, else automatic, even if the parent is unknown)", () => {
-		const parent = { id: "w/feature-a", settings: { color: "pink" } };
+	it("a subagent gets its parent's automatic color, even if the parent is unknown", () => {
 		const kid = { id: "w/sub-1", parentThreadId: "w/feature-a" };
-		const c = threadColor(kid, [parent, kid]);
-		assert.equal(c.key, "pink");
-		assert.equal(c.overridden, true);
 		assert.equal(threadColor(kid, [{ id: "w/feature-a" }, kid]).key, autoThreadColor("w/feature-a"));
 		assert.equal(threadColor(kid).key, autoThreadColor("w/feature-a"));
 	});
-	it("an override wins, a row-level color works, an invalid one falls back to automatic", () => {
-		assert.equal(threadColor({ id: "w/home", settings: { color: "teal" } }).key, "teal");
-		assert.equal(threadColor({ id: "w/home", color: "red" }).key, "red");
-		assert.equal(threadColor({ id: "w/home", color: "nope" }).key, autoThreadColor("w/home"));
+	it("the wolf's color colors its home thread and the home thread's subagents, nothing else", () => {
+		const home = { id: "w/home", kind: "home" };
+		const feature = { id: "w/feature-a", kind: "feature" };
+		const sub = { id: "w/sub-1", kind: "subagent", parentThreadId: "w/home" };
+		const featureSub = { id: "w/sub-2", kind: "subagent", parentThreadId: "w/feature-a" };
+		const all = [home, feature, sub, featureSub];
+		assert.deepEqual([threadColor(home, all, "pink").key, threadColor(home, all, "pink").overridden], ["pink", true]);
+		assert.equal(threadColor(sub, all, "pink").key, "pink");
+		assert.equal(threadColor(feature, all, "pink").key, autoThreadColor("w/feature-a"));
+		assert.equal(threadColor(featureSub, all, "pink").key, autoThreadColor("w/feature-a"));
 	});
-});
-
-import { changeSettings, type ThreadSettingsState } from "../components/composer-settings.ts";
-
-describe("color override through changeSettings", () => {
-	it("sets, resets to automatic, and rolls back a refused change", async () => {
-		let state: ThreadSettingsState = { tier: "main", autoShip: false };
-		const set = (u: (s: ThreadSettingsState) => ThreadSettingsState) => void (state = u(state));
-		await changeSettings({ current: state, patch: { color: "blue" }, put: async () => state, set });
-		assert.equal(state.color, "blue");
-		await changeSettings({ current: state, patch: { color: null }, put: async () => state, set });
-		assert.equal(state.color, undefined);
-		await changeSettings({ current: { ...state, color: "red" }, patch: { color: "green" }, put: async () => { throw new Error("no"); }, set: (u) => void (state = u({ ...state, color: "red" })) });
-		assert.equal(state.color, "red");
+	it("an unset or invalid wolf color falls back to the automatic color", () => {
+		const home = { id: "w/home", kind: "home" };
+		for (const c of [undefined, null, "nope"]) assert.equal(threadColor(home, [home], c).key, autoThreadColor("w/home"));
 	});
 });

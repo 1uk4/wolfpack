@@ -5,12 +5,10 @@ import { cn } from "@/lib/utils";
 import { MenuShell } from "@/components/menu-shell";
 import { Toggle } from "@/components/settings/controls";
 import { changeSettings, DEFAULT_SETTINGS, fetchSettings, putSettings, TIERS, type SettingsPatch, type Tier, type ThreadSettingsState } from "@/components/composer-settings";
-import { ThreadColorPicker } from "@/components/thread-color-picker";
-import { autoThreadColor, beginColorChange, onThreadColor, settleColorChange, THREAD_COLORS } from "@/src/core";
 import { settingsUrl } from "@/components/thread-transport";
 
 /** The thread's settings from the wolf, with an optimistic `change` that rolls back (and reports) when the wolf refuses. */
-export function useThreadSettings(wolf: string, slug: string, threadId?: string) {
+export function useThreadSettings(wolf: string, slug: string) {
 	const [settings, setSettings] = useState<ThreadSettingsState>(DEFAULT_SETTINGS);
 	const [loaded, setLoaded] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -34,34 +32,18 @@ export function useThreadSettings(wolf: string, slug: string, threadId?: string)
 		};
 	}, [url]);
 
-	// A pick made elsewhere (the sidebar menu) shows here at once.
-	useEffect(() => {
-		if (!threadId) return;
-		return onThreadColor((id, color) => {
-			if (id !== threadId) return;
-			setSettings((s) => {
-				if ((s.color ?? null) === color) return s;
-				const { color: _old, ...rest } = s;
-				return color === null ? rest : { ...rest, color };
-			});
-		});
-	}, [threadId]);
-
 	const change = useCallback(
 		async (patch: SettingsPatch) => {
 			setError(null);
-			// A color pick is announced to the shared store (sidebar dot, floating bar) and settled with the outcome.
-			const seq = threadId && patch.color !== undefined ? beginColorChange(threadId, patch.color, ref.current.color ?? null) : undefined;
 			const r = await changeSettings({
 				current: ref.current,
 				patch,
 				put: (p) => putSettings(url, p),
 				set: (update) => setSettings((s) => update(s)),
 			});
-			if (threadId && seq !== undefined) settleColorChange(threadId, seq, r.ok);
 			if (!r.ok) setError(r.error);
 		},
-		[url, threadId],
+		[url],
 	);
 	return { settings, loaded, error, change };
 }
@@ -74,10 +56,7 @@ export function ComposerControls({
 	settings,
 	error,
 	onChange,
-	threadId,
 }: {
-	/** For the "Automatic" swatch: the color the id would give. */
-	threadId?: string;
 	settings: ThreadSettingsState;
 	error?: string | null;
 	onChange: (patch: SettingsPatch) => void;
@@ -132,8 +111,6 @@ export function ComposerControls({
 					<MenuShell anchorRef={anchor} testid="tier-menu" preferredSide="up" menuClass="flex w-64 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl">
 						<TierMenuList
 							settings={settings}
-							threadId={threadId}
-							onColor={(color) => onChange({ color })}
 							onPick={(tier) => {
 								setOpen(false);
 								if (tier !== settings.tier) onChange({ tier });
@@ -151,7 +128,7 @@ export function ComposerControls({
 }
 
 /** The tier menu body: the wolf's three tiers, the resolved model beside each, a ✓-style highlight on the current one. */
-export function TierMenuList({ settings, onPick, onColor, threadId }: { settings: ThreadSettingsState; onPick: (tier: Tier) => void; onColor?: (color: string | null) => void; threadId?: string }) {
+export function TierMenuList({ settings, onPick }: { settings: ThreadSettingsState; onPick: (tier: Tier) => void }) {
 	return (
 		<>
 			{TIERS.map((tier) => (
@@ -168,12 +145,6 @@ export function TierMenuList({ settings, onPick, onColor, threadId }: { settings
 					<span className="min-w-0 truncate text-muted-foreground">{settings.models?.[tier] ?? ""}</span>
 				</button>
 			))}
-			{onColor && (
-				<div className="mt-1 border-t pt-1.5">
-					<div className="px-2 text-muted-foreground">Thread color</div>
-					<ThreadColorPicker value={settings.color ?? undefined} autoHex={threadId ? THREAD_COLORS[autoThreadColor(threadId)] : undefined} onPick={onColor} />
-				</div>
-			)}
 			<div className="mt-1 border-t px-2 pt-1.5 text-muted-foreground">This thread's model. A change applies from the next turn.</div>
 		</>
 	);

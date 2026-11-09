@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWrite, backupFile } from "@wolfpack/agents";
 import { WolfFileSchema } from "@wolfpack/engine";
-import { isMaskedConfigKey, isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
+import { THREAD_COLOR_KEYS, isMaskedConfigKey, isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
 import { isMap, parse as parseYaml, parseDocument } from "yaml";
 
 /** wolf.yaml keys an edit may set (dotted). Everything else (memory.live, librarian, identity, serve, sandbox, ...) stays hand-edited. */
 export const EDITABLE_KEYS: readonly string[] = [
   ...(["main", "smart", "fast"] as const).flatMap((t) => [`models.${t}.provider`, `models.${t}.model`, `models.${t}.thinking`, `tiers.${t}.model`, `tiers.${t}.thinking`]),
+  "color",
   "prompts.structuredOutput",
   "subagents.maxRunning",
   "compaction.enabled",
@@ -85,6 +86,12 @@ export class WolfSettingsStore {
     };
   }
 
+  /** The wolf's chosen color (a palette key) read live from wolf.yaml, or undefined (automatic). */
+  color(): string | undefined {
+    const c = this.doc().color;
+    return typeof c === "string" && (THREAD_COLOR_KEYS as readonly string[]).includes(c) ? c : undefined;
+  }
+
   envNames(): EnvVarView[] {
     return ENV_VARS.map((v) => ({ name: v.name, purpose: v.purpose, set: !!this.env[v.name], secret: isSecretValue(v.name, "") }));
   }
@@ -115,6 +122,9 @@ export class WolfSettingsStore {
     if (doc.contents === null || !isMap(doc.contents)) throw new SettingsError("invalid_request", "wolf.yaml is not a mapping");
     for (const [key, value] of Object.entries(set)) {
       if (!EDITABLE_KEYS.includes(key)) throw new SettingsError("invalid_request", `"${key}" is not an editable setting`);
+      if (key === "color" && value !== null && !(typeof value === "string" && (THREAD_COLOR_KEYS as readonly string[]).includes(value))) {
+        throw new SettingsError("invalid_request", `color must be one of ${THREAD_COLOR_KEYS.join(", ")} (or null for automatic)`);
+      }
       const path = key.split(".");
       if (value === null) doc.deleteIn(path);
       else doc.setIn(path, value);

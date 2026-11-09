@@ -278,6 +278,8 @@ export const WolfSummarySchema = z.object({
   librarian: z.boolean().optional(),
   /** Additive: this wolf has KB roots and serves the read-only graph and entry routes (a mirror when it is not the librarian). Absent = false. */
   kbReadable: z.boolean().optional(),
+  /** Additive: the wolf's chosen color (a THREAD_COLOR_KEYS key, wolf.yaml `color`). Absent = automatic. */
+  color: z.lazy(() => ThreadColorSchema).optional(),
 });
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 

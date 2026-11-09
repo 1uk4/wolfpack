@@ -11,7 +11,7 @@
  * Harness-originated revisions (no tool call) need a server-side source of upserts; they would need no console
  * change, since they arrive as the same events and history objects.
  */
-import { OBJECT_TOOL_TYPES, parseObjectData, type ChecklistData } from "@wolfpack/protocol/objects";
+import { OBJECT_TOOL_TYPES, parseObjectData, type ChecklistData, type DecisionData, type GraphData } from "@wolfpack/protocol/objects";
 import type { LhViewMessage, LhViewPart } from "./view.ts";
 
 /** Names of the tools that show objects: their tool row is hidden, the card is the UX. */
@@ -72,6 +72,29 @@ export interface ActiveChecklist {
 	objectId: string;
 	rev: number;
 	data: ChecklistData;
+}
+
+interface ActiveBase {
+	objectId: string;
+	rev: number;
+}
+/** Parsed (valid) data; `data` follows `type`. */
+export type ActiveObject = (ActiveBase & { type: "decision"; data: DecisionData }) | (ActiveBase & { type: "graph"; data: GraphData });
+
+/** The thread's pinned decision or graph: the folded part of `type` whose latest upsert came last (same rule as activeChecklist). Invalid data is skipped. */
+export function activeObject(messages: LhViewMessage[], type: "decision" | "graph"): ActiveObject | undefined {
+	let best: { seq: number; value: ActiveObject } | undefined;
+	for (const m of messages) {
+		if (m.role !== "assistant") continue;
+		for (const p of m.parts) {
+			if (p.type !== "object" || p.objectType !== type) continue;
+			const data = parseObjectData(type, p.data);
+			if (!data) continue;
+			const seq = typeof p.recency === "number" ? p.recency : 0;
+			if (!best || seq >= best.seq) best = { seq, value: { objectId: p.objectId as string, rev: p.rev as number, type, data } as ActiveObject };
+		}
+	}
+	return best?.value;
 }
 
 /**

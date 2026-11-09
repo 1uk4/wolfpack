@@ -1,14 +1,12 @@
 "use client";
 
-import { useCallback, useId, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useId, type KeyboardEvent } from "react";
 import { checklistProgress } from "@wolfpack/protocol/objects";
+import { PANEL_CHECKLIST, closePanel, dismiss, dismissKey, togglePanel, useDismissed, useOpenPanel } from "@/components/pin-store";
 import { ChecklistItems } from "@/components/checklist-card";
 import { sessionFindHasForegroundLayer } from "@/components/session-find";
 import { cn } from "@/lib/utils";
 import type { ActiveChecklist } from "@/src/core";
-
-/** Expanded state per thread, for the session (module scope: survives remounts, not a reload). Default collapsed. */
-const expandedThreads = new Set<string>();
 
 /**
  * Visibility rule (owner): the pinned status goes away in exactly two cases, and never on its own (not when every item
@@ -19,76 +17,8 @@ const expandedThreads = new Set<string>();
  *  (b) the user dismisses it with the close button. A dismissal is keyed by thread + objectId and persisted in
  *      localStorage, so it survives reload, a new session and reconnect. Revisions of the SAME objectId stay
  *      dismissed; a checklist with a different objectId pins again.
+ * (The dismissed/expanded stores live in pin-store.ts, shared with the decision and graph pins.)
  */
-const DISMISSED_KEY = "wp.pinned-checklist.dismissed.v1";
-const DISMISSED_MAX = 200;
-const dismissKey = (threadId: string, objectId: string) => JSON.stringify([threadId, objectId]);
-/** Fallback when localStorage is unavailable (private mode, quota): dismissal then lasts for the page's lifetime. Capped like the stored list. */
-let memoryDismissed: string[] = [];
-const dismissListeners = new Set<() => void>();
-/** Parsed stored list, so getSnapshot never parses JSON per render; invalidated on dismiss and on a cross-tab storage event. */
-let cache: string[] | null = null;
-
-function readDismissed(fresh = false): string[] {
-	if (cache && !fresh) return cache;
-	try {
-		const v: unknown = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]");
-		cache = Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-	} catch {
-		cache = [];
-	}
-	return cache;
-}
-
-function isDismissed(key: string): boolean {
-	return memoryDismissed.includes(key) || readDismissed().includes(key);
-}
-
-function notify() {
-	for (const l of dismissListeners) l();
-}
-
-function dismiss(key: string) {
-	memoryDismissed = [...memoryDismissed.filter((k) => k !== key), key].slice(-DISMISSED_MAX);
-	try {
-		// Re-read fresh storage first: another tab may have dismissed something since this tab's cache was filled.
-		const next = [...readDismissed(true).filter((k) => k !== key), key].slice(-DISMISSED_MAX);
-		localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
-		cache = next;
-	} catch {
-		cache = null; /* memory fallback above */
-	}
-	notify();
-}
-
-function subscribeDismissed(l: () => void) {
-	dismissListeners.add(l);
-	const onStorage = (e: StorageEvent) => {
-		if (e.key !== null && e.key !== DISMISSED_KEY) return;
-		cache = null;
-		notify();
-	};
-	window.addEventListener("storage", onStorage);
-	return () => {
-		dismissListeners.delete(l);
-		window.removeEventListener("storage", onStorage);
-	};
-}
-
-/** Test hook: forget the module-scope caches (the stub storage was reset). */
-export function resetDismissedCache() {
-	cache = null;
-	memoryDismissed = [];
-}
-
-/** Whether the user dismissed this thread's checklist `objectId`. SSR-safe: the server snapshot is "not dismissed", the client reads localStorage after hydration. */
-export function useChecklistDismissed(threadId: string, objectId: string | undefined): boolean {
-	return useSyncExternalStore(
-		subscribeDismissed,
-		() => objectId !== undefined && isDismissed(dismissKey(threadId, objectId)),
-		() => false,
-	);
-}
 
 /**
  * Top padding the transcript reserves while the card is pinned, so the first message is never under it. Sized for the
@@ -111,17 +41,9 @@ export const PINNED_CHECKLIST_RESERVE = "pt-24";
  * `active`, so the card refreshes in either state.
  */
 export function PinnedChecklist({ active, threadId, onDismiss }: { active: ActiveChecklist | undefined; threadId: string; onDismiss?: () => void }) {
-	const [open, setOpen] = useState(() => expandedThreads.has(threadId));
+	const open = useOpenPanel(threadId) === PANEL_CHECKLIST; // default collapsed; opening it collapses every other pinned panel
 	const panelId = useId();
-	const set = useCallback(
-		(v: boolean) => {
-			if (v) expandedThreads.add(threadId);
-			else expandedThreads.delete(threadId);
-			setOpen(v);
-		},
-		[threadId],
-	);
-	const dismissed = useChecklistDismissed(threadId, active?.objectId);
+	const dismissed = useDismissed(active ? dismissKey(threadId, active.objectId) : undefined);
 	if (!active || dismissed) return null;
 	const { data } = active;
 	const { done, total } = checklistProgress(data);
@@ -133,24 +55,24 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key !== "Escape" || !open || sessionFindHasForegroundLayer(document)) return;
 		e.stopPropagation(); // claim the Esc: the dismiss chain must not also stop dictation / abort the turn
-		set(false);
+		closePanel(threadId, PANEL_CHECKLIST);
 	};
 	const close = () => {
-		expandedThreads.delete(threadId);
+		closePanel(threadId, PANEL_CHECKLIST);
 		dismiss(dismissKey(threadId, active.objectId));
 		onDismiss?.(); // the focused × is about to unmount: hand focus on (the composer)
 	};
 	return (
-		<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex max-h-full flex-col" data-testid="pinned-checklist" data-object-id={active.objectId} data-expanded={open}>
+		<div className="pointer-events-none flex min-h-0 flex-col" data-testid="pinned-checklist" data-object-id={active.objectId} data-expanded={open}>
 			<div className="mx-auto flex min-h-0 w-full max-w-[46rem] flex-col px-4 pt-2">
 				<div onKeyDown={onKeyDown} className="pointer-events-auto relative flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg">
 					<button
 						type="button"
 						aria-expanded={open}
 						aria-controls={open ? panelId : undefined}
-						onClick={() => set(!open)}
+						onClick={() => togglePanel(threadId, PANEL_CHECKLIST)}
 						data-testid="pinned-checklist-button"
-						className={cn("flex w-full flex-col gap-0.5 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring", !showBar && "pb-2")}
+						className={cn("flex w-full shrink-0 flex-col gap-0.5 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring", !showBar && "pb-2")}
 					>
 						<span className="flex min-w-0 items-center gap-2">
 							<span className="min-w-0 flex-1 truncate font-medium" data-testid="pinned-checklist-summary">

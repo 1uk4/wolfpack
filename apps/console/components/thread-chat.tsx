@@ -9,7 +9,9 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
-import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
+import { PINNED_OBJECT_ROW_REM, PinnedObjects, pinnedObjectDismissKey } from "@/components/pinned-objects";
+import { dismissKey, useDismissed } from "@/components/pin-store";
+import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/pinned-checklist";
 import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/feature-progress";
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
@@ -40,6 +42,7 @@ import {
 	ASSISTANT_CONTENT_CLASS,
 	NO_CARDS,
 	activeChecklist,
+	activeObject,
 	PROSE_BLOCK_CLASS,
 	foldCardEvent,
 	withHeldSkip,
@@ -464,15 +467,22 @@ function ThreadChatInner({
 	const progressShown = featureProgress.state.phase === "ready";
 	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && initialBound !== undefined);
 	const active = useMemo(() => activeChecklist(messages), [messages]);
-	const dismissedChecklist = useChecklistDismissed(threadId, active?.objectId);
+	const dismissedChecklist = useDismissed(active ? dismissKey(threadId, active.objectId) : undefined);
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
+	// Decisions and graphs pin in any thread (stacked under the checklist / feature progress), updating in place per objectId.
+	const activeDecision = useMemo(() => activeObject(messages, "decision"), [messages]);
+	const activeGraph = useMemo(() => activeObject(messages, "graph"), [messages]);
+	const decisionDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeDecision));
+	const graphDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeGraph));
+	const pinnedObjects = [decisionDismissed ? undefined : activeDecision, graphDismissed ? undefined : activeGraph].filter((a): a is NonNullable<typeof a> => a !== undefined);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	// The composer dock overlays the list (absolute, bottom-0) and its height varies (controls wrap on a phone, chips, dictation bar,
 	// subagent strip, safe-area inset). Measure it so the tail spacer clears the dock and its gradient glow exactly.
 	const [dockEl, setDockEl] = useState<HTMLDivElement | null>(null);
 	const [dockHeight, setDockHeight] = useState<number | null>(null);
 	useEffect(() => {
-		if (!dockEl || typeof ResizeObserver !== "function") return;
+		if (!dockEl) return void setDockHeight(null); // the dock is gone (closed-thread notice): back to the pre-measure default
+		if (typeof ResizeObserver !== "function") return;
 		const read = () => setDockHeight(Math.ceil(dockEl.getBoundingClientRect().height));
 		read();
 		const ro = new ResizeObserver(read);
@@ -625,6 +635,7 @@ function ThreadChatInner({
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
 							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>
+								{pinnedObjects.length > 0 && <div aria-hidden style={{ height: `${pinnedObjects.length * PINNED_OBJECT_ROW_REM}rem` }} className="-mb-4 shrink-0" />}
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -813,10 +824,14 @@ function ThreadChatInner({
 							</div>
 						</div>
 					</Conversation>
-					{featureProgress.state.phase === "ready" && (
-						<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
-					)}
-					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. */}
+					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column">
+						{featureProgress.state.phase === "ready" && (
+							<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
+						)}
+						<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+						<PinnedObjects items={pinnedObjects} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+					</div>
 				</div>
 			</div>
 			<RightPanelHost />

@@ -39,7 +39,8 @@ const { MemoryEventsProvider } = await import("../components/memory-events.tsx")
 const { lookupCard } = await import("../components/card-registry.tsx");
 const { DecisionCard } = await import("../components/decision-card.tsx");
 const { ChecklistCard } = await import("../components/checklist-card.tsx");
-const { PinnedChecklist, resetDismissedCache } = await import("../components/pinned-checklist.tsx");
+const { PinnedChecklist } = await import("../components/pinned-checklist.tsx");
+const { resetDismissedCache, resetOpenPanels } = await import("../components/pin-store.ts");
 const { SessionModel } = await import("../components/session-core.ts");
 const { threadTransport } = await import("../components/thread-transport.ts");
 const { renderItems, threadMessagesToNative, collapseObjects, activeChecklist } = await import("../src/core/index.ts");
@@ -555,6 +556,7 @@ describe("pinned checklist card", () => {
 	beforeEach(() => {
 		store.clear();
 		resetDismissedCache();
+		resetOpenPanels();
 	});
 	const closeBtn = () => q('[aria-label="Dismiss checklist"]');
 	const remount = async (threadId: string, messages: ThreadMessage[]) => {
@@ -678,5 +680,145 @@ describe("pinned checklist card", () => {
 		store.set("wp.pinned-checklist.dismissed.v1", JSON.stringify([JSON.stringify([threadId, "cl"])]));
 		await fire(dom.window as never, "storage", { key: "wp.pinned-checklist.dismissed.v1" });
 		assert.equal(status(), null);
+	});
+});
+
+describe("pinned decision and graph", () => {
+	const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
+	const decision = (rev: number, chosen: string) => ({ objectId: "db", type: "decision", rev, textOffset: 0, data: { ...d1, chosen } });
+	const graph = { objectId: "g", type: "graph", rev: 1, textOffset: 0, data: { title: "Plan", nodes: [{ id: "a", label: "A", kind: "step", status: "done" }], edges: [] } };
+	const hist = (...objects: unknown[]): ThreadMessage[] => [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects } as never];
+	let seq = 0;
+	async function mount(threadId: string, messages: ThreadMessage[]) {
+		if (root) await act(async () => root!.unmount());
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(
+			<AppRouterContext.Provider value={{ push() {} } as never}>
+				<SettingsDialogProvider>
+					<MemoryEventsProvider connect={inertSource}>
+						<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={threadMessagesToNative(messages) as never} initiallyInFlight={false} />
+					</MemoryEventsProvider>
+				</SettingsDialogProvider>
+			</AppRouterContext.Provider>,
+		));
+	}
+
+	beforeEach(() => {
+		store.clear();
+		resetDismissedCache();
+		resetOpenPanels();
+	});
+	afterEach(() => void (globalThis.fetch = realFetch));
+
+	const click = (sel: string) => act(async () => void q(sel)!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+	const decisionOf = (objectId: string, chosen = "pg") => ({ objectId, type: "decision", rev: 1, textOffset: 0, data: { ...d1, objectId, chosen } });
+	const checklist = { objectId: "cl", type: "checklist", rev: 1, textOffset: 0, data: { title: "Todo", items: [{ id: "i0", label: "Step", state: "todo" }] } };
+	const toggle = (type: string) => `[data-testid="pinned-${type}"] [data-testid="pinned-object-button"]`;
+	const expanded = (type: string) => q(`[data-testid="pinned-${type}"]`)!.getAttribute("data-expanded");
+
+	it("pins a decision and a graph in a plain thread, a revision updating the pin in place", async () => {
+		await mount(`po-${++seq}`, hist(decision(1, "pg"), graph, decision(2, "sq")));
+		assert.equal(document.querySelectorAll('[data-testid="pinned-decision"]').length, 1);
+		assert.equal(q('[data-testid="pinned-decision"]')!.getAttribute("data-rev"), "2");
+		assert.ok(q('[data-testid="pinned-graph"]'));
+	});
+
+	it("pins only the newest of two decisions with different objectIds", async () => {
+		await mount(`po-${++seq}`, hist(decisionOf("old"), decisionOf("new")));
+		const pins = document.querySelectorAll('[data-testid="pinned-decision"]');
+		assert.equal(pins.length, 1);
+		assert.equal(pins[0]!.getAttribute("data-object-id"), "new");
+	});
+
+	it("dismissing the newest decision does not bring back an older one, and stays dismissed after reload", async () => {
+		const threadId = `po-${++seq}`;
+		const h = hist(decisionOf("old"), decisionOf("new"));
+		await mount(threadId, h);
+		await click('[data-testid="pinned-decision"] [data-testid="pinned-object-close"]');
+		assert.equal(q('[data-testid="pinned-decision"]'), null);
+		await mount(threadId, h);
+		assert.equal(q('[data-testid="pinned-decision"]'), null);
+	});
+
+	it("expands a pin to the card, then collapses it again", async () => {
+		await mount(`po-${++seq}`, hist(decision(1, "sq")));
+		await click(toggle("decision"));
+		assert.equal(expanded("decision"), "true");
+		assert.match(q('[data-testid="pinned-object-panel"] [data-chosen="true"]')!.textContent ?? "", /SQLite/);
+		assert.equal(q('[data-testid="pinned-object-panel"]')!.getAttribute("role"), "region");
+		await click(toggle("decision"));
+		assert.equal(expanded("decision"), "false");
+		assert.equal(q('[data-testid="pinned-object-panel"]'), null);
+	});
+
+	it("expanding a second pin collapses the first", async () => {
+		await mount(`po-${++seq}`, hist(decision(1, "pg"), graph));
+		await click(toggle("decision"));
+		await click(toggle("graph"));
+		assert.equal(expanded("graph"), "true");
+		assert.equal(expanded("decision"), "false");
+	});
+
+	it("renders the checklist pin and the decision and graph pins in one column, in order", async () => {
+		await mount(`po-${++seq}`, hist(checklist, decision(1, "pg"), graph));
+		const column = q('[data-testid="pinned-column"]')!;
+		const order = [...column.querySelectorAll('[data-testid="pinned-checklist"], [data-testid="pinned-decision"], [data-testid="pinned-graph"]')].map((e) => e.getAttribute("data-testid"));
+		assert.deepEqual(order, ["pinned-checklist", "pinned-decision", "pinned-graph"]);
+	});
+
+	/** Bind the thread to a feature so the progress panel shows: the threads list names it, the record is a one-task feature. */
+	function bindFeature(threadId: string) {
+		const rec = { id: "F", kind: "feature", title: "Feat", stage: "in_build", plan: "", record: "", children: [{ id: "a", title: "Task a", kind: "task", stage: "plan", dependsOn: [] }] };
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const path = new URL(String(input), "http://t").pathname;
+			if (path.endsWith("/threads")) return Response.json({ threads: [{ id: threadId, boundWorkItem: "F" }] });
+			if (path.endsWith("/record")) return Response.json(rec);
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+	}
+	/** `bound`: the thread is bound to a feature, so the progress panel shows (and replaces the checklist pin, as in ThreadChat). */
+	const mountAll = async (bound: boolean) => {
+		const threadId = `po-${++seq}`;
+		if (bound) bindFeature(threadId);
+		await mount(threadId, hist(checklist, decision(1, "pg"), graph));
+		await act(async () => void (await new Promise((r) => setTimeout(r, 40)))); // the progress fetch settles
+	};
+	const progressToggle = '[data-testid="feature-progress-toggle"]';
+	const checklistToggle = '[data-testid="pinned-checklist-button"]';
+	const isOpen = (testId: string) => q(`[data-testid="${testId}"]`)!.getAttribute("data-expanded");
+	const esc = (sel: string) => act(async () => void q(sel)!.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
+
+	it("opening the checklist collapses an open pin", async () => {
+		await mountAll(false);
+		await click(toggle("decision"));
+		await click(checklistToggle);
+		assert.deepEqual([isOpen("pinned-checklist"), isOpen("pinned-decision")], ["true", "false"]);
+	});
+
+	it("opening a pin collapses an expanded feature progress panel", async () => {
+		await mountAll(true);
+		await click(progressToggle);
+		assert.equal(isOpen("feature-progress"), "true");
+		await click(toggle("graph"));
+		assert.deepEqual([isOpen("feature-progress"), isOpen("pinned-graph")], ["false", "true"]);
+	});
+
+	it("opening the progress panel collapses an open pin", async () => {
+		await mountAll(true);
+		await click(toggle("decision"));
+		await click(progressToggle);
+		assert.deepEqual([isOpen("feature-progress"), isOpen("pinned-decision")], ["true", "false"]);
+	});
+
+	it("Esc inside whichever panel is open closes it: progress, checklist, pin", async () => {
+		for (const [bound, toggler, id] of [[true, progressToggle, "feature-progress"], [false, checklistToggle, "pinned-checklist"], [false, toggle("decision"), "pinned-decision"]] as const) {
+			await mountAll(bound);
+			await click(toggler);
+			assert.equal(isOpen(id), "true");
+			await esc(toggler);
+			assert.equal(isOpen(id), "false", id);
+		}
 	});
 });

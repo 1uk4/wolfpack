@@ -196,15 +196,6 @@ export function slotsConfigured(models: ModelsSettings | undefined): boolean {
 	return Boolean(models?.strong?.model && models?.cheap?.model && models?.vision?.model);
 }
 
-/** Agent settings — everything about the agent machinery. */
-export interface AgentSettings {
-	/** System-prompt override SWITCHES keyed by segment path (absent key =
-	 *  off). Switch-on requires the override file to exist (enforced by the
-	 *  route); the switch is explicit so users keep a file on disk but run
-	 *  the source default to compare (owner decision 2026-09-19). */
-	prompts?: Record<string, boolean>;
-}
-
 /** Markdown-rendering knobs — the bare-bones set (owner decision). */
 export interface MdRenderingSettings {
 	/** Heading font weight (100–900, default 600). CSS resolves the nearest
@@ -234,33 +225,13 @@ export interface AppearanceSettings {
 	mdRendering?: MdRenderingSettings;
 }
 
-/**
- * COMPACTION (owner round 14, 2026-10-05): the context-fitting mechanic's
- * user-facing knob. One number — the trigger threshold in context tokens.
- * The effective trigger is min(this, model contextWindow − 16k reserve)
- * (owner ruling: on big models the setting rules; on small ones the
- * window rules before the provider overflows).
- *
- * FACTORY DEFAULT 150_000 (owner ruling).
- *
- * FLOOR 32_000 (implementer's call, the chunk-budget discipline): below
- * the kept tail (20k) + a summary the chat would re-compact every turn —
- * a burn, not a preference. NO CEILING: a huge threshold just means "fit
- * everything" until the window rule binds.
- */
-export interface CompactionSettings {
-	thresholdTokens?: number;
-}
-
 /** THE record. Every section optional (delta); unknown top-level keys are
  *  preserved verbatim by the sanitizer (forward-compat with newer records). */
 export interface UserSettings {
 	version: number;
-	agent?: AgentSettings;
 	/** The strong/cheap/vision model slots (model slots wave, 2026-09-20). */
 	models?: ModelsSettings;
 	appearance?: AppearanceSettings;
-	compaction?: CompactionSettings;
 	[key: string]: unknown;
 }
 
@@ -283,7 +254,6 @@ export interface FactorySettings {
 			italicColor: string | null;
 		};
 	};
-	compaction: Required<CompactionSettings>;
 }
 
 export const FACTORY_SETTINGS: FactorySettings = {
@@ -296,7 +266,6 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		sessionNameSerif: true,
 		mdRendering: { headingWeight: 600, boldColor: null, italicColor: null },
 	},
-	compaction: { thresholdTokens: 150_000 },
 };
 
 // ─── Sanitizer ─────────────────────────────────────────────────────────────
@@ -366,22 +335,6 @@ function sanitizeModels(raw: Record<string, unknown>): ModelsSettings {
 	return out;
 }
 
-function sanitizeBooleanMap(raw: unknown): Record<string, boolean> | undefined {
-	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-	const out: Record<string, boolean> = {};
-	for (const [key, value] of Object.entries(raw)) {
-		if (typeof value === "boolean") out[key] = value;
-	}
-	return Object.keys(out).length ? out : undefined;
-}
-
-function sanitizeAgent(raw: Record<string, unknown>): AgentSettings {
-	const out: AgentSettings = {};
-	const prompts = sanitizeBooleanMap(raw.prompts);
-	if (prompts) out.prompts = prompts;
-	return out;
-}
-
 function sanitizeMdRendering(raw: unknown): MdRenderingSettings {
 	const out: MdRenderingSettings = {};
 	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
@@ -410,21 +363,6 @@ function sanitizeAppearance(raw: Record<string, unknown>): AppearanceSettings {
 	return out;
 }
 
-/** clamp-never-reject (the sanitizer's discipline): a finite positive
- *  number floors to COMPACTION_THRESHOLD_FLOOR, anything else drops (the
- *  factory default resolves at read time). Exported for the PUT parser's
- *  reject-with-rationale. */
-export const COMPACTION_THRESHOLD_FLOOR = 32_000;
-
-function sanitizeCompaction(raw: Record<string, unknown>): CompactionSettings {
-	const out: CompactionSettings = {};
-	const rawTokens = raw.thresholdTokens;
-	if (typeof rawTokens === "number" && Number.isFinite(rawTokens) && rawTokens > 0) {
-		out.thresholdTokens = Math.max(COMPACTION_THRESHOLD_FLOOR, Math.floor(rawTokens));
-	}
-	return out;
-}
-
 /**
  * Coerce arbitrary JSON (disk file, network body) into a valid delta record:
  * known fields validated strictly (invalid ones drop/clamp per module doc),
@@ -437,9 +375,6 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	const out: UserSettings = {
 		version: typeof r.version === "number" && Number.isInteger(r.version) && r.version >= 1 ? r.version : CURRENT_SETTINGS_VERSION,
 	};
-	if (r.agent !== null && typeof r.agent === "object" && !Array.isArray(r.agent)) {
-		out.agent = sanitizeAgent(r.agent as Record<string, unknown>);
-	}
 	if (r.appearance !== null && typeof r.appearance === "object" && !Array.isArray(r.appearance)) {
 		out.appearance = sanitizeAppearance(r.appearance as Record<string, unknown>);
 	}
@@ -447,17 +382,14 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 		const models = sanitizeModels(r.models as Record<string, unknown>);
 		if (Object.keys(models).length) out.models = models;
 	}
-	if (r.compaction !== undefined && r.compaction !== null && typeof r.compaction === "object") {
-		out.compaction = sanitizeCompaction(r.compaction as Record<string, unknown>);
-	}
 	// Unknown top-level keys ride along untouched (forward-compat). One
 	// known-DEAD keys are stripped instead of riding: `chat` (the old
 	// default-settings section, died with per-session models, owner
 	// 2026-09-28) and `graph` (the extraction switches, died with the
-	// extraction pipeline) — a fossil copy on disk must never resurrect
+	// extraction pipeline), `agent` (prompt switches) and `compaction` (the console compaction threshold), both retired — a fossil copy on disk must never resurrect
 	// through reads (and any later write flushes it from the file for good).
 	for (const [key, value] of Object.entries(r)) {
-		if (key === "chat" || key === "graph") continue;
+		if (key === "chat" || key === "graph" || key === "agent" || key === "compaction") continue;
 		if (!(key in out)) out[key] = value;
 	}
 	return out;

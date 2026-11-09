@@ -81,6 +81,24 @@ d("browser extension (live)", () => {
     await session.close();
     expect(existsSync(shot)).toBe(false);
   }, 60000);
+
+  it("sizes only the calling thread's tab with width, reports it, and resets after browser_close", async () => {
+    const ext = createBrowserExtension({ enabled: true, allowHosts: ["127.0.0.1"] }, { wolfDen: den, wolfName: "w", domains: [], wolfConfig: {} });
+    const call = (name: string, args: any, id: number) => ext.tools!.find((t) => t.name === name)!.execute(args, { cwd: "/", wolfDen: den, wolfName: "w", conversationId: id });
+    const size = async (id: number) => (await call("browser_eval", { expression: "innerWidth + 'x' + innerHeight" }, id)).content[0].text;
+    const phone = await call("browser_goto", { url: base + "/", width: 390 }, 1);
+    expect(phone.content[0].text).toMatch(/Viewport: 390x844/);
+    await call("browser_goto", { url: base + "/" }, 2);
+    expect(await size(1)).toContain("390x844");
+    expect(await size(2)).toContain("1280x800");
+    const shot = await call("browser_screenshot", { width: 500, height: 700 }, 1);
+    expect(shot.content[0].text).toMatch(/Viewport: 500x700/);
+    expect(await size(1)).toContain("500x700");
+    await call("browser_close", {}, 1);
+    await call("browser_goto", { url: base + "/" }, 1);
+    expect(await size(1)).toContain("1280x800");
+    await call("browser_close", {}, 2);
+  }, 60000);
 });
 
 d("browser extension (live): WebSockets", () => {
@@ -928,6 +946,18 @@ describe("browser extension (no browser needed)", () => {
       "browser_goto", "browser_click", "browser_fill", "browser_eval", "browser_screenshot", "browser_console", "browser_network", "browser_close",
     ]);
     expect(on.runtimes).toEqual(["pi-durable"]);
+  });
+
+  it("rejects an out-of-range viewport width or height before opening any browser", async () => {
+    const ctx = { wolfDen: "/nonexistent", wolfName: "w", domains: [], wolfConfig: {} };
+    const ext = createBrowserExtension({ enabled: true, executablePath: "/nope/chrome" }, ctx);
+    const tc = { cwd: "/", wolfDen: "/nonexistent", wolfName: "w", conversationId: 1 };
+    const cases: Array<[string, any]> = [["browser_goto", { url: "https://example.com", width: 100 }], ["browser_screenshot", { width: 5000 }], ["browser_screenshot", { width: 390, height: 99 }], ["browser_goto", { url: "https://example.com", width: 390.5 }]];
+    for (const [name, args] of cases) {
+      const res = await ext.tools!.find((t) => t.name === name)!.execute(args, tc);
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toMatch(/width must be an integer 320-3840|height must be an integer 320-2160/);
+    }
   });
 
   it("returns an install hint when the binary is missing", async () => {

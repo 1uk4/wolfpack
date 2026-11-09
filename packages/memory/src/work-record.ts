@@ -288,6 +288,8 @@ export interface WorkRecordItem {
   successCriteria?: string;
   /** The parent item (null: none). Undefined: the store does not say, so the observation's stored feature is used. */
   partOf?: string | null;
+  /** The wolf the item is assigned to, when the API says. */
+  assignee?: string;
   /** The working document ("" when none written yet). */
   body: string;
 }
@@ -358,6 +360,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       kind: String(it.kind ?? ""),
       stage: String(it.stage ?? ""),
       container: it.container === true,
+      ...(typeof it.assignee === "string" && it.assignee ? { assignee: it.assignee } : {}),
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
       partOf: typeof it.partOf === "string" ? it.partOf : it.partOf === null ? null : undefined,
       body: data.body ?? "",
@@ -404,7 +407,7 @@ export type WorkRecordOutcome =
   /** Item archived or deleted: the observations are discarded (logged by the caller), never sent to the den. */
   | { work: string; ids: string[]; status: "discarded"; reason: string }
   /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
-  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause };
+  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause; /** Next attempt (ms epoch) while the group backs off. */ retryAt?: number; assignee?: string };
 
 /** The hub's code for a Record write to an archived item (hubd RECORD_CLOSED). */
 export const RECORD_CLOSED_CODE = "record_closed";
@@ -419,6 +422,8 @@ export interface ConsolidateWorkOptions {
   observations: WorkObservation[];
   /** Retry backoff and the 404 grace period. Absent: every group is tried now and a 404 discards at once. */
   state?: WorkPendingState;
+  /** Try groups still inside their backoff (a manual Consolidate). A failure still updates the state. */
+  ignoreBackoff?: boolean;
   onProgress?: (msg: string) => void;
 }
 
@@ -501,16 +506,18 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       outcomes.push({ work, ids, status: "pending", reason: WORK_API_UNAVAILABLE, cause: "work-api-unavailable" });
       continue;
     }
-    if (state && !state.due(work)) {
+    if (state && !opts.ignoreBackoff && !state.due(work)) {
       onProgress?.(`  work ${work}: backing off, ${obs.length} observation(s) stay pending`);
-      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable" });
+      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable", ...(state.entry(work)?.nextAttemptAt ? { retryAt: state.entry(work)!.nextAttemptAt } : {}), ...(state.entry(work)?.assignee ? { assignee: state.entry(work)!.assignee } : {}) });
       continue;
     }
     let phase: PendingCause = "work-api-unavailable";
+    let assignee: string | undefined;
     try {
       const read = await readItem(work);
       if ("err" in read) throw read.err;
       const item = read.item;
+      assignee = item?.assignee;
       if (!item && store.healthy && !(await store.healthy())) throw new Error("Work API unhealthy: a 404 proves nothing");
       if (!item && state && !state.missing(work)) {
         onProgress?.(`  work ${work}: not found, waiting to confirm before discarding ${obs.length} observation(s)`);
@@ -568,13 +575,14 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
         onProgress?.(`  work ${work}: refused by the hub, ${obs.length} observation(s) stay pending — ${reason}`);
         // Deliberate: nextAttemptAt stays 0 for "forbidden", so a refused item costs one model call per run. Refusals are rare now that
         // the Record is open to every wolf, and that cost is accepted.
-        state?.pending(work, "forbidden", reason);
-        outcomes.push({ work, ids, status: "pending", reason, cause: "forbidden" });
+        state?.pending(work, "forbidden", { message: reason, ...(assignee ? { assignee } : {}) });
+        outcomes.push({ work, ids, status: "pending", reason, cause: "forbidden", ...(assignee ? { assignee } : {}) });
         continue;
       }
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
       state?.pending(work, phase);
-      outcomes.push({ work, ids, status: "pending", reason, cause: phase });
+      const retryAt = state?.entry(work)?.nextAttemptAt;
+      outcomes.push({ work, ids, status: "pending", reason, cause: phase, ...(retryAt ? { retryAt } : {}) });
     }
   }
   state?.save();

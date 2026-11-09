@@ -64,16 +64,10 @@ describe("settings overview API", () => {
 		assert.match(body.wolves[0].error, /timed out/);
 	});
 
-	it("reports both compaction prompts with where they run and the real source text", async () => {
+	it("reports the wolf compaction prompt with where they run and the real source text", async () => {
 		stubHub();
 		const body = await (await createSettingsOverviewApi(hubClient).overview()).json();
 		const byId = Object.fromEntries(body.compaction.prompts.map((p: { id: string }) => [p.id, p]));
-		const auto = byId["console-auto-summarizer"];
-		assert.deepEqual(auto.triggers, ["auto"]);
-		assert.equal(auto.runsIn, "console");
-		assert.match(auto.text, /^You are the session-compaction summarizer for a wolfpack console conversation\./);
-		assert.doesNotMatch(auto.text, /tutoring/);
-		assert.match(byId["console-auto-instructions"].text, /^You are compacting the earlier part of a conversation/);
 		const manual = byId["pi-durable-summarizer"];
 		assert.deepEqual(manual.triggers, ["auto", "manual"]);
 		assert.equal(manual.runsIn, "wolf");
@@ -93,7 +87,7 @@ describe("settings overview API", () => {
 		assert.deepEqual(body.wolves, []);
 		assert.match(body.wolvesError, /fetch failed/);
 		assert.equal(body.hub.ok, true);
-		assert.equal(body.compaction.prompts.length, 3);
+		assert.equal(body.compaction.prompts.length, 1);
 	});
 
 	it("keeps answering 401 with the hub-auth marker when the browser is unpaired", async () => {

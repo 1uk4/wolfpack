@@ -10,7 +10,8 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
+import { ProtocolError, type ConsoleClient } from "@wolfpack/client";
+import { withDirect, createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 import { directRoute, directTarget } from "../src/server/direct-path.ts";
 import { createPackHealth, healthTargets, type HealthSnapshot } from "../src/server/pack-health.ts";
 import { createSessionWitness, setSessionWitness } from "../src/server/session-witness.ts";
@@ -261,5 +262,33 @@ describe("directTarget", () => {
 			["http://127.0.0.1:7141", "http://[::1]:7141", "https://127.0.0.1:7141", "http://192.168.1.5:7141", "http://mac.tail.ts.net:7141"].map(t),
 			["http://127.0.0.1:7141", "http://[::1]:7141", undefined, undefined, undefined],
 		);
+	});
+});
+
+describe("withDirect on a hub request that timed out (work-wolfpack-FpEanzS)", () => {
+	const timedOut = () => Object.assign(new ProtocolError("engine_error", "wolf did not answer in time (20000 ms)", true), { timedOut: true });
+	const setup = () => {
+		const witness = createSessionWitness();
+		setSessionWitness(witness);
+		cleanups.push(() => setSessionWitness(undefined));
+		witness.verified("tok");
+		const calls: string[] = [];
+		const hub = {
+			listPrompts: async () => { calls.push("hub:listPrompts"); throw timedOut(); },
+			listKbEntries: async () => { calls.push("hub:listKbEntries"); throw timedOut(); },
+		} as unknown as ConsoleClient;
+		const direct = {
+			route: () => "direct" as const,
+			check: async () => "direct" as const,
+			owns: () => true,
+			sessionTtlMs: 1e9,
+			client: { listPrompts: async () => [{ id: "p" }] } as unknown as ConsoleClient,
+		};
+		return { calls, client: withDirect(hub, { ...direct, route: () => "hub" as const }, async () => "tok") };
+	};
+	it("answers a DIRECT_BY_WOLF route from the local wolfd, but a hub-only route ends in the unavailable error", async () => {
+		const { client } = setup();
+		assert.deepEqual(await client.listPrompts!("alpha"), [{ id: "p" }]);
+		await assert.rejects(() => (client as unknown as { listKbEntries(): Promise<unknown> }).listKbEntries(), /the hub is unreachable/);
 	});
 });

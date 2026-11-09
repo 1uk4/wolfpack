@@ -27,7 +27,6 @@ export * from "./events.ts";
 export * from "./layout.ts";
 export * from "./route-layout.ts";
 export * from "./pending.ts";
-export * from "./prompt-segments.ts";
 export * from "./math-delims.ts";
 export * from "./escape-html.ts";
 // Wave B (owner-approved 2026-09-26): the native record (LhMessage),

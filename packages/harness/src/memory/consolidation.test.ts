@@ -302,6 +302,24 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(archived().filter((e) => e.outcome === "discarded")).toEqual([]);
   });
 
+  it("a group backing off is skipped (with its retry time) unless the run ignores backoff", async () => {
+    poolWith([o(0, { work: "work-t1" })]);
+    const down = mocks();
+    down.workStore.get = async () => { throw new Error("ECONNREFUSED"); };
+    const r1 = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: down.engine, workStore: down.workStore, minObservations: 1 });
+    expect(r1.recordsWritten).toBe(0);
+    expect(r1.retryAt).toBeGreaterThan(Date.now()); // a fresh failure backs off too
+    const m = mocks();
+    const auto = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, minObservations: 1 });
+    expect(auto.observationsPending).toBe(1);
+    expect(auto.retryAt).toBeGreaterThan(Date.now());
+    expect(m.writes).toEqual([]);
+    const manual = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, minObservations: 1, ignoreBackoff: true });
+    expect(manual.recordsWritten).toBe(1);
+    expect(manual.observationsPending).toBe(0);
+    expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
+  });
+
   it("tasks of one feature share one Record on the feature; a legacy line with only `work` keeps its item", async () => {
     poolWith([o(1, { work: "work-t1", feature: "work-f1" }), o(2, { work: "work-t2", feature: "work-f1" }), o(3, { work: "work-t9" })]);
     const m = mocks();

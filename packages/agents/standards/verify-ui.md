@@ -20,7 +20,8 @@ Goal: each thread checks its own worktree in its own browser tab, and never dist
 - `browser_goto <url>`. Each thread has its own tab, so threads don't interfere. On a slot port the browser signs itself in. Never paste, print or ask for tokens.
 - Take screenshots with `browser_screenshot` and read `browser_console` for errors. A short burst of 401s just before sign-in completes is expected.
 - Check desktop width (the browser's default viewport is 1280x800) and mobile width, 390px.
-- The browser tools have no viewport setting, so 390px can't be checked with them today. Say plainly in the report that 390px was not checked; don't claim it.
+- For 390px, call `browser_goto` with `width: 390` (height defaults to 844), then `browser_screenshot`. `browser_screenshot` also takes `width`/`height` to resize before shooting. It resizes only your thread's tab and sticks until you change it or call `browser_close`, so pass `width: 1280` to go back to desktop. The result line `Viewport: 390x844` confirms the size.
+- Look at the 390px screenshot and confirm the mobile layout shows, not just that the page loaded.
 
 ## 4. Report
 - Include the screenshots, the slot URL `http://127.0.0.1:<port>`, and the line `wolfpack preview slot pair <port>`. The owner runs it once per port to open the same slot in his own browser.

@@ -91,7 +91,8 @@ Leanness comes from these rules (seams, one test per behaviour, no duplicates, r
 ## How to verify your work
 1. On a task branch, run `wolfpack test related <changed files>` while working, and again with typecheck
    at the end. Run tests only with `wolfpack test` (`wolfpack test run <paths>`, `-t <name>`), never vitest directly:
-   it queues behind other runs on this host, caps CPU, and reuses a pass for unchanged files (`--no-cache` to force a rerun). The console's `tsx --test` suite still runs its own way.
+   it queues behind other runs on this host, caps CPU, and reuses a pass for unchanged files (`--no-cache` to force a rerun).
+   Console tests (`apps/console`, `tsx --test`) run only through `wolfpack test run apps/console/tests/<file>`: named files only, one command per file group, 120 s per file, sharing the same queue slots. Never loop over test files, never call `tsx --test` or `npx tsx --test` directly, and never run the whole console suite (CI does; `wolfpack test run apps/console` is refused for agents).
    Exit 75 means the queue wait timed out: run it again later. Exit 124 means the run took too long and was stopped.
    The full suite of each affected package runs at merge into `wolf/1uk4` (see Suite stages).
 2. Red evidence: for each new test, show the failing run (test name and failure

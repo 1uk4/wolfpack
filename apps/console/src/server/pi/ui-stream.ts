@@ -45,7 +45,7 @@ import { ToolCallIdUniquifier } from "./call-ids.ts";
  * server-side background object decoupled from any single HTTP response —
  * clients are VIEWS. runPiTurn returns the handle (compacted state +
  * subscriber set); piTurnResponse wraps a subscriber stream as the SSE
- * response, and the POST /api/chat response and GET /api/chats/[id]/stream
+ * response, and the turn-submit response and GET /api/chats/[id]/stream
  * are BOTH exactly that. Cancelling a view detaches it ONLY — never aborts
  * the turn; the handle's abort() is the one remote kill.
  *
@@ -323,7 +323,7 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	};
 }
 
-/** The subscriber-shaped SSE response — the POST /api/chat response and
+/** The subscriber-shaped SSE response — the turn-submit response and
  * GET /api/chats/[id]/stream are BOTH this: same headers, same wire
  * dialect, one protocol for the client to consume. */
 export function piTurnResponse(handle: PiTurnHandle): Response {

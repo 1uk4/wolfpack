@@ -14,7 +14,9 @@ import {
 	actionBlock,
 	applyPromoteEvent,
 	bannerOf,
-	blockedText,
+	blockedLabel,
+	consolidateMessage,
+	reconcilePromote,
 	pendingWarning,
 	type PoolPending,
 	groupLabel,
@@ -93,6 +95,8 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		if (req !== statusReq.current) return;
 		if (r.ok) {
 			setStatus(r.data);
+			// wolfd knows whether a promote runs: a page that mounts mid-run shows it, and a finished one shows its result
+			setPromote((s) => reconcilePromote(s, r.data));
 			setStatusError(null);
 		} else setStatusError(r.message);
 	}, [wolf, threadId]);
@@ -113,11 +117,17 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	useEffect(() => {
 		if (!obsPool) return;
 		const now = Date.now();
-		const due = groupObservations(obsPool).filter((g) => g.kind === "work" && now - (infoAt.current.get(g.key) ?? -Infinity) >= INFO_TTL_MS);
-		for (const g of due) {
-			infoAt.current.set(g.key, now);
-			void fetchWorkRecord(wolf, g.key).then((r) => {
-				if (r.ok) setGroupInfo((m) => ({ ...m, [g.key]: { title: r.data.title || g.key, stage: r.data.stage || undefined } }));
+		// the groups' own items, and the feature whose Record blocks a group
+		const keys = new Set<string>();
+		for (const g of groupObservations(obsPool)) {
+			if (g.kind === "work") keys.add(g.key);
+			if (g.blockedKey) keys.add(g.blockedKey);
+		}
+		for (const key of keys) {
+			if (now - (infoAt.current.get(key) ?? -Infinity) < INFO_TTL_MS) continue;
+			infoAt.current.set(key, now);
+			void fetchWorkRecord(wolf, key).then((r) => {
+				if (r.ok) setGroupInfo((m) => ({ ...m, [key]: { title: r.data.title || key, stage: r.data.stage || undefined } }));
 			});
 		}
 	}, [obsPool, wolf]);
@@ -194,7 +204,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		setNote(null);
 		const r = await postConsolidate(wolf);
 		setConsolidating(false);
-		if (r.ok) setNote(`Consolidated ${r.data.observationsProcessed} observations → ${r.data.topicsCreated} new, ${r.data.topicsMerged} merged topics`);
+		if (r.ok) setNote(consolidateMessage(r.data));
 		else setNote(r.code === "memory_busy" ? BUSY_TEXT : r.message);
 		void refreshStatus();
 		void refreshPool();
@@ -341,7 +351,7 @@ export function ObservationsSection({ observations }: {
 									>
 										<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
 										<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-											{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{blockedText(g)}</span> : null}
+											{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, observations.info)}{g.blockedCount && g.blockedCount !== g.count ? ` (${g.blockedCount} of ${g.count})` : ""}</span> : null}
 											{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
 											<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
 										</span>

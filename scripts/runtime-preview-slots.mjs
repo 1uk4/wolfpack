@@ -192,11 +192,71 @@ export function createSlots({
 	max = Number(env.PREVIEW_SLOT_MAX) || SLOT_MAX,
 	idleMs = Number(env.PREVIEW_SLOT_IDLE_MS) || SLOT_IDLE_MS,
 	lockWaitMs = 5000,
+	// Revoking a slot's browser token (the one `slot pair` minted): a JSON request to the hub -> {status, json}; status 0 when unreachable.
+	hubFetch = async (url, init) => {
+		try {
+			const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
+			return { status: r.status, json: await r.json().catch(() => ({})) };
+		} catch {
+			return { status: 0, json: {} };
+		}
+	},
+	warn = (m) => console.error(m),
 } = {}) {
 	max = Math.min(max, SLOT_MAX_CAP);
 	const dir = path.join(home, ".wolfpack", "preview");
 	const file = path.join(dir, "slots.json");
 	const lockFile = path.join(dir, "slots.lock");
+	// Non-secret token ids of the browser tokens `slot pair` minted, one per port and kind ("agent" = the wolf browser via --print-url, "owner" = the owner's browser): {"3231": {"agent": "tok_...", "owner": "tok_..."}}. The older flat {"3231": "tok_..."} reads as the owner's id. Its own file (not slots.json) so a
+	// slot record dying never loses the id, and the runner's slots.json check is untouched. Only ids are ever stored here.
+	const tokensFile = path.join(dir, "slot-tokens.json");
+	const readIds = () => {
+		try {
+			const o = JSON.parse(fs.readFileSync(tokensFile, "utf8"));
+			if (!o || typeof o !== "object") return {};
+			for (const k of Object.keys(o)) if (typeof o[k] === "string") o[k] = { owner: o[k] }; // legacy flat shape
+			return o;
+		} catch {
+			return {};
+		}
+	};
+	const writeIds = (o) => {
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(tokensFile + ".tmp", JSON.stringify(o, null, 2) + "\n");
+		fs.renameSync(tokensFile + ".tmp", tokensFile);
+	};
+	const pendingIds = [];
+	/** Under the lock: forget the port's recorded id of one kind (every kind when none is named) and queue it for revoking (done after the lock, in settled). */
+	const forgetId = (port, kind) => {
+		const ids = readIds();
+		const entry = ids[String(port)];
+		if (!entry || typeof entry !== "object") return;
+		for (const k of kind ? [kind] : Object.keys(entry)) {
+			if (typeof entry[k] === "string") pendingIds.push(entry[k]);
+			delete entry[k];
+		}
+		if (!Object.keys(entry).length) delete ids[String(port)];
+		writeIds(ids);
+	};
+	/** Revoke a token id on the hub with a token this Mac holds (hub-token file first, as `slot pair` does, then the env one). Never throws: a failure is one warning. */
+	const revokeId = async (id) => {
+		const hub = resolveHub({ home, env });
+		const tokens = [];
+		try {
+			const t = fs.readFileSync(path.join(dir, "hub-token"), "utf8").trim();
+			if (t) tokens.push(t);
+		} catch {}
+		const fromEnv = env.WOLFPACK_HUB_TOKEN?.trim();
+		if (fromEnv && !tokens.includes(fromEnv)) tokens.push(fromEnv);
+		let last = 0;
+		if (hub) {
+			for (const token of tokens) {
+				last = (await hubFetch(hub.url + "/v1/tokens/" + encodeURIComponent(id), { method: "DELETE", headers: { Authorization: "Bearer " + token } })).status;
+				if (last === 200 || last === 404) return; // 404: already revoked
+			}
+		}
+		warn("preview: could not revoke slot browser token " + id + " (" + (hub ? (last ? "the hub answered " + last : "the hub is unreachable") : "no hub paired") + "); revoke it with `hubd tokens revoke " + id + "`");
+	};
 
 	/** A missing or corrupt file counts as "no slots" (runners whose record is gone exit on their next check). */
 	const read = () => {
@@ -258,6 +318,7 @@ export function createSlots({
 	const pending = [];
 	const settled = async (value) => {
 		await Promise.all(pending.splice(0));
+		for (const id of pendingIds.splice(0)) await revokeId(id);
 		return value;
 	};
 	/** Drop dead slots (clearing what they left behind) and idle slots (killing them). → {slots, stopped: [port]} */
@@ -271,10 +332,12 @@ export function createSlots({
 				// Only when no process holds the pid at all is the old group ours to clean up. A pid that exists but is not our runner (reused
 				// after a reboot) may lead an unrelated group, such as another console's next dev: just forget the record.
 				if (!pidExists(s.pid)) pending.push(Promise.resolve(reapLeftovers(s)).catch(() => {}));
+				forgetId(s.port);
 				continue;
 			}
 			if (t - s.lastUsed > idleMs) {
 				kill(s.pid, rec);
+				forgetId(s.port);
 				stopped.push(s.port);
 				continue;
 			}
@@ -363,6 +426,19 @@ export function createSlots({
 			return { port: slot.port, url: url(slot.port), pid: slot.pid, reused: slot.reused, noToken: !tok.token, ...(tok.looseFile ? { tokenFileLoose: tok.looseFile } : {}) };
 		},
 		list: async () => settled(await locked(() => sweep().slots)),
+		/** Keep the non-secret id of the browser token `slot pair` just minted for this port and kind ("owner" | "agent"). */
+		recordToken: async (port, id, kind = "owner") =>
+			locked(() => {
+				const ids = readIds();
+				writeIds({ ...ids, [String(port)]: { ...ids[String(port)], [kind]: id } });
+			}),
+		/** Revoke the port's recorded token of this kind (if any) and forget it. A failure is a warning, never an error. */
+		revokeToken: async (port, kind = "owner") => {
+			await locked(() => forgetId(port, kind));
+			return settled();
+		},
+		/** Best effort: revoke a token id that was minted but could not be recorded. Warns on failure. */
+		revokeTokenId: async (id) => revokeId(id),
 		/** Read-only view for `status`: no lock, no sweep, no write. Dead slots are just left out. */
 		peek: () => read().filter((s) => isAlive(s.pid, { ...s, home })),
 		/** Stop idle and dead slots. → [port] stopped for idleness */
@@ -377,6 +453,7 @@ export function createSlots({
 				const s = slots.find((x) => x.port === port && x.pid === pid && x.startedAt === startedAt);
 				if (!s) return false;
 				kill(s.pid, { ...s, home });
+				forgetId(s.port);
 				write(slots.filter((x) => x !== s));
 				return true;
 			}));
@@ -393,6 +470,7 @@ export function createSlots({
 				const s = hit[0];
 				if (!s) throw new Error(`no slot for ${key}${slots.length ? ` (running: ${slots.map((x) => `${x.port} ${x.worktree}`).join(", ")})` : " (no slots are running)"}`);
 				kill(s.pid, { ...s, home });
+				forgetId(s.port);
 				write(slots.filter((x) => x !== s));
 				return s.port;
 			}));

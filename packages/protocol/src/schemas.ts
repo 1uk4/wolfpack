@@ -1175,6 +1175,8 @@ export const ConsolidateResponseSchema = z.object({
   recordsWritten: z.number().int().nonnegative().optional(),
   /** Tagged observations left in the pool (the Work API or model was unavailable). */
   observationsPending: z.number().int().nonnegative().optional(),
+  /** Earliest next attempt (ms epoch) of a Record group that is backing off. */
+  retryAt: z.number().optional(),
   /** Ids of the session topics created or merged by this run. */
   topicIds: z.array(z.string()),
 });
@@ -1247,6 +1249,8 @@ export const MemoryStatusSchema = z.object({
   sessionTopics: z.array(MemoryTopicRefSchema),
   denTopics: z.array(MemoryTopicRefSchema),
   lastPromote: LastPromoteSchema.nullable(),
+  /** The promote job running in wolfd right now (absent: none). Lets a page that mounts mid-run show it. */
+  promoting: z.object({ jobId: z.string() }).optional(),
   /** `?thread=<id>`: that thread's bound work item; without it the home thread's. null = unbound. Absent on older servers. */
   bound: BoundWorkSchema.nullable().optional(),
 });
@@ -1284,6 +1288,10 @@ export const MemoryObservationSchema = z.object({
   blocked: z.enum(["work-api-unavailable", "consolidation-failed", "forbidden"]).optional(),
   /** The hub's own message when `blocked` is "forbidden" (e.g. "assigned to hal; only hal or the owner can change it"). */
   blockedMessage: z.string().optional(),
+  /** The key (feature or work item) whose pending entry blocks this observation. */
+  blockedKey: z.string().optional(),
+  /** cause forbidden: the wolf the blocking item is assigned to, when known. */
+  assignee: z.string().optional(),
 });
 export type MemoryObservation = z.infer<typeof MemoryObservationSchema>;
 

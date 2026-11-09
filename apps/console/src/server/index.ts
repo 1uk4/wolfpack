@@ -19,12 +19,6 @@ export {
 	writeSettings as writeSettingsRecord,
 	settingsStore,
 } from "../store/settings.ts";
-export { promptOverrides } from "../store/prompt-overrides.ts";
-export { isValidSegmentPath } from "../core/prompt-segments.ts";
-// The canonical segment discovery/resolution lives in the agent layer
-// (composition is an agent concern); the barrel re-exports it for the
-// routes — server→agent is the lawful direction (chat-handler precedent).
-export { effectivePromptSegments, allSegmentPaths, readPromptOverride } from "../agent/prompt-segments.ts";
 
 // The auth/keys composition (auth-keys wave, 2026-09-19): the curated
 // key catalog + the env-reflecting store behind GET/PUT/DELETE /api/keys.
@@ -36,7 +30,6 @@ export * from "./settings-body.ts";
 export * from "./turn-liveness.ts";
 export * from "./turn-runs.ts";
 export * from "./dismissal-park.ts";
-export * from "./compaction.ts";
 export { runPiTurn, piTurnResponse, type PiTurnHandle, type PiTurnSpec } from "./pi/ui-stream.ts";
 export * from "./observability.ts";
 export * from "./model-catalog.ts";
@@ -57,3 +50,4 @@ export * from "./health-api.ts";
 export * from "./pack-health.ts";
 export * from "./pack-actions.ts";
 export * from "./session-witness.ts";
+export * from "./domains-api.ts";

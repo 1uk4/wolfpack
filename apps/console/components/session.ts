@@ -26,8 +26,8 @@ export interface UseChatSessionOptions {
 	initiallyInFlight?: boolean;
 	/** The initial messages are only the newest page (see SessionModel.loadEarlier). */
 	initialHasMore?: boolean;
-	/** Turn traffic routes (default: the legacy pi routes). */
-	transport?: SessionTransport;
+	/** Turn traffic routes (the wolf thread routes). */
+	transport: SessionTransport;
 }
 
 export function useChatSession({ chatId, initialMessages, initiallyInFlight, initialHasMore, transport }: UseChatSessionOptions) {

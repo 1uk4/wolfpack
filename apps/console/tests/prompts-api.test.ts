@@ -40,4 +40,10 @@ describe("prompts API", () => {
 		assert.equal(out.applies, "on the next subagent spawned");
 		assert.equal(out.projectOverride, true);
 	});
+	it("answers 504 when the wolf did not answer in time", async () => {
+		const timedOut = Object.assign(new ProtocolError("engine_error", "wolf did not answer in time (20000 ms)", true), { timedOut: true });
+		const res = await createPromptsApi(stub({ listPrompts: async () => { throw timedOut; } })).list("hal");
+		assert.equal(res.status, 504);
+		assert.deepEqual(await res.json(), { error: "wolf did not answer in time (20000 ms)", code: "engine_error" });
+	});
 });

@@ -15,7 +15,8 @@ it("wolfd answers GET /healthz without a token, with service, version, uptime an
   await s.attach();
   const res = await fetch(`${await s.listen()}/healthz`);
   expect(res.status).toBe(200);
-  const b = (await res.json()) as { wolf: string };
+  const b = (await res.json()) as { wolf: string; postStartRejections: number };
+  expect(b.postStartRejections).toBe(0);
   expect(healthShapeProblems(b, "wolfd", `${(JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }).version}-dev`)).toEqual([]); // unstamped checkout: <package.json>-dev
   expect(b.wolf).toBe("w");
 });

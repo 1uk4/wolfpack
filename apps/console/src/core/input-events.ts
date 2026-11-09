@@ -1,6 +1,6 @@
 /**
  * THE INPUT-EVENTS CONTRACT (Wave B, owner ruling 2026-09-26: "input
- * events now, in the same pass"): POST /api/chat carries `{chatId, input}`
+ * events now, in the same pass"): handleChatRequest takes `{chatId, input}`
  * — ONE explicit event, never a client transcript. The server owns the
  * record; a send tells it what HAPPENED, not what the client's list looks
  * like. The 409 merge-retry died with the full-list body (an input event

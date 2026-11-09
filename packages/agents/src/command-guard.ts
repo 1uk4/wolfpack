@@ -642,6 +642,9 @@ function workerWords(all: Word[], depth: number): void {
 	const args = words.slice(1);
 	const t = args.map((a) => a.text);
 	if (name === "gh") workerBlock("`gh` is not available to workers", words);
+	if (t.includes("--test") && (name === "tsx" || (t.includes("tsx") && /^(npx|pnpm|npm)$/.test(name)))) consoleTestBlock();
+	if (name === "node" && t.includes("--test") && t.some((a) => /(^|=)tsx$/.test(a))) consoleTestBlock();
+	if (name === "test.sh" && /(^|\/)scripts\/test\.sh$|^\.\/test\.sh$/.test(head.text)) consoleTestBlock();
 	if (name === "git") return workerGit(words, args);
 	if (HARMLESS_WRAPPERS.has(name)) {
 		let rest: Word[];
@@ -688,6 +691,7 @@ function workerWords(all: Word[], depth: number): void {
 				if (a === "-o" || a === "+o" || a === "-O" || a === "+O") k++;
 				else if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return workerString(t.slice(k + 1).find((x) => !x.startsWith("-")) ?? "", depth + 1);
 				else if (!a.startsWith("-")) {
+					if (/(^|\/)scripts\/test\.sh$/.test(a)) consoleTestBlock();
 					if (args[k]!.dyn || a.startsWith("/") || a.startsWith("<") || a.startsWith("~") || a.split("/").includes("..")) workerBlock("a shell script given by an absolute, parent-relative or computed path cannot be checked", words);
 					return;
 				}
@@ -725,9 +729,20 @@ function workerWords(all: Word[], depth: number): void {
 	}
 }
 
+// The guard is a nudge for a cooperative worker, not a sandbox: an interpreter or a script can still start tsx.
+const CONSOLE_TEST_MSG =
+	"Blocked by bash: run named files through `wolfpack test run` (the shared test queue; console files: `wolfpack test run apps/console/tests/<file>`). " +
+	"Never call `tsx --test` or scripts/test.sh directly and never loop over test files; CI runs the whole suite.";
+
+function consoleTestBlock(): never {
+	throw new GuardBlock(CONSOLE_TEST_MSG);
+}
+
 function workerString(src: string, depth: number): void {
 	if (depth > MAX_DEPTH) throw new ParseError("nesting too deep");
 	const { segments, subs } = parse(src);
+	// a shell loop over test files (`for f in tests/*.test.ts; do …`): for/while/until as the first word of a segment, test files mentioned
+	if (/\.test\./.test(src) && segments.some((s) => /^(for|while|until)$/.test(s.words[0]?.text ?? ""))) consoleTestBlock();
 	for (const s of subs) workerString(s, depth + 1);
 	for (const seg of segments) workerWords(seg.words, depth);
 }
@@ -753,7 +768,8 @@ export function checkWorkerCommand(command: string): string | null {
 
 /**
  * Packages whose `test` script is `vitest run … packages/<name>/src`: `pnpm --filter @wolfpack/<name> test` becomes
- * `wolfpack test run packages/<name>`. The console (a `tsx --test` suite) and anything unlisted are left alone.
+ * `wolfpack test run packages/<name>`. The console (a `tsx --test` suite) is routed the same way to `wolfpack test run apps/console`, which refuses an agent's
+ * whole-suite run (CI runs it) and runs named files with tsx; anything unlisted is left alone.
  */
 const VITEST_PACKAGES = new Set([
 	"memory", "workerd", "kb", "hubd", "agents", "agent", "protocol", "cli", "workspaces", "harness", "work-server", "engine", "client",
@@ -850,7 +866,7 @@ function routeArgs(words: string[]): string[] | undefined {
 	return out;
 }
 
-function routeSegment(text: string): { text: string; namesPath: boolean } | undefined {
+function routeSegment(text: string, inConsole = false): { text: string; namesPath: boolean } | undefined {
 	const m = /^(\s*)((?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*)(.*)$/.exec(text);
 	if (!m) return undefined;
 	const [, lead, envs, rest] = m as unknown as [string, string, string, string];
@@ -868,8 +884,21 @@ function routeSegment(text: string): { text: string; namesPath: boolean } | unde
 	// and `wolfpack test` without paths would run the whole repo's)
 	else if (w[0] === "pnpm" && (w[1] === "--filter" || w[1] === "-F") && w[3] === "test") {
 		const m2 = /^@wolfpack\/(.+)$/.exec(w[2]!);
-		if (!m2 || !VITEST_PACKAGES.has(m2[1]!)) return undefined;
-		pkgDir = `packages/${m2[1]}`;
+		if (!m2 || !(VITEST_PACKAGES.has(m2[1]!) || m2[1] === "console")) return undefined;
+		pkgDir = m2[1] === "console" ? "apps/console" : `packages/${m2[1]}`;
+		used = 4;
+	} else if (w[0] === "pnpm" && (w[1] === "-C" || w[1] === "--dir") && w[2] === "apps/console" && w[3] === "test") {
+		pkgDir = "apps/console";
+		used = 4;
+	} else if (inConsole && ((w[0] === "pnpm" && w[1] === "test") || (w[0] === "npm" && w[1] === "test") || (w[0] === "npm" && w[1] === "run" && w[2] === "test"))) {
+		// after `cd apps/console`, the bare test script is the console suite
+		pkgDir = "apps/console";
+		used = w[1] === "run" ? 3 : 2;
+	} else if (w[0] === "npm" && w.length === 4 && w[1] === "test" && w[2] === "-w" && w[3] === "@wolfpack/console") {
+		pkgDir = "apps/console";
+		used = 4;
+	} else if (w[0] === "npm" && w.length === 4 && w[1] === "run" && w[2] === "test" && w[3] === "--workspace=@wolfpack/console") {
+		pkgDir = "apps/console";
 		used = 4;
 	} else return undefined;
 	const args = routeArgs(w.slice(used));
@@ -925,7 +954,13 @@ export function routeTestCommand(
 	if (env.WOLFPACK_AGENT_RUN !== "1" || env.WOLFPACK_TEST_BYPASS) return same;
 	const segments = splitSegments(command);
 	if (!segments) return same;
-	const routes = segments.map((s) => routeSegment(s.text));
+	let inConsole = false;
+	const routes = segments.map((s) => {
+		const r = routeSegment(s.text, inConsole);
+		if (/^\s*cd\s+(\.\/)?apps\/console\/?\s*$/.test(s.text)) inConsole = true;
+		else if (CHANGES_DIR.test(s.text)) inConsole = false;
+		return r;
+	});
 	if (routes.every((r) => r === undefined)) return same;
 	// After a cd/pushd, a test segment that names no path would run the whole repo instead of the directory's own suite.
 	let cd = false;

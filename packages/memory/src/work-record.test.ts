@@ -4,6 +4,7 @@ import { LlmInfraError } from "@wolfpack/engine";
 import { stripSources, parseRecordLines, formatSources } from "./record-sources.js";
 import {
   consolidateWorkRecords,
+  HttpWorkRecordStore,
   extractRecord,
   renderRecord,
   renderWorkingDocument,
@@ -19,7 +20,6 @@ import {
   type WorkRecordItem,
   type WorkRecordStore,
   WorkApiError,
-  HttpWorkRecordStore,
 } from "./work-record.js";
 import { WorkPendingState } from "./work-pending.js";
 
@@ -235,6 +235,45 @@ describe("consolidateWorkRecords", () => {
     expect(prompts[1]).toContain("Your previous answer rendered");
     expect(out[0].status).toBe("written");
     expect(stripSources(extractRecord(writes[0].body)!).length).toBeLessThanOrEqual(RECORD_CAP);
+  });
+});
+
+describe("a refused write is its own cause", () => {
+  const http = (patchStatus: number) =>
+    new HttpWorkRecordStore("http://w", "t", (async (_u: unknown, init?: RequestInit) =>
+      init?.method === "PATCH"
+        ? new Response("{}", { status: patchStatus })
+        : new Response(JSON.stringify({ item: { id: "a", title: "T", kind: "feature", stage: "in_build", assignee: "hal" }, body: "" }), { status: 200 })) as typeof fetch);
+
+  it("a 403 on the Record write is cause forbidden, with the assignee; the backoff state records it", async () => {
+    const state = new WorkPendingState(undefined);
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store: http(403), observations: obs("a", "x"), state });
+    expect(out[0]).toMatchObject({ status: "pending", cause: "forbidden", assignee: "hal" });
+    // both the hub's words and the assignee are stored, and a refusal has no backoff
+    expect(state.entry("a")).toMatchObject({ cause: "forbidden", assignee: "hal", message: "Work API PATCH a: HTTP 403", tries: 1, nextAttemptAt: 0 });
+    expect(state.due("a")).toBe(true);
+  });
+
+  it("a 502 on the write stays work-api-unavailable", async () => {
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store: http(502), observations: obs("a", "x") });
+    expect(out[0]).toMatchObject({ status: "pending", cause: "work-api-unavailable" });
+  });
+});
+
+describe("backoff", () => {
+  it("a group inside its backoff is skipped unless the run ignores backoff; a failed forced try still updates the state", async () => {
+    const state = new WorkPendingState(undefined, () => 1000);
+    state.pending("a", "work-api-unavailable");
+    const { store, writes } = fakeStore({ a: {} });
+    const auto = await consolidateWorkRecords({ engine: fakeEngine([]), store, observations: obs("a", "x"), state });
+    expect(auto[0]).toMatchObject({ status: "pending", reason: "backoff", retryAt: 1000 + 5 * 60_000 });
+    const manual = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store, observations: obs("a", "x"), state, ignoreBackoff: true });
+    expect(manual[0].status).toBe("written");
+    expect(writes).toHaveLength(1);
+    const { store: bad } = fakeStore({ a: {} }, { failSet: true });
+    state.pending("a", "work-api-unavailable");
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store: bad, observations: obs("a", "x"), state, ignoreBackoff: true });
+    expect(state.entry("a")?.tries).toBe(2);
   });
 });
 

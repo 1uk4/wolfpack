@@ -21,7 +21,7 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { absorbed, pendingCallTool, SessionModel } from "../components/session-core.ts";
+import { absorbed, pendingCallTool, SessionModel, type SessionTransport } from "../components/session-core.ts";
 import type { ChatInput } from "../src/core/input-events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { newUserMessage, newAnswerResult, needsContinuation, endsInDismissal } from "../src/core/native-messages.ts";
@@ -119,8 +119,24 @@ function partial(blocks: unknown[], stopReason?: string): Record<string, unknown
 	};
 }
 
+/** A plain transport on fixed route shapes: these tests pin the session machine, not a wolf's wire. */
+function plainTransport(chatId: string): SessionTransport {
+	return {
+		submitUrl: "/api/chat",
+		submitBody: (input) => JSON.stringify({ chatId, input }),
+		recordUrl: `/api/chats/${encodeURIComponent(chatId)}`,
+		parseRecord: (json) => {
+			const messages = (json as { messages?: LhMessage[] }).messages;
+			return Array.isArray(messages) ? messages : null;
+		},
+		streamUrl: `/api/chats/${encodeURIComponent(chatId)}/stream`,
+		retryOnBusy: true,
+		createWire: () => (raw) => [raw],
+	};
+}
+
 function model(opts: Partial<ConstructorParameters<typeof SessionModel>[0]> = {}): SessionModel {
-	return new SessionModel({ chatId: "chat_x", initialMessages: [], ...opts });
+	return new SessionModel({ chatId: "chat_x", initialMessages: [], transport: plainTransport("chat_x"), ...opts });
 }
 
 // ─── the 409 identity-retry ────────────────────────────────────────────────

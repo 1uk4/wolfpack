@@ -80,8 +80,6 @@ describe("leaving a command alone", () => {
 
   // When in doubt the command stays as written (the brief: never block, never guess). Each case says why.
   it.each([
-    // the console's suite is `tsx --test` (bash scripts/test.sh), not vitest: the runner cannot run it
-    ["pnpm --filter @wolfpack/console test"],
     // a package name that does not map to a directory by rule
     ["pnpm --filter some-other-pkg test"],
     // flags the runner does not accept: routing would turn a working command into a usage error
@@ -101,6 +99,22 @@ describe("leaving a command alone", () => {
     ["pnpm exec vitest run $FILE"],
   ])("%s", (cmd) => {
     untouched(cmd);
+  });
+});
+
+describe("the console suite", () => {
+  // `wolfpack test run apps/console` refuses an agent's whole-suite run with the CI message, so no agent starts it by accident
+  it.each([
+    ["pnpm --filter @wolfpack/console test", "wolfpack test run apps/console"],
+    ["pnpm -F @wolfpack/console test", "wolfpack test run apps/console"],
+    ["npm test -w @wolfpack/console", "wolfpack test run apps/console"],
+    ["npm run test --workspace=@wolfpack/console", "wolfpack test run apps/console"],
+    ["pnpm -C apps/console test", "wolfpack test run apps/console"],
+    ["cd apps/console && pnpm test", "cd apps/console && wolfpack test run apps/console"],
+    ["cd apps/console && npm test", "cd apps/console && wolfpack test run apps/console"],
+  ])("%s", (cmd, want) => {
+    expect(routed(cmd)).toBe(want);
+    untouched(cmd, {});
   });
 });
 

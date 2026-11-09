@@ -24,6 +24,8 @@ export interface MemoryActions {
   /** Fold the whole observation pool into session topics (not the den). Serialized with promote and auto-consolidation. */
   /** True while a promote job runs: a consolidate would queue behind it. */
   isBusy(): boolean;
+  /** The id of the promote job in flight, or null. */
+  promotingJob?(): string | null;
   consolidate(): Promise<ConsolidationResult>;
   /** Consolidate, then move session topics to the den and on to contribution files in the inbox. Runs in the background. */
   promote(): PromoteStart;

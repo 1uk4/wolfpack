@@ -340,7 +340,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return;
   }
 
-  const client = new WorkClient();
+  const client = new WorkClient(undefined, undefined, undefined, undefined, process.env.WOLF_NAME);
 
   /**
    * A subagent child (PI_SUBAGENT_AGENT) never binds: the binding belongs to the
@@ -1423,12 +1423,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             to.toLowerCase() === "inbox" ? (await client.ensureInbox(item.domain as string, wolfName)).id
             : to.toLowerCase() === "none" ? null
             : to;
-          const moved = await client.move(id, parentId);
+          const { item: moved, reassigned } = await client.moveReport(id, parentId);
           await refreshActiveItem();
           updateWidget(ctx);
           let where = "no parent";
           if (moved.partOf) { try { where = (await client.get(moved.partOf as string)).title; } catch {} }
-          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}` }] };
+          const handoff = reassigned.map((r) => `; now assigned to ${r.to}`).join("");
+          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}${handoff}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }

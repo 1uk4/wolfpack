@@ -66,7 +66,7 @@ export function httpNotePoster(
   return async (workId, text) => {
     const res = await fetchImpl(`${base}/work/${encodeURIComponent(workId)}`, {
       method: "PATCH",
-      headers: { "X-API-Key": token, "Content-Type": "application/json" },
+      headers: { "X-API-Key": token, ...(process.env.WOLF_NAME ? { "X-Wolf": process.env.WOLF_NAME } : {}), "Content-Type": "application/json" },
       body: JSON.stringify({ note: text }),
       signal: AbortSignal.timeout(10_000),
     });

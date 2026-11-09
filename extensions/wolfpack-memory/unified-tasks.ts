@@ -239,9 +239,14 @@ function formatHierarchy(
  * With an explicit context.env (sandbox) the client never falls back to process.env. Writes that cannot reach the hub wait in
  * <den>/factory/work-outbox and are sent in order once it is back (see WorkClient.flush).
  */
-function makeClient(wolfDen: string, env?: NodeJS.ProcessEnv): WorkClient {
+/** The wolf-facing words for a move-handoff: "; now assigned to hal" (empty when nothing was reassigned). */
+export function handoffText(reassigned: { id: string; from: string | null; to: string }[]): string {
+  return reassigned.map((r) => `; now assigned to ${r.to}`).join("");
+}
+
+function makeClient(wolfDen: string, wolfName: string, env?: NodeJS.ProcessEnv): WorkClient {
   const outbox = join(wolfDen, "factory", "work-outbox");
-  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox);
+  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox, wolfName) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox, wolfName);
 }
 
 /** How often saved writes are retried when no new write comes along to push them. */
@@ -285,7 +290,7 @@ export default function createTasksExtension(
   // <den>/factory/conversations/<cid>/thread-settings.json, so a flip applies to the very next task_done).
   const envAuto = resolveShipPolicy(env) === "auto";
   const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
-  const client = makeClient(wolfDen, context.env);
+  const client = makeClient(wolfDen, wolfName, context.env);
   // Drain the outbox while the wolf is idle too; unref'd so it never keeps a process alive.
   setInterval(() => { if (client.queued) client.flush().catch(() => {}); }, OUTBOX_FLUSH_MS).unref();
 
@@ -1568,9 +1573,9 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           
           try {
             const newParent = args.to === "none" ? null : args.to;
-            await client.move(binding.taskId, newParent);
+            const moved = await client.moveReport(binding.taskId, newParent);
             return {
-              content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}` }],
+              content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}${handoffText(moved.reassigned)}` }],
             };
           } catch (err) {
             return failed(err);

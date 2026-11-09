@@ -314,10 +314,11 @@ export interface ApplyHooks {
  * NOTE: `body` / `section` append no ledger event, so they bump no `updated` and fire no work.changed (known gap, follow-up).
  * WRITES: probe file in the item's work dir; ledger append (one event per op, batch appended once); re-render of the touched items' .md files (body/section ops: the .md only).
  */
-export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}): Item {
+export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}, opts: ApplyOptions = {}): Item {
   assertNotMixed(ops);
   probeItemDomains(roots, [id]);
-  if (ops.length <= 1) return applyOpsUnchecked(roots, id, ops);
+  // An assign can cascade to child tasks: it must be all-or-nothing, so it takes the staged path even as a single op.
+  if (ops.length <= 1 && ops[0]?.op !== "assign") return applyOpsUnchecked(roots, id, ops, opts);
   const cur0 = loadWorkState(roots).get(id as never);
   if (!cur0) throw new Error(`work item ${id} not found`);
   const domain = cur0.domain as string;
@@ -343,7 +344,7 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
     // Placement forbids a parent in another domain (placementError in kb schema/work.ts: `parent.domain !== child.domain`), so
     // every item a batch can touch, an auto-shipped parent feature included, lives in this one domain's work/ dir.
     // The kb ops read only the ledger and the item .md files, and write only those (see report): scratch is a faithful sandbox.
-    const item = applyOpsUnchecked(scratch, id, ops);
+    const item = applyOpsUnchecked(scratch, id, ops, opts);
     hooks.afterStaged?.();
 
     const bytes = readNewBytes(workLedgerFile(scratch), realSize);
@@ -394,7 +395,12 @@ function readNewBytes(file: string, offset: number): Buffer {
   return all.subarray(offset);
 }
 
-function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
+/** Who is applying the ops: a worker's wolf (`holder`) cascades a feature assign only to the children it holds; unset (the owner) cascades to all open children. */
+export interface ApplyOptions {
+  holder?: string;
+}
+
+function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[], opts: ApplyOptions = {}): Item {
   let item: Item | undefined;
   for (const o of ops) {
     switch (o.op) {
@@ -403,15 +409,16 @@ function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
       case "title": item = retitleWork(roots, id, o.title).item; break;
       case "successCriteria": item = setCriteria(roots, id, o.text).item; break;
       case "assign": {
-        const before = loadWorkState(roots).get(id as never);
+        const before = loadWorkState(roots);
+        const self = before.get(id as never);
+        // One snapshot of the open children, taken before any write: the actor's shortcut covers only those it may change.
+        const kids = self?.kind === "feature"
+          ? [...before.values()].filter((c) => c.partOf === id && c.kind === "task" && !["shipped", "live", "archived"].includes(String(c.stage)) && c.assignee !== o.to && (opts.holder === undefined || c.assignee === opts.holder))
+          : [];
         item = assignWork(roots, id, o.to).item;
-        // Child tasks follow their feature (unless shipped, live or archived), each with its own logged event, in the same write.
-        if (before?.kind === "feature") {
-          for (const c of [...loadWorkState(roots).values()]) {
-            if (c.partOf === id && c.kind === "task" && !["shipped", "live", "archived"].includes(String(c.stage)) && c.assignee !== o.to) assignWork(roots, c.id as string, o.to);
-          }
-          item = loadWorkState(roots).get(id as never) ?? item;
-        }
+        // Each child gets its own logged event, in the same (staged) write.
+        for (const c of kids) assignWork(roots, c.id as string, o.to);
+        if (kids.length) item = loadWorkState(roots).get(id as never) ?? item;
         break;
       }
       case "moveTo": item = moveWork(roots, id, o.partOf).item; break;

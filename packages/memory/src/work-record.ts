@@ -317,7 +317,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
     return this.fetchImpl(`${this.endpoint}/work/${encodeURIComponent(id)}`, {
       method,
-      headers: { "X-API-Key": this.token, ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-API-Key": this.token, ...(process.env.WOLF_NAME ? { "X-Wolf": process.env.WOLF_NAME } : {}), ...(body ? { "Content-Type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
   }

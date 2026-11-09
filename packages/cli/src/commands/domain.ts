@@ -166,6 +166,10 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
     console.error("Usage: wolfpack domain add <name> [--label ..] [--description ..]");
     process.exit(1);
   }
+  // New domains are stricter than the legacy rule (the hub enforces the same): work ids cannot hold a hyphen in the domain.
+  if (!/^[a-z0-9]{1,32}$/.test(name)) {
+    throw new Error(`Invalid domain name "${name}". New domains use lowercase letters and digits only (1–32 chars, no hyphens).`);
+  }
   assertValidDomainName(name);
 
   const reg = loadRegistry();

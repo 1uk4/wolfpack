@@ -337,7 +337,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
 
       it("CRUD over host, domain, wolf and subscription; retire marks the wolf retired", async () => {
         const id = randomBytes(3).toString("hex");
-        const host = `h-${id}`, dom = `d-${id}`, w = `w-${id}`;
+        const host = `h-${id}`, dom = `d${id}`, w = `w-${id}`;
         expect((await send("POST", buildPath("registryCreateHost"), { name: host, address: "10.0.0.1" })).status).toBe(201);
         expect((await send("POST", buildPath("registryCreateDomain"), { name: dom, label: "Suite" })).status).toBe(201);
         const cw = await send("POST", buildPath("registryCreateWolf"), { name: w, host, domains: [dom], tools: ["coding"] });

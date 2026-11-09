@@ -28,6 +28,7 @@ import {
 	type PackHealthState,
 } from "@/components/pack-health-store";
 import { cn } from "@/lib/utils";
+import { DomainsTab } from "@/components/pack-domains";
 import { groupByHost, type HostCard } from "@/src/core/pack-hosts";
 import type { PackMapHost } from "@/src/core/pack-map";
 import {
@@ -157,6 +158,7 @@ export function PackHealthHost() {
 }
 
 function PackHealthModal({ onClose }: { onClose: () => void }) {
+	const [tab, setTab] = useState<"health" | "domains">(() => (typeof window !== "undefined" && /[?&]packFixture=domains/.test(window.location?.search ?? "") ? "domains" : "health"));
 	const health = usePackHealth();
 	const { snapshot, reachable, lastSeenAt, now } = health;
 	const sum = packSummary({ snapshot, reachable, lastSeenAt, now });
@@ -169,7 +171,7 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 			header={(close) => (
 				// pl-4 undoes the header's -ml-4 so the title lines up with the body's px-4 (the Electron lights gutter still wins).
 				<OverlayHeader className="flex items-center gap-2 pb-3 pl-4">
-					<h2 id="pack-health-title" className="text-sm font-semibold">Pack health</h2>
+					<h2 id="pack-health-title" className="text-sm font-semibold">Pack</h2>
 					<span className={cn("flex min-w-0 items-center gap-1.5 truncate text-xs", TEXT[sum.tone])}>
 						<span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[sum.tone])} />
 						{sum.label}
@@ -179,6 +181,13 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 			)}
 		>
 			<div className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto pb-6 text-xs">
+				<div role="tablist" aria-label="Pack panel" className="mb-3 flex gap-1">
+					{(["health", "domains"] as const).map((t) => (
+						<button key={t} type="button" role="tab" id={`pack-tab-${t}`} data-testid={`pack-tab-${t}`} aria-selected={tab === t} onClick={() => setTab(t)} className={cn("rounded-sm border px-3 py-1 text-xs capitalize max-md:py-2", tab === t ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}>{t}</button>
+					))}
+				</div>
+				{tab === "domains" && <div role="tabpanel" aria-labelledby="pack-tab-domains"><DomainsTab /></div>}
+				{tab === "health" && <>
 				{!reachable && (
 					<p data-testid="pack-health-unreachable" className="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300">
 						This console's server is not answering. The rows below are its last report{lastSeenAt !== null ? ` (${ageText(now - lastSeenAt)})` : ""}; restarts need it back.
@@ -190,6 +199,7 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 					groupByHost(snapshot).map((c) => <HostSection key={c.id} card={c} now={now} canAct={reachable} actions={snapshot.actions} fakes={health} />)
 				)}
 				{snapshot?.checkedAt && <p className="mt-3 text-muted-foreground/70">Checked {ageText(now - Date.parse(snapshot.checkedAt))} · every {Math.round(snapshot.intervalMs / 1000)} s</p>}
+				</>}
 			</div>
 		</OverlayShell>
 	);

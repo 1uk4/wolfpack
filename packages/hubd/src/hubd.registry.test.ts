@@ -97,6 +97,43 @@ describe("hub registry", () => {
     expect(reg.ops?.description).toBe("Operations");
   });
 
+  it("creating a domain makes its KB folder at once; bad names and duplicates are refused", async () => {
+    const dir = mkdir();
+    const { call } = await start(dir);
+    expect((await call("POST", "/v1/registry/domains", { name: "docs", label: "Docs" })).status).toBe(201);
+    const root = join(hubRoots(dir).kbBase, "domains", "docs");
+    expect(existsSync(join(root, "entries"))).toBe(true);
+    expect(existsSync(join(root, "INDEX.md"))).toBe(true);
+    expect((await call("POST", "/v1/registry/domains", { name: "my-docs" })).status).toBe(400);
+    expect(existsSync(join(hubRoots(dir).kbBase, "domains", "my-docs"))).toBe(false);
+    expect((await call("POST", "/v1/registry/domains", { name: "docs" })).status).toBe(409);
+  });
+
+  it("a blocked KB folder gives a plain reason and records no domain", async () => {
+    const dir = mkdir();
+    const { call } = await start(dir);
+    mkdirSync(join(hubRoots(dir).kbBase, "domains"), { recursive: true });
+    writeFileSync(join(hubRoots(dir).kbBase, "domains", "docs"), "in the way");
+    const r = await call("POST", "/v1/registry/domains", { name: "docs" });
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(await r.json())).toMatch(/could not create the domain's KB folder: E/);
+    const list = JSON.stringify(await (await call("GET", "/v1/registry/domains")).json());
+    expect(list).not.toContain("\"docs\"");
+  });
+
+  it("deleting a domain that wolves subscribe to is 409 and names them; the KB folder is kept on delete", async () => {
+    const dir = mkdir();
+    const { call, place } = await start(dir);
+    await call("POST", "/v1/registry/domains", { name: "docs" });
+    await place("w1", { domains: ["docs"] });
+    const r = await call("DELETE", "/v1/registry/domains/docs");
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { details?: { wolves?: string } }).details?.wolves).toBe("w1");
+    await call("DELETE", "/v1/registry/subscriptions/w1:docs");
+    expect((await call("DELETE", "/v1/registry/domains/docs")).status).toBe(200);
+    expect(existsSync(join(hubRoots(dir).kbBase, "domains", "docs", "entries"))).toBe(true);
+  });
+
   it("create wolf writes only the entry; writes by a wolf are 403; reads need a token", async () => {
     const dir = mkdir();
     const { call } = await start(dir);

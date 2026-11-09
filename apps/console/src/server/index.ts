@@ -57,3 +57,4 @@ export * from "./health-api.ts";
 export * from "./pack-health.ts";
 export * from "./pack-actions.ts";
 export * from "./session-witness.ts";
+export * from "./domains-api.ts";

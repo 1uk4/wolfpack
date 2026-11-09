@@ -17,6 +17,11 @@ export function threadBase(wolf: string, slug: string): string {
 	return `/api/wolves/${encodeURIComponent(wolf)}/threads/${encodeURIComponent(slug)}`;
 }
 
+/** Where a card's rendered diagram is served (the console relays the wolf's `getDiagram`; never a path the client builds itself). */
+export function diagramUrl(wolf: string, slug: string, diagramId: string): string {
+	return `${threadBase(wolf, slug)}/diagrams/${encodeURIComponent(diagramId)}`;
+}
+
 /** Where a pending card's answer is POSTed (the console's server layer, then the wolf's /v1). */
 export function cardAnswerUrl(wolf: string, slug: string, callId: string): string {
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/answer`;

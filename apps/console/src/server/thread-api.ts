@@ -14,6 +14,7 @@
  */
 
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { DIAGRAM_ID_RE } from "@wolfpack/protocol";
 import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { resolveThreadId } from "../core/thread-adapter.ts";
@@ -219,6 +220,32 @@ export function createThreadApi(source: ClientSource) {
 				const { bytes, mimeType } = await client.getAttachment(await resolve(client, ref), attachmentId);
 				const mime = mimeType.split(";")[0]!.trim().toLowerCase();
 				if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(mime)) return json({ error: "unknown attachment" }, 404);
+				return new Response(bytes as BodyInit, {
+					headers: {
+						"Content-Type": mime,
+						"Content-Length": String(bytes.byteLength),
+						"X-Content-Type-Options": "nosniff",
+						"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+						"Cache-Control": "private, max-age=31536000, immutable",
+					},
+				});
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/**
+		 * The bytes of one question diagram (an `ask` field's `diagram` id), relayed from the thread's wolf: opaque ids only,
+		 * images only, served sandboxed like attachments. 404 when the wolf has none (or cannot serve diagrams).
+		 */
+		async diagram(ref: ThreadRef, diagramId: string): Promise<Response> {
+			try {
+				if (!DIAGRAM_ID_RE.test(diagramId)) return json({ error: "unknown diagram" }, 404);
+				const client = source();
+				if (!client.getDiagram) return json({ error: "unknown diagram" }, 404);
+				const { bytes, mimeType } = await client.getDiagram(await resolve(client, ref), diagramId);
+				const mime = mimeType.split(";")[0]!.trim().toLowerCase();
+				if (mime !== "image/png") return json({ error: "unknown diagram" }, 404);
 				return new Response(bytes as BodyInit, {
 					headers: {
 						"Content-Type": mime,

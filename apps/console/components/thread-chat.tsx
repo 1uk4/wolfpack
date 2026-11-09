@@ -36,7 +36,8 @@ import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetch
 import { appendToDraft, draftKey, useComposerDraft, useRereadDraftWhenShown, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
-import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
+import { AskRecordCard } from "@/components/ask-record";
+import { cardAnswerUrl, cardSkipUrl, diagramUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import { ThreadGitRow } from "@/components/thread-git-tree";
@@ -115,6 +116,8 @@ function ThreadReasoning({
 
 /** What the rows need to render tool-raised cards inline (cards.calls keys the card-raising calls). */
 interface CardContext {
+	wolf: string;
+	slug: string;
 	cards: ThreadCards;
 	answering: string | null;
 	onAnswer: (callId: string, answers: CardAnswers) => void;
@@ -127,6 +130,23 @@ function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
 	const entry = call && lookupInteractionCard(call.card.tool);
 	if (!call || !entry) return null;
 	const { Renderer } = entry;
+	// A paged `ask` is a compact Q→A record in the transcript (the chat bar's sheet owns answering it).
+	if (call.card.paged) {
+		return (
+			<AskRecordCard
+				callId={callId}
+				card={call.card}
+				closed={call.closed}
+				dismissed={call.dismissed}
+				answer={call.answer}
+				pageAnswers={call.pageAnswers}
+				pagesDone={call.pagesDone}
+				draft={call.draft}
+				pending={ctx.cards.pending.some((p) => p.callId === callId)}
+				diagramUrl={(id) => diagramUrl(ctx.wolf, ctx.slug, id)}
+			/>
+		);
+	}
 	return (
 		<Renderer
 			callId={callId}
@@ -409,7 +429,7 @@ function ThreadChatInner({
 		},
 		[wolf, slug, resumeStream, refreshCards, setSendPending],
 	);
-	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
+	const cardCtx: CardContext = { wolf, slug, cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after

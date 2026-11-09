@@ -20,6 +20,7 @@ const ALLOWED = [
   "git rebase wolf/1uk4",
   "git rebase --abort",
   "git rebase --continue",
+  "GIT_EDITOR=true git rebase --continue",
   "git rebase --skip",
   "git restore a.ts",
   "git restore --staged -- a.ts b.ts",
@@ -55,7 +56,7 @@ const REFUSED = [
   "sudo git push", "timeout 5 git push", "nohup git push", "xargs git push", "find . -exec git push ;", "eval 'git push'",
   "ssh host 'git push'", "env -i git push", "\"git\" push", "g=1 git push", "env gh pr create", "sh -c 'echo $(gh pr create)'",
   "GIT_SSH_COMMAND='ssh -i k' git status", "GIT_CONFIG_COUNT=1 git status", "GIT_SEQUENCE_EDITOR='git push' git rebase -i --autosquash abc",
-  "GIT_DIR=/x git status", "GIT_WORK_TREE=/x git status", "export GIT_EDITOR='git push'",
+  "GIT_EDITOR='git push' git rebase --continue", "GIT_DIR=/x git status", "GIT_WORK_TREE=/x git status", "export GIT_EDITOR='git push'",
   "env -S 'git push'", "env -iS 'git push'", "env --split-string='git push'",
   // programs fed to a shell, sourced files, package runners
   "echo 'git push' | sh", "echo 'git push' | bash -s", "sh <<< 'git push'", "bash <<EOF\ngit push\nEOF", "bash <(echo 'git push')", "sh < /tmp/x.sh",

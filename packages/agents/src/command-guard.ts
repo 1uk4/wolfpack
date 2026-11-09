@@ -632,7 +632,7 @@ function workerWords(all: Word[], depth: number): void {
 	let words = all;
 	while (words.length && ASSIGNMENT.test(words[0].text)) {
 		const m = WORKER_GIT_ENV.exec(words[0].text);
-		if (m && !(m[1]?.startsWith("GIT_SEQUENCE_EDITOR") && [":", "true", ""].includes(m[3] ?? "x"))) workerBlock(`setting ${words[0].text.split("=")[0]} is not allowed`, words);
+		if (m && !(/^GIT_(SEQUENCE_)?EDITOR$/.test(m[1] ?? "") && [":", "true", ""].includes(m[3] ?? "x"))) workerBlock(`setting ${words[0].text.split("=")[0]} is not allowed`, words);
 		words = words.slice(1);
 	}
 	if (!words.length) return;

@@ -276,9 +276,10 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				aria-label={`Assignee of ${row.title}: ${row.assignee || "none"}`}
 				disabled={a.busy.has(id)}
 				onClick={() => setOpen((o) => !o)}
-				className="flex min-w-0 max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+				className="flex min-w-0 max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] text-primary hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:text-muted-foreground disabled:opacity-50"
 			>
 				{face}
+				<ChevronDownIcon data-testid={`work-assignee-chevron-${row.key}`} aria-hidden className="size-3 shrink-0" />
 			</button>
 			{open && (
 				<MenuShell anchorRef={btn} testid={`work-assignee-menu-${row.key}`} preferredSide="down" align="left" menuClass="flex w-48 flex-col gap-0.5 rounded-xl border bg-card p-1.5 text-xs shadow-xl">

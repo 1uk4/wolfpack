@@ -458,12 +458,19 @@ describe("the assignee column", () => {
 		assert.deepEqual(heads, ["Name", "Assignee", "Status", "Created"]);
 		assert.equal(cell("f1").textContent, "hal");
 		assert.equal(cell("f1").tagName, "BUTTON");
-		assert.equal(cell("f1").querySelectorAll("svg").length, 1, "wolf icon");
+		assert.equal(cell("f1").querySelectorAll("svg").length, 2, "wolf icon + dropdown chevron");
 		assert.equal(cell("lt").textContent, "luka");
 		assert.equal(cell("nb").textContent, "—");
 		assert.equal(cell("t1").tagName, "SPAN", "a feature's child task is static");
 		assert.equal(cell("t1").textContent, "hal");
 		assert.equal(cell("t1").querySelectorAll("svg").length, 1);
+	});
+	it("an assignable assignee carries the accent colour and a dropdown chevron; a static one carries neither", async () => {
+		await openTree(withOwner({ items: TREE }));
+		assert.ok(cell("f1").className.split(" ").includes("text-primary"));
+		assert.ok(q("work-assignee-chevron-f1"));
+		assert.ok(!cell("t1").className.includes("text-primary"));
+		assert.equal(q("work-assignee-chevron-t1"), null);
 	});
 	it("the menu lists the other wolves only; picking one assigns and closes it; Escape closes it without assigning", async () => {
 		const calls: [string, string][] = [];

@@ -604,7 +604,7 @@ export const execRunner: CommandRunner = (file, args) =>
 
 export type RestartOutcome =
 	| { ok: true; service: string; at: string }
-	| { ok: false; service: string; code: "invalid_request" | "rate_limited" | "failed"; message: string; retryAfterS?: number };
+	| { ok: false; service: string; code: "invalid_request" | "rate_limited" | "unsupported" | "failed"; message: string; retryAfterS?: number };
 
 export interface Restarter {
 	restart(service: unknown, by: string): Promise<RestartOutcome>;
@@ -614,9 +614,10 @@ export interface Restarter {
  * Restarts a pack unit with `systemctl --no-ask-password --no-block restart <unit>.service`, authorised by the polkit rule
  * deploy/console/50-console-restart.rules (restart only, these units only). `service` must be one of `health.restartable()`:
  * anything else (unknown names, `hubd; rm`, `wolfd@../x`) is rejected before any command runs. One restart per service per
- * `minIntervalMs` (default 60 s). Every attempt is logged with who asked.
+ * `minIntervalMs` (default 60 s). Off linux (`systemd` false: the Mac stack) it answers unsupported and runs nothing. Every attempt is logged with who asked.
  */
-export function createRestarter(o: { health: PackHealth; run?: CommandRunner; now?: () => number; minIntervalMs?: number; log?: (m: string) => void }): Restarter {
+export function createRestarter(o: { health: PackHealth; run?: CommandRunner; now?: () => number; minIntervalMs?: number; log?: (m: string) => void; systemd?: boolean }): Restarter {
+	const systemd = o.systemd ?? process.platform === "linux";
 	const run = o.run ?? execRunner;
 	const now = o.now ?? Date.now;
 	const minInterval = o.minIntervalMs ?? 60_000;
@@ -628,6 +629,10 @@ export function createRestarter(o: { health: PackHealth; run?: CommandRunner; no
 			if (!o.health.restartable().has(name)) {
 				log(`console: health restart REFUSED (unknown service ${JSON.stringify(String(service).slice(0, 80))}) by ${by}`);
 				return { ok: false, service: name, code: "invalid_request", message: "unknown service" };
+			}
+			if (!systemd) {
+				log(`console: health restart ${name} UNSUPPORTED (no systemd on this host) by ${by}`);
+				return { ok: false, service: name, code: "unsupported", message: "no systemd on this host" };
 			}
 			const t = now();
 			const prev = last.get(name);

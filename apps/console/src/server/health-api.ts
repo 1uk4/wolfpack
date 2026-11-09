@@ -5,7 +5,7 @@
  *                             Versions, wolf names and timings are intentionally visible to the tailnet without auth (accepted).
  *   GET  /api/health/stream   SSE: the snapshot now and after every probe round (`data: <HealthSnapshot>`), `: ping` every 25 s
  *   POST /api/health/restart  {service: "hubd" | "workerd" | "wolfd@<name>"}; needs `Authorization: Bearer <device token>`.
- *                             202 {ok, service, at} | 400 invalid_request | 401 unauthorized | 429 rate_limited (+Retry-After) | 502 failed
+ *                             202 {ok, service, at} | 400 invalid_request | 401 unauthorized | 429 rate_limited (+Retry-After) | 501 unsupported (no systemd) | 502 failed
  *   GET  /api/health/logs     ?service=<restartable id>&lines=<1..200, default 100>; same auth (work-wolfpack-yM3uTlj, pack-actions.ts).
  *                             200 {ok, service, lines, truncated} | 400 invalid_request | 401 | 429 | 501 unsupported (no journalctl)
  *                             | 502 journal_denied (console user not in systemd-journal) | 502 failed
@@ -175,7 +175,7 @@ export function createHealthApi(d: HealthApiDeps) {
 			if (service instanceof Response) return service;
 			const out = await d.restarter.restart(service, gate);
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
-			return failure(out, out.code === "invalid_request" ? 400 : out.code === "rate_limited" ? 429 : 502);
+			return failure(out, out.code === "invalid_request" ? 400 : out.code === "rate_limited" ? 429 : out.code === "unsupported" ? 501 : 502);
 		},
 
 		/** GET /api/health/logs?service=<id>&lines=<n>: the unit's recent journal, redacted (pack-actions.ts). Same auth as restart. */

@@ -350,7 +350,7 @@ function LinkRow({ link, now, canRestart, actions, fakes }: { link: HealthLink; 
 									Roll back
 								</button>
 							)}
-							{link.restartable && (
+							{can.restart && (
 								<button type="button" data-testid="pack-health-restart" disabled={!canRestart || link.status === "restarting"} onClick={() => setUi({ phase: "confirm" })} className={QUIET_BTN}>
 									Restart
 								</button>

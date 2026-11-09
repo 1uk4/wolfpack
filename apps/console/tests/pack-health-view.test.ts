@@ -95,11 +95,11 @@ describe("error codes in plain words", () => {
 describe("service actions per row", () => {
 	it("offers roll back only for hubd and the workerd link unit with a kept previous release, naming the target version", () => {
 		const actions = { systemd: true, rollback: [{ service: "hubd", from: "0.1.14", to: "0.1.13" }, { service: "workerd", from: "0.1.5", to: null }] };
-		assert.deepEqual(rowActions(link("hubd", "ok"), actions), { logs: true, rollback: { service: "hubd", to: "0.1.13" }, macCommands: null });
-		assert.deepEqual(rowActions(link("workerd", "ok"), actions), { logs: true, rollback: { service: "workerd", to: null }, macCommands: null });
-		assert.deepEqual(rowActions(link("workerd-wolves", "ok"), actions), { logs: true, rollback: null, macCommands: null });
-		assert.deepEqual(rowActions(link("wolfd@hal", "ok"), actions), { logs: true, rollback: null, macCommands: null });
-		assert.deepEqual(rowActions(link("hubd", "ok", { restartable: false }), actions), { logs: false, rollback: { service: "hubd", to: "0.1.13" }, macCommands: null });
+		assert.deepEqual(rowActions(link("hubd", "ok"), actions), { logs: true, rollback: { service: "hubd", to: "0.1.13" }, macCommands: null, restart: true });
+		assert.deepEqual(rowActions(link("workerd", "ok"), actions), { logs: true, rollback: { service: "workerd", to: null }, macCommands: null, restart: true });
+		assert.deepEqual(rowActions(link("workerd-wolves", "ok"), actions), { logs: true, rollback: null, macCommands: null, restart: true });
+		assert.deepEqual(rowActions(link("wolfd@hal", "ok"), actions), { logs: true, rollback: null, macCommands: null, restart: true });
+		assert.deepEqual(rowActions(link("hubd", "ok", { restartable: false }), actions), { logs: false, rollback: { service: "hubd", to: "0.1.13" }, macCommands: null, restart: false });
 	});
 
 	it("never offers a roll back that would go to a newer release (after a rollback, previous is the release just left); unknown versions stay offered", () => {
@@ -119,12 +119,12 @@ describe("service actions per row", () => {
 		assert.equal(rollbackQuestion("hubd", null, "0.1.13"), "Roll hubd back to v0.1.13 (the running version is unknown)?");
 	});
 
-	it("off systemd (the Mac stack) offers no logs or rollback, only copyable stack commands on workerd and wolf rows; an older server without actions counts as off", () => {
+	it("off systemd (the Mac stack) offers no restart, logs or rollback, only copyable stack commands on workerd and wolf rows; an older server without actions counts as off", () => {
 		const mac = { systemd: false, rollback: [] };
 		const cmds = ["pnpm stack restart", "tail -n 100 ~/wolves/local/logs/stack.log"];
-		assert.deepEqual(rowActions(link("workerd", "ok"), mac), { logs: false, rollback: null, macCommands: cmds });
-		assert.deepEqual(rowActions(link("wolfd@hal", "down"), undefined), { logs: false, rollback: null, macCommands: cmds });
-		assert.deepEqual(rowActions(link("hubd", "ok"), mac), { logs: false, rollback: null, macCommands: null });
+		assert.deepEqual(rowActions(link("workerd", "ok"), mac), { logs: false, rollback: null, macCommands: cmds, restart: false });
+		assert.deepEqual(rowActions(link("wolfd@hal", "down"), undefined), { logs: false, rollback: null, macCommands: cmds, restart: false });
+		assert.deepEqual(rowActions(link("hubd", "ok"), mac), { logs: false, rollback: null, macCommands: null, restart: false });
 	});
 });
 

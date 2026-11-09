@@ -80,7 +80,7 @@ const linkOf = (s: HealthSnapshot, id: string): LinkSnapshot => {
 const cleanups: (() => Promise<void>)[] = [];
 after(async () => { for (const c of cleanups) await c().catch(() => {}); });
 
-async function setup(o: { wolves?: () => unknown[]; optRoot?: string } = {}) {
+async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: boolean } = {}) {
 	const hub = await fakeService("hubd");
 	const workerd = await fakeService("workerd", () => ({ wolves: o.wolves?.() ?? [] }));
 	cleanups.push(hub.close, workerd.close);
@@ -103,7 +103,7 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string } = {}) {
 	let overflow = false;
 	const run: CommandRunner = async (file, args) => { runs.push([file, ...args]); return { code: exit, stderr: "", stdout, ...(overflow ? { overflow: true } : {}) }; };
 	const logs: string[] = [];
-	const restarter = createRestarter({ health, run, now: clock.now, minIntervalMs: 60_000, log: (m) => logs.push(m) });
+	const restarter = createRestarter({ health, run, now: clock.now, minIntervalMs: 60_000, log: (m) => logs.push(m), systemd: o.systemd ?? true });
 	const witness = createSessionWitness({ now: clock.now });
 	const logReader = createLogReader({ health, run, log: (m) => logs.push(m) });
 	const rollbacker = createRollbacker({ releases, run, now: clock.now, log: (m) => logs.push(m) });
@@ -329,6 +329,16 @@ describe("pack health: POST /api/health/restart", () => {
 		}
 		assert.equal(s.runs.length, 3);
 		assert.ok(s.logs.some((l) => /health restart hubd by device [0-9a-f]{12}: ok/.test(l)), s.logs.join("\n"));
+	});
+
+	it("answers 501 unsupported off systemd (the Mac) and runs no systemctl", async () => {
+		const s = await setup({ systemd: false });
+		s.witness.verified("tok");
+		await s.tick(T0);
+		const r = await s.api.restart(restartReq("hubd", "tok"));
+		assert.equal(r.status, 501);
+		assert.equal(((await r.json()) as { code: string }).code, "unsupported");
+		assert.deepEqual(s.runs, []);
 	});
 
 	it("allows one restart per service per minute (429 + Retry-After), other services unaffected", async () => {

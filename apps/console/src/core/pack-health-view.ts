@@ -41,18 +41,18 @@ export const MAC_STACK_COMMANDS = ["pnpm stack restart", "tail -n 100 ~/wolves/l
 const ROLLBACK_LINK: Record<string, string> = { hubd: "hubd", workerd: "workerd" };
 
 /**
- * What a row offers besides restart (work-wolfpack-yM3uTlj). Under systemd: Logs for a unit the console may restart, Roll back for hubd and
- * the workerd link unit when a previous release is kept. Off systemd (the Mac stack, or an older server without `actions`): nothing that
+ * What a row offers (work-wolfpack-yM3uTlj). Under systemd: Restart and Logs for a unit the console may restart, Roll back for hubd and
+ * the workerd link unit when a previous release is kept. Off systemd (the Mac stack, or an older server without `actions`): no Restart, nothing that
  * would fail, just the stack commands to copy on the workerd and wolf rows (the hub runs elsewhere).
  */
 export function rowActions(
 	l: Pick<HealthLink, "id" | "kind" | "restartable">,
 	actions: HealthActionsView | undefined,
-): { logs: boolean; rollback: { service: string; to: string | null } | null; macCommands: string[] | null } {
-	if (!actions?.systemd) return { logs: false, rollback: null, macCommands: l.kind === "hubd" ? null : [...MAC_STACK_COMMANDS] };
+): { logs: boolean; rollback: { service: string; to: string | null } | null; macCommands: string[] | null; restart: boolean } {
+	if (!actions?.systemd) return { logs: false, rollback: null, macCommands: l.kind === "hubd" ? null : [...MAC_STACK_COMMANDS], restart: false };
 	const svc = ROLLBACK_LINK[l.id];
 	const rb = svc ? actions.rollback.find((r) => r.service === svc) : undefined;
-	return { logs: l.restartable, rollback: rb && rollbackOffered(rb) ? { service: rb.service, to: rb.to } : null, macCommands: null };
+	return { logs: l.restartable, rollback: rb && rollbackOffered(rb) ? { service: rb.service, to: rb.to } : null, macCommands: null, restart: l.restartable };
 }
 
 /** The X.Y.Z core of a version as numbers, or null when it has none. */
@@ -172,6 +172,7 @@ export function restartOutcome(status: number, retryAfter: string | null): Resta
 	}
 	if (status === 401) return { kind: "error", message: "Sign in with the console once while the hub is up" };
 	if (status === 502) return { kind: "error", message: "systemctl refused the restart (is the console's polkit rule installed?)" };
+	if (status === 501) return { kind: "error", message: "No systemd on this host; restart it by hand" };
 	if (status === 400) return { kind: "error", message: "The console doesn't know this service" };
 	if (status === 0) return { kind: "error", message: "Console unreachable; restart not sent" };
 	return { kind: "error", message: `Restart failed (HTTP ${status})` };

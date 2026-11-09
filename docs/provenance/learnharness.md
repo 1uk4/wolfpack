@@ -138,7 +138,7 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/.github/workflows/ci.yml`
 - `apps/console/.github/workflows/release.yml`
 - `apps/console/app/api/activity/route.ts`
-- `apps/console/app/api/chat/route.ts`
+- `apps/console/app/api/chat/route.ts` (since removed: threads use the wolf thread transport, `/api/wolves/<wolf>/threads/<slug>/...`; the console has no `POST /api/chat` or compaction of its own)
 - `apps/console/app/api/chats/[id]/dismiss/route.ts`
 - `apps/console/app/api/chats/[id]/markdown/route.ts`
 - `apps/console/app/api/chats/[id]/settings/route.ts`

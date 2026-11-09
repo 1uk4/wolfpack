@@ -36,9 +36,9 @@ import type {CallUsage, SteerMessage} from "../core/contracts.ts";
 /**
  * One chat turn over the server-owned native record. Framework-free (plain
  * Request/Response) so tests can drive it directly with a scripted faux
- * engine — the Next route handler in app/api/chat is a one-line wrapper.
+ * engine. Entry: the turn runner (setTurnRunner) for wake/job turns.
  *
- * THE INPUT-EVENTS CONTRACT (Wave B, owner ruling 2026-09-26): POST /api/chat
+ * THE INPUT-EVENTS CONTRACT (Wave B, owner ruling 2026-09-26): handleChatRequest
  * carries {chatId, input} — one explicit event (text / answer / verdict /
  * continue), never a client transcript. The server owns the record; this
  * module is the TURN COMPOSITION ROOT: it turns the event into native

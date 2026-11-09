@@ -6,7 +6,7 @@
  *
  * Same globalThis discipline as turn-liveness.ts (read its header): Next
  * dev compiles each route as its own module instance, so a module-level
- * Map would be a DIFFERENT registry in the POST /api/chat entry and the
+ * Map would be a DIFFERENT registry in the turn-submit entry and the
  * GET .../stream entry. globalThis spans module instances within the
  * process.
  *

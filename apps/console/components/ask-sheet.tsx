@@ -8,10 +8,11 @@
  * `questions/:qid/text` and the server's `draft` prefills the answer here.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CheckIcon, PencilIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { InertImage, mdComponents } from "@/components/md-blocks";
-import { CardTextInput, Indicator, OPTION_ROW, isOther, otherText } from "@/components/card-fields/shared";
+import { CardTextInput, isOther, otherText } from "@/components/card-fields/shared";
 import { attachmentUrl, cardPageAnswerUrl, diagramUrl } from "@/components/thread-transport";
 import { imagesOf, withImages } from "@/components/ask-images";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,13 @@ export interface Answering {
 	qid: string;
 }
 
+/** The console's one highlight (a thread screen overrides it, amber on the owner's), as classes this sheet shares. */
+const ACCENT_BG = "bg-(color:--thread-accent) text-(color:--thread-accent-foreground)";
+const ACCENT_TINT = "border-(color:--thread-accent) bg-[color-mix(in_oklab,var(--thread-accent)_12%,transparent)]";
+const FOCUS = "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
+const CHOICE = cn("flex w-full items-start gap-2.5 rounded-lg border bg-background/40 px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60", FOCUS);
+/** A read-only field that hands typing to the composer: an input-like surface with a pencil and the hint. */
+const PREVIEW = "w-full cursor-text rounded-lg border border-dashed bg-background/40 py-2 pl-8 pr-3 text-sm placeholder:text-muted-foreground/80 hover:bg-accent/40";
 const SAFE_MD = { ...mdComponents, img: InertImage };
 const DIAGRAM_ID = /^viz-[a-z0-9]+(?:-[a-z0-9]+)*-\d+\.png$/;
 type Opt = { label: string; value: string; description?: string; tradeoff?: string };
@@ -138,6 +146,11 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 	// Picking keeps the images bound to the question (wolfd keeps them in the draft too).
 	const set = (id: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [id]: withImages(a, imagesOf(d[id])) }));
 	const clear = (id: string) => setDraft((d) => (({ [id]: _g, ...rest }) => rest)(d));
+	// Skipped questions (optional ones the owner passed on): greyed until Answer or a click brings them back. A draft that arrives (bound text) also ends the skip.
+	const [skippedIds, setSkippedIds] = useState<ReadonlySet<string>>(new Set());
+	useEffect(() => setSkippedIds(new Set()), [pageIndex, pc.callId]);
+	const skip = (id: string) => { clear(id); setSkippedIds((s) => new Set(s).add(id)); };
+	const unskip = (id: string) => setSkippedIds((s) => { const n = new Set(s); n.delete(id); return n; });
 	/** Reply mode: aim the bottom composer at this question and put the cursor there. */
 	const reply = (id: string) => {
 		setAnswering({ callId: pc.callId, qid: id });
@@ -184,52 +197,74 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 	};
 
 	return (
-		<div data-testid="ask-sheet" data-call-id={pc.callId} data-page={pageIndex} className="flex min-h-0 flex-1 flex-col rounded-xl border bg-card text-card-foreground shadow-lg">
-			<div className="flex items-baseline justify-between gap-2 border-b px-3 py-2 font-ui text-xs text-muted-foreground">
-				<span className="truncate font-medium text-foreground" data-testid="ask-page-title">{steps[pageIndex]?.title ?? pc.card.title ?? "Questions"}</span>
-				<span data-testid="ask-page-count" className="shrink-0">page {pageIndex + 1} of {steps.length}</span>
+		<div data-testid="ask-sheet" data-call-id={pc.callId} data-page={pageIndex} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card text-card-foreground shadow-lg max-md:rounded-xl">
+			<div className="flex flex-col gap-2 border-b px-4 pb-2.5 pt-3">
+				<div className="flex items-baseline justify-between gap-2">
+					<span className="truncate text-sm font-semibold text-foreground" data-testid="ask-page-title">{steps[pageIndex]?.title ?? pc.card.title ?? "Questions"}</span>
+					<span data-testid="ask-page-count" className="shrink-0 font-ui text-xs text-muted-foreground">page {pageIndex + 1} of {steps.length}</span>
+				</div>
+				<div aria-hidden className="flex gap-1">
+					{steps.map((_, i) => (
+						<span key={i} className={cn("h-1 flex-1 rounded-full transition-colors", i <= pageIndex ? "bg-(color:--thread-accent)" : "bg-border")} />
+					))}
+				</div>
 			</div>
-			<div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
+			<div key={pageIndex} className="wp-card-enter min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
 				{fields.map((f) => {
 					const n = pc.card.fields.findIndex((x) => x.id === f.id) + 1;
-					const canType = typable(f);
 					const labelId = `ask-${pc.callId}-${f.id}-label`;
 					const on = answering !== null && answering.callId === pc.callId && answering.qid === f.id;
+					const skipped = skippedIds.has(f.id) && !draft[f.id];
 					return (
-						<section key={f.id} data-testid="ask-question" data-qid={f.id} className={cn("rounded-lg", on && "ring-2 ring-primary/50")}>
+						<section
+							key={f.id}
+							data-testid="ask-question"
+							data-qid={f.id}
+							data-skipped={skipped ? "true" : undefined}
+							tabIndex={skipped ? 0 : undefined}
+							onClick={skipped ? () => unskip(f.id) : undefined}
+							onKeyDown={skipped ? (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); unskip(f.id); } } : undefined}
+							className={cn("rounded-lg", skipped && "cursor-pointer focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", on && "ring-1 ring-(color:--thread-accent) ring-offset-4 ring-offset-card")}
+						>
+							<div className={cn(skipped && "opacity-50")}>
 							{f.description && (
-								<div data-testid="ask-context" className="mb-2 text-sm text-muted-foreground">
+								<div data-testid="ask-context" className="mb-2 text-[13px] leading-relaxed text-muted-foreground">
 									<MessageResponse components={SAFE_MD}>{escapeRawHtml(f.description)}</MessageResponse>
 								</div>
 							)}
 							{f.diagram && <Diagram target={target} id={f.diagram} />}
-							<div id={labelId} className="mb-2 flex flex-wrap items-baseline gap-x-2 text-sm font-medium">
-								<span className="font-ui text-xs text-muted-foreground">Q{n}</span>
+							<div id={labelId} className="mb-2 flex flex-wrap items-baseline gap-x-2 text-sm font-medium [overflow-wrap:anywhere]">
 								<MessageResponse components={SAFE_MD}>{escapeRawHtml(f.label)}</MessageResponse>
-								{f.optional && <span className="text-xs font-normal text-muted-foreground">(optional)</span>}
+								{f.optional && <span className="rounded-full bg-accent px-1.5 py-px font-ui text-[10px] font-normal uppercase tracking-wider text-muted-foreground">optional</span>}
 							</div>
-							<Control field={f} labelId={labelId} qn={`Q${n}`} onReply={() => reply(f.id)} value={draft[f.id]} onChange={(a) => set(f.id, a)} onClear={() => clear(f.id)} />
+							{skipped && <span data-testid="ask-skipped" className="mb-1 block font-ui text-[11px] text-muted-foreground">Skipped</span>}
+							<div data-testid="ask-choices" role={skipped ? "group" : undefined} aria-labelledby={skipped ? labelId : undefined} aria-disabled={skipped ? true : undefined}>
+								{/* A click on a greyed choice only brings the question back; it never selects. */}
+								<Control field={f} labelId={labelId} qn={`Q${n}`} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => (skipped ? unskip(f.id) : set(f.id, a))} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
+							</div>
 							{imagesOf(draft[f.id]).length > 0 && <Images target={target} ids={imagesOf(draft[f.id])} />}
-							<div className="mt-1 flex gap-3 font-ui text-xs">
-								{canType && (
-									<button type="button" data-testid="ask-answer-by-typing" className="text-primary underline" onClick={(e) => { e.stopPropagation(); if (on) setAnswering(null); else reply(f.id); }}>
-										{on ? `answering Q${n}…` : "answer by typing"}
+							</div>
+							<div className="mt-1.5 flex items-center gap-1 font-ui text-xs">
+								{skipped ? (
+									<button type="button" data-testid="ask-unskip" className={cn("ml-auto rounded-md px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); unskip(f.id); }}>
+										Answer
 									</button>
-								)}
-								{f.optional && draft[f.id] && (
-									<button type="button" data-testid="ask-skip" className="text-muted-foreground underline" onClick={(e) => { e.stopPropagation(); clear(f.id); }}>
-										skip
-									</button>
+								) : (
+									f.optional && draft[f.id] && (
+										<button type="button" data-testid="ask-skip" className={cn("ml-auto rounded-md px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skip(f.id); }}>
+											Skip question
+										</button>
+									)
 								)}
 							</div>
 						</section>
 					);
 				})}
 			</div>
-			{error && <p role="alert" data-testid="ask-error" className="px-3 pb-1 font-ui text-xs text-destructive">{error}</p>}
-			<div className="flex items-center justify-end gap-2 border-t px-3 py-2">
-				{missing.length > 0 && <span data-testid="ask-missing" role="status" aria-live="polite" className="mr-auto font-ui text-xs text-amber-700 dark:text-amber-400">Answer to continue: {missing.map((f) => `Q${pc.card.fields.findIndex((x) => x.id === f.id) + 1}`).join(", ")}</span>}
-				<Button type="button" size="sm" disabled={busy || missing.length > 0} onClick={() => void submit()} data-testid={last ? "ask-submit" : "ask-next"}>
+			{error && <p role="alert" data-testid="ask-error" className="px-4 pb-1 font-ui text-xs text-destructive">{error}</p>}
+			<div className="flex items-center justify-end gap-2 border-t bg-card px-4 py-2.5">
+				{missing.length > 0 && <span data-testid="ask-missing" role="status" aria-live="polite" className="mr-auto min-w-0 font-ui text-xs text-muted-foreground">Answer to continue: {missing.map((f) => `Q${pc.card.fields.findIndex((x) => x.id === f.id) + 1}`).join(", ")}</span>}
+				<Button type="button" size="sm" className={cn(ACCENT_BG, "min-h-9 px-4 hover:opacity-90 disabled:opacity-40", FOCUS)} disabled={busy || missing.length > 0} onClick={() => void submit()} data-testid={last ? "ask-submit" : "ask-next"}>
 					{busy ? "Sending…" : last ? "Submit" : "Next"}
 				</Button>
 			</div>
@@ -250,11 +285,11 @@ function seed(pc: PendingCard, ids: string[]): Record<string, CardFieldAnswer> {
 /** Small thumbnails of the images bound to an answer, with an "N images" badge; loaded through the thread's attachment URL. */
 function Images({ target, ids }: { target: Pick<AttachedRef, "wolf" | "slug">; ids: string[] }) {
 	return (
-		<div data-testid="ask-images" className="mt-1 flex flex-wrap items-center gap-1">
-			<span className="font-ui text-xs text-muted-foreground">{ids.length} image{ids.length === 1 ? "" : "s"}</span>
+		<div data-testid="ask-images" className="mt-1.5 flex flex-wrap items-center gap-1.5">
+			<span className="rounded-full bg-accent px-2 py-0.5 font-ui text-xs text-muted-foreground">{ids.length} image{ids.length === 1 ? "" : "s"}</span>
 			{ids.map((id) => (
 				// eslint-disable-next-line @next/next/no-img-element
-				<img key={id} src={attachmentUrl(target.wolf, target.slug, id)} alt="" className="size-8 rounded border object-cover" />
+				<img key={id} src={attachmentUrl(target.wolf, target.slug, id)} alt="" className="size-8 rounded-md border object-cover" />
 			))}
 		</div>
 	);
@@ -262,8 +297,8 @@ function Images({ target, ids }: { target: Pick<AttachedRef, "wolf" | "slug">; i
 
 function Diagram({ target, id }: { target: Pick<AttachedRef, "wolf" | "slug">; id: string }) {
 	const [failed, setFailed] = useState(false);
-	if (!DIAGRAM_ID.test(id) || failed) return <div data-testid="ask-diagram-missing" className="mb-2 rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">Diagram unavailable</div>;
-	return <img data-testid="ask-diagram" src={diagramUrl(target.wolf, target.slug, id)} alt="Diagram" onError={() => setFailed(true)} className="mb-2 max-h-72 w-full rounded-lg border bg-background object-contain" />;
+	if (!DIAGRAM_ID.test(id) || failed) return <div data-testid="ask-diagram-missing" className="mb-2 rounded-xl border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">Diagram unavailable</div>;
+	return <img data-testid="ask-diagram" src={diagramUrl(target.wolf, target.slug, id)} alt="Diagram" onError={() => setFailed(true)} className="mb-2 max-h-72 w-full rounded-xl border bg-background object-contain" />;
 }
 
 function Control({ field, labelId, qn, onReply, value, onChange, onClear }: { field: CardField; labelId: string; qn: string; onReply: () => void; value: CardFieldAnswer | undefined; onChange: (a: CardFieldAnswer) => void; onClear: () => void }) {
@@ -273,15 +308,15 @@ function Control({ field, labelId, qn, onReply, value, onChange, onClear }: { fi
 	const hint = (bound: boolean) => bound && <span data-testid="ask-replace-answer-hint" className="mt-0.5 block font-ui text-xs text-muted-foreground">Tap to replace this answer in the chat below</span>;
 	if (field.kind === "free-text") {
 		const v = typeof value?.value === "string" ? value.value : "";
-		return <div onClick={stop}><CardTextInput testId="ask-free" multiline aria-labelledby={labelId} className="min-h-20 w-full px-3 py-1.5" value={v} onChange={() => {}} readOnly {...replyKeys} placeholder="Tap to answer in the chat below" />{hint(v !== "")}</div>;
+		return <div onClick={stop} className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-3 size-3.5 text-muted-foreground" /><CardTextInput testId="ask-free" multiline aria-labelledby={labelId} className={cn(PREVIEW, "min-h-20", v !== "" && "border-solid text-foreground", FOCUS)} value={v} onChange={() => {}} readOnly {...replyKeys} placeholder="Tap to answer in the chat below" />{hint(v !== "")}</div>;
 	}
 	if (field.kind === "confirm") {
 		const v = (value as { value?: boolean } | undefined)?.value;
 		return (
-			<div className="flex gap-2" role="radiogroup" aria-labelledby={labelId} onClick={stop}>
+			<div className="inline-flex w-full gap-1 rounded-lg border bg-background/40 p-1 sm:w-auto" role="radiogroup" aria-labelledby={labelId} onClick={stop}>
 				{[true, false].map((b) => (
-					<button key={String(b)} type="button" role="radio" data-testid="ask-confirm" data-value={String(b)} aria-checked={v === b} onClick={() => (v === b ? onClear() : onChange({ value: b }))} className={cn(OPTION_ROW, "w-auto items-center", v === b ? "border-primary bg-accent" : "hover:bg-accent/50")}>
-						<Indicator shape="radio" on={v === b} />
+					<button key={String(b)} type="button" role="radio" data-testid="ask-confirm" data-value={String(b)} aria-checked={v === b} onClick={() => (v === b ? onClear() : onChange({ value: b }))} className={cn("flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent px-5 text-sm transition-colors sm:flex-none", FOCUS, v === b ? cn(ACCENT_TINT, "font-medium text-foreground") : "text-muted-foreground hover:bg-accent/60 hover:text-foreground")}>
+						{v === b && <CheckIcon aria-hidden className="size-3.5" />}
 						{b ? "Yes" : "No"}
 					</button>
 				))}
@@ -294,12 +329,12 @@ function Control({ field, labelId, qn, onReply, value, onChange, onClear }: { fi
 		const shown = touched ?? f.default ?? f.min;
 		return (
 			<div onClick={stop} data-testid="ask-slider" data-touched={touched !== undefined || undefined}>
-				<div className="flex items-center gap-3 text-xs text-muted-foreground">
+				<div className="flex items-center gap-3 text-xs text-muted-foreground [overflow-wrap:anywhere]">
 					<span data-testid="ask-slider-min">{f.minLabel ?? f.min}</span>
-					<input type="range" aria-labelledby={labelId} aria-valuetext={touched === undefined ? `${shown} (default)` : String(shown)} min={f.min} max={f.max} step={f.step} value={shown} onChange={(e) => onChange({ value: Number(e.target.value) })} className="min-w-0 flex-1" data-testid="ask-slider-input" />
+					<input type="range" aria-labelledby={labelId} aria-valuetext={touched === undefined ? `${shown} (default)` : String(shown)} min={f.min} max={f.max} step={f.step} value={shown} onChange={(e) => onChange({ value: Number(e.target.value) })} className="h-1.5 min-w-0 flex-1 cursor-pointer accent-(color:--thread-accent)" data-testid="ask-slider-input" />
 					<span data-testid="ask-slider-max">{f.maxLabel ?? f.max}</span>
 				</div>
-				<div data-testid="ask-slider-value" className="mt-1 text-center font-ui text-sm text-foreground">{shown}</div>
+				<div className="mt-2 flex justify-center"><span data-testid="ask-slider-value" className={cn("rounded-full px-2.5 py-0.5 font-ui text-xs tabular-nums", touched === undefined ? "bg-accent text-muted-foreground" : cn(ACCENT_BG, "font-medium"))}>{shown}</span></div>
 			</div>
 		);
 	}
@@ -323,22 +358,24 @@ function Control({ field, labelId, qn, onReply, value, onChange, onClear }: { fi
 						data-testid="ask-option"
 						data-value={o.value}
 						onClick={() => (multi ? write(sel ? picked.filter((x) => x !== o.value) : [...picked, o.value], custom[0] ?? "") : sel ? onClear() : onChange(make({ value: o.value } satisfies SingleA)))}
-						className={cn(OPTION_ROW, sel ? "border-primary bg-accent" : "hover:bg-accent/50")}
+						className={cn(CHOICE, sel && ACCENT_TINT)}
 					>
-						<Indicator shape={multi ? "check" : "radio"} on={sel} />
-						<span className="flex min-w-0 flex-col items-start">
-							<span>{o.label}</span>
+						<span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 [overflow-wrap:anywhere]">
+							<span className={cn(sel && "font-medium")}>{o.label}</span>
 							{o.description && <span className="text-xs text-muted-foreground">{o.description}</span>}
 							{o.tradeoff && <span data-testid="ask-tradeoff" className="text-xs text-muted-foreground">{o.tradeoff}</span>}
+						</span>
+						<span aria-hidden data-testid="card-indicator" data-on={sel || undefined} className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full transition-opacity", sel ? ACCENT_BG : "opacity-0")}>
+							<CheckIcon className="size-3" strokeWidth={3} />
 						</span>
 					</button>
 				);
 			})}
 			{otherAllowed && !multi && (
-				<CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn("px-3 py-1.5", isOther(value) && "border-primary bg-accent")} placeholder="Other: tap to answer in the chat below" value={otherText(value) ?? ""} onChange={() => {}} readOnly {...replyKeys} />
+				<div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, isOther(value) && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer in the chat below" value={otherText(value) ?? ""} onChange={() => {}} readOnly {...replyKeys} /></div>
 			)}
 			{otherAllowed && multi && (
-				<CardTextInput testId="ask-other" aria-label={`${qn} Other`} className="px-3 py-1.5" placeholder="Other: tap to answer in the chat below" value={custom[0] ?? ""} onChange={() => {}} readOnly {...replyKeys} />
+				<div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, custom[0] && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer in the chat below" value={custom[0] ?? ""} onChange={() => {}} readOnly {...replyKeys} /></div>
 			)}
 		</div>
 	);

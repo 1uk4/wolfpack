@@ -234,7 +234,7 @@ describe("ChatBar cards", () => {
 		await type("typed");
 		assert.equal(q('[data-testid="ask-replace-hint"]')!.textContent, "Sending a message replaces the open questions.");
 		await type("");
-		await click(qa('[data-testid="ask-answer-by-typing"]')[1]!);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[1]!);
 		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: How/);
 		await type("because");
 		await submit();
@@ -251,7 +251,7 @@ describe("ChatBar cards", () => {
 		await mount();
 		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
 		assert.match(slot().textContent!, /Which color\?/); // the classic card shows beside the sheet
-		await click(qa('[data-testid="ask-answer-by-typing"]')[1]!);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[1]!);
 		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: How/);
 		assert.equal(sendBtn().hasAttribute("disabled") || sendBtn().getAttribute("aria-disabled") === "true", true); // nothing typed: no send
 		raise("a", paged([{ fields: ["q1"] }, { fields: ["q2"] }]), q1("c1"));
@@ -269,7 +269,7 @@ describe("ChatBar cards", () => {
 			await until(() => q(`[data-testid="attachment-chip"][data-status="ready"]`), "the upload");
 		};
 		const texts = () => calls.filter((c) => c.url.endsWith("/cards/p1/questions/q1/text"));
-		await click(q('[data-testid="ask-answer-by-typing"]'));
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
 		assert.equal(props(q('button[aria-label="Attach images"]')!, "disabled"), false);
 		failPost = /\/text$/; // refused, e.g. over the card's image cap
 		await pick();
@@ -284,7 +284,7 @@ describe("ChatBar cards", () => {
 		await submit();
 		await until(() => texts().length === 2, "the retry");
 		await until(() => qa('[data-testid="attachment-chip"]').length === 0, "the chips to clear");
-		await click(qa('[data-testid="ask-answer-by-typing"]')[0]!);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[0]!);
 		await pick();
 		await submit();
 		await until(() => texts().length === 3, "the image-only bind");
@@ -298,7 +298,7 @@ describe("ChatBar cards", () => {
 		const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
 		await act(async () => void props(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
 		await until(() => q(`[data-testid="attachment-chip"][data-status="ready"]`), "the upload");
-		await click(q('[data-testid="ask-answer-by-typing"]'));
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
 		await type("look");
 		let release!: () => void;
 		const held = new Promise<void>((r) => (release = r));
@@ -322,10 +322,10 @@ describe("ChatBar cards", () => {
 		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
 		await mount();
 		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
-		await click(q('[data-testid="ask-answer-by-typing"]'));
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
 		await act(async () => void props(ta(), "onKeyDown")({ key: "Escape", preventDefault() {}, stopPropagation() {} }));
 		assert.equal(q('[data-testid="answering-chip"]'), null);
-		await click(qa('[data-testid="ask-answer-by-typing"]')[0]!);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[0]!);
 		await click(q('[data-testid="answering-chip-clear"]'));
 		await type("typed");
 		assert.equal(q('[data-testid="ask-replace-hint"]')!.textContent, "Sending a message replaces the open questions.");

@@ -227,7 +227,7 @@ describe("floating chat dictation", () => {
 		pagedAsk = true;
 		await mount("/kb", A);
 		await wait();
-		await fire(q('[data-testid="ask-answer-by-typing"]')!, "click");
+		await fire(q('[data-testid="ask-free"], [data-testid="ask-other"]')!, "click");
 		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why/);
 		await fire(barToggle(), "click", { detail: 1 });
 		await wait();

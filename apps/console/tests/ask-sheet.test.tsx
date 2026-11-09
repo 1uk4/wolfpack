@@ -224,6 +224,45 @@ describe("ask sheet answers and guards", () => {
 		assert.deepEqual(posts[0]!.body, { answers: {} });
 	});
 
+	it("skip greys the question with a Skipped label; Answer un-skips it", async () => {
+		await render(pending());
+		const sec = () => q('[data-testid="ask-question"]')!;
+		assert.equal(q('[data-testid="ask-skipped"]'), null);
+		await click(qa('[data-testid="ask-option"]')[0]!);
+		await click(q('[data-testid="ask-skip"]'));
+		assert.equal(q('[data-testid="ask-skipped"]')!.textContent, "Skipped");
+		assert.equal(sec().getAttribute("data-skipped"), "true");
+		assert.equal(q('[data-testid="ask-choices"]')!.getAttribute("aria-disabled"), "true");
+		assert.equal(q('[data-testid="ask-unskip"]')!.textContent, "Answer");
+		assert.equal(q('[data-testid="ask-skip"]'), null);
+		await click(q('[data-testid="ask-unskip"]'));
+		assert.equal(q('[data-testid="ask-skipped"]'), null);
+		assert.equal(q('[data-testid="ask-choices"]')!.getAttribute("aria-disabled"), null);
+	});
+
+	it("clicking the greyed question un-skips it without selecting an option; Enter does too", async () => {
+		await render(pending());
+		await click(qa('[data-testid="ask-option"]')[0]!);
+		await click(q('[data-testid="ask-skip"]'));
+		await click(qa('[data-testid="ask-option"]')[1]!); // a click on the greyed choice
+		assert.equal(q('[data-testid="ask-skipped"]'), null);
+		assert.deepEqual(qa('[data-testid="ask-option"]').map((o) => o.getAttribute("aria-checked")), ["false", "false"]);
+		await click(q('[data-testid="ask-option"]'));
+		await click(q('[data-testid="ask-skip"]'));
+		await act(async () => void props(q('[data-testid="ask-question"]')!, "onKeyDown")({ key: "Enter", target: q('[data-testid="ask-question"]'), currentTarget: q('[data-testid="ask-question"]'), preventDefault() {} }));
+		assert.equal(q('[data-testid="ask-skipped"]'), null);
+	});
+
+	it("a skipped question is omitted from the body and does not block Next", async () => {
+		await render(pending());
+		await click(qa('[data-testid="ask-option"]')[0]!);
+		await click(q('[data-testid="ask-skip"]'));
+		assert.equal(q('[data-testid="ask-missing"]'), null);
+		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await settle();
+		assert.deepEqual(posts[0]!.body, { answers: {} });
+	});
+
 	it("after card-pending moves the page away and back, the old q1 draft is not sent", async () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[0]!);
@@ -254,13 +293,13 @@ describe("ask sheet answers and guards", () => {
 		await act(async () => void props(free, "onKeyDown")({ key: "Enter", preventDefault() {} }));
 		await click(q('[data-testid="ask-other"]'));
 		assert.deepEqual(aimed, ["q1", "q2"]);
-		assert.equal(qa('[data-testid="ask-question"]').map((s) => !!s.querySelector('[data-testid="ask-answer-by-typing"]')).join(), "true,true,false,false,false");
+		assert.equal(qa('[data-testid="ask-question"]').map((s) => !!s.querySelector('[data-testid="ask-free"], [data-testid="ask-other"]')).join(), "true,true,false,false,false");
 		assert.equal(qa('[data-testid="ask-other"]').length, 1);
 	});
 
 	it("typing is offered only where the server takes text", async () => {
 		await render(one([{ id: "q1", kind: "single", label: "A", allowOther: false, options: OPTS }, { id: "q2", kind: "multi", label: "B", options: OPTS }, { id: "q3", kind: "multi", label: "C", allowOther: true, options: OPTS }, { id: "q4", kind: "free-text", label: "D" }]));
-		const has = qa('[data-testid="ask-question"]').map((s) => !!s.querySelector('[data-testid="ask-answer-by-typing"]'));
+		const has = qa('[data-testid="ask-question"]').map((s) => !!s.querySelector('[data-testid="ask-free"], [data-testid="ask-other"]'));
 		assert.deepEqual(has, [false, false, true, true]);
 	});
 

@@ -70,9 +70,9 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 		return {
 			pending: true,
 			sheet: (
-				<button type="button" data-testid="ask-sheet-reopen" onClick={() => setOpen(true)} className="pointer-events-auto flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border bg-card px-3 text-left font-ui text-sm shadow-lg">
-					<span>Questions waiting</span>
-					<ChevronUpIcon className="size-4" />
+				<button type="button" data-testid="ask-sheet-reopen" onClick={() => setOpen(true)} className="pointer-events-auto flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+					<span className="font-medium text-foreground">Questions waiting</span>
+					<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
 				</button>
 			),
 			answeringLabel: label,
@@ -85,9 +85,9 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 	return {
 		pending: true,
 		sheet: (
-			<div data-testid="ask-sheet-host" data-layout="fullscreen" role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto fixed inset-x-0 top-0 z-40 flex flex-col gap-1 bg-background p-2" style={{ bottom: dockHeight ?? 160 }}>
-				<button type="button" aria-label="Put the questions away" data-testid="ask-sheet-close" onClick={() => setOpen(false)} className="flex min-h-11 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent">
-					<ChevronDownIcon className="size-5" />
+			<div data-testid="ask-sheet-host" data-layout="fullscreen" role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto fixed inset-x-0 top-0 z-40 flex flex-col bg-background px-1.5 pb-1.5 pt-1" style={{ bottom: dockHeight ?? 160 }}>
+				<button type="button" aria-label="Put the questions away" data-testid="ask-sheet-close" onClick={() => setOpen(false)} className="flex min-h-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+					<ChevronDownIcon aria-hidden className="size-5" />
 				</button>
 				{sheet}
 			</div>

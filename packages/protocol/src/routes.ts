@@ -4,6 +4,8 @@ import {
   BindThreadRequestSchema,
   BindThreadResponseSchema,
   AnswerCardRequestSchema,
+  AnswerCardPageBodySchema,
+  BindCardTextBodySchema,
   ConsolidateResponseSchema,
   CreateThreadBodyVariantsSchema,
   CreateThreadResponseSchema,
@@ -70,6 +72,7 @@ export type CreateThreadBody = z.infer<typeof CreateThreadBodySchema>;
 
 export const AnswerCardBodySchema = AnswerCardRequestSchema.omit({ threadId: true, callId: true });
 export type AnswerCardBody = z.infer<typeof AnswerCardBodySchema>;
+export { AnswerCardPageBodySchema, BindCardTextBodySchema } from "./schemas.js";
 // --- feature progress: bind ---
 export const BindThreadBodySchema = BindThreadRequestSchema;
 // --- end feature progress ---
@@ -223,6 +226,42 @@ export const ROUTES = {
     status: [200],
     error: err,
   },
+  /**
+   * Submit one page of a paged (`ask`) card (`PendingCard.card.paged`). The page's answers are delivered to the agent
+   * at once (ack as `answerCard`: `started` or `steered`), but the card stays pending until the last page; the agent
+   * is told to hold its turn until then. `:page` must equal `PendingCard.pageIndex` (else 400 `invalid_request`); a
+   * required question without an answer is 400. Draft text bound with `bindCardText` fills questions not answered in
+   * the body. 404 `not_found` for an unknown/closed card, 400 when the card is not paged.
+   */
+  answerCardPage: {
+    method: "POST",
+    path: "/v1/threads/:id/cards/:callId/pages/:page/answer",
+    body: AnswerCardPageBodySchema,
+    response: { kind: "json", schema: SubmitAckSchema },
+    status: [200],
+    error: err,
+  },
+  /**
+   * "Answering Qn": hold typed text as the free-text / Other answer of question `:qid` on the current page of a paged
+   * card. Not a chat message: nothing is superseded and no turn starts. Answers `{accepted: true}`; the card's
+   * `draft` (card-pending event) then shows it. 400 for a slider/confirm question, one not on the current page, or a
+   * single/multi with `noOther`; 404 for an unknown card.
+   */
+  bindCardText: {
+    method: "POST",
+    path: "/v1/threads/:id/cards/:callId/questions/:qid/text",
+    body: BindCardTextBodySchema,
+    response: { kind: "json", schema: z.object({ accepted: z.literal(true) }) },
+    status: [200],
+    error: err,
+  },
+  /**
+   * A diagram the wolf rendered (render_mermaid / render_svg with `save_as` + `persist: true`), by id: the value of a
+   * card field's `diagram`. Use it as an `<img src>`. Served only from the wolf's own persisted viz directory; the id is
+   * the file name `viz-<slug>-<ms>.png` and nothing else (a path, URL or `..` is 404 `not_found`, as is an unpublished
+   * id). `Content-Type: image/png`, `X-Content-Type-Options: nosniff`.
+   */
+  getDiagram: { method: "GET", path: "/v1/threads/:id/diagrams/:diagramId", response: { kind: "bytes" }, status: [200], error: err },
   /**
    * The thread's composer settings: model tier (`main|smart|fast`) and auto-ship. `models` hints which model each tier
    * resolves to on this wolf. Defaults `{tier: "main", autoShip: false}`. 404 `not_found` for an unknown thread.

@@ -12,7 +12,7 @@
  * Limits: a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -20,6 +20,8 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_NAME_HEADER,
   AnswerCardBodySchema,
+  AnswerCardPageBodySchema,
+  BindCardTextBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
   GraduationConfirmBodySchema,
@@ -55,6 +57,8 @@ import { readDenTopics } from "@wolfpack/memory";
 import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
+import type { AskBridge } from "../extensions/ask.js";
+import { diagramPath } from "../diagrams.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
@@ -81,6 +85,8 @@ export interface WolfServerOptions {
   conversations?: ThreadConversations;
   /** Subagents: where their roster lives and how their conversations are created. Unset: this wolf has no spawn tools' manager. */
   subagents?: SubagentOptions & { bridge?: { manager?: SubagentManager } };
+  /** The ask tools' view of thread state (ask_revise validation, hold-your-turn). Unset: the ask tools find none. */
+  askBridge?: AskBridge;
   /** How long submit/abort wait for the event pump to observe the effect. Default 5000. */
   settleTimeoutMs?: number;
   /** Stall watchdog: abort a running turn silent for this many ms (no model events, no tool running). Default 120000; 0 disables. */
@@ -220,6 +226,15 @@ export class WolfServer {
         },
       );
       if (bridge) bridge.manager = this.subagents;
+    }
+    if (opts.askBridge) {
+      // Ids compare as strings (a conversation id may be a number). Threads are registered before their conversation can run a turn,
+      // so the only fail-open window is attach() itself; no fail-closed branch, it would wedge a thread whose attach failed.
+      const threadOf = (cid: string) => [...this.threads.values()].find((t) => String(t.conv.id) === String(cid));
+      opts.askBridge.host = {
+        reviseTarget: (cid, callId) => threadOf(cid)?.reviseTarget(callId) ?? { problem: "ask_revise: this conversation has no questionnaire." },
+        holdFor: (cid) => threadOf(cid)?.holdState(),
+      };
     }
     this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home", ...(opts.den ? { settings: loadHomeSettings(opts.den) } : {}) }, opts.conversation);
     this.http = createServer((req, res) => {
@@ -682,6 +697,21 @@ export class WolfServer {
         if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
         return this.json(res, 200, await t.answerCard(params.callId, body.data.answers));
       }
+      case "answerCardPage": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = AnswerCardPageBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<questionId>: {value, other?}}}");
+        return this.json(res, 200, await t.answerCardPage(params.callId, Number(params.page), body.data.answers));
+      }
+      case "bindCardText": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = BindCardTextBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {text}");
+        t.bindCardText(params.callId, params.qid, body.data.text);
+        return this.json(res, 200, { accepted: true });
+      }
       case "skipCard": {
         const t = this.checkThread(params.id);
         return this.json(res, 200, await t.skipCard(params.callId));
@@ -847,6 +877,22 @@ export class WolfServer {
           "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
         });
         res.end(file.bytes);
+        return;
+      }
+      case "getDiagram": {
+        this.checkThread(params.id);
+        // By id only: diagramPath accepts exactly a published `viz-<slug>-<ms>.png` of this wolf's viz dir, never a path.
+        const file = this.opts.den ? diagramPath(this.opts.den, params.diagramId, this.opts.env) : undefined;
+        if (!file) throw new HttpError("not_found", `unknown diagram ${params.diagramId}`);
+        const bytes = readFileSync(file);
+        res.writeHead(200, {
+          "Content-Type": "image/png",
+          "Content-Length": bytes.length,
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+        });
+        res.end(bytes);
         return;
       }
       case "abort": {

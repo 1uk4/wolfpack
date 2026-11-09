@@ -3,6 +3,7 @@ import {
   answerSchemaOf,
   cardKind,
   ConfirmFieldSchema,
+  SliderFieldSchema,
   fieldSchemaOf,
   FreeTextFieldSchema,
   MultiFieldSchema,
@@ -12,6 +13,7 @@ import {
   type ConfirmFieldAnswer,
   type FieldShowIf,
   type MultiFieldAnswer,
+  type SliderFieldAnswer,
   type TextFieldAnswer,
 } from "./card-kinds/index.js";
 export * from "./card-kinds/index.js";
@@ -112,7 +114,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
  * The static types below cover the four built-in kinds only: a registered kind parses and validates at runtime but is
  * not part of these unions.
  */
-export type CardField = z.infer<typeof FreeTextFieldSchema> | z.infer<typeof SingleFieldSchema> | z.infer<typeof MultiFieldSchema> | z.infer<typeof ConfirmFieldSchema>;
+export type CardField = z.infer<typeof FreeTextFieldSchema> | z.infer<typeof SingleFieldSchema> | z.infer<typeof MultiFieldSchema> | z.infer<typeof ConfirmFieldSchema> | z.infer<typeof SliderFieldSchema>;
 export const CardFieldSchema = fieldSchemaOf() as unknown as z.ZodType<CardField>;
 /** Kind names of the built-in fields only (see CardField). */
 export type CardFieldKind = CardField["kind"];
@@ -164,7 +166,18 @@ export const CardSchema = z
      * Absent = a single-page form.
      */
     steps: z.array(CardStepSchema).min(1).optional(),
+    /**
+     * The `ask` tool: `steps` are PAGES and each page is answered on its own (`answerCardPage`); the agent gets the
+     * answers after every page and the card stays pending until the last one. Requires `steps`.
+     */
+    paged: z.boolean().optional(),
+    /**
+     * Set by the `ask_revise` tool: this card is not raised, it REPLACES the not-yet-answered pages of the paged card
+     * raised by that call id (`fields`/`steps` are the replacement pages only).
+     */
+    revises: z.string().optional(),
   })
+  .refine((c) => !c.paged || c.steps !== undefined, { message: "a paged card needs steps (its pages)", path: ["steps"] })
   .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field (only a brief card may have none)", path: ["fields"] })
   .refine((c) => c.brief === undefined || c.fields.length <= BRIEF_LIMITS.questions, { message: `a brief card holds at most ${BRIEF_LIMITS.questions} questions`, path: ["fields"] })
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
@@ -234,8 +247,8 @@ export function visibleFields(card: Card, answers: Readonly<Record<string, { val
  *   of `value`).
  * - confirm: `value` is true (confirm) or false (reject), with an optional `note`.
  */
-export type { TextFieldAnswer, MultiFieldAnswer, ConfirmFieldAnswer };
-export type CardFieldAnswer = TextFieldAnswer | MultiFieldAnswer | ConfirmFieldAnswer;
+export type { TextFieldAnswer, MultiFieldAnswer, ConfirmFieldAnswer, SliderFieldAnswer };
+export type CardFieldAnswer = TextFieldAnswer | MultiFieldAnswer | ConfirmFieldAnswer | SliderFieldAnswer;
 /** Any registered kind's answer shape (see card-kinds/). */
 export const CardFieldAnswerSchema = answerSchemaOf() as unknown as z.ZodType<CardFieldAnswer>;
 /** Answers keyed by field id. */
@@ -261,6 +274,13 @@ export const PendingCardSchema = z.object({
   heldAnswer: CardAnswersSchema.optional(),
   /** The operator skipped this card while sibling cards still wait (held, changeable like a held answer). */
   heldSkip: z.boolean().optional(),
+  /**
+   * Paged (`ask`) cards: how many pages are already submitted (the current page is `pageIndex`), and the answers given
+   * on them. `draft` holds answers typed so far on the current page (including text bound to a question), not submitted.
+   */
+  pageIndex: z.number().int().min(0).optional(),
+  pageAnswers: CardAnswersSchema.optional(),
+  draft: CardAnswersSchema.optional(),
   /** ISO time the card was raised (the tool call's result time). */
   raisedAt: z.iso.datetime({ offset: true }),
 });
@@ -450,6 +470,10 @@ export const ThreadToolCallSchema = z.object({
   dismissed: z.boolean().optional(),
   /** Additive: how the card closed. Absent while pending (and on servers that predate it: read `answer` / `dismissed`). */
   closed: CardClosedSchema.optional(),
+  /** Additive, paged (`ask`) cards: answers of the pages submitted so far, keyed by question id. Feeds the transcript record (`askRecord`). */
+  pageAnswers: CardAnswersSchema.optional(),
+  /** Additive, paged cards: how many pages were submitted so far. */
+  pagesDone: z.number().int().min(0).optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });
@@ -1603,6 +1627,21 @@ export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
  */
 export const SkipCardRequestSchema = z.object({ threadId: z.string(), callId: z.string() });
 export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
+
+/**
+ * Submit one page of a paged (`ask`) card. `answers` covers the questions of that page (a skippable question may be
+ * omitted = skipped). Wire: thread id, `callId` and `page` (0-based, must be the next unanswered page) ride the path.
+ */
+export const AnswerCardPageBodySchema = z.object({ answers: CardAnswersSchema });
+export type AnswerCardPageBody = z.infer<typeof AnswerCardPageBodySchema>;
+
+/**
+ * Bind typed text to one question of the current page ("answering Q2"): it is that question's free-text / Other
+ * answer held as a draft, NOT a chat message, so it supersedes nothing. Wire: thread id, `callId`, `qid` ride the path.
+ */
+export const BIND_TEXT_MAX = 4000;
+export const BindCardTextBodySchema = z.object({ text: z.string().max(BIND_TEXT_MAX).refine((t) => t.trim() !== "", { message: "text must not be blank" }) });
+export type BindCardTextBody = z.infer<typeof BindCardTextBodySchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */
 export const AbortRequestSchema = z.object({ threadId: z.string() });

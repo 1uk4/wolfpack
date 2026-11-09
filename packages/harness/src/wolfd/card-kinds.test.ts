@@ -5,40 +5,40 @@ import { fieldKind, registerFieldKind, unregisterFieldKind } from "./card-kinds/
 import { answerText, validateAnswers } from "./cards.js";
 
 afterEach(() => {
-  unregisterCardKind("slider");
-  unregisterFieldKind("slider");
+  unregisterCardKind("gauge");
+  unregisterFieldKind("gauge");
 });
 
-const sliderCard = { tool: "brief", fields: [{ id: "n", kind: "slider", label: "How many?", lo: 1, hi: 10 }] };
+const gaugeCard = { tool: "brief", fields: [{ id: "n", kind: "gauge", label: "How many?", lo: 1, hi: 10 }] };
 
 describe("field-kind registry", () => {
   it("a dummy kind works end to end: schema → validate → answerText", () => {
-    expect(CardSchema.safeParse(sliderCard).success).toBe(true); // unknown kind: loose, forward compatible
+    expect(CardSchema.safeParse(gaugeCard).success).toBe(true); // unknown kind: loose, forward compatible
     registerCardKind({
-      kind: "slider",
-      fieldSchema: z.object({ id: z.string(), kind: z.literal("slider"), label: z.string(), lo: z.number(), hi: z.number(), optional: z.boolean().optional() }),
+      kind: "gauge",
+      fieldSchema: z.object({ id: z.string(), kind: z.literal("gauge"), label: z.string(), lo: z.number(), hi: z.number(), optional: z.boolean().optional() }),
       answerSchema: z.object({ value: z.string(), unit: z.string() }),
     });
     registerFieldKind({
-      kind: "slider",
+      kind: "gauge",
       validate: (f, a) => (Number(a.value) < (f.lo as number) || Number(a.value) > (f.hi as number) ? "out of range" : undefined),
       isEmpty: () => false,
-      answerText: (_f, a) => `${a.value as string} ${(a as unknown as { unit: string }).unit} on the slider`,
+      answerText: (_f, a) => `${a.value as string} ${(a as unknown as { unit: string }).unit} on the gauge`,
     });
     // registered: a malformed field now fails its own schema
-    expect(CardSchema.safeParse({ ...sliderCard, fields: [{ id: "n", kind: "slider", label: "x" }] }).success).toBe(false);
-    const card = CardSchema.parse(sliderCard) as Card;
-    // a string `value` plus an extra prop: free-text would strip `unit`, the slider schema keeps it
+    expect(CardSchema.safeParse({ ...gaugeCard, fields: [{ id: "n", kind: "gauge", label: "x" }] }).success).toBe(false);
+    const card = CardSchema.parse(gaugeCard) as Card;
+    // a string `value` plus an extra prop: free-text would strip `unit`, the gauge schema keeps it
     const parsed = CardAnswersSchema.parse({ n: { value: "4", unit: "cm" } });
     expect(parsed.n).toEqual({ value: "4", unit: "cm" });
     expect(validateAnswers(card, parsed)).toBeUndefined();
     expect(validateAnswers(card, { n: { value: "40", unit: "cm" } as never })).toBe("out of range");
-    expect(answerText([{ callId: "c1", card, answers: parsed }])).toContain("- How many?: 4 cm on the slider");
+    expect(answerText([{ callId: "c1", card, answers: parsed }])).toContain("- How many?: 4 cm on the gauge");
   });
 
   it("an unknown kind is handled like free text", () => {
-    const card = CardSchema.parse(sliderCard) as Card;
-    expect(fieldKind("slider").kind).toBe("free-text");
+    const card = CardSchema.parse(gaugeCard) as Card;
+    expect(fieldKind("gauge").kind).toBe("free-text");
     expect(validateAnswers(card, { n: { value: "7" } })).toBeUndefined();
     expect(answerText([{ callId: "c1", card, answers: { n: { value: "7" } } }])).toContain("- How many?: 7");
   });

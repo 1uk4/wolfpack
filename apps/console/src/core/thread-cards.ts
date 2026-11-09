@@ -114,6 +114,7 @@ export interface CardDraft {
 const copyAnswer = (a: CardFieldAnswer): CardFieldAnswer => {
 	if (Array.isArray(a.value)) return { value: [...a.value], ...("other" in a && Array.isArray(a.other) && a.other.length > 0 ? { other: [...a.other] } : {}) };
 	if (typeof a.value === "boolean") return { value: a.value, ...("note" in a && a.note ? { note: a.note } : {}) };
+	if (typeof a.value === "number") return { value: a.value };
 	return { value: a.value, ...("other" in a && a.other ? { other: true } : {}) };
 };
 
@@ -228,6 +229,7 @@ export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];
 			out[f.id] = { value: a.value, ...(other.length > 0 ? { other } : {}) };
 		} else if (typeof a.value === "boolean") out[f.id] = { value: a.value, ...("note" in a && a.note?.trim() ? { note: a.note.trim() } : {}) };
+		else if (typeof a.value === "number") out[f.id] = { value: a.value };
 		else out[f.id] = { value: a.value.trim(), ...("other" in a && a.other ? { other: true } : {}) };
 	}
 	return out;

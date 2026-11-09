@@ -180,6 +180,19 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers }, threadId)) as SubmitAck;
   }
 
+  async answerCardPage(threadId: string, callId: string, page: number, answers: CardAnswers): Promise<SubmitAck> {
+    return (await this.json("answerCardPage", { id: threadId, callId, page: String(page) }, ROUTES.answerCardPage.response.schema, { answers }, threadId)) as SubmitAck;
+  }
+
+  async bindCardText(threadId: string, callId: string, qid: string, text: string): Promise<void> {
+    await this.json("bindCardText", { id: threadId, callId, qid }, ROUTES.bindCardText.response.schema, { text }, threadId);
+  }
+
+  async getDiagram(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    const res = await this.request("getDiagram", { id: threadId, diagramId }, {}, threadId);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
+  }
+
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
     return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
   }

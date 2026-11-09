@@ -8,11 +8,12 @@ import { confirmFieldKind } from "./confirm.js";
 import { freeTextFieldKind } from "./free-text.js";
 import { multiFieldKind } from "./multi.js";
 import { singleFieldKind } from "./single.js";
+import { sliderFieldKind } from "./slider.js";
 import type { FieldKind } from "./types.js";
 
 export type { FieldKind, AnyAnswer } from "./types.js";
 
-const BUILTIN: FieldKind[] = [freeTextFieldKind, singleFieldKind, multiFieldKind, confirmFieldKind];
+const BUILTIN: FieldKind[] = [freeTextFieldKind, singleFieldKind, multiFieldKind, confirmFieldKind, sliderFieldKind];
 const kinds = new Map<string, FieldKind>(BUILTIN.map((k) => [k.kind, k]));
 
 export function registerFieldKind(k: FieldKind): void {

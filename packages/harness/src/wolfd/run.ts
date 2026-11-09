@@ -36,6 +36,9 @@ import { resolveAutosquash, resolveWorkspacesRoot } from "@wolfpack/workspaces";
 import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
 import { createBriefExtension } from "../extensions/brief.js";
+import { AskBridge, createAskExtension } from "../extensions/ask.js";
+import { createAskHoldExtension } from "./ask-hold.js";
+import { diagramProblem } from "../diagrams.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels, storedProviderIds } from "./models.js";
@@ -195,6 +198,8 @@ async function startConfigured(
   const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log, opts.sweepTick) : undefined;
   const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep, cardGuard.register);
   const brief = adaptToDurable(createBriefExtension(), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
+  const askBridge = new AskBridge();
+  const ask = adaptToDurable(createAskExtension(askBridge, { diagramCheck: (id) => diagramProblem(config.den, id, env) }), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through
   // adaptToDurable register themselves via onCardTool; native pi-durable extensions that bypass the adapter must pass
   // their card tools explicitly (createCardGuardExtension([...names]) / cardGuard.register).
@@ -206,7 +211,7 @@ async function startConfigured(
   // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
   // A tool another extension already defines keeps that definition.
   const readonlyOptIn = config.capability.tools.includes("readonly");
-  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), objectsExtension, brief, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
+  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), objectsExtension, brief, ask, createAskHoldExtension(askBridge), cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const taken = new Set(others.flatMap((e) => (e.tools ?? []).map((t) => t.name)));
   const readonlyExt = readOnlyToolsExcluding(taken, (m) => log(`warning: ${m}`));
   const ownReadonly = new Set((readonlyExt?.tools ?? []).map((t) => t.name));
@@ -293,6 +298,7 @@ async function startConfigured(
       },
       den: config.den,
       tierModels: Object.fromEntries((["main", "smart", "fast"] as const).map((t) => [t, resolveWolfModel(config, t, table).modelId])),
+      askBridge,
       subagents: {
         bridge: subagentBridge,
         wolfHome: dirname(config.file),

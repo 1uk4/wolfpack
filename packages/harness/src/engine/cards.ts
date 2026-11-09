@@ -31,7 +31,15 @@ export const USER_ENTRY_KIND = "pi.user";
 
 export interface CardAnswerData {
   /** `skipped`: the operator skipped the card instead of answering (`answers` is then empty). Additive: absent on older entries. */
-  cards: { callId: string; answers: CardAnswers; skipped?: true }[];
+  cards: {
+    callId: string;
+    answers: CardAnswers;
+    skipped?: true;
+    /** Paged (`ask`) cards: 0-based page these answers belong to. Absent = a whole-card answer. */
+    page?: number;
+    /** Paged cards: this was the last page, so the card closes. */
+    final?: true;
+  }[];
 }
 
 /** What a tool returns to raise a card: model-facing placeholder text, the card in details, and terminate. */

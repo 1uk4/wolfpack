@@ -10,14 +10,16 @@ import { confirmKind } from "./confirm.js";
 import { freeTextKind } from "./free-text.js";
 import { multiKind } from "./multi.js";
 import { singleKind } from "./single.js";
+import { sliderKind } from "./slider.js";
 
 export * from "./base.js";
 export { FreeTextFieldSchema, TextFieldAnswerSchema, type TextFieldAnswer } from "./free-text.js";
 export { SingleFieldSchema } from "./single.js";
 export { MultiFieldSchema, MultiFieldAnswerSchema, type MultiFieldAnswer } from "./multi.js";
+export { SliderFieldSchema, SliderFieldAnswerSchema, sliderProblem, onSliderStep, type SliderFieldAnswer } from "./slider.js";
 export { ConfirmFieldSchema, ConfirmFieldAnswerSchema, type ConfirmFieldAnswer } from "./confirm.js";
 
-const BUILTIN_KINDS: CardKind[] = [freeTextKind, singleKind, multiKind, confirmKind];
+const BUILTIN_KINDS: CardKind[] = [freeTextKind, singleKind, multiKind, confirmKind, sliderKind];
 const kinds = new Map<string, CardKind>(BUILTIN_KINDS.map((k) => [k.kind, k]));
 
 export function registerCardKind(k: CardKind): void {

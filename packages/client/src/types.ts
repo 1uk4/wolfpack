@@ -119,6 +119,12 @@ export interface ConsoleClient {
    * Rejects NotFoundError for an unknown / already-answered card, BusyError while a turn runs. Optional: the mock has no cards.
    */
   answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
+  /** Submit one page of a paged (`ask`) card; the card stays pending until the last page. 400 wrong page/missing required, 409 `conflict` on a repeat, 404 unknown card. Optional like answerCard. */
+  answerCardPage?(threadId: string, callId: string, page: number, answers: CardAnswers): Promise<SubmitAck>;
+  /** Hold typed text as the answer of question `qid` on the current page (not a chat message). Optional. */
+  bindCardText?(threadId: string, callId: string, qid: string, text: string): Promise<void>;
+  /** Bytes of a rendered diagram by id (a card field's `diagram`). NotFoundError for anything but a published diagram. Optional. */
+  getDiagram?(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
   /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
   skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
   /** The wolf's prompt registry with effective text, source, etag and editable flag. Optional: the mock has none. */

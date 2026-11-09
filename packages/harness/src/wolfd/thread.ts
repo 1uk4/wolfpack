@@ -15,6 +15,7 @@ import {
   type CardAnswers,
   type CardClosed,
   type InFlightPartial,
+  type PendingCard,
   type SubmitAck,
   DEFAULT_THREAD_SETTINGS,
   type ThreadSettings,
@@ -45,6 +46,7 @@ import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, recordSubmission } from "./attachments.js";
 import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
+import { askSupersedeDetail, pageCard } from "@wolfpack/protocol";
 import { CardTracker, answerText, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
@@ -93,7 +95,7 @@ interface QueuedOwner {
 }
 
 const cardAnswersOf = (ready: readonly ReadyAnswer[]) => ({
-  cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })),
+  cards: ready.map(({ callId: id, answers: a, skipped, page, final }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}), ...(page !== undefined ? { page } : {}), ...(final ? { final } : {}) })),
 });
 
 export class ThreadRuntime {
@@ -308,6 +310,7 @@ export class ThreadRuntime {
         // A dismissal (a skip, or a plain submit superseding cards) changes thread status: wake waiters.
         const closed = this.cards.apply(entry);
         this.syncCards(closed);
+        for (const id of this.cards.takeChanged()) this.announceHeld(id);
         if ([...closed.values()].some((c) => c !== "answered")) this.notify();
       }
     }
@@ -682,10 +685,14 @@ export class ThreadRuntime {
     }
     // (Only when idle, re-checked after the await: a turn may have started. A steer/followUp during a run finds nothing
     // pending, the run's first message superseded them, and carries no notice.)
-    if (this.running) notice = undefined;
-    else {
+    // A superseded questionnaire (paged ask) always says how far it got, even mid-turn: the owner's partial answers travel with the message.
+    const pagedNotes = supersededNotes(this.cards.pending().filter((p) => p.card.paged).map((p) => this.supersededOf(p)));
+    if (this.running) {
+      notice = undefined;
+      text = pagedNotes + text;
+    } else {
       // Order: superseded notes, then the notice, then the text (stripSupersededNotes / stripTaskNotice peel them in that order).
-      text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + withTaskNotice(notice?.text ?? "", text);
+      text = supersededNotes(this.cards.pending().map((p) => this.supersededOf(p))) + withTaskNotice(notice?.text ?? "", text);
     }
     let input: SubmitOptions["input"] = text;
     if (refs.length > 0) {
@@ -720,6 +727,85 @@ export class ThreadRuntime {
     return { messageId: r.messageId, disposition: r.disposition };
   }
 
+  private supersededOf(p: PendingCard): { tool: string; callId: string; detail?: string; paged?: true } {
+    const base = { tool: p.card.tool, callId: p.callId };
+    // The partial answers AND the text typed for the current page (draft) travel with the note: a draft is not "unanswered".
+    return p.card.paged ? { ...base, paged: true, detail: askSupersedeDetail(p.card, p.pageAnswers, p.pageIndex ?? 0, p.draft) } : base;
+  }
+
+  /** Hold-your-turn: set while a paged questionnaire has answered pages and is not complete (derived from the tracker). */
+  holdState(): { callId: string; page: number; total: number } | undefined {
+    return this.cards.holdOf();
+  }
+
+  /** What an ask_revise of `callId` may do now (see CardTracker.reviseTarget). */
+  reviseTarget(callId: string): { usedIds: string[] } | { problem: string } {
+    const t = this.cards.reviseTarget(callId);
+    return "problem" in t ? t : { usedIds: t.usedIds };
+  }
+
+  /**
+   * Submit one page of a paged (`ask`) card. The page's answers reach the agent now; the card stays pending until the
+   * last page. `rawAnswers` are completed by text bound to questions of the page (`bindCardText`).
+   */
+  async answerCardPage(callId: string, page: number, rawAnswers: CardAnswers): Promise<SubmitAck> {
+    const pending = this.cards.get(callId);
+    if (!pending) {
+      // Being submitted right now (a double submit): conflict, not "unknown card".
+      if (this.cards.raisedCards().some((c) => c.callId === callId)) throw new HttpError("conflict", `page ${page} of card ${callId} is already being submitted`);
+      throw new HttpError("not_found", `card ${callId}`);
+    }
+    if (!pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is not a paged questionnaire`);
+    const current = pending.pageIndex ?? 0;
+    if (page < current) throw new HttpError("conflict", `page ${page} of card ${callId} was already submitted (current page: ${current})`);
+    if (page !== current) throw new HttpError("invalid_request", `page ${page} is not the current page (${current})`);
+    const sub = pageCard(pending.card, page)!;
+    const merged = { ...(pending.draft ?? {}), ...rawAnswers };
+    const bad = validateAnswers(sub, merged);
+    if (bad) throw new HttpError("invalid_request", bad);
+    const claim = this.cards.claimPage(callId, rawAnswers)!;
+    const before = this.turnStarts;
+    if (this.answering++ === 0 && !this.running) this.answerStartedAt = new Date().toISOString();
+    this.syncStatus();
+    try {
+      let r;
+      const ready = this.cards.foldLateNote(claim.ready);
+      try {
+        r = await this.conv.submit({ input: answerText([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
+      } catch (e) {
+        this.cards.release([callId]);
+        if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
+        throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
+      }
+      this.trackQueued(r, { text: "", refs: [], cardAnswers: [ready] });
+      // `final` was computed against the card as it stood when the page was claimed; a revise can only replace later pages.
+      if (ready.final) {
+        const late = this.cards.takeLateNote(callId);
+        this.cards.settle([callId]);
+        // Only a rejection that landed after the final submit needs its own message.
+        if (late) await this.conv.submit({ input: `Note about the questionnaire you just completed (call ${callId}): your earlier ask_revise was NOT applied: ${late}`, whenBusy: "steer" }).catch((e) => this.host.onError(e));
+        this.syncCards(new Map([[callId, "answered" as CardClosed]]));
+      } else {
+        this.cards.pageDone(callId, page, claim.merged);
+        this.announceHeld(callId);
+        this.notify();
+      }
+      if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
+      return { messageId: r.messageId, disposition: r.disposition };
+    } finally {
+      if (--this.answering === 0) this.answerStartedAt = null;
+      this.syncStatus();
+    }
+  }
+
+  /** "Answering Qn": hold typed text as that question's answer (not a chat message, supersedes nothing). */
+  bindCardText(callId: string, qid: string, text: string): void {
+    const problem = this.cards.bindText(callId, qid, text);
+    if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
+    if (problem) throw new HttpError("invalid_request", problem);
+    this.announceHeld(callId);
+  }
+
   /** Close every pending card as superseded, now (the later pi.user entry then finds nothing to dismiss). */
   private supersedePending(): void {
     // Claimed cards (an answer is mid-submit) are not touched: they end answered/skipped, exactly once.
@@ -741,6 +827,7 @@ export class ThreadRuntime {
   async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
+    if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: answer it page by page (answerCardPage)`);
     const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
     const answers = dropHiddenAnswers(pending.card, rawAnswers);

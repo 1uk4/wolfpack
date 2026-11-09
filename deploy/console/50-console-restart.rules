@@ -1,0 +1,12 @@
+// Pack health (work-wolfpack-LUQ7C2B, work-wolfpack-yM3uTlj): the console user may RESTART hubd, the workerd units and wolfd@<name>, and
+// START the rollback oneshot wolfpack-rollback@{hubd,workerd,console}.service. Nothing else: no stop, no other unit, no other verb.
+// Installed to /etc/polkit-1/rules.d/ by deploy/console/setup.sh.
+// The console (apps/console/src/server/pack-health.ts, pack-actions.ts) runs `systemctl --no-ask-password --no-block restart|start <unit>.service`
+// with no shell, and only for names it validated against the links it knows (restart) or the fixed list hubd|workerd|console (rollback).
+polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "console") {
+    var unit = action.lookup("unit"), verb = action.lookup("verb");
+    if (verb == "restart" && /^(hubd|workerd(-[a-z0-9]+)*|wolfd@[a-z0-9][a-z0-9-]*)\.service$/.test(unit)) return polkit.Result.YES;
+    if (verb == "start" && /^wolfpack-rollback@(hubd|workerd|console)\.service$/.test(unit)) return polkit.Result.YES;
+  }
+});

@@ -1,0 +1,30 @@
+# Wolfpack auto-update on sfo-01 (work-wolfpack-qrU6cCO). UNVERIFIED until run on the host (deploy/auto-update/RUNBOOK.md).
+# One pass: poll the stable manifest, verify, install via deploy-release.sh, health-check, write the status file. Root: it installs services.
+# Started by wolfpack-auto-update.timer; a manual run is `systemctl start wolfpack-auto-update` (needs WOLFPACK_AUTO_UPDATE=1) or
+# `node /opt/wolfpack-auto-update/auto-update.mjs run --now`.
+[Unit]
+Description=Wolfpack auto-update (pull the latest stable release)
+Documentation=file:///opt/wolfpack-auto-update/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/wolfpack/auto-update.env
+ExecStart=@NODE@ /opt/wolfpack-auto-update/auto-update.mjs run
+StateDirectory=wolfpack-auto-update
+StateDirectoryMode=0755
+# A stuck install must not block the next pass forever; deploy-release.sh health-checks within ~2 min per unit.
+TimeoutStartSec=45min
+# Hardening that leaves deploy-release.sh working: it runs as root and only calls systemctl (D-Bus to PID 1), install, tar, curl,
+# sha256sum, journalctl and systemd-cgls (reads cgroups). No sudo/su/setuid helper is used, so NoNewPrivileges is safe. Its staging
+# dirs under /tmp live only within this run, so PrivateTmp is safe. ProtectSystem/ProtectHome are NOT set: it writes /opt, /etc/systemd,
+# /home/wolf-* and /var/log.
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0022
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

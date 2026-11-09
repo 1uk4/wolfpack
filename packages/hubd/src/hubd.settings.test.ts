@@ -85,10 +85,10 @@ describe("hub settings", () => {
     expect(c.curator.pollMs).toBe(1234);
   });
 
-  it("reports the hubd package version", async () => {
+  it("reports the hubd version (unstamped checkout: <package.json>-dev)", async () => {
     const hub = await setup();
     const s = (await (await fetch(`${hub.url}/v1/settings`, { headers: OP })).json()) as S;
-    expect(s.version).toBe("0.1.0");
+    expect(s.version).toBe("0.1.0-dev");
   });
 
   it("refuses a worker token", async () => {

@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { createThreadApi } from "../src/server/thread-api.ts";
 import { createMemoryApi } from "../src/server/memory-api.ts";
-import { cachedHubHealth, createConsoleClient, hubHealth, makeRequestToken } from "../src/server/console-client.ts";
+import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 
 const startHub = async () => {
 	const seen: string[] = [];
@@ -72,46 +72,6 @@ describe("no browser token = 401, never the console's own token", () => {
 			const paired = createConsoleClient(env, makeRequestToken(async () => new Headers({ authorization: "Bearer browser-tok" })));
 			await paired.listThreads("alpha");
 			assert.deepEqual(seen, ["/v1/wolves/alpha/threads Bearer browser-tok"]);
-		} finally {
-			hub.closeAllConnections();
-			hub.close();
-		}
-	});
-
-	it("hubHealth is the one caller of the console's own token", async () => {
-		const { hub, seen, url } = await startHub();
-		try {
-			assert.deepEqual(await hubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "console-own-token" }), { ok: true, status: 200 });
-			assert.deepEqual(seen, ["/v1/wolves Bearer console-own-token"]);
-			assert.equal((await hubHealth({})).ok, false);
-			seen.length = 0;
-			assert.deepEqual(await hubHealth({ WOLFPACK_HUB_URL: url }), { ok: true, status: 200 });
-			assert.deepEqual(seen, []);
-			let calls = 0;
-			const f401 = (async () => { calls++; return new Response(null, { status: 401 }); }) as typeof fetch;
-			assert.deepEqual(await hubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "t" }, f401), { ok: false, status: 503, reason: "hub answered 401 (the configured WOLFPACK_HUB_TOKEN was rejected)" });
-			assert.equal(calls, 1);
-		} finally {
-			hub.closeAllConnections();
-			hub.close();
-		}
-	});
-
-	it("cachedHubHealth: one outbound call per TTL, reason only to the log, result carries no reason", async () => {
-		const { hub, seen, url } = await startHub();
-		try {
-			let t = 0;
-			const logs: string[] = [];
-			const h = cachedHubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: OWN }, { now: () => t, log: (m) => logs.push(m) });
-			assert.deepEqual(await Promise.all([h(), h(), h()]), [{ ok: true, status: 200 }, { ok: true, status: 200 }, { ok: true, status: 200 }]);
-			await h();
-			assert.equal(seen.length, 1);
-			t = 6000;
-			await h();
-			assert.equal(seen.length, 2);
-			const bad = cachedHubHealth({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: OWN }, { fetchImpl: (async () => new Response(null, { status: 502 })) as typeof fetch, log: (m) => logs.push(m) });
-			assert.deepEqual(await bad(), { ok: false, status: 503 });
-			assert.ok(logs.some((l) => l.includes("hub answered 502")));
 		} finally {
 			hub.closeAllConnections();
 			hub.close();

@@ -13,6 +13,8 @@ StartLimitBurst=10
 Type=simple
 User=console
 Group=console
+# Pack-health Logs (work-wolfpack-yM3uTlj): read the system journal (journalctl -u hubd|workerd*|wolfd@*). Read-only; nothing else changes.
+SupplementaryGroups=systemd-journal
 # Root-owned, mode 600; systemd reads it as root before dropping privileges.
 EnvironmentFile=/etc/wolfpack/console.env
 Environment=NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOME=/var/lib/console

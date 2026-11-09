@@ -161,6 +161,8 @@ const defaultSteps = (pnpmFound) => ({
 	build: (wt) => {
 		const { pm } = choosePm(wt, { pnpmFound });
 		for (const { cmd, args } of buildCommands(pm)) execFileSync(cmd, args, { cwd: wt, stdio: "inherit", shell: process.platform === "win32" });
+		// Release versions for /healthz and update notices: <component>/vX.Y.Z tag -> packages/*/VERSION, apps/console/VERSION (gitignored).
+		execFileSync(process.execPath, [path.join(wt, "scripts/release-version.mjs"), "--stamp-runtime", wt], { cwd: wt, stdio: "inherit" });
 	},
 	refreshExtensions: refreshDenExtensions,
 });

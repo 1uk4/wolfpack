@@ -103,7 +103,12 @@ Run the sandbox with `pnpm dev:stack [--app console|none]` (`scripts/dev-stack.m
 console (`DEV_CONSOLE_PORT`, default 3220) against the wolves folder `DEV_WOLVES_DIR` (default `~/wolves/dev-sandbox`).
 If that folder holds no wolf it scaffolds one minimal wolf ("sandbox"); wolves already there (e.g. a snapshot taken above)
 are used as they are. It refuses any path touching `~/wolves/local` and the live ports, runs with `HOME=<sandbox>/.home` and
-no inherited `WOLF_*`/`WOLFPACK_*` vars, and Ctrl-C stops every process. `WOLFPACK_MODELS_FILE` overrides the scaffolded
+no inherited `WOLF_*`/`WOLFPACK_*` vars, and Ctrl-C stops every process. Live ports refused: 7141, 3210, 3230 and the
+preview slots 3231-3234. Without a terminal (a worker), use `pnpm dev:stack start [--app none]` / `status` / `stop`
+(or `wolfpack stack dev ...`): `start` detaches the same foreground runner, recording its pid in `<sandbox>/.dev-stack.json`
+and logging to `<sandbox>/logs/dev-stack.log`, and fails (exit 1, pointing to the log) if the runner is gone after 1 s;
+`stop` SIGTERMs it only after `ps` shows the pid is still this script running for this sandbox (`--sandbox <dir>` on its
+command line), waits up to 10 s for it to exit, and keeps the pid file (exit 1) if it did not. `WOLFPACK_MODELS_FILE` overrides the scaffolded
 `models.json`. It does not run the extension install below, the Ollama check or the api-key check. There is no
 attach mode and there are no `sandbox:stack*` or `dev:stack:desktop` scripts; the desktop app is started by hand
 (`pnpm --filter @wolfpack/desktop dev`).

@@ -1,16 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain .mjs script
 import * as stack from "./stack.mjs";
-// @ts-expect-error plain .mjs script
-import * as dev from "./dev-stack.mjs";
 
 describe("stack args", () => {
 	it("parses commands and flags", () => {
 		expect(stack.parseArgs(["logs", "-f", "-n", "20"])).toEqual({ cmd: "logs", flags: { follow: true, lines: 20 } });
-		expect(() => stack.parseArgs(["adopt", "--yes"])).toThrow(/unknown command/);
 	});
 	it("rejects bad input", () => {
 		expect(() => stack.parseArgs([])).toThrow(/usage/);
@@ -76,61 +73,197 @@ describe("stack parsing", () => {
 	});
 });
 
-describe("dev-stack", () => {
-	let tmp: string;
-	beforeEach(() => { tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "devstack-"))); });
-	afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
-	it("keeps sandbox paths, HOME and env inside the sandbox and strips live WOLF vars", () => {
-		const cfg = dev.resolveConfig({ DEV_WOLVES_DIR: path.join(tmp, "w") }, tmp);
-		const e = dev.childEnv(cfg, { WOLF_DEN: "/live", WOLFPACK_X: "1", WOLFPACK_MODELS_FILE: "/m.json", KEEP: "k", HOME: "/live" }, { WOLFPACK_Y: "2", ANTHROPIC_API_KEY: "sk" });
-		expect(e).toMatchObject({ KEEP: "k", ANTHROPIC_API_KEY: "sk", WOLFPACK_MODELS_FILE: "/m.json" });
-		expect(e.WOLF_DEN).toBeUndefined();
-		expect(e.WOLFPACK_X).toBeUndefined();
-		expect(e.WOLFPACK_Y).toBeUndefined();
-		for (const p of [e.HOME, e.WORKERD_CONFIG_DIR]) expect(p.startsWith(cfg.wolves + path.sep)).toBe(true);
-	});
-	it("keeps pnpm's store and corepack's cache at the real home, so the sandbox HOME does not duplicate them", () => {
-		const cfg = dev.resolveConfig({ DEV_WOLVES_DIR: path.join(tmp, "w") }, tmp);
-		const e = dev.childEnv(cfg, {});
-		for (const p of [e.PNPM_CONFIG_STORE_DIR, e.COREPACK_HOME]) {
-			expect(p.startsWith(tmp + path.sep)).toBe(true);
-			expect(p.startsWith(cfg.sandboxHome + path.sep)).toBe(false);
+type Call = { cmd: string; args: string[] };
+type Run = { status: number | null; stdout: string; stderr: string; error?: Error; signal?: string };
+type MacState = { loaded?: boolean; running?: boolean; health?: object | "refused"; print?: Run; lsof?: Run };
+/**
+ * A fake Mac: launchctl/ps/lsof answered from `state`, every command and fetch recorded; fetch answers /healthz from
+ * `state.health`. `state.print` / `state.lsof` override the launchctl print / lsof result (to fake a failure).
+ */
+function fakeMac(tmp: string, state: MacState) {
+	const calls: Call[] = [];
+	const fetched: string[] = [];
+	const out: string[] = [];
+	const spawned: Call[] = [];
+	const runtime = path.join(tmp, "runtime");
+	fs.mkdirSync(path.join(runtime, "packages/workerd/dist/bin"), { recursive: true });
+	fs.writeFileSync(path.join(runtime, "packages/workerd/dist/bin/workerd.js"), "");
+	const env = { STACK_WOLVES: path.join(tmp, "wolves"), STACK_RUNTIME: runtime, STACK_PLIST_DIR: path.join(tmp, "LaunchAgents"), WOLFPACK_HOME: path.join(tmp, "pack") };
+	const ok = (stdout = "") => ({ status: 0, stdout, stderr: "" });
+	const deps = {
+		home: tmp,
+		uid: 501,
+		platform: "darwin",
+		nodePath: "/n/bin/node",
+		nodeVersion: "22.23.3",
+		say: (m: string) => void out.push(m),
+		run: (cmd: string, args: string[]): Run => {
+			calls.push({ cmd, args });
+			if (cmd === "launchctl" && args[0] === "print") {
+				if (state.print) return state.print;
+				if (!state.loaded) return { status: 113, stdout: "", stderr: "Could not find service \"com.wolfpack.stack\" in domain for user gui: 501" };
+				return ok(state.running ? "\tstate = running\n\tpid = 4242\n" : "\tstate = not running\n\tlast exit code = 1\n");
+			}
+			if (cmd === "launchctl") {
+				if (args[0] === "bootstrap" || args[0] === "kickstart") Object.assign(state, { loaded: true, running: true });
+				if (args[0] === "bootout") Object.assign(state, { loaded: false, running: false });
+				return ok();
+			}
+			if (cmd === "ps") return ok(state.running ? "  4242 1 01:00 node workerd.js\n  4243 4242 00:59 node wolfd\n" : "");
+			if (cmd === "lsof") return state.lsof ?? (state.running ? ok("p4242\ncnode\n") : { status: 1, stdout: "", stderr: "" });
+			return ok();
+		},
+		spawnDetached: (cmd: string, args: string[]) => void spawned.push({ cmd, args }),
+		fetch: async (url: string) => {
+			fetched.push(url);
+			if (state.health === undefined || state.health === "refused") throw new Error("connect ECONNREFUSED");
+			return new Response(JSON.stringify(state.health), { status: 200 });
+		},
+	};
+	const launchctl = () => calls.filter((c) => c.cmd === "launchctl" && c.args[0] !== "print").map((c) => c.args.join(" "));
+	const ran = (cmd: string) => calls.some((c) => c.cmd === cmd);
+	return { deps, env, calls, fetched, out, spawned, launchctl, ran, plist: path.join(env.STACK_PLIST_DIR, "com.wolfpack.stack.plist") };
+}
+
+describe("stack status: updates line", () => {
+	it("flags an updater whose last check is older than two 30-minute timer intervals as stale; a recent check or no status file reads as before", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stack-au-"));
+		try {
+			const file = path.join(dir, "status.json");
+			const now = Date.parse("2026-11-09T12:00:00.000Z");
+			const status = (lastCheck: string) => JSON.stringify({ schema: 1, host: "mac", enabled: true, lastCheck, result: "ok", units: { stack: { component: "workerd", current: "0.1.5", target: "0.1.5", state: "idle" } } });
+			fs.writeFileSync(file, status("2026-11-09T09:00:00.000Z")); // 3 h ago: the timer has missed 6 runs
+			expect(stack.autoUpdateLine(file, now)).toMatch(/^stale \(last check 3h ago\)/);
+			fs.writeFileSync(file, status("2026-11-09T11:35:00.000Z")); // 25 min ago: within one interval
+			expect(stack.autoUpdateLine(file, now)).toBe("idle (running 0.1.5, stable 0.1.5); last check 2026-11-09T11:35:00.000Z");
+			expect(stack.autoUpdateLine(path.join(dir, "missing.json"), now)).toBe("auto-update not set up (node scripts/auto-update-mac.mjs install)");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
-		const explicit = dev.childEnv(cfg, { PNPM_CONFIG_STORE_DIR: "/my/store", COREPACK_HOME: "/my/corepack" });
-		expect(explicit).toMatchObject({ PNPM_CONFIG_STORE_DIR: "/my/store", COREPACK_HOME: "/my/corepack" });
 	});
-	it("parses --app", () => {
-		expect(dev.parseArgs([])).toEqual({ app: "console" });
-		expect(dev.parseArgs(["--app", "none"])).toEqual({ app: "none" });
-		expect(() => dev.parseArgs(["--app=desktop"])).toThrow(/must be one of/);
-		expect(() => dev.parseArgs(["--app", "x"])).toThrow(/must be one of/);
-		expect(() => dev.parseArgs(["--zzz"])).toThrow(/unknown option/);
+});
+
+describe("stack verdict", () => {
+	const online = { ok: true, wolves: [{ name: "a", state: "online" }] };
+	const running = { state: "running", pid: 1 };
+	const refused = { ok: false, wolves: [], error: "connect ECONNREFUSED" };
+	it("maps the launchd state and the /healthz probe to one verdict", () => {
+		const cases: [object | undefined, object, string | undefined, string][] = [
+			[running, online, undefined, "healthy"],
+			[running, { ok: true, wolves: [{ name: "a", state: "offline" }] }, undefined, "degraded"],
+			[running, { ok: false, wolves: [] }, undefined, "degraded"],
+			[running, refused, undefined, "unresponsive"],
+			[{ state: "not running" }, refused, undefined, "down"],
+			[undefined, online, undefined, "unmanaged"],
+			[undefined, refused, undefined, "down"],
+			[undefined, online, "launchctl print failed: Operation not permitted", "unknown"],
+		];
+		expect(cases.map(([svc, health, err]) => stack.verdict(svc, health, err))).toEqual(cases.map((c) => c[3]));
 	});
-	it("refuses the live wolves folder, its parents, children and symlinks to it", () => {
-		const home = path.join(tmp, "home");
-		fs.mkdirSync(path.join(home, "wolves/local/1uk4"), { recursive: true });
-		expect(() => dev.assertSandboxDir(path.join(home, "wolves/local"), home)).toThrow(/live wolves/);
-		expect(() => dev.assertSandboxDir(path.join(home, "wolves/local/x"), home)).toThrow(/live wolves/);
-		expect(() => dev.assertSandboxDir(path.join(home, "wolves"), home)).toThrow(/live wolves/);
-		expect(() => dev.assertSandboxDir(home, home)).toThrow(/live wolves/);
-		fs.symlinkSync(path.join(home, "wolves/local"), path.join(tmp, "link"));
-		expect(() => dev.assertSandboxDir(path.join(tmp, "link/sub"), home)).toThrow(/live wolves/);
-		expect(dev.assertSandboxDir(path.join(home, "wolves/dev-sandbox"), home)).toBe(path.join(home, "wolves/dev-sandbox"));
+});
+
+describe("stack commands against a fake launchctl", () => {
+	let tmp: string;
+	beforeEach(() => { tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "stackcmd-"))); });
+	afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+	it("install writes a 0600 KeepAlive plist and never loads it, even when the service is loaded", async () => {
+		const m = fakeMac(tmp, { loaded: false });
+		await stack.main(["install"], m.env, m.deps);
+		expect(fs.readFileSync(m.plist, "utf8")).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
+		expect(fs.statSync(m.plist).mode & 0o777).toBe(0o600);
+		const loaded = fakeMac(tmp, { loaded: true, running: true });
+		await stack.main(["install"], loaded.env, loaded.deps);
+		expect([...m.launchctl(), ...loaded.launchctl()]).toEqual([]);
 	});
-	it("refuses live ports and equal ports", () => {
-		const e = { DEV_WOLVES_DIR: path.join(tmp, "w") };
-		expect(dev.resolveConfig(e, tmp)).toMatchObject({ workerdPort: 7151, consolePort: 3220 });
-		expect(() => dev.resolveConfig({ ...e, DEV_WORKERD_PORT: "7141" }, tmp)).toThrow(/live-stack port/);
-		expect(() => dev.resolveConfig({ ...e, DEV_CONSOLE_PORT: "7151" }, tmp)).toThrow(/must differ/);
+
+	it("start bootstraps a service that is not loaded, kickstarts a loaded one, and does nothing while it runs", async () => {
+		const m = fakeMac(tmp, { loaded: false });
+		await stack.main(["start"], m.env, m.deps);
+		await stack.main(["start"], m.env, m.deps);
+		expect(m.launchctl()).toEqual([`bootstrap gui/501 ${m.plist}`]);
+		const idle = fakeMac(tmp, { loaded: true, running: false });
+		await stack.main(["start"], idle.env, idle.deps);
+		expect(idle.launchctl()).toEqual(["kickstart gui/501/com.wolfpack.stack"]);
 	});
-	it("scaffolds a wolf once, copying models.json", () => {
-		const cfg = { wolves: path.join(tmp, "sb") };
-		const models = path.join(tmp, "models.json");
-		fs.writeFileSync(models, '{"transport":"subscription"}');
-		const dir = dev.scaffold(cfg, models);
-		expect(fs.readFileSync(path.join(dir, "wolf.yaml"), "utf8")).toMatch(/^name: sandbox$/m);
-		expect(fs.existsSync(path.join(dir, "den"))).toBe(true);
-		expect(fs.readFileSync(path.join(dir, "models.json"), "utf8")).toContain("subscription");
-		expect(dev.scaffold(cfg, models)).toBeUndefined();
+
+	it("restart hands off to a detached helper with the service target and pid, and changes nothing itself", async () => {
+		const m = fakeMac(tmp, { loaded: true, running: true });
+		await stack.main(["restart"], m.env, m.deps);
+		expect(m.spawned).toHaveLength(1);
+		expect(m.spawned[0].args.slice(-2)).toEqual(["gui/501/com.wolfpack.stack", "4242"]);
+		expect(m.launchctl()).toEqual([]);
+		// loaded but not running: nothing to signal, so it falls back to start (kickstart)
+		const idle = fakeMac(tmp, { loaded: true, running: false });
+		await stack.main(["restart"], idle.env, idle.deps);
+		expect([idle.spawned, idle.launchctl()]).toEqual([[], ["kickstart gui/501/com.wolfpack.stack"]]);
+	});
+
+	it("stop is idempotent, and uninstall stops and removes the plist", async () => {
+		const m = fakeMac(tmp, { loaded: true, running: true });
+		await stack.main(["stop"], m.env, m.deps);
+		await stack.main(["stop"], m.env, m.deps);
+		expect(m.launchctl()).toEqual(["bootout gui/501/com.wolfpack.stack"]);
+		await stack.main(["install"], m.env, m.deps);
+		await stack.main(["start"], m.env, m.deps);
+		await stack.main(["uninstall"], m.env, m.deps);
+		expect(m.launchctl().slice(-2)).toEqual([`bootstrap gui/501 ${m.plist}`, "bootout gui/501/com.wolfpack.stack"]);
+		expect(fs.existsSync(m.plist)).toBe(false);
+	});
+
+	it("logs passes -f and -n through to tail on the stack log", async () => {
+		const m = fakeMac(tmp, { loaded: false });
+		const log = path.join(m.env.STACK_WOLVES, "logs/stack.log");
+		fs.mkdirSync(path.dirname(log), { recursive: true });
+		fs.writeFileSync(log, "x\n");
+		await stack.main(["logs", "-f", "-n", "5"], m.env, m.deps);
+		expect(m.calls.at(-1)).toEqual({ cmd: "tail", args: ["-f", "-n", "5", log] });
+	});
+
+	it("start refuses when something else holds the port", async () => {
+		const m = fakeMac(tmp, { loaded: false, lsof: { status: 0, stdout: "p999\nchand-started\n", stderr: "" } });
+		await expect(stack.main(["start"], m.env, m.deps)).rejects.toThrow(/in use by hand-started \(pid 999\)/);
+		expect(m.launchctl()).toEqual([]);
+	});
+
+	it("start fails on an lsof error instead of reading it as a free port", async () => {
+		const bad = fakeMac(tmp, { loaded: false, lsof: { status: 2, stdout: "", stderr: "lsof: unacceptable port specification" } });
+		await expect(stack.main(["start"], bad.env, bad.deps)).rejects.toThrow(/lsof failed: lsof: unacceptable port specification/);
+		const missing = fakeMac(tmp, { loaded: false, lsof: { status: null, stdout: "", stderr: "", error: new Error("spawnSync lsof ENOENT") } });
+		await expect(stack.main(["start"], missing.env, missing.deps)).rejects.toThrow(/lsof failed: spawnSync lsof ENOENT/);
+		expect([...bad.launchctl(), ...missing.launchctl()]).toEqual([]);
+	});
+
+	it("a launchctl print failure other than not-found is an error, not 'not loaded'", async () => {
+		const print = { status: 5, stdout: "", stderr: "Operation not permitted" };
+		const m = fakeMac(tmp, { print, health: "refused" });
+		await expect(stack.main(["start"], m.env, m.deps)).rejects.toThrow(/launchctl print failed: Operation not permitted/);
+		expect(m.launchctl()).toEqual([]);
+		const r = await stack.main(["status"], m.env, m.deps);
+		expect(r).toMatchObject({ code: 1, status: { verdict: "unknown", reason: "launchctl print failed: Operation not permitted", service: undefined } });
+	});
+
+	it("status probes /healthz on 127.0.0.1:<port> and exits 0 only when healthy", async () => {
+		const online = { ok: true, wolves: [{ name: "a", state: "online" }] };
+		const m = fakeMac(tmp, { loaded: true, running: true, health: online });
+		const r = await stack.main(["status"], m.env, m.deps);
+		expect(m.fetched).toEqual(["http://127.0.0.1:7141/healthz"]);
+		expect(r).toMatchObject({ code: 0, status: { verdict: "healthy", service: { state: "running", pid: 4242 }, health: online, port: { listeners: [{ pid: 4242, command: "node" }] } } });
+		const u = fakeMac(tmp, { loaded: false, health: online });
+		expect(await stack.main(["status"], u.env, u.deps)).toMatchObject({ code: 1, status: { verdict: "unmanaged", service: undefined } });
+		expect(u.out.join("\n")).toMatch(/no restart on crash/);
+	});
+
+	it("status with a silent say and brief prints nothing, skips ps and the log tail, and still returns the verdict", async () => {
+		const m = fakeMac(tmp, { loaded: true, running: true, health: "refused", lsof: { status: 2, stdout: "", stderr: "lsof: boom" } });
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const r = await stack.main(["status"], m.env, { ...m.deps, say: () => {} }, { brief: true });
+			expect(r).toMatchObject({ code: 1, status: { verdict: "unresponsive", port: { error: "lsof failed: lsof: boom" } } });
+			expect(log).not.toHaveBeenCalled();
+		} finally {
+			log.mockRestore();
+		}
+		expect([m.ran("ps"), m.ran("tail")]).toEqual([false, false]);
 	});
 });

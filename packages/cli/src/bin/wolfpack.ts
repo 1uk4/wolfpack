@@ -19,6 +19,7 @@ import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
 import { postMergeCmd, prCmd } from "../commands/pr.js";
 import { previewCmd } from "../commands/preview.js";
+import { stackCmd } from "../commands/stack.js";
 import { testCmd } from "../commands/test.js";
 import { parsePostMergeArgs } from "../pr-post-merge.js";
 import { parsePrArgs } from "../pr-prepare.js";
@@ -58,6 +59,8 @@ ${c.bold("COMMANDS")}
   release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
   test [run|related] [paths…]     Run vitest with a result cache; agents queue for a slot (-t <name>, --no-cache)
   preview <ref>|status|off        Run a branch on the Mac stack and return to stable (--dry-run)
+  stack <verb>                    Live Mac stack under launchd: install|start|stop|restart|status|logs [-f]|uninstall
+  stack dev [start|stop|status]   Sandboxed dev stack (workerd :7151, console :3220, own wolves dir)
   pr prepare                      Open/update the release PR wolf/<wolf> -> stable; the owner merges (--full, --dry-run)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
@@ -435,6 +438,12 @@ async function main(): Promise<void> {
 
       case "preview": {
         const code = await previewCmd(process.argv.slice(3));
+        if (code !== 0) process.exit(code);
+        break;
+      }
+
+      case "stack": {
+        const code = await stackCmd(process.argv.slice(3));
         if (code !== 0) process.exit(code);
         break;
       }

@@ -2,7 +2,7 @@
 /**
  * Build a single-file workerd bundle for sfo-01 (no node_modules or npm on the VPS, same idea as the harness bundle).
  *   node deploy/workerd/build-bundle.mjs [out-dir]     (run after `npx tsc --build`; default out-dir: deploy/workerd/out)
- * Writes <out>/workerd.mjs, <out>/RUNBOOK.md, <out>/VERSION (git sha) and prints the sha256 of workerd.mjs.
+ * Writes <out>/workerd.mjs, <out>/RUNBOOK.md, <out>/VERSION (the release version from the workerd/vX.Y.Z tag, scripts/release-version.mjs; <package version>-dev+<sha> when untagged) and prints the sha256 of workerd.mjs.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -10,6 +10,7 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+import { resolveVersion } from "../../scripts/release-version.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -29,5 +30,6 @@ await esbuild.build({
 });
 copyFileSync(path.join(here, "RUNBOOK.md"), path.join(out, "RUNBOOK.md"));
 const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-writeFileSync(path.join(out, "VERSION"), `${sha}\n`);
-console.log(`workerd bundle ${sha} sha256 ${createHash("sha256").update(readFileSync(path.join(out, "workerd.mjs"))).digest("hex")}`);
+const version = resolveVersion("workerd", root) ?? `${JSON.parse(readFileSync(path.join(root, "packages/workerd/package.json"), "utf8")).version}-dev+${sha}`;
+writeFileSync(path.join(out, "VERSION"), `${version}\n`);
+console.log(`workerd bundle ${version} sha256 ${createHash("sha256").update(readFileSync(path.join(out, "workerd.mjs"))).digest("hex")}`);

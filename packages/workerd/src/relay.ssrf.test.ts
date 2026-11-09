@@ -41,6 +41,17 @@ describe("WorkerRelay refuses request targets that leave the worker", () => {
     expect(relay.inflight()).toBe(0);
   });
 
+  it("the direct console path is never reachable through the hub, however the path is spelled", async () => {
+    const worker = await listen(() => {});
+    const sent: LinkFrame[] = [];
+    const relay = new WorkerRelay({ baseUrl: () => worker.base, send: (f) => (sent.push(f), true) });
+    const paths = ["/direct/v1/wolves", "/%64irect/v1/wolves", "/v1/../direct/v1/wolves", "/v1/%2e%2e/direct/v1/wolves", "/DIRECT/v1/wolves"];
+    paths.forEach((path, i) => relay.handle({ t: "req", id: `d-${i}`, method: "GET", path, headers: {} }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sent.map((f) => [f.t, (f as { id: string }).id])).toEqual(paths.map((_, i) => ["rerr", `d-${i}`]));
+    expect(worker.hits).toEqual([]);
+  });
+
   it("an encoded // is just a path: forwarded unchanged to the worker's own origin", async () => {
     const worker = await listen(() => {});
     const sent: LinkFrame[] = [];

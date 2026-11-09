@@ -1,11 +1,8 @@
-import { cachedHubHealth } from "@/src/server";
+import { healthApi } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
-const health = cachedHubHealth();
-
-/** Liveness of the console and its hub link. The only user of the console's own WOLFPACK_HUB_TOKEN. Answers only {ok} + the status; the reason is logged server-side. Cached ~5s. */
+/** Pack health snapshot (hubd, workerd units, wolves) probed by the console itself; never calls the hub. src/server/health-api.ts. */
 export async function GET(): Promise<Response> {
-	const h = await health();
-	return Response.json({ ok: h.ok }, { status: h.status, headers: { "Cache-Control": "no-store" } });
+	return healthApi().get();
 }

@@ -554,7 +554,24 @@ export class BrowserSession {
 }
 
 /** One thread's tab: its own queue, page, logs, blocked list and screenshots, in the shared browser context. */
+const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
+const PHONE_HEIGHT = 844;
+
+/** Validate an optional viewport request (browser_goto / browser_screenshot); undefined when none was asked for. */
+export function parseViewport(a: { width?: unknown; height?: unknown }): { width?: number; height?: number } | undefined {
+  const check = (v: unknown, name: string, lo: number, hi: number) => {
+    if (v === undefined) return undefined;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < lo || v > hi) throw new Error(`${name} must be an integer ${lo}-${hi}`);
+    return v;
+  };
+  const width = check(a.width, "width", 320, 3840);
+  const height = check(a.height, "height", 320, 2160);
+  return width === undefined && height === undefined ? undefined : { width, height };
+}
+
 export class Tab {
+  /** Size set by the caller for this tab only; undefined means the context default. */
+  private viewport?: { width: number; height: number };
   page: any;
   chain: Promise<unknown> = Promise.resolve();
   busy = 0;
@@ -614,6 +631,24 @@ export class Tab {
     this.blocked = [];
     this.shotFiles = [];
     this.pairTried = new Set();
+    this.viewport = undefined;
+  }
+
+  /** Resize this tab's page only. Width alone picks a phone height below 768px; the size sticks until changed or the tab closes. */
+  async setViewport(req: { width?: number; height?: number } | undefined): Promise<void> {
+    if (!req) return;
+    const cur = this.viewport ?? DEFAULT_VIEWPORT;
+    const width = req.width ?? cur.width;
+    const height = req.height ?? (req.width !== undefined ? (width < 768 ? PHONE_HEIGHT : DEFAULT_VIEWPORT.height) : cur.height);
+    const page = await this.ready();
+    await page.setViewportSize({ width, height });
+    this.viewport = { width, height };
+  }
+
+  /** Line for tool results when this tab is not at the default size. */
+  viewportNote(): string {
+    const v = this.viewport;
+    return v && (v.width !== DEFAULT_VIEWPORT.width || v.height !== DEFAULT_VIEWPORT.height) ? `\nViewport: ${v.width}x${v.height}` : "";
   }
 
   private push<T>(arr: T[], item: T) {
@@ -633,6 +668,7 @@ export class Tab {
     const page = await this.sess.newPage(this);
     this.page = page;
     page.setDefaultTimeout(this.sess.timeout);
+    if (this.viewport) await page.setViewportSize(this.viewport).catch(() => undefined);
     const gone = () => { if (this.page === page) this.page = undefined; };
     page.on("close", gone);
     page.on("crash", () => { gone(); page.close().catch(() => undefined); });
@@ -691,7 +727,7 @@ export class Tab {
     }
     const signed = await this.slotSignIn(page, url, waitUntil, timeoutMs);
     const now = signed.signedIn ? url : page.url();
-    return this.sess.scrub(`Loaded ${redactUrl(now)}${status ? ` (HTTP ${status})` : ""}${signed.note}\nTitle: ${await page.title()}`);
+    return this.sess.scrub(`Loaded ${redactUrl(now)}${status ? ` (HTTP ${status})` : ""}${signed.note}\nTitle: ${await page.title()}${this.viewportNote()}`);
   }
 
   /** Slot consoles (loopback 3231-3234) keep their hub token in the origin's localStorage: pair once per origin per tab. */

@@ -92,7 +92,9 @@ describe("hub work proxy", () => {
     expect((await call(B, "PATCH", `/${mine}`, { stage: "approved" })).status).toBe(403);
     expect((await call(B, "POST", `/${mine}/graduate`)).status).toBe(403);
     // create: foreign assignee, foreign domain
-    expect((await call(A, "POST", "", { ...feature, assignee: "wb" })).status).toBe(403);
+    const foreign = await call(A, "POST", "", { ...feature, assignee: "wb" });
+    expect(foreign.status).toBe(403);
+    expect(((await foreign.json()) as { error: string }).error).toContain("only the owner can assign one to another wolf");
     expect((await call(A, "POST", "", { ...feature, domain: "other" })).status).toBe(403);
     // an item in A's domain assigned to a wolf A does not own is read-only to A
     const op = ((await (await call(OP_TOKEN, "POST", "", { ...feature, assignee: "wb" })).json()) as { id: string }).id;

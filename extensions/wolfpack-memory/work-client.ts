@@ -166,6 +166,16 @@ export function handoffText(reassigned: { id: string; from: string | null; to: s
   return reassigned.map((r) => `; now assigned to ${r.to}`).join("");
 }
 
+/**
+ * The note a create adds when the item did not get the assignee the wolf asked for (a feature's assignee wins). Empty when nothing
+ * was asked, the ask was met, or the ask was the wolf's own name and the hub's "now assigned to X" already said it.
+ */
+export function overrideNote(requested: string | undefined, got: string | undefined, wolf: string, assignedTo?: string): string {
+  if (!requested || !got || got === requested) return "";
+  if (assignedTo && requested === wolf) return "";
+  return `; the feature's assignee ${got} applies, not ${requested}`;
+}
+
 export class WorkClient {
   private endpoint: string;
   private token: string;

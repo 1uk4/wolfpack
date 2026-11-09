@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import createTasksExtension, { readBoundTask as readBound } from "./unified-tasks.js";
 import { bindingFile } from "./conversation-binding.js";
+import { LOOSE_CREATE_FOREIGN_WOLF } from "../../packages/hubd/src/work-proxy.js";
 
 // The same task tools on the durable stack: an in-memory Work API behind fetch.
 type Item = Record<string, any>;
@@ -20,7 +21,7 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   const m = u.pathname.replace(/^\/work\/?/, "");
   const body = init.body ? JSON.parse(String(init.body)) : {};
   if (init.method === "POST" && m === "") {
-    if (body.title === "Refused") return json({ error: "A wolf can create a loose item only for itself." }, 403);
+    if (body.title === "Refused") return json({ error: LOOSE_CREATE_FOREIGN_WOLF }, 403);
     // as the hub: under a real feature the item takes the feature's assignee
     const parent = body.partOf ? items.get(body.partOf) : undefined;
     const inherited = parent && !parent.container ? parent.assignee : undefined;
@@ -110,7 +111,14 @@ describe("durable task tools: binding", () => {
     expect(items.get("work-1")!.assignee).toBe("hal");
     const refused = await tool("task_create").execute({ kind: "task", domain: "wolfpack", title: "Refused", assignee: "hal" }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
     expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toBe("Failed to create: A wolf can create a loose item only for itself.");
+    expect(refused.content[0].text).toBe("Failed to create: a wolf can only create a loose item for itself; only the owner can assign one to another wolf");
+  });
+
+  it("task_create under another wolf's feature without an assignee says it was assigned, with no override note", async () => {
+    const f = add({ kind: "feature", title: "F", assignee: "hal" });
+    const r = await run("task_create", { kind: "task", domain: "wolfpack", title: "T", partOf: f.id });
+    expect(r).toContain("; now assigned to hal");
+    expect(r).not.toContain("applies, not");
   });
 
   it("an Inbox task is bound without a feature (it keeps its own Record)", async () => {

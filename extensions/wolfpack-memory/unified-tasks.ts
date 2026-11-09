@@ -73,7 +73,7 @@ import {
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
-import { WorkClient, WorkQueuedError, handoffText, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
+import { WorkClient, WorkQueuedError, handoffText, overrideNote, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
@@ -1164,7 +1164,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           "Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.",
         parameters: Type.Object({
           kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
-          assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature." })),
+          assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone." })),
           domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
           title: Type.String({ description: "Short title" }),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
@@ -1236,8 +1236,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
             if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
-            const got = result.item.assignee as string | undefined;
-            if (args.assignee && got && got !== args.assignee) reply += `; the feature's assignee ${got} applies, not ${args.assignee}`;
+            reply += overrideNote(args.assignee, result.item.assignee as string | undefined, ctx.wolfName, result.assignedTo);
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
@@ -1557,14 +1556,13 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_move ───────────────────────────────────────────────────────
       defineTool({
         name: "task_move",
-        description: "Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it.",
+        description: "Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it. Moving the bound task itself does not refresh its cached feature (the memory fold resolves the feature at fold time anyway).",
         parameters: Type.Object({
           to: Type.String({ description: "New parent ID, 'inbox', or 'none'" }),
           id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
         }),
         async execute(args: { to: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          const bound = await readBinding(ctx);
-          const binding = args.id ? { taskId: args.id } : bound;
+          const binding = args.id ? { taskId: args.id } : await readBinding(ctx);
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],

@@ -36,6 +36,8 @@ import { idempotencyKeyOf, type WorkIdempotency } from "./work-idempotency.js";
 import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY, RECORD_CLOSED } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
+/** The refusal for a worker's loose create for another wolf: names who can do it. */
+export const LOOSE_CREATE_FOREIGN_WOLF = "a wolf can only create a loose item for itself; only the owner can assign one to another wolf";
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 
 interface WolfRow {
@@ -142,7 +144,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
           if (!parent.assignee) forbid(NO_ASSIGNEE);
           knownWolf(String(parent.assignee)); // a retired or unknown wolf cannot be given new work
           body.data.assignee = String(parent.assignee);
-        } else if (body.data.assignee !== w) forbid("a worker token can only create work assigned to the acting wolf, or under a feature");
+        } else if (body.data.assignee !== w) forbid(LOOSE_CREATE_FOREIGN_WOLF);
       }
       const actor = actorOf();
       const inherited = worker && body.data.assignee !== actor.id ? { assignedTo: body.data.assignee } : {}; // says who got it when that is not the acting wolf

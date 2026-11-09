@@ -265,20 +265,23 @@ interface Observation {
  *   no_healthz     an answer with no health body, as an older build gives: 401/403/404 on /healthz (hubd had it behind auth), a 2xx
  *                  that is not a JSON object, or a body with no `service`. wrong_service is kept for a health body naming another
  *                  service (something else on that port).
+ *                  Only for a /healthz probe: the direct link's authenticated probe (healthz false) never gives no_healthz. Its
+ *                  401 is a wrong local token (http_401, down), and a body that is not JSON is something else on its port (wrong_service).
  */
-function probeErrorCode(r: ProbeResult): string {
+function probeErrorCode(r: ProbeResult, healthz: boolean): string {
 	const raw = r.error ?? "";
 	if (raw.startsWith("no answer within ")) return "timeout";
 	const http = /^HTTP (\d{3})$/.exec(raw);
-	if (http) return http[1] === "401" || http[1] === "403" || http[1] === "404" ? "no_healthz" : `http_${http[1]}`;
-	if (raw === "wrong service") return typeof r.body?.service === "string" ? "wrong_service" : "no_healthz";
-	if (raw === "unparseable health body") return "no_healthz";
+	if (http) return healthz && (http[1] === "401" || http[1] === "403" || http[1] === "404") ? "no_healthz" : `http_${http[1]}`;
+	if (raw === "wrong service") return typeof r.body?.service === "string" || !healthz ? "wrong_service" : "no_healthz";
+	if (raw === "unparseable health body") return healthz ? "no_healthz" : "wrong_service";
 	if (raw === "ECONNREFUSED") return "refused";
 	return "unreachable";
 }
 
-const fromProbe = (r: ProbeResult, timeoutMs: number): Observation => {
-	const code = r.error !== undefined ? probeErrorCode(r) : null;
+/** `healthz` false: an authenticated probe (the direct link), graded without the older-build no_healthz downgrade. */
+const fromProbe = (r: ProbeResult, timeoutMs: number, healthz = true): Observation => {
+	const code = r.error !== undefined ? probeErrorCode(r, healthz) : null;
 	return {
 		answered: r.status !== "down",
 		graded: code === "no_healthz" ? "unknown" : r.status === "down" ? (r.body === undefined && r.responseMs >= timeoutMs ? "frozen" : "down") : r.status,
@@ -442,7 +445,7 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		const r = await probeHealth(`${d.url}/direct/v1/wolves`, { timeoutMs, headers: { [DIRECT_TOKEN_HEADER]: token, [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) }, ...(o.fetch ? { fetch: o.fetch } : {}) });
 		const listed = r.status !== "down" && Array.isArray(r.body?.wolves) ? (r.body.wolves as unknown[]) : [];
 		const wolves = listed.map((w) => (w as { name?: unknown })?.name).filter((n): n is string => typeof n === "string" && WOLF_RE.test(n)).slice(0, MAX_WOLVES_PER_WORKERD);
-		return { ob: fromProbe(r, timeoutMs), wolves };
+		return { ob: fromProbe(r, timeoutMs, false), wolves };
 	};
 
 	const runRound = async (): Promise<HealthSnapshot> => {

@@ -629,11 +629,20 @@ body {
 		height: auto;
 		min-height: 100%;
 	}
+	/* Pinned to the screen edges instead of sized by 100dvh: in the iOS home-screen app (black-translucent + viewport-fit=cover)
+	   dvh/100% come out short by the safe-area insets, leaving a band under the composer. top+bottom:0 fills the screen in every
+	   mode; while the keyboard is open --wp-vvh gives an explicit height, which wins over bottom. */
 	[data-wp-shell] {
-		height: var(--wp-vvh, 100dvh);
+		position: fixed;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: var(--wp-vvh, auto);
 	}
+	/* fills main (the shell's content box, below the top inset) rather than re-deriving the height from dvh */
 	[data-testid="thread-chat"] {
-		height: calc(var(--wp-vvh, 100dvh) - env(safe-area-inset-top));
+		height: 100%;
 		padding-bottom: env(safe-area-inset-bottom);
 	}
 	/* composer + card answers + list rows: >= 44px tap targets */

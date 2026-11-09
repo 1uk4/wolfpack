@@ -317,3 +317,24 @@ function unref(dir: string, owner: LeaseOwner): void {
 export function wolfLeaseDirs(roots: KbRoots): string[] {
   return [join(roots.opsRoot, "inbox"), join(roots.opsRoot, "contributions")];
 }
+
+/**
+ * Refuse a standalone KB write command (offline rebuild/restore) while a hub holds these roots: the hub's own command does that job under
+ * its KB lock. Two markers: the curator lease (only while the curator is enabled) and `<denLocal>/run/kb-writer.lock` (hubd's KB writer
+ * lock, held whenever hubd runs; its pid must be alive).
+ */
+export function assertNoLiveHub(roots: KbRoots): void {
+  const use = "use `hubd rebuild` (preview, apply, restore), which needs no stop";
+  const l = freshLeaseIn(wolfLeaseDirs(roots), "hub");
+  if (l) throw new Error(`a running hubd holds the KB (curator lease, pid ${l.pid} on ${l.host}); ${use}`);
+  try {
+    const pid = (JSON.parse(readFileSync(join(roots.denLocal, "run", "kb-writer.lock"), "utf8")) as { pid?: number }).pid;
+    if (typeof pid === "number") {
+      try { process.kill(pid, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ESRCH") return; }
+      throw new Error(`a running hubd holds the KB (kb-writer.lock, pid ${pid}); ${use}`);
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("a running hubd")) throw e;
+    /* no lock file, or unreadable: nothing holds it */
+  }
+}

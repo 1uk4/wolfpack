@@ -177,7 +177,7 @@ describe("completing a work item unbinds its conversations", () => {
     expect(await sectionText("active_task", 1)).not.toContain("Your previous work item");
   });
 
-  it("task_graduate confirm: unbinds the other holders (feature thread, task), the caller with the complete line, not unrelated ones", async () => {
+  it("task_graduate after the owner's yes: unbinds the other holders (feature thread, task), the caller with the complete line, not unrelated ones", async () => {
     const f = add({ kind: "feature", title: "Feat", stage: "shipped" });
     const t = add({ kind: "task", title: "Tk", stage: "shipped", partOf: f.id });
     bind(3, f.id, f.id); // feature thread
@@ -196,8 +196,11 @@ describe("completing a work item unbinds its conversations", () => {
       if (i.method === "POST" && m === `${f.id}/graduate`) { items.get(f.id)!.graduated = "2026-10-27"; return json({ item: items.get(f.id) }); }
       return base(u, i);
     });
-    ext = createTasksExtension({ kbRoots: { kbBase: join(den, "kbbase"), opsRoot: join(den, "ops"), denLocal: join(den, "kb") } }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {} });
-    const r = await run("task_graduate", { id: f.id, confirm: token }, 1);
+    ext = createTasksExtension({ kbRoots: { kbBase: join(den, "kbbase"), opsRoot: join(den, "ops"), denLocal: join(den, "kb") } }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards: true } } as never);
+    // the owner said yes on the card for this feature; the stored preview is what was shown
+    const card = { tool: "task_graduate", fields: [{ id: "confirm", kind: "confirm", label: `Graduate "Feat" (${f.id})?`, description: `Preview ${token}` }] };
+    const conversation = { classify: async () => ({ kind: "root" }), latestCard: async () => ({ status: "answered", card, answers: { confirm: { value: true } }, laterResults: [] }) };
+    const r = (await tool("task_graduate").execute({ id: f.id }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1, conversation } as never)).content[0].text;
     expect(r).toContain("2 item(s) archived");
     expect(r).toContain(`Feat (${f.id}) is complete; you are no longer bound to it.`);
     expect(readBindingFile(den, 1)).toBeNull();

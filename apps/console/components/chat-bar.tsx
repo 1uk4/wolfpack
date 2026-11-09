@@ -313,7 +313,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const { setMinimized, working, attachedThread, groups } = api;
 	const minimized = api.minimized;
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
-	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.settings ? { settings: attachedThread.settings } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all).hex;
+	const wolfColor = api.wolves.find((w) => w.name === target.wolf)?.color;
+	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.kind ? { kind: attachedThread.kind } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all, wolfColor).hex;
 	const router = useRouter();
 	const cards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek);
 	const raised = useRaisedAt(BAR_EXTRAS.badge && api.attached !== null);
@@ -595,7 +596,7 @@ function useRaisedAt(enabled: boolean): RaisedAt {
 function NeedsYouBadge({ waiting, all }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[] }) {
 	const api = useAttachedThread()!;
 	const first = waiting[0]!;
-	const color = useThreadColor({ id: first.id, ...(first.settings ? { settings: first.settings } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) }, all).hex;
+	const color = useThreadColor({ id: first.id, ...(first.kind ? { kind: first.kind } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) }, all, api.wolves.find((w) => w.name === first.wolf)?.color).hex;
 	return (
 		<button
 			type="button"

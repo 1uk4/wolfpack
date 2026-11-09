@@ -181,18 +181,22 @@ export async function fetchWorkItem(id: string, work: { endpoint?: string; token
 }
 
 /**
- * GET <endpoint>/work: every work item the API knows (all domains, archived included; the graph builder filters).
+ * GET <endpoint>/work?domain=<d>, one request per domain in parallel, concatenated (archived included; the graph builder
+ * filters). Never the whole list: that is ~1.6 MB / ~4 s, over the 3 s limit, and grows with every item. Scoped reads stay small.
  * Undefined when the API is unconfigured or unreachable, so the caller falls back to the KB work files.
  */
-export async function fetchWorkSources(endpoint: string | undefined, token: string | undefined): Promise<KbWorkSource[] | undefined> {
+export async function fetchWorkSources(endpoint: string | undefined, token: string | undefined, domains: string[]): Promise<KbWorkSource[] | undefined> {
   const base = (endpoint ?? "").replace(/\/$/, "");
   if (!base || !token) return undefined;
   try {
-    const res = await fetch(`${base}/work`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
-    if (!res.ok) return undefined;
-    const data = (await res.json()) as { items?: Array<ApiWorkItem & { assignee?: string }> };
-    if (!Array.isArray(data.items)) return undefined;
-    return data.items
+    const pages = await Promise.all(domains.map(async (d) => {
+      const res = await fetch(`${base}/work?domain=${encodeURIComponent(d)}`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { items?: Array<ApiWorkItem & { assignee?: string }> };
+      if (!Array.isArray(data.items)) throw new Error("no items");
+      return data.items;
+    }));
+    return pages.flat()
       .filter((w) => typeof w.id === "string" && typeof w.domain === "string")
       .map((w) => ({
         id: w.id,

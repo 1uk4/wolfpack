@@ -7,7 +7,8 @@
  * goes through /api/wolves/:name/settings*, which carries the browser's device token.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buildPayload, fieldKind, getAt, parseIssues, retryAfterSeconds, type Draft } from "@/src/core";
+import { ThreadColorPicker } from "@/components/thread-color-picker";
+import { THREAD_COLORS, autoThreadColor, buildPayload, fieldKind, getAt, parseIssues, retryAfterSeconds, type Draft } from "@/src/core";
 
 interface EnvVar { name: string; set: boolean; secret: boolean; purpose: string }
 interface SettingsView {
@@ -23,6 +24,7 @@ interface SettingsView {
 interface WolfRow { name: string; host?: string }
 
 const SECTIONS: { id: string; title: string; match: (k: string) => boolean }[] = [
+	{ id: "color", title: "Color", match: (k) => k === "color" },
 	{ id: "models", title: "Models and tiers", match: (k) => k.startsWith("models.") || k.startsWith("tiers.") },
 	{ id: "subagents", title: "Subagents", match: (k) => k.startsWith("subagents.") },
 	{ id: "compaction", title: "Compaction", match: (k) => k.startsWith("compaction.") },
@@ -123,6 +125,15 @@ export function WolfSettingsView() {
 		setView(v);
 		setDrafts({});
 		setSaved(true);
+	};
+
+	/** The wolf's one color: saved at once (no Save button), null = automatic. Shown on its orchestrator mark in the sidebar. */
+	const saveColor = async (key: string | null) => {
+		if (!view) return;
+		setFormError("");
+		const r = await fetch(base, { method: "PUT", headers: { "Content-Type": "application/json", "If-Match": view.etag }, body: JSON.stringify({ set: { color: key } }) });
+		if (!r.ok) return setFormError(r.status === 409 ? "This wolf's config changed since you loaded it. Reload to see the current values." : (await readError(r)).message);
+		setView((await r.json()) as SettingsView);
 	};
 
 	const reveal = async (source: "env" | "config", name: string) => {
@@ -279,7 +290,11 @@ export function WolfSettingsView() {
 								{s.id === "models" && Object.keys(view.tierModels).length > 0 && (
 									<p className="text-xs text-muted-foreground" data-testid="tier-models">Running now: {Object.entries(view.tierModels).map(([t, m]) => `${t} = ${m}`).join(", ")}</p>
 								)}
-								{keys.map(renderField)}
+								{s.id === "color" ? (
+									<ThreadColorPicker value={typeof view.config.color === "string" ? view.config.color : undefined} autoHex={THREAD_COLORS[autoThreadColor(`${wolf}/home`)]} onPick={(k) => void saveColor(k)} />
+								) : (
+									keys.map(renderField)
+								)}
 							</section>
 						);
 					})}

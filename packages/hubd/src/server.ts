@@ -18,6 +18,9 @@ import {
   PatchWorkBatchSchema,
   PatchWorkOpSchema,
   KbCommitRequestSchema,
+  RebuildApplyRequestSchema,
+  RebuildPreviewRequestSchema,
+  RebuildRestoreRequestSchema,
   KbManifestDiffRequestSchema,
   ContributionCheckBodySchema,
   KbMatchBodySchema,
@@ -38,7 +41,8 @@ import { HubError } from "./errors.js";
 import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
-import { createCurator, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
+import { createRebuildService, type RebuildService } from "./kb-rebuild.js";
+import { createCurator, curatorEmbedderFactory, curatorEngineFactory, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
@@ -167,6 +171,8 @@ export interface HubServer {
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
   /** Run one curator tick now (undefined when the curator is off or a tick is already running). */
   runCuratorOnce(): Promise<CuratorRun | undefined>;
+  /** Pause curator ticks (waits for the one in flight); returns the resume function. Used by the KB rebuild apply. */
+  pauseCurator(): Promise<() => void>;
   /**
    * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated.
    */
@@ -304,6 +310,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
+  let rebuild: RebuildService | undefined; // set with the curator below
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({
@@ -866,6 +873,25 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const q = url.searchParams;
           return send(res, 200, kbActivity!.read({ since: q.get("since"), before: q.get("before"), limit: q.get("limit"), domain: q.get("domain") }));
         }
+        case "hubKbRebuildPreview": {
+          writeActor(req, { ownerOnly: true });
+          const body = parseBody(RebuildPreviewRequestSchema, await readJson(req, { maxBytes: 64 * 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 202, rebuild!.preview(body.domain, body.flags));
+        }
+        case "hubKbRebuildApply": {
+          writeActor(req, { ownerOnly: true });
+          const body = parseBody(RebuildApplyRequestSchema, await readJson(req, { maxBytes: 64 * 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 200, await rebuild!.apply(body.planId, body.expectFlags));
+        }
+        case "hubKbRebuildRestore": {
+          writeActor(req, { ownerOnly: true });
+          const body = parseBody(RebuildRestoreRequestSchema, await readJson(req, { maxBytes: 64 * 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 200, await rebuild!.restore(body.domain, body.stamp));
+        }
+        case "hubKbRebuildList": {
+          writeActor(req, { ownerOnly: true });
+          return send(res, 200, rebuild!.list());
+        }
         case "hubKbEntry": {
           if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(params.id)) throw new HubError("invalid_request", "malformed entry id");
           // Only the readable domains are even read, so a forbidden entry is indistinguishable from a missing one (and backlinks never cross the grant).
@@ -944,6 +970,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator } });
     curator.start();
     kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator, now: opts.now });
+    rebuild = createRebuildService({
+      roots, dataDir: opts.dataDir, curator, exclusive: (fn) => kbWriter!.exclusive(fn), scan: () => revisions.scan({ settle: false }),
+      createEngine: curatorEngineFactory(opts.curator ?? {}), getEmbedder: curatorEmbedderFactory(roots, opts.curator ?? {}), now: opts.now,
+    });
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
@@ -969,6 +999,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     commitKb: (actor, req) => kbWriter!.commit(actor, req),
     runCuratorOnce: async () => curator?.runOnce(),
+    pauseCurator: async () => (curator ? curator.pause() : () => undefined),
     scanKb: async (o) => void (await kbWriter!.exclusive(() => revisions.scan(o))),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */

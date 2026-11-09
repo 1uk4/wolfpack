@@ -41,6 +41,7 @@ import {
   type WolfEvent,
   type ThreadSummary,
   type ThreadWorkspace,
+  type ThreadColor,
   type WolfSummary,
 } from "@wolfpack/protocol";
 import {
@@ -49,7 +50,7 @@ import {
 import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
+import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
 import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
@@ -995,7 +996,8 @@ export class WolfServer {
         const denTopics = flag("denTopics") && this.opts.den !== undefined;
         const den = denTopics && this.opts.den ? { wolf: this.name, topics: readDenTopics(this.opts.den) } : undefined;
         // Work items come from the Work API; unreachable or unconfigured, the builder falls back to the KB work files.
-        const work = await fetchWorkSources(this.opts.work?.endpoint || process.env.WORK_ENDPOINT, this.opts.work?.token || process.env.WORK_TOKEN);
+        // Scoped to the requested domain, or one read per domain the graph covers (never the whole list).
+        const work = await fetchWorkSources(this.opts.work?.endpoint || process.env.WORK_ENDPOINT, this.opts.work?.token || process.env.WORK_TOKEN, domain ? [domain] : listDomainDirs(roots.kbBase));
         try {
           return this.json(res, 200, buildKbGraph(roots, { domain, archivedWork: flag("archivedWork"), denTopics, den, work }));
         } catch (e) {
@@ -1080,8 +1082,16 @@ export class WolfServer {
 
   // ------------------------------------------------------------ state
 
+  /** The wolf's chosen color, read live from wolf.yaml so a Settings change shows without a restart. */
+  private colorField(): { color?: ThreadColor } {
+    if (!this.opts.configFile) return {};
+    const store = (this.settingsStore ??= new WolfSettingsStore(this.opts.configFile, this.opts.env, this.opts.wolfHome));
+    const color = store.color() as ThreadColor | undefined;
+    return color ? { color } : {};
+  }
+
   private wolfSummary(): WolfSummary {
-    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true, kbReadable: this.opts.kbRoots !== undefined };
+    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true, kbReadable: this.opts.kbRoots !== undefined, ...this.colorField() };
   }
 
   private checkWolf(name: string): void {

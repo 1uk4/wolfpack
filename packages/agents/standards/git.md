@@ -18,6 +18,7 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
 - Rebase only your own unmerged `feat/...` task branch with a clean tree. If the tree has changes that are not yours, or you are not on a task branch, do not rebase; report it.
 - Never use `--autostash`, stash or reset to get a clean tree. Never merge the parent into your branch.
 - The worker reduces its own branch before reporting done. After task_done the branch is merged and section 4 applies.
+- `workspaces.autosquash` (wolf.yaml, off by default): when on, wolfd folds a task branch's `fixup!` commits at ship. While it is off, the self-squash above still applies; that step will be removed when the flag defaults on.
 
 ## 3. Messages
 - Put the work item ID in the subject: `agents: append the git standard (work-<domain>-<id>)`. Convention, not enforced.
@@ -27,7 +28,11 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
 ## 4. Shared history
 - Never rewrite history that is already merged.
 - Never force-push a shared branch (`wolf/1uk4`, `stable`).
-- Task branches merge into `wolf/1uk4` automatically on task_done. Agents never merge or push to `stable`; only the owner merges PRs into `stable`.
+- Task branches merge into their feature branch automatically on task_done: wolfd rebases them and fast-forwards.
+- A feature branch lands on the home branch (`wolf/<wolf>`, e.g. `wolf/1uk4`) through a PR, as a **merge commit**. No squash merge, no rebase merge: per-task commits and hashes are kept, and the feature can be reverted with `git revert -m 1`.
+- `stable` changes only through a PR from the home branch. GitHub rejects direct pushes to `stable` (ruleset).
+- The owner merges every PR. Agents open PRs, watch CI and report; they never run `gh pr merge` and never merge into `stable` or the home branch themselves.
+- The release PR from the home branch into `stable` is also merged with a merge commit, never squashed. Flow: `docs/releases.md`.
 - Release flow, release notes and the `fixes` branch: `docs/releases.md`.
 
 ## Before you report done

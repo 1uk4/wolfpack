@@ -4,7 +4,14 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [{ "path": "../protocol" }, { "path": "../engine" }, { "path": "../kb" }],
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../engine" },
+    { "path": "../kb" },
+    { "path": "../client" },
+    { "path": "../harness" },
+    { "path": "../hubd" }
+  ],
   "include": ["src"],
   "exclude": ["**/*.test.ts", "src/testing/**"]
 }

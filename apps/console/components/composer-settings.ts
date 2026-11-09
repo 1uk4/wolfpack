@@ -9,16 +9,13 @@ export const TIERS: readonly Tier[] = ["main", "smart", "fast"];
 export interface ThreadSettingsState {
 	tier: Tier;
 	autoShip: boolean;
-	/** The owner's color override (a palette key); absent = automatic. */
-	color?: string | null;
 	/** The model each tier resolves to on this wolf (a hint beside the picker). */
 	models?: Partial<Record<Tier, string>>;
 }
 
 export const DEFAULT_SETTINGS: ThreadSettingsState = { tier: "main", autoShip: false };
 
-/** `color: null` resets to automatic. */
-export type SettingsPatch = Partial<Pick<ThreadSettingsState, "tier" | "autoShip">> & { color?: string | null };
+export type SettingsPatch = Partial<Pick<ThreadSettingsState, "tier" | "autoShip">>;
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
 async function failureOf(res: Response): Promise<Error> {
@@ -52,27 +49,14 @@ export async function changeSettings(args: {
 	const before: SettingsPatch = {};
 	if (patch.tier !== undefined) before.tier = current.tier;
 	if (patch.autoShip !== undefined) before.autoShip = current.autoShip;
-	if (patch.color !== undefined) before.color = current.color ?? null;
-	const apply = (s: ThreadSettingsState, p: SettingsPatch): ThreadSettingsState => {
-		const { color, ...rest } = p;
-		const next: ThreadSettingsState = { ...s, ...rest };
-		if (color === null) delete next.color;
-		else if (color !== undefined) next.color = color;
-		return next;
-	};
-	set((s) => apply(s, patch));
+	set((s) => ({ ...s, ...patch }));
 	try {
 		const stored = await put(patch);
 		// The model hints may be news; the choice itself stays as the operator made it.
 		if (stored.models) set((s) => ({ ...s, models: stored.models }));
 		return { ok: true };
 	} catch (e) {
-		// Roll back only what this change set and nobody changed since (a later color pick stays).
-		set((s) => {
-			const b: SettingsPatch = { ...before };
-			if (patch.color !== undefined && (s.color ?? null) !== patch.color) delete b.color;
-			return apply(s, b);
-		});
+		set((s) => ({ ...s, ...before }));
 		return { ok: false, error: e instanceof Error ? e.message : "could not save the setting" };
 	}
 }

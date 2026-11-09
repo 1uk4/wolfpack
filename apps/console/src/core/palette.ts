@@ -89,7 +89,7 @@ export function wolfItems(wolves: readonly { name: string }[]): PaletteItem[] {
 	return wolves.map((w) => ({ id: `wolf:${w.name}`, kind: "wolf", label: w.name, href: `/wolf/${encodeURIComponent(w.name)}` }));
 }
 
-export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string; state?: SubagentState; parentThreadId?: string; settings?: { color?: string } }[]): PaletteItem[] {
+export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string; state?: SubagentState; parentThreadId?: string }[]): PaletteItem[] {
 	// Settled subagent threads are hidden here too; only active ones are visible anywhere.
 	return threads.filter((t) => !isSettled(t)).map((t) => ({
 		id: `thread:${wolf}:${t.id}`,

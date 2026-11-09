@@ -169,9 +169,8 @@ describe("ThreadGitTree", () => {
 		assert.match(dirty, /src\/a\.ts/);
 		assert.match(dirty, /new\.txt/);
 		assert.match(dirty, /2 files changed/);
-		const commits = q('[data-testid="git-tree-commits"]')!.textContent!; // fallback list when no graph
-		assert.match(commits, /aaaaaaa.*add a/);
-		assert.match(commits, /initial/);
+		assert.equal(q('[data-testid="git-tree-commits"]'), null); // no commit-list fallback in place of the graph
+		assert.ok(q('[data-testid="git-tree-graph"]') || q('[data-testid="git-tree-graph-error"]') || q('[data-testid="git-tree-graph-loading"]'));
 		assert.match(q('[data-testid="git-tree-children"]')!.textContent!, /Task 1[\s\S]*feat\/abc1234-console--task-1/);
 		await click(q('[data-testid="git-tree-button"]')!);
 		assert.equal(q('[data-testid="git-tree-popover"]'), null);

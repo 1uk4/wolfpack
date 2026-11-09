@@ -87,6 +87,8 @@ export const WolfFileSchema = z.object({
     .object({ main: ModelTierSetting.optional(), smart: ModelTierSetting.optional(), fast: ModelTierSetting.optional() })
     .passthrough()
     .optional(),
+  /** The wolf's one main color: a THREAD_COLOR_KEYS key (validated by the settings store on write). Unset = automatic. */
+  color: z.string().min(1).optional(),
   workspace: z.string().min(1).optional(),
   extensions: z.array(z.string().min(1)).default([]),
   serve: z
@@ -138,6 +140,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "tools",
   "tiers",
   "models",
+  "color",
   "workspace",
   "extensions",
   "serve",

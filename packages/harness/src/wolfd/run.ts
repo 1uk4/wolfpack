@@ -32,7 +32,7 @@ import {
   type WolfEngine,
 } from "../engine/index.js";
 import type { ThreadTier } from "@wolfpack/protocol";
-import { resolveWorkspacesRoot } from "@wolfpack/workspaces";
+import { resolveAutosquash, resolveWorkspacesRoot } from "@wolfpack/workspaces";
 import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
 import { createBriefExtension } from "../extensions/brief.js";
@@ -299,6 +299,7 @@ async function startConfigured(
         workspace: cwd,
         instructionsFor: (at) => contextFor(at).instructions,
         workspacesRoot: resolveWorkspacesRoot(dirname(config.file), readWorkspacesConfig(config.file)),
+        autosquash: resolveAutosquash(readWorkspacesConfig(config.file)),
         ...(config.subagents?.maxRunning !== undefined ? { maxRunning: config.subagents.maxRunning } : {}),
         // Per-host cap and slot directory: shared by every wolfd on the host (env WOLFPACK_SUBAGENT_HOST_MAX / _SLOTS).
         ...(Number(env.WOLFPACK_SUBAGENT_HOST_MAX) >= 1 ? { hostMax: Number(env.WOLFPACK_SUBAGENT_HOST_MAX) } : {}),
@@ -440,10 +441,17 @@ async function reconcile(conv: EngineConversation, want: ConfigureOptions, onIns
 }
 
 /** The `workspaces:` block of wolf.yaml (its root); the engine's config loader does not model it. */
-function readWorkspacesConfig(file: string): { workspaces?: { root?: string } } | null {
+export function readWorkspacesConfig(file: string): { workspaces?: { root?: string; autosquash?: boolean } } | null {
   try {
-    const doc = parseYaml(readFileSync(file, "utf8")) as { workspaces?: { root?: unknown } } | null;
-    return typeof doc?.workspaces?.root === "string" ? { workspaces: { root: doc.workspaces.root } } : null;
+    const doc = parseYaml(readFileSync(file, "utf8")) as { workspaces?: { root?: unknown; autosquash?: unknown } } | null;
+    const w = doc?.workspaces;
+    if (!w) return null;
+    return {
+      workspaces: {
+        ...(typeof w.root === "string" ? { root: w.root } : {}),
+        ...(w.autosquash === true ? { autosquash: true } : {}),
+      },
+    };
   } catch {
     return null;
   }

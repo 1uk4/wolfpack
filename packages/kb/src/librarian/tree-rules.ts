@@ -401,7 +401,7 @@ export interface CategoryReport {
   coherent: number;
   share: number;
   kept: boolean;
-  why?: "too-few-coherent" | "low-share" | "over-limit";
+  why?: "too-few-coherent" | "low-share" | "over-limit" | "partial";
 }
 export interface PartitionDecision {
   /** Group index per input vector (-1 = leftover: stays in the parent). */
@@ -412,14 +412,19 @@ export interface PartitionDecision {
   categories: CategoryReport[];
   leftovers: number[];
 }
-export interface PartitionRejected { split: null; reason: string; categories: CategoryReport[]; leftovers?: number[] }
+export interface PartitionRejected {
+  split: null; reason: string; categories: CategoryReport[]; leftovers?: number[];
+  /** When exactly one category survived: it as a one-group decision, so a second pass can try to find its partner among the leftovers. */
+  single?: PartitionDecision;
+}
 
 /**
  * Vectors VALIDATE a proposed partition; they never assign. The section's vectors are centred (the shared
  * direction removed), then for every member: it is coherent if it is closer to its own category's centroid
  * (leave-one-out) than to every other category's. Incoherent members become leftovers. A category survives
- * only with >= minGroup coherent members and a coherent share >= llmMinCoherence; the members of a dropped
- * category become leftovers too, as do "doesn't fit" members. Fewer than two surviving categories: no split.
+ * with >= minGroup coherent members, keeping just those (a partly coherent category is kept as a smaller group,
+ * flagged "partial" below llmMinCoherence, and dropped below llmMinPartialShare); the rest of it become leftovers, as do the members of a dropped
+ * category and "doesn't fit" members. Fewer than two surviving categories: no split.
  * A member listed in several categories counts for the first; one listed nowhere is "doesn't fit".
  */
 export function validatePartition(
@@ -453,25 +458,31 @@ export function validatePartition(
     }
     const share = ms.length ? good.length / ms.length : 0;
     const overLimit = !honoured.has(c);
-    const kept = !overLimit && good.length >= rules.minGroup && share >= rules.llmMinCoherence;
+    // A category survives with >= minGroup coherent members AND at least llmMinPartialShare of what was proposed coherent;
+    // its incoherent members are dropped to leftovers. Between llmMinPartialShare and llmMinCoherence it is flagged "partial".
+    const kept = !overLimit && good.length >= rules.minGroup && share >= rules.llmMinPartialShare;
     reports.push({
       name: proposal.names[c] ?? `Category ${c + 1}`, size: ms.length || (proposal.members[c]?.length ?? 0), coherent: good.length, share, kept,
-      why: kept ? undefined : overLimit ? "over-limit" : good.length < rules.minGroup ? "too-few-coherent" : "low-share",
+      why: kept ? (share < rules.llmMinCoherence ? "partial" : undefined) : overLimit ? "over-limit" : good.length < rules.minGroup ? "too-few-coherent" : "low-share",
     });
     coherentSets.push(kept ? good : []);
   });
   const survivors = reports.map((r, c) => (r.kept ? c : -1)).filter((c) => c >= 0);
-  if (survivors.length < 2) {
-    return { split: null, reason: survivors.length === 0 ? "no-coherent-category" : "fewer-than-two-categories", categories: reports };
-  }
-  const labels = new Array<number>(n).fill(-1);
-  survivors.forEach((c, g) => { for (const i of coherentSets[c]) labels[i] = g; });
-  return {
-    labels,
-    k: survivors.length,
-    names: survivors.map((c) => reports[c].name),
-    categories: reports,
-    leftovers: labels.flatMap((l, i) => (l < 0 ? [i] : [])),
+  const decide = (chosen: number[]): PartitionDecision => {
+    const labels = new Array<number>(n).fill(-1);
+    chosen.forEach((c, g) => { for (const i of coherentSets[c]) labels[i] = g; });
+    return {
+      labels,
+      k: chosen.length,
+      names: chosen.map((c) => reports[c].name),
+      categories: reports,
+      leftovers: labels.flatMap((l, i) => (l < 0 ? [i] : [])),
+    };
   };
+  if (survivors.length < 2) {
+    const one = survivors.length === 1 ? decide(survivors) : undefined;
+    return { split: null, reason: survivors.length === 0 ? "no-coherent-category" : "fewer-than-two-categories", categories: reports, single: one };
+  }
+  return decide(survivors);
 }
 export const isPartition = (d: PartitionDecision | PartitionRejected): d is PartitionDecision => !("split" in d);

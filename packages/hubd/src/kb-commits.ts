@@ -616,7 +616,7 @@ export function createKbWriter(opts: KbWriterOptions) {
       });
     },
     /** Run `fn` on the writer queue (revision scans); undefined result when the hub is shutting down. */
-    exclusive<T>(fn: () => T): Promise<T | undefined> {
+    exclusive<T>(fn: () => T | Promise<T>): Promise<T | undefined> { // the queue awaits an async fn: the lock spans it
       if (closing) return Promise.resolve(undefined);
       return queue.run(() => (closing ? undefined : fn()));
     },

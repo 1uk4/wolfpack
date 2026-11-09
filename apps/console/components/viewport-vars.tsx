@@ -27,10 +27,21 @@ export function ViewportVars() {
 		vv?.addEventListener("resize", apply);
 		vv?.addEventListener("scroll", apply);
 		mq.addEventListener("change", apply);
+		// Rotation changes innerHeight without a visualViewport event on some iOS versions, and it settles a frame late.
+		let raf = 0;
+		const applyNextFrame = () => {
+			cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(apply);
+		};
+		window.addEventListener("resize", applyNextFrame);
+		window.addEventListener("orientationchange", applyNextFrame);
 		return () => {
 			vv?.removeEventListener("resize", apply);
 			vv?.removeEventListener("scroll", apply);
 			mq.removeEventListener("change", apply);
+			window.removeEventListener("resize", applyNextFrame);
+			window.removeEventListener("orientationchange", applyNextFrame);
+			cancelAnimationFrame(raf);
 			root.style.removeProperty("--wp-vvh");
 		};
 	}, []);

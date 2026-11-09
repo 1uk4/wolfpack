@@ -19,6 +19,18 @@ interface Fence {
 
 const fenced = new Map<string, Fence>();
 
+/** Conversations that belong to a subagent (the tools are shared with the main wolf): their bash gets the git/GitHub lockdown. */
+const subagentConversations = new Set<string>();
+export function markSubagentConversation(id: unknown): void {
+  subagentConversations.add(String(id));
+}
+export function unmarkSubagentConversation(id: unknown): void {
+  subagentConversations.delete(String(id));
+}
+export function isSubagentConversation(id: unknown): boolean {
+  return id !== undefined && subagentConversations.has(String(id));
+}
+
 function real(p: string): string {
   // The deepest existing ancestor is resolved (symlinks included); the part that does not exist yet is appended.
   const rest: string[] = [];

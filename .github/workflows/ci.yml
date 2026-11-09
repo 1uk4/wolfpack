@@ -83,7 +83,8 @@ jobs:
       - name: tsc --build (affected projects)
         run: |
           mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
-          [ ${#P[@]} -gt 0 ] && pnpm exec tsc --build "${P[@]}" || echo "no TS projects affected"
+          # if/else, not `a && b || c`: with that form a failing tsc fell through to the echo and the step passed.
+          if [ ${#P[@]} -gt 0 ]; then pnpm exec tsc --build "${P[@]}"; else echo "no TS projects affected"; fi
       - name: vitest (affected packages)
         run: |
           ALL=$(node -p 'JSON.parse(process.env.A).all')
@@ -94,7 +95,8 @@ jobs:
             if(a.extensionsTests)f.push("extensions/");
             if(a.scriptsTests)f.push("scripts/");
             console.log(f.join("\n"))')
-          [ -n "${F[0]:-}" ] && pnpm exec vitest run --project default "${F[@]}" || echo "no vitest paths affected"
+          # if/else, not `a && b || c`: with that form a failing vitest fell through to the echo and the step passed.
+          if [ -n "${F[0]:-}" ]; then pnpm exec vitest run --project default "${F[@]}"; else echo "no vitest paths affected"; fi
       - name: console tests
         if: fromJSON(needs.detect.outputs.affected).consoleTests
         run: pnpm --filter @wolfpack/console test

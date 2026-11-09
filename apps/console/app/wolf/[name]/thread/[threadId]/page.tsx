@@ -20,6 +20,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 		const threads = await client.listThreads(name);
 		const id = resolveThreadId(name, slug, threads);
 		if (!id) notFound();
+		const wolfColor = (await client.listWolves().catch(() => [])).find((w) => w.name === name)?.color;
 		const thread = await client.getThread(id, { limit: THREAD_PAGE_SIZE });
 		return (
 			<ThreadChat
@@ -35,7 +36,8 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				initiallyInFlight={thread.busy}
 				initialCards={cardsOfThread(thread)}
 				parentThreadId={thread.parentThreadId}
-				colorThreads={threads.map((t) => ({ id: t.id, parentThreadId: t.parentThreadId, settings: t.settings }))}
+				colorThreads={threads.map((t) => ({ id: t.id, kind: t.kind, parentThreadId: t.parentThreadId, settings: t.settings }))}
+				wolfColor={wolfColor}
 				initialBound={thread.boundItem ?? thread.boundWorkItem}
 				closedReason={thread.closed ? (thread.closedReason ?? "Feature graduated") : undefined}
 			/>

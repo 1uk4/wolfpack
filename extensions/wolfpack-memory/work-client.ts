@@ -176,22 +176,26 @@ export class WorkClient {
     return res.item;
   }
 
+  /**
+   * The item and everything under it, depth first. Reads the root with get() and each level with query({ partOf }),
+   * siblings in parallel: the unfiltered list is ~1.6 MB / ~4 s on the hub, over the 3 s limit, and grows with every item.
+   * Scoped reads stay small however many items exist, so the limit is left alone.
+   */
   async getTree(rootId: string): Promise<WorkItem[]> {
-    const all = await this.query({});
-    const result: WorkItem[] = [];
-    const root = all.find((i) => i.id === rootId);
-    if (!root) return result;
-    result.push(root);
-    const collectChildren = (parentId: string) => {
-      for (const item of all) {
-        if (item.partOf === parentId) {
-          result.push(item);
-          collectChildren(item.id as string);
-        }
-      }
+    let root: WorkItem;
+    try {
+      root = await this.get(rootId);
+    } catch {
+      return [];
+    }
+    const seen = new Set<string>([rootId]);
+    const walk = async (parentId: string): Promise<WorkItem[]> => {
+      const kids = (await this.query({ partOf: parentId })).filter((k) => typeof k.id === "string" && !seen.has(k.id));
+      for (const k of kids) seen.add(k.id as string);
+      const below = await Promise.all(kids.map((k) => walk(k.id as string)));
+      return kids.flatMap((k, i) => [k, ...below[i]!]);
     };
-    collectChildren(rootId);
-    return result;
+    return [root, ...(await walk(rootId))];
   }
 
   async ensureInbox(domain: string, assignee: string): Promise<WorkItem> {

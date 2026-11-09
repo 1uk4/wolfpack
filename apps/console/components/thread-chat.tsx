@@ -183,6 +183,7 @@ function ThreadChatInner({
 	initialBound,
 	parentThreadId,
 	colorThreads = NO_COLOR_THREADS,
+	wolfColor,
 }: {
 	wolf: string;
 	slug: string;
@@ -205,8 +206,10 @@ function ThreadChatInner({
 	initialBound?: string;
 	/** A subagent thread: the thread that spawned it (it shows that thread's color). */
 	parentThreadId?: string;
-	/** The wolf's threads (id, parent, settings) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
+	/** The wolf's threads (id, kind, parent) as loaded: the lookup `threadColor(thread, all)` needs. Includes this thread. */
 	colorThreads?: readonly ThreadColorSource[];
+	/** The wolf's chosen color at page load; the live roster (attached-thread provider) overrides it after a Settings change. */
+	wolfColor?: string;
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -219,10 +222,11 @@ function ThreadChatInner({
 		initiallyInFlight,
 		transport,
 	});
-	const threadSettings = useThreadSettings(wolf, slug, threadId);
-	// A faint tint of the thread's color (its override, else the one its id gives; a subagent's = its parent's) behind the conversation.
+	const threadSettings = useThreadSettings(wolf, slug);
+	// A faint tint of the thread's color (the one its id gives; a subagent's = its parent's) behind the conversation.
+	const colorApi = useAttachedThread();
 	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
-	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads).hex;
+	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads, colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor).hex;
 	const tint = threadTint(tintHex);
 	const tintSolid = threadTintSolid(tintHex);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
@@ -463,6 +467,18 @@ function ThreadChatInner({
 	const dismissedChecklist = useChecklistDismissed(threadId, active?.objectId);
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	// The composer dock overlays the list (absolute, bottom-0) and its height varies (controls wrap on a phone, chips, dictation bar,
+	// subagent strip, safe-area inset). Measure it so the tail spacer clears the dock and its gradient glow exactly.
+	const [dockEl, setDockEl] = useState<HTMLDivElement | null>(null);
+	const [dockHeight, setDockHeight] = useState<number | null>(null);
+	useEffect(() => {
+		if (!dockEl || typeof ResizeObserver !== "function") return;
+		const read = () => setDockHeight(Math.ceil(dockEl.getBoundingClientRect().height));
+		read();
+		const ro = new ResizeObserver(read);
+		ro.observe(dockEl);
+		return () => ro.disconnect();
+	}, [dockEl]);
 	const busy = status === "submitted" || status === "streaming";
 	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
@@ -743,9 +759,14 @@ function ThreadChatInner({
 								)}
 							</div>
 							{/* Reserve the composer's height so the tail scrolls clear of it. */}
-							<div aria-hidden className="h-40" style={stripReserve ? { marginTop: stripReserve } : undefined} />
+							<div
+								aria-hidden
+								data-testid="thread-tail-spacer"
+								className={dockHeight === null ? "h-40" : undefined}
+								style={dockHeight !== null ? { height: dockHeight } : stripReserve ? { marginTop: stripReserve } : undefined}
+							/>
 						</ConversationContent>
-						<div className="pointer-events-none absolute inset-x-0 bottom-0">
+						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0">
 							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
@@ -778,7 +799,7 @@ function ThreadChatInner({
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls threadId={threadId} settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
+											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>

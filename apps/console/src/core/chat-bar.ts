@@ -84,6 +84,8 @@ export interface WolfLite {
 	name: string;
 	status?: string;
 	librarian?: boolean;
+	/** The wolf's chosen palette key (wolf.yaml `color`); absent = automatic. */
+	color?: string;
 }
 
 /**

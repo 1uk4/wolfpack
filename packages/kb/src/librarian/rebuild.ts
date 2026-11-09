@@ -319,7 +319,7 @@ function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): stri
   if (v.source === "llm") {
     out.push(`grouping proposed by the LLM${v.cached ? " (cached)" : ""}; vectors validated it`);
     for (const c of v.categories ?? []) {
-      out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? "kept" : `dropped (${c.why})`}`);
+      out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? (c.why === "partial" ? "kept (partial)" : "kept") : `dropped (${c.why})`}`);
     }
     if (v.doesntFit?.length) out.push(`  - doesn't fit: ${v.doesntFit.map((i) => byEntry.get(i)?.title ?? i).join("; ")}`);
     if (!v.decision && v.reason) out.push(`  → no split: ${v.reason}`);
@@ -387,6 +387,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
     for (const sec of todo) {
       const id = String(sec.id);
       judged.add(id);
+      await new Promise<void>((r) => setImmediate(r)); // a fast-failing engine must not starve the host's event loop
       const members = t.direct(id);
       if (members.length <= rules.splitAbove) { plan.judged.push({ id, n: members.length, outcome: "below-threshold" }); continue; }
       const verdict = await judgeSplit(judgeDeps, {
@@ -553,6 +554,7 @@ async function labelTree(
     const done: string[] = [];
     const ask = async (sec: Section, forbidden?: string[]) => {
       const members = sample(sec);
+      await new Promise<void>((r) => setImmediate(r));
       try {
         if (sec.depth > SECTION_TREE.llmNamingMaxDepth) throw new Error("auto");
         const r = await namer({ members, depth: sec.depth, maxDepth, domain: plan.domain, parentTitle: parent?.title, siblingSummaries: done.slice(), forbidden, fixedTitle: forbidden ? undefined : plan.initialTitles.get(String(sec.id)) });

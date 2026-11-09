@@ -304,6 +304,8 @@ export default function createTasksExtension(
 
   /** First line of a successful ship result; the spent-yes check reads it back. */
   const shippedLine = (id: string) => `Shipped: ${id}`;
+  /** First line of a successful graduation result; the spent-yes check reads it back. */
+  const graduatedLine = (id: string) => `Graduated: ${id}`;
 
   /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
@@ -350,6 +352,9 @@ export default function createTasksExtension(
   const FOLD_MS = 100;
   /** Open fold window per conversation: the ids (-> title) the leader call will put on its card. */
   const folding = new Map<string, Map<string, string>>();
+
+  /** task_graduate: open fold windows (`grad:conversation:item`). */
+  const gradFolding = new Set<string>();
 
   type ShipState = "approved" | "declined" | "pending" | "none";
 
@@ -1586,39 +1591,77 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_graduate ───────────────────────────────────────────────────
       defineTool({
         name: "task_graduate",
+        raisesCard: true,
         description:
-          "Graduate a finished work item into the knowledge base, in two steps. " +
-          "Step 1: task_graduate(id) distills the item and returns a PREVIEW (what would be sent to the KB) and a confirmation token. Nothing is sent. " +
-          "Show the preview to the owner and ask whether to send it. " +
-          "Step 2, ONLY after the owner has said yes in this conversation: task_graduate(id, confirm=<token>). " +
-          "Never confirm on your own. Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.",
+          "Graduate a finished work item into the knowledge base. Only the owner's yes on a card sends it: " +
+          "task_graduate(id) distills the item and raises a confirmation card showing what would be sent; your turn ends there and nothing is sent. " +
+          "When the owner answers, call task_graduate(id) once more: it sends only if they said yes, and does nothing if they said no. " +
+          "There is no token or confirm argument; you cannot graduate on your own. Where no card can be answered (no owner in this conversation) it only previews and the owner graduates from the console. " +
+          "Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.",
         parameters: Type.Object({
           id: Type.String({ description: "Work item to graduate" }),
-          confirm: Type.Optional(Type.String({ description: "The token from the preview, once the owner approved it" })),
         }),
-        async execute(args: { id: string; confirm?: string }, ctx: ToolContext): Promise<ToolResult> {
+        async execute(args: { id: string }, ctx: ToolContext): Promise<ToolResult> {
           const fail = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: true });
           try {
-            if (!args.confirm) {
+            const canCard = await canAsk(ctx);
+            const found = canCard
+              ? await ctx.conversation!.latestCard!("task_graduate", (c) => c.fields.length === 1 && c.fields[0].kind === "confirm" && c.fields[0].label.endsWith(`(${args.id})?`))
+              : undefined;
+            const answered = found?.status === "answered" ? (found.answers?.[found.card.fields[0].id] as { value?: unknown } | undefined)?.value : undefined;
+            if (found?.status === "pending") {
+              return { content: [{ type: "text", text: `The owner was already asked whether to graduate ${args.id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
+            }
+            const spent = !!found && found.laterResults.some((m) => textLines(m).includes(graduatedLine(args.id)));
+            // A no is final for that card (shipState would re-ask; here the card itself is the answer, so only a newer card changes it).
+            if (answered === false && found) {
+              return { content: [{ type: "text", text: `The owner declined graduating ${args.id}. Nothing was sent. Do not ask again unless they bring it up; they can also use the Graduate button in the console.` }] };
+            }
+            // The owner's yes, not yet used: send only the exact preview shown on the card (its token rides in the field description).
+            const shownToken = found ? /Preview ([0-9a-f]{12})/.exec(found.card.fields[0].description ?? "")?.[1] : undefined;
+            const latest = answered === true && !spent ? await graduation.actions.pendingPreview(args.id) : undefined;
+            // No stored preview (expired or restarted) or a different one (replaced since the card): not what the owner approved, so ask again.
+            const approved = latest && shownToken && latest.token === shownToken ? latest : undefined;
+            let staleNote = "";
+            if (answered === true && !spent && !approved) staleNote = "The preview changed since the owner's yes (or expired), so that yes no longer applies. ";
+            if (!approved) {
+              const round = `grad:${ctx.conversationId}:${args.id}`;
+              if (canCard) {
+                // Parallel calls of one round fold into one card: check and set with no await between.
+                if (gradFolding.has(round)) {
+                  return { content: [{ type: "text", text: `Folded into the graduation question raised by another task_graduate call of this round (${args.id}). Do not ask again: your turn ends here.` }], endTurn: true };
+                }
+                gradFolding.add(round);
+                await new Promise((r) => setTimeout(r, FOLD_MS));
+                gradFolding.delete(round);
+              }
               const preview = await graduation.preview(args.id);
               const text = renderGraduationPreview(preview);
+              if (preview.blocked) return { content: [{ type: "text", text: `${text}\n\nNothing can be sent from this preview. Tell the owner and try again later.` }] };
+              if (!canCard) {
+                return { content: [{ type: "text", text: `${text}\n\nNOTHING HAS BEEN SENT. Nobody can answer a card in this conversation: tell the owner to graduate it with the Graduate button in the console. You cannot confirm it yourself.` }] };
+              }
+              const summary = preview.contributions.slice(0, 4).map((c, i) => `${i + 1}. ${c.title}`);
               return {
-                content: [{
-                  type: "text",
-                  text: preview.blocked
-                    ? `${text}\n\nNothing can be sent from this preview. Tell the owner and try again later.`
-                    : `${text}\n\nNOTHING HAS BEEN SENT. Ask the owner whether to send this. If they say yes, call task_graduate with id ${args.id} and confirm "${preview.token}".`,
-                }],
+                content: [{ type: "text", text: `${staleNote}${text}\n\nNOTHING HAS BEEN SENT. Asked the owner whether to graduate ${args.id}. Your turn ends here. When they answer, call task_graduate(id ${args.id}) again: it sends only on their yes.` }],
+                card: confirmCard({
+                  tool: "task_graduate",
+                  question: `Graduate "${preview.title}" (${args.id})?`,
+                  description: `Preview ${preview.token}`,
+                  confirmLabel: "Graduate",
+                  rejectLabel: "Not yet",
+                  brief: briefHeader(`Graduate "${preview.title}"?`, [`${preview.kind} ${args.id}: ${preview.contributions.length} contribution(s) to the KB`, ...summary, "Sends to the KB and archives the item; this can't be undone from the card."]),
+                }),
               };
             }
 
             // Nothing more goes to a graduated feature: every holder unbinds, this conversation by the clearBinding below.
-            const { preview, done } = await graduation.confirm(args.id, args.confirm, { exceptRoot: (await resolveBindingRoot(ctx)).root });
+            const { preview, done } = await graduation.confirm(args.id, approved.token, { exceptRoot: (await resolveBindingRoot(ctx)).root });
 
             // Raw read: the self-check would already see the item archived and leave a notice the result line replaces.
             const stored = isSubagent() ? null : (await readConversationBinding(ctx)).binding;
             const binding = stored ? { taskId: stored.workId, featureId: stored.featureId } : null;
-            const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
+            const result = [graduatedLine(args.id), `Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
             if (done.lateFolded) result.push(`${done.lateFolded} late observation(s) were folded in and included.`);
             if (binding && (done.archived.includes(binding.taskId) || (binding.featureId && done.archived.includes(binding.featureId)))) {
               if (await clearBinding(ctx)) {

@@ -6,15 +6,15 @@ import { THREAD_COLORS, THREAD_COLOR_KEYS } from "@/src/core";
 /** Display names: the stored `teal` key is lime now (see THREAD_COLORS), so label it so. */
 const THREAD_COLOR_NAMES: Record<string, string> = { teal: "lime" };
 
-/** The 8 palette colors plus "Automatic" (reset). `value` is the override key; absent = automatic. */
+/** The wolf color picker (Settings): the 8 palette colors plus "Automatic" (reset). `value` is the override key; absent = automatic. */
 export function ThreadColorPicker({ value, autoHex, onPick }: { value?: string; autoHex?: string; onPick: (key: string | null) => void }) {
 	return (
-		<div data-testid="thread-color-picker" role="group" aria-label="Thread color" className="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
+		<div data-testid="thread-color-picker" role="radiogroup" aria-label="Wolf color" className="flex flex-wrap items-center gap-1.5 py-1">
 			{THREAD_COLOR_KEYS.map((key) => (
 				<button
 					key={key}
 					type="button"
-					role="menuitemradio"
+					role="radio"
 					aria-checked={value === key}
 					aria-label={THREAD_COLOR_NAMES[key] ?? key}
 					title={THREAD_COLOR_NAMES[key] ?? key}
@@ -26,7 +26,7 @@ export function ThreadColorPicker({ value, autoHex, onPick }: { value?: string; 
 			))}
 			<button
 				type="button"
-				role="menuitemradio"
+				role="radio"
 				aria-checked={value === undefined}
 				data-testid="thread-color-auto"
 				onClick={() => onPick(null)}

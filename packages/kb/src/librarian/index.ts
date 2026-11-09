@@ -13,7 +13,7 @@ export { syncDelivered } from "./groups.js";
 export { writeSections, readSections, foldSections } from "./sections.js";
 export { groupOf } from "./anchors.js";
 export { entryDomain, survivorOf, resolveAliasedEntry } from "./alias.js";
-export { acquireLease, freshLease, freshLeaseIn, readLease, wolfLeaseDirs, leaseFile, LEASE_FILE, LEASE_STALE_MS, type Lease, type LeaseHandle, type LeaseOwner } from "./curator-lease.js";
+export { acquireLease, freshLease, freshLeaseIn, readLease, wolfLeaseDirs, assertNoLiveHub, leaseFile, LEASE_FILE, LEASE_STALE_MS, type Lease, type LeaseHandle, type LeaseOwner } from "./curator-lease.js";
 export {
   workIdOfTopic,
   parseKbNotes,
@@ -127,3 +127,7 @@ export {
   type IncomingWolf,
 } from "./activity.js";
 export { oneLine } from "./redact.js";
+export { previewToFile, applyPlanFile, loadPlanFile, serializePlan, entrySetFingerprint, PLAN_FILE_VERSION, PlanRefusedError, type PlanFile, type PlanFlags, type PreviewOptions, type ApplyOptions } from "./rebuild-plan-file.js";
+export { commitRebuild, restoreRebuild, loadRebuildEntries, listRebuildBackups, engineNamer } from "./rebuild.js";
+export { restoreAndRender } from "./rebuild-recover.js";
+export { enginePartitioner, fileSplitCache } from "./llm-split.js";

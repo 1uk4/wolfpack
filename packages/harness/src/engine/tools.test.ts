@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -195,5 +195,62 @@ describe("coding bash env", () => {
     const c = ex("pnpm exec vitest run x.test.ts", { WOLFPACK_TEST_BYPASS: "1" });
     prepareCodingBash(c);
     expect(c.command).toBe("pnpm exec vitest run x.test.ts");
+  });
+
+  const withGhEnv = async (fn: () => void | Promise<void>) => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { GH_TOKEN: "t1", GITHUB_TOKEN: "t2", GH_ENTERPRISE_TOKEN: "t3", GITHUB_PAT_X: "t4", SSH_AUTH_SOCK: "/tmp/agent.sock", KEEP_ME: "yes" });
+    try {
+      await fn();
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  };
+  const ex = (command: string) => ({ command, cwd: "/tmp", env: {} as Record<string, string>, inheritEnv: true });
+
+  it("leaves the main wolf's shell untouched", async () => {
+    const { prepareCodingBash } = await import("./tools.js");
+    await withGhEnv(() => {
+      const main = ex("gh pr create");
+      prepareCodingBash(main, { conversationId: 900 });
+      expect(main.inheritEnv).toBe(true);
+      expect(main.env.GH_TOKEN).toBeUndefined();
+      expect(main.command).toBe("gh pr create");
+    });
+  });
+
+  it("strips GitHub and ssh credentials from a subagent shell, makes ssh fail, and holds it to the git lockdown", async () => {
+    const { prepareCodingBash } = await import("./tools.js");
+    const { markSubagentConversation } = await import("./fence.js");
+    await withGhEnv(() => {
+      markSubagentConversation(901);
+      const sub = ex("git status");
+      prepareCodingBash(sub, { conversationId: 901 });
+      expect(sub.inheritEnv).toBe(false);
+      expect(sub.env).toMatchObject({ KEEP_ME: "yes", WOLFPACK_AGENT_RUN: "1", GIT_SSH_COMMAND: "false", GIT_TERMINAL_PROMPT: "0" });
+      for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_PAT_X", "SSH_AUTH_SOCK"]) expect(sub.env[k], k).toBeUndefined();
+      expect(readdirSync(sub.env.GH_CONFIG_DIR!)).toEqual([]);
+      expect(() => prepareCodingBash(ex("gh pr create"), { conversationId: 901 })).toThrow(/Blocked by bash/);
+      expect(() => prepareCodingBash(ex("git push"), { conversationId: 901 })).toThrow(/Blocked by bash/);
+    });
+  });
+
+  it("stops holding a conversation to the lockdown once it is unmarked", async () => {
+    const { prepareCodingBash } = await import("./tools.js");
+    const { markSubagentConversation, unmarkSubagentConversation } = await import("./fence.js");
+    markSubagentConversation(902);
+    expect(() => prepareCodingBash(ex("git push"), { conversationId: 902 })).toThrow(/Blocked by bash/);
+    unmarkSubagentConversation(902);
+    expect(() => prepareCodingBash(ex("git push"), { conversationId: 902 })).not.toThrow();
+  });
+
+  it("lets a conflict-resolve worker run the rebase its brief tells it to", async () => {
+    const { checkWorkerCommand } = await import("@wolfpack/agents");
+    const { conflictBrief } = await import("../wolfd/subagent-merge.js");
+    const brief = conflictBrief({ path: "/w/child", branch: "feat/x-child" } as never, { path: "/w/feat", branch: "feat/x" } as never);
+    const cmd = /`(git rebase [^`]+)`/.exec(brief)?.[1];
+    expect(cmd).toBe("git rebase feat/x");
+    expect(checkWorkerCommand(cmd!)).toBeNull();
   });
 });

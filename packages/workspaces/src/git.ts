@@ -15,9 +15,9 @@ export function setGitCommand(cmd: string): string {
 }
 
 /** Run git with an argv array (never a shell string). Resolves with the exit code instead of throwing. */
-export function git(cwd: string, args: string[]): Promise<GitResult> {
+export function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
   return new Promise((resolve) => {
-    execFile(gitCommand, args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" }, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(gitCommand, args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true", ...env }, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (!err) return resolve({ code: 0, stdout, stderr });
       const code = typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : 1;
       resolve({ code, stdout: stdout ?? "", stderr: stderr || String(err.message) });

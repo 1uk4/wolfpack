@@ -2,8 +2,11 @@
 import { createBashTool, createEditTool, type BashExecution, createReadTool, createWriteTool, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
-import { routeTestCommand } from "@wolfpack/agents";
-import { bashViolation, fenceWriteTool } from "./fence.js";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { checkWorkerCommand, routeTestCommand } from "@wolfpack/agents";
+import { bashViolation, fenceWriteTool, isSubagentConversation } from "./fence.js";
 import { READONLY_TOOL_NAMES, ReadOnlyTools } from "./readonly-tools.js";
 
 interface RegistryEntry {
@@ -118,12 +121,36 @@ export function lazyImageProcessor(load: () => Promise<ImageProcessor> = createN
  * Runs before every command of the coding bash tool: the off-limits fence, and the agent-run marker. The marker goes
  * into this execution's env only, never wolfd's process.env: whatever else wolfd starts (a terminal, a dev stack) is not an agent shell.
  */
-export function prepareCodingBash(execution: BashExecution): void {
+export function prepareCodingBash(execution: BashExecution, api?: { conversationId: unknown }): void {
   const refused = bashViolation(execution.cwd, execution.command);
   if (refused) throw new Error(refused);
   execution.env.WOLFPACK_AGENT_RUN = "1";
+  if (isSubagentConversation(api?.conversationId)) {
+    const blocked = checkWorkerCommand(execution.command);
+    if (blocked) throw new Error(blocked);
+    withoutGitHubCredentials(execution);
+  }
   // a direct vitest run becomes `wolfpack test …` (queued, capped, cached); rewrite only, never a refusal
   execution.command = routeTestCommand(execution.command, { ...process.env, ...execution.env }).command;
+}
+
+/**
+ * A subagent's shell is a copy of wolfd's environment with the ways to authenticate to GitHub taken out: every GH_* and
+ * GITHUB_* variable, SSH_AUTH_SOCK, `gh` pointed at an empty config dir under the wolf's den (no stored login), ssh made
+ * to fail (GIT_SSH_COMMAND) and no credential prompts. It is a second layer behind the command guard, not a guarantee:
+ * credentials stored elsewhere (a git credential helper, ~/.ssh keys used by a program the guard does not see) are not removed.
+ * Workers never push (wolfd merges in its own process), so nothing legitimate needs any of it. The main wolf's shell is not touched.
+ */
+export function withoutGitHubCredentials(execution: BashExecution, base: NodeJS.ProcessEnv = process.env): void {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries({ ...base, ...execution.env })) if (v !== undefined && !/^(GH_|GITHUB_)/.test(k) && k !== "SSH_AUTH_SOCK") env[k] = v;
+  const empty = join(base.WOLF_DEN || tmpdir(), "no-gh-config");
+  mkdirSync(empty, { recursive: true, mode: 0o700 });
+  env.GH_CONFIG_DIR = empty;
+  env.GIT_SSH_COMMAND = "false";
+  env.GIT_TERMINAL_PROMPT = "0";
+  execution.env = env;
+  execution.inheritEnv = false;
 }
 
 // (the same four tools as createCodingTools, with write and edit held to a worktree child's root: see fence.ts)
@@ -133,7 +160,7 @@ const CodingTools = defineExtension({
     createReadTool({ images: lazyImageProcessor() }),
     fenceWriteTool(createWriteTool()),
     fenceWriteTool(createEditTool()),
-    createBashTool({ prepare: prepareCodingBash }),
+    createBashTool({ prepare: (execution, api) => prepareCodingBash(execution, api) }),
   ],
 });
 

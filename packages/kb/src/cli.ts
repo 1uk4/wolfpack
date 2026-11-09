@@ -76,6 +76,7 @@ import { restoreAndRender, badJournalNote, recoveryPausedNote } from "./libraria
 import { unpark, listParked } from "./librarian/park.js";
 import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
 import { countPending } from "./librarian/intake.js";
+import { assertNoLiveHub } from "./librarian/curator-lease.js";
 import { readCurrent, oldestInbox, formatAge } from "./librarian/progress.js";
 
 /** Roots of this run, so the signal handler can drop the lock it holds. */
@@ -471,6 +472,7 @@ async function cmdRebuild(): Promise<void> {
       console.error(`restore puts back the section: lines and the sections snapshot saved before the rebuild stamped ${restoreAt}.\nKnown backups: ${listRebuildBackups(roots).join(", ") || "none"}\nRe-run with --yes.`);
       process.exit(2);
     }
+    try { assertNoLiveHub(roots); } catch (e) { console.error(e instanceof Error ? e.message : e); process.exit(1); }
     const release = acquireKbLock(roots);
     if (!release) { console.error("a sweep is running (sweep.lock held); retry when it finishes"); process.exit(1); }
     try {
@@ -503,6 +505,7 @@ async function cmdRebuild(): Promise<void> {
     console.error("--from-current and --from-scratch are exclusive");
     process.exit(1);
   }
+  if (!dryRun) { try { assertNoLiveHub(roots); } catch (e) { console.error(e instanceof Error ? e.message : e); process.exit(1); } }
   const rebuildFrom = argv.includes("--from-scratch") ? "scratch" : "current";
   console.log(`\n── rebuild${dryRun ? " (dry-run: no KB file is written; LLM label calls are made and the vector cache may be warmed)" : ""}: ${domain} (from ${rebuildFrom === "current" ? "the current tree: only oversized sections are judged" : "scratch: one root, every section judged"}) ──`);
 

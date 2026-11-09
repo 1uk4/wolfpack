@@ -14,10 +14,12 @@
  *             entry and clears it after the ledger append. A crash or restart in between leaves the file; the next tick replays it
  *             under the sweep lease before it drains the lane (append the events only if the hash is unseen and the entry file is
  *             live as written; the entry_written commitKb already logged is not doubled). The file is in kb/ops, outside export.
- *   not covered  reorg / rebuild / retire / split-fat and tryRecoverAndRender are not under the sweep lease and write the KB
- *             directly, bypassing commitKb: do not run them against a live hub KB.
+ *   rebuild   a section rebuild runs as a hub command (kb-rebuild.ts): it applies a previewed plan file inside `kb.exclusive` with
+ *             this curator paused (`pause()`), so it never races a tick. reorg / retire / split-fat and tryRecoverAndRender are
+ *             NOT under the sweep lease and write the KB directly, bypassing commitKb: do not run them against a live hub KB.
  *   flag      off unless `enabled`. No decision logic lives here: sweep.ts decides, this file only writes and reports.
  */
+import { HubError } from "./errors.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { loadModelTable, type Engine } from "@wolfpack/engine";
@@ -101,6 +103,11 @@ export interface Curator {
   runOnce(): Promise<CuratorRun | undefined>;
   /** Stop the timer, wait (bounded) for a tick in flight, release the lease. */
   close(): Promise<void>;
+  /**
+   * Stop new ticks (runOnce answers "skipped"), wait for the tick in flight (bounded by closeWaitMs), keep the lease, and hand back
+   * the function that lets ticks run again. Pauses nest: ticks resume when the last holder resumes.
+   */
+  pause(): Promise<() => void>;
   /** Read-only state for the KB activity route: whether the curator is on, a sweep is running, and the last finished one (this process only). */
   status(): CuratorStatus;
 }
@@ -122,6 +129,15 @@ export interface CuratorDeps {
   exclusive: <T>(fn: () => T) => Promise<T | undefined>;
   emit: (draft: HubEventDraft) => void;
   options?: CuratorOptions;
+}
+
+/** The engine the curator (and the rebuild preview) use: the test seam, else the librarian engine on the model table. */
+export function curatorEngineFactory(o: CuratorOptions): () => Engine {
+  return o.createEngine ?? (() => createLibrarianEngine(loadModelTable(o.modelsFile ? { file: o.modelsFile } : {}).table));
+}
+/** The embedder the curator (and the rebuild) use: the test seam, else the KB's cached embedder on embedUrl / embedModel / the process defaults. */
+export function curatorEmbedderFactory(roots: KbRoots, o: CuratorOptions): () => CachedEmbedder {
+  return o.getEmbedder ?? (() => createEmbedder(roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }));
 }
 
 const err1 = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
@@ -259,6 +275,7 @@ export function createCurator(deps: CuratorDeps): Curator {
   let timer: NodeJS.Timeout | undefined;
   let inflight: Promise<CuratorRun | undefined> | undefined;
   let closing = false;
+  let pausedBy = 0;
   let warnedWolf = false;
   let running = false;
   let last: CuratorStatus["last"];
@@ -336,7 +353,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         roots: deps.roots,
         lane: CONTRIBUTIONS_LANE,
         writer,
-        createEngine: o.createEngine ?? (() => createLibrarianEngine(loadModelTable(o.modelsFile ? { file: o.modelsFile } : {}).table)),
+        createEngine: curatorEngineFactory(o),
         leaseOwner: "none", // the hub lease is held by this curator for its whole life
         ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : o.embedUrl || o.embedModel ? { getEmbedder: () => createEmbedder(deps.roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }) } : {}),
         budgetMs: o.budgetMs,
@@ -364,6 +381,7 @@ export function createCurator(deps: CuratorDeps): Curator {
 
   const runOnce = (): Promise<CuratorRun | undefined> => {
     if (!enabled || closing || inflight) return Promise.resolve(undefined);
+    if (pausedBy > 0) return Promise.resolve({ outcome: "skipped", processed: 0, created: 0, merged: 0, rejected: 0, parked: 0, remaining: 0, error: "paused for a KB rebuild" });
     if (freshLeaseIn(wolfLeaseDirs(deps.roots), "wolf")) {
       if (!warnedWolf) console.warn("[curator] skipped: a wolf-side sweep holds the sweep lease");
       warnedWolf = true;
@@ -386,6 +404,21 @@ export function createCurator(deps: CuratorDeps): Curator {
       o.afterStart?.();
     },
     runOnce,
+    async pause() {
+      pausedBy++;
+      const p = inflight;
+      if (p) {
+        let to: NodeJS.Timeout | undefined;
+        await Promise.race([p.catch(() => undefined), new Promise<void>((r) => (to = setTimeout(r, o.closeWaitMs ?? DEFAULT_CLOSE_WAIT_MS)))]);
+        if (to) clearTimeout(to);
+        if (inflight) { // still running after the bounded wait: it holds an old view and could commit later, so do not hand out the lock
+          pausedBy--;
+          throw new HubError("busy", "a curator tick is still running; retry");
+        }
+      }
+      let done = false;
+      return () => { if (!done) { done = true; pausedBy--; } };
+    },
     async close() {
       closing = true; // from here every writer call of a tick in flight is refused
       if (timer) clearInterval(timer);

@@ -57,6 +57,8 @@ export const WORK_UNDO_MS = 8000;
 
 /** The one move notification. `undo` reverses the move; `from` is the assignee to give back after a handoff. */
 interface MoveToast {
+	/** Which notification this is; a late undo only writes to the one it started from. */
+	id: number;
 	kind: "moved" | "undone" | "error";
 	text: string;
 	undo?: { id: string; prev: string | null; from: string | null };
@@ -220,15 +222,15 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const a = ctx.assign;
 	const [open, setOpen] = useState(false);
 	const btn = useRef<HTMLButtonElement>(null);
-	const menuHost = useRef<HTMLSpanElement>(null);
 	const close = useCallback(() => setOpen(false), []);
 	// Escape and a pointer-down outside the button and the (portaled) menu close it; Escape hands focus back to the button.
 	useEffect(() => {
 		if (!open) return;
 		const down = (e: PointerEvent) => {
 			const t = e.target as Node;
-			if (btn.current?.contains(t) || (t as Element).closest?.('[data-assignee-menu]')) return;
+			if (btn.current?.contains(t) || (t as Element).closest?.(`[data-testid="work-assignee-menu-${row.key}"]`)) return;
 			close();
+			btn.current?.focus();
 		};
 		const key = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return;
@@ -237,12 +239,13 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 			btn.current?.focus();
 		};
 		document.addEventListener("pointerdown", down);
-		document.addEventListener("keydown", key);
+		// Capture phase, so stopPropagation keeps an open reader or dialog from also closing on this Escape.
+		document.addEventListener("keydown", key, true);
 		return () => {
 			document.removeEventListener("pointerdown", down);
-			document.removeEventListener("keydown", key);
+			document.removeEventListener("keydown", key, true);
 		};
-	}, [open, close]);
+	}, [open, close, row.key]);
 	const face = row.assignee ? (
 		<>
 			<span className="inline-flex size-3 shrink-0">
@@ -263,7 +266,7 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const id = row.id;
 	const others = a.wolves.filter((w) => w !== row.assignee);
 	return (
-		<span ref={menuHost} className={`${COLS.assignee} flex min-w-0 items-center`} onClick={(e) => e.stopPropagation()}>
+		<span className={`${COLS.assignee} flex min-w-0 items-center`} onClick={(e) => e.stopPropagation()}>
 			<button
 				ref={btn}
 				type="button"
@@ -279,7 +282,7 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 			</button>
 			{open && (
 				<MenuShell anchorRef={btn} testid={`work-assignee-menu-${row.key}`} preferredSide="down" align="left" menuClass="flex w-48 flex-col gap-0.5 rounded-xl border bg-card p-1.5 text-xs shadow-xl">
-					<span data-assignee-menu className="flex flex-col gap-0.5">
+					<span role="menu" className="flex flex-col gap-0.5">
 						{a.wolvesError !== null ? (
 							<span role="alert" className="px-2 py-1 text-destructive">
 								can't load wolves: {a.wolvesError}
@@ -289,9 +292,11 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 								<button
 									key={w}
 									type="button"
+									role="menuitem"
 									data-testid={`work-assignee-option-${row.key}-${w}`}
 									onClick={() => {
 										close();
+										btn.current?.focus();
 										a.onAssign(id, w);
 									}}
 									className="flex items-center gap-2 rounded-lg px-2 py-1 text-left hover:bg-muted focus:bg-muted focus:outline-none"
@@ -498,6 +503,8 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 	const [busyMove, setBusyMove] = useState<ReadonlySet<string>>(() => new Set());
 	const [moveMsgs, setMoveMsgs] = useState<ReadonlyMap<string, MoveMsg>>(() => new Map());
 	const [toast, setToast] = useState<MoveToast | null>(null);
+	const toastSeq = useRef(0);
+	const undoing = useRef<number | null>(null);
 	const loads = useRef(0);
 	const [dragId, setDragId] = useState<string | null>(null);
 	const mounted = useRef(true);
@@ -575,6 +582,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 		// The parent before the move, from the loaded items (not the row label). Undo is offered only when it is known and still exists.
 		const before = items?.find((x) => x.id === id);
 		const prevParent = before && (before.partOf !== undefined || before.kind === "feature") ? (before.partOf ?? null) : undefined;
+		// Read from this render's items, before the move changes them.
 		const prevOk = prevParent !== undefined && (prevParent === null || !!items?.some((x) => x.id === prevParent));
 		setBusyMove((prev) => new Set(prev).add(id));
 		say(null);
@@ -588,6 +596,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 				const parent = target?.title ?? to;
 				const where = to === null ? "no initiative" : target?.container ? "Inbox" : String(parent);
 				setToast({
+					id: ++toastSeq.current,
 					kind: "moved",
 					text: `Moved ${before?.title ?? id} to ${where}${handoff ? ` and assigned to ${handoff.to}` : ""}`,
 					...(prevOk ? { undo: { id, prev: prevParent as string | null, from: handoff?.from ?? null } } : {}),
@@ -612,11 +621,17 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 	// Undo: move back with the same client path (no new notification), then give the old assignee back unless the move-back already did.
 	const onUndo = async (): Promise<void> => {
 		const u = toast?.undo;
-		if (!u || !client.move || toast?.busy) return;
-		setToast({ ...toast!, busy: true });
-		const fail = (text: string, keepUndo: boolean) => {
-			if (mounted.current) setToast({ kind: "error", text, ...(keepUndo ? { undo: u } : {}) });
+		if (!toast || !u || !client.move || toast.busy) return;
+		// A synchronous guard: a second click before the re-render must not send a second undo.
+		if (undoing.current === toast.id) return;
+		undoing.current = toast.id;
+		const tid = toast.id;
+		// Writes only while this toast is still the current one (a newer move replaces it).
+		const put = (t: Omit<MoveToast, "id">) => {
+			if (mounted.current && toastSeq.current === tid) setToast({ ...t, id: tid });
 		};
+		put({ ...toast, busy: true });
+		const fail = (text: string, keepUndo: boolean) => put({ kind: "error", text, ...(keepUndo ? { undo: u } : {}) });
 		try {
 			const res = await client.move(u.id, u.prev);
 			if (!mounted.current) return;
@@ -630,14 +645,16 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 				}
 			}
 			await reload();
-			if (mounted.current) setToast({ kind: "undone", text: "Move undone" });
+			put({ kind: "undone", text: "Move undone" });
 		} catch (err) {
 			fail(err instanceof Error ? err.message : "undo failed", true);
+		} finally {
+			if (undoing.current === tid) undoing.current = null;
 		}
 	};
-	// The notification goes after `undoMs`, unless it is an error or an undo is running.
+	// The notification (an error too, with its Undo) goes after `undoMs`, unless an undo is running.
 	useEffect(() => {
-		if (!toast || toast.kind === "error" || toast.busy) return;
+		if (!toast || toast.busy) return;
 		const t = setTimeout(() => setToast(null), undoMs);
 		return () => clearTimeout(t);
 	}, [toast, undoMs]);
@@ -730,21 +747,20 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 						<div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background/80 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
 							{HEADERS.map((h) => (
 								<Fragment key={h.col}>
-								{h.col === "stage" && (
-									<span data-testid="work-header-assignee" className={COLS.assignee}>
-										Assignee
-									</span>
-								)}
-								<button
-									key={h.col}
-									type="button"
-									data-testid={`work-sort-${h.col}`}
-									aria-sort={sort.col === h.col ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
-									onClick={() => setSort((cur) => nextWorkSort(cur, h.col))}
-									className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${h.cls}`}
-								>
-									{h.label} {chevron(h.col)}
-								</button>
+									{h.col === "stage" && (
+										<span data-testid="work-header-assignee" className={COLS.assignee}>
+											Assignee
+										</span>
+									)}
+									<button
+										type="button"
+										data-testid={`work-sort-${h.col}`}
+										aria-sort={sort.col === h.col ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
+										onClick={() => setSort((cur) => nextWorkSort(cur, h.col))}
+										className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${h.cls}`}
+									>
+										{h.label} {chevron(h.col)}
+									</button>
 								</Fragment>
 							))}
 							<span aria-hidden className={COLS.open} />

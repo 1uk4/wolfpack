@@ -18,6 +18,7 @@ Object.assign(globalThis, {
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,
 	HTMLInputElement: dom.window.HTMLInputElement,
+	HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
 	KeyboardEvent: dom.window.KeyboardEvent,
 	Event: dom.window.Event,
 	CustomEvent: dom.window.CustomEvent,
@@ -32,6 +33,12 @@ Object.assign(globalThis, {
 		removeItem: (k: string) => void store.delete(k),
 	},
 });
+
+// linkedom's focus() does not move document.activeElement: track it here (compared by testid, never by node).
+let focusedEl: Element | null = null;
+const focusedId = () => focusedEl?.getAttribute("data-testid") ?? null;
+dom.window.HTMLElement.prototype.focus = function (this: Element) { focusedEl = this; };
+Object.defineProperty(dom.document, "activeElement", { get: () => focusedEl });
 
 const { WorkList, WORK_DOMAIN_KEY } = await import("../components/work-view.tsx");
 const { WorkReaderHost } = await import("../components/work-reader.tsx");
@@ -104,6 +111,11 @@ const open = async (client: WorkClient = fake()) => {
 	await mount(client);
 	await settle();
 };
+/** Calls a React handler (onDragStart, onDrop…) on the element directly. */
+const fire = (el: HTMLElement, name: string) => act(async () => {
+	const key = Object.keys(el).find((k) => k.startsWith("__reactProps"))!;
+	(el as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]![name]!({ preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {} } });
+});
 const rows = () => qa('[data-testid^="work-row-"]').map((r) => r.getAttribute("data-testid")!.slice("work-row-".length));
 
 describe("the Work page", () => {
@@ -541,6 +553,34 @@ describe("the assignee column", () => {
 		await settle();
 		assert.equal(q("work-assignee-error-f1")!.textContent, "assigned, but the list couldn't refresh");
 	});
+	const evt = (el: Element, type: string, props: object = {}) => act(async () => { el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), props)); });
+	it("the menu has menu/menuitem roles, arrow keys walk the options, and a pick hands focus back to the button", async () => {
+		await openTree(withOwner({ items: TREE, assignees: async () => ({ ok: true, data: ["hal", "luka", "zed"] }) }));
+		assert.equal(cell("f1").getAttribute("aria-haspopup"), "menu");
+		await click(cell("f1"));
+		assert.equal(qa('[role="menu"]').length, 1);
+		assert.deepEqual(qa('[role="menuitem"]').map((o) => o.getAttribute("data-testid")), ["work-assignee-option-f1-luka", "work-assignee-option-f1-zed"]);
+		const first = q("work-assignee-option-f1-luka")!;
+		first.focus();
+		await evt(first, "keydown", { key: "ArrowDown" });
+		assert.equal(focusedId(), q("work-assignee-option-f1-zed")!.getAttribute("data-testid"));
+		await click(q("work-assignee-option-f1-zed")!);
+		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
+	});
+	it("Escape and an outside click close the menu and focus the button; a press on the menu's own body (not an option) keeps it open", async () => {
+		await openTree(withOwner({ items: TREE }));
+		await click(cell("f1"));
+		await evt(q("work-assignee-menu-f1")!, "pointerdown");
+		assert.ok(q("work-assignee-menu-f1"), "the menu body's padding is inside");
+		await evt(document.body, "pointerdown");
+		assert.equal(q("work-assignee-menu-f1"), null);
+		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
+		focusedEl = null;
+		await click(cell("f1"));
+		await evt(document, "keydown", { key: "Escape" });
+		assert.equal(q("work-assignee-menu-f1"), null);
+		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
+	});
 	it("shows \"can't load wolves\" inside the menu when the wolves cannot be loaded", async () => {
 		await openTree(withOwner({ items: TREE, assignees: async () => ({ ok: false, reason: "error", message: "HTTP 502" }) }));
 		await click(cell("f1"));
@@ -572,13 +612,11 @@ describe("moving items", () => {
 		await settle();
 	};
 	const draggable = (id: string) => q(`work-row-${id}`)!.getAttribute("draggable");
-	const fire = (el: HTMLElement, name: string) => act(async () => {
-		const key = Object.keys(el).find((k) => k.startsWith("__reactProps"))!;
-		(el as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]![name]!({ preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {} } });
-	});
 	it("moving is drag-only: no Move to menu; tasks and features drag, initiatives and the Inbox container do not", async () => {
 		await openAll(withMove(async () => ({ ok: true, data: {} })));
-		assert.equal(qa('[data-testid^="work-move-"]:not([data-testid^="work-move-msg"]):not([data-testid^="work-move-toast"]):not([data-testid="work-move-undo"])').length, 0);
+		assert.equal(q("work-move-t1"), null);
+		assert.equal(q("work-move-menu-t1"), null);
+		assert.equal(qa("select").filter((e) => e.getAttribute("data-testid") !== "work-domain").length, 0);
 		assert.equal(draggable("t1"), "true");
 		assert.equal(draggable("f1"), "true");
 		assert.equal(draggable("i1"), null);
@@ -672,13 +710,9 @@ describe("undoing a move", () => {
 		for (const k of ["i1", "f1", "no-initiative"]) await click(q(`work-toggle-${k}`)!);
 		return Object.assign(rec, { c });
 	};
-	const fire = (el: HTMLElement, name: string) => act(async () => {
-		const key = Object.keys(el).find((k) => k.startsWith("__reactProps"))!;
-		(el as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]![name]!({ preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {} } });
-	});
 	/** Where each draggable row is dropped: the first valid target. */
 	const DROP: Record<string, string> = { t1: "f2", lf: "i1", it: "f1", lt: "f1" };
-	const pick = async (key: string, _i = 0) => {
+	const pick = async (key: string) => {
 		await fire(q(`work-row-${key}`)!, "onDragStart");
 		await fire(q(`work-row-${DROP[key]!}`)!, "onDrop");
 		await settle();
@@ -688,42 +722,42 @@ describe("undoing a move", () => {
 
 	it("announces a move with an Undo, adding the new assignee after a handoff", async () => {
 		await setup();
-		await pick("t1", 0);
+		await pick("t1");
 		assert.equal(text(), "Moved T1 to F2");
 		assert.ok(q("work-move-undo"));
 		await setup({ move: handoff("t1", "hal") });
-		await pick("t1", 0);
+		await pick("t1");
 		assert.equal(text(), "Moved T1 to F2 and assigned to luka");
 	});
 	it("undo moves back to the old parent: a feature to no initiative (null), a task to its Inbox container", async () => {
 		const r = await setup();
-		await pick("lf", 0);
+		await pick("lf");
 		await click(q("work-move-undo")!);
 		await settle();
 		assert.deepEqual(r.moves, [["lf", "i1"], ["lf", null]]);
 		assert.equal(text(), "Move undone");
 		assert.equal(q("work-move-undo"), null, "no redo chain");
-		await pick("it", 0);
+		await pick("it");
 		await click(q("work-move-undo")!);
 		await settle();
 		assert.deepEqual(r.moves.slice(2), [["it", "f1"], ["it", "inbox"]]);
 	});
 	it("undo after a handoff gives the old assignee back, unless the move-back already did", async () => {
 		const r = await setup({ move: (id, _to, n) => handoff(id, "hal")().then((x) => (n === 2 ? { ok: true as const, data: { reassigned: [{ id, from: "luka", to: "hal" }] } } : x)) });
-		await pick("t1", 0);
+		await pick("t1");
 		await click(q("work-move-undo")!);
 		await settle();
 		assert.deepEqual(r.moves, [["t1", "f2"], ["t1", "f1"]]);
 		assert.deepEqual(r.assigns, [], "the move-back handed it to hal already");
 		const r2 = await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()) });
-		await pick("t1", 0);
+		await pick("t1");
 		await click(q("work-move-undo")!);
 		await settle();
 		assert.deepEqual(r2.assigns, [["t1", "hal"]]);
 	});
 	it("a failed undo shows the hub's message, keeps the notification and leaves the list alone", async () => {
 		const r = await setup({ move: (_id, _to, n) => Promise.resolve(n === 1 ? { ok: true as const, data: {} } : { ok: false as const, reason: "error" as const, message: "hub says no" }) });
-		await pick("t1", 0);
+		await pick("t1");
 		const before = rows();
 		await click(q("work-move-undo")!);
 		await settle();
@@ -734,27 +768,62 @@ describe("undoing a move", () => {
 	});
 	it("says so when the move-back worked but the assignee could not be restored", async () => {
 		await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()), assign: async () => ({ ok: false, reason: "error", message: "hal is offline" }) });
-		await pick("t1", 0);
+		await pick("t1");
 		await click(q("work-move-undo")!);
 		await settle();
 		assert.equal(text(), "moved back, but couldn't restore the assignee: hal is offline");
 	});
 	it("the notification goes after its timeout, and a second move replaces it", async () => {
 		await setup({ undoMs: 60 });
-		await pick("t1", 0);
-		await pick("lf", 0);
+		await pick("t1");
+		await pick("lf");
 		assert.equal(qa('[data-testid="work-move-toast"]').length, 1);
 		assert.equal(text(), "Moved LF to Phase 1");
 		await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
 		assert.equal(q("work-move-toast"), null);
 	});
+	it("a double click on Undo sends one undo, not two", async () => {
+		const r = await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()) });
+		await pick("t1");
+		const btn = q("work-move-undo")!;
+		await act(async () => {
+			btn.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+			btn.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+		});
+		await settle();
+		assert.equal(r.moves.length, 2);
+		assert.deepEqual(r.assigns, [["t1", "hal"]]);
+	});
+	it("a failed undo's notification times out too, Undo with it", async () => {
+		await setup({ undoMs: 60, move: (_id, _to, n) => Promise.resolve(n === 1 ? { ok: true as const, data: {} } : { ok: false as const, reason: "error" as const, message: "hub says no" }) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.equal(text(), "hub says no");
+		await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
+		assert.equal(q("work-move-toast"), null);
+		assert.equal(q("work-move-undo"), null);
+	});
+	it("an undo finishing after a newer move leaves the newer notification and its Undo alone", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		await setup({ move: async (_id, _to, n) => (n === 2 ? (await gate, { ok: true as const, data: {} }) : { ok: true as const, data: {} }) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await pick("lf");
+		assert.equal(text(), "Moved LF to Phase 1");
+		release();
+		await settle();
+		assert.equal(text(), "Moved LF to Phase 1");
+		assert.ok(q("work-move-undo"));
+	});
 	it("offers no Undo when the previous parent is unknown or its Inbox container is gone", async () => {
 		await setup();
-		await pick("lt", 0);
+		await pick("lt");
 		assert.equal(text(), "Moved LT to F1");
 		assert.equal(q("work-move-undo"), null);
 		await setup({ items: UI.filter((x) => x.id !== "inbox") });
-		await pick("it", 0);
+		await pick("it");
 		assert.ok(q("work-move-toast"));
 		assert.equal(q("work-move-undo"), null);
 	});

@@ -25,11 +25,11 @@ async function rig() {
   await reg("/v1/registry/wolves", { name: "wa", host: "hA", domains: ["personal"] });
   await reg("/v1/registry/wolves", { name: "wb", host: "hB", domains: ["other"] });
   // the proxy speaks X-API-Key (what the Work clients send); a bearer is accepted too
-  const call = (key: string, method: string, path: string, body?: unknown) =>
-    fetch(`${hub.url}/v1/workapi/work${path}`, { method, headers: { "X-API-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const call = (key: string, method: string, path: string, body?: unknown, wolf?: string) =>
+    fetch(`${hub.url}/v1/workapi/work${path}`, { method, headers: { "X-API-Key": key, ...(wolf ? { "X-Wolf": wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const A = workerTokenFor("hA");
   const B = workerTokenFor("hB");
-  return { hub, call, A, B };
+  return { hub, call, A, B, reg };
 }
 const feature = { kind: "feature", domain: "personal", title: "Proxy me", assignee: "wa", body: "x" };
 
@@ -96,11 +96,10 @@ describe("hub work proxy", () => {
     expect((await call(A, "POST", `/${op}/graduate`)).status).toBe(403);
   });
 
-  it("whitelist: no DELETE, no assignee changes, no unknown paths; malformed ids and bodies are 400", async () => {
+  it("whitelist: no DELETE, no unknown paths; malformed ids and bodies are 400", async () => {
     const { call, A, hub } = await rig();
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
     expect((await call(A, "DELETE", `/${id}`)).status).toBe(400);
-    expect((await call(A, "PATCH", `/${id}`, { assignee: "wa" })).status).toBe(403);
     expect((await call(A, "GET", `/${id}/extra/segments`)).status).toBe(404);
     expect((await call(A, "GET", "/not-an-id")).status).toBe(400);
     expect((await call(A, "POST", "", { kind: "feature" })).status).toBe(400);
@@ -171,6 +170,58 @@ describe("hub work proxy", () => {
     expect(((await (await keyed("k-old")).json()) as { id: string }).id).toBe(id);
     t += 2 * day;
     expect(((await (await keyed("k-old")).json()) as { id: string }).id).not.toBe(id);
+  });
+
+  it("gates writes and assignment per acting wolf: hand-off, same-host refusal, child tasks follow the feature, cascade, inherit on create", async () => {
+    const { call, A, reg } = await rig();
+    await reg("/v1/registry/wolves", { name: "wa2", host: "hA", domains: ["personal"] });
+    const as = (w: string, method: string, path: string, body?: unknown) => call(A, method, path, body, w);
+    const json = async (r: Response) => (await r.json()) as { id: string; error: string; item: { assignee: string } };
+    const mk = async (b: object) => (await json(await call(OP_TOKEN, "POST", "", { domain: "personal", assignee: "wa", ...b }))).id;
+
+    // the owner assigns any item
+    const loose = await mk({ kind: "feature", title: "loose", body: "x", assignee: "wb" });
+    const o = await call(OP_TOKEN, "PATCH", `/${loose}`, { assignee: "wa" });
+    expect(o.status).toBe(200);
+    expect((await json(o)).item.assignee).toBe("wa");
+
+    // wa2 on the same host is refused wa's item, with the message
+    const refused = await as("wa2", "PATCH", `/${loose}`, { note: "x" });
+    expect(refused.status).toBe(403);
+    expect((await json(refused)).error).toBe("assigned to wa; only wa or the owner can change it");
+
+    // wa hands its loose item off, then cannot write it
+    expect((await as("wa", "PATCH", `/${loose}`, { assignee: "wa2" })).status).toBe(200);
+    const after = await as("wa", "PATCH", `/${loose}`, { note: "x" });
+    expect(after.status).toBe(403);
+    expect((await json(after)).error).toBe("assigned to wa2; only wa2 or the owner can change it");
+
+    // a feature with open, shipped and archived children
+    const feat = await mk({ kind: "feature", title: "F", body: "x" });
+    const task = (title: string) => mk({ kind: "task", title, partOf: feat, successCriteria: "ok" });
+    const open = await task("open");
+    const done = await task("done");
+    const arch = await task("arch");
+    await call(OP_TOKEN, "PATCH", `/${done}`, { stage: "shipped" });
+    await call(OP_TOKEN, "PATCH", `/${arch}`, { stage: "archived" });
+
+    // a wolf cannot reassign a child task of its own feature
+    const child = await as("wa", "PATCH", `/${open}`, { assignee: "wa2" });
+    expect(child.status).toBe(403);
+    expect((await json(child)).error).toBe(`this task follows its feature ${feat}; only the owner can split it`);
+
+    // create under a feature it holds takes the feature's assignee; another wolf cannot
+    const made = await json(await as("wa", "POST", "", { kind: "task", domain: "personal", title: "N", assignee: "wa2", partOf: feat }));
+    expect(made.item.assignee).toBe("wa");
+    expect((await as("wa2", "POST", "", { kind: "task", domain: "personal", title: "M", assignee: "wb", partOf: feat })).status).toBe(403);
+
+    // handing the feature over moves open children, not shipped or archived ones
+    expect((await as("wa", "PATCH", `/${feat}`, { assignee: "wa2" })).status).toBe(200);
+    const who = async (id: string) => (await json(await call(OP_TOKEN, "GET", `/${id}`))).item.assignee;
+    expect(await who(open)).toBe("wa2");
+    expect(await who(made.id)).toBe("wa2");
+    expect(await who(done)).toBe("wa");
+    expect(await who(arch)).toBe("wa");
   });
 
   it("an operator token is unrestricted over the whitelist", async () => {

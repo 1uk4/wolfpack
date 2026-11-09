@@ -402,7 +402,18 @@ function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
       case "note": item = noteWork(roots, id, o.text).item; break;
       case "title": item = retitleWork(roots, id, o.title).item; break;
       case "successCriteria": item = setCriteria(roots, id, o.text).item; break;
-      case "assign": item = assignWork(roots, id, o.to).item; break;
+      case "assign": {
+        const before = loadWorkState(roots).get(id as never);
+        item = assignWork(roots, id, o.to).item;
+        // Child tasks follow their feature (unless shipped, live or archived), each with its own logged event, in the same write.
+        if (before?.kind === "feature") {
+          for (const c of [...loadWorkState(roots).values()]) {
+            if (c.partOf === id && c.kind === "task" && !["shipped", "live", "archived"].includes(String(c.stage)) && c.assignee !== o.to) assignWork(roots, c.id as string, o.to);
+          }
+          item = loadWorkState(roots).get(id as never) ?? item;
+        }
+        break;
+      }
       case "moveTo": item = moveWork(roots, id, o.partOf).item; break;
       case "link": item = linkWork(roots, id, o.rel, o.target).item; break;
       case "unlink": item = unlinkWork(roots, id, o.rel, o.target).item; break;

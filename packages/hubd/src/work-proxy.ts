@@ -5,12 +5,12 @@
  * hubd stays the single ledger writer: every write goes through the same write queue and kb work-ops as `/v1/work`.
  *
  * WHITELIST (everything else is 404/405): GET /work, GET /work/:id, POST /work, PATCH /work/:id, POST /work/:id/graduate.
- * No DELETE, no assignee changes (those are `assign` ops, operator-only on /v1/work).
+ * No DELETE. `assign` ops: the owner on any item; a wolf only on its own loose item (a task of a feature follows the feature).
  *
  * SCOPE for a WORKER token (its host's wolves = the ACTIVE wolves the registry places on the token's host):
  *   reads   only items whose domain is subscribed by one of those wolves (list is filtered, a foreign item is 404 as if absent);
- *   create  only for an assignee that is one of those wolves, in a subscribed domain;
- *   patch / graduate  only items assigned to (or bound by) one of those wolves, in a subscribed domain.
+ *   create  only for the ACTING wolf (X-Wolf, else the host's only active wolf), or under a feature it holds (the item then takes that assignee), in a subscribed domain;
+ *   patch / graduate  only items assigned to the acting wolf, in a subscribed domain.
  * Console/operator tokens are unrestricted (same whitelist). Errors are `{error: string}` like the agent's.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -60,15 +60,19 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     const rest = url.pathname.slice(`${WORK_PROXY_PREFIX}/work`.length).split("/").filter(Boolean); // [] | [id] | [id, "graduate"]
     const method = req.method ?? "GET";
     const worker = identity.kind === "worker";
+    const named = typeof req.headers["x-wolf"] === "string" ? (req.headers["x-wolf"] as string) : undefined;
     const mine = worker ? d.wolves().filter((w) => w.host === identity.hostId && w.status === "active") : [];
     const myNames = new Set(mine.map((w) => w.name));
     const myDomains = new Set(mine.flatMap((w) => w.domains ?? []));
     const domainOk = (domain: unknown): boolean => !worker || myDomains.has(String(domain));
-    const ownerOk = (item: { assignee?: unknown; boundBy?: unknown; domain?: unknown }): boolean => !worker || (domainOk(item.domain) && (myNames.has(String(item.assignee)) || myNames.has(String(item.boundBy))));
+    // The acting wolf of a worker request: wolfActor names it (X-Wolf, or the host's only active wolf) or refuses.
+    const actingWolf = (): string => d.wolfActor(tokenActor, named).id;
+    const gate = (item: { assignee?: unknown }, w: string): void => {
+      if (String(item.assignee) !== w) forbid(`assigned to ${String(item.assignee)}; only ${String(item.assignee)} or the owner can change it`);
+    };
     const forbid = (m: string): never => {
       throw new HubError("forbidden", m);
     };
-    const named = typeof req.headers["x-wolf"] === "string" ? (req.headers["x-wolf"] as string) : undefined;
     // A write with a key runs at most once: checked and recorded inside the write queue, so two resends cannot both apply.
     // Only writes use a key: a read with a malformed one is answered, not refused.
     const rawKey = ["POST", "PATCH", "PUT", "DELETE"].includes(method) ? idempotencyKeyOf(req.headers["idempotency-key"]) : undefined;
@@ -104,7 +108,12 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
       if (!body.success) throw new HubError("invalid_request", "kind, domain, title, and assignee are required");
       if (worker) {
         if (!domainOk(body.data.domain)) forbid(`this worker host has no wolf subscribed to domain ${JSON.stringify(body.data.domain).slice(0, 60)}`);
-        if (!myNames.has(body.data.assignee)) forbid("a worker token can only create work assigned to a wolf of its own host");
+        const parent = body.data.partOf ? loadWorkState(d.roots).get(body.data.partOf as never) : undefined;
+        const w = actingWolf();
+        if (body.data.assignee !== w) {
+          if (parent && !parent.container && parent.assignee === w) body.data.assignee = w; // the new item takes its feature's assignee
+          else forbid("a worker token can only create work assigned to the acting wolf, or under a feature it holds");
+        }
       }
       const actor = d.wolfActor(tokenActor, named);
       return await once(actor, 201, () => createItem(d.roots, body.data as CreateWorkInput));
@@ -116,19 +125,23 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     }
     if (rest.length === 1 && method === "PATCH") {
       const id = rest[0]!;
-      ownerOk0(itemOf(id), ownerOk, forbid);
+      const item = itemOf(id);
+      if (worker) gate(item, actingWolf());
       const raw = await d.readBody(req);
       const isBatch = typeof raw === "object" && raw !== null && "ops" in raw;
       const parsed = (isBatch ? PatchWorkBatchSchema : PatchWorkOpSchema).safeParse(raw);
       if (!parsed.success) throw new HubError("invalid_request", parsed.error.issues.map((i) => `${i.path.map(String).join(".") || "body"}: ${i.message}`).join("; "));
       const ops = normalisePatch(parsed.data as never);
-      if (ops.some((o) => o.op === "assign")) forbid("assigning work is not available through the work proxy");
+      if (worker && ops.some((o) => o.op === "assign")) {
+        const parent = item.partOf ? loadWorkState(d.roots).get(item.partOf as never) : undefined;
+        if (item.kind === "task" && parent && !parent.container) forbid(`this task follows its feature ${String(parent.id)}; only the owner can split it`);
+      }
       const actor = d.wolfActor(tokenActor, named);
       return await once(actor, 200, () => ({ item: applyOps(d.roots, id, ops) }));
     }
     if (rest.length === 2 && rest[1] === "graduate" && method === "POST") {
       const id = rest[0]!;
-      ownerOk0(itemOf(id), ownerOk, forbid);
+      if (worker) gate(itemOf(id), actingWolf());
       const actor = d.wolfActor(tokenActor, named);
       return await once(actor, 200, () => ({ item: graduateItem(d.roots, id) }));
     }
@@ -140,8 +153,4 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     if (!res.headersSent) respond(res, (typed ? TYPED_STATUS[typed] : undefined) ?? STATUS[err.code] ?? 500, { error: err.message, ...(typed && TYPED_STATUS[typed] ? { code: typed } : {}) });
     else res.end();
   }
-}
-
-function ownerOk0(item: { assignee?: unknown; boundBy?: unknown; domain?: unknown }, ownerOk: (i: typeof item) => boolean, forbid: (m: string) => never): void {
-  if (!ownerOk(item)) forbid("a worker token can only change work assigned to a wolf of its own host");
 }

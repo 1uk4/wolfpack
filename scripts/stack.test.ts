@@ -125,6 +125,24 @@ function fakeMac(tmp: string, state: MacState) {
 	return { deps, env, calls, fetched, out, spawned, launchctl, ran, plist: path.join(env.STACK_PLIST_DIR, "com.wolfpack.stack.plist") };
 }
 
+describe("stack status: updates line", () => {
+	it("flags an updater whose last check is older than two 30-minute timer intervals as stale; a recent check or no status file reads as before", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stack-au-"));
+		try {
+			const file = path.join(dir, "status.json");
+			const now = Date.parse("2026-11-09T12:00:00.000Z");
+			const status = (lastCheck: string) => JSON.stringify({ schema: 1, host: "mac", enabled: true, lastCheck, result: "ok", units: { stack: { component: "workerd", current: "0.1.5", target: "0.1.5", state: "idle" } } });
+			fs.writeFileSync(file, status("2026-11-09T09:00:00.000Z")); // 3 h ago: the timer has missed 6 runs
+			expect(stack.autoUpdateLine(file, now)).toMatch(/^stale \(last check 3h ago\)/);
+			fs.writeFileSync(file, status("2026-11-09T11:35:00.000Z")); // 25 min ago: within one interval
+			expect(stack.autoUpdateLine(file, now)).toBe("idle (running 0.1.5, stable 0.1.5); last check 2026-11-09T11:35:00.000Z");
+			expect(stack.autoUpdateLine(path.join(dir, "missing.json"), now)).toBe("auto-update not set up (node scripts/auto-update-mac.mjs install)");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("stack verdict", () => {
 	const online = { ok: true, wolves: [{ name: "a", state: "online" }] };
 	const running = { state: "running", pid: 1 };

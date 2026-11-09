@@ -3,7 +3,10 @@
 # Designed to be piped: `ssh host sudo bash -s -- wolfd 0.1.2 --wolf hal2 < deploy-release.sh`. All code is inside main() and `main "$@"` is the
 # last line, so bash has parsed the whole script before running anything; nothing inside reads stdin (every external command gets </dev/null).
 #
-#   deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--dry-run] [--health-timeout SEC] [--settle SEC]
+#   deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
+#
+# --sha256 HEX (optional): the tarball hash the caller already verified (scripts/auto-update.mjs passes GitHub's asset digest). When given,
+#   both the downloaded .sha256 file and the downloaded tarball must equal it, or nothing is installed. Without it, behaviour is unchanged.
 #
 # wolfd (needs --wolf): download -> verify sha256 -> inspect tar members -> unpack into a root-owned 0700 staging dir -> chown -> VERSION check
 #   -> switch (release -> release.prev -> older prev kept as release.prev-<ver>-<ts>) -> restart wolfd@<name> -> health check -> automatic swap-back.
@@ -29,12 +32,12 @@ main() {
     TMPROOT="${DEPLOY_TMP:-/tmp}"; LOCKDIR="${DEPLOY_LOCK_DIR:-/run}"
     SYSTEMCTL="${DEPLOY_SYSTEMCTL:-systemctl}"; CGLS="${DEPLOY_CGLS:-systemd-cgls}"; JOURNALCTL="${DEPLOY_JOURNALCTL:-journalctl}"; PROTO='=http,https'
   fi
-  local COMP="" VER="" WOLF="" UNITSEL=auto UNITSET=0 WUSHA="" DRY=0 HTIMEOUT=60 SETTLE=6
+  local COMP="" VER="" WOLF="" UNITSEL=auto UNITSET=0 WUSHA="" PINSHA="" DRY=0 HTIMEOUT=60 SETTLE=6
   log() { echo "deploy: $*"; }
   die() { echo "deploy: REFUSED: $1" >&2; exit "${2:-1}"; }
   usage() {
     cat >&2 <<'USAGE'
-usage: deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--unit link|wolves|both] [--wolfd-unit-sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
+usage: deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--unit link|wolves|both] [--wolfd-unit-sha256 HEX] [--sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
   wolfd needs --wolf <name>; hubd/workerd/console must not have it. --unit (workerd only): link = workerd.service (default; auto means link), wolves = workerd-wolves.service, both. wolves/both restart workerd-wolves and are opt-in. Run as root (not needed for --dry-run).
 USAGE
     exit 2
@@ -107,6 +110,9 @@ USAGE
       --wolf) WOLF="${2:-}"; shift ;;
       --unit) UNITSEL="${2:-}"; UNITSET=1; shift ;;
       --wolfd-unit-sha256) WUSHA="${2:-}"; shift ;;
+      --sha256) # a missing or empty value must not fall through to an unpinned install
+        { (($# >= 2)) && [ -n "$2" ] && [[ $2 != -* ]]; } || { echo "deploy: --sha256 needs a 64-hex value" >&2; usage; }
+        PINSHA=$2; shift ;;
       --dry-run) DRY=1 ;;
       --health-timeout) HTIMEOUT="${2:-}"; shift ;;
       --settle) SETTLE="${2:-}"; shift ;;
@@ -142,6 +148,7 @@ USAGE
   [ "$COMP" = workerd ] || [ "$UNITSET" = 0 ] || die "--unit only applies to workerd" 2
   [ -z "$WUSHA" ] || [ "$COMP" = workerd ] || die "--wolfd-unit-sha256 only applies to workerd" 2
   [ -z "$WUSHA" ] || [[ $WUSHA =~ ^[0-9a-f]{64}$ ]] || die "--wolfd-unit-sha256 must be 64 hex chars" 2
+  [ -z "$PINSHA" ] || [[ $PINSHA =~ ^[0-9a-f]{64}$ ]] || die "--sha256 must be 64 lowercase hex chars" 2
   [ "$UNITSEL" != auto ] || UNITSEL=link   # auto means link: workerd-wolves is only ever restarted on request
   local WOLVES_DIR="$OPT_ROOT/wolfpack-workerd-wolves"
   if [ "$COMP" != wolfd ] && ((!DRY)); then # deploy only upgrades: refuse a host that was never set up (first install is `setup.sh setup`, an owner step)
@@ -275,8 +282,10 @@ USAGE
   want=${line%% *}; name=${line##* }; name=${name#\*}
   [[ $want =~ ^[0-9a-f]{64}$ ]] || die "malformed .sha256 file"
   [ "$name" = "$ASSET" ] || die "component/version mismatch: .sha256 names '$name', expected '$ASSET'"
+  [ -z "$PINSHA" ] || [ "$want" = "$PINSHA" ] || die "sha256 mismatch: $ASSET.sha256 says ${want:0:12}…, --sha256 pins ${PINSHA:0:12}…"
   got=$(sha256sum "$TMP/$ASSET" </dev/null | cut -d' ' -f1)
   [ "$got" = "$want" ] || die "sha256 mismatch for $ASSET (expected ${want:0:12}…, got ${got:0:12}…)"
+  [ -z "$PINSHA" ] || [ "$got" = "$PINSHA" ] || die "sha256 mismatch for $ASSET against --sha256 (pinned ${PINSHA:0:12}…, got ${got:0:12}…)"
   log "sha256 ok ${want:0:12}…"
 
   # ---- member inspection (GNU tar listing). Real releases DO contain relative symlinks (node_modules/.bin -> ../x) and hardlinks (esbuild),

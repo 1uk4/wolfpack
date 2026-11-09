@@ -29,6 +29,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ageText, STALE_AFTER_MS } from "./auto-update.mjs";
 import { liveWolvesDir, packHome } from "./live-paths.mjs";
 
 export const COMMANDS = ["install", "start", "stop", "restart", "status", "logs", "uninstall"];
@@ -144,6 +145,22 @@ export function descendants(rows, root) {
 		for (const r of rows) if (r.ppid === p && !out.some((o) => o.pid === r.pid)) (out.push(r), todo.push(r.pid));
 	}
 	return out;
+}
+
+/**
+ * One line from the Mac auto-update status file (scripts/auto-update-mac.mjs); display only. A `lastCheck` older than
+ * STALE_AFTER_MS (two timer intervals) leads with `stale (last check <age>)`: the job is not running or every run finds the lock
+ * held (deploy/auto-update/RUNBOOK.md, troubleshooting). No file = never set up, not stale.
+ */
+export function autoUpdateLine(file, nowMs = Date.now()) {
+	let s;
+	try { s = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "auto-update not set up (node scripts/auto-update-mac.mjs install)"; }
+	const at = Date.parse(s?.lastCheck ?? "");
+	if (Number.isFinite(at) && nowMs - at > STALE_AFTER_MS) return `stale (last check ${ageText(s.lastCheck, nowMs)}); see deploy/auto-update/RUNBOOK.md`;
+	const u = s?.units?.stack ?? {};
+	const ver = u.current || u.target ? ` (running ${u.current ?? "?"}, stable ${u.target ?? "?"})` : "";
+	const why = u.state === "disabled" ? s.disabledReason : u.state === "failed" ? `${u.code}: ${u.message ?? ""}` : u.message;
+	return `${u.state ?? s.result ?? "unknown"}${ver}${why ? `; ${why}` : ""}; last check ${s.lastCheck ?? "never"}`;
 }
 
 /** Warning text about the env file (missing, or readable by others), or undefined. */
@@ -327,6 +344,7 @@ async function status(cfg, d, ops, { brief = false } = {}) {
 	}
 	d.say(`healthz:   ${health.error ? `no answer (${health.error})` : `${health.ok ? "ok" : "not ok"}; ${health.wolves.map((w) => `${w.name} ${w.state}`).join(", ") || "no wolves"}`}`);
 	d.say(`verdict:   ${v}${v === "unmanaged" ? " (workerd answers but launchd does not run it: no restart on crash)" : ""}`);
+	d.say(`updates:   ${autoUpdateLine(path.join(packHome(process.env, cfg.home), "auto-update/status.json"))}`);
 	if (!brief && (v !== "healthy" || lsErr)) {
 		d.say(`\nlast log lines (${cfg.log}):`);
 		const t = d.run("tail", ["-n", "15", cfg.log]);

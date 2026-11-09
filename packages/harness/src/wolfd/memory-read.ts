@@ -110,11 +110,11 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
   // A state entry blocks an observation only if it is not an orphan: it must be under a key the observation
   // is grouped under (feature or work) and started after the observation was recorded. An entry older than the
   // observation was left by an earlier grouping and is ignored (consolidation clears it on the next success).
-  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed"; since: number } | undefined => {
+  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed" | "forbidden"; since: number; message?: string } | undefined => {
     const rec = o.recordedAt ? Date.parse(o.recordedAt) : NaN;
     for (const k of [o.feature, o.work]) {
       const t = k ? waiting.firstPendingAt[k] : undefined;
-      if (k && t !== undefined && (Number.isNaN(rec) || t >= rec)) return { cause: waiting.keys[k]!, since: t };
+      if (k && t !== undefined && (Number.isNaN(rec) || t >= rec)) return { cause: waiting.keys[k]!, since: t, ...(waiting.messages[k] ? { message: waiting.messages[k] } : {}) };
     }
     return unavailable && (o.work || o.feature) ? { cause: "work-api-unavailable", since: Number.isNaN(rec) ? now : rec } : undefined;
   };
@@ -135,6 +135,7 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
       ...(w ? { blocked: w.cause } : {}),
+      ...(w?.message ? { blockedMessage: w.message } : {}),
       _i: i,
     };
   });

@@ -1281,7 +1281,9 @@ export const MemoryObservationSchema = z.object({
   work: z.string().optional(),
   feature: z.string().optional(),
   /** Set on a tagged observation that stays pending: the Work API is unreachable or not configured, or the model failed. */
-  blocked: z.enum(["work-api-unavailable", "consolidation-failed"]).optional(),
+  blocked: z.enum(["work-api-unavailable", "consolidation-failed", "forbidden"]).optional(),
+  /** The hub's own message when `blocked` is "forbidden" (e.g. "assigned to hal; only hal or the owner can change it"). */
+  blockedMessage: z.string().optional(),
 });
 export type MemoryObservation = z.infer<typeof MemoryObservationSchema>;
 

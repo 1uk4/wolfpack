@@ -9,7 +9,8 @@
  *
  * GATE for a WORKER token acting as wolf W (X-Wolf, else the host's only active wolf; its host's wolves = the ACTIVE wolves the registry places on it):
  *   reads   only items whose domain is subscribed by one of those wolves (list is filtered, a foreign item is 404 as if absent);
- *   notes   a request made only of `note` ops is open to any item; a batch mixing in other ops goes through the full gate;
+ *   notes   a request made only of `note` ops and/or `section` ops named exactly "Record" (the `## Record` heading) is open to any item;
+ *           a batch mixing in other ops goes through the full gate (the Record is memory's fold, written by whichever wolf holds the work);
  *   write / move / assign / graduate  only items assigned to W (no domain check on writes: the gate checks only the assignee;
  *           an unassigned item can only be changed by the owner);
  *   move    under a feature held by another wolf X is a handoff: the task is also assigned to X in the same write (`reassigned` in the answer);
@@ -163,8 +164,8 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         const state = loadWorkState(d.roots);
         const item = state.get(id as never);
         if (!item) throw new HubError("not_found", `Work item not found: ${id}`);
-        // A request of only notes is open to any item; anything else goes through the full gate.
-        if (worker && !ops.every((o) => o.op === "note")) gate(item, actor.id);
+        // A request of only notes and Record-section writes is open to any item; anything else (plan, other sections, body, a mix) goes through the full gate.
+        if (worker && !ops.every((o) => o.op === "note" || (o.op === "section" && o.name === "record"))) gate(item, actor.id);
         const finalOps: WorkOp[] = [];
         const reassigned: { id: string; from: string | null; to: string }[] = [];
         let current = item.assignee ? String(item.assignee) : null;

@@ -60,8 +60,11 @@ export type WorkOp =
   | { op: "standing"; value: boolean }
   | { op: "schedule"; scheduledFor: string | null; durationMinutes?: number };
 
-export type SectionName = "plan" | "notes";
-const SECTION_HEADING: Record<SectionName, string> = { plan: "## Plan", notes: "## Notes" };
+export type SectionName = "plan" | "notes" | "record";
+const SECTION_HEADING: Record<SectionName, string> = { plan: "## Plan", notes: "## Notes", record: "## Record" };
+
+/** The only section name the Record writer sends, matched exactly (case and spacing): the heading `## Record`. */
+export const RECORD_SECTION_NAME = "Record";
 
 /** Ops only an operator may issue: whole-body replace and direct assignee writes. A non-operator gets 403 `forbidden`. */
 export function isOwnerOnlyOp(op: WorkOp): boolean {
@@ -201,9 +204,10 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
   if (b.body !== undefined) ops.push({ op: "body", text: b.body });
   if (b.standing !== undefined) ops.push({ op: "standing", value: b.standing });
   if (b.section !== undefined) {
-    const name = b.section.name.trim().toLowerCase();
-    if (name !== "plan" && name !== "notes") {
-      throw new HubError("invalid_request", `section must be "plan" or "notes" (the Record is generated from the ledger and cannot be edited)`);
+    // The Record is addressed only by its exact name; "plan" / "notes" keep their forgiving match.
+    const name = b.section.name === RECORD_SECTION_NAME ? "record" : b.section.name.trim().toLowerCase();
+    if (name !== "plan" && name !== "notes" && !(name === "record" && b.section.name === RECORD_SECTION_NAME)) {
+      throw new HubError("invalid_request", `section must be "plan", "notes" or "Record"`);
     }
     assertSectionText(b.section.text); // a heading in the text would restructure the body (or forge the generated Log)
     ops.push({ op: "section", name, text: b.section.text });

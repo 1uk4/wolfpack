@@ -149,6 +149,32 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
         }
         commitWorkItem(roots, item, String(body.body));
         result = { item };
+      } else if (body.section !== undefined) {
+        // Local/sandbox Work API: only the Record section is replaceable (memory's fold). Plan/notes edits go through the hub.
+        const sec = body.section as { name?: unknown; text?: unknown };
+        if (sec.name !== "Record" || typeof sec.text !== "string") {
+          res.status(400).json({ error: 'section must be {name: "Record", text}' });
+          return;
+        }
+        const item = loadWorkState(roots).get(id as any);
+        if (!item) {
+          res.status(404).json({ error: `Work item not found: ${id}` });
+          return;
+        }
+        const cur = (resolveWorkItem(roots, item.domain as string, id)?.body ?? "").replace(/\r\n/g, "\n");
+        const lines = cur.split("\n");
+        const start = lines.findIndex((l) => l.replace(/[ \t]+$/, "") === "## Record");
+        const block = `## Record\n\n${sec.text.trim()}\n`;
+        let next: string;
+        if (start < 0) next = `${cur.trimEnd()}\n\n${block}`;
+        else {
+          let end = lines.length;
+          for (let i = start + 1; i < lines.length; i++) if (/^#{1,2}[ \t]/.test(lines[i]!)) { end = i; break; }
+          const rest = lines.slice(end).join("\n");
+          next = `${lines.slice(0, start).join("\n")}${start ? "\n" : ""}${block}${rest ? `\n${rest}` : ""}`;
+        }
+        commitWorkItem(roots, item, next);
+        result = { item };
       } else if (typeof body.standing === "boolean") {
         result = { item: setStanding(roots, id, body.standing).item };
       } else if (body.schedule !== undefined) {

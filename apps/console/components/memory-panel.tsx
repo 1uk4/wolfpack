@@ -14,7 +14,7 @@ import {
 	actionBlock,
 	applyPromoteEvent,
 	bannerOf,
-	BLOCKED_LABELS,
+	blockedText,
 	pendingWarning,
 	type PoolPending,
 	groupLabel,
@@ -341,7 +341,7 @@ export function ObservationsSection({ observations }: {
 									>
 										<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
 										<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-											{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{BLOCKED_LABELS[g.blocked]}</span> : null}
+											{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{blockedText(g)}</span> : null}
 											{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
 											<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
 										</span>

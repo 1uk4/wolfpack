@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
+import { replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
 import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
@@ -150,9 +150,9 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     } as unknown as Engine;
     const workStore = {
       get: async (id: string) => (id === "gone" ? null : { id, title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" }),
-      setBody: async (id: string, body: string) => {
+      setRecord: async (id: string, record: string) => {
         if (opts.failSet) throw new Error("HTTP 502");
-        writes.push({ id, body });
+        writes.push({ id, body: replaceRecordSection("## Plan\n\np", record) });
       },
     };
     return { engine, workStore, prompts, writes };
@@ -236,8 +236,8 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     poolWith([o(0, { work: "work-t1" }), o(1), o(2), o(3), o(4), o(5)]);
     const m = mocks({ failSet: true });
     let sets = 0;
-    const setBody = m.workStore.setBody;
-    m.workStore.setBody = async (id: string, b: string) => { sets++; return setBody(id, b); };
+    const setRecord = m.workStore.setRecord;
+    m.workStore.setRecord = async (id: string, b: string) => { sets++; return setRecord(id, b); };
     const cfg = { wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, poolTarget: 1 };
     const r = await consolidatePool(cfg);
     expect(r.observationsPending).toBe(1);
@@ -368,7 +368,7 @@ describe("drainWorkObservations (graduation)", () => {
     const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => { prompts.push(p.prompt); return schema.parse({ decisions: [], changes: ["Did it"], findings: [], problems: [] }); } } as unknown as Engine;
     const workStore = {
       get: async (id: string) => ({ id, title: "T", kind: "feature", stage: "in_build", body: "## Plan\n\np" }),
-      setBody: async (id: string) => { if (failSet) throw new Error("HTTP 502"); writes.push(id); },
+      setRecord: async (id: string) => { if (failSet) throw new Error("HTTP 502"); writes.push(id); },
     };
     return { engine, workStore, prompts, writes };
   }
@@ -435,7 +435,7 @@ describe("drainWorkObservations (graduation)", () => {
     const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ decisions: [], changes: ["x"], findings: [], problems: [] }) } as unknown as Engine;
     const workStore = {
       get: async (id: string) => ({ id, title: "T", kind: "task", stage: "in_build", body: "" }),
-      setBody: async (id: string) => { if (id === "fb" && failB) throw new Error("HTTP 502"); writes.push(id); },
+      setRecord: async (id: string) => { if (id === "fb" && failB) throw new Error("HTTP 502"); writes.push(id); },
     };
     await expect(drainWorkObservations({ wolfDen: den, engine, workStore, workIds: ["fa", "fb"] })).rejects.toThrow(/HTTP 502/);
     expect(writes).toEqual(["fa"]);

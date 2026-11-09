@@ -7,7 +7,12 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { dirname, join } from "node:path";
 import { observationHash } from "./observation-id.js";
 
-export type PendingCause = "work-api-unavailable" | "consolidation-failed";
+/**
+ * Why a group is waiting. "forbidden": the hub refused the write (403) and said why. That is a final state, not an outage:
+ * no backoff (the group is due again on the next consolidation run, so a reassign or rule change lets it fold), and the
+ * observations are kept. The hub's message is stored on the entry (`message`) for the console.
+ */
+export type PendingCause = "work-api-unavailable" | "consolidation-failed" | "forbidden";
 
 /** First retry delay for a pending group; doubles per failed attempt up to the cap. */
 export const BACKOFF_BASE_MS = 5 * 60_000;
@@ -212,6 +217,8 @@ export interface PendingEntry {
   tries: number;
   nextAttemptAt: number;
   cause: PendingCause;
+  /** The hub's own words for a "forbidden" cause. */
+  message?: string;
   /** Work API answered 404 for the item since this time / for this many runs. */
   missingSince?: number;
   missingRuns?: number;
@@ -239,10 +246,13 @@ export class WorkPendingState {
     return this.data[key];
   }
 
-  pending(key: string, cause: PendingCause): void {
+  pending(key: string, cause: PendingCause, message?: string): void {
     const e = this.data[key];
     const tries = (e?.tries ?? 0) + 1;
-    this.data[key] = { ...e, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt: this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS) };
+    // forbidden: no backoff timer, due on every run.
+    const nextAttemptAt = cause === "forbidden" ? 0 : this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS);
+    const { message: _old, ...rest } = e ?? ({} as Partial<PendingEntry>);
+    this.data[key] = { ...rest, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt, ...(cause === "forbidden" && message ? { message } : {}) };
     this.dirty = true;
   }
 
@@ -274,16 +284,18 @@ export class WorkPendingState {
 }
 
 /** The pending summary the observations route serves: keys waiting, and the oldest wait. */
-export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; oldestAgeMs?: number } {
+export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; messages: Record<string, string>; oldestAgeMs?: number } {
   const st = new WorkPendingState(root, () => now);
   const keys: Record<string, PendingCause> = {};
   const firstPendingAt: Record<string, number> = {};
+  const messages: Record<string, string> = {};
   let oldest: number | undefined;
   for (const [k, e] of Object.entries((st as unknown as { data: StateFile }).data)) {
     if (e.tries === 0) continue;
     keys[k] = e.cause;
     firstPendingAt[k] = e.firstPendingAt;
+    if (e.message) messages[k] = e.message;
     oldest = Math.min(oldest ?? e.firstPendingAt, e.firstPendingAt);
   }
-  return { keys, firstPendingAt, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
+  return { keys, firstPendingAt, messages, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
 }

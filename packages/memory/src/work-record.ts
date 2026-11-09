@@ -286,15 +286,25 @@ export interface WorkRecordItem {
   /** Holding container (the domain Inbox): never a Record's home. */
   container?: boolean;
   successCriteria?: string;
+  /** The parent item (null: none). Undefined: the store does not say, so the observation's stored feature is used. */
+  partOf?: string | null;
   /** The working document ("" when none written yet). */
   body: string;
+}
+
+/** A Work API refusal: the HTTP status and the hub's own message. */
+export class WorkApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "WorkApiError";
+  }
 }
 
 export interface WorkRecordStore {
   /** The item and its document; null when it no longer exists. Throws on any other failure (the run stays pending). */
   get(id: string): Promise<WorkRecordItem | null>;
-  /** Replace the whole document. */
-  setBody(id: string, body: string): Promise<void>;
+  /** Replace ONLY the Record section; `record` is the full section starting at its heading. Throws WorkApiError on a refusal. */
+  setRecord(id: string, record: string): Promise<void>;
   /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
   healthy?(): Promise<boolean>;
 }
@@ -349,13 +359,22 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       stage: String(it.stage ?? ""),
       container: it.container === true,
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
+      partOf: typeof it.partOf === "string" ? it.partOf : it.partOf === null ? null : undefined,
       body: data.body ?? "",
     };
   }
 
-  async setBody(id: string, body: string): Promise<void> {
-    const res = await this.call("PATCH", id, { body });
-    if (!res.ok) throw new Error(`Work API PATCH ${id}: HTTP ${res.status}`);
+  async setRecord(id: string, record: string): Promise<void> {
+    // The hub adds the `## Record` heading itself; the text must not hold a level-2 heading.
+    const text = record.startsWith(RECORD_HEADING) ? record.slice(RECORD_HEADING.length).replace(/^\s+/, "") : record;
+    const res = await this.call("PATCH", id, { section: { name: "Record", text } });
+    if (res.ok) return;
+    let message = `Work API PATCH ${id}: HTTP ${res.status}`;
+    try {
+      const e = ((await res.json()) as { error?: unknown }).error;
+      if (typeof e === "string" && e) message = e;
+    } catch { /* keep the generic message */ }
+    throw new WorkApiError(res.status, message);
   }
 }
 
@@ -439,13 +458,27 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
   // The key is the feature when it is a real, live feature; anything else
   // (no feature, the Inbox, deleted, archived, store unreachable) keeps the item's own.
   const featureOk = new Map<string, boolean>();
+  const liveFeature = async (id: string): Promise<boolean> => {
+    if (!featureOk.has(id)) {
+      try { featureOk.set(id, isRecordFeature(await store!.get(id))); } catch { featureOk.set(id, false); }
+    }
+    return featureOk.get(id)!;
+  };
+  // The feature is resolved NOW from the task's current parent (a task moved since the observation was tagged follows it).
+  // Only a task that cannot be read (or a store that does not report parents) falls back to the stored feature, then to the task.
+  const taskOf = new Map<string, WorkRecordItem | null>();
   for (const o of opts.observations) {
     let key = o.work;
-    if (o.feature && store) {
-      if (!featureOk.has(o.feature)) {
-        try { featureOk.set(o.feature, isRecordFeature(await store.get(o.feature))); } catch { featureOk.set(o.feature, false); }
+    if (store) {
+      if (!taskOf.has(o.work)) {
+        try { taskOf.set(o.work, await store.get(o.work)); } catch { taskOf.set(o.work, null); }
       }
-      if (featureOk.get(o.feature)) key = o.feature;
+      const task = taskOf.get(o.work);
+      if (task && task.partOf !== undefined) {
+        const parent = task.partOf;
+        if (isRecordFeature(task)) key = task.id; // bound to the feature itself
+        else if (parent && (await liveFeature(parent))) key = parent;
+      } else if (o.feature && (await liveFeature(o.feature))) key = o.feature;
     }
     groups.set(key, [...(groups.get(key) ?? []), o]);
   }
@@ -504,15 +537,21 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       // The cap counts what is read; the sources ride along as comments.
       rendered = renderLines(resolveSources(record, current ? parseRecordLines(current) : [], obs.map((o) => ({ id: o.id, ...(o.timestamp ? { timestamp: o.timestamp } : {}) }))), true);
 
-      // Re-read right before the write so a plan edit made while the model
-      // ran is not overwritten (only the Record section is ours).
-      const fresh = (await store.get(work)) ?? item;
-      await store.setBody(work, replaceRecordSection(fresh.body, rendered));
+      // Only the Record section is written (a section op), so a plan edit made while the model ran cannot be overwritten:
+      // no re-read before the write.
+      await store.setRecord(work, rendered);
       clearEntries(state, work, obs);
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
       outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: stripSources(rendered).length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      // A 403 is final, not an outage: kept pending with the hub's message, no backoff, retried on the next run only.
+      if (err instanceof WorkApiError && err.status === 403) {
+        onProgress?.(`  work ${work}: refused by the hub, ${obs.length} observation(s) stay pending — ${reason}`);
+        state?.pending(work, "forbidden", reason);
+        outcomes.push({ work, ids, status: "pending", reason, cause: "forbidden" });
+        continue;
+      }
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
       state?.pending(work, phase);
       outcomes.push({ work, ids, status: "pending", reason, cause: phase });

@@ -18,6 +18,8 @@ import {
   type WorkRecord,
   type WorkRecordItem,
   type WorkRecordStore,
+  WorkApiError,
+  HttpWorkRecordStore,
 } from "./work-record.js";
 import { WorkPendingState } from "./work-pending.js";
 
@@ -130,7 +132,7 @@ describe("renderWorkingDocument", () => {
 
 // ── consolidateWorkRecords ───────────────────────────────────────────────────
 
-function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failGet?: boolean; failSet?: boolean } = {}) {
+function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failGet?: boolean; failSet?: boolean; forbid?: string } = {}) {
   const writes: Array<{ id: string; body: string }> = [];
   const store: WorkRecordStore = {
     async get(id) {
@@ -138,8 +140,10 @@ function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failG
       const it = items[id];
       return it ? { id, title: "T", kind: "task", stage: "in_build", body: "", ...it } : null;
     },
-    async setBody(id, body) {
+    async setRecord(id, record) {
       if (opts.failSet) throw new Error("HTTP 502");
+      if (opts.forbid) throw new WorkApiError(403, opts.forbid);
+      const body = replaceRecordSection(items[id]?.body ?? "", record);
       writes.push({ id, body });
       items[id] = { ...items[id], body };
     },
@@ -291,6 +295,56 @@ describe("Record per feature", () => {
     const { store, writes } = fakeStore({ f1: { kind: "feature" }, t1: { body: "## Plan\n\np\n\n## Record\n\n- old" } });
     await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["n"] })]), store, observations: withFeature("f1", "t1", "x") });
     expect(writes.map((w) => w.id)).toEqual(["f1"]);
+  });
+});
+
+describe("the Record follows the item", () => {
+  const one = (work: string, feature?: string) => [{ id: `${work}-0`, content: "c", work, ...(feature ? { feature } : {}) }];
+
+  it("a task moved to another feature folds into its CURRENT feature, not the one stored on the observation", async () => {
+    const { store, writes } = fakeStore({ fA: { kind: "feature" }, fB: { kind: "feature" }, t: { partOf: "fB" } });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t", "fA") });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["fB", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["fB"]);
+  });
+
+  it("a task that cannot be read falls back to the feature stored on the observation", async () => {
+    const { store, writes } = fakeStore({ fA: { kind: "feature" } });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("gone", "fA") });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["fA", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["fA"]);
+  });
+
+  it("a 403 is a final 'forbidden' with the hub's message: kept pending, no backoff, tried again on the next run", async () => {
+    const msg = "assigned to hal; only hal or the owner can change it";
+    const { store } = fakeStore({ f: { kind: "feature" }, t: { partOf: "f" } }, { forbid: msg });
+    const state = new WorkPendingState(undefined, () => 1000);
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] }), rec({ findings: ["x"] })]), store, state, observations: one("t") });
+    expect(out[0]).toMatchObject({ work: "f", status: "pending", cause: "forbidden", reason: msg });
+    expect(state.entry("f")).toMatchObject({ cause: "forbidden", message: msg });
+    expect(state.due("f")).toBe(true);
+    const again = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, state, observations: one("t") });
+    expect(again[0]).toMatchObject({ cause: "forbidden", reason: msg });
+  });
+
+  it("writes only the Record section through the hub, sending the section name 'Record' and no heading in the text", async () => {
+    const calls: Array<{ method: string; body: unknown }> = [];
+    const fetchImpl = (async (_u: string, init: { method: string; body?: string }) => {
+      calls.push({ method: init.method, body: init.body ? JSON.parse(init.body) : undefined });
+      return new Response(init.method === "GET" ? JSON.stringify({ item: { id: "t", kind: "task", stage: "in_build", title: "T" }, body: "## Plan\n\nmine" }) : "{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t") });
+    const patch = calls.find((c) => c.method === "PATCH")!.body as { section: { name: string; text: string }; body?: string };
+    expect(patch.body).toBeUndefined();
+    expect(patch.section.name).toBe("Record");
+    expect(patch.section.text.startsWith("### Findings")).toBe(true);
+  });
+
+  it("the HTTP store reports a refused write as a WorkApiError with the status and the hub's message", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "assigned to hal; only hal or the owner can change it" }), { status: 403 })) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await expect(store.setRecord("t", "## Record\n\n### Findings\n\n- x")).rejects.toMatchObject({ status: 403, message: "assigned to hal; only hal or the owner can change it" });
   });
 });
 

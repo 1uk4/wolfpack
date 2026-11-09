@@ -229,6 +229,25 @@ describe("hub work proxy", () => {
     expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ note: "one" }, { note: "two" }] })).status).toBe(200);
   });
 
+  it("any wolf replaces the Record section of another wolf's item; plan, full body and mixed batches stay gated", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "the plan" });
+    expect((await g.owner("PATCH", `/${id}`, { section: { name: "Plan", text: "the plan" } })).status).toBe(200);
+    const rec = await g.as("wa2", "PATCH", `/${id}`, { section: { name: "Record", text: "### Decisions\n\n- one" } });
+    expect(rec.status).toBe(200);
+    const body = ((await (await g.as("wa2", "GET", `/${id}`)).json()) as { body: string }).body;
+    expect(body).toContain("## Record\n\n### Decisions\n\n- one");
+    expect(body).toContain("the plan");
+    const refusal = "assigned to wa; only wa or the owner can change it";
+    const plan = await g.as("wa2", "PATCH", `/${id}`, { section: { name: "Plan", text: "mine" } });
+    expect(plan.status).toBe(403);
+    expect((await g.json(plan)).error).toBe(refusal);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { body: "all mine" })).status).toBe(403);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ section: { name: "Record", text: "x" } }, { section: { name: "Plan", text: "mine" } }] })).status).toBe(403);
+    // a ledger op beside a section is refused by the batch rule, never applied
+    expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ section: { name: "Record", text: "x" } }, { stage: "approved" }] })).status).toBe(400);
+  });
+
   it("an unknown assign target is a 400 that names it, for the owner too", async () => {
     const g = await gateRig();
     const id = await g.mk({ kind: "feature", title: "F", body: "x" });

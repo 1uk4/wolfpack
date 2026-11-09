@@ -311,7 +311,9 @@ export interface PoolObservation {
 	work?: string;
 	feature?: string;
 	/** Pending because the Work API is unavailable (consolidation never sends tagged observations to the den). */
-	blocked?: "work-api-unavailable" | "consolidation-failed";
+	blocked?: "work-api-unavailable" | "consolidation-failed" | "forbidden";
+	/** The hub's message when blocked is "forbidden". */
+	blockedMessage?: string;
 }
 
 /** One row of the grouped list: the den, or a work item (id = its key). */
@@ -320,7 +322,8 @@ export interface ObservationGroup {
 	kind: "den" | "work";
 	count: number;
 	/** Waiting for the Work API: some of the group's observations are blocked on it. */
-	blocked?: "work-api-unavailable" | "consolidation-failed";
+	blocked?: "work-api-unavailable" | "consolidation-failed" | "forbidden";
+	blockedMessage?: string;
 	/** Sort stamp of the group's newest observation. */
 	latest: string;
 }
@@ -349,9 +352,9 @@ export function groupObservations(obs: readonly PoolObservation[]): ObservationG
 	for (const o of obs) {
 		const key = groupKeyOf(o);
 		const g = groups.get(key);
-		if (!g) groups.set(key, { key, kind: key === DEN_GROUP ? "den" : "work", count: 1, latest: stampOf(o), ...(o.blocked ? { blocked: o.blocked } : {}) });
+		if (!g) groups.set(key, { key, kind: key === DEN_GROUP ? "den" : "work", count: 1, latest: stampOf(o), ...(o.blocked ? { blocked: o.blocked, ...(o.blockedMessage ? { blockedMessage: o.blockedMessage } : {}) } : {}) });
 		else {
-			if (o.blocked) g.blocked = o.blocked;
+			if (o.blocked) { g.blocked = o.blocked; if (o.blockedMessage) g.blockedMessage = o.blockedMessage; }
 			g.count++;
 			if (stampOf(o) > g.latest) g.latest = stampOf(o);
 		}
@@ -366,7 +369,11 @@ export const observationsInGroup = (obs: readonly PoolObservation[], key: string
 
 /** The note a blocked group shows. */
 export const BLOCKED_LABEL = "waiting for Work API";
-export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying" } as const;
+export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying", forbidden: "refused by the hub" } as const;
+
+/** What a blocked group shows: the label, and for a refusal the hub's own message. */
+export const blockedText = (g: Pick<ObservationGroup, "blocked" | "blockedMessage">): string =>
+	g.blocked === "forbidden" && g.blockedMessage ? `${BLOCKED_LABELS.forbidden}: ${g.blockedMessage}` : g.blocked ? BLOCKED_LABELS[g.blocked] : "";
 
 /** Pending observations older than this, or more than PENDING_WARN_COUNT of them, raise a warning in the panel. */
 export const PENDING_WARN_AGE_MS = 24 * 3_600_000;

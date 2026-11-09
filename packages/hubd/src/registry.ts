@@ -9,7 +9,7 @@
  * - "Create wolf" writes only the entry. "Retire wolf" marks it retired and releases its claims through `releaseClaims`.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { WolfFileSchema } from "@wolfpack/engine";
 import { WolfIdSchema } from "@wolfpack/kb/client";
@@ -19,7 +19,7 @@ import { loadWorkState } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { HubError } from "./errors.js";
 import { unclaimItem } from "./work-writes.js";
-import { domainsYamlFile, registryFile } from "./layout.js";
+import { domainsYamlFile, hubRoots, registryFile } from "./layout.js";
 
 export interface RegistrySeed {
   /** A domains.yaml (the `wolfpack domain` registry). */
@@ -48,6 +48,25 @@ const RESERVED_DOMAINS = new Set(["_unclassified", "entries", "registry", "domai
 export function assertValidDomainName(name: string): void {
   if (!DOMAIN_NAME.test(name)) throw bad(`invalid domain name "${name}" (lower-case letters, digits, hyphens, 2-40 chars, no leading/trailing hyphen)`);
   if (RESERVED_DOMAINS.has(name)) throw bad(`"${name}" is a reserved name and cannot be a domain`);
+}
+
+const NEW_DOMAIN_NAME = /^[a-z0-9]{1,32}$/;
+
+/**
+ * A new domain is usable at once: `<kb>/domains/<name>/entries/` and a stub INDEX.md. The stub is written with `wx` so it never
+ * overwrites an INDEX.md the curator has already rewritten. A registry persist that fails after this leaves an empty folder, which is harmless.
+ * An fs failure (permissions, a file in the way) becomes a HubError with the errno code, so the console shows a real reason.
+ */
+function makeDomainFolder(kbBase: string, name: string): void {
+  const root = join(kbBase, "domains", name);
+  try {
+    mkdirSync(join(root, "entries"), { recursive: true });
+    writeFileSync(join(root, "INDEX.md"), `# ${name}\n\nNo entries yet.\n`, { flag: "wx" });
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EEXIST" && existsSync(join(root, "INDEX.md"))) return;
+    throw new HubError("invalid_request", `could not create the domain's KB folder: ${code ?? "unknown error"}`);
+  }
 }
 
 const DOMAIN_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -312,7 +331,10 @@ export function createRegistry(opts: RegistryOptions): Registry {
         if (c === "domains") {
           const dom = strip(parse(RegistryDomainSchema, body));
           assertValidDomainName(dom.name);
+          // New domains are stricter than the legacy rule: work ids cannot hold a hyphen in the domain.
+          if (!NEW_DOMAIN_NAME.test(dom.name)) throw bad(`invalid domain name "${dom.name}" (lower-case letters and digits only, 1-32 chars)`);
           if (d.domains.some((x) => x.name === dom.name)) throw conflict(`domain ${dom.name} exists`);
+          makeDomainFolder(hubRoots(opts.dataDir).kbBase, dom.name);
           d.domains.push({ ...dom, created: dom.created ?? today() });
           return d.domains.at(-1);
         }
@@ -358,7 +380,11 @@ export function createRegistry(opts: RegistryOptions): Registry {
           if (held.length) throw conflict(`wolf ${name} still holds ${held.length} claim(s); retire it first (retire releases them)`);
         }
         if (c === "hosts" && d.wolves.some((w) => w.host === name)) throw conflict(`host ${name} still has wolves`);
-        if (c === "domains" && d.wolves.some((w) => w.domains.includes(name))) throw conflict(`domain ${name} still has subscribers`);
+        if (c === "domains") {
+          const subs = d.wolves.filter((w) => w.domains.includes(name)).map((w) => w.name);
+          // The KB folder and its entries are left in place on delete.
+          if (subs.length) throw new HubError("conflict", `domain ${name} still has subscribers: ${subs.join(", ")}`, { wolves: subs.join(", ") });
+        }
         list.splice(i, 1);
         return name;
       }),

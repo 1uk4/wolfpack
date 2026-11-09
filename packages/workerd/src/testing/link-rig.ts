@@ -117,7 +117,11 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const operator = { Authorization: `Bearer ${store.redeem(store.mintPairingCode({ kind: "console" }).code, "rig-operator", "console").token}` };
   const op = { ...operator, "Content-Type": "application/json" };
   await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name: "wolfpack" }) });
-  for (const name of o.kbDomains ?? []) await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name }) });
+  for (const name of o.kbDomains ?? []) {
+    await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name }) });
+    // Creating a domain writes a stub INDEX.md (the hubd registry test covers that). These tests count the files they write themselves, so start from an empty folder.
+    rmSync(join(dataDir, "kb", "base", "domains", name, "INDEX.md"), { force: true });
+  }
   const { token, tokenId } = mintWorker();
   const wolfNames = o.wolves ?? ["alpha"];
   const { root } = makeWolves(...wolfNames);

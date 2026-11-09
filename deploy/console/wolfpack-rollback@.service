@@ -1,0 +1,22 @@
+# Owner-initiated rollback of one pack service to its kept previous release (work-wolfpack-yM3uTlj).
+# Instance = hubd | workerd | console. Started ONLY by the console's pack-health modal (POST /api/health/rollback, a signed-in device) via
+# `systemctl start wolfpack-rollback@<svc>.service`, which polkit (50-console-restart.rules) allows for exactly those three instances; or by
+# root by hand. Never started automatically: no [Install] section, no timer, no OnFailure= anywhere points here.
+# Runs as root in its OWN unit, so rolling back the console (which restarts console.service) does not kill the rollback half-way.
+# console-rollback-release.sh (the console bundle's copy of infra/release/deploy-release.sh) --rollback validates the instance again (hubd|workerd|console only), takes the deploy lock, swaps current/previous,
+# restarts the service and checks it settles. Output: journalctl -u wolfpack-rollback@<svc> (also shown in the modal's Logs) and
+# /var/log/deploy-release.log.
+[Unit]
+Description=Wolfpack rollback of %i to the previous release
+Documentation=file:///opt/wolfpack-console/current/RUNBOOK.md
+# Only the three known components; anything else fails before the script runs.
+AssertPathExists=/opt/wolfpack-%i/previous
+# Assert, not Condition: a missing script must FAIL the start (Result=assert, shown in the modal), never skip it silently.
+AssertPathExists=/usr/local/lib/wolfpack/console-rollback-release.sh
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/bash /usr/local/lib/wolfpack/console-rollback-release.sh %i --rollback
+TimeoutStartSec=300
+# A second start while one runs is merged by systemd (oneshot "activating"); the script's flock also refuses a concurrent deploy.

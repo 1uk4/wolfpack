@@ -16,6 +16,9 @@ ENV_DIR=/etc/wolfpack
 ENV_FILE=$ENV_DIR/console.env
 UNIT=/etc/systemd/system/console.service
 POLKIT_RULE=/etc/polkit-1/rules.d/50-console-restart.rules
+ROLLBACK_UNIT=/etc/systemd/system/wolfpack-rollback@.service
+# The console bundle's OWN copy of infra/release/deploy-release.sh: never the shared /usr/local/lib/wolfpack/deploy-release.sh other tools install.
+ROLLBACK_SCRIPT=/usr/local/lib/wolfpack/console-rollback-release.sh
 KEEP_RELEASES=5
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -106,9 +109,21 @@ cmd_setup() {
     echo "NOTICE: /etc/polkit-1/rules.d missing (polkit not installed): the console's restart action will answer 502 until it is"
   fi
 
+  install_rollback
   run systemctl daemon-reload
   run systemctl enable console.service
   echo "setup done. Next: edit $ENV_FILE (CHANGE-ME host names), 'setup.sh install --bundle <dir>', then 'systemctl start console'."
+}
+
+# Pack-health rollback (work-wolfpack-yM3uTlj): the root oneshot wolfpack-rollback@.service and the script it runs. Both root-owned, not
+# writable by the console user; the unit is never enabled (started only by the console's owner-initiated POST, polkit-gated, or by hand).
+# Skipped quietly when the bundle predates them. Refreshed on every install, so a deploy carries script fixes.
+install_rollback() {
+  [[ -f $HERE/wolfpack-rollback@.service && -f $HERE/deploy-release.sh ]] || { echo "NOTICE: bundle has no rollback unit/script; the modal's Roll back answers 502 until a newer bundle is installed"; return 0; }
+  log "pack-health rollback unit (root oneshot; started only on the owner's request)"
+  run install -d -o root -g root -m 0755 "$(dirname "$ROLLBACK_SCRIPT")"
+  run install -o root -g root -m 0755 "$HERE/deploy-release.sh" "$ROLLBACK_SCRIPT"
+  run install -o root -g root -m 0644 "$HERE/wolfpack-rollback@.service" "$ROLLBACK_UNIT"
 }
 
 cmd_install() {
@@ -135,6 +150,7 @@ cmd_install() {
   if [[ -L $OPT/current ]]; then ln -sfn "$(readlink -f "$OPT/current")" "$OPT/previous.new" && mv -T "$OPT/previous.new" "$OPT/previous"; fi
   ln -sfn "$rel" "$OPT/current.new" && mv -T "$OPT/current.new" "$OPT/current" # rename(2): atomic
   install -m 0755 "$HERE/setup.sh" "$OPT/setup.sh" 2>/dev/null || true # the deploy script rolls back with the INSTALLED copy
+  install_rollback && systemctl daemon-reload
   if systemctl is-active --quiet console; then systemctl restart console; echo "restarted console"; fi
   local cur prev old
   cur="$(readlink -f "$OPT/current")"; prev="$(readlink -f "$OPT/previous" 2>/dev/null || true)"
@@ -158,7 +174,7 @@ cmd_rollback() {
 cmd_uninstall() {
   log "uninstall console"
   if ((DRY)) || systemctl cat console.service >/dev/null 2>&1; then run systemctl disable --now console.service; else echo "console.service not installed; skipping disable"; fi
-  run rm -f "$UNIT" "$POLKIT_RULE"
+  run rm -f "$UNIT" "$POLKIT_RULE" "$ROLLBACK_UNIT" "$ROLLBACK_SCRIPT"
   run systemctl daemon-reload
   run rm -rf "$OPT"
   if ((PURGE)); then

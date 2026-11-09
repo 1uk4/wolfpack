@@ -4,6 +4,7 @@
 # last line, so bash has parsed the whole script before running anything; nothing inside reads stdin (every external command gets </dev/null).
 #
 #   deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
+#   deploy-release.sh <hubd|workerd|console> --rollback   owner-initiated swap back to the kept previous release (see rollback_only)
 #
 # --sha256 HEX (optional): the tarball hash the caller already verified (scripts/auto-update.mjs passes GitHub's asset digest). When given,
 #   both the downloaded .sha256 file and the downloaded tarball must equal it, or nothing is installed. Without it, behaviour is unchanged.
@@ -38,6 +39,7 @@ main() {
   usage() {
     cat >&2 <<'USAGE'
 usage: deploy-release.sh <wolfd|hubd|workerd|console> <X.Y.Z> [--wolf <name>] [--unit link|wolves|both] [--wolfd-unit-sha256 HEX] [--sha256 HEX] [--dry-run] [--health-timeout SEC] [--settle SEC]
+       deploy-release.sh <hubd|workerd|console> --rollback [--health-timeout SEC] [--settle SEC]   (swap back to the kept previous release)
   wolfd needs --wolf <name>; hubd/workerd/console must not have it. --unit (workerd only): link = workerd.service (default; auto means link), wolves = workerd-wolves.service, both. wolves/both restart workerd-wolves and are opt-in. Run as root (not needed for --dry-run).
 USAGE
     exit 2
@@ -103,9 +105,66 @@ USAGE
     return 0
   }
 
-  local INSPECT=""
+  # --rollback (work-wolfpack-yM3uTlj): owner-initiated swap back to the kept previous release of hubd|workerd|console; nothing downloaded.
+  # Started by the console's pack-health modal through the oneshot unit wolfpack-rollback@<comp>.service (deploy/console/), or by hand:
+  #   deploy-release.sh <hubd|workerd|console> --rollback [--health-timeout SEC] [--settle SEC]
+  # Takes the same per-component lock as a deploy (never races one), runs the installed $OPT/setup.sh rollback (swaps current/previous,
+  # restarts the unit if active); only when there is NO installed setup.sh does it swap the links itself and restart. When the installed
+  # setup.sh refuses (e.g. the previous release has no server.js / workerd.mjs), that refusal stands: nothing is swapped behind its back.
+  # Then: unit active and stable across a settle. Never automatic.
+  # Exit 0 rolled back (healthy, or left stopped as it was), 1 refused / nothing changed, 2 usage, 4 changed but unhealthy or half-done
+  # (needs a person). The console's modal maps these codes to text (apps/console/src/core/pack-health-view.ts rollbackFinished).
+  rollback_only() {
+    [ -z "$VER" ] && [ -z "$WOLF" ] && [ "$UNITSET" = 0 ] && [ -z "$WUSHA" ] && [ -z "$PINSHA" ] && ((!DRY)) || usage
+    case "$COMP" in hubd|workerd|console) ;; *) die "--rollback supports hubd|workerd|console, got '$COMP'" 2 ;; esac
+    [[ $HTIMEOUT =~ ^[0-9]+$ && $SETTLE =~ ^[0-9]+$ ]] || die "--health-timeout/--settle must be integers" 2
+    [ "$(id -u)" = 0 ] || die "run as root" 2
+    local OPT="$OPT_ROOT/wolfpack-$COMP" SVC="$COMP.service" was=0 cur prev to from iid iid2 nr1 nr2 t=0
+    vof() { local v; v=$(head -n1 "$1/VERSION" 2>/dev/null </dev/null) && [[ $v =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]] && echo "${BASH_REMATCH[1]}" || echo "${1##*/}"; }
+    if : >>"$LOGF" 2>/dev/null; then exec > >(tee -a "$LOGF") 2>&1; chmod 600 "$LOGF" 2>/dev/null || true; fi
+    log "=== $(date -u +%FT%TZ) rollback $COMP (owner-initiated)"
+    command -v flock >/dev/null || die "flock (util-linux) is required"
+    exec 9>"$LOCKDIR/deploy-release-$COMP-host.lock" || die "cannot open the lock file in $LOCKDIR"
+    flock -n 9 || die "a deploy or rollback is already running for $COMP"
+    [ -L "$OPT/current" ] && [ -e "$OPT/current" ] || die "no $COMP install ($OPT/current missing)"
+    [ -L "$OPT/previous" ] && [ -e "$OPT/previous" ] || die "no previous $COMP release kept ($OPT/previous missing); nothing changed"
+    cur=$(readlink -f "$OPT/current"); prev=$(readlink -f "$OPT/previous")
+    [ "$cur" != "$prev" ] || die "$OPT/previous is the running release; nothing changed"
+    from=$(vof "$cur"); to=$(vof "$prev")
+    log "$COMP: $from -> $to"
+    sc is-active --quiet "$SVC" 2>/dev/null && was=1
+    if [ -f "$OPT/setup.sh" ]; then
+      if ! bash "$OPT/setup.sh" rollback </dev/null 9>&-; then
+        [ "$(readlink -f "$OPT/current")" = "$cur" ] && [ "$(readlink -f "$OPT/previous")" = "$prev" ] \
+          || die "installed $OPT/setup.sh rollback failed after changing the links; manual check needed" 4
+        if [ $was = 1 ] && ! sc is-active --quiet "$SVC" 2>/dev/null; then die "installed $OPT/setup.sh rollback failed and $SVC is no longer active; manual check needed" 4; fi
+        die "installed $OPT/setup.sh refused the rollback (see above); nothing changed" 1
+      fi
+    else
+      log "no installed $OPT/setup.sh; swapping the links myself"
+      { ln -sfn "$prev" "$OPT/current.new" && mv -T "$OPT/current.new" "$OPT/current" && ln -sfn "$cur" "$OPT/previous.new" && mv -T "$OPT/previous.new" "$OPT/previous"; } \
+        || die "link swap failed in $OPT; manual check needed" 4
+      if [ $was = 1 ]; then sc reset-failed "$SVC" >/dev/null 2>&1 || true; sc restart "$SVC" || die "restart of $SVC failed after the swap" 4; fi
+    fi
+    [ "$(readlink -f "$OPT/current")" = "$prev" ] || die "$OPT/current does not point at the previous release after the rollback" 4
+    if [ $was = 0 ]; then log "$SVC was not running; rolled back to $to and left stopped"; return 0; fi
+    while ((t <= HTIMEOUT)); do
+      if sc is-active --quiet "$SVC" 2>/dev/null; then
+        iid=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true); nr1=$(sc show -p NRestarts --value "$SVC" 2>/dev/null || true)
+        sleep "$SETTLE"
+        iid2=$(sc show -p InvocationID --value "$SVC" 2>/dev/null || true); nr2=$(sc show -p NRestarts --value "$SVC" 2>/dev/null || true)
+        if sc is-active --quiet "$SVC" 2>/dev/null && [ "$iid" = "$iid2" ] && [ "$nr1" = "$nr2" ]; then log "OK: $COMP rolled back $from -> $to, $SVC active"; return 0; fi
+        log "$SVC is not stable after the rollback to $to (crash loop): needs a human"; return 4
+      fi
+      sleep 1; t=$((t + 1))
+    done
+    log "$SVC not active within ${HTIMEOUT}s after the rollback to $to: needs a human"; return 4
+  }
+
+  local INSPECT="" ROLLBACK=0
   while (($#)); do
     case "$1" in
+      --rollback) ROLLBACK=1 ;;
       --inspect-only) [ "${DEPLOY_TEST:-}" = 1 ] || usage; INSPECT="${2:-}"; shift ;;
       --wolf) WOLF="${2:-}"; shift ;;
       --unit) UNITSEL="${2:-}"; UNITSET=1; shift ;;
@@ -128,6 +187,7 @@ USAGE
     tar -xzf "$INSPECT" --no-same-owner --no-same-permissions --no-overwrite-dir -C "$it" </dev/null 9>&- && contained_check "$it"; iv=$?
     rm -rf --one-file-system -- "$it"; echo "contained: rc=$iv"; exit "$iv"
   fi
+  if ((ROLLBACK)); then rollback_only; exit $?; fi
   [ -n "$COMP" ] && [ -n "$VER" ] || usage
   VER="${VER#v}"
   case "$COMP" in wolfd|hubd|workerd|console) ;; *) die "unknown component '$COMP' (wolfd|hubd|workerd|console)" 2 ;; esac

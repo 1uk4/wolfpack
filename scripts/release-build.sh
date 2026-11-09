@@ -34,7 +34,7 @@ case "$COMP" in
     npx tsc --build
     STAGE=$(mktemp -d)
     node scripts/build-server.mjs --out "$STAGE/console/app"
-    cp deploy/console/{setup.sh,console.service,console.env.example,RUNBOOK.md} "$STAGE/console/"
+    cp deploy/console/{setup.sh,console.service,console.env.example,RUNBOOK.md,50-console-restart.rules,wolfpack-rollback@.service} infra/release/deploy-release.sh "$STAGE/console/"
     printf '%s\n' "$STAMP" > "$STAGE/console/VERSION"
     rm -f "$STAGE/console/app/VERSION"; printf '%s\n' "$STAMP" > "$STAGE/console/app/VERSION"
     scripts/smoke-console-release.sh "$STAGE/console/app"

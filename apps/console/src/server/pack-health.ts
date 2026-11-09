@@ -9,17 +9,19 @@
  *                        probe when WOLFPACK_HEALTH_WOLVES names a URL for it (e.g. a TCP wolfd in dev)
  *
  * Status per link: ok | degraded | recovering | down | frozen | restarting | unknown.
- *   frozen      no answer within the probe timeout (a hung event loop), as opposed to down (refused, HTTP error, wrong service)
+ *   frozen      no answer within the probe timeout (a hung event loop), as opposed to down (refused, HTTP 5xx, wrong service)
  *   recovering  answering fast but still graded degraded right after an outage/restart: the service's lag is a ~20 s rolling window,
  *               so one long stall keeps it degraded for a while after it is fine again
  *   restarting  a restart was issued from here and the new process has not answered yet. Ends on the first answer from a process
  *               younger than the restart (uptimeS), or after RESTART_DEADLINE_MS. A wolf read off workerd has no uptime and its
  *               "online" can still be the old process, so it ends only when workerd's restart count for it went up, or a
  *               not-online state was seen after the restart and it is online again, or at the deadline.
- *   unknown     a wolf whose state cannot be told: its workerd is not answering (error workerd_unavailable; kept however long that
- *               lasts), or its workerd answers but no longer lists it (not_reported; dropped after WOLF_FORGET_MS of that).
+ *   unknown     a service that answered but with no health body: an older build from before /healthz (no_healthz: 401/403/404,
+ *               a 200 that is not a health body, or a body without `service`). It runs, but is not verified healthy, so lastOkAt
+ *               stays. Or a wolf whose state cannot be told: its workerd is not answering (error workerd_unavailable; kept however
+ *               long that lasts), or its workerd answers but no longer lists it (not_reported; dropped after WOLF_FORGET_MS of that).
  * `error` is a short code, never raw text (the snapshot is unauthenticated): timeout | refused | http_<status> | wrong_service |
- * bad_body | unreachable for probes; slow | reports_not_ok when degraded; wolf_<state> | workerd_unavailable | not_reported for
+ * no_healthz | unreachable for probes; slow | reports_not_ok when degraded; wolf_<state> | workerd_unavailable | not_reported for
  * wolves. Raw errors go to
  * the server log only.
  * Each status change is appended to the link's `history` (last HISTORY_MAX), so the UI can say "restarting… back".
@@ -192,29 +194,36 @@ interface Observation {
 
 /**
  * The snapshot is unauthenticated, so a probe failure is a short code, never the raw error text (which can carry addresses, paths
- * or library messages): timeout | refused | http_<status> | wrong_service | bad_body | unreachable. The raw text is logged
+ * or library messages): timeout | refused | http_<status> | wrong_service | no_healthz | unreachable. The raw text is logged
  * server-side when a link's code changes.
+ *   no_healthz     an answer with no health body, as an older build gives: 401/403/404 on /healthz (hubd had it behind auth), a 2xx
+ *                  that is not a JSON object, or a body with no `service`. wrong_service is kept for a health body naming another
+ *                  service (something else on that port).
  */
-function probeErrorCode(raw: string): string {
+function probeErrorCode(r: ProbeResult): string {
+	const raw = r.error ?? "";
 	if (raw.startsWith("no answer within ")) return "timeout";
 	const http = /^HTTP (\d{3})$/.exec(raw);
-	if (http) return `http_${http[1]}`;
-	if (raw === "wrong service") return "wrong_service";
-	if (raw === "unparseable health body") return "bad_body";
+	if (http) return http[1] === "401" || http[1] === "403" || http[1] === "404" ? "no_healthz" : `http_${http[1]}`;
+	if (raw === "wrong service") return typeof r.body?.service === "string" ? "wrong_service" : "no_healthz";
+	if (raw === "unparseable health body") return "no_healthz";
 	if (raw === "ECONNREFUSED") return "refused";
 	return "unreachable";
 }
 
-const fromProbe = (r: ProbeResult, timeoutMs: number): Observation => ({
-	answered: r.status !== "down",
-	graded: r.status === "down" ? (r.body === undefined && r.responseMs >= timeoutMs ? "frozen" : "down") : r.status,
+const fromProbe = (r: ProbeResult, timeoutMs: number): Observation => {
+	const code = r.error !== undefined ? probeErrorCode(r) : null;
+	return {
+		answered: r.status !== "down",
+		graded: code === "no_healthz" ? "unknown" : r.status === "down" ? (r.body === undefined && r.responseMs >= timeoutMs ? "frozen" : "down") : r.status,
 	responseMs: r.responseMs,
 	lagMs: r.lagMs ?? null,
-	error: r.error !== undefined ? probeErrorCode(r.error) : r.status === "degraded" ? (r.body?.ok === false ? "reports_not_ok" : "slow") : null,
-	version: typeof r.body?.version === "string" ? r.body.version : null,
-	uptimeS: typeof r.body?.uptimeS === "number" ? r.body.uptimeS : null,
-	...(r.error !== undefined ? { rawError: r.error } : {}),
-});
+		error: code ?? (r.status === "degraded" ? (r.body?.ok === false ? "reports_not_ok" : "slow") : null),
+		version: typeof r.body?.version === "string" ? r.body.version : null,
+		uptimeS: typeof r.body?.uptimeS === "number" ? r.body.uptimeS : null,
+		...(r.error !== undefined ? { rawError: r.error } : {}),
+	};
+};
 
 const WOLF_STATES = new Set(["online", "starting", "restarting", "failed", "stopped"]);
 

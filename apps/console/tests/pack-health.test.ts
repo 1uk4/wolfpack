@@ -14,7 +14,7 @@ import { createPackHealth, createRestarter, healthTargets, hubTarget, type Comma
 import { createSessionWitness, setSessionWitness } from "../src/server/session-witness.ts";
 import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 
-type Mode = "ok" | "hang" | "slow-lag" | "http500" | "wrong-service" | "bad-body";
+type Mode = "ok" | "hang" | "slow-lag" | "http500" | "http401" | "wrong-service" | "bad-body" | "legacy";
 
 /**
  * A fake service: answers /healthz as `service`, or hangs; records every request it gets. `refuse()` closes the port, `back()` reopens it.
@@ -42,7 +42,12 @@ async function fakeService(service: string, extra: () => Record<string, unknown>
 				res.statusCode = 500;
 				return res.end("{}");
 			}
+			if (mode === "http401") {
+				res.statusCode = 401; // an older hubd: /healthz sits behind auth
+				return res.end(JSON.stringify({ code: "unauthorized" }));
+			}
 			if (mode === "bad-body") return res.end("<html>/var/lib/x: oops</html>");
+			if (mode === "legacy") return res.end(JSON.stringify({ ok: true, version: "0.1.3", wolves: [] })); // an older build: no `service`
 			if (mode === "wrong-service") return res.end(JSON.stringify({ ok: true, service: "nginx" }));
 			const lag = mode === "slow-lag" ? { p99Ms: 900, maxMs: 4000 } : { p99Ms: 2, maxMs: 5 };
 			res.end(JSON.stringify({ ok: true, service, version: "1.2.3", uptimeS, lag, ...extra() }));
@@ -122,6 +127,23 @@ describe("pack health: GET /api/health", () => {
 		assert.equal(s.hub.seen.some((r) => r.auth !== undefined), false);
 	});
 
+	it("an older build without /healthz (401, a non-health 200, a body with no service) is unknown, not down; another service is down", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		const seen: [string, string | null, string | null][] = [];
+		for (const [i, m] of (["http401", "bad-body", "legacy", "wrong-service"] as const).entries()) {
+			s.hub.set(m);
+			const h = linkOf(await s.tick(T0 + (i + 1) * 5000), "hubd");
+			seen.push([h.status, h.error, h.lastOkAt]);
+		}
+		assert.deepEqual(seen, [
+			["unknown", "no_healthz", iso(T0)],
+			["unknown", "no_healthz", iso(T0)],
+			["unknown", "no_healthz", iso(T0)],
+			["down", "wrong_service", iso(T0)],
+		]);
+	});
+
 	it("names each failure by a short code (no raw error text, paths or addresses in the unauthenticated snapshot)", async () => {
 		const s = await setup({ wolves: () => [{ name: "hal", state: "failed: /home/wolf-hal/den", restarts: 3 }] });
 		const codes: (string | null)[] = [];
@@ -131,14 +153,14 @@ describe("pack health: GET /api/health", () => {
 			codes.push(linkOf(snap, "hubd").error);
 			all.push(...snap.links.map((l) => l.error));
 		};
-		for (const [i, m] of (["hang", "http500", "wrong-service", "bad-body"] as const).entries()) {
+		for (const [i, m] of (["hang", "http500", "wrong-service", "http401"] as const).entries()) {
 			s.hub.set(m);
 			await round(T0 + i * 5000);
 		}
 		await s.hub.refuse();
 		await s.tick(T0 + 20_000); // the pooled keep-alive socket is reset first; the next probe meets a closed port
 		await round(T0 + 25_000);
-		assert.deepEqual(codes, ["timeout", "http_500", "wrong_service", "bad_body", "refused"]);
+		assert.deepEqual(codes, ["timeout", "http_500", "wrong_service", "no_healthz", "refused"]);
 		const leaky = all.filter((e) => e !== null && /[:/]/.test(e));
 		assert.deepEqual(leaky, []);
 	});

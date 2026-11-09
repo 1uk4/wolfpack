@@ -12,6 +12,7 @@ import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { UpdateNotice } from "@/components/update-notice";
+import { PackHealthBar, PackHealthHost } from "@/components/pack-health";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ChatBar } from "@/components/chat-bar";
@@ -1010,6 +1011,8 @@ export function SessionsSidebar() {
 						KB activity
 					</Link>
 					<WorkNavEntry />
+					{/* Pack health at a glance (work-wolfpack-6imFEq7): works with the hub down; opens the health modal. */}
+					<PackHealthBar onOpen={closeList} />
 				</div>
 
 				{/* Headless: raises OS/browser notifications for newly waiting cards. The rows carry the visible needs-you mark. */}
@@ -1223,6 +1226,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			<ChatBar />
 			{/* The one work reader: `?item=<id>` opens it over whichever page this is. */}
 			<WorkReaderHost />
+			{/* The one pack-health modal and its live region (work-wolfpack-6imFEq7): outlives the phone list layer. */}
+			<PackHealthHost />
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}

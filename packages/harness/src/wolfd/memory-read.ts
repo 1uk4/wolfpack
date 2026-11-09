@@ -61,10 +61,11 @@ export function memoryState(i: MemoryStateInput): { state: MemoryState; reason: 
   return { state: "inert", reason: "memory is inert: the extension is loaded but gated off (set `sandbox` or `memory.live` in wolf.yaml)" };
 }
 
-export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPromote | null, bound: BoundWork | null): Promise<MemoryStatus> {
+export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPromote | null, bound: BoundWork | null, promotingJobId: string | null = null): Promise<MemoryStatus> {
   const { state, reason } = memoryState(i);
+  const promoting = promotingJobId ? { promoting: { jobId: promotingJobId } } : {};
   if (!i.den || (state !== "live" && state !== "sandbox")) {
-    return { state, reason, pool: null, sessionTopics: [], denTopics: [], lastPromote, bound };
+    return { state, reason, pool: null, sessionTopics: [], denTopics: [], lastPromote, ...promoting, bound };
   }
   const stats = await getPoolStats(i.den);
   const c = i.config.consolidation;
@@ -75,6 +76,7 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
     sessionTopics: readTopics(sessionTopicsRoot(i.den)).map((t) => ref(t, t.domain)).sort(byUpdated),
     denTopics: readDenTopics(i.den).map((t) => ref(t)).sort(byUpdated),
     lastPromote,
+    ...promoting,
     bound,
   };
 }
@@ -110,11 +112,19 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
   // A state entry blocks an observation only if it is not an orphan: it must be under a key the observation
   // is grouped under (feature or work) and started after the observation was recorded. An entry older than the
   // observation was left by an earlier grouping and is ignored (consolidation clears it on the next success).
-  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed"; since: number } | undefined => {
+  // An entry is live when some observation grouped under its key was recorded at or before it first went
+  // pending (that one could have caused it): then every observation under the key waits, including later ones.
+  // An entry older than all of its key's observations was left by an earlier grouping: an orphan.
+  const oldestRec = new Map<string, number>();
+  for (const p of pool) {
+    const r = p.recordedAt ? Date.parse(p.recordedAt) : NaN;
+    for (const k of [p.feature, p.work]) if (k) oldestRec.set(k, Math.min(oldestRec.get(k) ?? Infinity, Number.isNaN(r) ? -Infinity : r));
+  }
+  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed" | "forbidden"; since: number; key?: string; assignee?: string } | undefined => {
     const rec = o.recordedAt ? Date.parse(o.recordedAt) : NaN;
     for (const k of [o.feature, o.work]) {
       const t = k ? waiting.firstPendingAt[k] : undefined;
-      if (k && t !== undefined && (Number.isNaN(rec) || t >= rec)) return { cause: waiting.keys[k]!, since: t };
+      if (k && t !== undefined && t >= (oldestRec.get(k) ?? -Infinity)) return { cause: waiting.keys[k]!, since: t, key: k, ...(waiting.assignees[k] ? { assignee: waiting.assignees[k] } : {}) };
     }
     return unavailable && (o.work || o.feature) ? { cause: "work-api-unavailable", since: Number.isNaN(rec) ? now : rec } : undefined;
   };
@@ -134,7 +144,7 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
       ...(o.domain ? { domain: o.domain } : {}),
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
-      ...(w ? { blocked: w.cause } : {}),
+      ...(w ? { blocked: w.cause, ...(w.key ? { blockedKey: w.key } : {}), ...(w.assignee ? { assignee: w.assignee } : {}) } : {}),
       _i: i,
     };
   });

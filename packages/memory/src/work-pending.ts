@@ -7,7 +7,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { dirname, join } from "node:path";
 import { observationHash } from "./observation-id.js";
 
-export type PendingCause = "work-api-unavailable" | "consolidation-failed";
+export type PendingCause = "work-api-unavailable" | "consolidation-failed" | "forbidden";
 
 /** First retry delay for a pending group; doubles per failed attempt up to the cap. */
 export const BACKOFF_BASE_MS = 5 * 60_000;
@@ -212,6 +212,8 @@ export interface PendingEntry {
   tries: number;
   nextAttemptAt: number;
   cause: PendingCause;
+  /** cause forbidden: the wolf the item is assigned to, when known. */
+  assignee?: string;
   /** Work API answered 404 for the item since this time / for this many runs. */
   missingSince?: number;
   missingRuns?: number;
@@ -239,10 +241,11 @@ export class WorkPendingState {
     return this.data[key];
   }
 
-  pending(key: string, cause: PendingCause): void {
+  pending(key: string, cause: PendingCause, assignee?: string): void {
     const e = this.data[key];
     const tries = (e?.tries ?? 0) + 1;
-    this.data[key] = { ...e, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt: this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS) };
+    const { assignee: _old, ...rest } = e ?? ({} as Partial<PendingEntry>);
+    this.data[key] = { ...rest, ...(cause === "forbidden" && assignee ? { assignee } : {}), firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt: this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS) };
     this.dirty = true;
   }
 
@@ -274,16 +277,20 @@ export class WorkPendingState {
 }
 
 /** The pending summary the observations route serves: keys waiting, and the oldest wait. */
-export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; oldestAgeMs?: number } {
+export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; assignees: Record<string, string>; nextAttemptAt: Record<string, number>; oldestAgeMs?: number } {
   const st = new WorkPendingState(root, () => now);
   const keys: Record<string, PendingCause> = {};
   const firstPendingAt: Record<string, number> = {};
+  const assignees: Record<string, string> = {};
+  const nextAttemptAt: Record<string, number> = {};
   let oldest: number | undefined;
   for (const [k, e] of Object.entries((st as unknown as { data: StateFile }).data)) {
     if (e.tries === 0) continue;
     keys[k] = e.cause;
     firstPendingAt[k] = e.firstPendingAt;
+    nextAttemptAt[k] = e.nextAttemptAt;
+    if (e.assignee) assignees[k] = e.assignee;
     oldest = Math.min(oldest ?? e.firstPendingAt, e.firstPendingAt);
   }
-  return { keys, firstPendingAt, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
+  return { keys, firstPendingAt, assignees, nextAttemptAt, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
 }

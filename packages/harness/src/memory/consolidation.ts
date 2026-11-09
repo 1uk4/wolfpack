@@ -134,6 +134,8 @@ export interface ConsolidationConfig {
   minObservations?: number;
   /** Minimum tokens to consolidate (default: 1000) */
   minTokens?: number;
+  /** Try Record groups still inside their retry backoff (a manual Consolidate). Auto-consolidation leaves it off. */
+  ignoreBackoff?: boolean;
   /** Optional progress callback */
   onProgress?: (msg: string) => void;
   /** Called per topic written (session topics or, on the legacy path, den topics). Metadata only. */
@@ -158,6 +160,8 @@ export interface ConsolidationResult {
   recordsWritten?: number;
   /** Tagged observations left in the pool (the Work API or model was unavailable). */
   observationsPending?: number;
+  /** Earliest next attempt (ms epoch) of a Record group that is backing off, when one was skipped or failed. */
+  retryAt?: number;
   /** Ids of the topics created or merged by this run (distinct, in write order). */
   topicIds?: string[];
 }
@@ -416,6 +420,7 @@ async function consolidatePoolInner(
     });
   let recordsWritten = 0;
   let pending = 0;
+  let retryAt: number | undefined;
   const workObs = observations.filter(isTagged);
   if (workObs.length > 0) {
     const store = config.workStore ?? defaultWorkStore();
@@ -423,6 +428,7 @@ async function consolidatePoolInner(
       engine,
       store,
       state: new WorkPendingState(wolfDen),
+      ...(config.ignoreBackoff ? { ignoreBackoff: true } : {}),
       observations: workObs.map((o) => ({ id: poolIds.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
       onProgress,
     });
@@ -438,12 +444,14 @@ async function consolidatePoolInner(
     }
     if (discarded > 0) onProgress?.(`${discarded} work observation(s) discarded (item archived or deleted)`);
     recordsWritten = outcomes.filter((o) => o.status === "written").length;
+    const retries = outcomes.flatMap((o) => (o.status === "pending" && o.retryAt ? [o.retryAt] : []));
+    retryAt = retries.length ? Math.min(...retries) : undefined;
     if (pending > 0) onProgress?.(`${pending} work observation(s) stay pending`);
   }
   const denTokens = denObs.reduce((sum, o) => sum + Math.ceil(o.content.length / 4), 0);
   if (denObs.length === 0 || (workObs.length > 0 && denObs.length < minObservations && denTokens < minTokens)) {
     await settlePool(wolfDen, handled, onProgress);
-    return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending };
+    return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending, ...(retryAt ? { retryAt } : {}) };
   }
 
   if (config.sessionTopics) {
@@ -457,6 +465,7 @@ async function consolidatePoolInner(
       claimsSubmitted: 0,
       recordsWritten,
       observationsPending: pending,
+      ...(retryAt ? { retryAt } : {}),
     };
   }
 
@@ -629,6 +638,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     claimsSubmitted,
     recordsWritten,
     observationsPending: pending,
+    ...(retryAt ? { retryAt } : {}),
   };
 }
 

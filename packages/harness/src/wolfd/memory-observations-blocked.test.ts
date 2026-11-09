@@ -81,6 +81,17 @@ describe("observations route: blocked on the Work API", () => {
     expect(r.pending).toBeUndefined();
   });
 
+  it("blocks observations recorded after the key first went pending, naming the feature and who it is assigned to", async () => {
+    const rows = [0, 1, 2].map((i) => ({ timestamp: "t", recordedAt: new Date(T0 + i * 3_600_000).toISOString(), content: `o${i}`, work: `work-wolfpack-T${i}`, feature: "work-wolfpack-FFFFFFF" }));
+    writeFileSync(join(den, ".memory", "pool", "observations.jsonl"), rows.map((r) => JSON.stringify(r) + "\n").join(""));
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-FFFFFFF": { firstPendingAt: T0 + 1_000, tries: 3, nextAttemptAt: 0, cause: "forbidden", assignee: "hal" } }));
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 5 * 3_600_000);
+    expect(r.observations.map((o) => o.blocked)).toEqual(["forbidden", "forbidden", "forbidden"]);
+    expect(r.observations[0]).toMatchObject({ blockedKey: "work-wolfpack-FFFFFFF", assignee: "hal" });
+    expect(r.pending?.count).toBe(3);
+  });
+
   it("ages the warning by the blocked observations, not the oldest state entry", async () => {
     writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: T0 - 5 * 24 * 3_600_000, tries: 2, nextAttemptAt: 0, cause: "work-api-unavailable" } }));
     vi.stubGlobal("fetch", async () => { throw new Error("down"); });

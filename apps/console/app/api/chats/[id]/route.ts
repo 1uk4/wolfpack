@@ -1,4 +1,4 @@
-import { compactionInFlight, deleteChatSession, getChat, isTurnRunning, stores } from "@/src/server";
+import { deleteChatSession, getChat, isTurnRunning, stores } from "@/src/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
@@ -14,7 +14,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 		...chat,
 		messages: chat.messages,
 		turnInFlight: isTurnRunning(id),
-		compacting: compactionInFlight(id),
+		compacting: false,
 	});
 }
 

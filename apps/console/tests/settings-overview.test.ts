@@ -87,7 +87,7 @@ describe("settings overview API", () => {
 		assert.deepEqual(body.wolves, []);
 		assert.match(body.wolvesError, /fetch failed/);
 		assert.equal(body.hub.ok, true);
-		assert.equal(body.compaction.prompts.length, 3);
+		assert.equal(body.compaction.prompts.length, 1);
 	});
 
 	it("keeps answering 401 with the hub-auth marker when the browser is unpaired", async () => {

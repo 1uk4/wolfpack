@@ -11,7 +11,7 @@ import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from
 import { composeSlotModel } from "../components/model-slot.ts";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, visibleKeyGroups, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
-import type { AgentSettings, AuthKeyStatus, ModelsSettings } from "../src/core";
+import type { AuthKeyStatus, ModelsSettings } from "../src/core";
 import { slotsConfigured } from "../src/core";
 import { setupStage } from "../components/setup-dialog.tsx";
 

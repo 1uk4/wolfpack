@@ -10,35 +10,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	parseAgentSettingsBody,
 	parseModelsSettingsBody,
 	parseAppearanceSettingsBody,
-	parseCompactionSettingsBody,
 	SETTINGS_SECTIONS,
 } from "../src/server/settings-body.ts";
-
-describe("parseAgentSettingsBody", () => {
-	it("prompts: a boolean map; non-boolean values are 400s", () => {
-		const r = parseAgentSettingsBody({ prompts: { "system-prompt.md": true } });
-		assert.ok(r.ok);
-		assert.deepEqual(r.settings.prompts, { "system-prompt.md": true });
-		assert.equal(parseAgentSettingsBody({ prompts: { "x.md": 1 } }).ok, false);
-		// switch validity (segment membership, file presence) is the ROUTE's
-		// cross-validation — the parser only sees shapes.
-	});
-
-	it("retired keys (models/tools/search/graphTools) are dropped, not errors", () => {
-		const r = parseAgentSettingsBody({ models: { researcher: {} }, tools: { research: false }, search: { engine: "tavily" }, graphTools: {} });
-		assert.ok(r.ok);
-		assert.deepEqual(r.settings, {});
-	});
-
-	it("an empty {} agent section parses to {} (replace-whole clear)", () => {
-		const r = parseAgentSettingsBody({});
-		assert.ok(r.ok);
-		assert.deepEqual(r.settings, {});
-	});
-});
 
 describe("parseAppearanceSettingsBody", () => {
 	it("parses every field; hex-or-null colors; clamps happen at sanitize, rejects here", () => {
@@ -93,40 +68,11 @@ describe("parseAppearanceSettingsBody", () => {
 	});
 });
 
-describe("parseCompactionSettingsBody (owner round 14)", () => {
-	it("parses a threshold; absent = the empty section (factory default at resolution)", () => {
-		const r = parseCompactionSettingsBody({ thresholdTokens: 120000 });
-		assert.ok(r.ok);
-		assert.deepEqual(r.settings, { thresholdTokens: 120000 });
-		const none = parseCompactionSettingsBody({});
-		assert.ok(none.ok);
-		assert.deepEqual(none.settings, {});
-	});
-	it("floors to integers", () => {
-		const r = parseCompactionSettingsBody({ thresholdTokens: 120000.9 });
-		assert.ok(r.ok);
-		assert.equal(r.settings.thresholdTokens, 120000);
-	});
-	it("rejects below the 32k floor with the anti-churn rationale", () => {
-		const r = parseCompactionSettingsBody({ thresholdTokens: 20_000 });
-		assert.ok(!r.ok);
-		assert.match(r.error ?? "", /at least 32000/);
-		assert.match(r.error ?? "", /churn/);
-	});
-	it("rejects non-numbers", () => {
-		const r = parseCompactionSettingsBody({ thresholdTokens: "big" });
-		assert.ok(!r.ok);
-		assert.match(r.error ?? "", /must be a number/);
-	});
-});
-
 describe("SETTINGS_SECTIONS (the route's section map)", () => {
-	it("maps exactly the five record sections", () => {
-		// compaction joined (owner round 14): its own section PUT — the
-		// threshold is engine behavior, not an agent-section key.
+	it("maps exactly the three record sections", () => {
 		assert.deepEqual(
 			Object.keys(SETTINGS_SECTIONS),
-			["chat", "agent", "appearance", "compaction", "models"],
+			["chat", "appearance", "models"],
 		);
 	});
 });

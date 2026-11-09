@@ -32,7 +32,6 @@ describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 
 	it("has NO factory model pin — chat defaults and role overrides start absent", () => {
 		assert.equal("chat" in FACTORY_SETTINGS, false);
-		assert.equal("agent" in FACTORY_SETTINGS, false);
 	});
 });
 
@@ -49,9 +48,6 @@ describe("sanitizeUserSettings", () => {
 	it("round-trips a fully valid record field-for-field", () => {
 		const record = {
 			version: 1,
-			agent: {
-				prompts: { "system-prompt.md": true, "assistant/20-style.md": false },
-			},
 			models: {
 				strong: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "low" },
 				cheap: { thinkingLevel: "medium" },
@@ -64,7 +60,6 @@ describe("sanitizeUserSettings", () => {
 				sessionNameSerif: false,
 				mdRendering: { headingWeight: 700, boldColor: "#ff8800", italicColor: null },
 			},
-			compaction: { thresholdTokens: 64_000 },
 		};
 		assert.deepEqual(sanitizeUserSettings(record), record);
 	});
@@ -84,11 +79,9 @@ describe("sanitizeUserSettings", () => {
 
 	it("wrong-typed fields DROP (resolve to factory), never crash", () => {
 		const out = sanitizeUserSettings({
-			agent: { prompts: { "system-prompt.md": 1 } },
 			appearance: { mode: "sepia", sessionNameSerif: "true" },
 		});
 		assert.ok(out);
-		assert.deepEqual(out.agent, {});
 		assert.deepEqual(out.appearance, {});
 	});
 
@@ -97,6 +90,16 @@ describe("sanitizeUserSettings", () => {
 		assert.ok(out);
 		assert.equal("graph" in out, false);
 		assert.equal("chat" in out, false);
+	});
+
+	it("a settings.json that still holds the retired agent and compaction sections loads; those sections are ignored", () => {
+		const out = sanitizeUserSettings({
+			version: 1,
+			agent: { prompts: { "system-prompt.md": true } },
+			compaction: { thresholdTokens: 64_000 },
+			appearance: { mode: "light" },
+		});
+		assert.deepEqual(out, { version: 1, appearance: { mode: "light" } });
 	});
 
 	it("out-of-range numbers CLAMP (proseFontSize, headingWeight)", () => {
@@ -128,11 +131,5 @@ describe("sanitizeUserSettings", () => {
 			assert.ok(out);
 			assert.equal(out.appearance?.fontFamily, null, JSON.stringify(bad));
 		}
-	});
-
-	it("partial maps: booleans survive, non-boolean entries drop individually", () => {
-		const out = sanitizeUserSettings({ agent: { prompts: { "system-prompt.md": true, "x.md": "y" } } });
-		assert.ok(out);
-		assert.deepEqual(out.agent?.prompts, { "system-prompt.md": true });
 	});
 });

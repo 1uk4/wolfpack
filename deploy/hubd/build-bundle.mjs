@@ -2,7 +2,7 @@
 /**
  * Build a single-file hubd bundle for sfo-01 (no node_modules or npm on the VPS, same idea as the harness bundle).
  *   node deploy/hubd/build-bundle.mjs [out-dir]     (run after `npx tsc --build`; default out-dir: deploy/hubd/out)
- * Writes <out>/hubd.mjs, <out>/RUNBOOK.md, <out>/VERSION (git sha) and prints the sha256 of hubd.mjs.
+ * Writes <out>/hubd.mjs, <out>/RUNBOOK.md, <out>/VERSION (the release version from the hubd/vX.Y.Z tag, scripts/release-version.mjs; <package version>-dev+<sha> when untagged) and prints the sha256 of hubd.mjs.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -10,6 +10,7 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+import { resolveVersion } from "../../scripts/release-version.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -29,5 +30,6 @@ await esbuild.build({
 });
 copyFileSync(path.join(here, "RUNBOOK.md"), path.join(out, "RUNBOOK.md"));
 const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-writeFileSync(path.join(out, "VERSION"), `${sha}\n`);
-console.log(`hubd bundle ${sha} sha256 ${createHash("sha256").update(readFileSync(path.join(out, "hubd.mjs"))).digest("hex")}`);
+const version = resolveVersion("hubd", root) ?? `${JSON.parse(readFileSync(path.join(root, "packages/hubd/package.json"), "utf8")).version}-dev+${sha}`;
+writeFileSync(path.join(out, "VERSION"), `${version}\n`);
+console.log(`hubd bundle ${version} sha256 ${createHash("sha256").update(readFileSync(path.join(out, "hubd.mjs"))).digest("hex")}`);

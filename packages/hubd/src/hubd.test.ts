@@ -82,7 +82,7 @@ describe("hubd /healthz", () => {
   it("answers without a token with service, version, uptime and event-loop lag", async () => {
     const res = await fetch(hub.url + "/healthz");
     expect(res.status).toBe(200);
-    expect(healthShapeProblems(await res.json(), "hubd", (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version)).toEqual([]);
+    expect(healthShapeProblems(await res.json(), "hubd", `${(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version}-dev`)).toEqual([]); // unstamped checkout: <package.json>-dev
   });
 
   it("a frozen event loop shows as lag on every probe in the window, graded degraded", async () => {

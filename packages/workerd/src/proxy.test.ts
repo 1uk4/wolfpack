@@ -96,7 +96,7 @@ describe("workerd proxy", () => {
   it("/healthz lists children with restart counts", async () => {
     const h = await (await fetch(`${base}/healthz`)).json();
     expect(h.wolves.map((w: { name: string; restarts: number }) => [w.name, w.restarts])).toEqual([["alpha", 0], ["beta", 0], ["gamma", 0]]);
-    expect(healthShapeProblems(h, "workerd", (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version)).toEqual([]); // pack-health fields ride along, old fields kept
+    expect(healthShapeProblems(h, "workerd", `${(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version}-dev`)).toEqual([]); // pack-health fields ride along, old fields kept
     for (const w of h.wolves) expect(Object.keys(w).filter((k) => k === "url" || k === "logFile")).toEqual([]); // unauthenticated: no socket or log paths
   });
 

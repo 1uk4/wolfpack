@@ -1,7 +1,7 @@
 import { request as httpRequest, createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { ERROR_HTTP_STATUS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, matchRoute, type ErrorCode, type WolfSummary } from "@wolfpack/protocol";
-import { baseHealth, createLagMonitor, packageVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
+import { baseHealth, createLagMonitor, stampedVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import type { WolfRegistry } from "./registry.js";
 import { getJson, socketOf } from "./socket.js";
 
@@ -13,7 +13,8 @@ export interface WorkerdServerOptions {
   probeTimeoutMs?: number;
 }
 
-const VERSION = packageVersion(new URL("../package.json", import.meta.url));
+/** Release version: the VERSION beside the bundle (workerd.mjs) or the package root (`pnpm runtime:update` stamp), else <package.json>-dev. */
+const VERSION = stampedVersion([new URL("./VERSION", import.meta.url), new URL("../VERSION", import.meta.url)], new URL("../package.json", import.meta.url));
 
 /**
  * The /healthz body is unauthenticated, so it carries names, states and counts only: per-wolf socket `url` and `logFile` paths

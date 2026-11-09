@@ -59,7 +59,7 @@ import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
-import { baseHealth, createLagMonitor, packageVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
+import { baseHealth, createLagMonitor, stampedVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import { HttpError } from "./http-error.js";
 import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
 import type { PromptBlock } from "./context.js";
@@ -138,8 +138,8 @@ export interface ThreadConversations {
   setTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
 }
 
-/** The @wolfpack/harness version (src/wolfd and dist/wolfd both sit two levels below package.json). */
-const WOLFD_VERSION = packageVersion(new URL("../../package.json", import.meta.url));
+/** Release version: packages/harness/VERSION (`pnpm runtime:update` stamp), else the release tarball root VERSION (src/wolfd and dist/wolfd sit four levels below it), else <package.json>-dev. */
+const WOLFD_VERSION = stampedVersion([new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)], new URL("../../package.json", import.meta.url));
 const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;

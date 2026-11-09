@@ -65,6 +65,24 @@ export function createLagMonitor(opts: LagMonitorOptions = {}): LagMonitor {
   };
 }
 
+/**
+ * The release version a service reports: the first non-empty VERSION stamp in `stamps` (written at build time by
+ * scripts/release-version.mjs from the `<component>/vX.Y.Z` tag: "X.Y.Z" or "X.Y.Z+<sha>"), else `<package.json version>-dev`
+ * (tests, unbuilt checkouts: a -dev version never prompts an update), else undefined. Read once at startup.
+ */
+export function stampedVersion(stamps: URL[], pkg: URL): string | undefined {
+  for (const s of stamps) {
+    try {
+      const v = readFileSync(s, "utf8").trim();
+      if (v) return v;
+    } catch {
+      /* not stamped here */
+    }
+  }
+  const v = packageVersion(pkg);
+  return v ? `${v}-dev` : undefined;
+}
+
 /** `version` from the package.json at `url` (e.g. `new URL("../package.json", import.meta.url)`); undefined when unreadable. */
 export function packageVersion(url: URL): string | undefined {
   try {

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Build ONE component's linux-x64 release asset, version-stamped. Runs at release time only (release.yml) or by hand.
 #   scripts/release-build.sh <component> <version X.Y.Z> <out-dir>
-# Writes <out>/<asset> and <out>/<asset>.sha256 (sha256sum format). VERSION inside the artifact: "<version>+<short sha>".
+# Writes <out>/<asset> and <out>/<asset>.sha256 (sha256sum format). VERSION inside the artifact: scripts/release-version.mjs --release,
+# so "<version>" when HEAD is the <component>/v<version> tag (release.yml) and "<version>+<short sha>" for a by-hand build off the tag.
 # Asset names come from scripts/release-components.json. 
 set -euo pipefail
 COMP=${1:?component}; VER=${2:?version}; OUT=${3:?out dir}
 cd "$(dirname "$0")/.."
 [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be X.Y.Z, got $VER" >&2; exit 2; }
 ASSET=$(node -e 'const c=require("./scripts/release-components.json")[process.argv[1]];if(!c){console.error("unknown component "+process.argv[1]);process.exit(2)};console.log(c.asset.replace("{version}",process.argv[2]))' "$COMP" "$VER")
-SHA=$(git rev-parse --short HEAD)
-STAMP="$VER+$SHA"
+STAMP=$(node scripts/release-version.mjs "$COMP" --release "$VER")
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 case "$COMP" in
   wolfd)

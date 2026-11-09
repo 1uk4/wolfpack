@@ -15,6 +15,9 @@ knowledge/
 node_modules/
 dist/
 *.tsbuildinfo
+# Release-version stamps written by `pnpm runtime:update` (scripts/release-version.mjs --stamp-runtime)
+/packages/*/VERSION
+/apps/console/VERSION
 
 # Syncthing metadata
 **/.stfolder

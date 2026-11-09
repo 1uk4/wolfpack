@@ -29,6 +29,7 @@ Agents never merge a PR and never push `stable`. They open a PR that explains it
 - The build is `pnpm install --frozen-lockfile --prefer-offline` then `node scripts/turbo.mjs run build` in each worktree that moved (a checkout without `pnpm-lock.yaml`, or without pnpm, keeps `npx turbo run build`): the same commands as `runtime:update`. (The root `pnpm run build` is plain `tsc --build`, which is not what the runtime uses.)
 - It never merges a PR, pushes or rebases.
 - `pnpm runtime:update` then follows `origin/stable` for the live stack (fetch, fast-forward, build, refresh extensions); it no longer merges or pushes. **It needs to reach `origin`**: offline, only `pnpm runtime:update --dry-run` works (it does not fetch). `post-merge` also fetches, so offline only `--dry-run` works there too.
+- `runtime:update` stamps each component's `VERSION` (`scripts/release-version.mjs --stamp-runtime`) from the newest `<component>/vX.Y.Z` tag reachable from the checkout. A working branch (e.g. `wolf/1uk4`) only sees tags merged back into it, so until stable is merged back the console sidebar shows "update available". That is correct: the Mac really is behind stable. Merge stable back and re-run `runtime:update` to clear it.
 
 ## The `## Release notes` format
 Put this in the feature document. `prepare` reads it to fill the Decide header; the notes also stay in the document.

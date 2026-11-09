@@ -10,7 +10,7 @@ import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
-import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
+import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/needs-you";
 import { UpdateNotice } from "@/components/update-notice";
 import { PackHealthBar, PackHealthHost } from "@/components/pack-health";
 import { WolfpackMark } from "@/components/wolfpack-mark";
@@ -79,7 +79,7 @@ type DesktopBridgeApi = {
 	onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
 	installUpdate?: () => void;
 	/** Needs-you notification (ticket 4): main shows it only while the window is unfocused, once per `key`. */
-	notify?: (n: { key: string; title: string; body: string; href: string }) => void;
+	notify?: (n: { key: string; title: string; body: string; href: string; always?: boolean }) => void;
 	/** The OS notification was clicked: main focused the window; open this href. Returns unsubscribe. */
 	onNavigate?: (cb: (href: string) => void) => () => void;
 };
@@ -1015,6 +1015,7 @@ export function SessionsSidebar() {
 
 				{/* Headless: raises OS/browser notifications for newly waiting cards. The rows carry the visible needs-you mark. */}
 				<NeedsYouNotifier />
+				<ReplyNotifier />
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>

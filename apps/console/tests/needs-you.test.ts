@@ -359,7 +359,7 @@ describe("electron notify guards", () => {
 	const { safeNotifyHref, isMainFrameSender, createNeedsYouNotifier } = createRequire(import.meta.url)("../../desktop/electron/notify.cjs") as {
 		safeNotifyHref(h: unknown, o: string): string | null;
 		isMainFrameSender(e: unknown, w: unknown): boolean;
-		createNeedsYouNotifier(o: { Notification: unknown; appOrigin: string; log?: (l: string) => void }): (e: unknown, w: unknown, n: unknown) => boolean;
+		createNeedsYouNotifier(o: { Notification: unknown; appOrigin: string; log?: (l: string) => void; now?: () => number }): (e: unknown, w: unknown, n: unknown) => boolean;
 	};
 	const ORIGIN = "http://127.0.0.1:3000";
 
@@ -421,6 +421,31 @@ describe("electron notify guards", () => {
 		assert.deepEqual(f.sent, ["/wolf/1uk4/thread/home"]);
 		const focused = fakes(true);
 		assert.equal(createNeedsYouNotifier({ Notification: focused.Notification, appOrigin: ORIGIN })({ senderFrame: focused.mainFrame }, focused.win, note), false);
+		// A reply notification (always) is decided by the renderer per thread, so a focused window still shows it.
+		assert.equal(createNeedsYouNotifier({ Notification: focused.Notification, appOrigin: ORIGIN })({ senderFrame: focused.mainFrame }, focused.win, { ...note, key: "r1", always: true }), true);
+	});
+
+	it("`always` skips only the focus gate: bad href, subframe sender and duplicate key are still rejected", () => {
+		const f = fakes(true);
+		const notify = createNeedsYouNotifier({ Notification: f.Notification, appOrigin: ORIGIN });
+		const reply = { ...note, key: "r1", always: true };
+		assert.equal(notify({ senderFrame: f.mainFrame }, f.win, { ...reply, href: "//evil.com" }), false, "bad href");
+		assert.equal(notify({ senderFrame: {} }, f.win, reply), false, "subframe");
+		assert.equal(f.shown.length, 0);
+		assert.equal(notify({ senderFrame: f.mainFrame }, f.win, reply), true);
+		assert.equal(notify({ senderFrame: f.mainFrame }, f.win, reply), false, "duplicate key");
+		assert.equal(f.shown.length, 1);
+	});
+
+	it("throttles `always` notifications: the 7th within a minute is dropped, and the next minute starts fresh", () => {
+		const f = fakes(true);
+		let now = 1_000_000;
+		const notify = createNeedsYouNotifier({ Notification: f.Notification, appOrigin: ORIGIN, now: () => now });
+		const ev = { senderFrame: f.mainFrame };
+		const results = [1, 2, 3, 4, 5, 6, 7].map((i) => notify(ev, f.win, { ...note, key: `r${i}`, always: true }));
+		assert.deepEqual(results, [true, true, true, true, true, true, false]);
+		now += 61_000;
+		assert.equal(notify(ev, f.win, { ...note, key: "r8", always: true }), true);
 	});
 
 	it("logs every decision: received, rejected with the reason, shown, clicked", () => {

@@ -76,6 +76,7 @@ function failure(err: unknown): Response {
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
 	// A refusal the user can act on (unsupported type, too large, unknown attachment).
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "conflict") return json({ error: err.message, code: "conflict" }, 409);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "thread_closed") return json({ error: err.message, code: "thread_closed" }, 409);
 	return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
 }
@@ -242,6 +243,50 @@ export function createThreadApi(source: ClientSource) {
 				const client = source();
 				if (!client.answerCard) return json({ error: "this client has no cards" }, 501);
 				return json(await client.answerCard(await resolve(client, ref), callId, body.answers as CardAnswers));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Submit one page of a paged `ask` card: `POST /v1/threads/:id/cards/:callId/pages/:page/answer`. 409 `conflict` = the page moved on. */
+		async answerCardPage(ref: ThreadRef, callId: string, page: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { answers?: unknown } | null;
+				const n = Number(page);
+				if (!Number.isInteger(n) || n < 0) return json({ error: "page must be a non-negative integer" }, 400);
+				if (!body || typeof body.answers !== "object" || body.answers === null || Array.isArray(body.answers)) return json({ error: "answers is required" }, 400);
+				const client = source();
+				if (!client.answerCardPage) return json({ error: "this client has no paged cards" }, 501);
+				return json(await client.answerCardPage(await resolve(client, ref), callId, n, body.answers as CardAnswers));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** "Answering Qn": hold typed text as question `qid`'s answer (not a chat message): `POST .../questions/:qid/text`. */
+		async bindCardText(ref: ThreadRef, callId: string, qid: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { text?: unknown } | null;
+				if (!body || typeof body.text !== "string" || body.text.trim() === "") return json({ error: "text is required" }, 400);
+				const client = source();
+				if (!client.bindCardText) return json({ error: "this client has no paged cards" }, 501);
+				await client.bindCardText(await resolve(client, ref), callId, qid, body.text);
+				return json({ accepted: true });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** A diagram the wolf rendered, relayed as an image. Only a published render's file name is accepted (never a path or URL). */
+		async diagram(ref: ThreadRef, diagramId: string): Promise<Response> {
+			try {
+				if (!/^viz-[a-z0-9]+(?:-[a-z0-9]+)*-\d+\.png$/.test(diagramId)) return json({ error: "unknown diagram" }, 404);
+				const client = source();
+				if (!client.getDiagram) return json({ error: "unknown diagram" }, 404);
+				const { bytes } = await client.getDiagram(await resolve(client, ref), diagramId);
+				return new Response(bytes as BodyInit, {
+					headers: { "Content-Type": "image/png", "Content-Length": String(bytes.byteLength), "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "private, max-age=31536000, immutable" },
+				});
 			} catch (err) {
 				return failure(err);
 			}

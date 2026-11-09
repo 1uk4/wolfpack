@@ -70,9 +70,12 @@ export function Composer({
 	enterSends,
 	controls,
 	sendLabel,
+	attachDisabled,
 }: {
 	/** Replaces the send button's icon with this text while there is something to send (the bar's "Reply instead" with a card open). An empty composer keeps Send / Stop. */
 	sendLabel?: string;
+	/** Why attaching is off right now (the attach button is shown disabled with this as its title). */
+	attachDisabled?: string;
 	busy: boolean;
 	value: string;
 	onChange: (v: string) => void;
@@ -136,8 +139,10 @@ export function Composer({
 						<button
 							type="button"
 							aria-label="Attach images"
+							disabled={attachDisabled !== undefined}
+							title={attachDisabled}
 							onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.click()}
-							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground"
+							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
 						>
 							<PaperclipIcon className="size-4" />
 						</button>

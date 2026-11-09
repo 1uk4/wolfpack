@@ -218,6 +218,63 @@ describe("ChatBar cards", () => {
 		await until(() => /Step 2 of 2/.test(slot().textContent!), "step 2");
 	});
 
+	it("a paged ask opens the sheet; the answering chip routes typed text to the question, plain typing to a normal message", async () => {
+		const paged = {
+			callId: "p1",
+			threadId: "w/a",
+			raisedAt: "2026-11-09T00:00:00+00:00",
+			card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }, { id: "q2", kind: "free-text", label: "How", optional: true }], steps: [{ fields: ["q1", "q2"] }] },
+		};
+		raise("a", paged);
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.equal(q('[data-testid="bar-card"]'), null); // not the classic card path
+		assert.equal(q('[data-testid="ask-replace-hint"]'), null);
+		await type("typed");
+		assert.equal(q('[data-testid="ask-replace-hint"]')!.textContent, "Sending a message replaces the open questions.");
+		await type("");
+		await click(qa('[data-testid="ask-answer-by-typing"]')[1]!);
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: How/);
+		await type("because");
+		await submit();
+		await until(() => calls.some((c) => c.url.endsWith("/cards/p1/questions/q2/text")), "the bind POST");
+		assert.deepEqual(calls.find((c) => c.url.endsWith("/text"))!.body, { text: "because" });
+		assert.equal(calls.some((c) => c.url.endsWith("/submit")), false);
+		assert.equal(q('[data-testid="answering-chip"]'), null);
+	});
+
+	it("the answering chip clears when its question leaves the page; a text-only send cannot go out empty; other cards still show beside the sheet", async () => {
+		const fields = [{ id: "q1", kind: "free-text", label: "Why", optional: true }, { id: "q2", kind: "free-text", label: "How", optional: true }];
+		const paged = (steps: object[], pageIndex = 0) => ({ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", pageIndex, card: { tool: "ask", paged: true, fields, steps } });
+		raise("a", paged([{ fields: ["q1", "q2"] }, { fields: [] }]), q1("c1"));
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.match(slot().textContent!, /Which color\?/); // the classic card shows beside the sheet
+		await click(qa('[data-testid="ask-answer-by-typing"]')[1]!);
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: How/);
+		assert.equal(sendBtn().hasAttribute("disabled") || sendBtn().getAttribute("aria-disabled") === "true", true); // nothing typed: no send
+		raise("a", paged([{ fields: ["q1"] }, { fields: ["q2"] }]), q1("c1"));
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", status: "idle" } });
+		await until(() => q('[data-testid="answering-chip"]') === null, "the chip to clear");
+	});
+
+	it("reply mode: attaching is visibly off, Esc and × leave it and the replace hint returns", async () => {
+		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(q('[data-testid="ask-answer-by-typing"]'));
+		const attach = q('button[aria-label="Attach images"]')!;
+		assert.equal(attach.title, "Images can't be attached to an answer yet");
+		assert.equal(props(attach, "disabled"), true);
+		await act(async () => void props(ta(), "onKeyDown")({ key: "Escape", preventDefault() {}, stopPropagation() {} }));
+		assert.equal(q('[data-testid="answering-chip"]'), null);
+		assert.equal(q('button[aria-label="Attach images"]')!.title, "");
+		await click(qa('[data-testid="ask-answer-by-typing"]')[0]!);
+		await click(q('[data-testid="answering-chip-clear"]'));
+		await type("typed");
+		assert.equal(q('[data-testid="ask-replace-hint"]')!.textContent, "Sending a message replaces the open questions.");
+	});
+
 	it("keeps the input usable with a card open; Reply instead supersedes the card and shows it superseded", async () => {
 		raise("a", q1("c1"));
 		await mount();

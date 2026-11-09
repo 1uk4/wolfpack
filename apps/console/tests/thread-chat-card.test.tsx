@@ -643,3 +643,119 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.equal(q('[data-testid="card-confirm"]')!.hasAttribute("disabled"), true);
 	});
 });
+
+const PAGED: Card = {
+	tool: "ask",
+	paged: true,
+	fields: [{ id: "q1", kind: "single", label: "Pick one", options: [{ label: "Alpha", value: "a" }, { label: "Beta", value: "b" }] }],
+	steps: [{ title: "First", fields: ["q1"] }],
+} as Card;
+
+describe("ThreadChat on the thread's own page shows a pending paged ask as a sheet", () => {
+	it("renders the questionnaire sheet above the composer, which stays", async () => {
+		await mount(new CardClient(PAGED));
+		await settle();
+		assert.equal(q('[data-testid="ask-sheet"]')?.getAttribute("data-page"), "0");
+		assert.equal(document.querySelectorAll('[data-testid="ask-option"]').length, 2);
+		assert.equal(q('[data-testid="thread-composer-card"]')?.tagName, "DIV");
+	});
+
+	const FREEQ = { ...PAGED, fields: [{ id: "q1", kind: "free-text", label: "Why [it](https://x.example)" }] } as Card;
+	const textPosts: { url: string; body: { text: string } }[] = [];
+	let textStatus = 200;
+	const submitPosts: string[] = [];
+	const withTextRoute = (client: CardClient) => {
+		const base = routeFetch(client);
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (/\/questions\/[^/]+\/text$/.test(String(input))) {
+				textPosts.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+				return textStatus === 200 ? Response.json({ ok: true }) : Response.json({ error: "nope" }, { status: textStatus });
+			}
+			if (/\/submit$/.test(String(input)) && init?.method === "POST") {
+				submitPosts.push((JSON.parse(String(init.body)) as { input: string }).input);
+				return Response.json({ messageId: "1", disposition: "started" });
+			}
+			return base(input, init);
+		}) as typeof fetch;
+	};
+	const propsOf = (el: Element, n: string) => (el as any)[Object.keys(el).find((k) => k.startsWith("__reactProps$"))!][n];
+	const ta = () => document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement;
+	const typeText = (v: string) =>
+		act(async () => {
+			ta().value = v;
+			propsOf(ta(), "onChange")({ target: ta(), currentTarget: ta() });
+		});
+	const enter = () => act(async () => void propsOf(ta(), "onKeyDown")({ key: "Enter", shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, stopPropagation() {}, nativeEvent: {} }));
+
+	it("reply mode: Send binds the text to the question without a chat message; x leaves it and a plain send goes out as a message", async () => {
+		textPosts.length = 0;
+		submitPosts.length = 0;
+		const client = new CardClient(FREEQ);
+		await mount(client);
+		withTextRoute(client);
+		await settle();
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why it/);
+		await typeText("because");
+		await enter();
+		await settle();
+		assert.equal(textPosts.length, 1);
+		assert.match(textPosts[0]!.url, /\/cards\/call-1\/questions\/q1\/text$/);
+		assert.equal(textPosts[0]!.body.text, "because");
+		assert.deepEqual(submitPosts, []);
+		assert.equal(q('[data-testid="answering-chip"]'), null);
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		await click(q('[data-testid="answering-chip-clear"]')!);
+		assert.equal(q('[data-testid="answering-chip"]'), null);
+		await typeText("plain message");
+		await enter();
+		await settle(400);
+		assert.deepEqual(submitPosts, ["plain message"]);
+		assert.equal(textPosts.length, 1);
+	});
+
+	it("reply mode: a failed bind puts the text back in the page composer", async () => {
+		textPosts.length = 0;
+		textStatus = 400;
+		try {
+			const client = new CardClient(FREEQ);
+			await mount(client);
+			withTextRoute(client);
+			await settle();
+			await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+			await typeText("keep me");
+			await enter();
+			await settle();
+			assert.equal(textPosts.length, 1);
+			assert.equal(ta().value, "keep me");
+		} finally {
+			textStatus = 200;
+		}
+	});
+
+	it("phone: Esc and the close button put the questions away to a strip that reopens them; the composer stays", async () => {
+		const mm = (window as any).matchMedia;
+		(window as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		try {
+			await mount(new CardClient(PAGED));
+			await settle();
+			const layer = q('[data-testid="ask-sheet-host"]')!;
+			assert.equal(layer.getAttribute("data-layout"), "fullscreen");
+			assert.equal(layer.getAttribute("role"), "dialog");
+			assert.equal(layer.getAttribute("aria-modal"), "false");
+			assert.equal(layer.getAttribute("aria-label"), "Questions");
+			assert.equal(ta().tagName, "TEXTAREA");
+			await act(async () => void propsOf(layer, "onKeyDown")({ key: "Escape", defaultPrevented: false, stopPropagation() {} }));
+			assert.equal(q('[data-testid="ask-sheet-host"]'), null);
+			assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent, "Questions waiting");
+			await click(q('[data-testid="ask-sheet-reopen"]')!);
+			assert.equal(q('[data-testid="ask-sheet-host"]')?.getAttribute("data-layout"), "fullscreen");
+			await click(q('[data-testid="ask-sheet-close"]')!);
+			assert.equal(q('[data-testid="ask-sheet-host"]'), null);
+			assert.equal(q('[data-testid="ask-sheet-reopen"]')?.textContent, "Questions waiting");
+			assert.equal(ta().tagName, "TEXTAREA");
+		} finally {
+			(window as any).matchMedia = mm;
+		}
+	});
+});

@@ -20,6 +20,33 @@ describe("thread API: answerCard", () => {
 	});
 });
 
+describe("thread API: paged ask routes", () => {
+	const paged = (over: object) => createThreadApi(() => Object.assign(new MockConsoleClient({ delayMs: 0 }), over));
+
+	it("answerCardPage rejects a bad page number and a missing answers object", async () => {
+		const api = paged({ answerCardPage: async () => ({ ok: true }) });
+		assert.equal((await api.answerCardPage(ref, "c1", "-1", post({ answers: {} }))).status, 400);
+		assert.equal((await api.answerCardPage(ref, "c1", "x", post({ answers: {} }))).status, 400);
+		assert.equal((await api.answerCardPage(ref, "c1", "0", post({ answers: [] }))).status, 400);
+		assert.equal((await api.answerCardPage(ref, "c1", "0", post({}))).status, 400);
+		assert.equal((await api.answerCardPage(ref, "c1", "0", post({ answers: {} }))).status, 200);
+	});
+
+	it("a conflict from the wolf is a 409 with code conflict", async () => {
+		const api = paged({ answerCardPage: async () => { throw Object.assign(new Error("page moved"), { name: "ProtocolError", code: "conflict" }); } });
+		const res = await api.answerCardPage(ref, "c1", "0", post({ answers: {} }));
+		assert.equal(res.status, 409);
+		assert.equal(((await res.json()) as { code: string }).code, "conflict");
+	});
+
+	it("bindCardText rejects blank or non-string text and accepts real text", async () => {
+		const api = paged({ bindCardText: async () => undefined });
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "  " }))).status, 400);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: 3 }))).status, 400);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "because" }))).status, 200);
+	});
+});
+
 describe("thread API: skipCard", () => {
 	const api = createThreadApi(() => new MockConsoleClient({ delayMs: 0 }));
 

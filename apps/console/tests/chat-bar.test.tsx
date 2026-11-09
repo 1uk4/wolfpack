@@ -127,11 +127,17 @@ describe("ChatBar", () => {
 
 	it("with the extras off the bar fetches no cards, reply peek or needs-you list", async () => {
 		assert.equal(BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.badge || BAR_EXTRAS.switcher, false);
-		await mount("/kb", A);
-		assert.ok(q('[data-testid="chat-bar"]'));
-		assert.deepEqual(gets.filter((u) => /\/threads\/a(\?|$)|needs-you/.test(u)), []);
-		assert.equal(q('[data-testid="chat-bar-card-surface"]')?.children.length ?? 0, 0);
-		assert.equal(q('[data-testid="chat-bar-needs-you"]'), null);
+		// The paged-ask sheet is the one extra that is on: it reads the thread's pending cards, so it is off here to check the rest.
+		BAR_EXTRAS.ask = false;
+		try {
+			await mount("/kb", A);
+			assert.ok(q('[data-testid="chat-bar"]'));
+			assert.deepEqual(gets.filter((u) => /\/threads\/a(\?|$)|needs-you/.test(u)), []);
+			assert.equal(q('[data-testid="chat-bar-card-surface"]')?.children.length ?? 0, 0);
+			assert.equal(q('[data-testid="chat-bar-needs-you"]'), null);
+		} finally {
+			BAR_EXTRAS.ask = true;
+		}
 	});
 
 	it("A thread attached while its page is open shows the bar once the owner leaves", async () => {

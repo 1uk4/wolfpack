@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { useAttachedThread } from "@/components/attached-thread";
-import { threadBase } from "@/components/thread-transport";
+import { cardTextUrl, threadBase } from "@/components/thread-transport";
 import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
 import { canSendWith, chipFor, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, uploadFile, UploadError, type AttachmentLimit, type PendingAttachment } from "@/components/attachments";
 import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
@@ -17,15 +17,15 @@ import { useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
 
-/** The text to put back after a failed send: the sent text, then whatever was typed meanwhile (never dropped). */
-export const mergeRestored = (sent: string, current: string): string => (current.trim() === "" ? sent : sent.trim() === "" ? current : `${sent}\n${current}`);
+import { ReplyingChip } from "@/components/replying-chip";
+import { mergeRestored } from "@/components/composer-restore";
 
 /**
  * `dictation` is owned by ChatBar (it must outlive this component: the composer unmounts when the bar is minimized or the
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ target, title, cardOpen = false, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, answering, onClearAnswering, onBound, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; answering?: { callId: string; qid: string; label: string } | null; onClearAnswering?: () => void; onBound?: () => void; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -88,6 +88,29 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 	const send = useCallback(async () => {
 		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
+		if (answering && t === "") return; // an attachment alone never answers a question
+		if (answering) {
+			// "Answering Qn": the text is that question's answer (a draft), not a chat message; nothing is superseded.
+			applyText("");
+			schedule("");
+			setError(null);
+			try {
+				const res = await fetch(cardTextUrl(target.wolf, target.slug, answering.callId, answering.qid), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: t }) });
+				if (res.ok) {
+					onClearAnswering?.();
+					onBound?.();
+					return;
+				}
+				const b = (await res.json().catch(() => null)) as { error?: string } | null;
+				setError(b?.error ?? "Could not save the answer.");
+			} catch {
+				setError("Could not save the answer.");
+			}
+			const merged = mergeRestored(t, textRef.current);
+			applyText(merged);
+			schedule(merged);
+			return;
+		}
 		const refs = readyInfos(attachments);
 		applyText("");
 		schedule("");
@@ -105,7 +128,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 			schedule(merged);
 			setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
 		}
-	}, [attachments, applyText, schedule, api, target, working, onReplied]);
+	}, [attachments, applyText, schedule, api, target, working, onReplied, answering, onClearAnswering, onBound]);
 	const stop = useCallback(() => void abortThread(target), [target]);
 	// Enter while dictating finishes the run, then sends the spoken text (as on the thread page); one send in flight.
 	const sendRef = useRef(send);
@@ -126,6 +149,8 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 					{waiting} attachment{waiting === 1 ? "" : "s"} waiting in the thread
 				</p>
 			)}
+			{answering && <ReplyingChip label={answering.label} onClear={onClearAnswering} className="px-3 pt-1" />}
+			{askOpen && !answering && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 			<Composer
 				busy={working}
 				{...(cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
@@ -133,12 +158,13 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 				onChange={onChange}
 				onSend={onSend}
 				onStop={stop}
-				canSend={canSendWith(text, attachments) || (dictation.active && !working)}
-				onEscape={dictation.active ? dictation.cancel : undefined}
+				canSend={answering ? text.trim() !== "" || (dictation.active && !working) : canSendWith(text, attachments) || (dictation.active && !working)}
+				onEscape={dictation.active ? dictation.cancel : answering ? onClearAnswering : undefined}
+				attachDisabled={answering ? "Images can't be attached to an answer yet" : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}
 				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
-				onFiles={onFiles}
+				onFiles={answering ? undefined : onFiles}
 				onPickFiles={onFiles}
 				chips={<AttachmentChips items={attachments} onRemove={(k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>

@@ -105,6 +105,7 @@ const { useDictation, DictationBar, joinDictation, useBarShown } = await import(
 const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
 
 let posts: string[] = [];
+let pagedAsk = false;
 let stops = 0;
 let tokenFetches = 0;
 const realFetch = globalThis.fetch;
@@ -118,6 +119,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	if (url.includes("/api/stt/token")) tokenFetches++;
 	if (url.includes("/api/stt/token")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
+	if (pagedAsk && /^\/api\/wolves\/w\/threads\/a\?/.test(url)) return Response.json({ messages: [], pendingCards: [{ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } }] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [{ id: "w/a", title: "w/a", kind: "feature", status: "idle" }, { id: "w/b", title: "w/b", kind: "feature", status: "idle" }] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
@@ -193,6 +195,7 @@ afterEach(async () => {
 	document.body.innerHTML = "";
 	mem.clear();
 	posts = [];
+	pagedAsk = false;
 	FakeWS.last = null;
 	FakeWS.count = 0;
 	stops = 0;
@@ -218,6 +221,21 @@ describe("floating chat dictation", () => {
 		await wait(400); // the draft write is debounced
 		assert.equal(mem.get("wolfpack:draft:w:w/a"), "hello from the graph");
 		assert.deepEqual(posts, []);
+	});
+
+	it("dictating in reply mode binds the spoken text to the question instead of sending a chat message", async () => {
+		pagedAsk = true;
+		await mount("/kb", A);
+		await wait();
+		await fire(q('[data-testid="ask-answer-by-typing"]')!, "click");
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why/);
+		await fire(barToggle(), "click", { detail: 1 });
+		await wait();
+		const ws = await say("because of dictation");
+		await fire(q('[data-testid="chat-bar"] form')!, "submit");
+		await endRun(ws);
+		await wait();
+		assert.deepEqual(posts.filter((u) => /\/(submit|questions\/q1\/text)$/.test(u)), ["/api/wolves/w/threads/a/cards/p1/questions/q1/text"]);
 	});
 
 	it("Enter while dictating finishes the run then sends the spoken text", async () => {

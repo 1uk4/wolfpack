@@ -19,6 +19,9 @@ import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { TurnTimer, useTurnStart } from "@/components/turn-timer";
+import { useOwnAsk } from "@/components/thread-ask";
+import { ReplyingChip } from "@/components/replying-chip";
+import { mergeRestored } from "@/components/composer-restore";
 import { useAttachedStripRow } from "@/components/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
@@ -501,6 +504,10 @@ function ThreadChatInner({
 	const subagents = useSubagentChildren(wolf, slug, threadId);
 	const attachedRow = useAttachedStripRow(wolf, threadId);
 	const stripReserve = stripReservePx(subagents, Date.now(), attachedRow);
+	// A paged `ask` pending on this thread: its questionnaire sheet lives here (the floating bar never mounts on this page).
+	const ask = useOwnAsk({ wolf, slug, threadId }, busy, dockHeight);
+	const askRef = useRef(ask);
+	askRef.current = ask;
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
 		[messages],
@@ -574,6 +581,18 @@ function ThreadChatInner({
 	const doSend = useCallback(() => {
 		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
+		if (askRef.current.answeringLabel) {
+			// "Answering Qn": the text is that question's answer, not a chat message (an attachment alone sends nothing).
+			if (t === "") return;
+			applyText("");
+			void askRef.current.bindText(t).then((err) => {
+				if (err) {
+					setCardError(err);
+					applyText(mergeRestored(t, textRef.current));
+				}
+			});
+			return;
+		}
 		const refs = readyInfos(attachments);
 		applyText("");
 		setSendPending(false);
@@ -800,6 +819,10 @@ function ThreadChatInner({
 											) : null}
 										</div>
 									) : barOwnsInput ? null : (
+									<>
+									{ask.sheet}
+									{ask.answeringLabel && <ReplyingChip label={ask.answeringLabel} onClear={ask.clearAnswering} className="pointer-events-auto px-1 pb-1" />}
+									{ask.pending && !ask.answeringLabel && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 									<div
 										data-testid="thread-composer-card"
 										{...(dictation.active ? { "data-listening": "true" } : {})}
@@ -814,11 +837,12 @@ function ThreadChatInner({
 											onStop={onStop}
 											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
-											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
-											onEscape={dictation.active ? dictation.cancel : undefined}
+											canSend={ask.answeringLabel ? text.trim() !== "" || (dictation.active && !busy) : canSendWith(text, attachments) || (dictation.active && !busy)}
+											onEscape={dictation.active ? dictation.cancel : ask.answeringLabel ? ask.clearAnswering : undefined}
+											attachDisabled={ask.answeringLabel ? "Images can't be attached to an answer yet" : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
 											enterSends={dictation.active}
-											onFiles={onFiles}
+											onFiles={ask.answeringLabel ? undefined : onFiles}
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
@@ -831,6 +855,7 @@ function ThreadChatInner({
 											<DictationBar dictation={dictation} />
 										</div>
 									</div>
+									</>
 									)}
 								</div>
 							</div>

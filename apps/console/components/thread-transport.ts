@@ -22,6 +22,21 @@ export function cardAnswerUrl(wolf: string, slug: string, callId: string): strin
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/answer`;
 }
 
+/** Where one page of a paged `ask` card is POSTed. */
+export function cardPageAnswerUrl(wolf: string, slug: string, callId: string, page: number): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/pages/${page}/answer`;
+}
+
+/** Where typed text bound to one question ("answering Qn") is POSTed. */
+export function cardTextUrl(wolf: string, slug: string, callId: string, qid: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/questions/${encodeURIComponent(qid)}/text`;
+}
+
+/** A rendered diagram by id (the client's getDiagram route, relayed). */
+export function diagramUrl(wolf: string, slug: string, id: string): string {
+	return `${threadBase(wolf, slug)}/diagrams/${encodeURIComponent(id)}`;
+}
+
 /** Where a pending card's skip is POSTed. */
 export function cardSkipUrl(wolf: string, slug: string, callId: string): string {
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/skip`;

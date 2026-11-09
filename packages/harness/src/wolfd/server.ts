@@ -59,6 +59,7 @@ import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
+import { postStartRejectionCount } from "../crash-guard.js";
 import { baseHealth, createLagMonitor, stampedVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import { HttpError } from "./http-error.js";
 import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overridePath, promptDef, promptEtag, resetPromptOverride, resolvePrompt, writePromptOverride } from "@wolfpack/agents";
@@ -629,7 +630,7 @@ export class WolfServer {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://wolfd");
     res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
-    if (url.pathname === "/healthz" && req.method === "GET") return this.json(res, 200, { ...baseHealth("wolfd", (this.lag ??= createLagMonitor()), WOLFD_VERSION), wolf: this.name }); // no auth, in-memory only
+    if (url.pathname === "/healthz" && req.method === "GET") return this.json(res, 200, { ...baseHealth("wolfd", (this.lag ??= createLagMonitor()), WOLFD_VERSION), wolf: this.name, postStartRejections: postStartRejectionCount() }); // no auth, in-memory only
     const m = matchRoute(req.method ?? "GET", url.pathname);
     if (m === undefined) throw new HttpError("not_found", `no route ${url.pathname}`);
     if (m === "method") throw new HttpError("invalid_request", `method ${req.method} not allowed`);

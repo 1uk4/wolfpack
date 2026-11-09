@@ -156,12 +156,19 @@ interface RowCtx {
 	move?: {
 		options: (id: string) => MoveOption[];
 		busy: ReadonlySet<string>;
-		messages: ReadonlyMap<string, { kind: "error" | "handoff"; text: string }>;
+		messages: ReadonlyMap<string, MoveMsg>;
 		dragId: string | null;
 		onDragStart: (id: string) => void;
 		onDragEnd: () => void;
 		onMove: (id: string, to: string | null) => void;
 	};
+}
+
+/** A row's move message; a handoff note goes once the list has been read again after the one that set it (`until` = the list count then). */
+interface MoveMsg {
+	kind: "error" | "handoff";
+	text: string;
+	until?: number;
 }
 
 /** The option a drop on this row would pick for the dragged item: a feature/initiative row by id, the Inbox group for the inbox option. */
@@ -177,13 +184,13 @@ function MoveCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const m = ctx.move;
 	if (!m || !row.id) return null;
 	const opts = m.options(row.id);
-	const msg = m.messages.get(row.id);
-	if (opts.length === 0 && !msg) return null;
+	if (opts.length === 0) return null;
 	return (
 		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
 			{opts.length > 0 && (
 				<select
 					data-testid={`work-move-${row.key}`}
+					title={`Move to: ${opts.map((o) => o.label).join(", ")}`}
 					aria-label={`Move ${row.title} to`}
 					value=""
 					disabled={m.busy.has(row.id)}
@@ -203,11 +210,29 @@ function MoveCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					))}
 				</select>
 			)}
-			{msg && (
-				<span data-testid={`work-move-msg-${row.key}`} data-kind={msg.kind} role={msg.kind === "error" ? "alert" : "status"} className={`max-w-64 truncate text-[11px] ${msg.kind === "error" ? "text-destructive" : "text-emerald-500"}`} title={msg.text}>
-					{msg.text}
-				</span>
-			)}
+		</span>
+	);
+}
+
+/** A failed assignee change, on its own line under the title. */
+function AssignError({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const a = ctx.assign;
+	const error = a && row.id && row.assignable ? a.errors.get(row.id) : undefined;
+	if (error === undefined) return null;
+	return (
+		<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="block truncate text-[11px] leading-4 text-destructive" title={error}>
+			{error}
+		</span>
+	);
+}
+
+/** The move message, on its own line under the title. */
+function MoveMessage({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const msg = row.id ? ctx.move?.messages.get(row.id) : undefined;
+	if (!msg) return null;
+	return (
+		<span data-testid={`work-move-msg-${row.key}`} data-kind={msg.kind} role={msg.kind === "error" ? "alert" : "status"} className={`block truncate text-[11px] leading-4 ${msg.kind === "error" ? "text-destructive" : "text-emerald-500"}`} title={msg.text}>
+			{msg.text}
 		</span>
 	);
 }
@@ -231,7 +256,6 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 		);
 	}
 	const options = row.assignee && !a.wolves.includes(row.assignee) ? [row.assignee, ...a.wolves] : a.wolves;
-	const error = a.errors.get(row.id);
 	return (
 		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
 			<select
@@ -249,11 +273,6 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					</option>
 				))}
 			</select>
-			{error !== undefined && (
-				<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="max-w-64 truncate text-[11px] text-destructive" title={error}>
-					{error}
-				</span>
-			)}
 		</span>
 	);
 }
@@ -333,6 +352,8 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 						) : (
 							<RowTitle row={row} />
 						)}
+						<MoveMessage row={row} ctx={ctx} />
+						<AssignError row={row} ctx={ctx} />
 					</span>
 					<MoveCell row={row} ctx={ctx} />
 					<AssigneeCell row={row} ctx={ctx} />
@@ -443,7 +464,8 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
 	const [assignErrors, setAssignErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [busyMove, setBusyMove] = useState<ReadonlySet<string>>(() => new Set());
-	const [moveMsgs, setMoveMsgs] = useState<ReadonlyMap<string, { kind: "error" | "handoff"; text: string }>>(() => new Map());
+	const [moveMsgs, setMoveMsgs] = useState<ReadonlyMap<string, MoveMsg>>(() => new Map());
+	const loads = useRef(0);
 	const [dragId, setDragId] = useState<string | null>(null);
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -507,10 +529,10 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 		}
 	};
 
-	// Drag and the menu share this one path; no optimistic update: the hub answers, then the list is read again. The message stays until the next move of that row.
+	// Drag and the menu share this one path; no optimistic update: the hub answers, then the list is read again. An error stays until the next move of that row; a handoff note until the second list read after it.
 	const onMove = async (id: string, to: string | null): Promise<void> => {
 		if (!client.move || busyMove.has(id)) return;
-		const say = (m: { kind: "error" | "handoff"; text: string } | null) =>
+		const say = (m: MoveMsg | null) =>
 			setMoveMsgs((prev) => {
 				const next = new Map(prev);
 				if (m === null) next.delete(id);
@@ -526,10 +548,10 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 			else {
 				const handoff = res.data.reassigned?.find((r) => r.id === id);
 				const parent = items?.find((x) => x.id === to)?.title ?? to;
+				if (handoff) say({ kind: "handoff", text: `Moved under ${parent}; now assigned to ${handoff.to}`, until: loads.current + 1 });
 				const fresh = await reload();
 				if (!mounted.current) return;
 				if (!fresh) say({ kind: "error", text: "moved, but the list couldn't refresh" });
-				else if (handoff) say({ kind: "handoff", text: `Moved under ${parent}; now assigned to ${handoff.to}` });
 			}
 		} catch (err) {
 			if (mounted.current) say({ kind: "error", text: err instanceof Error ? err.message : "move failed" });
@@ -561,6 +583,24 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 		});
 
 	const items = load.state === "ready" ? load.items : null;
+	// Each new list: end a drag whose row went away (no dragend reaches an unmounted row), and age out handoff notes.
+	useEffect(() => {
+		loads.current++;
+		setDragId(null);
+		setMoveMsgs((prev) => {
+			if (![...prev.values()].some((m) => m.until !== undefined && m.until < loads.current)) return prev;
+			return new Map([...prev].filter(([, m]) => m.until === undefined || m.until >= loads.current));
+		});
+	}, [items]);
+	useEffect(() => {
+		const end = () => setDragId(null);
+		window.addEventListener("dragend", end);
+		window.addEventListener("drop", end);
+		return () => {
+			window.removeEventListener("dragend", end);
+			window.removeEventListener("drop", end);
+		};
+	}, []);
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
 	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.move && items ? { move: { options: (id: string) => moveOptions(items, id), busy: busyMove, messages: moveMsgs, dragId, onDragStart: setDragId, onDragEnd: () => setDragId(null), onMove: (id: string, to: string | null) => void onMove(id, to) } } : {}), ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];

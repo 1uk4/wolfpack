@@ -521,6 +521,7 @@ describe("moving items", () => {
 		item("f2", "feature", { partOf: "i1", assignee: "luka", title: "F2" }),
 		item("t1", "task", { partOf: "f1" }),
 		item("lt", "task", { title: "LT" }),
+		item("inbox", "feature", { container: true, title: "Inbox" }),
 	];
 	type Moves = [string, string | null][];
 	const withMove = (move: NonNullable<WorkClient["move"]>, over: Partial<Fake> = {}) => fake({ items: MV, move, ...over });
@@ -570,6 +571,22 @@ describe("moving items", () => {
 		assert.equal(q("work-move-msg-t1")!.textContent, "Moved under F2; now assigned to luka");
 		reassigned = false;
 		await change(sel("t1"), { value: "0" });
+		await settle();
+		assert.equal(q("work-move-msg-t1"), null);
+	});
+	it("a cancelled drag (dragend, no drop) clears the highlights, even when the row is gone", async () => {
+		await openAll(withMove(async () => ({ ok: true, data: {} })));
+		await fire(q("work-row-t1")!, "onDragStart");
+		assert.equal(qa("[data-drop-target]").length, 2);
+		await act(async () => { window.dispatchEvent(new dom.window.Event("dragend")); });
+		assert.equal(qa("[data-drop-target]").length, 0);
+	});
+	it("drops the handoff note once the list has been read again after the move's own reload", async () => {
+		await openAll(withMove(async (id) => ({ ok: true, data: { reassigned: [{ id, from: "hal", to: "luka" }] } })));
+		await change(sel("t1"), { value: "0" });
+		await settle();
+		assert.equal(q("work-move-msg-t1")?.getAttribute("data-kind"), "handoff");
+		await act(async () => { window.dispatchEvent(new dom.window.Event("focus")); });
 		await settle();
 		assert.equal(q("work-move-msg-t1"), null);
 	});

@@ -137,18 +137,22 @@ export interface MoveOption {
  */
 export function moveOptions(items: readonly WorkListItem[], id: string): MoveOption[] {
 	const it = items.find((x) => x.id === id);
-	if (!it || isGraduated(it) || isInboxContainer(it)) return [];
-	const live = (x: WorkListItem): boolean => !isGraduated(x) && !isInboxContainer(x);
+	// The Inbox is the container flag only: a real feature titled "Inbox" is an ordinary target.
+	const isBox = (x: WorkListItem): boolean => x.container === true;
+	if (!it || isGraduated(it) || isBox(it)) return [];
+	const live = (x: WorkListItem): boolean => !isGraduated(x) && !isBox(x);
+	const inboxId = items.find(isBox)?.id;
 	if (it.kind === "task") {
 		const out: MoveOption[] = items.filter((x) => x.kind === "feature" && live(x) && x.id !== it.partOf).map((x) => ({ to: x.id, label: x.title, inbox: false }));
 		const parent = it.partOf ? items.find((x) => x.id === it.partOf) : undefined;
-		if (parent && !isInboxContainer(parent)) out.push({ to: items.find(isInboxContainer)?.id ?? null, label: "Inbox (no feature)", inbox: true });
+		// Only when a container exists: the hub refuses a task with no parent and never creates the Inbox.
+		if (parent && !isBox(parent) && inboxId !== undefined) out.push({ to: inboxId, label: "Inbox (no feature)", inbox: true });
 		return out;
 	}
 	if (it.kind === "feature") {
 		const out: MoveOption[] = items.filter((x) => x.kind === "initiative" && live(x) && x.id !== it.partOf).map((x) => ({ to: x.id, label: x.title, inbox: false }));
 		const parent = it.partOf ? items.find((x) => x.id === it.partOf) : undefined;
-		if (parent && !isInboxContainer(parent)) out.push({ to: null, label: "No initiative", inbox: true });
+		if (parent && !isBox(parent)) out.push({ to: null, label: "No initiative", inbox: true });
 		return out;
 	}
 	return [];

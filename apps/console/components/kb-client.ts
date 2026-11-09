@@ -7,6 +7,7 @@
  * `code` is the protocol error code when the server sent one (e.g.
  * "memory_busy", "promote_unavailable") so callers can tell 409s apart.
  */
+import type { WorkItemResponse } from "@wolfpack/protocol";
 import type {
 	ConsolidateResponse,
 	GraduationJob,
@@ -136,7 +137,7 @@ export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbRes
 }
 
 /** Owner work op through the hub (console route PATCH /api/work/:id): `{assignee}` now, `{moveTo}` for moves. */
-export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<{ item: { id: string; assignee?: string }; reassigned?: { id: string; from: string | null; to: string }[] }>> {
+export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<WorkItemResponse>> {
 	return request(`/api/work/${seg(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op) });
 }
 

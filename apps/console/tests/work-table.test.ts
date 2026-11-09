@@ -340,6 +340,15 @@ describe("moveOptions", () => {
 	it("nothing else moves: initiatives, issues, graduated items, unknown ids", () => {
 		for (const id of ["i1", "is1", "old", "oldt", "nope"]) assert.deepEqual(to(id), [], id);
 	});
+	it("a domain without an Inbox container gives tasks no Inbox option (the hub would refuse it), but a feature keeps No initiative", () => {
+		const bare = items.filter((x) => x.id !== "inbox");
+		assert.deepEqual(moveOptions(bare, "t1").map((o) => o.to), ["f2", "f3", "f4"]);
+		assert.deepEqual(moveOptions(bare, "f1"), [{ to: null, label: "No initiative", inbox: true }]);
+	});
+	it("a real feature titled Inbox, without the container flag, is an ordinary target", () => {
+		const real = [...items.filter((x) => x.id !== "inbox"), item("fi", "feature", { title: "Inbox" })];
+		assert.ok(moveOptions(real, "t1").some((o) => o.to === "fi" && !o.inbox));
+	});
 	it("labels name the target", () => {
 		assert.deepEqual(moveOptions(all, "f3"), [{ to: "i1", label: "Phase 1", inbox: false }]);
 		assert.deepEqual(moveOptions(all, "f1"), [{ to: null, label: "No initiative", inbox: true }]);

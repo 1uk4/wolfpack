@@ -6,7 +6,7 @@
  */
 import { spawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { setPriority, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -17,6 +17,9 @@ export const EXIT_QUEUE_TIMEOUT = 75;
 export const EXIT_RUN_TIMEOUT = 124;
 export const RUN_TIMEOUT_MS = 20 * 60_000;
 export const KILL_GRACE_MS = 10_000;
+/** The console's `tsx --test` limit per file (node applies --test-timeout to each file as well as each test). Keep equal to the default of CONSOLE_TEST_TIMEOUT_MS in apps/console/scripts/test.sh. */
+export const CONSOLE_FILE_TIMEOUT_MS = 120_000;
+export const EXIT_REFUSED = 2;
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 const SIGNUM: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 };
 
@@ -69,7 +72,9 @@ export function parseTestArgs(argv: string[], ctx?: { cwd: string; root: string 
   const mode = words[0]?.value && (words[0].text === "related" || words[0].text === "run") ? words.shift()!.text : "run";
   const out = words.map((w) => {
     if (!w.value || !ctx) return w.text;
-    const abs = resolve(ctx.cwd, w.text);
+    let abs = resolve(ctx.cwd, w.text);
+    // a repo-root path typed from a subdirectory (apps/console/tests/x.test.ts inside apps/console) is taken as it is
+    if (w.text.includes("/") && !w.text.startsWith(".") && !existsSync(abs) && existsSync(resolve(ctx.root, w.text))) abs = resolve(ctx.root, w.text);
     // (in run mode a bare word is a vitest filter; it is a path only if it looks like one or exists at the caller's cwd)
     if (mode === "run" && !/\/|\.[A-Za-z0-9]+$/.test(w.text) && !existsSync(abs)) return w.text;
     const rel = relative(ctx.root, abs);
@@ -101,6 +106,53 @@ export interface RunOptions {
   runTimeoutMs?: number;
   /** After SIGTERM (timeout or signal), how long before the group gets SIGKILL (default 10 s). */
   killGraceMs?: number;
+  /** The console's tsx bin script; default: resolved from apps/console. */
+  tsxBin?: string;
+  tsxVersion?: string;
+  /** Per-file limit of a console run (default 120 s). */
+  fileTimeoutMs?: number;
+}
+
+const CONSOLE = "apps/console";
+const isConsolePath = (p: string) => p === CONSOLE || p.startsWith(`${CONSOLE}/`);
+const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+
+type Plan = { kind: "vitest" } | { kind: "mixed" } | { kind: "refused"; why: string } | { kind: "console"; files: string[]; whole: boolean; namePattern?: string };
+
+/** The most console files one agent run may name (an unquoted shell glob that expands to the whole suite is refused). */
+export const MAX_AGENT_CONSOLE_FILES = 5;
+/** How long a finished test process's output pipe may keep draining before the group is killed and the pipe destroyed. */
+const DRAIN_MS = 500;
+
+/** Which runner the (root-relative) arguments belong to. A console run with no named test file is a whole-suite run. */
+function planFor(args: string[], root: string, agent: boolean): Plan {
+  const paths: string[] = [];
+  let namePattern: string | undefined;
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "-t" || a === "--testNamePattern") namePattern = args[++i];
+    else if (!a.startsWith("-")) paths.push(a);
+  }
+  if (!paths.some(isConsolePath)) return { kind: "vitest" };
+  if (args[0] === "related") return { kind: "refused", why: "console tests have no related mode; name the test files: wolfpack test run apps/console/tests/<file>" };
+  if (!paths.every(isConsolePath)) return { kind: "mixed" };
+  for (const p of paths) {
+    if (/[*?[\]{}]/.test(p)) return { kind: "refused", why: `${p}: glob characters are not allowed in console paths; name each file` };
+  }
+  const files = paths.filter((p) => TEST_FILE.test(p));
+  const others = paths.filter((p) => !TEST_FILE.test(p) && !(p === CONSOLE && files.length === 0));
+  if (others.length) return { kind: "refused", why: `${others[0]}: not a console test file; name test files, e.g. wolfpack test run apps/console/tests/<file>` };
+  for (const f of files) if (!existsSync(join(root, f))) return { kind: "refused", why: `${f} does not exist` };
+  if (agent && files.length > MAX_AGENT_CONSOLE_FILES) return { kind: "refused", why: `at most ${MAX_AGENT_CONSOLE_FILES} console test files per agent run; run fewer files or let CI run them` };
+  return { kind: "console", files, whole: files.length === 0, ...(namePattern !== undefined ? { namePattern } : {}) };
+}
+
+function resolveTsx(root: string): { bin: string; version: string } {
+  const pkgPath = createRequire(join(root, CONSOLE, "package.json")).resolve("tsx/package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version: string; bin?: string | Record<string, string> };
+  const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.tsx;
+  if (!rel) throw new Error("tsx has no bin entry");
+  return { bin: resolve(dirname(pkgPath), rel), version: pkg.version };
 }
 
 function resolveVitest(root: string): { bin: string; version: string } {
@@ -118,7 +170,33 @@ export async function runTests(o: RunOptions): Promise<number> {
   const signals = o.signals ?? process;
   const now = o.now ?? Date.now;
   const grace = o.killGraceMs ?? KILL_GRACE_MS;
-  const resolved = o.vitestBin ? { bin: o.vitestBin, version: o.vitestVersion ?? "unknown" } : resolveVitest(o.root);
+  const plan = planFor(o.args, o.root, isAgentRun(env));
+  if (plan.kind === "refused") {
+    log(`wolfpack test: ${plan.why}`);
+    return EXIT_REFUSED;
+  }
+  if (plan.kind === "mixed") {
+    log("wolfpack test: console tests (apps/console) and package tests run separately. Run them in two commands.");
+    return EXIT_REFUSED;
+  }
+  if (plan.kind === "console" && plan.whole && isAgentRun(env)) {
+    log("wolfpack test: a whole-suite console run is refused for agents; CI runs the whole console suite. Name the files: wolfpack test run apps/console/tests/<file>");
+    return EXIT_REFUSED;
+  }
+  const consoleFiles =
+    plan.kind !== "console"
+      ? []
+      : plan.whole
+        ? readdirSync(join(o.root, CONSOLE, "tests")).filter((n) => /\.test\.tsx?$/.test(n)).sort().map((n) => `${CONSOLE}/tests/${n}`)
+        : plan.files;
+  const resolved =
+    plan.kind === "console"
+      ? o.tsxBin
+        ? { bin: o.tsxBin, version: o.tsxVersion ?? "unknown" }
+        : resolveTsx(o.root)
+      : o.vitestBin
+        ? { bin: o.vitestBin, version: o.vitestVersion ?? "unknown" }
+        : resolveVitest(o.root);
 
   // Signals first: from here on a SIGINT/SIGTERM/SIGHUP is never lost, whatever step we are in.
   let interrupted: string | undefined;
@@ -202,8 +280,21 @@ export async function runTests(o: RunOptions): Promise<number> {
       /* best effort */
     }
     // `--project default` keeps *.live.* and *.eval.* files out even when named by path (vitest.config.ts).
-    const args = [resolved.bin, ...o.args, "--project", "default", `--maxWorkers=${o.settings.workersPerRun}`, ...(cache ? ["--reporter=default", "--reporter=json", `--outputFile.json=${reportFile}`] : [])];
-    const child = spawn(process.execPath, args, { cwd: o.root, env, stdio: o.stdio ?? "inherit", detached: true });
+    const args =
+      plan.kind === "console"
+        ? [
+            resolved.bin,
+            "--test",
+            `--test-timeout=${o.fileTimeoutMs ?? CONSOLE_FILE_TIMEOUT_MS}`,
+            `--test-concurrency=${o.settings.workersPerRun}`,
+            ...(plan.namePattern !== undefined ? [`--test-name-pattern=${plan.namePattern}`] : []),
+            ...consoleFiles.map((f) => relative(CONSOLE, f)),
+          ]
+        : [resolved.bin, ...o.args, "--project", "default", `--maxWorkers=${o.settings.workersPerRun}`, ...(cache ? ["--reporter=default", "--reporter=json", `--outputFile.json=${reportFile}`] : [])];
+    const child =
+      plan.kind === "console"
+        ? spawn(process.execPath, args, { cwd: join(o.root, CONSOLE), env: { ...env, NODE_ENV: "test" }, stdio: ["ignore", "pipe", o.stdio === "ignore" ? "ignore" : "inherit"], detached: true })
+        : spawn(process.execPath, args, { cwd: o.root, env, stdio: o.stdio ?? "inherit", detached: true });
     if (ticket && child.pid) await queue?.setChild(ticket, { pgid: child.pid });
     const killGroup = (sig: NodeJS.Signals) => {
       try {
@@ -212,6 +303,26 @@ export async function runTests(o: RunOptions): Promise<number> {
         /* gone */
       }
     };
+    // The console's output is piped (node then prints TAP) and passed on, so a file that hit the limit can be named.
+    // Scanned line by line (only a partial-line remainder is kept): a failing top-level `not ok N - <file>` followed by a
+    // testTimeoutFailure names a file that ran out of time.
+    const timedOutFiles: string[] = [];
+    let partial = "";
+    let lastNotOk: string | undefined;
+    child.stdout?.on("data", (d: Buffer) => {
+      const lines = (partial + d.toString()).split("\n");
+      partial = lines.pop() ?? "";
+      for (const line of lines) {
+        const m = /^not ok \d+ - (\S+\.test\.\w+)\s*$/.exec(line);
+        if (m) lastNotOk = m[1];
+        else if (/^(not )?ok \d+ /.test(line)) lastNotOk = undefined;
+        else if (lastNotOk && /failureType: 'testTimeoutFailure'/.test(line)) {
+          if (!timedOutFiles.includes(lastNotOk)) timedOutFiles.push(lastNotOk);
+          lastNotOk = undefined;
+        }
+      }
+    });
+    if (o.stdio !== "ignore") child.stdout?.pipe(process.stdout, { end: false }); // (pipe keeps backpressure)
     let exited = false;
     let hardKill: NodeJS.Timeout | undefined;
     // SIGTERM now, SIGKILL if the group is still there after the grace period
@@ -228,12 +339,33 @@ export async function runTests(o: RunOptions): Promise<number> {
     }, o.runTimeoutMs ?? RUN_TIMEOUT_MS);
     const code = await new Promise<number>((res) => {
       child.on("error", (e) => {
-        log(`wolfpack test: could not start vitest: ${e.message}`);
+        log(`wolfpack test: could not start the test runner: ${e.message}`);
         res(1);
       });
-      child.on("close", (c, sig) => res(c ?? (sig ? 128 + (SIGNUM[sig] ?? 1) : 1)));
+      // Settle on the process's exit, not on its pipe closing: a grandchild that inherited the pipe would hold the run open.
+      // After a short drain the group is killed and the pipe destroyed.
+      child.on("exit", (c, sig) => {
+        const result = c ?? (sig ? 128 + (SIGNUM[sig] ?? 1) : 1);
+        const out = child.stdout;
+        if (!out || out.destroyed || out.readableEnded) return res(result);
+        let done = false;
+        const fin = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(drain);
+          killGroup("SIGKILL");
+          out.destroy();
+          res(result);
+        };
+        const drain = setTimeout(fin, DRAIN_MS);
+        out.once("end", fin);
+        out.once("close", fin);
+      });
     });
     exited = true;
+    for (const f of timedOutFiles) {
+      log(`wolfpack test: ${f} ran longer than ${Math.round((o.fileTimeoutMs ?? CONSOLE_FILE_TIMEOUT_MS) / 1000)} s and was stopped`);
+    }
     clearTimeout(timer);
     clearTimeout(hardKill);
     killGroup("SIGKILL"); // stragglers of the group
@@ -245,7 +377,9 @@ export async function runTests(o: RunOptions): Promise<number> {
 
     // 4. Remember a pass, together with the test files that actually ran, but only if the tree is exactly what it was
     // when the key was made (it may have been edited while we waited or ran).
-    if (cache && key && code === 0 && keyNow() === key) {
+    if (cache && key && code === 0 && keyNow() === key && plan.kind === "console") {
+      if (consoleFiles.length) cache.store(key, { status: "pass", files: consoleFiles, args: o.args });
+    } else if (cache && key && code === 0 && keyNow() === key) {
       try {
         const rep = JSON.parse(readFileSync(reportFile, "utf8")) as { testResults?: Array<{ name: string }> };
         const files = (rep.testResults ?? []).map((r) => r.name);

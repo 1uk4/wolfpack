@@ -53,7 +53,7 @@ export const PatchWorkOpSchema = z
     body: z.string().optional(),
     standing: z.boolean().optional(),
     schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
-    /** Replace the `plan` or `notes` section of the body. Any other name (e.g. the generated `record`/`log`) is `invalid_request`. */
+    /** Replace the `plan`, `notes` or `Record` section of the body. `Record` is matched exactly (case and spacing); any other name (e.g. `log`) is `invalid_request`. */
     section: z.object({ name: z.string(), text: z.string() }).strict().optional(),
   })
   .strict();

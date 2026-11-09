@@ -132,10 +132,12 @@ describe("renderWorkingDocument", () => {
 
 // ── consolidateWorkRecords ───────────────────────────────────────────────────
 
-function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failGet?: boolean; failSet?: boolean; forbid?: string } = {}) {
+function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failGet?: boolean; failSet?: boolean; forbid?: string; closed?: boolean } = {}) {
+  const gets: string[] = [];
   const writes: Array<{ id: string; body: string }> = [];
   const store: WorkRecordStore = {
     async get(id) {
+      gets.push(id);
       if (opts.failGet) throw new Error("Work API unreachable");
       const it = items[id];
       return it ? { id, title: "T", kind: "task", stage: "in_build", body: "", ...it } : null;
@@ -143,12 +145,13 @@ function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failG
     async setRecord(id, record) {
       if (opts.failSet) throw new Error("HTTP 502");
       if (opts.forbid) throw new WorkApiError(403, opts.forbid);
+      if (opts.closed) throw new WorkApiError(409, "item is archived; its Record is closed", "record_closed");
       const body = replaceRecordSection(items[id]?.body ?? "", record);
       writes.push({ id, body });
       items[id] = { ...items[id], body };
     },
   };
-  return { store, writes };
+  return { store, writes, gets };
 }
 
 const rec = (over: Partial<WorkRecord> = {}): WorkRecord => ({ decisions: [], changes: [], findings: [], problems: [], ...over });
@@ -306,6 +309,35 @@ describe("the Record follows the item", () => {
     const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t", "fA") });
     expect(out.map((o) => [o.work, o.status])).toEqual([["fB", "written"]]);
     expect(writes.map((w) => w.id)).toEqual(["fB"]);
+    expect(writes[0].body).toContain("### Findings");
+    expect(writes[0].body).toContain("- x");
+  });
+
+  it("a task moved out of its feature (partOf null) folds into its own Record, whatever feature the observation stored", async () => {
+    const { store, writes } = fakeStore({ fA: { kind: "feature" }, t: { partOf: null } });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t", "fA") });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["t", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["t"]);
+  });
+
+  it("reads each item at most once per run", async () => {
+    const { store, gets } = fakeStore({ f: { kind: "feature" }, t1: { partOf: "f" }, t2: { partOf: "f" } });
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: [...one("t1"), ...one("t2")] });
+    expect([...gets].sort()).toEqual(["f", "t1", "t2"]);
+  });
+
+  it("a write refused because the item was archived meanwhile discards the observations, like the archived path", async () => {
+    const { store } = fakeStore({ f: { kind: "feature" }, t: { partOf: "f" } }, { closed: true });
+    const state = new WorkPendingState(undefined, () => 1000);
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, state, observations: one("t") });
+    expect(out).toEqual([{ work: "f", ids: ["t-0"], status: "discarded", reason: "archived" }]);
+    expect(state.entry("f")).toBeUndefined();
+  });
+
+  it("the HTTP store carries the hub error code of a refusal", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "item is archived; its Record is closed", code: "record_closed" }), { status: 409 })) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await expect(store.setRecord("t", "### Findings\n\n- x")).rejects.toMatchObject({ status: 409, code: "record_closed" });
   });
 
   it("a task that cannot be read falls back to the feature stored on the observation", async () => {
@@ -325,6 +357,7 @@ describe("the Record follows the item", () => {
     expect(state.due("f")).toBe(true);
     const again = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, state, observations: one("t") });
     expect(again[0]).toMatchObject({ cause: "forbidden", reason: msg });
+    expect(again[0].ids).toEqual(["t-0"]);
   });
 
   it("writes only the Record section through the hub, sending the section name 'Record' and no heading in the text", async () => {

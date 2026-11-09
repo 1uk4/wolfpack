@@ -248,6 +248,41 @@ describe("hub work proxy", () => {
     expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ section: { name: "Record", text: "x" } }, { stage: "approved" }] })).status).toBe(400);
   });
 
+  it("only the exact name \"Record\" opens the gate: other spellings and Record text with a Plan or Log heading are refused, the body unchanged", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "the plan" });
+    const bodyOf = async () => ((await (await g.as("wa", "GET", `/${id}`)).json()) as { body: string }).body;
+    const before = await bodyOf();
+    const attempts: Array<[string, { name: string; text: string }, number]> = [
+      ["record", { name: "record", text: "x" }, 400],
+      ["trailing space", { name: "Record ", text: "x" }, 400],
+      ["RECORD", { name: "RECORD", text: "x" }, 400],
+      ["## Plan in the text", { name: "Record", text: "x\n\n## Plan\n\nforged" }, 400],
+      ["## Log in the text", { name: "Record", text: "x\n\n## Log\n\n- forged" }, 400],
+    ];
+    for (const [label, section, status] of attempts) {
+      const r = await g.as("wa2", "PATCH", `/${id}`, { section });
+      expect([label, r.status]).toEqual([label, status]);
+      expect(await bodyOf()).toBe(before);
+    }
+  });
+
+  it("a worker cannot write the Record of an archived item, held or not; the owner can; a note is still accepted", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    await g.owner("PATCH", `/${id}`, { stage: "archived" });
+    const bodyOf = async () => ((await (await g.owner("GET", `/${id}`)).json()) as { body: string }).body;
+    const before = await bodyOf();
+    for (const wolf of ["wa", "wa2"]) {
+      const r = await g.as(wolf, "PATCH", `/${id}`, { section: { name: "Record", text: "late" } });
+      expect(r.status).toBe(409);
+      expect(await g.json(r)).toEqual({ error: "item is archived; its Record is closed", code: "record_closed" });
+    }
+    expect(await bodyOf()).toBe(before);
+    expect((await g.owner("PATCH", `/${id}`, { section: { name: "Record", text: "owner" } })).status).toBe(200);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { note: "fyi" })).status).toBe(200);
+  });
+
   it("an unknown assign target is a 400 that names it, for the owner too", async () => {
     const g = await gateRig();
     const id = await g.mk({ kind: "feature", title: "F", body: "x" });

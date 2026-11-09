@@ -294,7 +294,7 @@ export interface WorkRecordItem {
 
 /** A Work API refusal: the HTTP status and the hub's own message. */
 export class WorkApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string) {
     super(message);
     this.name = "WorkApiError";
   }
@@ -370,11 +370,13 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     const res = await this.call("PATCH", id, { section: { name: "Record", text } });
     if (res.ok) return;
     let message = `Work API PATCH ${id}: HTTP ${res.status}`;
+    let code: string | undefined;
     try {
-      const e = ((await res.json()) as { error?: unknown }).error;
-      if (typeof e === "string" && e) message = e;
+      const j = (await res.json()) as { error?: unknown; code?: unknown };
+      if (typeof j.error === "string" && j.error) message = j.error;
+      if (typeof j.code === "string") code = j.code;
     } catch { /* keep the generic message */ }
-    throw new WorkApiError(res.status, message);
+    throw new WorkApiError(res.status, message, code);
   }
 }
 
@@ -403,6 +405,9 @@ export type WorkRecordOutcome =
   | { work: string; ids: string[]; status: "discarded"; reason: string }
   /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
   | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause };
+
+/** The hub's code for a Record write to an archived item (hubd RECORD_CLOSED). */
+export const RECORD_CLOSED_CODE = "record_closed";
 
 /** The reason a pending outcome carries when the Work API is missing or unreachable. */
 export const WORK_API_UNAVAILABLE = "work-api-unavailable";
@@ -457,23 +462,27 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
   const groups = new Map<string, WorkObservation[]>();
   // The key is the feature when it is a real, live feature; anything else
   // (no feature, the Inbox, deleted, archived, store unreachable) keeps the item's own.
-  const featureOk = new Map<string, boolean>();
-  const liveFeature = async (id: string): Promise<boolean> => {
-    if (!featureOk.has(id)) {
-      try { featureOk.set(id, isRecordFeature(await store!.get(id))); } catch { featureOk.set(id, false); }
+  // Each item is read at most once per run: every read (task, feature, group key) goes through this cache. A failed read is cached too;
+  // the grouping treats it as "unknown" (null: a task falls back to its stored `o.feature`, a feature is not live), but the group loop
+  // below rethrows it, so the group stays pending instead of being taken for deleted.
+  const reads = new Map<string, { item: WorkRecordItem | null } | { err: unknown }>();
+  const readItem = async (id: string) => {
+    if (!reads.has(id)) {
+      try { reads.set(id, { item: await store!.get(id) }); } catch (err) { reads.set(id, { err }); }
     }
-    return featureOk.get(id)!;
+    return reads.get(id)!;
   };
+  const getOrNull = async (id: string): Promise<WorkRecordItem | null> => {
+    const r = await readItem(id);
+    return "item" in r ? r.item : null;
+  };
+  const liveFeature = async (id: string): Promise<boolean> => isRecordFeature(await getOrNull(id));
   // The feature is resolved NOW from the task's current parent (a task moved since the observation was tagged follows it).
   // Only a task that cannot be read (or a store that does not report parents) falls back to the stored feature, then to the task.
-  const taskOf = new Map<string, WorkRecordItem | null>();
   for (const o of opts.observations) {
     let key = o.work;
     if (store) {
-      if (!taskOf.has(o.work)) {
-        try { taskOf.set(o.work, await store.get(o.work)); } catch { taskOf.set(o.work, null); }
-      }
-      const task = taskOf.get(o.work);
+      const task = await getOrNull(o.work);
       if (task && task.partOf !== undefined) {
         const parent = task.partOf;
         if (isRecordFeature(task)) key = task.id; // bound to the feature itself
@@ -499,7 +508,9 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
     }
     let phase: PendingCause = "work-api-unavailable";
     try {
-      const item = await store.get(work);
+      const read = await readItem(work);
+      if ("err" in read) throw read.err;
+      const item = read.item;
       if (!item && store.healthy && !(await store.healthy())) throw new Error("Work API unhealthy: a 404 proves nothing");
       if (!item && state && !state.missing(work)) {
         onProgress?.(`  work ${work}: not found, waiting to confirm before discarding ${obs.length} observation(s)`);
@@ -545,9 +556,18 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: stripSources(rendered).length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      // The item was archived between the read and the write: same as the archived path, the observations are discarded.
+      if (err instanceof WorkApiError && err.status === 409 && err.code === RECORD_CLOSED_CODE) {
+        clearEntries(state, work, obs);
+        onProgress?.(`  work ${work}: item is archived, ${obs.length} observation(s) are discarded`);
+        outcomes.push({ work, ids, status: "discarded", reason: "archived" });
+        continue;
+      }
       // A 403 is final, not an outage: kept pending with the hub's message, no backoff, retried on the next run only.
       if (err instanceof WorkApiError && err.status === 403) {
         onProgress?.(`  work ${work}: refused by the hub, ${obs.length} observation(s) stay pending — ${reason}`);
+        // Deliberate: nextAttemptAt stays 0 for "forbidden", so a refused item costs one model call per run. Refusals are rare now that
+        // the Record is open to every wolf, and that cost is accepted.
         state?.pending(work, "forbidden", reason);
         outcomes.push({ work, ids, status: "pending", reason, cause: "forbidden" });
         continue;

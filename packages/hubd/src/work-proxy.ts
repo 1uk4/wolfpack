@@ -21,6 +21,9 @@
  * The item read, the gate and the handoff lookup of PATCH/graduate run inside the write queue, so they cannot race another write.
  * `assign` (any caller) must name an active wolf of the registry. Assigning a feature also reassigns its open child tasks (not shipped,
  * live or archived): all for the owner, only those held by W for a worker; the others are left alone.
+ * A worker cannot write the Record of an ARCHIVED item, held or not: 409 `item is archived; its Record is closed` (code record_closed).
+ * Notes on an archived item are not refused (unchanged).
+ * The create path reads the parent feature OUTSIDE the write queue, so a feature reassigned mid-request is not seen (low risk).
  * Console/operator tokens can do anything (same whitelist). Errors are `{error: string}` like the agent's.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -30,7 +33,7 @@ import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type 
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
 import { idempotencyKeyOf, type WorkIdempotency } from "./work-idempotency.js";
-import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY } from "./work-writes.js";
+import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY, RECORD_CLOSED } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
@@ -60,7 +63,7 @@ const respond = (res: ServerResponse, status: number, body: unknown): void => {
 };
 const STATUS: Record<string, number> = { invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503 };
 /** Typed write failures (HubError details.code, see ERRNO_TABLE in work-writes.ts): the status is decided by the typed code, not the protocol code. */
-const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500, [PARENT_CLOSED]: 409 };
+const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500, [PARENT_CLOSED]: 409, [RECORD_CLOSED]: 409 };
 
 /** Is this request under the proxy prefix? */
 export const isWorkProxyPath = (pathname: string): boolean => pathname === `${WORK_PROXY_PREFIX}/work` || pathname.startsWith(`${WORK_PROXY_PREFIX}/work/`);
@@ -164,8 +167,12 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         const state = loadWorkState(d.roots);
         const item = state.get(id as never);
         if (!item) throw new HubError("not_found", `Work item not found: ${id}`);
+        // normaliseOne maps ONLY the literal "Record" to the internal name "record", so this exemption cannot be reached with another spelling.
+        const isRecordWrite = (o: WorkOp): boolean => o.op === "section" && o.name === "record";
         // A request of only notes and Record-section writes is open to any item; anything else (plan, other sections, body, a mix) goes through the full gate.
-        if (worker && !ops.every((o) => o.op === "note" || (o.op === "section" && o.name === "record"))) gate(item, actor.id);
+        if (worker && !ops.every((o) => o.op === "note" || isRecordWrite(o))) gate(item, actor.id);
+        // The Record of an archived item is closed to workers, held or not (the owner is unaffected).
+        if (worker && item.stage === "archived" && ops.some(isRecordWrite)) throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
         const finalOps: WorkOp[] = [];
         const reassigned: { id: string; from: string | null; to: string }[] = [];
         let current = item.assignee ? String(item.assignee) : null;

@@ -251,8 +251,10 @@ export class WorkPendingState {
     const tries = (e?.tries ?? 0) + 1;
     // forbidden: no backoff timer, due on every run.
     const nextAttemptAt = cause === "forbidden" ? 0 : this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS);
-    const { message: _old, ...rest } = e ?? ({} as Partial<PendingEntry>);
-    this.data[key] = { ...rest, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt, ...(cause === "forbidden" && message ? { message } : {}) };
+    const entry: PendingEntry = { ...e, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt };
+    if (cause === "forbidden" && message) entry.message = message;
+    else delete entry.message;
+    this.data[key] = entry;
     this.dirty = true;
   }
 

@@ -117,10 +117,10 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
   if (b.standing !== undefined) ops.push({ op: "standing", value: b.standing });
   if (b.section !== undefined) {
     // The Record is addressed only by its exact name; "plan" / "notes" keep their forgiving match.
-    const name = b.section.name === RECORD_SECTION_NAME ? "record" : b.section.name.trim().toLowerCase();
-    if (name !== "plan" && name !== "notes" && !(name === "record" && b.section.name === RECORD_SECTION_NAME)) {
-      throw new HubError("invalid_request", `section must be "plan", "notes" or "Record"`);
-    }
+    const isRecord = b.section.name === RECORD_SECTION_NAME;
+    const lower = b.section.name.trim().toLowerCase();
+    const name: SectionName | undefined = isRecord ? "record" : lower === "plan" || lower === "notes" ? lower : undefined;
+    if (!name) throw new HubError("invalid_request", `section must be "plan", "notes" or "Record"`);
     assertSectionText(b.section.text); // a heading in the text would restructure the body (or forge the generated Log)
     ops.push({ op: "section", name, text: b.section.text });
   }
@@ -506,6 +506,8 @@ export const WORK_STORE_READ_ONLY = "work_store_read_only";
 export const WORK_STORE_PERMISSION_DENIED = "work_store_permission_denied";
 /** The target parent graduated or is archived (thrown by kb createWork/moveWork as ParentClosedError). */
 export const PARENT_CLOSED = "parent_closed";
+/** A worker wrote the Record of an archived item (the work is no longer needed; its Record is closed). */
+export const RECORD_CLOSED = "record_closed";
 
 /**
  * THE errno table for write paths (applied by `mapWorkError(e, {write: true})` only; a failed read is never mapped here):

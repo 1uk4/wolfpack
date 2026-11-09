@@ -347,4 +347,20 @@ describe("hubd token auth", () => {
     await expect(main(["tokens", "revoke", tokenId, "--data-dir", dir], {}, () => {})).rejects.toThrow(/no token/);
     expect((await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: bearer(token) })).status).toBe(401);
   });
+
+  it("CLI: pair --owner and tokens owner set, clear and list the owner flag; a worker token is refused", async () => {
+    const lines = async (args: string[]) => { const o: string[] = []; await main([...args, "--data-dir", dir], {}, (m) => o.push(m)); return o.join("\n"); };
+    const code = /pairing code: (\S+)/.exec(await lines(["pair", "--kind", "console", "--owner"]))![1]!;
+    const a = await (await pairVia({ label: "boss", kind: "console" }, code)).json();
+    const b = await mint("browser");
+    const w = await mint("worker", { hostId: "vps-1" });
+    const row = async (id: string) => (await lines(["tokens", "list"])).split("\n").find((l) => l.startsWith(id))!;
+    expect(await row(a.tokenId)).toContain("isOwner=true");
+    expect(await row(b.tokenId)).not.toContain("isOwner"); // a token without the flag (as every old record) lists and loads fine
+    await lines(["tokens", "owner", b.tokenId]);
+    expect(await row(b.tokenId)).toContain("isOwner=true");
+    await lines(["tokens", "owner", b.tokenId, "--unset"]);
+    expect(await row(b.tokenId)).not.toContain("isOwner");
+    await expect(lines(["tokens", "owner", w.tokenId])).rejects.toThrow(/worker/);
+  });
 });

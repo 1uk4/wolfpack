@@ -635,6 +635,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!identity.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a 500, never a silent fallback
       return { ...identity, tokenId: identity.tokenId };
     }
+    /** Owner-only calls: the caller must be a console/browser token flagged isOwner (set on the host CLI). Else 403. */
+    function ownerCaller(identity: AuthIdentity | undefined): AuthIdentity & { tokenId: string } {
+      const caller = deviceCaller(identity);
+      if (!tokens.list().some((t) => t.id === caller.tokenId && t.isOwner)) throw new HubError("forbidden", "only an owner device can do this");
+      return caller;
+    }
     /** A label for a log line: bounded, JSON-escaped (no control characters or line breaks reach the log). */
     const auditLabel = (l: string) => JSON.stringify(l.slice(0, 40));
     /** Mints and revokes: at most DEVICE_MUTATIONS_PER_MIN a minute per calling token (409 busy, retryable). */
@@ -730,6 +736,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const cascade = url.searchParams.get("cascade") === "1";
           const target = tokens.list().find((t) => t.id === params.id && t.kind !== "worker");
           if (!target) throw new HubError("not_found", "no such device");
+          const all = tokens.list();
+          if (!all.some((t) => t.id === caller.tokenId && t.isOwner)) {
+            // not an owner: only itself and the devices descended from it through mintedBy
+            const mine = new Set([caller.tokenId]);
+            for (let grew = true; grew; ) {
+              grew = false;
+              for (const t of all) if (t.mintedBy && mine.has(t.mintedBy) && !mine.has(t.id)) (mine.add(t.id), (grew = true));
+            }
+            if (!mine.has(target.id)) throw new HubError("forbidden", "you can revoke only this device and the devices it added; only an owner device can revoke it");
+          }
           const gone = tokens.revokeDevice(target.id, cascade); // 409 conflict when it would remove the last console token
           const ids = gone.map((t) => t.id);
           console.log(`hubd: token ${caller.tokenId} revoked ${ids.length} device(s) ${ids.join(",")} label=${auditLabel(target.label)}${cascade ? " (cascade)" : ""}${ids.includes(caller.tokenId) ? " (incl. itself)" : ""}`);

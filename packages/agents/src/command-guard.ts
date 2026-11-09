@@ -569,6 +569,186 @@ export function checkReadOnlyCommand(command: string): string | null {
 	}
 }
 
+// ── Worker shells: git and GitHub lockdown ──────────────────────────────────
+
+/** git subcommands a worker may run; everything else (push, merge, reset, checkout, tag, stash, ...) is refused. */
+const WORKER_GIT_ALLOWED = new Set([
+	"add", "commit", "status", "diff", "log", "show", "rev-parse", "merge-base", "ls-files", "blame", "grep",
+	"rebase", // only its own branch onto one ref, the fixup-squash forms, --continue/--abort/--skip; see workerGit
+	"rev-list", "cat-file", "ls-tree", "describe", "diff-tree", "shortlog", "for-each-ref", "name-rev", "show-ref", "branch",
+	"restore", "rm", "mv", "checkout", "config", "remote", // restricted forms, see workerGit
+]);
+/** Global git flags without a value. Anything that takes one (-C, --git-dir, --work-tree, --namespace, -c) is refused: a worker stays in its own worktree. */
+const WORKER_GIT_GLOBAL_FLAG = new Set(["--version", "--no-pager", "-p", "-P", "--paginate", "--no-replace-objects", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks"]);
+/** Environment variables that make git run a program or load config of the caller's choosing. */
+const WORKER_GIT_ENV = /^(GIT_(CONFIG\w*|EXEC_PATH|SSH\w*|ASKPASS|EDITOR|SEQUENCE_EDITOR|PAGER|EXTERNAL_DIFF|PROXY_COMMAND|TERMINAL_PROMPT|DIR|WORK_TREE)|SSH_ASKPASS|GH_\w+|GITHUB_\w+)=(.*)$/s;
+
+function workerBlock(what: string, words: Word[]): never {
+	throw new GuardBlock(
+		`Blocked by bash: ${what}. Command: ${shown(words)}. Workers may only run add, commit (not --amend), status, diff, log, show, rev-parse, merge-base, ` +
+			`ls-files, blame, grep and the fixup rebase (rebase -i --autosquash <base>); push, merge, reset, checkout and gh belong to the orchestrator. ` +
+			`Do not retry a variant; report what you need.`,
+		);
+}
+
+function workerGit(words: Word[], args: Word[]): void {
+	const t = args.map((a) => a.text);
+	let k = 0;
+	for (; k < t.length; k++) {
+		const a = t[k];
+		if (WORKER_GIT_GLOBAL_FLAG.has(a)) continue;
+		else if (a.startsWith("-")) workerBlock(`git option \`${a}\` is not allowed (no -C, --git-dir, --work-tree or -c: stay in your worktree)`, words);
+		else break;
+	}
+	const sub = t[k];
+	if (args[k]?.dyn) workerBlock("git subcommand is built from an expansion and cannot be checked", words);
+	if (sub === undefined) return;
+	if (!WORKER_GIT_ALLOWED.has(sub)) workerBlock(`\`git ${sub}\` is not allowed`, words);
+	const rest = t.slice(k + 1);
+	if (sub === "commit" && rest.some((a) => (a === "--amend") || (/^--am/.test(a) && "--amend".startsWith(a)))) workerBlock("git commit --amend is not allowed (use --fixup)", words);
+	if (sub === "grep" && rest.some((a) => /^-[A-Za-z0-9]*O/.test(a) || a.startsWith("--open-files-in-pager"))) workerBlock("git grep -O runs a program", words);
+	if (["log", "diff", "show"].includes(sub) && rest.some((a) => /^--ou/.test(a) && "--output".startsWith(a.split("=")[0]!))) workerBlock("--output writes a file", words);
+	if (sub === "checkout" && !(rest[0] === "--" && rest.length > 1)) workerBlock("git checkout is only allowed as `checkout -- <paths>`", words);
+	if (sub === "restore" && rest.some((a) => a === "-s" || a.startsWith("--source"))) workerBlock("git restore --source is not allowed", words);
+	if (sub === "config" && !(rest.length === 2 && rest[0] === "--get")) workerBlock("git config may only read: `config --get <key>`", words);
+	if (sub === "remote" && !(rest.length === 0 || (rest.length === 1 && (rest[0] === "-v" || rest[0] === "--verbose")))) workerBlock("git remote may only list: `remote -v`", words);
+	if (sub === "branch") {
+		const listing = rest.some((a) => /^(--list|-l|--contains|--no-contains|--merged|--no-merged|--show-current)$/.test(a));
+		if (rest.some((a) => /^(-[dDmMcCfut]|--delete|--move|--copy|--force|--set-upstream|--unset-upstream|--edit-description|--track|--no-track)/.test(a)) || (!listing && rest.some((a) => !a.startsWith("-"))))
+			workerBlock("git branch may only list branches", words);
+	}
+	if (sub === "rebase") {
+		if (rest.length === 1 && ["--abort", "--continue", "--skip"].includes(rest[0]!)) return;
+		const flags = rest.filter((a) => a.startsWith("-"));
+		const pos = rest.filter((a) => !a.startsWith("-"));
+		const plain = flags.length === 0 && pos.length === 1; // (a worker rebases its own branch onto one ref: the conflict-resolve brief)
+		if (!plain && (!flags.includes("--autosquash") || !flags.every((a) => a === "-i" || a === "--interactive" || a === "--autosquash") || pos.length > 1))
+			workerBlock("git rebase is only allowed as `rebase <ref>`, `rebase -i --autosquash <base>`, `rebase --autosquash`, `--abort`, `--continue` or `--skip`", words);
+	}
+}
+
+function workerWords(all: Word[], depth: number): void {
+	if (depth > MAX_DEPTH) throw new ParseError("nesting too deep");
+	let words = all;
+	while (words.length && ASSIGNMENT.test(words[0].text)) {
+		const m = WORKER_GIT_ENV.exec(words[0].text);
+		if (m && !(m[1]?.startsWith("GIT_SEQUENCE_EDITOR") && [":", "true", ""].includes(m[3] ?? "x"))) workerBlock(`setting ${words[0].text.split("=")[0]} is not allowed`, words);
+		words = words.slice(1);
+	}
+	if (!words.length) return;
+	const head = words[0];
+	if (head.dyn) workerBlock("command name is built from an expansion and cannot be checked", words);
+	const name = head.text.split("/").pop() ?? head.text;
+	const args = words.slice(1);
+	const t = args.map((a) => a.text);
+	if (name === "gh") workerBlock("`gh` is not available to workers", words);
+	if (name === "git") return workerGit(words, args);
+	if (HARMLESS_WRAPPERS.has(name)) {
+		let rest: Word[];
+		if (name === "env") {
+			for (let k = 0; k < t.length && t[k]!.startsWith("-"); k++) {
+				if (/^-[A-Za-z]*S|^--split-string/.test(t[k]!)) workerBlock("env -S builds a command from a string and cannot be checked", words);
+				if (t[k] === "-u" || t[k] === "-C") k++;
+			}
+			rest = skipOptions(args, ["-u", "-C"]);
+		}
+		else if (name === "nice" || name === "ionice") rest = skipOptions(args, ["-n", "-c", "-p"]);
+		else if (name === "timeout") rest = skipOptions(args, ["-s", "-k", "--signal", "--kill-after"]).slice(1);
+		else if (name === "stdbuf" || name === "command") rest = skipOptions(args);
+		else rest = args;
+		return workerWords(rest, depth + 1);
+	}
+	switch (name) {
+		case "export": case "declare": case "typeset": case "local": case "readonly":
+			return workerWords(args.filter((a) => ASSIGNMENT.test(a.text)), depth + 1);
+		case "eval":
+			return workerString(t.join(" "), depth + 1);
+		case "sudo": case "doas":
+			return workerWords(skipOptions(args, ["-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U", "-D", "-R", "-T"]), depth + 1);
+		case "su": {
+			const idx = t.findIndex((a) => a === "-c" || a === "--command" || a.startsWith("--command="));
+			if (idx >= 0) workerString(t[idx]!.startsWith("--command=") ? t[idx]!.slice(10) : (t[idx + 1] ?? ""), depth + 1);
+			return;
+		}
+		case "source": case ".":
+			return workerBlock("`source` runs a file that cannot be checked", words);
+		case "npx": case "pnpx": case "bunx":
+			return workerWords(skipOptions(args), depth + 1);
+		case "pnpm": case "npm": case "yarn": case "bun": {
+			const at = t.findIndex((a) => a === "exec" || a === "dlx");
+			if (at >= 0) workerWords(skipOptions(args.slice(at + 1)), depth + 1);
+			return;
+		}
+		case "bash": case "sh": case "zsh": case "dash": case "ksh": case "ash": {
+			// Reading the program from stdin (a pipe, <<<, a here-doc, <file) or from a file that is not a plain repo-relative path
+			// (process substitution, absolute, .., an expansion) cannot be checked: refused. `sh scripts/x.sh` stays allowed so repo scripts run;
+			// what a script itself does is a known gap, like python3 -c.
+			for (let k = 0; k < args.length; k++) {
+				const a = t[k]!;
+				if (a === "-o" || a === "+o" || a === "-O" || a === "+O") k++;
+				else if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return workerString(t.slice(k + 1).find((x) => !x.startsWith("-")) ?? "", depth + 1);
+				else if (!a.startsWith("-")) {
+					if (args[k]!.dyn || a.startsWith("/") || a.startsWith("<") || a.startsWith("~") || a.split("/").includes("..")) workerBlock("a shell script given by an absolute, parent-relative or computed path cannot be checked", words);
+					return;
+				}
+			}
+			return workerBlock("a shell reading its program from stdin cannot be checked (use `sh -c '…'` or a repo script)", words);
+		}
+		case "ssh": {
+			let k = 0;
+			while (k < args.length) {
+				const a = t[k]!;
+				if (a === "--") { k++; break; }
+				if (!a.startsWith("-") || a === "-") break;
+				k++;
+				for (let c = 1; c < a.length; c++) if ("bcDEeFIiJLlmOopQRSWw".includes(a[c]!)) { if (c === a.length - 1) k++; break; }
+			}
+			const rest = args.slice(k + 1);
+			if (rest.length) workerString(rest.map((w) => w.text).join(" "), depth + 1);
+			return;
+		}
+		case "xargs": {
+			const rest = skipOptions(args, ["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "-l"]);
+			if (rest.length) workerWords(rest, depth + 1);
+			return;
+		}
+		case "find":
+			for (let k = 0; k < args.length; k++) {
+				if (/^-(exec|execdir|ok|okdir)$/.test(t[k]!)) {
+					let e = k + 1;
+					while (e < args.length && t[e] !== ";" && t[e] !== "+") e++;
+					workerWords(args.slice(k + 1, e), depth + 1);
+					k = e;
+				}
+			}
+			return;
+	}
+}
+
+function workerString(src: string, depth: number): void {
+	if (depth > MAX_DEPTH) throw new ParseError("nesting too deep");
+	const { segments, subs } = parse(src);
+	for (const s of subs) workerString(s, depth + 1);
+	for (const seg of segments) workerWords(seg.words, depth);
+}
+
+/**
+ * The git and GitHub lockdown for a worker or other writing subagent's `bash`: a block reason, or null. Unlike
+ * checkReadOnlyCommand it leaves everything but git and gh alone. This steers a cooperative worker; it is NOT a hard barrier:
+ * an interpreter (`python3 -c`, `node -e`, a script the worker wrote) can still run git. The environment hardening in
+ * the harness (no GitHub tokens, no ssh agent, a failing GIT_SSH_COMMAND) is the second layer, not a guarantee.
+ */
+export function checkWorkerCommand(command: string): string | null {
+	try {
+		workerString(command, 0);
+		return null;
+	} catch (e) {
+		if (e instanceof GuardBlock) return e.message;
+		if (e instanceof ParseError) return `Blocked by bash: couldn't parse; simplify the command (${e.message}).`;
+		throw e;
+	}
+}
+
 // ── Routing test runs through `wolfpack test` ───────────────────────────────
 
 /**

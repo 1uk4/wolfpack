@@ -38,7 +38,7 @@ import { readBindingFile } from "@wolfpack/memory";
 import { WriterGuard, abandonChild, dependenciesLine, installDependencies, wantsInstall, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type InstallResult, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
-import { fenceRoot, offLimitsRegex, unfenceRoot } from "../engine/fence.js";
+import { fenceRoot, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
 import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
@@ -62,6 +62,8 @@ export interface SubagentOptions {
   instructionsFor?(cwd: string): string;
   /** Where worktrees go (wolf.yaml `workspaces.root`). Default `<wolfHome>/workspaces`. */
   workspacesRoot?: string;
+  /** wolf.yaml `workspaces.autosquash`: fold a task branch's fixup! commits at merge. Default false. */
+  autosquash?: boolean;
   /** An existing conversation as it is stored (no reconciling with the home configuration: a child keeps its own). */
   getConversation(id: string): Promise<EngineConversation | undefined>;
   /** Terminate a child's owner task (the parked task its conversation hangs under). */
@@ -754,6 +756,7 @@ export class SubagentManager {
   }
 
   private async attach(rec: ChildRecord, conv: EngineConversation): Promise<ThreadRuntime> {
+    markSubagentConversation(conv.id); // (its bash is held to the git/GitHub lockdown, also after a restart)
     if (rec.workspace) fenceRoot(rec.workspace.path, this.offLimitsOf(rec)); // (write and edit stay inside it, bash is checked; also after a restart)
     const thread = await this.port.attachChild(this.summaryOf(rec), conv);
     this.unobserve.set(rec.id, thread.observe((ev) => this.onChildEvent(rec, thread, ev)));
@@ -1119,14 +1122,16 @@ ${text}`;
       const held = this.heldBy(rec);
       if (held) return say(`Not merged: ${held}. When it finishes the branch is merged again.`);
       let n = 0;
+      let notes: string[] | undefined;
       try {
         n = Number(await gitOk(feature.path, ["rev-list", "--count", `${feature.branch}..${ws.branch}`]));
-        const res = await mergeChild(ws, feature);
+        const res = await mergeChild(ws, feature, {}, { autosquash: this.opts.autosquash === true });
         if (!res.ok) {
           this.ledger(rec, "system", "parent", "error", `merge conflict: ${res.files.join(", ")}`);
           tried();
-          return say(conflictText(rec, ws, feature, res.files));
+          return say(conflictText(rec, ws, feature, res.files, res.notes));
         }
+        notes = res.notes;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         this.ledger(rec, "system", "parent", "error", `merge refused: ${msg}`);
@@ -1138,7 +1143,7 @@ ${text}`;
       this.guard.releaseAll(rec.id);
       this.persist();
       this.ledger(rec, "system", "parent", "result", `merged ${ws.branch} into ${feature.branch}`);
-      return say(mergedText(ws, feature, n));
+      return say(mergedText(ws, feature, n, notes));
     } finally {
       this.merging.delete(rec.id);
     }
@@ -1323,6 +1328,7 @@ ${text}`;
     this.guard.releaseAll(rec.id);
     this.releaseSlot(rec);
     this.persist();
+    unmarkSubagentConversation(rec.conversationId);
     if (rec.workspace) await this.dropWorkspace(rec.workspace);
     await this.port.detachChild(rec.id).catch((e) => this.port.onError(e));
     await this.opts.releaseOwner(rec.ownerTaskId).catch((e) => this.port.onError(e));

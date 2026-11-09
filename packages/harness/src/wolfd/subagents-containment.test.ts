@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempRepo, type TempRepo } from "@wolfpack/workspaces";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "./scripted-model.js";
-import { bashViolation, fenceRoot, fenceViolation, unfenceRoot } from "../engine/fence.js";
+import { bashViolation, fenceRoot, fenceViolation, isSubagentConversation, unfenceRoot } from "../engine/fence.js";
 import { rewriteBrief } from "./subagents.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -96,6 +96,8 @@ function scripted(mainDir: () => string, gate?: Promise<void>) {
       if (n === 0) return call("bash", { command: `${viaVar(main)}; cd "$M" && git commit -q --allow-empty -m sneaky` });
     } else if (brief.includes("MODE_UNCOMMITTED")) {
       if (n === 0) return call("bash", { command: `${viaVar(main)}; echo hi > "$M/stray.txt"` });
+    } else if (brief.includes("MODE_PUSH")) {
+      if (n === 0) return call("bash", { command: "git push origin HEAD" });
     } else if (brief.includes("MODE_QUIET")) {
       if (n === 0) return call("write", { path: "quiet.txt", content: "q" });
       if (n === 1) return call("bash", { command: "git add -A && git commit -q -m quiet" });
@@ -185,6 +187,25 @@ describe("worktree child containment", () => {
     expect(r.git(["log", "--format=%s", rec.workspace.branch]).split("\n")[0]).toBe("work");
     expect(r.git(["log", "--format=%s", "main"])).toBe("initial");
     expect(await parentText(w)).not.toContain("WARNING");
+  });
+
+  it("holds a spawned child's bash to the git lockdown through the real tool path (its conversation is marked before its first turn)", async () => {
+    const { w, s } = await boot();
+    await say(w, "spawn editor: MODE_PUSH");
+    await settled(w, 1);
+    expect(s.childResults[0]).toContain("Blocked by bash: `git push` is not allowed");
+    const [rec] = regOf(w).children;
+    expect(isSubagentConversation(rec.conversationId)).toBe(true);
+  });
+
+  it("keeps a child marked for the git lockdown after its worktree is abandoned (its record, and a possible resume, outlive the worktree)", async () => {
+    const { w } = await boot();
+    await say(w, "spawn editor: MODE_NOOP");
+    await settled(w, 1);
+    const { conversationId } = regOf(w).children[0];
+    await say(w, "abandon editor");
+    await vi.waitFor(() => expect(regOf(w).children[0].workspace).toBeUndefined());
+    expect(isSubagentConversation(conversationId)).toBe(true);
   });
 
   it("reports a commit that landed on the main checkout, with a ledger entry, and does not revert it", async () => {

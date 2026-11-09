@@ -15,7 +15,7 @@ import {
 } from "../components/settings/agent-section.tsx";
 import { composeSlotModel } from "../components/model-slot.ts";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
-import { classifyKeys, keyStatusLine, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
+import { classifyKeys, keyStatusLine, visibleKeyGroups, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
 import type { AgentSettings, AuthKeyStatus, ModelsSettings } from "../src/core";
 import { slotsConfigured } from "../src/core";
 import { setupStage } from "../components/setup-dialog.tsx";
@@ -243,6 +243,27 @@ describe("classifyKeys — the Keys section's two-group projection", () => {
 	it("providers seam absent = addable empty, nothing crashes", () => {
 		const out = classifyKeys([], undefined);
 		assert.deepEqual(out.addable, []);
+	});
+});
+
+describe("visibleKeyGroups — Keys shows only Deepgram unless all providers are enabled", () => {
+	const st = (id: string): AuthKeyStatus => ({ id, info: null, present: true, masked: "…ab12 (32 chars)", source: "file", shadowedByEnv: false });
+	const providers: ProviderKeyInfo[] = [{ id: "groq", envVar: "GROQ_API_KEY", label: "Groq" }];
+	const classified = classifyKeys([st("GROQ_API_KEY"), st("DEEPGRAM_API_KEY"), st("PLANS_LOGIN_TOKEN")], providers);
+
+	it("off: provider rows, the Add-provider row and unknown vars are hidden; Deepgram stays", () => {
+		const out = visibleKeyGroups(classified, false);
+		assert.deepEqual(out.toolRows.map((r) => r.id), ["DEEPGRAM_API_KEY"]);
+		assert.deepEqual(out.providerRows, []);
+		assert.deepEqual(out.unknownRows, []);
+		assert.equal(out.showAddProvider, false);
+	});
+
+	it("on: everything is shown as before", () => {
+		const out = visibleKeyGroups(classified, true);
+		assert.deepEqual(out.providerRows.map((r) => r.id), ["GROQ_API_KEY"]);
+		assert.equal(out.unknownRows.length, 1);
+		assert.equal(out.showAddProvider, true);
 	});
 });
 

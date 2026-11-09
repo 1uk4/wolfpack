@@ -95,6 +95,23 @@ export function classifyKeys(
 	};
 }
 
+/** Owner (2026-11): Keys shows only how Anthropic is reached (Claude Max) and Deepgram. Flip to true to bring back the
+ *  provider table, the Add-provider row and the other stored variables. Hidden keys are never touched. */
+export const SHOW_ALL_PROVIDERS = false;
+
+/** What the Keys table renders for a classification. Pure; exported for tests. */
+export function visibleKeyGroups(
+	classified: ReturnType<typeof classifyKeys>,
+	showAll: boolean,
+): { providerRows: AuthKeyStatus[]; toolRows: AuthKeyStatus[]; unknownRows: AuthKeyStatus[]; showAddProvider: boolean } {
+	return {
+		providerRows: showAll ? classified.providerRows : [],
+		toolRows: classified.toolRows,
+		unknownRows: showAll ? classified.unknownRows : [],
+		showAddProvider: showAll,
+	};
+}
+
 /** The minimal status line, e.g. "…ab12 · 64 chars" (" · env" marks an
  *  environment-owned value — the row itself is read-only then). Pure. */
 export function keyStatusLine(status: AuthKeyStatus): string {
@@ -399,7 +416,9 @@ export function KeysSection({
 		return <p className="px-6 py-5 text-xs text-muted-foreground/70">Loading keys…</p>;
 	}
 
-	const { providerRows, toolRows, unknownRows, addable } = classifyKeys(statuses, providers);
+	const classified = classifyKeys(statuses, providers);
+	const { addable } = classified;
+	const { providerRows, toolRows, unknownRows, showAddProvider } = visibleKeyGroups(classified, SHOW_ALL_PROVIDERS);
 
 	async function saveNewProvider(p: ProviderKeyInfo, value: string) {
 		const err = await saveKey(p.envVar, value);
@@ -412,6 +431,15 @@ export function KeysSection({
 
 	return (
 		<>
+			{/* The console has no readable source for the Max login (it lives in the wolf's claude bridge), so this row is static. */}
+			<SettingsGroup label="Model access" testid="group-anthropic-access">
+				<div className="flex items-center justify-between gap-3 px-1 py-1.5" data-testid="anthropic-access-row">
+					<span className="font-ui text-xs text-foreground">Anthropic</span>
+					<span className="font-ui text-[11px] text-muted-foreground">Claude Max subscription</span>
+				</div>
+			</SettingsGroup>
+
+			{SHOW_ALL_PROVIDERS && (
 			<SettingsGroup label="Model providers" testid="group-provider-keys">
 				{providerRows.map((status) => (
 					<KeyTableRow
@@ -431,7 +459,7 @@ export function KeysSection({
 						testid={`key-${status.id.toLowerCase()}`}
 					/>
 				))}
-				{providers !== undefined && (
+				{showAddProvider && providers !== undefined && (
 					<AddProviderRow
 						addable={addable}
 						onPick={(p) => {
@@ -440,13 +468,14 @@ export function KeysSection({
 						}}
 					/>
 				)}
-				{adding && (
+				{showAddProvider && adding && (
 					<div className="flex items-center gap-2 rounded-sm px-1 py-1.5" data-testid={`key-${adding.id}-editor`}>
 						<span className="shrink-0 font-ui text-xs text-foreground">{adding.label}</span>
 						<AddProviderEditor provider={adding} onSave={(v) => void saveNewProvider(adding, v)} onCancel={() => setAdding(null)} error={addError} />
 					</div>
 				)}
 			</SettingsGroup>
+			)}
 
 			<SettingsGroup label="Tools & services" testid="group-tool-keys">
 				{toolRows.map((status) => (

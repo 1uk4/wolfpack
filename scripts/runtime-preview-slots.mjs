@@ -207,13 +207,15 @@ export function createSlots({
 	const dir = path.join(home, ".wolfpack", "preview");
 	const file = path.join(dir, "slots.json");
 	const lockFile = path.join(dir, "slots.lock");
-	// Non-secret token ids of the browser tokens `slot pair` minted, one per port: {"3231": "tok_..."}. Its own file (not slots.json) so a
+	// Non-secret token ids of the browser tokens `slot pair` minted, one per port and kind ("agent" = the wolf browser via --print-url, "owner" = the owner's browser): {"3231": {"agent": "tok_...", "owner": "tok_..."}}. The older flat {"3231": "tok_..."} reads as the owner's id. Its own file (not slots.json) so a
 	// slot record dying never loses the id, and the runner's slots.json check is untouched. Only ids are ever stored here.
 	const tokensFile = path.join(dir, "slot-tokens.json");
 	const readIds = () => {
 		try {
 			const o = JSON.parse(fs.readFileSync(tokensFile, "utf8"));
-			return o && typeof o === "object" ? o : {};
+			if (!o || typeof o !== "object") return {};
+			for (const k of Object.keys(o)) if (typeof o[k] === "string") o[k] = { owner: o[k] }; // legacy flat shape
+			return o;
 		} catch {
 			return {};
 		}
@@ -224,14 +226,17 @@ export function createSlots({
 		fs.renameSync(tokensFile + ".tmp", tokensFile);
 	};
 	const pendingIds = [];
-	/** Under the lock: forget the port's recorded id and queue it for revoking (done after the lock, in settled). */
-	const forgetId = (port) => {
+	/** Under the lock: forget the port's recorded id of one kind (every kind when none is named) and queue it for revoking (done after the lock, in settled). */
+	const forgetId = (port, kind) => {
 		const ids = readIds();
-		const id = ids[String(port)];
-		if (typeof id !== "string") return;
-		delete ids[String(port)];
+		const entry = ids[String(port)];
+		if (!entry || typeof entry !== "object") return;
+		for (const k of kind ? [kind] : Object.keys(entry)) {
+			if (typeof entry[k] === "string") pendingIds.push(entry[k]);
+			delete entry[k];
+		}
+		if (!Object.keys(entry).length) delete ids[String(port)];
 		writeIds(ids);
-		pendingIds.push(id);
 	};
 	/** Revoke a token id on the hub with a token this Mac holds (hub-token file first, as `slot pair` does, then the env one). Never throws: a failure is one warning. */
 	const revokeId = async (id) => {
@@ -421,13 +426,19 @@ export function createSlots({
 			return { port: slot.port, url: url(slot.port), pid: slot.pid, reused: slot.reused, noToken: !tok.token, ...(tok.looseFile ? { tokenFileLoose: tok.looseFile } : {}) };
 		},
 		list: async () => settled(await locked(() => sweep().slots)),
-		/** Keep the non-secret id of the browser token `slot pair` just minted for this port. */
-		recordToken: async (port, id) => locked(() => writeIds({ ...readIds(), [String(port)]: id })),
-		/** Revoke the port's recorded token (if any) and forget it. A failure is a warning, never an error. */
-		revokeToken: async (port) => {
-			await locked(() => forgetId(port));
+		/** Keep the non-secret id of the browser token `slot pair` just minted for this port and kind ("owner" | "agent"). */
+		recordToken: async (port, id, kind = "owner") =>
+			locked(() => {
+				const ids = readIds();
+				writeIds({ ...ids, [String(port)]: { ...ids[String(port)], [kind]: id } });
+			}),
+		/** Revoke the port's recorded token of this kind (if any) and forget it. A failure is a warning, never an error. */
+		revokeToken: async (port, kind = "owner") => {
+			await locked(() => forgetId(port, kind));
 			return settled();
 		},
+		/** Best effort: revoke a token id that was minted but could not be recorded. Warns on failure. */
+		revokeTokenId: async (id) => revokeId(id),
 		/** Read-only view for `status`: no lock, no sweep, no write. Dead slots are just left out. */
 		peek: () => read().filter((s) => isAlive(s.pid, { ...s, home })),
 		/** Stop idle and dead slots. → [port] stopped for idleness */

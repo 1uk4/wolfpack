@@ -432,6 +432,33 @@ describe("agent slots: browser tokens", () => {
 		expect(warnings[0]).not.toContain("tok-1");
 	});
 
+	it("keeps one id per port and kind: revoking one kind leaves the other; release and the idle stop revoke both", async () => {
+		const s = withHub({ idleMs: 20 * 60_000 });
+		await s.get("/wt/a");
+		await s.get("/wt/b");
+		await s.recordToken(3231, "tok_owner", "owner");
+		await s.recordToken(3231, "tok_agent", "agent");
+		await s.recordToken(3232, "tok_o2", "owner");
+		await s.recordToken(3232, "tok_a2", "agent");
+		await s.revokeToken(3231, "agent");
+		expect(calls.map((c) => c.url.split("/").pop())).toEqual(["tok_agent"]);
+		await s.release("3231");
+		expect(calls.map((c) => c.url.split("/").pop())).toEqual(["tok_agent", "tok_owner"]);
+		clock += 25 * 60_000;
+		expect(await s.reap()).toEqual([3232]);
+		expect(calls.map((c) => c.url.split("/").pop()).slice(2).sort()).toEqual(["tok_a2", "tok_o2"]);
+	});
+
+	it("reads the old flat slot-tokens.json ({port: id}) as the owner's id", async () => {
+		const s = withHub();
+		await s.get("/wt/a");
+		fs.writeFileSync(path.join(home, ".wolfpack", "preview", "slot-tokens.json"), JSON.stringify({ "3231": "tok_old" }));
+		await s.revokeToken(3231, "agent");
+		expect(calls).toEqual([]);
+		await s.revokeToken(3231, "owner");
+		expect(calls.map((c) => c.url.split("/").pop())).toEqual(["tok_old"]);
+	});
+
 	it("revokeToken revokes and clears the port's id; an already-revoked id (404) is not a warning", async () => {
 		hubStatus = 404;
 		const s = withHub();

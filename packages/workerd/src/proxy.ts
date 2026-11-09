@@ -4,6 +4,7 @@ import { ERROR_HTTP_STATUS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, matchRout
 import { baseHealth, createLagMonitor, stampedVersion, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import type { WolfRegistry } from "./registry.js";
 import { getJson, socketOf } from "./socket.js";
+import { DIRECT_TOKEN_HEADER, directTokenMatches } from "./direct-token.js";
 
 export interface WorkerdServerOptions {
   registry: WolfRegistry;
@@ -11,10 +12,25 @@ export interface WorkerdServerOptions {
   health?: () => unknown;
   /** Timeout for the per-wolf /v1/wolves probe during aggregation. Default 1000. */
   probeTimeoutMs?: number;
+  /**
+   * The local direct-console token (direct-token.ts). When set, /direct/v1/* serves the same /v1 API to a console on THIS machine while
+   * the hub is unreachable: loopback callers only (403 forbidden otherwise, whatever interface workerd listens on), and only with the
+   * token in X-Wolfpack-Direct-Token (401 unauthorized otherwise). A request carrying proxy headers (X-Forwarded-For, X-Forwarded-Host,
+   * Forwarded, Via) is 403 too: something (tailscale serve/funnel, a reverse proxy) is relaying it onto loopback. Unset: /direct is 404.
+   * The hub relay never reaches it (relay.ts refuses /direct paths).
+   */
+  directToken?: () => string;
+  /** Is this request from this machine? Default: the socket's peer address is loopback (isLoopbackPeer). */
+  isLoopback?: (req: IncomingMessage) => boolean;
 }
 
 /** Release version: the VERSION beside the bundle (workerd.mjs) or the package root (`pnpm runtime:update` stamp), else <package.json>-dev. */
 const VERSION = stampedVersion([new URL("./VERSION", import.meta.url), new URL("../VERSION", import.meta.url)], new URL("../package.json", import.meta.url));
+
+/** A loopback peer address (IPv4, IPv6 and IPv4-mapped IPv6). */
+export const isLoopbackPeer = (a: string | undefined): boolean => !!a && (a === "::1" || /^(::ffff:)?127\./.test(a));
+/** Headers a proxy adds: their presence means the loopback peer is a relay for someone else. */
+const PROXY_HEADERS = ["x-forwarded-for", "x-forwarded-host", "forwarded", "via"];
 
 /**
  * The /healthz body is unauthenticated, so it carries names, states and counts only: per-wolf socket `url` and `logFile` paths
@@ -102,6 +118,21 @@ export class WorkerdServer {
       res.end(body);
       return;
     }
+    if (url.pathname.startsWith("/direct/v1/") && this.opts.directToken) {
+      const loopback = this.opts.isLoopback ?? ((r: IncomingMessage) => isLoopbackPeer(r.socket.remoteAddress));
+      if (!loopback(req)) return sendError(res, "forbidden", "the direct console path is loopback only");
+      if (PROXY_HEADERS.some((h) => req.headers[h] !== undefined)) return sendError(res, "forbidden", "the direct console path does not accept proxied requests");
+      let expected = "";
+      try {
+        expected = this.opts.directToken();
+      } catch {
+        /* no token file: nothing matches */
+      }
+      if (!directTokenMatches(req.headers[DIRECT_TOKEN_HEADER], expected)) return sendError(res, "unauthorized", "missing or wrong direct token");
+      delete req.headers[DIRECT_TOKEN_HEADER]; // never forwarded to the wolf
+      url.pathname = url.pathname.slice("/direct".length);
+    }
+    const path = url.pathname + url.search; // the normalised URL is the one source of truth for routing and forwarding
     if (!url.pathname.startsWith("/v1/")) return sendError(res, "not_found", `no such path: ${url.pathname}`);
     // /v1/wolves is answered here (never forwarded), so the version gate must live here too; forwarded routes also get wolfd's own check.
     const ver = req.headers[PROTOCOL_VERSION_HEADER.toLowerCase()];
@@ -117,12 +148,12 @@ export class WorkerdServer {
     if (!wolf || !this.opts.registry.has(wolf)) return sendError(res, "not_found", `unknown wolf: ${wolf ?? "(none)"}`);
     const upstream = this.opts.registry.upstream(wolf);
     if (!upstream) return sendError(res, "engine_error", `wolf ${wolf} is offline`, true);
-    this.forward(req, res, upstream, wolf);
+    this.forward(req, res, upstream, wolf, path);
   }
 
-  private forward(req: IncomingMessage, res: ServerResponse, upstream: string, wolf: string): void {
+  private forward(req: IncomingMessage, res: ServerResponse, upstream: string, wolf: string, path: string): void {
     const sock = socketOf(upstream);
-    const target = new URL(req.url ?? "/", sock ? "http://wolf" : upstream);
+    const target = new URL(path, sock ? "http://wolf" : upstream);
     const where = sock ? { socketPath: sock } : { hostname: target.hostname, port: target.port };
     const up = httpRequest(
       { ...where, path: target.pathname + target.search, method: req.method, headers: forwardHeaders(req.headers) },

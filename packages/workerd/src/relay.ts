@@ -5,7 +5,7 @@
  * frames are sent while the hub's client is slow). Only the hub opens requests.
  *
  * SSRF: the frame is untrusted. Host and port ALWAYS come from `baseUrl`; `path` must be origin-form ("/x", not "//x", not absolute) and must
- * resolve to baseUrl's own origin, else the request is refused with rerr before anything connects.
+ * resolve to baseUrl's own origin, else the request is refused with rerr before anything connects. /direct/* (the local console path) is always refused.
  * Backpressure: bytes handed to the socket are counted until ws's send callback fires; above HIGH_WATER the local response is paused.
  */
 import { request as httpRequest } from "node:http";
@@ -15,7 +15,28 @@ type Req = Extract<LinkFrame, { t: "req" }>;
 /** Never copied from the worker's response (hop-by-hop, framing, cookies and CORS belong to the worker's origin, not the hub's). */
 const SKIP_RES = (k: string) => HOP.has(k) || k === "set-cookie" || k === "set-cookie2" || k.startsWith("access-control-");
 const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authenticate", "proxy-authorization", "content-length", "host"]);
-const SKIP_REQ = new Set(["authorization", "cookie", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authorization", "content-length", "host", "expect"]);
+const SKIP_REQ = new Set(["x-wolfpack-direct-token", "authorization", "cookie", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authorization", "content-length", "host", "expect"]);
+/**
+ * The direct console path (/direct/*, work-wolfpack-Fy45EOA) is for a console on this machine only. The relay connects to workerd on
+ * loopback, so a hub-supplied /direct path would pass workerd's loopback check: refuse it here, after normalising dots, percent-encoding
+ * (decoded until stable) and case, so no spelling of it gets through.
+ */
+function isDirectPath(pathname: string): boolean {
+  let p = pathname;
+  for (let i = 0; i < 4; i++) {
+    let d: string;
+    try {
+      d = decodeURIComponent(p);
+    } catch {
+      return true; // undecodable: refuse rather than guess
+    }
+    d = new URL(d.replace(/\\/g, "/"), "http://x").pathname;
+    if (d === p) break;
+    p = d;
+  }
+  p = p.toLowerCase();
+  return p === "/direct" || p.startsWith("/direct/");
+}
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 const HIGH_WATER = 256 * 1024;
 const LOW_WATER = HIGH_WATER / 4;
@@ -85,6 +106,7 @@ export class WorkerRelay {
       return refuse("bad_request", "bad path");
     }
     if (resolved.origin !== base.origin) return refuse("bad_request", "path leaves the worker origin");
+    if (isDirectPath(resolved.pathname)) return refuse("forbidden", "the direct console path is local only");
     if (f.body !== undefined && f.body.length > MAX_B64) return refuse("bad_request", "request body too large");
     const body = f.body ? Buffer.from(f.body, "base64") : undefined;
     if (body && body.length > LINK_RELAY_MAX_BODY) return refuse("bad_request", "request body too large");

@@ -13,6 +13,7 @@ import type { LinkWelcome, LinkWolf } from "@wolfpack/protocol";
 import { WorkerRelay } from "./relay.js";
 import { KbSync, type KbSyncOptions } from "./kb-sync.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
+import { ensureDirectToken } from "./direct-token.js";
 
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Directory holding `<wolf>/wolf.yaml`. Default: ~/wolves/local. */
@@ -241,8 +242,21 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     }
     wake = startWakeMonitor({ ...opts.wake, onWake: (reason) => (log(`[workerd] ${reason}: reconnecting hub link`), link!.kick()) });
   }
+  // The direct console path (work-wolfpack-Fy45EOA): a supervising workerd creates its local token now, so a console on this machine can
+  // read it before the hub ever goes down. Only with a hub (it is the hub's fallback); link-only supervises no wolves, so it has nothing to serve.
+  let directToken: (() => string) | undefined;
+  if (!linkOnly && hubCfg) {
+    const dir = opts.configDir ?? workerdConfigDir();
+    try {
+      ensureDirectToken(dir, log);
+      directToken = () => ensureDirectToken(dir, log);
+    } catch (e) {
+      log(`[workerd] direct console path off: cannot create its token (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
   const server = new WorkerdServer({
     registry: supervisor,
+    ...(directToken ? { directToken } : {}),
     health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
   });
   const url = await server.listen(opts.port ?? 7141, opts.host ?? (linkOnly ? (process.env.WORKERD_HOST || "127.0.0.1") : undefined));

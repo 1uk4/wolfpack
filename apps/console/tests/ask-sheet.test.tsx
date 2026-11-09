@@ -306,6 +306,35 @@ describe("ask sheet answers and guards", () => {
 	});
 });
 
+describe("ask sheet image answers", () => {
+	it("an images-only draft counts as answered, shows an N images badge with thumbnails, and the page body never carries attachments", async () => {
+		const req = [{ id: "q1", kind: "free-text", label: "Show me" }, { id: "q2", kind: "single", label: "Pick", optional: true, options: OPTS }];
+		await render(pending({ card: card({ fields: req, steps: [{ fields: ["q1", "q2"] }] }), draft: { q1: { value: "", attachments: ["i1", "i2"] }, q2: { value: "a", attachments: ["i3"] } } as never }));
+		assert.equal(q('[data-testid="ask-missing"]'), null);
+		assert.deepEqual(qa('[data-testid="ask-images"]').map((e) => e.textContent), ["2 images", "1 image"]);
+		assert.deepEqual(qa('[data-testid="ask-images"] img').map((i) => i.getAttribute("src")), ["/api/wolves/w/threads/a/attachments/i1", "/api/wolves/w/threads/a/attachments/i2", "/api/wolves/w/threads/a/attachments/i3"]);
+		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await settle();
+		assert.deepEqual(posts[0]!.body, { answers: { q2: { value: "a" } } });
+	});
+
+	it("picking an option keeps the images bound to that question", async () => {
+		const req = [{ id: "q2", kind: "single", label: "Pick", optional: true, options: OPTS }];
+		await render(pending({ card: card({ fields: req, steps: [{ fields: ["q2"] }] }), draft: { q2: { value: "a", attachments: ["i3"] } } as never }));
+		await click(qa('[data-testid="ask-option"]')[1]!);
+		assert.deepEqual(qa('[data-testid="ask-images"]').map((e) => e.textContent), ["1 image"]);
+	});
+
+	it("a revise that keeps the question also keeps an image-only draft (free, single, multi)", async () => {
+		const req = [{ id: "q1", kind: "free-text", label: "Show me" }, { id: "q2", kind: "single", label: "Pick", optional: true, options: OPTS }, { id: "q3", kind: "multi", label: "Many", optional: true, options: OPTS }];
+		const c = card({ fields: req, steps: [{ fields: ["q1", "q2", "q3"] }] });
+		await render(pending({ card: c, draft: { q1: { value: "", attachments: ["i1"] }, q2: { value: "", attachments: ["i2"] }, q3: { value: [], attachments: ["i3"] } } as never }));
+		assert.equal(qa('[data-testid="ask-images"]').length, 3);
+		await render(pending({ card: c, draft: {} as never }));
+		assert.equal(qa('[data-testid="ask-images"]').length, 3);
+	});
+});
+
 after_all();
 function after_all() {
 	process.on("exit", () => void (globalThis.fetch = realFetch));

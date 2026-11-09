@@ -42,6 +42,11 @@ export function diagramUrl(wolf: string, slug: string, id: string): string {
 	return `${threadBase(wolf, slug)}/diagrams/${encodeURIComponent(id)}`;
 }
 
+/** Where one uploaded image of a thread is served (the same URL the transcript uses for message images). */
+export function attachmentUrl(wolf: string, slug: string, id: string): string {
+	return `${threadBase(wolf, slug)}/attachments/${encodeURIComponent(id)}`;
+}
+
 /** Where a pending card's skip is POSTed. */
 export function cardSkipUrl(wolf: string, slug: string, callId: string): string {
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/skip`;
@@ -91,7 +96,7 @@ export function threadTransport(
 				...(input.type === "text" && input.attachments?.length ? { attachments: input.attachments.map((a) => ({ id: a.id })) } : {}),
 			}),
 		uploadUrl: `${base}/attachments`,
-		attachmentUrl: (id) => `${base}/attachments/${encodeURIComponent(id)}`,
+		attachmentUrl: (id) => attachmentUrl(wolf, slug, id),
 		steersViaSubmit: true,
 		// The record is the newest page only: the full transcript is never refetched on a settle.
 		recordUrl: `${base}?limit=${THREAD_PAGE_SIZE}`,

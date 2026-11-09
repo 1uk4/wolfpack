@@ -55,13 +55,14 @@ const th = (id: string, extra: object = {}) => ({ id, title: id, kind: "feature"
 const body = (slug: string) => bodies[slug] ?? { messages: [], pendingCards: [] };
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	const url = String(input);
+	if (init?.method === "POST" && url.endsWith("/attachments")) return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
 	if (init?.method === "POST") {
 		calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
 		if (failPost?.test(url)) return Response.json({ error: "nope" }, { status: 500 });
 		const slug = /\/threads\/([^/]+)\//.exec(url)![1]!;
 		if (url.endsWith("/submit")) body(slug).pendingCards = []; // the wolf closes every pending card as superseded
 		const m = /\/cards\/([^/]+)\//.exec(url);
-		if (m) body(slug).pendingCards = body(slug).pendingCards.filter((p) => p.callId !== m[1]);
+		if (m && !url.endsWith("/text")) body(slug).pendingCards = body(slug).pendingCards.filter((p) => p.callId !== m[1]);
 		return new Response(JSON.stringify({ disposition: "started" }), { status: 200 });
 	}
 	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
@@ -258,17 +259,72 @@ describe("ChatBar cards", () => {
 		await until(() => q('[data-testid="answering-chip"]') === null, "the chip to clear");
 	});
 
-	it("reply mode: attaching is visibly off, Esc and × leave it and the replace hint returns", async () => {
+	it("reply mode: an attached image binds with the text, alone it still sends, and a refused bind keeps text and image", async () => {
+		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		const pick = async () => {
+			const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+			await act(async () => void props(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+			await until(() => q(`[data-testid="attachment-chip"][data-status="ready"]`), "the upload");
+		};
+		const texts = () => calls.filter((c) => c.url.endsWith("/cards/p1/questions/q1/text"));
+		await click(q('[data-testid="ask-answer-by-typing"]'));
+		assert.equal(props(q('button[aria-label="Attach images"]')!, "disabled"), false);
+		failPost = /\/text$/; // refused, e.g. over the card's image cap
+		await pick();
+		await type("look");
+		await submit();
+		await until(() => q('[role="alert"]'), "the inline error");
+		assert.deepEqual(texts()[0]!.body, { text: "look", attachments: ["up-1"] });
+		assert.equal(q('[role="alert"]')!.textContent, "nope");
+		assert.equal(ta().value, "look");
+		assert.equal(qa('[data-testid="attachment-chip"]').length, 1);
+		failPost = null;
+		await submit();
+		await until(() => texts().length === 2, "the retry");
+		await until(() => qa('[data-testid="attachment-chip"]').length === 0, "the chips to clear");
+		await click(qa('[data-testid="ask-answer-by-typing"]')[0]!);
+		await pick();
+		await submit();
+		await until(() => texts().length === 3, "the image-only bind");
+		assert.deepEqual(texts()[2]!.body, { text: "", attachments: ["up-1"] });
+	});
+
+	it("reply mode: a double Send posts the answer once and the second Send cannot overwrite it with an empty one", async () => {
+		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+		await act(async () => void props(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+		await until(() => q(`[data-testid="attachment-chip"][data-status="ready"]`), "the upload");
+		await click(q('[data-testid="ask-answer-by-typing"]'));
+		await type("look");
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		const inner = globalThis.fetch;
+		globalThis.fetch = (async (i: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === "POST" && String(i).endsWith("/text")) await held;
+			return inner(i, init);
+		}) as typeof fetch;
+		try {
+			await submit();
+			await submit(); // the round trip is still open
+			release();
+			await until(() => calls.some((c) => c.url.endsWith("/text")), "the bind");
+		} finally {
+			globalThis.fetch = inner;
+		}
+		assert.deepEqual(calls.filter((c) => c.url.endsWith("/cards/p1/questions/q1/text")).map((c) => c.body), [{ text: "look", attachments: ["up-1"] }]);
+	});
+
+	it("reply mode: Esc and × leave it and the replace hint returns", async () => {
 		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
 		await mount();
 		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
 		await click(q('[data-testid="ask-answer-by-typing"]'));
-		const attach = q('button[aria-label="Attach images"]')!;
-		assert.equal(attach.title, "Images can't be attached to an answer yet");
-		assert.equal(props(attach, "disabled"), true);
 		await act(async () => void props(ta(), "onKeyDown")({ key: "Escape", preventDefault() {}, stopPropagation() {} }));
 		assert.equal(q('[data-testid="answering-chip"]'), null);
-		assert.equal(q('button[aria-label="Attach images"]')!.title, "");
 		await click(qa('[data-testid="ask-answer-by-typing"]')[0]!);
 		await click(q('[data-testid="answering-chip-clear"]'));
 		await type("typed");

@@ -11,7 +11,7 @@ import dynamic from "next/dynamic";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useBarCards } from "@/components/chat-bar-cards";
 import { useWide } from "@/components/chat-bar";
-import { cardTextUrl } from "@/components/thread-transport";
+import { postReply } from "@/components/ask-reply-send";
 import type { Answering } from "@/components/ask-sheet";
 import { replyLabel } from "@/components/ask-reply";
 import { BAR_EXTRAS, type AttachedRef } from "@/src/core";
@@ -27,7 +27,7 @@ export interface OwnAsk {
 	answeringLabel: string | null;
 	clearAnswering: () => void;
 	/** Send the composer text to the aimed question. Resolves to an error message, or null when it was saved. */
-	bindText: (text: string) => Promise<string | null>;
+	bindText: (text: string, attachments?: string[]) => Promise<string | null>;
 }
 
 export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: number | null): OwnAsk {
@@ -48,20 +48,14 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 	}, [answering, label]);
 	const clearAnswering = useCallback(() => setAnswering(null), []);
 	const bindText = useCallback(
-		async (text: string): Promise<string | null> => {
+		async (text: string, attachments?: string[]): Promise<string | null> => {
 			if (!answering) return "Pick a question first.";
-			try {
-				const res = await fetch(cardTextUrl(target.wolf, target.slug, answering.callId, answering.qid), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-				if (res.ok) {
-					setAnswering(null);
-					cards.refetch();
-					return null;
-				}
-				const b = (await res.json().catch(() => null)) as { error?: string } | null;
-				return b?.error ?? "Could not save the answer.";
-			} catch {
-				return "Could not save the answer.";
+			const err = await postReply(target.wolf, target.slug, answering.callId, answering.qid, text, attachments ?? []);
+			if (!err) {
+				setAnswering(null);
+				cards.refetch();
 			}
+			return err;
 		},
 		[answering, target.wolf, target.slug, cards.refetch], // eslint-disable-line react-hooks/exhaustive-deps
 	);

@@ -6,6 +6,7 @@ import type { Card, CardAnswers, CardClosed } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { escapeRawHtml } from "@/src/core";
+import { imagesOf, withImages } from "@/components/ask-images";
 
 export interface AskRecordProps {
 	callId: string;
@@ -41,7 +42,10 @@ function Line({ item, card, diagramUrl }: { item: AskRecordItem; card: Card; dia
 	const field = card.fields.find((f) => f.id === item.id);
 	if (!field) return null;
 	const detail = item.context !== undefined || item.diagram !== undefined;
-	const answer = item.state === "answered" ? plainAnswer(field, item.answer!) : item.state;
+	const imgs = imagesOf(item.answer).length;
+	const imgNote = imgs > 0 ? `${imgs} image${imgs === 1 ? "" : "s"}` : "";
+	const text = item.state === "answered" ? plainAnswer(field, withImages(item.answer!, []) as NonNullable<typeof item.answer>) : item.state;
+	const answer = imgNote ? (text === "" ? imgNote : `${text} · ${imgNote}`) : text;
 	return (
 		<li data-testid="ask-record-line" data-state={item.state} className="py-0.5">
 			<div className="flex items-baseline gap-2">

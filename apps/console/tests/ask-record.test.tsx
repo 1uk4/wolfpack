@@ -92,6 +92,11 @@ describe("ask record in the transcript", () => {
 		assert.deepEqual(lines(), ["Which DB? → pg", "Why? → fast", "Ship it? → yes", "How many? → 7"]);
 	});
 
+	it("an answer with images reads 'N image(s)' after its text, or alone for an images-only answer", async () => {
+		await render(<AskRecordCard {...base} closed="answered" pageAnswers={{ db: { value: "pg", attachments: ["a"] }, why: { value: "", attachments: ["a", "b"] }, ship: { value: true } } as never} answer={{ n: { value: 7 } }} pagesDone={3} />);
+		assert.deepEqual(lines(), ["Which DB? → pg · 1 image", "Why? → 2 images", "Ship it? → yes", "How many? → 7"]);
+	});
+
 	it("text typed but not submitted shows marked 'typed, not sent'; a pending set reads 'questions open'", async () => {
 		await render(<AskRecordCard {...base} pending pageAnswers={{ db: { value: "pg" } }} pagesDone={1} draft={{ ship: { value: false } }} />);
 		assert.match(q('[data-testid="ask-record-header"]')!.textContent!, /questions open/i);

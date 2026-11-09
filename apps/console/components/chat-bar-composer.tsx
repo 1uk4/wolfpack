@@ -9,7 +9,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { useAttachedThread } from "@/components/attached-thread";
-import { cardTextUrl, threadBase } from "@/components/thread-transport";
+import { threadBase } from "@/components/thread-transport";
+import { postReply } from "@/components/ask-reply-send";
 import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
 import { canSendWith, chipFor, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, uploadFile, UploadError, type AttachmentLimit, type PendingAttachment } from "@/components/attachments";
 import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
@@ -85,30 +86,33 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		}
 	}, [uploadUrl, patch]);
 
+	const replyInFlight = useRef(false);
 	const send = useCallback(async () => {
 		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
-		if (answering && t === "") return; // an attachment alone never answers a question
 		if (answering) {
-			// "Answering Qn": the text is that question's answer (a draft), not a chat message; nothing is superseded.
+			// "Answering Qn": the text and ready images are that question's answer (a draft), not a chat message; nothing is superseded.
+			const refs = readyInfos(attachments);
+			if (t === "" && refs.length === 0) return;
+			if (replyInFlight.current) return;
+			replyInFlight.current = true;
+			// Text and ready images leave the composer before the POST, so a second Send finds nothing to send.
 			applyText("");
 			schedule("");
+			setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
 			setError(null);
-			try {
-				const res = await fetch(cardTextUrl(target.wolf, target.slug, answering.callId, answering.qid), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: t }) });
-				if (res.ok) {
-					onClearAnswering?.();
-					onBound?.();
-					return;
-				}
-				const b = (await res.json().catch(() => null)) as { error?: string } | null;
-				setError(b?.error ?? "Could not save the answer.");
-			} catch {
-				setError("Could not save the answer.");
+			const err = await postReply(target.wolf, target.slug, answering.callId, answering.qid, t, refs.map((r) => r.id));
+			replyInFlight.current = false;
+			if (!err) {
+				onClearAnswering?.();
+				onBound?.();
+				return;
 			}
+			setError(err);
 			const merged = mergeRestored(t, textRef.current);
 			applyText(merged);
 			schedule(merged);
+			setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
 			return;
 		}
 		const refs = readyInfos(attachments);
@@ -158,13 +162,12 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 				onChange={onChange}
 				onSend={onSend}
 				onStop={stop}
-				canSend={answering ? text.trim() !== "" || (dictation.active && !working) : canSendWith(text, attachments) || (dictation.active && !working)}
+				canSend={canSendWith(text, attachments) || (dictation.active && !working)}
 				onEscape={dictation.active ? dictation.cancel : answering ? onClearAnswering : undefined}
-				attachDisabled={answering ? "Images can't be attached to an answer yet" : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}
 				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
-				onFiles={answering ? undefined : onFiles}
+				onFiles={onFiles}
 				onPickFiles={onFiles}
 				chips={<AttachmentChips items={attachments} onRemove={(k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>

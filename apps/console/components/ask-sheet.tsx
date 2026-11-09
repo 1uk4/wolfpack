@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { InertImage, mdComponents } from "@/components/md-blocks";
 import { CardTextInput, Indicator, OPTION_ROW, isOther, otherText } from "@/components/card-fields/shared";
-import { cardPageAnswerUrl, diagramUrl } from "@/components/thread-transport";
+import { attachmentUrl, cardPageAnswerUrl, diagramUrl } from "@/components/thread-transport";
+import { imagesOf, withImages } from "@/components/ask-images";
 import { cn } from "@/lib/utils";
 import { escapeRawHtml, type AttachedRef } from "@/src/core";
 import type { CardAnswers, CardField, CardFieldAnswer, PendingCard } from "@wolfpack/client";
@@ -49,6 +50,8 @@ export function typable(f: CardField): boolean {
 function fits(f: CardField, a: CardFieldAnswer): boolean {
 	const v = read<AnyA>(a);
 	if (!v) return false;
+	// An image-only draft (no text, no option) belongs to a free, single or multi question and stays.
+	if (imagesOf(a).length > 0 && (v.value === "" || (Array.isArray(v.value) && v.value.length === 0)) && (f.kind === "free-text" || f.kind === "single" || f.kind === "multi")) return true;
 	const opts = ((f as { options?: Opt[] }).options ?? []).map((o) => o.value);
 	switch (f.kind) {
 		case "free-text": return typeof v.value === "string";
@@ -74,11 +77,13 @@ export function pageBody(fields: CardField[], draft: Record<string, CardFieldAns
 			out[f.id] = { value: (f as { default: number }).default };
 			continue;
 		}
-		const a = draft[f.id] as { value?: unknown } | undefined;
+		const a = draft[f.id];
 		if (!a) continue;
-		if (typeof a.value === "string" && a.value.trim() === "") continue;
-		if (Array.isArray(a.value) && a.value.length === 0) continue;
-		out[f.id] = draft[f.id]!;
+		const v = read<AnyA>(a)!.value;
+		if (typeof v === "string" && v.trim() === "") continue;
+		if (Array.isArray(v) && v.length === 0) continue;
+		// The images live in the server's draft, which it merges; a page answer carrying `attachments` is refused (400).
+		out[f.id] = withImages(a, []);
 	}
 	return out;
 }
@@ -130,14 +135,15 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 	const keyRef = useRef(key);
 	keyRef.current = key;
 
-	const set = (id: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [id]: a }));
+	// Picking keeps the images bound to the question (wolfd keeps them in the draft too).
+	const set = (id: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [id]: withImages(a, imagesOf(d[id])) }));
 	const clear = (id: string) => setDraft((d) => (({ [id]: _g, ...rest }) => rest)(d));
 	/** Reply mode: aim the bottom composer at this question and put the cursor there. */
 	const reply = (id: string) => {
 		setAnswering({ callId: pc.callId, qid: id });
 		requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-testid="composer"] textarea')?.focus());
 	};
-	const missing = fields.filter((f) => f.optional !== true && Object.keys(pageBody([f], draft)).length === 0);
+	const missing = fields.filter((f) => f.optional !== true && Object.keys(pageBody([f], draft)).length === 0 && imagesOf(draft[f.id]).length === 0);
 
 	const submit = async () => {
 		if (inFlight.current || missing.length > 0) return;
@@ -203,6 +209,7 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 								{f.optional && <span className="text-xs font-normal text-muted-foreground">(optional)</span>}
 							</div>
 							<Control field={f} labelId={labelId} qn={`Q${n}`} onReply={() => reply(f.id)} value={draft[f.id]} onChange={(a) => set(f.id, a)} onClear={() => clear(f.id)} />
+							{imagesOf(draft[f.id]).length > 0 && <Images target={target} ids={imagesOf(draft[f.id])} />}
 							<div className="mt-1 flex gap-3 font-ui text-xs">
 								{canType && (
 									<button type="button" data-testid="ask-answer-by-typing" className="text-primary underline" onClick={(e) => { e.stopPropagation(); if (on) setAnswering(null); else reply(f.id); }}>
@@ -238,6 +245,19 @@ function seed(pc: PendingCard, ids: string[]): Record<string, CardFieldAnswer> {
 		if (d) out[id] = d;
 	}
 	return out;
+}
+
+/** Small thumbnails of the images bound to an answer, with an "N images" badge; loaded through the thread's attachment URL. */
+function Images({ target, ids }: { target: Pick<AttachedRef, "wolf" | "slug">; ids: string[] }) {
+	return (
+		<div data-testid="ask-images" className="mt-1 flex flex-wrap items-center gap-1">
+			<span className="font-ui text-xs text-muted-foreground">{ids.length} image{ids.length === 1 ? "" : "s"}</span>
+			{ids.map((id) => (
+				// eslint-disable-next-line @next/next/no-img-element
+				<img key={id} src={attachmentUrl(target.wolf, target.slug, id)} alt="" className="size-8 rounded border object-cover" />
+			))}
+		</div>
+	);
 }
 
 function Diagram({ target, id }: { target: Pick<AttachedRef, "wolf" | "slug">; id: string }) {

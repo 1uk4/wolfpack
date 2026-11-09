@@ -597,18 +597,27 @@ function ThreadChatInner({
 		}
 	}, [dictation.active]);
 
+	const replyInFlight = useRef(false);
 	const beginSend = useRestoreOnSendFailure(error, status, textRef, applyText);
 	const doSend = useCallback(() => {
 		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
 		if (askRef.current.answeringLabel) {
-			// "Answering Qn": the text is that question's answer, not a chat message (an attachment alone sends nothing).
-			if (t === "") return;
+			// "Answering Qn": the text and ready images are that question's answer, not a chat message.
+			const refs = readyInfos(attachments);
+			const ids = refs.map((r) => r.id);
+			if (t === "" && ids.length === 0) return;
+			if (replyInFlight.current) return;
+			replyInFlight.current = true;
+			// Text and ready images leave the composer before the POST, so a second Send finds nothing to send.
 			applyText("");
-			void askRef.current.bindText(t).then((err) => {
+			setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
+			void askRef.current.bindText(t, ids).then((err) => {
+				replyInFlight.current = false;
 				if (err) {
 					setCardError(err);
 					applyText(mergeRestored(t, textRef.current));
+					setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
 				}
 			});
 			return;
@@ -857,12 +866,11 @@ function ThreadChatInner({
 											onStop={onStop}
 											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
-											canSend={ask.answeringLabel ? text.trim() !== "" || (dictation.active && !busy) : canSendWith(text, attachments) || (dictation.active && !busy)}
+											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
 											onEscape={dictation.active ? dictation.cancel : ask.answeringLabel ? ask.clearAnswering : undefined}
-											attachDisabled={ask.answeringLabel ? "Images can't be attached to an answer yet" : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
 											enterSends={dictation.active}
-											onFiles={ask.answeringLabel ? undefined : onFiles}
+											onFiles={onFiles}
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}

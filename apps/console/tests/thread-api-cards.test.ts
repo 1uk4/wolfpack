@@ -47,6 +47,19 @@ describe("thread API: paged ask routes", () => {
 	});
 });
 
+describe("thread API: bindCardText attachments", () => {
+	it("passes attachment ids through, allows images without text, and refuses neither or a bad list", async () => {
+		const seen: unknown[][] = [];
+		const api = createThreadApi(() => Object.assign(new MockConsoleClient({ delayMs: 0 }), { bindCardText: async (_t: string, _c: string, _q: string, text: string, att?: string[]) => void seen.push([text, att]) }));
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "why", attachments: ["a1"] }))).status, 200);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ attachments: ["a1", "a2"] }))).status, 200);
+		assert.deepEqual(seen, [["why", ["a1"]], ["", ["a1", "a2"]]]);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: " ", attachments: [] }))).status, 400);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "x", attachments: [3] }))).status, 400);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "x", attachments: "a1" }))).status, 400);
+	});
+});
+
 describe("thread API: skipCard", () => {
 	const api = createThreadApi(() => new MockConsoleClient({ delayMs: 0 }));
 

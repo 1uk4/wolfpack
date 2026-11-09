@@ -733,6 +733,74 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		}
 	});
 
+	it("reply mode: an attached image binds with the text, alone it still sends, and a refused bind keeps text and image", async () => {
+		textPosts.length = 0;
+		const client = new CardClient(FREEQ);
+		await mount(client);
+		withTextRoute(client);
+		const inner = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).endsWith("/attachments") && init?.method === "POST" ? Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 }) : inner(input, init)) as typeof fetch;
+		const pick = async () => {
+			const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+			await act(async () => void propsOf(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+			await settle();
+		};
+		await settle();
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		assert.equal(q('button[aria-label="Attach images"]')!.hasAttribute("disabled"), false);
+		// refused (e.g. over the card's image cap): text and image stay
+		textStatus = 400;
+		try {
+			await pick();
+			await typeText("look");
+			await enter();
+			await settle();
+			assert.deepEqual(textPosts.at(-1)!.body, { text: "look", attachments: ["up-1"] });
+			assert.equal(ta().value, "look");
+			assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1);
+			assert.match(document.body.textContent!, /nope/);
+		} finally {
+			textStatus = 200;
+		}
+		// accepted; then an image with no text
+		await enter();
+		await settle();
+		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 0);
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		await pick();
+		await enter();
+		await settle();
+		assert.deepEqual(textPosts.at(-1)!.body, { text: "", attachments: ["up-1"] });
+		assert.equal(textPosts.length, 3);
+	});
+
+	it("reply mode: a double Send posts the answer once and the second Send cannot overwrite it with an empty one", async () => {
+		textPosts.length = 0;
+		const client = new CardClient(FREEQ);
+		await mount(client);
+		withTextRoute(client);
+		const inner = globalThis.fetch;
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (String(input).endsWith("/attachments") && init?.method === "POST") return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
+			if (/\/questions\/[^/]+\/text$/.test(String(input))) await held;
+			return inner(input, init);
+		}) as typeof fetch;
+		await settle();
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		const picker = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+		await act(async () => void propsOf(picker, "onChange")({ target: Object.assign(picker, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+		await settle();
+		await typeText("look");
+		await enter();
+		await enter(); // the round trip is still open
+		release();
+		await settle();
+		assert.deepEqual(textPosts.map((p) => p.body), [{ text: "look", attachments: ["up-1"] }]);
+	});
+
 	it("phone: Esc and the close button put the questions away to a strip that reopens them; the composer stays", async () => {
 		const mm = (window as any).matchMedia;
 		(window as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });

@@ -293,11 +293,16 @@ export function createThreadApi(source: ClientSource) {
 		/** "Answering Qn": hold typed text as question `qid`'s answer (not a chat message): `POST .../questions/:qid/text`. */
 		async bindCardText(ref: ThreadRef, callId: string, qid: string, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { text?: unknown } | null;
-				if (!body || typeof body.text !== "string" || body.text.trim() === "") return json({ error: "text is required" }, 400);
+				const body = (await req.json().catch(() => null)) as { text?: unknown; attachments?: unknown } | null;
+				if (!body) return json({ error: "text or attachments is required" }, 400);
+				if (body.text !== undefined && typeof body.text !== "string") return json({ error: "text must be a string" }, 400);
+				if (body.attachments !== undefined && (!Array.isArray(body.attachments) || body.attachments.some((a) => typeof a !== "string"))) return json({ error: "attachments must be a list of ids" }, 400);
+				const text = (body.text as string | undefined) ?? "";
+				const attachments = (body.attachments as string[] | undefined) ?? [];
+				if (text.trim() === "" && attachments.length === 0) return json({ error: "text or attachments is required" }, 400);
 				const client = source();
 				if (!client.bindCardText) return json({ error: "this client has no paged cards" }, 501);
-				await client.bindCardText(await resolve(client, ref), callId, qid, body.text);
+				await client.bindCardText(await resolve(client, ref), callId, qid, text, attachments.length ? attachments : undefined);
 				return json({ accepted: true });
 			} catch (err) {
 				return failure(err);

@@ -20,18 +20,30 @@ import { parseEnv } from "node:util";
 import { liveWolvesDir, packHome } from "./live-paths.mjs";
 
 export const APPS = ["console", "none"];
-export const LIVE_PORTS = [7141, 3210];
+/** Live ports: workerd 7141, the standalone console build 3210, the `wolfpack preview` console 3230 and the agent preview slots 3231-3234. */
+export const LIVE_PORTS = [7141, 3210, 3230, 3231, 3232, 3233, 3234];
 
+export const ACTIONS = ["start", "stop", "status"];
+
+/**
+ * `[start|stop|status] [--app console|none]`. No action: run in the foreground (Ctrl-C stops). → {app, action?, sandbox?}
+ * `--sandbox <dir>` is what `start` passes to its detached runner: it puts the sandbox dir on the runner's command line, so
+ * `isOurs` can tell this sandbox's runner from another's, and the runner refuses to start if it does not match its config.
+ */
 export function parseArgs(argv) {
 	let app = "console";
+	let action;
+	let sandbox;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
-		if (a === "--app") app = argv[++i];
+		if (i === 0 && ACTIONS.includes(a)) action = a;
+		else if (a === "--app") app = argv[++i];
 		else if (a.startsWith("--app=")) app = a.slice(6);
-		else throw new Error(`unknown option "${a}" (usage: dev:stack [--app console|none])`);
+		else if (a === "--sandbox" && argv[i + 1]) sandbox = argv[++i];
+		else throw new Error(`unknown option "${a}" (usage: dev:stack [start|stop|status] [--app console|none])`);
 	}
 	if (!APPS.includes(app)) throw new Error(`--app must be one of ${APPS.join("|")}, got "${app}"`);
-	return { app };
+	return { app, ...(action ? { action } : {}), ...(sandbox ? { sandbox } : {}) };
 }
 
 const port = (name, v, dflt) => {
@@ -141,9 +153,103 @@ export function findModelsSource(home = os.homedir(), env = process.env) {
 	return undefined;
 }
 
+/** Runner record and log of a detached dev stack: both inside the sandbox, never in ~/.wolfpack or the live wolves folder. */
+export const runFiles = (cfg) => ({ pidFile: path.join(cfg.wolves, ".dev-stack.json"), log: path.join(cfg.wolves, "logs", "dev-stack.log") });
+
+const SELF = fileURLToPath(import.meta.url);
+/** How long `stop` waits for the runner to exit after SIGTERM (the runner gives its children 8 s), and how often it looks. */
+export const STOP_WAIT_MS = 10000;
+const STOP_POLL_MS = 250;
+/** How long `start` waits before checking that the runner is still alive. */
+export const START_CHECK_MS = 1000;
+
+/**
+ * The real side effects for `control`: a detached foreground runner, a ps check that a pid is still our dev-stack.mjs
+ * running for THIS sandbox (`--sandbox <dir>` on its command line), a signal, and a blocking sleep.
+ */
+export function realControlDeps(env = process.env) {
+	return {
+		spawnDetached: (args, log) => {
+			fs.mkdirSync(path.dirname(log), { recursive: true });
+			const fd = fs.openSync(log, "a");
+			const c = spawn(process.execPath, [SELF, ...args], { detached: true, stdio: ["ignore", fd, fd], env });
+			c.unref();
+			fs.closeSync(fd);
+			return c.pid;
+		},
+		isOurs: (pid, cfg) => {
+			const r = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+			const cmd = (r.stdout ?? "").trim();
+			return r.status === 0 && /\bnode\b/.test(cmd) && cmd.includes(SELF) && (cmd.endsWith(` --sandbox ${cfg.wolves}`) || cmd.includes(` --sandbox ${cfg.wolves} `));
+		},
+		kill: (pid, sig) => { try { process.kill(pid, sig); } catch { /* gone */ } },
+		sleep: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+		say: (m) => console.log(m),
+	};
+}
+
+/**
+ * start | stop | status for a detached dev stack (what a worker uses: no terminal to Ctrl-C). start spawns this script in
+ * foreground mode as its own session, logging to <sandbox>/logs/dev-stack.log, and records its pid in <sandbox>/.dev-stack.json.
+ * After START_CHECK_MS it checks the runner is still alive; if not it reports that and points to the log. (It does not wait
+ * for the ports: the runner builds first, which takes longer than a quick check.)
+ * stop SIGTERMs that runner (it stops workerd and the console itself), only after ps shows the pid is still our runner for
+ * this sandbox, then waits up to STOP_WAIT_MS for it to exit. The pid file is removed only once it is gone.
+ * Returns {running, pid?, log}: after start, running=false means it died; after stop, running=true means it did not exit.
+ */
+export function control(action, cfg, opts = {}, d = realControlDeps()) {
+	const { pidFile, log } = runFiles(cfg);
+	let rec;
+	try { rec = JSON.parse(fs.readFileSync(pidFile, "utf8")); } catch { /* none */ }
+	const ours = (pid) => d.isOurs(pid, cfg);
+	const alive = rec?.pid && ours(rec.pid) ? rec : undefined;
+	if (action === "status") {
+		d.say(alive ? `dev-stack: running (pid ${alive.pid}) workerd=:${cfg.workerdPort} console=:${cfg.consolePort}  log ${log}` : "dev-stack: not running");
+		return alive ? { running: true, pid: alive.pid, log } : { running: false, log };
+	}
+	if (action === "stop") {
+		if (!alive) {
+			fs.rmSync(pidFile, { force: true });
+			d.say("dev-stack: not running");
+			return { running: false, log };
+		}
+		d.kill(alive.pid, "SIGTERM");
+		for (let waited = 0; ours(alive.pid) && waited < STOP_WAIT_MS; waited += STOP_POLL_MS) d.sleep(STOP_POLL_MS);
+		if (ours(alive.pid)) {
+			d.say(`dev-stack: still running ${STOP_WAIT_MS / 1000} s after SIGTERM (pid ${alive.pid}); see ${log}, or kill it: kill ${alive.pid}`);
+			return { running: true, pid: alive.pid, log };
+		}
+		fs.rmSync(pidFile, { force: true });
+		d.say(`dev-stack: stopped (pid ${alive.pid})`);
+		return { running: false, log };
+	}
+	if (alive) {
+		d.say(`dev-stack: already running (pid ${alive.pid}); log ${log}`);
+		return { running: true, pid: alive.pid, log };
+	}
+	const app = opts.app ?? "console";
+	const pid = d.spawnDetached(["--app", app, "--sandbox", cfg.wolves], log);
+	fs.mkdirSync(cfg.wolves, { recursive: true });
+	fs.writeFileSync(pidFile, `${JSON.stringify({ pid, app, workerdPort: cfg.workerdPort, consolePort: cfg.consolePort, startedAt: new Date().toISOString() })}\n`);
+	d.sleep(START_CHECK_MS);
+	if (!ours(pid)) {
+		fs.rmSync(pidFile, { force: true });
+		d.say(`dev-stack: the runner (pid ${pid}) exited within ${START_CHECK_MS / 1000} s; see the log: ${log}`);
+		return { running: false, log };
+	}
+	d.say(`dev-stack: started (pid ${pid}) workerd=:${cfg.workerdPort}${app === "none" ? "" : ` console=:${cfg.consolePort}`}  log ${log}  stop: pnpm dev:stack stop`);
+	return { running: true, pid, log };
+}
+
+/** → exit code: 1 when `start` saw the runner die or `stop` could not stop it; 0 otherwise (also for the foreground run). */
 export function main(argv, env = process.env) {
-	const { app } = parseArgs(argv);
+	const { app, action, sandbox } = parseArgs(argv);
 	const cfg = resolveConfig(env);
+	if (sandbox && real(sandbox) !== cfg.wolves) throw new Error(`--sandbox ${sandbox} does not match the configured sandbox ${cfg.wolves}`);
+	if (action) {
+		const r = control(action, cfg, { app }, realControlDeps(env));
+		return (action === "start" && !r.running) || (action === "stop" && r.running) ? 1 : 0;
+	}
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 	const made = scaffold(cfg, env.WOLFPACK_MODELS_FILE || findModelsSource(cfg.home, env));
 	if (made) console.log(`dev-stack: scaffolded ${made}`);
@@ -183,8 +289,9 @@ export function main(argv, env = process.env) {
 	run("workerd", process.execPath, [path.join(root, "packages/workerd/dist/bin/workerd.js"), "--wolves", cfg.wolves, "--port", String(cfg.workerdPort)]);
 	if (app === "console") run("console", "pnpm", ["--filter", "@wolfpack/console", "run", "dev", "-p", String(cfg.consolePort)], { CONSOLE_PORT: String(cfg.consolePort) });
 	console.log("dev-stack: Ctrl-C stops everything");
+	return 0;
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
-	try { main(process.argv.slice(2)); } catch (e) { console.error(`dev-stack: ${e.message}`); process.exit(1); }
+	try { process.exitCode = main(process.argv.slice(2)); } catch (e) { console.error(`dev-stack: ${e.message}`); process.exit(1); }
 }

@@ -87,6 +87,8 @@ export interface HttpClientOptions {
   maxStreamRetries?: number;
   /** Base reconnect backoff in ms (doubles per attempt, capped at 2s). Default 50. */
   retryDelayMs?: number;
+  /** Ms a non-stream request may wait for the server's response headers before failing with a retryable engine_error (`timedOut`). Default 20000. SSE routes are exempt. */
+  requestTimeoutMs?: number;
 }
 
 interface Frame {
@@ -101,6 +103,7 @@ export class HttpConsoleClient implements ConsoleClient {
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
@@ -108,6 +111,7 @@ export class HttpConsoleClient implements ConsoleClient {
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 20_000;
   }
 
   async listWolves(): Promise<WolfSummary[]> {
@@ -606,11 +610,26 @@ export class HttpConsoleClient implements ConsoleClient {
     if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
     const viaHub = hubRoute || this.hub?.relay === true; // relay mode: every route goes through the hub
     const origin = viaHub ? this.hub!.base : this.base;
-    const res = await this.fetchFn(origin + buildPath(name, params) + query, {
-      ...init,
-      method: route.method,
-      headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
-    });
+    // Streams (SSE routes) are long-lived and run their own idle timeouts; every other request is bounded.
+    const bounded = route.response.kind !== "sse";
+    const timer = bounded ? new AbortController() : undefined;
+    let timedOut = false;
+    const handle = timer ? setTimeout(() => { timedOut = true; timer.abort(); }, this.requestTimeoutMs) : undefined;
+    const signal = timer ? (init.signal ? AbortSignal.any([init.signal, timer.signal]) : timer.signal) : init.signal;
+    let res: Response;
+    try {
+      res = await this.fetchFn(origin + buildPath(name, params) + query, {
+        ...init,
+        ...(signal ? { signal } : {}),
+        method: route.method,
+        headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      });
+    } catch (e) {
+      if (timedOut) throw Object.assign(new ProtocolError("engine_error", `wolf did not answer in time (${this.requestTimeoutMs} ms)`, true), { timedOut: true });
+      throw e;
+    } finally {
+      if (handle) clearTimeout(handle);
+    }
     if (res.ok) return res;
     if (viaHub && res.status === 401) {
       // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.

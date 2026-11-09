@@ -10,6 +10,8 @@ export interface HealthBody {
   /** Which service answered: "hubd" | "workerd" | "wolfd". */
   service?: string;
   version?: string;
+  /** os.hostname() of the machine the service runs on. Additive: older services omit it. */
+  host?: string;
   uptimeS?: number;
   /** Event-loop delay over the service's rolling window (about the last 20 s), ms beyond the sampler's own interval: p99 and max. */
   lag?: { p99Ms: number; maxMs: number };

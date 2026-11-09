@@ -28,7 +28,8 @@ import {
 	type PackHealthState,
 } from "@/components/pack-health-store";
 import { cn } from "@/lib/utils";
-import { PACK_MAP } from "@/src/core/pack-map";
+import { groupByHost, type HostCard } from "@/src/core/pack-hosts";
+import type { PackMapHost } from "@/src/core/pack-map";
 import {
 	ageText,
 	BACK_MS,
@@ -155,12 +156,6 @@ export function PackHealthHost() {
 	);
 }
 
-const GROUPS: { kind: HealthLink["kind"]; title: string }[] = [
-	{ kind: "hubd", title: "Hub" },
-	{ kind: "workerd", title: "Workers" },
-	{ kind: "wolfd", title: "Wolves" },
-];
-
 function PackHealthModal({ onClose }: { onClose: () => void }) {
 	const health = usePackHealth();
 	const { snapshot, reachable, lastSeenAt, now } = health;
@@ -192,23 +187,8 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 				{snapshot === null ? (
 					<p className="text-muted-foreground">{reachable ? "Checking the pack…" : "No report yet."}</p>
 				) : (
-					GROUPS.map((g) => {
-						const rows = snapshot.links.filter((l) => l.kind === g.kind);
-						if (rows.length === 0) return null;
-						return (
-							<section key={g.kind} className="mb-4">
-								<h3 className="mb-1.5 text-xs uppercase tracking-widest text-muted-foreground/70">{g.title}</h3>
-								<div className="flex flex-col gap-1.5">
-									{rows.map((l) => (
-										<LinkRow key={l.id} link={l} now={now} canRestart={reachable} actions={snapshot.actions} fakes={health} />
-									))}
-								</div>
-							</section>
-						);
-					})
+					groupByHost(snapshot).map((c) => <HostSection key={c.id} card={c} now={now} canAct={reachable} actions={snapshot.actions} fakes={health} />)
 				)}
-				{snapshot?.actions?.rollback.some((r) => r.service === "console") && <ConsoleRow actions={snapshot.actions} canAct={reachable} fakes={health} />}
-				<PackMap />
 				{snapshot?.checkedAt && <p className="mt-3 text-muted-foreground/70">Checked {ageText(now - Date.parse(snapshot.checkedAt))} · every {Math.round(snapshot.intervalMs / 1000)} s</p>}
 			</div>
 		</OverlayShell>
@@ -319,8 +299,13 @@ function LinkRow({ link, now, canRestart, actions, fakes }: { link: HealthLink; 
 		link.lagMs !== null ? `lag ${link.lagMs} ms` : null,
 		link.version ? `v${link.version}` : null,
 		link.uptimeS !== null ? `up ${durationText(link.uptimeS)}` : null,
-		link.via ? `via ${link.via}` : null,
+		link.via && link.source !== "hub" ? `via ${link.via}` : null,
+		link.source === "hub" ? "via hub" : null,
+		link.source === "hub" && link.since ? `since ${ageText(now - Date.parse(link.since)).replace(/ ago$/, "")}` : null,
+		link.hubPresence && link.hubPresence !== "online" ? `hub sees it ${link.hubPresence}` : null,
+		link.hubStatus === "offline" && link.status === "ok" ? "hub sees it offline" : null,
 	].filter(Boolean);
+	const staleHub = link.source === "hub" && link.error === "hub_stale" && link.hubSeenAt;
 	const busy = ui.phase !== "idle" || rbUi.phase !== "idle";
 
 	return (
@@ -363,13 +348,12 @@ function LinkRow({ link, now, canRestart, actions, fakes }: { link: HealthLink; 
 			<p className="mt-1 text-muted-foreground/80">
 				{stats.join(" · ")}
 				{stats.length > 0 && " · "}
-				{link.lastOkAt ? `last OK ${ageText(now - Date.parse(link.lastOkAt))}` : "never OK"}
+				{staleHub ? `last seen from the hub ${ageText(now - Date.parse(link.hubSeenAt!))}` : link.source === "hub" ? (link.lastCheckedAt ? `hub checked ${ageText(now - Date.parse(link.lastCheckedAt))}` : "") : link.lastOkAt ? `last OK ${ageText(now - Date.parse(link.lastOkAt))}` : "never OK"}
 				{link.lastRestart && ` · restart ${link.lastRestart.ok ? "issued" : "failed"} ${ageText(now - Date.parse(link.lastRestart.at))}`}
 			</p>
 			{story && <p data-testid="pack-health-history" className="mt-1 break-words text-muted-foreground/70">{story}</p>}
 			{ui.phase === "error" && <p data-testid="pack-health-restart-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
 			{rbUi.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rbUi.message}</p>}
-			{can.macCommands && <MacCommands commands={can.macCommands} />}
 			{logsOpen && <LogsPanel service={link.id} fake={fakes.fakeLogs} canFetch={canRestart} />}
 		</div>
 	);
@@ -400,8 +384,8 @@ function useRollbackProgress(rollback: ReturnType<typeof useAction>, last: Rollb
 }
 
 /** The console's own row (it is not a probed link): only roll back, since it is the thing serving this page. */
-function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView; canAct: boolean; fakes: Fakes }) {
-	const rb = actions.rollback.find((r) => r.service === "console");
+function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView | undefined; canAct: boolean; fakes: Fakes }) {
+	const rb = actions?.rollback.find((r) => r.service === "console");
 	const rollback = useAction("/api/health/rollback", "console", rollbackOutcome, fakes.fakeRollback);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -410,16 +394,16 @@ function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView; ca
 		return () => clearInterval(t);
 	}, [rollback.ui.phase]);
 	useRollbackProgress(rollback, rb?.last, rb?.from ?? null, now);
-	if (!rb) return null;
-	// A console row whose kept previous release is newer (it was just rolled back) has nothing to offer; a running rollback still shows.
-	if (!rollbackOffered(rb) && rollback.ui.phase === "idle") return null;
+	// No kept release, or one that is newer (it was just rolled back): nothing to offer; a running rollback still shows.
+	const offer = !!rb && (rollbackOffered(rb) || rollback.ui.phase !== "idle");
 	return (
-		<section className="mb-4">
-			<h3 className="mb-1.5 text-xs uppercase tracking-widest text-muted-foreground/70">This console</h3>
-			<div data-testid="pack-health-row" data-link="console" className="rounded-lg border bg-card px-3 py-2">
-				<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-					<span className="font-medium text-foreground">Console</span>
-					{rb.from && <span className="text-muted-foreground/80">v{rb.from}</span>}
+		<div data-testid="pack-health-row" data-link="console" className="rounded-lg border bg-card px-3 py-2">
+			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+				<span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[canAct ? "green" : "red"])} />
+				<span className="font-medium text-foreground">Console</span>
+				<span className="text-muted-foreground/70">this page</span>
+				{rb?.from && <span className="text-muted-foreground/80">v{rb.from}</span>}
+				{offer && rb && (
 					<span className="ml-auto flex items-center gap-1.5">
 						<ActionControl
 							verb="Roll back"
@@ -434,10 +418,10 @@ function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView; ca
 							onConfirm={() => void rollback.send()}
 						/>
 					</span>
-				</div>
-				{rollback.ui.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rollback.ui.message}</p>}
+				)}
 			</div>
-		</section>
+			{rollback.ui.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rollback.ui.message}</p>}
+		</div>
 	);
 }
 
@@ -550,33 +534,65 @@ function MacCommands({ commands }: { commands: string[] }) {
 	);
 }
 
-function PackMap() {
+/**
+ * One host (work-wolfpack-w7RPvtd): its hub, its workerd units with the wolves each runs nested under it, this console if it runs here,
+ * and the host's map facts (services, paths, backups) folded away at the bottom. A map host with nothing probed from here: facts only.
+ */
+function HostSection({ card, now, canAct, actions, fakes }: { card: HostCard; now: number; canAct: boolean; actions: HealthActionsView | undefined; fakes: Fakes }) {
+	const row = (l: HealthLink) => <LinkRow key={l.id} link={l} now={now} canRestart={canAct} actions={actions} fakes={fakes} />;
+	const note = !card.checked ? "not checked from here" : card.console ? "this console runs here" : "checked over the network";
+	const titleId = "pack-host-" + card.id.replace(/[^a-z0-9-]/g, "-");
+	// The Mac stack commands are the same for every row of a host: shown once, at the foot of the card.
+	const macCommands = [...card.workerds.flatMap((w) => [w.link, ...w.wolves]), ...card.wolves].map((l) => rowActions(l, actions).macCommands).find((c) => c !== null) ?? null;
 	return (
-		<section className="mt-2" data-testid="pack-map">
-			<h3 className="mb-1.5 text-xs uppercase tracking-widest text-muted-foreground/70">Where things run</h3>
-			<div className="grid gap-2 md:grid-cols-2">
-				{PACK_MAP.map((h) => (
-					<div key={h.host} className="rounded-lg border bg-card px-3 py-2">
-						<div className="mb-1 font-medium text-foreground">{h.host}</div>
-						<ul className="mb-1.5 flex flex-col gap-0.5">
-							{h.services.map((s) => (
-								<li key={s.name}>
-									<span className="text-foreground">{s.name}</span> <span className="text-muted-foreground">{s.at}</span>
-									<span className="block text-muted-foreground/70">{s.what}</span>
-								</li>
-							))}
-						</ul>
-						<ul className="mb-1.5 flex flex-col gap-0.5">
-							{h.stores.map((s) => (
-								<li key={s.name}>
-									<span className="text-foreground">{s.name}</span> <span className="break-all text-muted-foreground">{s.path}</span>
-								</li>
-							))}
-						</ul>
-						<p className="text-muted-foreground/70">Backups: {h.backups}</p>
+		<section data-testid="pack-host" data-host={card.id} aria-labelledby={titleId} className="mb-4">
+			<h3 id={titleId} className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-xs">
+				<span className="font-semibold uppercase tracking-widest text-muted-foreground">{card.label}</span>
+				{card.label !== card.id && card.checked && <span className="text-muted-foreground/60">{card.id}</span>}
+				<span className="text-muted-foreground/60">· {note}</span>
+			</h3>
+			<div className="flex flex-col gap-1.5">
+				{card.hub && row(card.hub)}
+				{card.workerds.map((w) => (
+					<div key={w.link.id} className="flex flex-col gap-1.5">
+						{row(w.link)}
+						{w.wolves.length > 0 && (
+							<div data-testid="pack-host-wolves" data-via={w.link.id} className="ml-3 flex flex-col gap-1.5 border-l pl-2.5">
+								{w.wolves.map(row)}
+							</div>
+						)}
 					</div>
 				))}
+				{card.wolves.map(row)}
+				{card.console && <ConsoleRow actions={actions} canAct={canAct} fakes={fakes} />}
+				{macCommands && <MacCommands commands={macCommands} />}
+				{card.facts && <HostFacts facts={card.facts} open={!card.checked} />}
 			</div>
 		</section>
+	);
+}
+
+/** A host's static map facts (pack-map.ts), quiet and collapsible (open on a card that has nothing else). */
+function HostFacts({ facts, open }: { facts: PackMapHost; open: boolean }) {
+	return (
+		<details data-testid="pack-map" open={open} className="rounded-lg border border-dashed px-3 py-1.5 text-muted-foreground">
+			<summary className="cursor-pointer select-none py-0.5 text-muted-foreground/80 hover:text-foreground max-md:py-1.5">Services, paths and backups</summary>
+			<ul className="mt-1 mb-1.5 flex flex-col gap-0.5">
+				{facts.services.map((s) => (
+					<li key={s.name}>
+						<span className="text-foreground/80">{s.name}</span> <span className="break-all">{s.at}</span>
+						<span className="block text-muted-foreground/70">{s.what}</span>
+					</li>
+				))}
+			</ul>
+			<ul className="mb-1.5 flex flex-col gap-0.5">
+				{facts.stores.map((s) => (
+					<li key={s.name}>
+						<span className="text-foreground/80">{s.name}</span> <span className="break-all">{s.path}</span>
+					</li>
+				))}
+			</ul>
+			<p className="mb-1 text-muted-foreground/70">Backups: {facts.backups}</p>
+		</details>
 	);
 }

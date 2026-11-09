@@ -221,6 +221,7 @@ export function packHealth(env: Record<string, string | undefined> = process.env
 			targets: healthTargets(env),
 			...(interval >= 1000 ? { intervalMs: interval } : {}),
 			actions: () => ({ systemd: SYSTEMD, rollback: SYSTEMD ? releases() : [] }),
+			...(env.WOLFPACK_HEALTH_HOST_LABELS ? { hostLabels: env.WOLFPACK_HEALTH_HOST_LABELS } : {}),
 		});
 		h[MONITOR].start();
 	}
@@ -234,7 +235,7 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 		const health = packHealth(env);
 		h[KEY] = createHealthApi({
 			health,
-			restarter: createRestarter({ health }),
+			restarter: createRestarter({ health, systemd: SYSTEMD }),
 			logs: createLogReader({ health }),
 			rollbacker: createRollbacker({ releases: releaseReader() }),
 			witness: sessionWitness(env),

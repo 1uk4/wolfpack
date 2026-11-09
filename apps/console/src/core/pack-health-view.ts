@@ -1,4 +1,5 @@
 /** Pack health view model (work-wolfpack-6imFEq7): pure wording and colour for the sidebar bar and the health modal. */
+import type { HostInfo } from "./pack-hosts.ts";
 
 export type HealthStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
 export type Tone = "red" | "amber" | "grey" | "green";
@@ -6,7 +7,8 @@ export type Tone = "red" | "amber" | "grey" | "green";
 /** One link as GET /api/health returns it (src/server/pack-health.ts LinkSnapshot). */
 export interface HealthLink {
 	id: string;
-	kind: "hubd" | "workerd" | "wolfd";
+	/** hublink: a host's link to the hub, as the hub reports it (no local workerd checks that host from here). */
+	kind: "hubd" | "workerd" | "wolfd" | "hublink";
 	status: HealthStatus;
 	responseMs: number | null;
 	lagMs: number | null;
@@ -19,6 +21,17 @@ export interface HealthLink {
 	history: { status: HealthStatus; at: string }[];
 	lastRestart: { at: string; ok: boolean } | null;
 	restartable: boolean;
+	/** The host id it runs on (src/core/pack-hosts.ts); absent from older servers. */
+	host?: string;
+	/** "hub": known only from the hub's /healthz (no restart, logs or rollback). */
+	source?: "hub";
+	/** Hub-only rows: when the host's presence last changed, per the hub. */
+	since?: string;
+	/** Hub-only rows: when the hub last answered with its list. */
+	hubSeenAt?: string;
+	/** A local workerd / wolf the hub also knows: what the hub reports. */
+	hubPresence?: "online" | "asleep" | "offline";
+	hubStatus?: "online" | "offline";
 }
 
 /** What the console offers besides restart (src/server/pack-health.ts HealthActions; absent from older servers). */
@@ -32,6 +45,8 @@ export interface HealthSnapshotView {
 	intervalMs: number;
 	links: HealthLink[];
 	actions?: HealthActionsView;
+	/** The hosts the links run on, this console's own included (absent from older servers). */
+	hosts?: HostInfo[];
 }
 
 /** The Mac live stack has no systemd: these are what the owner can run by hand (scripts/stack.mjs). */
@@ -46,9 +61,10 @@ const ROLLBACK_LINK: Record<string, string> = { hubd: "hubd", workerd: "workerd"
  * would fail, just the stack commands to copy on the workerd and wolf rows (the hub runs elsewhere).
  */
 export function rowActions(
-	l: Pick<HealthLink, "id" | "kind" | "restartable">,
+	l: Pick<HealthLink, "id" | "kind" | "restartable"> & { source?: "hub" },
 	actions: HealthActionsView | undefined,
 ): { logs: boolean; rollback: { service: string; to: string | null } | null; macCommands: string[] | null; restart: boolean } {
+	if (l.source === "hub" || l.kind === "hublink") return { logs: false, rollback: null, macCommands: null, restart: false }; // seen only through the hub: nothing to act on from here
 	if (!actions?.systemd) return { logs: false, rollback: null, macCommands: l.kind === "hubd" ? null : [...MAC_STACK_COMMANDS], restart: false };
 	const svc = ROLLBACK_LINK[l.id];
 	const rb = svc ? actions.rollback.find((r) => r.service === svc) : undefined;
@@ -112,6 +128,7 @@ const RANK: Record<Tone, number> = { green: 0, grey: 1, amber: 2, red: 3 };
 export function linkName(l: Pick<HealthLink, "id" | "kind">): string {
 	if (l.kind === "hubd") return "Hub";
 	if (l.kind === "wolfd") return l.id.replace(/^wolfd@/, "");
+	if (l.kind === "hublink") return "Hub link";
 	return l.id;
 }
 
@@ -128,6 +145,10 @@ const ERROR_TEXT: Record<string, string> = {
 	reports_not_ok: "Answering, but reports a problem",
 	workerd_unavailable: "Its workerd isn't answering, so its state is unknown",
 	not_reported: "Its workerd no longer lists it",
+	host_asleep: "Its host is asleep (the hub expects it back)",
+	host_offline: "Its host has no link to the hub",
+	wolf_offline: "The hub sees it offline",
+	hub_stale: "Last known from the hub, which isn't answering",
 };
 
 /** The monitor's short error code (pack-health.ts) in plain words; an unknown code is shown as is. */
@@ -241,9 +262,11 @@ export function ageText(ms: number): string {
 export function packSummary(o: { snapshot: HealthSnapshotView | null; reachable: boolean; lastSeenAt?: number | null; now: number }): { tone: Tone; label: string } {
 	if (!o.reachable) return { tone: "red", label: o.lastSeenAt != null ? `Console unreachable · last seen ${ageText(o.now - o.lastSeenAt)}` : "Console unreachable" };
 	if (!o.snapshot) return { tone: "grey", label: "Checking…" };
-	const issues = o.snapshot.links.filter((l) => l.status !== "ok");
+	// A host asleep (and its wolves) is expected, not an issue; one the hub cannot reach (offline) is. Rows the hub reported before it
+	// stopped answering are not counted either: the hub being down is the issue, already counted on its own row.
+	const issues = o.snapshot.links.filter((l) => l.status !== "ok" && l.error !== "host_asleep" && l.error !== "hub_stale");
 	if (issues.length === 0) {
-		const back = o.snapshot.links.find((l) => isBack(l, o.now));
+		const back = o.snapshot.links.find((l) => isBack(l, o.now) && l.source !== "hub");
 		return { tone: "green", label: back ? `${linkName(back)} back` : "All good" };
 	}
 	const tone = issues.map((l) => toneOf(l.status)).reduce((a, b) => (RANK[b] > RANK[a] ? b : a));

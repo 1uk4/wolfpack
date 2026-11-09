@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { HealthBody } from "./health.js";
 
@@ -93,7 +94,7 @@ export function packageVersion(url: URL): string | undefined {
   }
 }
 
-/** Standard fields of a /healthz body. `lag` covers the monitor's rolling window (see createLagMonitor). */
+/** Standard fields of a /healthz body. `lag` covers the monitor's rolling window (see createLagMonitor); `host` is os.hostname(). */
 export function baseHealth(service: string, monitor: LagMonitor, version?: string): HealthBody {
-  return { ok: true, service, ...(version ? { version } : {}), uptimeS: Math.round(process.uptime()), lag: monitor.sample() };
+  return { ok: true, service, host: hostname(), ...(version ? { version } : {}), uptimeS: Math.round(process.uptime()), lag: monitor.sample() };
 }

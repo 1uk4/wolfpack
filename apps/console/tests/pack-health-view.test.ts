@@ -38,6 +38,13 @@ describe("pack health summary (the sidebar bar)", () => {
 		assert.deepEqual(packSummary({ snapshot: snap(link("hubd", "ok"), link("wolfd@hal", "unknown")), reachable: true, now: NOW }), { tone: "grey", label: "hal unknown" });
 	});
 
+	it("counts a host the hub reports offline (and its wolves), not one asleep, nor rows the hub reported before it stopped answering", () => {
+		const hub = (id: string, status: HealthLink["status"], error: string) => link(id, status, { kind: id.startsWith("wolfd@") ? "wolfd" : "hublink", source: "hub", error });
+		assert.deepEqual(packSummary({ snapshot: snap(link("hubd", "ok"), hub("hub-link@lap", "unknown", "host_asleep"), hub("wolfd@lappy", "unknown", "host_asleep")), reachable: true, now: NOW }), { tone: "green", label: "All good" });
+		assert.deepEqual(packSummary({ snapshot: snap(link("hubd", "ok"), hub("hub-link@cron", "down", "host_offline"), hub("wolfd@job", "down", "wolf_offline")), reachable: true, now: NOW }), { tone: "red", label: "2 issues" });
+		assert.deepEqual(packSummary({ snapshot: snap(link("hubd", "down"), hub("hub-link@cron", "unknown", "hub_stale")), reachable: true, now: NOW }), { tone: "red", label: "Hub down" });
+	});
+
 	it("says '<name> back' for a few seconds after a link returns to ok", () => {
 		const back = link("hubd", "ok", { history: [{ status: "recovering", at: "2026-11-09T14:09:30Z" }, { status: "ok", at: "2026-11-09T14:09:56Z" }] });
 		assert.deepEqual(packSummary({ snapshot: snap(back, link("workerd", "ok")), reachable: true, now: NOW }), { tone: "green", label: "Hub back" });
@@ -125,6 +132,13 @@ describe("service actions per row", () => {
 		assert.deepEqual(rowActions(link("workerd", "ok"), mac), { logs: false, rollback: null, macCommands: cmds, restart: false });
 		assert.deepEqual(rowActions(link("wolfd@hal", "down"), undefined), { logs: false, rollback: null, macCommands: cmds, restart: false });
 		assert.deepEqual(rowActions(link("hubd", "ok"), mac), { logs: false, rollback: null, macCommands: null, restart: false });
+	});
+
+	it("offers nothing on a row known only from the hub, even under systemd", () => {
+		const actions = { systemd: true, rollback: [{ service: "workerd", from: "0.1.5", to: "0.1.4" }] };
+		const none = { logs: false, rollback: null, macCommands: null, restart: false };
+		assert.deepEqual(rowActions(link("wolfd@ada", "ok", { source: "hub" }), actions), none);
+		assert.deepEqual(rowActions(link("hub-link@lap", "ok", { kind: "hublink", source: "hub", restartable: false }), { systemd: false, rollback: [] }), none);
 	});
 });
 

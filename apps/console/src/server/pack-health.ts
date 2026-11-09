@@ -32,14 +32,27 @@
  * goes: "hub" normally; "direct" after SWITCH_ROUNDS consecutive rounds in which hubd does not answer (down, frozen, refused, timeout)
  * while the direct link answers; back to "hub" after SWITCH_ROUNDS consecutive rounds in which hubd answers (symmetric, so one slow or
  * failed probe never flips it either way). A live check (direct-path.ts) is one round like any other. A hub 401 never moves it: /healthz is unauthenticated.
+ *
+ * THE HUB'S VIEW (work-wolfpack-w7RPvtd): hubd's /healthz lists every host linked to it and their wolves (`hosts`). That list is the
+ * main source for which hosts and wolves the snapshot shows; local probes add detail.
+ *   - A hub host whose id a local workerd names as its `hubHostId` is that workerd's host: the workerd row stands in for the host's
+ *     link (it carries `hubPresence`), a hub wolf with the name of a local wolf only adds `hubStatus` to it, and a hub wolf the
+ *     workerd does not report shows under it as a hub-only row.
+ *   - Any other hub host gets a `hub-link@<id>` row (kind hublink) with its wolves under it, on the host hostId(label ?? id).
+ *   - Hub-only rows (`source: "hub"`) are never restartable and offer no logs or rollback. Grades: online ok; asleep unknown
+ *     (host_asleep); offline down (host_offline for the link, wolf_offline for a wolf; a wolf on an asleep host is host_asleep).
+ *   - Hub not answering: the last list stays, every hub-only row unknown (hub_stale) with `hubSeenAt`; local rows stay live. Never
+ *     answered: local checks only. A hub that answers without `hosts` (an older build): the list is dropped, local checks only.
  */
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
+import { hostId, hostLabel, parseHostLabels, type HostInfo } from "../core/pack-hosts.ts";
 import { probeHealth, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
 
-export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct";
+export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct" | "hublink";
+export type HubPresence = "online" | "asleep" | "offline";
 /** Where the console's client sends wolf traffic: through the hub, or straight to the local workerd while the hub is unreachable. */
 export type Route = "hub" | "direct";
 
@@ -116,6 +129,18 @@ export interface LinkSnapshot {
 	uptimeS: number | null;
 	/** Wolves only: the workerd link the state was read from. */
 	via?: string;
+	/** Host id it runs on (see HOSTS). */
+	host: string;
+	/** "hub": the row comes only from the hub's /healthz `hosts` (see THE HUB'S VIEW). */
+	source?: "hub";
+	/** Hub-only rows: when the host's presence last changed, as the hub reports it. */
+	since?: string;
+	/** Hub-only rows: when the hub last answered with its list. */
+	hubSeenAt?: string;
+	/** A local workerd the hub knows: the presence the hub reports for its host. */
+	hubPresence?: HubPresence;
+	/** A local wolf the hub knows: the status the hub reports for it. */
+	hubStatus?: "online" | "offline";
 	history: LinkHistoryEntry[];
 	/** The last restart issued from this console, if any. */
 	lastRestart: { at: string; ok: boolean } | null;
@@ -137,6 +162,8 @@ export interface HealthSnapshot {
 	route: Route;
 	links: LinkSnapshot[];
 	actions: HealthActions;
+	/** Every host a link runs on, plus this console's own (isThisConsole, with its platform). */
+	hosts: HostInfo[];
 }
 
 export interface HealthTargets {
@@ -154,6 +181,41 @@ export const RESTART_DEADLINE_MS = 120_000;
 export const WOLF_FORGET_MS = 10 * 60_000;
 /** At most this many wolves are read from one workerd's /healthz (the rest are ignored). */
 export const MAX_WOLVES_PER_WORKERD = 64;
+/** At most this many hosts are read from the hub's /healthz (it caps itself at the same). */
+export const MAX_HUB_HOSTS = 64;
+const HUB_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const HUB_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$/;
+
+/** One host of hubd's /healthz `hosts`, validated. */
+interface HubHost {
+	id: string;
+	label?: string;
+	presence: HubPresence;
+	since?: string;
+	wolves: { name: string; status: "online" | "offline" }[];
+}
+
+/** hubd's `hosts` (null when absent: an older hub). Bad entries are skipped, labels kept only when hostname-like, lists capped. */
+function parseHubHosts(raw: unknown): HubHost[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: HubHost[] = [];
+	for (const h of raw.slice(0, MAX_HUB_HOSTS)) {
+		const o = (h && typeof h === "object" ? h : {}) as Record<string, unknown>;
+		if (typeof o.id !== "string" || !HUB_ID_RE.test(o.id)) continue;
+		const presence: HubPresence = o.presence === "online" || o.presence === "asleep" ? o.presence : "offline";
+		const label = typeof o.label === "string" && HUB_LABEL_RE.test(o.label.trim()) ? o.label.trim() : ""; // hostname-like only: an older hub may still send free text
+		const since = typeof o.since === "string" && !Number.isNaN(Date.parse(o.since)) ? new Date(Date.parse(o.since)).toISOString() : undefined;
+		const wolves = (Array.isArray(o.wolves) ? o.wolves : []).slice(0, MAX_WOLVES_PER_WORKERD).flatMap((w) => {
+			const x = (w && typeof w === "object" ? w : {}) as Record<string, unknown>;
+			return typeof x.name === "string" && WOLF_RE.test(x.name) ? [{ name: x.name, status: x.status === "online" ? ("online" as const) : ("offline" as const) }] : [];
+		});
+		out.push({ id: o.id, ...(label ? { label } : {}), presence, ...(since ? { since } : {}), wolves });
+	}
+	return out;
+}
+
+/** The host card id for a hub host no local workerd claims: its label (the pairing hostname) normalised, else its hub id. */
+const hubCardHost = (h: HubHost): string => hostId(h.label ?? h.id).replace(/[^a-z0-9.:-]+/g, "-") || h.id;
 const UNIT_RE = /^[a-z0-9][a-z0-9-]*$/;
 const WOLF_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKERD_UNIT_RE = /^workerd(-[a-z0-9]+)*$/;
@@ -232,6 +294,12 @@ interface LinkState {
 	kind: LinkKind;
 	url?: string;
 	via?: string;
+	/** Host id the link's own /healthz last reported (kept across outages). */
+	reportedHost: string | null;
+	/** A workerd: the hub host id its /healthz names (`hubHostId`, kept across outages). */
+	hubHostId?: string;
+	/** Hub-only rows: the host's presence change time the hub reports. */
+	since?: string;
 	status: LinkStatus;
 	responseMs: number | null;
 	lagMs: number | null;
@@ -261,6 +329,10 @@ interface Observation {
 	error: string | null;
 	version: string | null;
 	uptimeS: number | null;
+	/** Host id the /healthz body reported. */
+	host?: string;
+	/** A workerd's `hubHostId`. */
+	hubHostId?: string;
 	/** Wolves read off workerd: the supervisor's restart count for this wolf (ChildStatus.restarts). */
 	restarts?: number;
 	/** The probe's raw error text: server log only, never in the snapshot. */
@@ -299,6 +371,8 @@ const fromProbe = (r: ProbeResult, timeoutMs: number, healthz = true): Observati
 		error: code ?? (r.status === "degraded" ? (r.body?.ok === false ? "reports_not_ok" : "slow") : null),
 		version: typeof r.body?.version === "string" ? r.body.version : null,
 		uptimeS: typeof r.body?.uptimeS === "number" ? r.body.uptimeS : null,
+		...(typeof r.body?.host === "string" && r.body.host.trim() ? { host: hostId(r.body.host.slice(0, 253)) } : {}),
+		...(typeof r.body?.hubHostId === "string" && HUB_ID_RE.test(r.body.hubHostId) ? { hubHostId: r.body.hubHostId } : {}),
 		...(r.error !== undefined ? { rawError: r.error } : {}),
 	};
 };
@@ -332,6 +406,11 @@ export interface PackHealthOptions {
 	log?: (m: string) => void;
 	/** The service actions to advertise (default: no systemd, nothing to roll back). */
 	actions?: () => HealthActions;
+	/** This console's hostname (default os.hostname()) and platform (default process.platform). */
+	consoleHost?: string;
+	platform?: string;
+	/** WOLFPACK_HEALTH_HOST_LABELS: `<host>=<label>,...` label overrides. */
+	hostLabels?: string;
 }
 
 export interface PackHealth {
@@ -357,6 +436,9 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 	const timeoutMs = o.timeoutMs ?? 3000;
 	const now = o.now ?? Date.now;
 	const log = o.log ?? ((m: string) => console.warn(m));
+	const selfHost = hostId(o.consoleHost ?? hostname()) || "this-console";
+	const platform = o.platform ?? process.platform;
+	const labels = parseHostLabels(o.hostLabels);
 	const links = new Map<string, LinkState>();
 	const listeners = new Set<(s: HealthSnapshot) => void>();
 	let checkedAt: string | null = null;
@@ -364,6 +446,12 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 	let hubOkRounds = 0;
 	let hubFailRounds = 0;
 	let localWolves: ReadonlySet<string> = new Set();
+	/** THE HUB'S VIEW: its last `hosts` list (null: never answered, or an older hub), when that came, and whether it is stale. */
+	let hubHosts: HubHost[] | null = null;
+	let hubSeenAt: number | null = null;
+	let hubStale = false;
+	/** Hub-only rows (never in `links`, so never a restart, logs or rollback target). */
+	const hubRows = new Map<string, LinkState>();
 	let round: Promise<HealthSnapshot> | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -371,7 +459,7 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		let l = links.get(id);
 		if (!l) {
 			l = {
-				id, kind, status: "unknown", responseMs: null, lagMs: null, lastOkAt: null, lastCheckedAt: null, error: null, version: null, uptimeS: null,
+				id, kind, reportedHost: null, status: "unknown", responseMs: null, lagMs: null, lastOkAt: null, lastCheckedAt: null, error: null, version: null, uptimeS: null,
 				history: [], restartAt: null, lastRestart: null, restarts: null, restartsAtMark: null, sawOutSinceRestart: false, lastReportedAt: now(),
 			};
 			links.set(id, l);
@@ -394,6 +482,8 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 
 	const apply = (l: LinkState, ob: Observation, t: number) => {
 		const at = new Date(t).toISOString();
+		if (ob.host) l.reportedHost = ob.host;
+		if (ob.hubHostId) l.hubHostId = ob.hubHostId;
 		if (ob.error !== l.error && ob.rawError) log(`console: health ${l.id}: ${ob.error} (${ob.rawError})`);
 		Object.assign(l, { responseMs: ob.responseMs, lagMs: ob.lagMs, error: ob.error, version: ob.version, uptimeS: ob.uptimeS, lastCheckedAt: at });
 		const prevRestarts = l.restarts;
@@ -420,8 +510,83 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		setStatus(l, ob.graded, t);
 	};
 
+	/** HOSTS: its own /healthz host; a wolf read off workerd: its workerd's; a loopback probe URL: this console's; else the URL's hostname. */
+	const hostOf = (l: LinkState, depth = 0): string => {
+		if (l.reportedHost) return l.reportedHost;
+		if (l.via && !l.url && depth === 0) {
+			const w = links.get(l.via);
+			if (w) return hostOf(w, 1);
+		}
+		if (!l.url) return selfHost; // the direct link: the local workerd
+		let h = "";
+		try {
+			h = new URL(l.url).hostname;
+		} catch {
+			/* targets are validated URLs */
+		}
+		return !h || LOOPBACK_HOSTS.has(h) ? selfHost : hostId(h.replace(/^\[|\]$/g, ""));
+	};
+
+	/** The local workerd of a hub host: the one naming its id as `hubHostId`, else (an older build, no hubHostId) the one whose host is the hub label's host. */
+	const workerdFor = (h: HubHost): LinkState | undefined => {
+		const ws = [...links.values()].filter((l) => l.kind === "workerd");
+		return ws.find((l) => l.hubHostId === h.id) ?? (h.label ? ws.find((l) => !l.hubHostId && hostOf(l) === hubCardHost(h)) : undefined);
+	};
+
+	/** Rebuild the hub-only rows from the hub's last list (THE HUB'S VIEW). Runs after the local wolves of this round are known. */
+	const syncHubRows = (t: number) => {
+		if (!hubHosts) return hubRows.clear();
+		const keep = new Set<string>();
+		const row = (id: string, kind: LinkKind, host: string, via: string | undefined, since: string | undefined, ob: Pick<Observation, "graded" | "error">) => {
+			let r = hubRows.get(id);
+			if (!r || r.kind !== kind) {
+				r = { id, kind, reportedHost: host, status: "unknown", responseMs: null, lagMs: null, lastOkAt: null, lastCheckedAt: null, error: null, version: null, uptimeS: null, history: [], restartAt: null, lastRestart: null, restarts: null, restartsAtMark: null, sawOutSinceRestart: false, lastReportedAt: t };
+				hubRows.set(id, r);
+			}
+			keep.add(id);
+			Object.assign(r, { reportedHost: host, via, since });
+			apply(r, { answered: ob.graded === "ok", graded: ob.graded, responseMs: null, lagMs: null, error: ob.error, version: null, uptimeS: null }, t);
+			r.lastCheckedAt = hubSeenAt === null ? null : new Date(hubSeenAt).toISOString();
+		};
+		const stale = { graded: "unknown" as const, error: "hub_stale" };
+		for (const h of hubHosts) {
+			const local = workerdFor(h);
+			const host = local ? hostOf(local) : hubCardHost(h);
+			const parent = local ? local.id : `hub-link@${h.id}`;
+			if (!local) row(parent, "hublink", host, undefined, h.since, hubStale ? stale : h.presence === "online" ? { graded: "ok", error: null } : h.presence === "asleep" ? { graded: "unknown", error: "host_asleep" } : { graded: "down", error: "host_offline" });
+			for (const w of h.wolves) {
+				const id = `wolfd@${w.name}`;
+				if (links.has(id)) continue; // a local wolf: the hub only adds hubStatus (snapshot)
+				row(id, "wolfd", host, parent, h.since, hubStale ? stale : w.status === "online" ? { graded: "ok", error: null } : h.presence === "asleep" ? { graded: "unknown", error: "host_asleep" } : { graded: "down", error: "wolf_offline" });
+			}
+		}
+		for (const id of [...hubRows.keys()]) if (!keep.has(id)) hubRows.delete(id);
+	};
+
 	const snapshot = (): HealthSnapshot => {
 		const can = restartable();
+		const all = [...links.values(), ...hubRows.values()];
+		const hostIds = new Map<string, string>(all.map((l) => [l.id, hostOf(l)]));
+		// What the hub says about each local workerd's host and each local wolf.
+		const hubOfHost = new Map<string, HubHost>();
+		const presenceOf = new Map<string, HubPresence>();
+		const statusOf = new Map<string, "online" | "offline">();
+		for (const h of hubHosts ?? []) {
+			const local = workerdFor(h);
+			const host = local ? hostOf(local) : hubCardHost(h);
+			if (!hubOfHost.has(host)) hubOfHost.set(host, h);
+			if (local && !hubStale) presenceOf.set(local.id, h.presence);
+			if (!hubStale) for (const w of h.wolves) statusOf.set(`wolfd@${w.name}`, w.status);
+		}
+		// Labels: an operator override, then the hub's label, then the host id rules (hostLabel).
+		const info = (id: string, isThisConsole: boolean): HostInfo => {
+			const h = hubOfHost.get(id);
+			const label = labels.get(id) ?? h?.label ?? hostLabel(id, { isThisConsole, platform }, labels);
+			return { id, label, isThisConsole, ...(isThisConsole ? { platform } : {}), ...(h ? { hubId: h.id } : {}) };
+		};
+		const hosts: HostInfo[] = [info(selfHost, true)];
+		for (const id of new Set(hostIds.values())) if (id !== selfHost) hosts.push(info(id, false));
+		const seen = hubSeenAt === null ? undefined : new Date(hubSeenAt).toISOString();
 		let actions: HealthActions = { systemd: false, rollback: [] };
 		try {
 			if (o.actions) actions = o.actions();
@@ -433,7 +598,8 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 			intervalMs,
 			route,
 			actions,
-			links: [...links.values()].map((l) => ({
+			hosts,
+			links: all.map((l) => ({
 				id: l.id,
 				kind: l.kind,
 				status: l.status,
@@ -445,9 +611,13 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 				version: l.version,
 				uptimeS: l.uptimeS,
 				...(l.via ? { via: l.via } : {}),
+				host: hostIds.get(l.id)!,
+				...(hubRows.get(l.id) === l ? { source: "hub" as const, ...(l.since ? { since: l.since } : {}), ...(seen ? { hubSeenAt: seen } : {}) } : {}),
+				...(hubRows.get(l.id) !== l && presenceOf.has(l.id) ? { hubPresence: presenceOf.get(l.id)! } : {}),
+				...(hubRows.get(l.id) !== l && l.kind === "wolfd" && statusOf.has(l.id) ? { hubStatus: statusOf.get(l.id)! } : {}),
 				history: l.history.map((h) => ({ ...h })),
 				lastRestart: l.lastRestart,
-				restartable: can.has(l.id),
+				restartable: hubRows.get(l.id) !== l && can.has(l.id),
 			})),
 		};
 	};
@@ -532,6 +702,14 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 			}
 			apply(l, { answered: false, graded: "unknown", responseMs: null, lagMs: null, error: "not_reported", version: null, uptimeS: null }, t);
 		}
+		// THE HUB'S VIEW: a fresh list when the hub answers; kept (stale) while it does not; dropped when it answers without one.
+		const hubResult = results.find(([l]) => l.kind === "hubd")?.[1];
+		if (hubResult && hubResult.status !== "down") {
+			hubHosts = parseHubHosts(hubResult.body?.hosts);
+			hubSeenAt = hubHosts ? t : null;
+			hubStale = false;
+		} else if (hubHosts) hubStale = true;
+		syncHubRows(t);
 		checkedAt = new Date(t).toISOString();
 		const s = snapshot();
 		for (const fn of listeners) {

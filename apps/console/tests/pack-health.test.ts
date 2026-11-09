@@ -120,6 +120,114 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 }
 
 describe("pack health: GET /api/health", () => {
+	it("gives every link a host: its own /healthz host, else its workerd's, else this console's for loopback, else the probe URL's; and lists the hosts", async () => {
+		// The network boundary: each URL answers a canned /healthz body (old builds send no `host`).
+		const bodies: Record<string, Record<string, unknown>> = {
+			"http://sfo-01.tail9c2.ts.net:3150/healthz": { ok: true, service: "hubd" },
+			"http://127.0.0.1:7141/healthz": { ok: true, service: "workerd", host: "Build-Box.local", wolves: [{ name: "hal", state: "online" }] },
+			"http://127.0.0.1:7151/healthz": { ok: true, service: "workerd", wolves: [] },
+			"http://100.120.154.69:7200/healthz": { ok: true, service: "wolfd" },
+			"http://127.0.0.1:7300/healthz": { ok: true, service: "wolfd", host: "sfo-010" },
+		};
+		const refused = new Set<string>();
+		const fakeFetch = (async (url: string) => {
+			if (refused.has(url)) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+			return new Response(JSON.stringify(bodies[url] ?? {}), { status: bodies[url] ? 200 : 404 });
+		}) as unknown as typeof fetch;
+		const env = {
+			WOLFPACK_HEALTH_HUB_URL: "http://sfo-01.tail9c2.ts.net:3150",
+			WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:7141,workerd-old=http://127.0.0.1:7151",
+			WOLFPACK_HEALTH_WOLVES: "ada=http://100.120.154.69:7200,bob=http://127.0.0.1:7300",
+			WOLFPACK_HEALTH_HOST_LABELS: "100.120.154.69=ada box",
+		};
+		const health = createPackHealth({ targets: healthTargets(env), fetch: fakeFetch, now: () => T0, consoleHost: "Luka-Air.local", platform: "darwin", hostLabels: env.WOLFPACK_HEALTH_HOST_LABELS, log: () => {} });
+		const snap = await health.tick();
+		assert.deepEqual(Object.fromEntries(snap.links.map((l) => [l.id, l.host])), {
+			hubd: "sfo-01",
+			workerd: "build-box",
+			"workerd-old": "luka-air",
+			"wolfd@ada": "100.120.154.69",
+			"wolfd@bob": "sfo-010",
+			"wolfd@hal": "build-box",
+		});
+		assert.deepEqual([...snap.hosts].sort((a, b) => a.id.localeCompare(b.id)), [
+			{ id: "100.120.154.69", label: "ada box", isThisConsole: false },
+			{ id: "build-box", label: "build-box", isThisConsole: false },
+			{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin" },
+			{ id: "sfo-01", label: "sfo-01", isThisConsole: false },
+			{ id: "sfo-010", label: "sfo-010", isThisConsole: false }, // exact match only: a look-alike is not sfo-01
+		]);
+		// An outage does not move a link: the workerd that said build-box stays on build-box while it is down.
+		refused.add("http://127.0.0.1:7141/healthz");
+		const down = await health.tick();
+		assert.equal(linkOf(down, "workerd").status, "down");
+		assert.equal(linkOf(down, "workerd").host, "build-box");
+	});
+
+	it("lists the hosts and wolves the hub reports: a local workerd stands in for its host's hub link, the hub's wolves join or enrich it, the rest show hub-only without actions", async () => {
+		const hubHosts = [
+			{ id: "sfo", label: "sfo-01", presence: "online", wolves: [{ name: "ada", status: "online" }, { name: "hal", status: "online" }] },
+			{ id: "lap", label: "Mac", presence: "asleep", since: iso(T0 - 600_000), wolves: [{ name: "lappy", status: "offline" }] },
+			{ id: "cron", presence: "offline", since: iso(T0 - 60_000), wolves: [{ name: "job", status: "offline" }] },
+		];
+		let hub: Record<string, unknown> | "refused" = { ok: true, service: "hubd", host: "sfo-01", hosts: hubHosts };
+		const fakeFetch = (async (url: string) => {
+			if (url === "http://127.0.0.1:3150/healthz") {
+				if (hub === "refused") throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+				return new Response(JSON.stringify(hub));
+			}
+			return new Response(JSON.stringify({ ok: true, service: "workerd", host: "sfo-01", hubHostId: "sfo", wolves: [{ name: "hal", state: "online" }] }));
+		}) as unknown as typeof fetch;
+		let t = T0;
+		const health = createPackHealth({ targets: healthTargets({ WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:7141" }), fetch: fakeFetch, now: () => t, consoleHost: "sfo-01", platform: "linux", log: () => {} });
+		const view = (s: HealthSnapshot) =>
+			Object.fromEntries(s.links.map((l) => [l.id, [l.host, l.status, l.error, l.via ?? null, l.source ?? null, l.restartable]]));
+		const snap = await health.tick();
+		assert.deepEqual(view(snap), {
+			hubd: ["sfo-01", "ok", null, null, null, true],
+			workerd: ["sfo-01", "ok", null, null, null, true],
+			"wolfd@hal": ["sfo-01", "ok", null, "workerd", null, true],
+			"wolfd@ada": ["sfo-01", "ok", null, "workerd", "hub", false],
+			"hub-link@lap": ["mac", "unknown", "host_asleep", null, "hub", false],
+			"wolfd@lappy": ["mac", "unknown", "host_asleep", "hub-link@lap", "hub", false],
+			"hub-link@cron": ["cron", "down", "host_offline", null, "hub", false],
+			"wolfd@job": ["cron", "down", "wolf_offline", "hub-link@cron", "hub", false],
+		});
+		assert.equal(linkOf(snap, "workerd").hubPresence, "online");
+		assert.equal(linkOf(snap, "wolfd@hal").hubStatus, "online");
+		assert.equal(linkOf(snap, "hub-link@lap").since, iso(T0 - 600_000));
+		assert.deepEqual(snap.hosts.find((h) => h.id === "mac"), { id: "mac", label: "Mac", isThisConsole: false, hubId: "lap" });
+		assert.deepEqual([...health.restartable()].sort(), ["hubd", "wolfd@hal", "workerd"]); // hub-only rows are never a restart target
+		// The hub stops answering: its last list stays, graded unknown and dated; the local checks stay live.
+		hub = "refused";
+		t = T0 + 30_000;
+		const stale = await health.tick();
+		assert.deepEqual([linkOf(stale, "hub-link@cron").status, linkOf(stale, "hub-link@cron").error, linkOf(stale, "hub-link@cron").hubSeenAt], ["unknown", "hub_stale", iso(T0)]);
+		assert.deepEqual([linkOf(stale, "wolfd@ada").status, linkOf(stale, "wolfd@ada").error], ["unknown", "hub_stale"]);
+		assert.deepEqual([linkOf(stale, "wolfd@hal").status, linkOf(stale, "hubd").status], ["ok", "down"]);
+		// An older hub that answers without `hosts`: back to the local checks only.
+		hub = { ok: true, service: "hubd" };
+		const old = await health.tick();
+		assert.deepEqual(old.links.map((l) => l.id).sort(), ["hubd", "wolfd@hal", "workerd"]);
+	});
+
+	it("shows an older workerd's machine once: the hub host whose label is that workerd's host joins its card; a free-text label is ignored", async () => {
+		const fakeFetch = (async (url: string) => {
+			if (url === "http://127.0.0.1:3150/healthz") {
+				return new Response(JSON.stringify({ ok: true, service: "hubd", hosts: [
+					{ id: "sfo", label: "sfo-01", presence: "online", wolves: [{ name: "hal", status: "online" }] },
+					{ id: "cron", label: "Ada Lovelace", presence: "offline", wolves: [] },
+				] }));
+			}
+			return new Response(JSON.stringify({ ok: true, service: "workerd", host: "sfo-01", wolves: [{ name: "hal", state: "online" }] })); // an older build: no hubHostId
+		}) as unknown as typeof fetch;
+		const health = createPackHealth({ targets: healthTargets({ WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:7141" }), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {} });
+		const snap = await health.tick();
+		assert.deepEqual(snap.links.map((l) => l.id).sort(), ["hub-link@cron", "hubd", "wolfd@hal", "workerd"]); // no hub-link@sfo: the workerd is that host
+		assert.equal(linkOf(snap, "workerd").hubPresence, "online");
+		assert.equal(linkOf(snap, "hub-link@cron").host, "cron"); // not "ada-lovelace"
+	});
+
 	it("reports a refused hub as down and a hanging hub as frozen, keeping lastOkAt, without calling the hub's API", async () => {
 		const s = await setup();
 		await s.tick(T0);

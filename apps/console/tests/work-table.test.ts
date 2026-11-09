@@ -66,6 +66,18 @@ describe("buildWorkTable: progress, stage label, columns", () => {
 	});
 });
 
+describe("buildWorkTable: assignee control", () => {
+	it("offers it on features and loose tasks, never on a feature's child tasks or groups", () => {
+		const withLoose = [...items, item("lt", "task", { created: "2026-10-10" })];
+		const [init, inbox] = buildWorkTable(withLoose).groups;
+		const f1 = init!.children.find((r) => r.id === "f1")!;
+		assert.deepEqual([init!.assignable, f1.assignable, inbox!.assignable], [false, true, false]);
+		assert.deepEqual(f1.children.map((t) => t.assignable), [false, false, false]);
+		assert.equal(inbox!.children.find((r) => r.id === "lt")!.assignable, true);
+		assert.equal(inbox!.children.find((r) => r.id === "f3")!.assignable, true);
+	});
+});
+
 describe("buildWorkTable: dependencies", () => {
 	const f1 = () => buildWorkTable(items).groups[0]!.children.find((r) => r.id === "f1")!;
 	it("a row's dependsOn keeps the sibling dependencies (the lanes); chip state is styled by stage", () => {

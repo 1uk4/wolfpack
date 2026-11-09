@@ -412,3 +412,40 @@ describe("graduated toggle, refresh and select", () => {
 		assert.ok(rows().includes("i1"));
 	});
 });
+
+describe("the assignee dropdown", () => {
+	const withOwner = (over: Partial<Fake> = {}) => fake({ assignees: async () => ["hal", "luka"], assign: async () => ({ ok: true, data: {} }), ...over });
+	it("sits on features and loose tasks, shows child tasks' assignee as text, and a failed change leaves the list with the hub's message", async () => {
+		const items = [
+			item("f1", "feature", { assignee: "hal", title: "F1" }),
+			item("t1", "task", { partOf: "f1", assignee: "hal" }),
+			item("lt", "task", { assignee: "luka" }),
+		];
+		const c = withOwner({ items, assign: async () => ({ ok: false, reason: "error", message: 'unknown assignee "zed"' }) });
+		await open(c);
+		await click(q("work-toggle-no-initiative")!);
+		await click(q("work-toggle-f1")!);
+		assert.equal((q("work-assignee-f1") as HTMLSelectElement).value, "hal");
+		assert.ok(q("work-assignee-lt"));
+		assert.equal(q("work-assignee-t1"), null);
+		assert.equal(q("work-assignee-text-t1")!.textContent, "hal");
+		const listCalls = c.calls.length;
+		await change(q("work-assignee-f1")!, { value: "luka" });
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, 'unknown assignee "zed"');
+		assert.equal(c.calls.length, listCalls, "no reload after a failure");
+		assert.equal((q("work-assignee-f1") as HTMLSelectElement).value, "hal");
+	});
+	it("reloads the list from the hub after a successful change", async () => {
+		const c = withOwner({ items: [item("f1", "feature", { assignee: "hal" })] });
+		c.assign = async (id, wolf) => {
+			c.items = [item(id, "feature", { assignee: wolf })];
+			return { ok: true, data: {} };
+		};
+		await open(c);
+		await click(q("work-toggle-no-initiative")!);
+		await change(q("work-assignee-f1")!, { value: "luka" });
+		await settle();
+		assert.equal((q("work-assignee-f1") as HTMLSelectElement).value, "luka");
+	});
+});

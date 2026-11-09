@@ -61,7 +61,7 @@ function readDomain(): string {
 type Load = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; items: WorkListItem[] };
 
 /** Fetches the domain's items; refetches on focus, on a poll and on `reload`, keeping the last good list while it does. */
-function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => void } {
+function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => Promise<void> } {
 	const [load, setLoad] = useState<Load>({ state: "loading" });
 	const seq = useRef(0);
 	const refresh = useCallback(async () => {
@@ -86,7 +86,7 @@ function useWorkItems(client: WorkClient, domain: string): { load: Load; reload:
 	}, [refresh]);
 	// A graduation elsewhere (this view's own dialog, the graph pane) changes the list: read it again now.
 	useGraduated(() => void refresh());
-	return { load, reload: () => void refresh() };
+	return { load, reload: () => refresh() };
 }
 
 // ---- View ------------------------------------------------------------------
@@ -146,6 +146,46 @@ interface RowCtx {
 	gutter: number;
 	/** The graduation seam: each feature row's control reads and drives its job through it. */
 	graduate: GraduateClient;
+	/** The owner's assignee control (absent: assignees show as plain text). */
+	assign?: { wolves: readonly string[]; busyId: string | null; error: { id: string; message: string } | null; onAssign: (id: string, wolf: string) => void };
+}
+
+/** A feature or loose task: a dropdown of the active wolves, disabled while its change runs; any other row: the assignee as text. */
+function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const a = ctx.assign;
+	if (!row.assignee && !(a && row.assignable)) return null;
+	if (!a || !row.assignable || !row.id) {
+		return (
+			<span data-testid={`work-assignee-text-${row.key}`} className="max-w-24 shrink-0 truncate text-[11px] text-muted-foreground">
+				{row.assignee}
+			</span>
+		);
+	}
+	const options = row.assignee && !a.wolves.includes(row.assignee) ? [row.assignee, ...a.wolves] : a.wolves;
+	return (
+		<span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+			<select
+				data-testid={`work-assignee-${row.key}`}
+				aria-label={`Assignee of ${row.title}`}
+				value={row.assignee}
+				disabled={a.busyId === row.id}
+				onChange={(e) => a.onAssign(row.id, e.target.value)}
+				className="h-6 max-w-28 rounded border bg-background px-1 text-[11px] outline-none focus:border-ring disabled:opacity-50"
+			>
+				{!row.assignee && <option value="">unassigned</option>}
+				{options.map((w) => (
+					<option key={w} value={w}>
+						{w}
+					</option>
+				))}
+			</select>
+			{a.error?.id === row.id && (
+				<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="max-w-64 truncate text-[11px] text-destructive" title={a.error.message}>
+					{a.error.message}
+				</span>
+			)}
+		</span>
+	);
 }
 
 /** A row shows its children when it has some and is open (by hand or by search). */
@@ -205,6 +245,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 							<RowTitle row={row} />
 						)}
 					</span>
+					<AssigneeCell row={row} ctx={ctx} />
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
 					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
@@ -306,7 +347,10 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [query, setQuery] = useState("");
 	const [sort, setSort] = useState<WorkSort>(DEFAULT_WORK_SORT);
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-	const { load } = useWorkItems(client, domain);
+	const { load, reload } = useWorkItems(client, domain);
+	const [wolves, setWolves] = useState<string[]>([]);
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [assignError, setAssignError] = useState<{ id: string; message: string } | null>(null);
 	const graduateClient = useMemo(() => injectedGraduate ?? createGraduateClient(), [injectedGraduate]);
 
 	useEffect(() => {
@@ -318,6 +362,25 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 			cancelled = true;
 		};
 	}, [client]);
+	useEffect(() => {
+		let cancelled = false;
+		void client.assignees?.().then((w) => {
+			if (!cancelled) setWolves(w);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+	// No optimistic update: the hub answers, then the list is read again.
+	const onAssign = async (id: string, wolf: string): Promise<void> => {
+		if (!client.assign) return;
+		setBusyId(id);
+		setAssignError(null);
+		const res = await client.assign(id, wolf);
+		if (res.ok) await reload();
+		else setAssignError({ id, message: res.message });
+		setBusyId(null);
+	};
 
 	const setDomain = (next: string) => {
 		setDomainState(next);
@@ -338,7 +401,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 
 	const items = load.state === "ready" ? load.items : null;
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.assign ? { assign: { wolves, busyId, error: assignError, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 

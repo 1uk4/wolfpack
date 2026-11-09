@@ -30,6 +30,7 @@ const STATUS_BY_CODE: Record<string, number> = {
 	busy: 409,
 	not_found: 404,
 	unauthorized: 401,
+	forbidden: 403,
 	version_mismatch: 426,
 	engine_error: 502,
 	invalid_request: 400,
@@ -133,6 +134,24 @@ export function createMemoryApi(source: ClientSource) {
 				if (!client.listWork) return unsupported("memory_unavailable", "work lists");
 				if (!domain) return json({ error: "domain is required", code: "invalid_request" }, 400);
 				return json(await client.listWork(wolf, { domain, graduated }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/**
+		 * Owner work ops, a thin pass-through to the hub's PATCH: exactly one of `{assignee: "<wolf>"}` or `{moveTo: "<id>"|null}`.
+		 * Anything else is refused here (400) without calling the hub; the hub's own refusals come back with its message.
+		 */
+		async workOp(id: string, body: unknown): Promise<Response> {
+			try {
+				const keys = typeof body === "object" && body !== null && !Array.isArray(body) ? Object.keys(body) : [];
+				const b = (body ?? {}) as { assignee?: unknown; moveTo?: unknown };
+				const ok = keys.length === 1 && ((keys[0] === "assignee" && typeof b.assignee === "string" && b.assignee !== "") || (keys[0] === "moveTo" && (b.moveTo === null || (typeof b.moveTo === "string" && b.moveTo !== ""))));
+				if (!ok) return json({ error: "body must be {assignee} or {moveTo}", code: "invalid_request" }, 400);
+				const client = source();
+				if (!client.patchWork) return unsupported("memory_unavailable", "work changes");
+				return json(await client.patchWork(id, keys[0] === "assignee" ? { assignee: b.assignee } : { moveTo: b.moveTo }));
 			} catch (err) {
 				return failure(err);
 			}

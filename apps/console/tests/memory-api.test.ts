@@ -79,6 +79,24 @@ describe("memory API: pass-through", () => {
 		assert.equal((await createMemoryApi(stub({})).workList("a", "d", false)).status, 409);
 	});
 
+	it("workOp passes assign and move to the hub, refuses any other op, and returns the hub's message on failure", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ patchWork: async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } }) }));
+		assert.equal((await api.workOp("work-x-1", { assignee: "hal" })).status, 200);
+		assert.equal((await api.workOp("work-x-1", { moveTo: null })).status, 200);
+		assert.deepEqual(calls, [["work-x-1", { assignee: "hal" }], ["work-x-1", { moveTo: null }]]);
+		for (const bad of [{ title: "x" }, { body: "## Plan" }, { assignee: "hal", note: "x" }, { assignee: "" }, null, ["assignee"]]) {
+			assert.equal((await api.workOp("work-x-1", bad)).status, 400, JSON.stringify(bad));
+		}
+		assert.equal(calls.length, 2, "refused ops never reach the hub");
+		const refused = createMemoryApi(stub({ patchWork: async () => { throw new ProtocolError("invalid_request", 'unknown assignee "zed": not an active wolf known to this hub', false); } }));
+		const res = await refused.workOp("work-x-1", { assignee: "zed" });
+		assert.equal(res.status, 400);
+		assert.deepEqual(await body(res), { error: 'unknown assignee "zed": not an active wolf known to this hub', code: "invalid_request" });
+		const forbidden = createMemoryApi(stub({ patchWork: async () => { throw new ProtocolError("forbidden", "only the owner can change it", false); } }));
+		assert.equal((await forbidden.workOp("work-x-1", { assignee: "hal" })).status, 403);
+	});
+
 	it("kbGraph maps query params to options", async () => {
 		const calls: unknown[][] = [];
 		const api = createMemoryApi(stub({ getKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [] }) }));

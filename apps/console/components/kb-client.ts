@@ -135,6 +135,11 @@ export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbRes
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/status`);
 }
 
+/** Owner work op through the hub (console route PATCH /api/work/:id): `{assignee}` now, `{moveTo}` for moves. */
+export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<{ item: { id: string; assignee?: string } }>> {
+	return request(`/api/work/${seg(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op) });
+}
+
 /** The pending observations in the wolf's pool a graduation of the feature would fold, per task. */
 export function fetchGraduateObservations(wolf: string, workId: string): Promise<KbResult<GraduationObservations>> {
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/observations`);

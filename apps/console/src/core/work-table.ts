@@ -75,6 +75,8 @@ export interface TableRow {
 	stage: string;
 	stageLabel: string;
 	assignee: string;
+	/** The owner may set the assignee here: a feature row or a loose task (depth 1). A feature's child tasks follow its assignee, so they get no control. */
+	assignable: boolean;
 	/** YYYY-MM-DD, "" when unknown. */
 	created: string;
 	progress: ProgressCell | null;
@@ -185,6 +187,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 			stage: it.stage,
 			stageLabel: stageLabel(it.stage, it.kind),
 			assignee: it.assignee ?? "",
+			assignable: depth === 1,
 			created: it.created ?? "",
 			progress: kind === "feature" && tasks.length > 0 ? { shipped, total: tasks.length, label: `${shipped}/${tasks.length} shipped` } : null,
 			dependsOn,
@@ -238,6 +241,7 @@ function groupOf(allItems: readonly WorkListItem[], init: WorkListItem | null, r
 		stage: init?.stage ?? "",
 		stageLabel: init ? stageLabel(init.stage, init.kind) : "",
 		assignee: init?.assignee ?? "",
+		assignable: false,
 		created: init?.created ?? "",
 		progress: features.length > 0 ? { shipped, total: features.length, label: `${shipped}/${features.length} shipped` } : null,
 		dependsOn: [],

@@ -473,6 +473,12 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("hubMintPairingCode", {}, ROUTES.hubMintPairingCode.response.schema, label ? { label } : {})) as MintPairingCodeResponse;
   }
 
+  /** Hub only: one single-field PATCH of a work item (the caller passes the op; the hub gates it by the token's identity). */
+  async patchWork(workId: string, op: Record<string, unknown>): Promise<WorkItemResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "patchWork needs a hub client", false);
+    return (await this.json("hubPatchWork", { id: workId }, ROUTES.hubPatchWork.response.schema, op)) as WorkItemResponse;
+  }
+
   /** `wolf`: which wolf a worker token acts for (sent as the `{wolf}` body); omit for operator tokens. */
   async claimWork(workId: string, wolf?: string): Promise<WorkItemResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "claimWork needs a hub client", false);

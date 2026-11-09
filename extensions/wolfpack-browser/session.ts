@@ -553,7 +553,6 @@ export class BrowserSession {
   }
 }
 
-/** One thread's tab: its own queue, page, logs, blocked list and screenshots, in the shared browser context. */
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 const PHONE_HEIGHT = 844;
 
@@ -569,6 +568,7 @@ export function parseViewport(a: { width?: unknown; height?: unknown }): { width
   return width === undefined && height === undefined ? undefined : { width, height };
 }
 
+/** One thread's tab: its own queue, page, logs, blocked list and screenshots, in the shared browser context. */
 export class Tab {
   /** Size set by the caller for this tab only; undefined means the context default. */
   private viewport?: { width: number; height: number };

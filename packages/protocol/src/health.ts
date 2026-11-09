@@ -18,6 +18,21 @@ export interface HealthBody {
   [extra: string]: unknown;
 }
 
+/** One host in hubd's /healthz `hosts` summary: the hub's view of the pack (registry + link presence). */
+export interface HubHealthHost {
+  /** The host id the worker token was paired with (`hubd pair --host-id`); workerd's /healthz names it as `hubHostId`. */
+  id: string;
+  /** The worker token's label: the operator's `hubd pair --label`, else the os.hostname() workerd sent when it paired. */
+  label?: string;
+  presence: "online" | "asleep" | "offline";
+  /** When presence last changed, as seen by this hubd process (absent: unchanged since it started). */
+  since?: string;
+  wolves: { name: string; status: "online" | "offline" }[];
+}
+/** Caps on the hubd /healthz summary (it is unauthenticated). */
+export const HUB_HEALTH_MAX_HOSTS = 64;
+export const HUB_HEALTH_MAX_WOLVES = 64;
+
 export type HealthStatus = "ok" | "degraded" | "down";
 
 export interface ProbeResult {

@@ -42,7 +42,7 @@ import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { createRebuildService, type RebuildService } from "./kb-rebuild.js";
-import { createHubHealth, type HubHealth } from "./health.js";
+import { createHubHealth, createPackSummary, type HubHealth, type PackSummary } from "./health.js";
 import { createCurator, curatorEmbedderFactory, curatorEngineFactory, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
@@ -397,7 +397,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
-    health = createHubHealth();
+    let packSummary: PackSummary | undefined; // built once the link exists (below)
+    health = createHubHealth(() => packSummary?.hosts() ?? []);
     kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
     // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
     await kbWriter.exclusive(() => revisions.init());
@@ -455,6 +456,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         const now = tokens.stamp();
         if (now === stamp) return;
         stamp = now;
+        packSummary?.labelsChanged();
         sweepRevoked();
       } catch (e) {
         console.error("hubd: token watch failed:", e);
@@ -510,6 +512,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     link = createLink({ authenticate, registry, timers: opts.linkTimers, onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     linkRef = link;
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
+    packSummary = createPackSummary({
+      hosts: () => registry.list("hosts") as { name: string }[],
+      wolves: () => registry.list("wolves") as { name: string; host?: string; status?: string }[],
+      presence: (h) => link.presence(h),
+      // A host's label is its newest worker token's label (operator `--label`, else the hostname workerd sent when pairing).
+      labels: () => new Map(tokens.list().filter((t) => t.kind === "worker" && t.hostId && t.label).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((t) => [t.hostId!, t.label] as const)),
+      now: opts.now,
+    });
+    link.onPresence((h) => packSummary?.presenceChanged(h));
+    registry.onChange(() => packSummary?.registryChanged());
     relay = createRelay({ link, registry, bodyTimeoutMs: opts.bodyTimeoutMs });
     revokeListeners.add((id) => link.closeByToken(id));
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {

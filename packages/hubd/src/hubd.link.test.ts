@@ -301,6 +301,39 @@ describe("hubd worker link: handshake rules", () => {
   });
 });
 
+describe("hubd /healthz pack summary", () => {
+  it("lists every host with its presence, pairing label and non-retired wolves, sorted, without a token", async () => {
+    for (const w of ["beta", "alpha", "old", "lappy"]) await register(w);
+    const pair = (hostId: string, label: string) => store.redeem(store.mintPairingCode({ kind: "worker", hostId }).code, label, "worker", hostId).token;
+    const box = await join_(pair("sfo", "sfo-01"), "sfo", { wolves: [{ name: "beta", domains: [] }, { name: "alpha", domains: [] }, { name: "old", domains: [] }] });
+    expect((await fetch(`${hub.url}/v1/registry/wolves/old/retire`, { method: "POST", headers: OP })).status).toBe(200);
+    const lap = await join_(pair("mac", "Lukas MBP"), "mac", { laptop: true, wolves: [{ name: "lappy", domains: [] }] });
+    lap.send({ t: "sleep" });
+    await lap.until(() => hub.link.presence("mac") === "asleep", "asleep");
+    expect((await fetch(`${hub.url}/v1/registry/hosts`, { method: "POST", headers: OP, body: JSON.stringify({ name: "cron" }) })).status).toBe(201);
+    const gone = await join_(pair("cron", "cron-box"), "cron");
+    gone.ws.close(1000);
+    await gone.until(() => hub.link.presence("cron") === "offline", "offline");
+    const body = (await (await fetch(hub.url + "/healthz")).json()) as { hosts: { id: string; label?: string; presence: string; since?: string; wolves: unknown[] }[] };
+    expect(body.hosts.map(({ since: _s, ...h }) => h)).toEqual([
+      { id: "cron", label: "cron-box", presence: "offline", wolves: [] },
+      { id: "mac", presence: "asleep", wolves: [{ name: "lappy", status: "offline" }] },
+      { id: "sfo", label: "sfo-01", presence: "online", wolves: [{ name: "alpha", status: "online" }, { name: "beta", status: "online" }] },
+    ]);
+    for (const h of body.hosts) expect(Number.isNaN(Date.parse(h.since ?? ""))).toBe(false); // each presence change is timestamped
+    // A label that is not hostname-like (a space, a person's name) is never sent on the unauthenticated /healthz.
+    expect(body.hosts.find((h) => h.id === "mac")).not.toHaveProperty("label");
+    // A host removed from the registry that is not linked any more leaves the list.
+    expect((await fetch(`${hub.url}/v1/registry/hosts/cron`, { method: "DELETE", headers: OP })).status).toBe(200);
+    await sleep(2100); // past the summary cache
+    expect(((await (await fetch(hub.url + "/healthz")).json()) as typeof body).hosts.map((h) => h.id)).toEqual(["mac", "sfo"]);
+    box.ws.terminate();
+    await box.until(() => hub.link.presence("sfo") === "offline", "sfo offline");
+    const after = (await (await fetch(hub.url + "/healthz")).json()) as typeof body;
+    expect(after.hosts.find((h) => h.id === "sfo")).toMatchObject({ presence: "offline", wolves: [{ name: "alpha", status: "offline" }, { name: "beta", status: "offline" }] }); // a change shows at once, not after the cache
+  });
+});
+
 describe("hubd worker link: presence", () => {
   it("the hub pings; steady traffic keeps the link alive, silence past deadAfter drops it to offline", async () => {
     const seen = watch();

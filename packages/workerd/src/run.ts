@@ -257,7 +257,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   const server = new WorkerdServer({
     registry: supervisor,
     ...(directToken ? { directToken } : {}),
-    health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
+    health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}), ...(link && hubCfg ? { hubHostId: hubCfg.hostId } : {}) }), // hubHostId: matches this workerd to its entry in hubd's /healthz hosts
   });
   const url = await server.listen(opts.port ?? 7141, opts.host ?? (linkOnly ? (process.env.WORKERD_HOST || "127.0.0.1") : undefined));
   serverUrl = url;

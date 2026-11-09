@@ -162,15 +162,25 @@ export function createHealthApi(d: HealthApiDeps) {
 }
 
 const KEY = Symbol.for("wolfpack.console.packHealth");
-type Holder = { [KEY]?: ReturnType<typeof createHealthApi> };
+const MONITOR = Symbol.for("wolfpack.console.packHealthMonitor");
+type Holder = { [KEY]?: ReturnType<typeof createHealthApi>; [MONITOR]?: PackHealth };
 
-/** The process-wide API over one monitor (started on first use; probes every WOLFPACK_HEALTH_INTERVAL_MS, default 5000). */
+/** The process-wide monitor (started on first use; probes every WOLFPACK_HEALTH_INTERVAL_MS, default 5000). The API and the client's direct route share it. */
+export function packHealth(env: Record<string, string | undefined> = process.env): PackHealth {
+	const h = globalThis as Holder;
+	if (!h[MONITOR]) {
+		const interval = Number(env.WOLFPACK_HEALTH_INTERVAL_MS);
+		h[MONITOR] = createPackHealth({ targets: healthTargets(env), ...(interval >= 1000 ? { intervalMs: interval } : {}) });
+		h[MONITOR].start();
+	}
+	return h[MONITOR];
+}
+
+/** The process-wide API over the one monitor. */
 export function healthApi(env: Record<string, string | undefined> = process.env): ReturnType<typeof createHealthApi> {
 	const h = globalThis as Holder;
 	if (!h[KEY]) {
-		const interval = Number(env.WOLFPACK_HEALTH_INTERVAL_MS);
-		const health = createPackHealth({ targets: healthTargets(env), ...(interval >= 1000 ? { intervalMs: interval } : {}) });
-		health.start();
+		const health = packHealth(env);
 		h[KEY] = createHealthApi({ health, restarter: createRestarter({ health }), witness: sessionWitness(env), checkToken: hubTokenCheck(hubTarget(env).wolvesUrl) });
 	}
 	return h[KEY];

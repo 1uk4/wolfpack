@@ -25,11 +25,72 @@
  * wolves. Raw errors go to
  * the server log only.
  * Each status change is appended to the link's `history` (last HISTORY_MAX), so the UI can say "restarting… back".
+ *
+ * DIRECT PATH (work-wolfpack-Fy45EOA): the link `workerd-direct` (kind direct) is the console's fallback to the workerd on THIS machine.
+ * It is probed on the authenticated path (GET <url>/direct/v1/wolves with the local token from its 0600 file; no token file: down,
+ * no_token), and the wolves it lists are the ones the direct path may serve. The snapshot's `route` says where the console's client
+ * goes: "hub" normally; "direct" after SWITCH_ROUNDS consecutive rounds in which hubd does not answer (down, frozen, refused, timeout)
+ * while the direct link answers; back to "hub" after SWITCH_ROUNDS consecutive rounds in which hubd answers (symmetric, so one slow or
+ * failed probe never flips it either way). A live check (direct-path.ts) is one round like any other. A hub 401 never moves it: /healthz is unauthenticated.
  */
 import { execFile } from "node:child_process";
-import { probeHealth, DEGRADED_RESPONSE_MS, type ProbeResult } from "@wolfpack/protocol";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { probeHealth, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
 
-export type LinkKind = "hubd" | "workerd" | "wolfd";
+export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct";
+/** Where the console's client sends wolf traffic: through the hub, or straight to the local workerd while the hub is unreachable. */
+export type Route = "hub" | "direct";
+
+/** The link id of the direct path in the snapshot. */
+export const DIRECT_LINK_ID = "workerd-direct";
+/** Consecutive hubd rounds (failing, or answering) before the route switches to direct, or back to hub. */
+export const SWITCH_ROUNDS = 2;
+/** The header workerd's /direct/v1 checks the local token in (packages/workerd/src/direct-token.ts DIRECT_TOKEN_HEADER). */
+export const DIRECT_TOKEN_HEADER = "x-wolfpack-direct-token";
+
+export interface DirectTarget {
+	/** The local workerd's origin (loopback only). */
+	url: string;
+	/** workerd's direct-token file (mode 0600). */
+	tokenFile: string;
+}
+
+/** The local token, or undefined when the file is missing, unreadable or empty. Read on every use (workerd may create it later). */
+export function readDirectToken(file: string): string | undefined {
+	try {
+		return readFileSync(file, "utf8").trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+/**
+ * The direct path from the environment, or undefined when it is off (opt-in: only a console on the same machine as a workerd has one):
+ *   WOLFPACK_WORKERD_DIRECT_URL         the local workerd, e.g. http://127.0.0.1:7141 (unset: off). Must be http on loopback: the token
+ *                                       never leaves the machine.
+ *   WOLFPACK_WORKERD_DIRECT_TOKEN_FILE  default <WORKERD_CONFIG_DIR or ~/.wolfpack/workerd>/direct-token (workerd creates it)
+ */
+export function directTarget(env: Record<string, string | undefined> = process.env): DirectTarget | undefined {
+	const raw = env.WOLFPACK_WORKERD_DIRECT_URL?.trim();
+	if (!raw) return undefined;
+	let url: URL;
+	try {
+		url = new URL(raw);
+	} catch {
+		console.warn("console: WOLFPACK_WORKERD_DIRECT_URL is not a URL; the direct path is off");
+		return undefined;
+	}
+	if (url.protocol !== "http:" || !LOOPBACK_HOSTS.has(url.hostname)) {
+		console.warn("console: WOLFPACK_WORKERD_DIRECT_URL must be http on loopback (127.0.0.1, ::1, localhost); the direct path is off");
+		return undefined;
+	}
+	const tokenFile = env.WOLFPACK_WORKERD_DIRECT_TOKEN_FILE?.trim() || join(env.WORKERD_CONFIG_DIR?.trim() || join(homedir(), ".wolfpack", "workerd"), "direct-token");
+	return { url: url.origin, tokenFile };
+}
 export type LinkStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
 
 export interface LinkHistoryEntry {
@@ -64,6 +125,8 @@ export interface LinkSnapshot {
 export interface HealthSnapshot {
 	checkedAt: string | null;
 	intervalMs: number;
+	/** Where the console's client goes right now (see DIRECT PATH). */
+	route: Route;
 	links: LinkSnapshot[];
 }
 
@@ -72,6 +135,8 @@ export interface HealthTargets {
 	workerds: { id: string; url: string }[];
 	/** Wolves with a direct /healthz URL (optional). */
 	wolves: { name: string; url: string }[];
+	/** The local workerd's direct console path (absent: no `workerd-direct` link, the route stays hub). */
+	direct?: DirectTarget;
 }
 
 export const HISTORY_MAX = 20;
@@ -149,7 +214,8 @@ export function hubTarget(env: Record<string, string | undefined> = process.env)
 export function healthTargets(env: Record<string, string | undefined> = process.env): HealthTargets {
 	const workerds = pairs(env.WOLFPACK_HEALTH_WORKERDS?.trim() || "workerd=http://127.0.0.1:7141", (id) => WORKERD_UNIT_RE.test(id), "WOLFPACK_HEALTH_WORKERDS");
 	const wolves = pairs(env.WOLFPACK_HEALTH_WOLVES, (id) => WOLF_RE.test(id), "WOLFPACK_HEALTH_WOLVES").map(({ id, url }) => ({ name: id, url }));
-	return { hub: hubTarget(env).healthz, workerds, wolves };
+	const direct = directTarget(env);
+	return { hub: hubTarget(env).healthz, workerds, wolves, ...(direct ? { direct } : {}) };
 }
 
 interface LinkState {
@@ -264,6 +330,10 @@ export interface PackHealth {
 	restartable(): Set<string>;
 	/** Record a restart issued for `id` (the link shows "restarting" until the new process answers). */
 	markRestart(id: string, ok: boolean): void;
+	/** Where the console's client goes right now (see DIRECT PATH). */
+	route(): Route;
+	/** The wolves the direct link listed in its last answering round (the only ones the direct path may serve). */
+	localWolves(): ReadonlySet<string>;
 	start(): void;
 	stop(): void;
 }
@@ -276,6 +346,10 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 	const links = new Map<string, LinkState>();
 	const listeners = new Set<(s: HealthSnapshot) => void>();
 	let checkedAt: string | null = null;
+	let route: Route = "hub";
+	let hubOkRounds = 0;
+	let hubFailRounds = 0;
+	let localWolves: ReadonlySet<string> = new Set();
 	let round: Promise<HealthSnapshot> | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -294,6 +368,8 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 	link("hubd", "hubd", { url: o.targets.hub });
 	for (const w of o.targets.workerds) link(w.id, "workerd", { url: w.url });
 	for (const w of o.targets.wolves) link(`wolfd@${w.name}`, "wolfd", { url: w.url });
+	const direct = o.targets.direct;
+	if (direct) link(DIRECT_LINK_ID, "direct"); // no `url`: probed on its authenticated path below, not as a /healthz
 
 	const setStatus = (l: LinkState, s: LinkStatus, t: number) => {
 		if (l.status === s && l.history.length > 0) return;
@@ -335,6 +411,7 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		return {
 			checkedAt,
 			intervalMs,
+			route,
 			links: [...links.values()].map((l) => ({
 				id: l.id,
 				kind: l.kind,
@@ -358,10 +435,43 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 
 	const probe = (url: string, service: string) => probeHealth(url, { timeoutMs, expectService: service, ...(o.fetch ? { fetch: o.fetch } : {}) });
 
+	/** The direct path probed as the console uses it: the local token on GET /direct/v1/wolves. */
+	const probeDirect = async (d: DirectTarget): Promise<{ ob: Observation; wolves: string[] }> => {
+		const token = readDirectToken(d.tokenFile);
+		if (!token) return { ob: { answered: false, graded: "down", responseMs: null, lagMs: null, error: "no_token", version: null, uptimeS: null, rawError: `no direct token in ${d.tokenFile}` }, wolves: [] };
+		const r = await probeHealth(`${d.url}/direct/v1/wolves`, { timeoutMs, headers: { [DIRECT_TOKEN_HEADER]: token, [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) }, ...(o.fetch ? { fetch: o.fetch } : {}) });
+		const listed = r.status !== "down" && Array.isArray(r.body?.wolves) ? (r.body.wolves as unknown[]) : [];
+		const wolves = listed.map((w) => (w as { name?: unknown })?.name).filter((n): n is string => typeof n === "string" && WOLF_RE.test(n)).slice(0, MAX_WOLVES_PER_WORKERD);
+		return { ob: fromProbe(r, timeoutMs), wolves };
+	};
+
 	const runRound = async (): Promise<HealthSnapshot> => {
 		const direct = [...links.values()].filter((l) => l.url);
-		const results = await Promise.all(direct.map(async (l) => [l, await probe(l.url!, l.kind)] as const));
+		const [results, directResult] = await Promise.all([
+			Promise.all(direct.map(async (l) => [l, await probe(l.url!, l.kind)] as const)),
+			o.targets.direct ? probeDirect(o.targets.direct) : Promise.resolve(undefined),
+		]);
 		const t = now();
+		if (directResult) {
+			apply(link(DIRECT_LINK_ID, "direct"), directResult.ob, t);
+			if (directResult.ob.answered) localWolves = new Set(directResult.wolves);
+		}
+		// The route (see DIRECT PATH). hubd "answering" = its /healthz probe was not down (ok, degraded or recovering).
+		const hubAnswered = results.some(([l, r]) => l.kind === "hubd" && r.status !== "down");
+		if (route === "hub") {
+			if (hubAnswered) hubFailRounds = 0;
+			else if (++hubFailRounds >= SWITCH_ROUNDS && directResult?.ob.answered) {
+				route = "direct";
+				hubOkRounds = 0;
+				hubFailRounds = 0;
+				log("console: hub unreachable: chat now goes straight to the local workerd");
+			}
+		} else if (!hubAnswered) hubOkRounds = 0;
+		else if (++hubOkRounds >= SWITCH_ROUNDS) {
+			route = "hub";
+			hubOkRounds = 0;
+			log("console: hub back: chat goes through the hub again");
+		}
 		const reported = new Set<string>();
 		const answeringWorkerds = new Set<string>();
 		for (const [l, r] of results) {
@@ -426,6 +536,8 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 			return () => listeners.delete(fn);
 		},
 		restartable,
+		route: () => route,
+		localWolves: () => localWolves,
 		markRestart(id, ok) {
 			const l = links.get(id);
 			if (!l) return;

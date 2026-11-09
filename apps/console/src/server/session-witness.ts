@@ -23,8 +23,8 @@ import * as path from "node:path";
 export interface SessionWitness {
 	verified(token: string): void;
 	rejected(token: string): void;
-	/** Was this token accepted by the hub within the TTL? */
-	isRecent(token: string): boolean;
+	/** Was this token accepted by the hub within the TTL (or within `maxAgeMs`, when that is shorter: the direct path's 24 h)? */
+	isRecent(token: string, maxAgeMs?: number): boolean;
 	/** Short, non-reversible id of a token for audit logs. */
 	fingerprint(token: string): string;
 }
@@ -75,10 +75,10 @@ export function createSessionWitness(o: { file?: string; ttlMs?: number; now?: (
 		rejected(token) {
 			if (seen.delete(hashOf(token))) persist();
 		},
-		isRecent(token) {
+		isRecent(token, maxAgeMs) {
 			const h = hashOf(token);
 			const at = seen.get(h);
-			if (live(at)) return true;
+			if (live(at)) return maxAgeMs === undefined || now() - at <= maxAgeMs;
 			if (at !== undefined) seen.delete(h); // expired: drop it (written with the next change)
 			return false;
 		},

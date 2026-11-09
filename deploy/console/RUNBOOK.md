@@ -18,6 +18,9 @@ Files: `deploy/console/{setup.sh,console.service,console.env.example}`, `deploy/
 | `WOLFPACK_HEALTH_WOLVES` | optional; `<name>=<url>,...` wolfd `/healthz` URLs to probe directly. Normally empty: wolves come from their workerd's `/healthz` |
 | `WOLFPACK_HEALTH_INTERVAL_MS` | optional; probe interval, default 5000 (minimum 1000) |
 | `WOLFPACK_HEALTH_SESSION_TTL_H` | optional; how long a device the hub accepted may restart units while the hub is down, default 72. While the hub is up it is not used: the hub is asked live (see Pack-health restarts) |
+| `WOLFPACK_WORKERD_DIRECT_URL` | optional; the local workerd's origin (http on loopback only) for the direct path (see Direct path). Unset: no fallback, the route stays on the hub |
+| `WOLFPACK_WORKERD_DIRECT_TOKEN_FILE` | optional; workerd's 0600 direct token. Default `$WORKERD_CONFIG_DIR/direct-token` (`~/.wolfpack/workerd/direct-token`) |
+| `WOLFPACK_DIRECT_SESSION_TTL_H` | optional; a browser may use the direct path only if the hub accepted it through this console within this many hours, default 24 |
 
 hubd's own `/etc/wolfpack/hubd.env` gets the same two public values: `HUBD_PUBLIC_URL=https://<host>.ts.net/hub` (pairing QR) and `HUBD_CONSOLE_URL=https://<host>.ts.net` (where the pairing page redirects with `#token=`), then `systemctl restart hubd`.
 
@@ -65,6 +68,15 @@ Nothing has to move: the Mac's workerd links to `http://100.120.154.69:3150`, wh
 - Logs: `journalctl -u console -n 100 --no-pager`. Restart: `systemctl restart console`.
 - Health: `curl -s http://127.0.0.1:3200/api/health`: a JSON snapshot of hubd, the workerd units and the wolves, probed by the console itself (no hub call, so it answers with hubd stopped or frozen). Always 200 while the console runs. Live: `GET /api/health/stream` (SSE).
   **Changed:** `/api/health` no longer answers 503 when the hub is down. It is always 200 with a per-link snapshot, so an external monitor keyed on 503 must read `links[]` instead (e.g. `jq -e '.links[] | select(.id=="hubd") | .status=="ok"'`). Each link's `error` is a short code (`timeout`, `refused`, `http_<status>`, `wrong_service`, `bad_body`, `unreachable`, `slow`, `reports_not_ok`, `wolf_<state>`, `workerd_unavailable`, `not_reported`); the raw error is only in the console's journal (`journalctl -u console | grep 'console: health'`).
+
+## Direct path (hub down)
+
+With `WOLFPACK_WORKERD_DIRECT_URL` set, a console on the same machine as a workerd falls back to that workerd's loopback-only `/direct/v1` while hubd is unreachable (details: `apps/console/src/server/direct-path.ts`).
+
+- **When it switches:** after 2 consecutive pack-health rounds in which hubd does not answer while the direct link does; back to the hub after 2 answering rounds. A hub call that gets no answer runs one live round (debounced to one per 2 s). So a live hub failure goes direct after 2 failed rounds: a live check plus the next 5 s round (`WOLFPACK_HEALTH_INTERVAL_MS`), or two live checks at least 2 s apart. Until then requests fail with the retryable "hub is unreachable" error. This is deliberate, to avoid flapping.
+- **What it serves:** chat, threads, streams and reads of the local workerd's wolves, and `restartWolf` (recovery). Not served (retryable "hub is unreachable"): other hosts' wolves, hub-only routes (work, KB, devices, hub events), and `putWolfSettings`, `putPrompt`, `resetPrompt`, `revealWolfSetting`, `putThreadSettings`.
+- **Exposure:** workerd refuses `/direct*` from a non-loopback peer and from requests carrying forwarding headers (`X-Forwarded-*`, `Forwarded`, `Via`). A raw TCP forward to 127.0.0.1 (e.g. `tailscale serve --tcp`, `socat`, `ssh -L`) adds no headers and looks like loopback, so only the token protects that case. **Never set one up to workerd's port.**
+- **Token file:** created by workerd (0600). A symlink or a file owned by another user is refused; an empty or invalid file of workerd's own is replaced with a fresh token.
 
 ## Pack-health restarts (polkit)
 

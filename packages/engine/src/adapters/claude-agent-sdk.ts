@@ -92,10 +92,33 @@ export type QueryFn = (params: { prompt: string; options?: any }) => AsyncIterab
   close?: () => void;
 };
 
-let cachedQuery: QueryFn | null = null;
+let cachedQuery: Promise<QueryFn> | null = null;
+let sdkImporter: ((specifier: string) => Promise<any>) | undefined;
 
-export async function loadQuery(): Promise<QueryFn> {
+/** @internal TEST-ONLY: replace the dynamic import; clears the cache. */
+export function __setSdkImporter(fn: ((specifier: string) => Promise<any>) | undefined): void {
+  sdkImporter = fn;
+  cachedQuery = null;
+}
+
+/** Concurrent callers (the hub's early warm-up and the first sweep tick) share one in-flight load; a failure is not cached. */
+export function loadQuery(): Promise<QueryFn> {
   if (cachedQuery) return cachedQuery;
+  const p = loadQueryUncached();
+  cachedQuery = p;
+  p.catch(() => {
+    if (cachedQuery === p) cachedQuery = null;
+  });
+  return p;
+}
+
+/** Load the SDK now so the first real call does not pay for it. Resolves when loaded; rejects like loadQuery. */
+export async function warmClaudeAgentSdk(): Promise<void> {
+  await loadQuery();
+}
+
+async function loadQueryUncached(): Promise<QueryFn> {
+  const doImport = (s: string): Promise<any> => (sdkImporter ? sdkImporter(s) : import(s));
   // Indirect specifier so TS doesn't statically require the module at build time.
   // Deployed extension bundles (<den>/extensions/<x>/index.js) have no
   // node_modules above them, so plain import() fails; fall back to anchors we
@@ -103,7 +126,7 @@ export async function loadQuery(): Promise<QueryFn> {
   const specifier = SDK_SPECIFIER;
   let mod: any;
   try {
-    mod = await import(specifier);
+    mod = await doImport(specifier);
   } catch (err) {
     const found = findSdkUrl(specifier);
     if (!found) {
@@ -116,7 +139,7 @@ export async function loadQuery(): Promise<QueryFn> {
     }
     console.warn(`[claude-agent-sdk] plain import failed; loading SDK from ${found}`);
     try {
-      mod = await import(found);
+      mod = await doImport(found);
     } catch (err2) {
       const first = err instanceof Error ? err.message : String(err);
       const second = err2 instanceof Error ? err2.message : String(err2);
@@ -133,8 +156,7 @@ export async function loadQuery(): Promise<QueryFn> {
       "@anthropic-ai/claude-agent-sdk loaded but did not export query()."
     );
   }
-  cachedQuery = query as QueryFn;
-  return cachedQuery;
+  return query as QueryFn;
 }
 
 const SDK_SPECIFIER = "@anthropic-ai/claude-agent-sdk";

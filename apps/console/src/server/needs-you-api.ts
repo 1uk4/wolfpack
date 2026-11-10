@@ -12,7 +12,8 @@
 import type { ConsoleClient, WolfEvent } from "@wolfpack/client";
 import { buildNeedsYou, type WolfNeedsYou } from "../core/needs-you.ts";
 import { emit, type ServerEvents } from "../core/events.ts";
-import { getConsoleClient } from "./console-client.ts";
+import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
+import { getConsoleClient, isHubAuthError } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
 /**
@@ -27,7 +28,9 @@ export async function collectNeedsYou(client: ConsoleClient, only?: string): Pro
 			try {
 				const [cards, threads] = await Promise.all([client.listCards!(wolf), client.listThreads(wolf)]);
 				return { wolf, cards, threads };
-			} catch {
+			} catch (err) {
+				// A revoked/missing token must reach the route (401 + marker), not look like an unreachable wolf.
+				if (isHubAuthError(err)) throw err;
 				return null;
 			}
 		}),
@@ -46,6 +49,8 @@ export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client
 				const { reports, responded, listed } = await collectNeedsYou(client, wolf);
 				return Response.json({ items: buildNeedsYou(reports), responded, ...(wolf ? {} : { wolves: listed }) });
 			} catch (err) {
+				// An unpaired/revoked browser token: 401 + the marker, so the client goes to /pair (same as the other hub-backed routes).
+				if (isHubAuthError(err)) return Response.json({ error: err.message, code: "unauthorized" }, { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });
 				return Response.json({ error: err instanceof Error ? err.message : "Unexpected error" }, { status: 500 });
 			}
 		},

@@ -356,8 +356,10 @@ describe("runSweepTick", () => {
     afterEach(() => vi.useRealTimers());
     const stuckEngine = () => {
       let release!: () => void;
+      let markReached!: () => void;
       const gate = new Promise<void>((r) => (release = r));
-      return { release, engine: { ...engine, call: async (...a: [string, { parse: (v: unknown) => unknown }]) => { await gate; return (engine as any).call(...a); } } as unknown as Engine };
+      const reached = new Promise<void>((r) => (markReached = r)); // the sweep is inside the stuck engine call
+      return { release, reached, engine: { ...engine, call: async (...a: [string, { parse: (v: unknown) => unknown }]) => { markReached(); await gate; return (engine as any).call(...a); } } as unknown as Engine };
     };
 
     it("stops waiting after the grace plus the cap: SweepStuck, marker set until the sweep ends, alert repeats then stops", async () => {
@@ -367,6 +369,7 @@ describe("runSweepTick", () => {
       const marks: boolean[] = [];
       const p = runSweepTick({ roots, createEngine: () => s.engine, notify: () => {}, alert: (m) => void alerts.push(m), budgetMs: 100_000, outerBudgetMs: 1000, abortGraceMs: 1000, abortRepeatMs: 2000, abortCapMs: 5000, onSweepStuck: (v) => void marks.push(v) });
       const outcome = p.then(() => "ok", (e: Error) => e.name);
+      await s.reached; // real file I/O (async ledger read) must finish before the clock moves
       await vi.advanceTimersByTimeAsync(1000); // budget spent: aborted
       expect(marks).toEqual([true]);
       await vi.advanceTimersByTimeAsync(1000); // grace over: first alert

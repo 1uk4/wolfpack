@@ -50,6 +50,20 @@ describe("hub work proxy", () => {
     expect((await fetch(`${hub.url}/v1/work?domain=personal`, { headers: { "X-API-Key": A } })).status).toBe(401);
   });
 
+  it("GET /work?ids= returns only the named items: deduped, unknown skipped, empty = absent, over 200 = 400", async () => {
+    const { call, A } = await rig();
+    const mk = async (title: string) => ((await (await call(A, "POST", "", { ...feature, title })).json()) as { id: string }).id;
+    const [a, b, c] = [await mk("a"), await mk("b"), await mk("c")];
+    const ids = async (q: string) => ((await (await call(A, "GET", q)).json()) as { items: { id: string }[] }).items.map((i) => i.id).sort();
+    expect(await ids(`?domain=personal&ids=${a},${b},${a},work-personal-Zzzzzzz`)).toEqual([a, b].sort());
+    expect(await ids(`?domain=other&ids=${a}`)).toEqual([]); // the other filters still apply
+    expect(await ids("?domain=personal&ids=")).toEqual([a, b, c].sort()); // empty ids= is as if absent
+    const many = Array.from({ length: 201 }, (_, i) => `work-personal-X${String(i).padStart(6, "0")}`).join(",");
+    const r = await call(A, "GET", `?ids=${many}`);
+    expect(r.status).toBe(400);
+    expect(await r.json()).toMatchObject({ error: expect.stringContaining("200") });
+  });
+
   it("create / get / patch / graduate keep the agent shapes for the wolf's own host", async () => {
     const { call, A } = await rig();
     const c = await call(A, "POST", "", feature);

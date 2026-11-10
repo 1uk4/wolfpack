@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildWorkLogPrompt, parseWorkDistillOutput, parseWorkLogOutput } from "./work-log.js";
+import { buildWorkCompactPrompt, parseWorkCompactOutput, buildWorkLogPrompt, parseWorkDistillOutput, parseWorkLogOutput } from "./work-log.js";
 
 describe("parseWorkLogOutput", () => {
   it("reads a valid answer", () => {
@@ -68,5 +68,34 @@ describe("buildWorkLogPrompt", () => {
     expect(p).not.toContain("line1\n");
     expect(p).toContain("- line2\n");
     expect(p).toContain("- line9");
+  });
+});
+
+describe("parseWorkCompactOutput", () => {
+  it("reads a valid answer, keeping which input lines each line merges", () => {
+    const out = '{"lines":[{"kind":"decision","text":"Use X because Y","from":["l1","l3"]}]}';
+    expect(parseWorkCompactOutput(out)).toEqual([{ kind: "decision", text: "Use X because Y", from: ["l1", "l3"] }]);
+  });
+
+  it("drops garbage, unknown kinds, over-long text and lines that cite nothing", () => {
+    expect(parseWorkCompactOutput("sorry, no")).toEqual([]);
+    const out = JSON.stringify({
+      lines: [
+        { kind: "narration", text: "ran a check", from: ["l1"] },
+        { kind: "change", text: "x".repeat(241), from: ["l2"] },
+        { kind: "change", text: "cites nothing", from: ["nope"] },
+        { kind: "problem", text: "P, fixed by F", from: ["l4", "bogus"] },
+      ],
+    });
+    expect(parseWorkCompactOutput(out)).toEqual([{ kind: "problem", text: "P, fixed by F", from: ["l4"] }]);
+  });
+});
+
+describe("buildWorkCompactPrompt", () => {
+  it("numbers the lines l1… and states the target size", () => {
+    const p = buildWorkCompactPrompt({ lines: [{ kind: "change", text: "a" }, { kind: "finding", text: "b" }], targetChars: 2000 });
+    expect(p).toContain("[l1] (change) a");
+    expect(p).toContain("[l2] (finding) b");
+    expect(p).toContain("2000");
   });
 });

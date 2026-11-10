@@ -436,6 +436,17 @@ In "from" list the observation refs the line rests on, e.g. ["o2"]. Use only ref
 Respond with strict JSON only: {"lines":[{"kind":"decision|change|finding|problem","text":string,"from":[string]}]}`;
 
 /**
+ * stage: workCompact · model: fast · in: a full Record's lines ([l1]…, each with its kind) + a target size · out: fewer lines, each citing the inputs it merges
+ */
+export const WORK_COMPACT_SYSTEM = `You compact a work item's LOG that has hit its size cap. You are given its lines numbered [l1], [l2]… each with a kind, and a TARGET size in characters. Return a shorter list that keeps what is worth knowing later.
+
+Merge lines that say the same thing or one chain of events into one line. Drop routine detail. Keep decisions with their reasons, lasting changes, facts that stay true, and problems with their fixes. Keep each line's kind (decision|change|finding|problem); a merged line takes the kind that fits it best.
+The total text must stay within TARGET, each line 240 characters or fewer. Do not invent facts.
+In "from" list EVERY input ref the line merges or replaces, e.g. ["l3","l7"]. Use only refs you were given; never put a ref in the text.
+
+Respond with strict JSON only: {"lines":[{"kind":"decision|change|finding|problem","text":string,"from":[string]}]}`;
+
+/**
  * stage: workDistill · model: smart · in: a shipped task's log + the feature's Outcomes and Record · out: up to 5 lines for the feature Record
  */
 export const WORK_DISTILL_SYSTEM = `You distill a SHIPPED task's log into lines for its FEATURE's Record. You are given the task id and title, the task's LOG, the feature's Outcomes one-liners, and the feature Record's headings with its last few bullets.

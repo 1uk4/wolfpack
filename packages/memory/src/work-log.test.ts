@@ -71,6 +71,28 @@ describe("appendWorkLog", () => {
     expect(out[0]).toMatchObject({ status: "pending", reason: "log_full" });
   });
 
+  it("on a full log compacts the Record once and retries the append, which then succeeds", async () => {
+    const fill = Array.from({ length: 40 }, (_, i) => `- 10:00 [w·change] old line ${i} ${"x".repeat(130)} <!-- src:old${i} -->`).join("\n");
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a", body: `## Record\n\n${fill}` }) });
+    let sets = 0;
+    const set = store.setRecord.bind(store);
+    store.setRecord = async (id, r) => { sets++; return set(id, r); };
+    const steps: string[] = [];
+    const engine = {
+      call: async (step: string) => {
+        steps.push(step);
+        return step === "workCompact" ? { lines: [{ kind: "change", text: "old work, merged", from: ["l1", "l2", "l3"] }] } : { lines: [line("new fact", ["o1"])] };
+      },
+    } as unknown as Engine;
+    const out = await appendWorkLog({ engine, store, src: "w", now: () => NOW, observations: [o("1", "a", "x")] });
+    expect(out[0]).toMatchObject({ status: "written" });
+    expect(steps).toEqual(["workLog", "workCompact"]);
+    expect(sets).toBe(1);
+    const body = (await store.get("a"))!.body;
+    expect(body).toContain("new fact <!-- src:1 -->");
+    expect(body).toContain("old work, merged <!-- src:old0,old1,old2 -->");
+  });
+
   it("keeps observations pending as forbidden when the hub refuses", async () => {
     const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
     store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "forbidden", message: "not yours" });

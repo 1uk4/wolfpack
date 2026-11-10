@@ -58,6 +58,27 @@ describe("distillTaskToFeature", () => {
     expect(orphan.prompts).toHaveLength(0);
   });
 
+  it("on a full feature Record compacts it, appends, and distilling again still makes no model call", async () => {
+    const fill = Array.from({ length: 24 }, (_, i) => `- 09:00 [x·Changes] old ${i} ${"x".repeat(130)} <!-- src:${i === 0 ? "distilled:older,distilled:older:1" : `old${i}`} -->`).join("\n");
+    const { store, prompts, run } = setup({ featureBody: `## Record\n\n### Changes\n\n${fill}` });
+    const steps: string[] = [];
+    const engine = {
+      call: async (step: string, _s: unknown, o: { prompt: string }) => {
+        steps.push(step);
+        prompts.push(o.prompt);
+        return step === "workCompact" ? { lines: [{ kind: "change", text: "old stuff", from: ["l2", "l3"] }] } : { lines: [{ group: "Decisions", text: "Use a TTL map" }] };
+      },
+    } as never;
+    const res = await distillTaskToFeature({ store, engine, taskId: "t", src: "hal", now: () => new Date("2026-11-09T10:30:00Z") });
+    expect(res).toEqual({ ok: true, status: "distilled", lines: 1 });
+    expect(steps).toEqual(["workDistill", "workCompact"]);
+    const body = (await store.get("f"))!.body;
+    expect(body).toContain("Use a TTL map <!-- src:distilled:t,distilled:t:1 -->");
+    expect(body).toContain("distilled:older,distilled:older:1");
+    expect(await run()).toEqual({ ok: true, status: "already", lines: 0 });
+    expect(steps).toHaveLength(2);
+  });
+
   it("a model failure returns ok:false without throwing and writes nothing", async () => {
     const { store, run } = setup({ reply: new Error("model down") });
     const before = (await store.get("f"))!.body;

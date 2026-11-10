@@ -12,6 +12,7 @@
 import { z } from "zod";
 import { LlmInfraError, WORK_LOG_SYSTEM, buildWorkLogPrompt, parseWorkLogOutput, type Engine } from "@wolfpack/engine";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
+import { appendCompacting } from "./work/compact.js";
 import { extractRecord, type RecordAppendLine, type WorkObservation, type WorkRecordItem, type WorkRecordOutcome, type WorkRecordStore } from "./work-record.js";
 
 /** An observation as the log sees it: `work` may be empty when only `feature` is set. */
@@ -103,7 +104,8 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
           // A line the model did not map carries the whole batch.
           return { at, src, kind: l.kind, text: l.text, ids: [...new Set(mapped.length ? mapped : ids)] };
         });
-        const res = await store.appendRecord(target, append);
+        // On log_full: compact once and retry once (appendCompacting); still full falls through to the pending branch below.
+        const res = await appendCompacting({ store, engine, id: target, kind: item.kind, src, lines: append });
         if (!res.ok) {
           if (res.code === "archived") {
             pending?.clear(target);
@@ -111,7 +113,6 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
             continue;
           }
           if (res.code === "log_full") {
-            // TODO(T11): compact the log here, then retry the append; until then the batch waits.
             pending?.pending(target, "consolidation-failed");
             const retryAt = pending?.entry(target)?.nextAttemptAt;
             outcomes.push({ work: target, target, ids, status: "pending", reason: LOG_FULL, cause: "consolidation-failed", ...(retryAt ? { retryAt } : {}) });

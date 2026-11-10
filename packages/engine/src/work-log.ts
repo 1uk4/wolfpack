@@ -107,6 +107,36 @@ export function parseWorkLogOutput(text: string): WorkLogLine[] {
   return out;
 }
 
+export interface WorkCompactPromptInput {
+  /** The Record's lines, comments stripped; numbered l1, l2… in order. */
+  lines: Array<{ kind: string; text: string }>;
+  /** Size the compacted lines should total, in characters. */
+  targetChars: number;
+}
+
+export function buildWorkCompactPrompt(input: WorkCompactPromptInput): string {
+  return [
+    `TARGET: at most ${input.targetChars} characters of text in total.`,
+    "",
+    "LINES:",
+    input.lines.map((l, i) => `[l${i + 1}] (${l.kind}) ${one(l.text)}`).join("\n") || "(none)",
+  ].join("\n");
+}
+
+/** Valid entries only; `from` keeps only refs of the form lN. A line citing no ref is dropped. Never throws. */
+export function parseWorkCompactOutput(text: string): WorkLogLine[] {
+  const out: WorkLogLine[] = [];
+  for (const raw of rawLines(text) ?? []) {
+    if (!isObj(raw) || !WORK_LOG_KINDS.includes(raw.kind as WorkLogKind) || typeof raw.text !== "string") continue;
+    const t = one(raw.text);
+    if (!t || t.length > WORK_LOG_MAX_CHARS) continue;
+    const from = Array.isArray(raw.from) ? raw.from.filter((f): f is string => typeof f === "string" && /^l\d+$/.test(f)) : [];
+    if (!from.length) continue;
+    out.push({ kind: raw.kind as WorkLogKind, text: t, from });
+  }
+  return out;
+}
+
 /** Valid entries only, at most 5. Never throws. */
 export function parseWorkDistillOutput(text: string): WorkDistillLine[] {
   const out: WorkDistillLine[] = [];

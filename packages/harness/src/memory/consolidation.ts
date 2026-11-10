@@ -53,6 +53,7 @@ import {
   WorkPendingState,
   appendArchive,
   withPoolLock as withPoolFileLock,
+  writeFileAtomic,
   observationIds,
   shouldFlushWorkLog,
   type ArchiveItem,
@@ -324,8 +325,8 @@ async function settlePoolLocked(wolfDen: string, handled: Handled[], onError?: (
   const archiveDir = join(wolfDen, ".memory", "archive");
   await mkdir(archiveDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  await writeFile(join(archiveDir, `observations-${timestamp}.jsonl`), archived.map((l) => l + "\n").join(""));
-  await writeFile(poolFile, kept.map((l) => l + "\n").join(""));
+  await writeFileAtomic(join(archiveDir, `observations-${timestamp}.jsonl`), archived.map((l) => l + "\n").join(""));
+  await writeFileAtomic(poolFile, kept.map((l) => l + "\n").join(""));
 }
 
 /**

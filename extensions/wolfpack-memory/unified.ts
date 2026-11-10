@@ -28,6 +28,7 @@ import {
   serializeBranchEntries,
   chunkSerialized,
   buildDomainContext,
+  withPoolLock,
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool, durableSessionTopics, promoteSessionTopics, stripSupersededNotes, type ConsolidationResult } from "@wolfpack/harness/memory";
@@ -296,7 +297,7 @@ async function writeToPool(
       })() : {}),
     }) + "\n"
   );
-  await appendFile(poolFile, lines.join(""));
+  await withPoolLock(wolfDen, () => appendFile(poolFile, lines.join("")));
 }
 
 function renderSplitResult(

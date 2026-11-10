@@ -52,6 +52,7 @@ import {
   refuseTagged,
   WorkPendingState,
   appendArchive,
+  withPoolLock as withPoolFileLock,
   observationIds,
   type ArchiveItem,
   type ArchiveOutcome,
@@ -293,7 +294,12 @@ interface Handled {
  * the archive (id, content, outcome, target), then the pool is rewritten
  * without it, so nothing vanishes.
  */
-async function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
+function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
+  // Read, split and rewrite under the pool lock (no model call inside): a concurrent append is never dropped.
+  return withPoolFileLock(wolfDen, () => settlePoolLocked(wolfDen, handled, onError));
+}
+
+async function settlePoolLocked(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
   const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
   if (!existsSync(poolFile) || handled.length === 0) return;
 

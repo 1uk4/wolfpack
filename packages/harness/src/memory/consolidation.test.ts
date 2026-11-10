@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
+import { replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
 import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
@@ -171,6 +171,21 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(m.writes[0].body).toContain("## Record\n\n### Changes\n\n- Added the thing");
     expect(m.writes[0].body.startsWith("## Plan\n\np")).toBe(true);
     expect(poolLines()).toEqual([]);
+  });
+
+  it("the pool rewrite waits for the pool lock, so a line appended meanwhile survives", async () => {
+    poolWith([o(0), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    const file = join(den, ".memory", "pool", "observations.jsonl");
+    let run!: Promise<unknown>;
+    await withPoolLock(den, async () => {
+      run = consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(poolLines()).toHaveLength(6); // not rewritten while another writer holds the lock
+      appendFileSync(file, JSON.stringify(o(9, { content: "late arrival" })) + "\n");
+    });
+    await run;
+    expect(poolLines().map((l) => l.content)).toEqual(["late arrival"]);
   });
 
   it("an untagged observation with origin goes the den way and is never offered to the Record path", async () => {

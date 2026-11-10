@@ -525,3 +525,98 @@ describe("promoteSessionTopics domain hint (work-wolfpack-0BdguCL)", () => {
     }
   });
 });
+
+describe("work log append mode (pi-durable)", () => {
+  const NOW = new Date("2026-10-20T12:00:00Z");
+  const poolFile = () => join(den, ".memory", "pool", "observations.jsonl");
+  const o = (n: number, extra: object = {}, minutesAgo = 1) => ({
+    timestamp: `2026-10-20T10:0${n}:00Z`,
+    recordedAt: new Date(NOW.getTime() - minutesAgo * 60_000).toISOString(),
+    content: `observation ${n}`,
+    ...extra,
+  });
+  function poolWith(lines: object[]): void {
+    mkdirSync(join(den, ".memory", "pool"), { recursive: true });
+    writeFileSync(poolFile(), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  }
+  const poolContents = () => readFileSync(poolFile(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).content);
+  function mocks(appendResult: { ok: true } | { ok: false; code: "log_full" } = { ok: true }) {
+    const appends: Array<{ id: string; lines: Array<{ ids: string[] }> }> = [];
+    const steps: string[] = [];
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+        steps.push(step);
+        if (step === "workLog") return schema.parse({ lines: [{ kind: "change", text: "Did the thing", from: ["o1"] }] });
+        if (step === "workRecord") return schema.parse({ decisions: [], changes: ["Added"], findings: [], problems: [] });
+        return schema.parse({ actions: [] });
+      },
+    } as unknown as Engine;
+    const workStore = {
+      get: async (id: string) => ({ id, title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" }),
+      setRecord: async () => {},
+      appendRecord: async (id: string, lines: Array<{ ids: string[] }>) => { appends.push({ id, lines }); return appendResult; },
+    };
+    return { engine, workStore, appends, steps };
+  }
+  const cfg = (m: ReturnType<typeof mocks>, extra: object = {}) => ({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, now: () => NOW, ...extra });
+
+  it("fold mode never appends", async () => {
+    poolWith([o(0, { work: "t1" })]);
+    const m = mocks();
+    await consolidatePool(cfg(m, { workLog: "fold" }));
+    expect(m.appends).toEqual([]);
+    expect(m.steps).toEqual(["workRecord"]);
+  });
+
+  it("append mode sends nothing below 6 fresh observations", async () => {
+    poolWith([0, 1, 2, 3, 4].map((n) => o(n, { work: "t1", feature: "f1" })));
+    const m = mocks();
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends).toEqual([]);
+    expect(r.observationsPending).toBe(5);
+    expect(poolContents()).toHaveLength(5);
+  });
+
+  it("append mode at 6 appends once to the task, not the feature, and archives with the target", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { work: "t1", feature: "f1" })));
+    const m = mocks();
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends.map((a) => a.id)).toEqual(["t1"]);
+    expect(r.recordsWritten).toBe(1);
+    expect(poolContents()).toEqual([]);
+    expect(readArchive(den).map((e) => [e.outcome, e.target])).toEqual(Array(6).fill(["written", "t1"]));
+  });
+
+  it("append mode flushes a single observation older than 10 minutes", async () => {
+    poolWith([o(0, { work: "t1" }, 11)]);
+    const m = mocks();
+    await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends.map((a) => a.id)).toEqual(["t1"]);
+  });
+
+  it("a forced drain flushes below the threshold", async () => {
+    poolWith([o(0), o(1, { work: "t1", feature: "f1" }), o(2, { feature: "f1" })]);
+    const m = mocks();
+    const r = await drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1"], workLog: "append" });
+    expect(m.appends.map((a) => a.id).sort()).toEqual(["f1", "t1"]);
+    expect(r.folded).toBe(2);
+    expect(poolContents()).toEqual(["observation 0"]);
+  });
+
+  it("origin-only observations still go to the den in append mode", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, n === 1 ? { origin: { work: "t1" } } : {})));
+    const m = mocks();
+    await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends).toEqual([]);
+    expect(m.steps).toEqual(["consolidate"]);
+  });
+
+  it("a log_full outcome stays pending in the pool", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { work: "t1" })));
+    const m = mocks({ ok: false, code: "log_full" });
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(r.observationsPending).toBe(6);
+    expect(poolContents()).toHaveLength(6);
+    expect(readArchive(den)).toEqual([]);
+  });
+});

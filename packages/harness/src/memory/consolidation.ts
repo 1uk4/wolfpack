@@ -44,6 +44,8 @@ import {
   subscribedDomain,
   envDomains,
   consolidateWorkRecords,
+  appendWorkLog,
+  type WorkRecordOutcome,
   HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
   type WorkRecordStore,
@@ -150,6 +152,10 @@ export interface ConsolidationConfig {
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
   workStore?: WorkRecordStore;
+  /** `memory.workLog`: "fold" (default) rewrites the Record; "append" appends a few log lines per task, batched by `shouldFlush`. */
+  workLog?: "fold" | "append";
+  /** Clock (tests); append mode's age check uses it. */
+  now?: () => Date;
 }
 
 export interface ConsolidationResult {
@@ -209,6 +215,66 @@ function overflowAbove(pool: PoolObservation[], target: number): PoolObservation
     firstKept = i;
   }
   return pool.slice(0, firstKept);
+}
+
+/** Append mode batches per target: flush at 6 or more pending, or when the oldest has waited 10 minutes. */
+export const FLUSH_COUNT = 6;
+export const FLUSH_AGE_MS = 10 * 60 * 1000;
+export function shouldFlush(pendingForTarget: Array<{ recordedAt?: string; timestamp: string }>, now: Date): boolean {
+  if (pendingForTarget.length >= FLUSH_COUNT) return true;
+  return pendingForTarget.some((o) => {
+    const t = Date.parse(o.recordedAt ?? o.timestamp);
+    return Number.isFinite(t) && now.getTime() - t >= FLUSH_AGE_MS;
+  });
+}
+
+type WorkObs = { id: string; timestamp: string; content: string; work: string; feature?: string };
+
+/**
+ * The work step over tagged observations: fold (rewrite the Record) or append (log lines). Append mode holds back targets
+ * that `shouldFlush` says wait (no outcome: they stay in the pool) unless `force`. Outcomes carry `target`.
+ */
+async function runWorkStep(a: {
+  mode: "fold" | "append" | undefined;
+  force?: boolean;
+  engine: Engine;
+  store: WorkRecordStore | undefined;
+  obs: Array<{ o: PoolObservation; w: WorkObs }>;
+  state?: WorkPendingState;
+  ignoreBackoff?: boolean;
+  src: string;
+  now?: () => Date;
+  onProgress?: (m: string) => void;
+}): Promise<Array<WorkRecordOutcome & { target?: string }>> {
+  if (a.mode !== "append") {
+    return consolidateWorkRecords({
+      engine: a.engine,
+      store: a.store,
+      ...(a.state ? { state: a.state } : {}),
+      ...(a.ignoreBackoff ? { ignoreBackoff: true } : {}),
+      observations: a.obs.map((x) => x.w),
+      onProgress: a.onProgress,
+    });
+  }
+  const now = (a.now ?? (() => new Date()))();
+  const groups = new Map<string, Array<{ o: PoolObservation; w: WorkObs }>>();
+  for (const x of a.obs) {
+    const key = x.o.work || x.o.feature!;
+    groups.set(key, [...(groups.get(key) ?? []), x]);
+  }
+  const due = [...groups.values()].filter((g) => a.force || shouldFlush(g.map((x) => x.o), now)).flat();
+  if (due.length === 0 || !a.store) {
+    if (due.length > 0) throw new Error("no Work API configured");
+    return [];
+  }
+  return appendWorkLog({
+    engine: a.engine,
+    store: a.store,
+    ...(a.state ? { pending: a.state } : {}),
+    now: a.now,
+    src: a.src,
+    observations: due.map((x) => ({ id: x.w.id, timestamp: x.w.timestamp, content: x.w.content, ...(x.o.work ? { work: x.o.work } : {}), ...(x.o.feature ? { feature: x.o.feature } : {}) })),
+  });
 }
 
 const poolKey = (o: PoolObservation) => `${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`;
@@ -291,6 +357,10 @@ export interface DrainWorkConfig {
   /** The Work API; absent → anything pending for these ids is an error. */
   workStore?: WorkRecordStore;
   workIds: string[];
+  /** "append": fold into the log (forced, thresholds ignored). Default "fold". */
+  workLog?: "fold" | "append";
+  /** Label on appended lines (default "wolf"). */
+  wolfName?: string;
   onProgress?: (msg: string) => void;
   onRecord?: ConsolidationConfig["onRecord"];
   /** Gives up (and frees the pool lock) after this long; default 3 minutes. */
@@ -321,19 +391,22 @@ export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ 
     const mine = pool.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
     if (mine.length === 0) return { folded: 0, discarded: 0 };
     onProgress?.(`Folding ${mine.length} pending observation(s) into the Record for graduation`);
-    const outcomes = await consolidateWorkRecords({
+    const outcomes = await runWorkStep({
+      mode: config.workLog,
+      force: true,
       engine,
       store: config.workStore ?? defaultWorkStore(),
-      observations: mine.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      src: config.wolfName ?? "wolf",
+      obs: mine.map((o) => ({ o, w: { id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) } })),
       onProgress,
     });
-    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
+    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.target ?? o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
     const handled: Handled[] = [];
     let discarded = 0;
     for (const o of mine) {
       const out = status.get(idOf.get(o)!);
-      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.work });
+      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.target ?? out.work });
       else if (out?.status === "discarded") {
         handled.push({ obs: o, outcome: "discarded", target: out.reason });
         discarded++;
@@ -426,19 +499,24 @@ async function consolidatePoolInner(
   const workObs = observations.filter(isTagged);
   if (workObs.length > 0) {
     const store = config.workStore ?? defaultWorkStore();
-    const outcomes = await consolidateWorkRecords({
+    const outcomes = await runWorkStep({
+      mode: config.workLog,
       engine,
       store,
       state: new WorkPendingState(wolfDen),
-      ...(config.ignoreBackoff ? { ignoreBackoff: true } : {}),
-      observations: workObs.map((o) => ({ id: poolIds.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      ignoreBackoff: config.ignoreBackoff,
+      // A manual consolidate (ignoreBackoff) flushes everything now, like a forced drain.
+      force: config.ignoreBackoff,
+      src: wolfName,
+      now: config.now,
+      obs: workObs.map((o) => ({ o, w: { id: poolIds.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) } })),
       onProgress,
     });
-    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
+    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.target ?? o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
     for (const o of workObs) {
       const out = status.get(poolIds.get(o)!);
-      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.work });
+      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.target ?? out.work });
       else if (out?.status === "discarded") {
         handled.push({ obs: o, outcome: "discarded", target: out.reason });
         discarded++;
@@ -652,7 +730,7 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
     provider: tier.provider,
     apiKey,
     defaultModel: steps.consolidate.model,
-    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord },
+    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord, workLog: steps.workLog },
   });
 }
 

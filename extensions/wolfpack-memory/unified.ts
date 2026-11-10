@@ -72,6 +72,8 @@ export interface MemoryConfig {
   subagentMemory?: "on" | "off";
   /** `memory.generalToDen` in wolf.yaml: observations flagged `general` skip the work tag (origin only) and go to the den. Default off. */
   generalToDen?: boolean;
+  /** `memory.workLog` in wolf.yaml: "fold" (default) rewrites work Records; "append" appends batched log lines. */
+  workLog?: "fold" | "append";
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;
 }
@@ -678,6 +680,7 @@ export default function createMemoryExtension(
       apiKey: apiKeyFor(getTable()),
       kbRoots: kbRoots ?? undefined,
       workStore: recordStore(),
+      ...(config.workLog ? { workLog: config.workLog } : {}),
       ...(config.engine ? { engine: config.engine } : {}),
       defaultDomain,
       domains,

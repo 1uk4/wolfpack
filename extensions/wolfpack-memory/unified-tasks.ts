@@ -42,7 +42,7 @@ import {
   resolveShipPolicy,
   rollupToParent,
   recordFeatureId,
-  renderFeatureRecord,
+  renderFeatureView,
   shouldBindOnCreate,
   createSerial,
   notBoundReason,
@@ -546,7 +546,10 @@ export default function createTasksExtension(
         siblings = await client.query({ domain: task.domain as string, partOf: task.partOf as string });
         if (parent.kind === "feature" && !parent.container) {
           const f = await client.getWithBody(parent.id as string);
-          featureRecord = renderFeatureRecord(parent.title, f.body ?? "") || undefined;
+          const open = (siblings ?? []).filter((k) => k.id !== task.id && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
+          const tasks = await Promise.all(open.map(async (k) => ({ id: k.id as string, title: k.title, stage: k.stage as string, body: (await client.getWithBody(k.id as string).catch(() => null))?.body ?? "" })));
+          const rest = (siblings ?? []).filter((k) => k.id !== task.id && !open.includes(k)).map((k) => ({ id: k.id as string, title: k.title, stage: k.stage as string }));
+          featureRecord = renderFeatureView({ title: parent.title, body: f.body ?? "" }, [...tasks, ...rest], task.id as string) || undefined;
         }
       } catch { /* best effort */ }
     }

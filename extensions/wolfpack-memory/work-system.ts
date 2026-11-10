@@ -65,7 +65,7 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   recordFeatureId,
-  renderFeatureRecord,
+  renderFeatureView,
   bindingLabel,
   readyBoundContext,
   readyBoundReply,
@@ -637,9 +637,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     // The Record is kept on the feature: show it next to the task's own document.
     let featureRecord = "";
     if (activeTask.featureId && activeTask.featureId !== activeTask.workId) {
+      const boundId = activeTask.workId;
       try {
         const f = await client.getWithBody(activeTask.featureId);
-        featureRecord = renderFeatureRecord(f.item.title, f.body ?? "");
+        const kids = await client.query({ partOf: activeTask.featureId }) ?? [];
+        const open = kids.filter((k: any) => k.id !== boundId && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
+        const tasks = await Promise.all(open.map(async (k: any) => ({ id: k.id, title: k.title, stage: k.stage, body: (await client.getWithBody(k.id).catch(() => null))?.body ?? "" })));
+        featureRecord = renderFeatureView({ title: f.item.title, body: f.body ?? "" }, [...tasks, ...kids.filter((k: any) => !open.includes(k) && k.id !== boundId).map((k: any) => ({ id: k.id, title: k.title, stage: k.stage }))], boundId);
       } catch { /* the task's own context still goes in */ }
     }
 

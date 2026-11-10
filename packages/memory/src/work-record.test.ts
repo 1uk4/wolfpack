@@ -10,6 +10,7 @@ import {
   renderRecord,
   renderWorkingDocument,
   renderFeatureRecord,
+  renderFeatureView,
   replaceRecordSection,
   withoutRecord,
   resolveSources,
@@ -128,6 +129,15 @@ describe("renderWorkingDocument", () => {
     expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
     expect(out).toContain("the plan");
     expect(out).toContain("## Record");
+  });
+
+  it("keeps the newest log lines and marks the dropped older ones", () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `- 10:00 [w·note] log line number ${i} padding padding`);
+    const out = renderWorkingDocument(`## Plan\n\nthe plan\n\n## Record\n\n${lines.join("\n")}`);
+    expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+    expect(out).toContain("log line number 199 ");
+    expect(out).not.toContain("log line number 0 ");
+    expect(out).toMatch(/… \d+ earlier lines/);
   });
 });
 
@@ -419,6 +429,49 @@ describe("the Record follows the item", () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ error: "assigned to hal; only hal or the owner can change it" }), { status: 403 })) as unknown as typeof fetch;
     const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
     await expect(store.setRecord("t", "## Record\n\n### Findings\n\n- x")).rejects.toMatchObject({ status: 403, message: "assigned to hal; only hal or the owner can change it" });
+  });
+});
+
+describe("renderFeatureView", () => {
+  const logBody = (n: number, tag: string) =>
+    `## Plan\n\np\n\n## Record\n\n${Array.from({ length: n }, (_, i) => `- 10:00 [w·note] ${tag} line ${i} some words here`).join("\n")}`;
+  const task = (i: number, stage = "in_build", body = logBody(30, `t${i}`)) => ({ id: `work-wolfpack-T${i}`, title: `Task ${i}`, stage, body });
+  const feature = { title: "Feat", body: `## Record\n\n${Array.from({ length: 300 }, (_, i) => `- feature fact ${i} with padding words`).join("\n")}` };
+
+  it("stays within the caps with a large Record and 8 open tasks, and counts the rest", () => {
+    const open = Array.from({ length: 8 }, (_, i) => task(i));
+    const out = renderFeatureView(feature, open);
+    const [rec, tasks] = out.split("\n\n## Open tasks");
+    expect(rec.length).toBeLessThanOrEqual(2500);
+    expect(rec).toContain("feature fact 299 ");
+    expect(rec).not.toContain("feature fact 0 ");
+    expect(tasks.length + 10).toBeLessThanOrEqual(1500);
+    expect(tasks).toContain("work-wolfpack-T4");
+    expect(tasks).not.toContain("work-wolfpack-T5");
+    expect(tasks).toContain("+3 more");
+    expect(tasks).toContain("t0 line 29 "); // newest whole line
+    expect(tasks).not.toContain("t0 line 0 ");
+  });
+
+  it("leaves out shipped and archived siblings", () => {
+    const out = renderFeatureView(feature, [task(1, "shipped"), task(2, "archived"), task(3)]);
+    expect(out).not.toContain("work-wolfpack-T1");
+    expect(out).not.toContain("work-wolfpack-T2");
+    expect(out).toContain("work-wolfpack-T3");
+    expect(out).not.toContain("more");
+  });
+
+  it("leaves out the bound task", () => {
+    const out = renderFeatureView(feature, [task(1), task(2)], "work-wolfpack-T1");
+    expect(out).not.toContain("work-wolfpack-T1");
+    expect(out).toContain("work-wolfpack-T2");
+  });
+
+  it("shows only title and stage for a task with no Record", () => {
+    const out = renderFeatureView({ title: "Feat", body: "" }, [task(1, "plan", "## Plan\n\njust a plan")]);
+    expect(out).toContain('work-wolfpack-T1 "Task 1" (plan)');
+    expect(out).not.toContain("just a plan");
+    expect(out).not.toContain("Feature Record");
   });
 });
 

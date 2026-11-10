@@ -107,6 +107,24 @@ export const DOCUMENT_CAP = 4000;
 const PLAN_MIN = 600;
 
 /**
+ * Clip a Record section to `room` characters keeping its NEWEST lines: the heading stays, the oldest lines go,
+ * and a `… N earlier lines` marker says how many. Whole lines only.
+ */
+function clipRecordTail(record: string, room: number): string {
+  if (record.length <= room) return record;
+  const [heading, ...rest] = record.split("\n");
+  const lines = rest.filter((l) => l.trim() !== "");
+  const kept: string[] = [];
+  let used = heading.length + 40; // heading + marker
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (used + lines[i].length + 1 > room) break;
+    used += lines[i].length + 1;
+    kept.unshift(lines[i]);
+  }
+  return [heading, `… ${lines.length - kept.length} earlier lines`, ...kept].join("\n");
+}
+
+/**
  * The working document for context injection, capped. The Record has
  * priority: when the whole document does not fit, the plan is clipped first
  * (it keeps at least PLAN_MIN characters). Document order is kept: plan, then Record.
@@ -119,7 +137,7 @@ export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP):
   const recordRoom = Math.max(0, Math.min(record.length, cap - Math.min(plan.length, PLAN_MIN) - 2));
   const planRoom = Math.max(0, cap - recordRoom - 2);
   const clip = (t: string, n: number) => (t.length <= n ? t : n <= 5 ? "" : t.slice(0, n - 5).trimEnd() + " […]");
-  return [plan ? clip(plan, planRoom) : "", record ? clip(record, recordRoom) : ""].filter(Boolean).join("\n\n");
+  return [plan ? clip(plan, planRoom) : "", record ? clipRecordTail(record, recordRoom) : ""].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -135,6 +153,74 @@ export function renderFeatureRecord(featureTitle: string, featureBody: string, c
   const room = Math.max(0, cap - head.length - 2);
   const body = text.length <= room ? text : text.slice(0, Math.max(0, room - 5)).trimEnd() + " […]";
   return `${head}\n\n${body}`;
+}
+
+// ── the feature view: feature Record + live tails of its open tasks ──────────
+
+/** The feature Record part of the view. */
+export const FEATURE_VIEW_RECORD_CAP = 2500;
+/** The open-tasks block of the view, header included. */
+export const FEATURE_VIEW_TASKS_CAP = 1500;
+/** Open sibling tasks shown; the rest is "+N more". */
+export const FEATURE_VIEW_TASKS_MAX = 5;
+/** Record characters kept per open task. */
+export const FEATURE_VIEW_TAIL = 300;
+
+const CLOSED_STAGES = ["shipped", "live", "archived"];
+
+export interface FeatureViewTask {
+  id: string;
+  title: string;
+  stage: string;
+  /** The task's working document; absent or "" when it has none. */
+  body?: string;
+}
+
+/** The newest whole Record lines of a document within `max` characters. */
+function recordTail(body: string, max: number): string[] {
+  const rec = extractRecord(stripSources(body));
+  if (!rec) return [];
+  const lines = rec.split("\n").slice(1).map((l) => l.trim()).filter((l) => l.startsWith("- "));
+  const out: string[] = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (used + lines[i].length > max) break;
+    used += lines[i].length;
+    out.unshift(lines[i]);
+  }
+  return out;
+}
+
+/**
+ * The feature as a bound task reads it, composed at read time (no model call): the feature Record (newest content,
+ * 2500 chars) then an "Open tasks" block (up to 5 open siblings, whole-line Record tails of ~300 chars, 1500 chars in all).
+ * The bound task is left out (its own document shows it). "" when there is neither.
+ */
+export function renderFeatureView(feature: { title: string; body: string }, tasks: FeatureViewTask[], boundId?: string): string {
+  const parts: string[] = [];
+  const record = extractRecord(feature.body);
+  const text = record ? stripSources(record).slice(RECORD_HEADING.length).trim() : "";
+  if (text) {
+    const head = `## Feature Record — ${feature.title} (shared by all its tasks; kept up to date by memory)`;
+    const clipped = clipRecordTail(`${RECORD_HEADING}\n${text}`, FEATURE_VIEW_RECORD_CAP - head.length - 2);
+    parts.push(`${head}\n\n${clipped.split("\n").slice(1).join("\n").trim()}`);
+  }
+  const open = tasks.filter((t) => !CLOSED_STAGES.includes(t.stage) && t.id !== boundId);
+  if (open.length > 0) {
+    const shown = open.slice(0, FEATURE_VIEW_TASKS_MAX);
+    const header = "## Open tasks in this feature";
+    const more = open.length > shown.length ? `\n+${open.length - shown.length} more` : "";
+    const heads = shown.map((t) => `- ${t.id} "${t.title}" (${t.stage})`);
+    // Lines are indented two spaces and joined by newlines: budget them out of what the headers leave.
+    let room = FEATURE_VIEW_TASKS_CAP - 2 - header.length - more.length - heads.reduce((n, h) => n + h.length + 1, 0);
+    const blocks = shown.map((t, i) => {
+      const tail = recordTail(t.body ?? "", Math.min(FEATURE_VIEW_TAIL, Math.floor(room / (shown.length - i)))).map((l) => `  ${l}`);
+      room -= tail.reduce((n, l) => n + l.length + 1, 0);
+      return [heads[i], ...tail].join("\n");
+    });
+    parts.push([header, ...blocks].join("\n") + more);
+  }
+  return parts.join("\n\n");
 }
 
 // ── the Record's shape ───────────────────────────────────────────────────────

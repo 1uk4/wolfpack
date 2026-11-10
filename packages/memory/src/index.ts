@@ -166,6 +166,8 @@ export {
   DOCUMENT_CAP,
   renderWorkingDocument,
   renderFeatureRecord,
+  renderFeatureView,
+  type FeatureViewTask,
   type WorkRecord,
   resolveSources,
   findRecordLine,

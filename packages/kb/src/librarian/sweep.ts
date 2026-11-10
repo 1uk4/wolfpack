@@ -20,7 +20,7 @@ import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { writeIntent, clearIntent, replayIntent, intentDigest, intentWrittenCount } from "./intent.js";
 import { renderEntry } from "./commit.js";
-import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
+import { readLedger, readLedgerAsync, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox, countPending, DEFAULT_LANE } from "./intake.js";
 import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
@@ -95,7 +95,7 @@ export interface SweepContext {
   /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
   writer?: SweepWriter;
   /** The tick's once-per-tick ledger read (memoized by the caller, so vectors and sweep parse the file once). Default: read it. */
-  readLog?: () => KbEvent[];
+  readLog?: () => KbEvent[] | Promise<KbEvent[]>;
   /** Step timings for the tick's one log line (see timings.ts). */
   timings?: Timings;
 }
@@ -410,7 +410,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const timed = <X>(step: string, fn: () => X): X => (T ? T.time(step, fn) : fn());
   // The sweep appends to its own copy: the tick's memoized ledger (ctx.readLog) is shared with the vector scan and must not see mid-sweep events.
   // The "ledger" step is timed here only (the tick's memo is not timed separately).
-  const log = timed("ledger", () => (ctx.readLog ? ctx.readLog().slice() : readLedger(roots)));
+  const ledgerT0 = performance.now();
+  const log = (ctx.readLog ? await ctx.readLog() : await readLedgerAsync(roots)).slice();
+  T?.add("ledger", performance.now() - ledgerT0);
   const seen = seenHashes(log);
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));

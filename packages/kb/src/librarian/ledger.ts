@@ -7,7 +7,9 @@
  * package. Replayable: delete vectors/clusters caches and rebuild from here.
  */
 import { existsSync, readFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   KbEventSchema,
   type KbEvent,
@@ -41,6 +43,126 @@ export function readLedger(roots: KbRoots): KbEvent[] {
     if (parsed.success) out.push(parsed.data);
   }
   return out;
+}
+
+interface LedgerCache {
+  ino: number;
+  /** Bytes consumed: everything up to and including the last newline read. */
+  offset: number;
+  /** The last bytes before `offset`, to notice a rewrite that kept the file at least as long. */
+  tail: Buffer;
+  lines: number;
+  events: KbEvent[];
+}
+/**
+ * One entry per ledger path, holding every parsed event for the life of the process. Accepted: the ledger is
+ * append-only and bounded in practice, and the cache is what makes repeat reads cheap.
+ */
+const ledgerCache = new Map<string, LedgerCache>();
+/** Per-path chain so overlapping calls never parse the same byte range twice. */
+const inflight = new Map<string, Promise<unknown>>();
+const TAIL_BYTES = 64;
+const SLICE_MS = 5;
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+
+/**
+ * Same events as readLedger, without blocking the event loop: the file is read asynchronously, only the bytes appended
+ * since the last call are parsed (the ledger is append-only), and parsing yields to the loop every few ms. A changed inode,
+ * a shorter file or a changed tail means it was rewritten or compacted: full re-read. A rewrite that grows the file and
+ * keeps the same inode and the same last 64 bytes before the cached offset is NOT detected. A final line without a newline
+ * is used if it parses as JSON, otherwise held until complete. Calls on the same path are serialized.
+ * Returns a fresh array the caller may mutate; the events in it are frozen and shared with the cache.
+ */
+export function readLedgerAsync(roots: KbRoots): Promise<KbEvent[]> {
+  const file = ledgerFile(roots);
+  const prev = inflight.get(file) ?? Promise.resolve();
+  const run = prev.then(() => readLedgerOnce(file));
+  const settled = run.catch(() => undefined);
+  inflight.set(file, settled);
+  void settled.then(() => {
+    if (inflight.get(file) === settled) inflight.delete(file);
+  });
+  return run;
+}
+
+async function readLedgerOnce(file: string): Promise<KbEvent[]> {
+  let fh;
+  try {
+    fh = await open(file, "r");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      ledgerCache.delete(file);
+      return [];
+    }
+    throw err;
+  }
+  try {
+    const st = await fh.stat(); // same file as the bytes read below
+    let c = ledgerCache.get(file);
+    if (c && (c.ino !== st.ino || st.size < c.offset)) c = undefined;
+    if (c && c.tail.length > 0) {
+      const probe = Buffer.alloc(c.tail.length);
+      await fh.read(probe, 0, probe.length, c.offset - c.tail.length);
+      if (!probe.equals(c.tail)) c = undefined;
+    }
+    if (!c) c = { ino: st.ino, offset: 0, tail: Buffer.alloc(0), lines: 0, events: [] };
+    const len = st.size - c.offset;
+    if (len > 0) {
+      const buf = Buffer.alloc(len);
+      let got = 0;
+      while (got < len) {
+        const { bytesRead } = await fh.read(buf, got, len - got, c.offset + got);
+        if (bytesRead === 0) break;
+        got += bytesRead;
+      }
+      let end = buf.subarray(0, got).lastIndexOf(0x0a) + 1; // complete lines
+      if (end < got) {
+        // Unterminated last line: the sync read parses it, so take it when it is valid JSON; a torn one waits.
+        try {
+          JSON.parse(buf.subarray(end, got).toString("utf-8"));
+          end = got;
+        } catch {
+          /* torn: hold */
+        }
+      }
+      if (end > 0) {
+        const text = buf.subarray(0, end).toString("utf-8");
+        let sliceStart = performance.now();
+        let pos = 0;
+        while (pos < text.length) {
+          let nl = text.indexOf("\n", pos);
+          if (nl < 0) nl = text.length;
+          const line = text.slice(pos, nl);
+          pos = nl + 1;
+          c.lines++;
+          if (line.trim()) {
+            let json: unknown;
+            let ok = true;
+            try {
+              json = JSON.parse(line);
+            } catch (err) {
+              ok = false;
+              console.warn(`ledger: skipping unparseable line ${c.lines} of ${file}: ${err instanceof Error ? err.message : err}`);
+            }
+            if (ok) {
+              const parsed = KbEventSchema.safeParse(json);
+              if (parsed.success) c.events.push(Object.freeze(parsed.data));
+            }
+          }
+          if (performance.now() - sliceStart > SLICE_MS) {
+            await yieldToLoop();
+            sliceStart = performance.now();
+          }
+        }
+        c.offset += end;
+        c.tail = Buffer.from(buf.subarray(Math.max(0, end - TAIL_BYTES), end));
+      }
+    }
+    ledgerCache.set(file, c);
+    return c.events.slice();
+  } finally {
+    await fh.close();
+  }
 }
 
 export function appendLedger(roots: KbRoots, events: KbEvent[]): void {

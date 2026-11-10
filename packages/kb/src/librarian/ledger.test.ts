@@ -131,6 +131,25 @@ describe("readLedgerAsync", () => {
     expect(got).toHaveLength(3);
     expect(JSON.stringify(got[0])).toContain("kb-wp-New0001");
   });
+
+  it("does not republish a cache entry from a read that was in flight when the ledger was invalidated", async () => {
+    const line = (n: number) => JSON.stringify(ev.entryWritten(`kb-wp-E${String(n).padStart(7, "0")}`, "kb-wp-T1", "create")) + "\n";
+    const N = 30000;
+    const oldBytes = Array.from({ length: N }, (_, i) => line(i)).join("");
+    mkdirSync(dirname(ledgerFile(roots)), { recursive: true });
+    writeFileSync(ledgerFile(roots), oldBytes);
+    const inFlight = readLedgerAsync(roots);
+    for (let i = 0; i < 6; i++) await new Promise<void>((r) => setImmediate(r)); // the read is mid-parse, still on the old bytes
+    // rollback: same inode, first line differs but has the same length, same last bytes, plus one more line
+    truncateSync(ledgerFile(roots), 0);
+    writeFileSync(ledgerFile(roots), line(9999999) + oldBytes.slice(line(0).length) + line(N));
+    invalidateLedgerCache(roots);
+    await inFlight;
+    const got = await readLedgerAsync(roots);
+    expect(got).toEqual(readLedger(roots));
+    expect(got).toHaveLength(N + 1);
+    expect(JSON.stringify(got[0])).toContain("kb-wp-E9999999");
+  });
 });
 
 describe("appendLedger", () => {

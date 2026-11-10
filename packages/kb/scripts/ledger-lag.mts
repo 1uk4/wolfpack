@@ -1,5 +1,5 @@
 // Measures max event-loop lag while readLedgerAsync reads a synthetic ~4,200-event / ~4 MB ledger.
-// Not part of the test suite. Run after `pnpm --filter @wolfpack/kb build`:
+// Not part of the test suite. Imports from dist, so run  first. Run after `pnpm --filter @wolfpack/kb build`:
 //   node --experimental-strip-types packages/kb/scripts/ledger-lag.mts   (or: pnpm dlx tsx packages/kb/scripts/ledger-lag.mts)
 // Prints max lag (ms) for the cold read and for an incremental read after one more append.
 // For a "before" number, run the same script on a checkout of the pre-chunking code.

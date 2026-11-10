@@ -60,6 +60,8 @@ interface LedgerCache {
  * append-only and bounded in practice, and the cache is what makes repeat reads cheap.
  */
 const ledgerCache = new Map<string, LedgerCache>();
+/** Per-path invalidation counter: a read that started before an invalidate must not publish its (stale) result. */
+const ledgerGeneration = new Map<string, number>();
 /** Per-path chain so overlapping calls never parse the same byte range twice. */
 const inflight = new Map<string, Promise<unknown>>();
 const TAIL_BYTES = 64;
@@ -89,6 +91,7 @@ export function readLedgerAsync(roots: KbRoots): Promise<KbEvent[]> {
 }
 
 async function readLedgerOnce(file: string): Promise<KbEvent[]> {
+  const generation = ledgerGeneration.get(file) ?? 0;
   let fh;
   try {
     fh = await open(file, "r");
@@ -102,7 +105,7 @@ async function readLedgerOnce(file: string): Promise<KbEvent[]> {
   try {
     const st = await fh.stat(); // same file as the bytes read below
     let c = ledgerCache.get(file);
-    // Cross-process fallback for rewrites: new inode, shorter file, or an mtime older than the cached one.
+    // Cross-process fallback for rewrites (a coarse-timestamp filesystem can make the mtime check reset falsely; that only costs an extra full read): new inode, shorter file, or an mtime older than the cached one.
     if (c && (c.ino !== st.ino || st.size < c.offset || st.mtimeMs < c.mtimeMs)) c = undefined;
     if (c && c.tail.length > 0) {
       const probe = Buffer.alloc(c.tail.length);
@@ -180,7 +183,7 @@ async function readLedgerOnce(file: string): Promise<KbEvent[]> {
       lines,
       events: c ? (fresh.length === 0 ? c.events : c.events.concat(fresh)) : fresh,
     };
-    ledgerCache.set(file, next);
+    if ((ledgerGeneration.get(file) ?? 0) === generation) ledgerCache.set(file, next);
     return Object.freeze(next.events) as KbEvent[]; // shared with the cache: sweep.ts copies before it appends
   } finally {
     await fh.close();
@@ -188,15 +191,18 @@ async function readLedgerOnce(file: string): Promise<KbEvent[]> {
 }
 
 /**
- * Drop the cached events for this ledger so the next read parses the file from byte 0. Call it after anything that
- * rewrites the ledger in place. The one such writer is the kb-commits rollback (packages/hubd/src/kb-commits.ts,
- * rollbackLedger, `truncateSync(file, j.ledgerOffset)`, about line 302): it keeps the inode, and a later append can grow
- * the file past the cached offset with different bytes, which the size/mtime/tail probe catches only probabilistically.
- * It runs in the hubd process, so invalidating here is exact. Appends (appendLedger, appendFileSync, line 182) never
- * change the inode and need nothing; writeDurable (tmp + rename, kb-commits.ts:217) gives a new inode, caught by the inode check.
+ * Drop the cached events for this ledger so the next read parses the file from byte 0, and make any read already in
+ * flight skip publishing its result to the cache. Call it after anything that rewrites the ledger in place. The one such
+ * writer is the kb-commits rollback (rollbackLedger in packages/hubd/src/kb-commits.ts, which truncates the file): it
+ * keeps the inode, and a later append can grow the file past the cached offset with different bytes, which the
+ * size/mtime/tail probe catches only probabilistically. It runs in the hubd process, so invalidating here is exact.
+ * Appends (appendLedger) never change the inode and need nothing; writeDurable (tmp + rename in kb-commits.ts) gives a
+ * new inode, caught by the inode check.
  */
 export function invalidateLedgerCache(roots: KbRoots): void {
-  ledgerCache.delete(ledgerFile(roots));
+  const file = ledgerFile(roots);
+  ledgerGeneration.set(file, (ledgerGeneration.get(file) ?? 0) + 1);
+  ledgerCache.delete(file);
 }
 
 export function appendLedger(roots: KbRoots, events: KbEvent[]): void {

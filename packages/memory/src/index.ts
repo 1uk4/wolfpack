@@ -28,6 +28,9 @@ export { serializeBranchEntries, chunkSerialized } from "./serialize-branch.js";
 export {
   createOrchestrator,
   DEFAULT_CONFIG,
+  shouldFlushWorkLog,
+  WORK_LOG_FLUSH_COUNT,
+  WORK_LOG_FLUSH_AGE_MS,
   type MemoryOrchestrator,
   type OrchestratorConfig,
   type BoundWork,

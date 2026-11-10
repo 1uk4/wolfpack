@@ -118,6 +118,7 @@ export const WolfFileSchema = z.object({
       hubKb: z.boolean().optional(),
       generalToDen: z.boolean().optional(),
       subagentMemory: z.enum(["on", "off"]).optional(),
+      workLog: z.enum(["fold", "append"]).optional(),
       defaultDomain: z.string().min(1).optional(),
       sweepInterval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30s", "1m", "1h"').optional(),
       consolidation: z
@@ -205,6 +206,8 @@ export interface WolfConfig {
     generalToDen?: boolean;
     /** `on`: subagents (worker, planner, investigator, reviewer, scout) record their own observations; the orchestrator's observer skips subagent traffic. Default off. */
     subagentMemory?: "on" | "off";
+    /** How work observations reach their item: `fold` (default) rewrites the feature Record; `append` adds lines to the task's or feature's own log. */
+    workLog?: "fold" | "append";
     /** Librarian sweep interval (e.g. "1m"); default 1m. */
     sweepInterval?: string;
     /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */

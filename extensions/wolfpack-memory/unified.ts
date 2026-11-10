@@ -72,7 +72,7 @@ export interface MemoryConfig {
   subagentMemory?: "on" | "off";
   /** `memory.generalToDen` in wolf.yaml: observations flagged `general` skip the work tag (origin only) and go to the den. Default off. */
   generalToDen?: boolean;
-  /** `memory.workLog` in wolf.yaml: "fold" (default) rewrites work Records; "append" appends batched log lines. */
+  /** `memory.workLog` in wolf.yaml: `fold` (default) or `append` (work observations are appended to the task's or feature's own log, batched). */
   workLog?: "fold" | "append";
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;

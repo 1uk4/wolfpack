@@ -163,6 +163,8 @@ function renderBar(pct: number, width: number): string {
 let excludeSubagentTraffic = false;
 /** `memory.generalToDen: true` in wolf.yaml (default off). Set at load. */
 let generalToDenOn = false;
+/** `memory.workLog: append` in wolf.yaml (default fold): work observations are appended to their item's log. Set at load. */
+let workLogMode: "fold" | "append" = "fold";
 
 class PiRuntime implements AgentRuntime {
   readonly name = "pi";
@@ -1345,6 +1347,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       getBoundWork: () => (subagentObserving() ? subagentTag : workHandle?.getBoundWork()) ?? null,
       generalToDen: generalToDenOn,
       workRecordStore: workRecordStore.configured ? workRecordStore : undefined,
+      workLog: workLogMode,
     };
     orchestrator = createOrchestrator(engine, runtime, orchConfig);
   }
@@ -1464,7 +1467,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     refreshStatus(ctx);
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
+    // Append mode: forced flush of the pending work logs before the orchestrator goes away (no-op in fold mode).
+    try { await orchestrator?.flushWorkLog(); } catch { /* never block shutdown */ }
     enabled = false;
     orchestrator = null;
     runtime = null;
@@ -1589,6 +1594,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // ── Work System (Factory merged into Memory) ─────────────────────────────
 
   const workConfig: WorkSystemConfig = {
+    // Ship / unbind: forced flush of the pending work logs (append mode).
+    flushWorkLog: (targets) => (orchestrator ? orchestrator.flushWorkLog(targets) : Promise.resolve()),
     // Inject stage-specific prompts when bound to a task
     getStageContext: (item) => getStageContext(item),
 
@@ -1672,18 +1679,19 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     const wolfYamlPath = path.join(wolfDen, "..", "wolf.yaml");
     if (fs.existsSync(wolfYamlPath)) {
       const raw = fs.readFileSync(wolfYamlPath, "utf-8");
-      // memory.workLog is not in the wolfconfig schema yet (work-wolfpack-D14nor1 adds it): read it directly for now.
-      workLogAppend = /^\s+workLog:\s*["']?append\b/m.test(raw);
       try {
         // The real load: pi wolves share wolf.yaml with wolfd, so the same schema and defaults apply.
         const mem = loadWolfConfig(wolfYamlPath).config.memory;
         excludeSubagentTraffic = mem.subagentMemory === "on";
         generalToDenOn = mem.generalToDen === true;
+        workLogMode = mem.workLog === "append" ? "append" : "fold";
       } catch {
-        // A file the strict loader rejects must not silently turn these off: fall back to reading the two keys.
+        // A file the strict loader rejects must not silently turn these off: fall back to reading the three keys.
         excludeSubagentTraffic = /^\s+subagentMemory:\s*["']?on\b/m.test(raw);
         generalToDenOn = /^\s+generalToDen:\s*true\b/m.test(raw);
+        workLogMode = /^\s+workLog:\s*["']?append\b/m.test(raw) ? "append" : "fold";
       }
+      workLogAppend = workLogMode === "append";
       const match = raw.match(/domains:\s*\n((?:\s+-\s+\S+\n?)*)/)
       if (match) {
         wolfDomains = match[1].match(/- (\S+)/g)?.map(m => m.slice(2)) ?? [];

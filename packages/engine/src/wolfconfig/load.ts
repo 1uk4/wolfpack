@@ -126,6 +126,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.memory.hubKb === true ? { hubKb: true } : {}),
       ...(v.memory.generalToDen === true ? { generalToDen: true } : {}),
       ...(v.memory.subagentMemory ? { subagentMemory: v.memory.subagentMemory } : {}),
+      ...(v.memory.workLog === "append" ? { workLog: "append" as const } : {}),
       ...(v.memory.defaultDomain ? { defaultDomain: v.memory.defaultDomain } : {}),
       ...(v.memory.sweepInterval ? { sweepInterval: v.memory.sweepInterval } : {}),
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],

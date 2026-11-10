@@ -315,6 +315,8 @@ export interface WorkSystemConfig {
   distillOnShip?: (taskId: string) => Promise<unknown>;
   /** Callback when task completes (for summarization) */
   onTaskComplete?: (taskId: string, item: WorkItem) => Promise<void>;
+  /** Append mode (`memory.workLog: append`): write the pending work observations to their logs now. Called on ship and unbind. */
+  flushWorkLog?: (targets?: string[]) => Promise<unknown>;
   /** Graduation: `g` previews the distilled contributions, then sends after the owner confirms. */
   graduation?: {
     preview(id: string): Promise<GraduationPreview>;
@@ -358,6 +360,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // Every feature keeps the section (the Inbox does not). Errors are logged —
   // a bad rollup never blocks the ship.
   async function shipWithRollup(id: string): Promise<WorkItem> {
+    // Forced log flush BEFORE rollupToParent (and before any ship distill): the log must hold everything seen so far. Never blocks the ship.
+    try { await config.flushWorkLog?.(); } catch (err) { debugLog("flushWorkLog failed", { id, err: String(err) }); }
     const item = await shipAndRollup(client, id, rollupToParent, (err) => debugLog("rollupToParent failed", { id, err: String(err) }));
     // Ship distill (memory.workLog: append): one model call folds the task's log into its feature's Record. Tasks only; never blocks the ship.
     if (config.distillOnShip && (item as { kind?: string }).kind === "task") {
@@ -572,6 +576,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   function unbindTask(ctx: any): void {
     ensureSessionLoaded(ctx);
     if (activeTask) stopFileTracking(activeTask.workId);
+    // Observations made while bound are tagged already; flush them now so the log is complete when the binding ends.
+    void Promise.resolve(config.flushWorkLog?.()).catch((err) => debugLog("flushWorkLog failed", { err: String(err) }));
     activeTask = null;
     activeItem = null;
     if (sessionId) writeActiveTask(wolfDen, sessionId, null);

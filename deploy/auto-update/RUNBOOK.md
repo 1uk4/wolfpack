@@ -51,6 +51,15 @@ The verified hash is passed to `deploy-release.sh --sha256 <hex>`, which require
    `node /opt/wolfpack-auto-update/auto-update.mjs run --now; node /opt/wolfpack-auto-update/auto-update.mjs status`
 4. Run `systemctl enable --now wolfpack-auto-update.timer` (every 30 min, randomised). Check with `systemctl list-timers wolfpack-auto-update.timer` and `journalctl -u wolfpack-auto-update`.
 
+- **First press on a host.** The code default for `WOLFPACK_AUTO_UPDATE_UNITS` still includes the link `workerd`, so on sfo-01 set the env explicitly. Checklist:
+  1. `bash deploy/auto-update/setup.sh install`.
+  2. Re-run `deploy/console/setup.sh` to install the polkit rule (start-only for `wolfpack-auto-update-now.service`).
+  3. In `/etc/wolfpack/auto-update.env` set `WOLFPACK_AUTO_UPDATE_UNITS="hubd workerd-wolves wolfd console"` and `WOLFPACK_AUTO_UPDATE_WOLVES="hal"`.
+  4. Check that `/etc/wolfpack/workerd-wolves.env` has `WORKERD_PORT` (the health probe has no default port).
+  5. Run `node /opt/wolfpack-auto-update/auto-update.mjs run --now` once under supervision, before using the button.
+  6. Leave `wolfpack-auto-update.timer` disabled.
+  With `--now` the script exits 3 when the kill switch is set and 4 when another run holds the lock, so the button shows those instead of "Updated".
+- **Button only (no timer).** `setup.sh install` also writes `wolfpack-auto-update-now.service`, a root oneshot running `auto-update.mjs run --now` with no timer. The console's pack health page starts it with its **Update** button (`POST /api/health/update`; polkit allows the console user to start exactly that unit, `deploy/console/50-console-restart.rules`). Leave `wolfpack-auto-update.timer` disabled and nothing runs unless the button is pressed. The kill switch file and a recorded failure still stop it (the button never passes `--clear-failed`). Check a press with `journalctl -u wolfpack-auto-update-now`.
 - Pause: `touch /var/lib/wolfpack-auto-update/auto-update.disabled`. Resume: `rm` the file. A failure recorded before the pause still holds after it.
 - The service runs as root with `NoNewPrivileges`, `PrivateTmp`, `UMask=0022`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictSUIDSGID` and `LockPersonality`. `ProtectSystem`/`ProtectHome` are not set, because the deploy writes `/opt`, `/etc/systemd`, `/home/wolf-*` and `/var/log`. UNVERIFIED on the host: check the first manual `systemctl start wolfpack-auto-update` run.
 - After a failure:

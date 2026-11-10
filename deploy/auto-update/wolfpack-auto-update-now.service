@@ -1,0 +1,28 @@
+# Wolfpack manual update (work-wolfpack-7eP9W3Z). UNVERIFIED until run on the host. No timer: started only by the console's Update button
+# (POST /api/health/update -> `systemctl start wolfpack-auto-update-now`, allowed by polkit rule deploy/console/50-console-restart.rules)
+# or by hand. Same pass as wolfpack-auto-update.service, but `run --now` works without WOLFPACK_AUTO_UPDATE=1. The kill switch
+# (<state>/auto-update.disabled) and the failed-hold still apply; --clear-failed is deliberately NOT passed.
+[Unit]
+Description=Wolfpack manual update (pull the latest stable release, on request)
+Documentation=file:///opt/wolfpack-auto-update/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+# Not installed yet / removed: the unit reports an assert failure (the console says "update script missing on the host"), not exit 203.
+AssertPathExists=/opt/wolfpack-auto-update/auto-update.mjs
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/wolfpack/auto-update.env
+ExecStart=@NODE@ /opt/wolfpack-auto-update/auto-update.mjs run --now
+StateDirectory=wolfpack-auto-update
+StateDirectoryMode=0755
+TimeoutStartSec=45min
+# Same hardening as wolfpack-auto-update.service (see the reasons there).
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0022
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

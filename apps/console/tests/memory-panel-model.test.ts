@@ -11,7 +11,25 @@ const obs = (threadId: string | undefined, target: unknown, summary = "s"): Memo
 const st = (state: MemoryStatus["state"]): MemoryStatus => ({ state, reason: "why", pool: null, sessionTopics: [], denTopics: [], lastPromote: null });
 const rec = (o: Partial<WorkRecordResponse>): WorkRecordResponse => ({ id: "a", title: "A", kind: "task", stage: "plan", plan: "", record: "", ...o });
 
-import { pendingWarning } from "../src/core/memory-panel-model.ts";
+import { pendingWarning, nestGroups, type ObservationGroup } from "../src/core/memory-panel-model.ts";
+
+describe("nestGroups", () => {
+	const g = (key: string, count: number): ObservationGroup => ({ key, kind: "work", count, latest: "2026-11-01" });
+	it("puts tasks under their feature (header even without own observations); unknown parents stay top-level", () => {
+		const info = {
+			t1: { title: "T1", partOf: "f1" }, t2: { title: "T2", partOf: "f1" }, solo: { title: "Solo" },
+			f1: { title: "Feature one" }, orphan: { title: "O", partOf: "gone" },
+			t3: { title: "T3", partOf: "f2" }, f2: { title: "Feature two", stage: "archived" },
+		};
+		const nodes = nestGroups([g("t1", 2), g("solo", 1), g("t2", 3), g("orphan", 4), g("f1", 5), g("t3", 1)], info);
+		assert.deepEqual(nodes.map((n) => [n.key, n.header, n.total, n.own?.count, n.children.map((c) => c.key)]), [
+			["f1", true, 10, 5, ["t1", "t2"]],
+			["solo", false, 1, 1, []],
+			["orphan", false, 4, 4, []],
+			["f2", true, 1, undefined, ["t3"]],
+		]);
+	});
+});
 
 describe("pending warning wording", () => {
 	it("says the oldest observation has waited, not that all have", () => {

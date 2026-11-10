@@ -102,7 +102,8 @@ cmd_setup() {
   if ((DRY)); then echo "DRY-RUN: install $UNIT from console.service with @NODE@=$node"; else
     sed "s|@NODE@|$node|" "$HERE/console.service" >"$UNIT.tmp" && chmod 644 "$UNIT.tmp" && mv "$UNIT.tmp" "$UNIT"
   fi
-  log "pack-health restart permission (polkit: restart hubd / workerd* / wolfd@* only)"
+  # Also allows START (only) of wolfpack-auto-update-now.service, the Update button's unit (work-wolfpack-7eP9W3Z): no stop, no other verb.
+  log "pack-health restart permission (polkit: restart hubd / workerd* / wolfd@*; start-only for wolfpack-rollback@* and wolfpack-auto-update-now)"
   if [[ -d /etc/polkit-1/rules.d ]] || ((DRY)); then
     run install -o root -g root -m 0644 "$HERE/50-console-restart.rules" "$POLKIT_RULE"
   else

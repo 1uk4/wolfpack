@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs
-import { computeAffected, loadWorkspaces } from "./affected.mjs";
+import { computeAffected, loadWorkspaces, scriptsDistImports } from "./affected.mjs";
 
 const ws = loadWorkspaces(new URL("..", import.meta.url).pathname);
 const run = (files: string[] | null) => computeAffected(files, ws) as { all: boolean; packages: string[]; components: string[]; tsProjects: string[]; consoleTests: boolean; tracer: boolean; release: boolean };
 
 describe("affected", () => {
+  it("a scripts/ change builds the packages the scripts import from dist, so the scripts suite can load them", () => {
+    // scripts/dev-stack-extensions.mjs loads packages/cli/dist and packages/engine/dist; CI ran scripts/ without building them
+    const r = computeAffected(["scripts/auto-update.test.ts"], ws, scriptsDistImports(new URL("..", import.meta.url).pathname)) as { tsProjects: string[]; scriptsTests: boolean };
+    expect(r.scriptsTests).toBe(true);
+    for (const d of ["packages/cli", "packages/engine"]) expect(r.tsProjects).toContain(d);
+    // no scripts suite, no extra builds
+    const leaf = computeAffected(["packages/cli/src/x.ts"], ws, ["packages/engine"]) as { tsProjects: string[] };
+    expect(leaf.tsProjects).not.toContain("packages/engine");
+  });
   it("leaf change: only that package (and dependents, none for cli)", () => {
     const r = run(["packages/cli/src/x.ts"]);
     expect(r.packages).toEqual(["@wolfpack/cli"]);

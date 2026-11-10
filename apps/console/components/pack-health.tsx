@@ -48,6 +48,11 @@ import {
 	rowActions,
 	statusWord,
 	toneOf,
+	updateFinished,
+	updateOffered,
+	updateOutcome,
+	updateQuestion,
+	type UpdateUnitView,
 	type HealthActionsView,
 	type HealthLink,
 	type HealthSnapshotView,
@@ -196,7 +201,10 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 				{snapshot === null ? (
 					<p className="text-muted-foreground">{reachable ? "Checking the pack…" : "No report yet."}</p>
 				) : (
-					groupByHost(snapshot).map((c) => <HostSection key={c.id} card={c} now={now} canAct={reachable} actions={snapshot.actions} fakes={health} />)
+					<>
+					<UpdatePanel actions={snapshot.actions} canAct={reachable} />
+					{groupByHost(snapshot).map((c) => <HostSection key={c.id} card={c} now={now} canAct={reachable} actions={snapshot.actions} fakes={health} />)}
+					</>
 				)}
 				{snapshot?.checkedAt && <p className="mt-3 text-muted-foreground/70">Checked {ageText(now - Date.parse(snapshot.checkedAt))} · every {Math.round(snapshot.intervalMs / 1000)} s</p>}
 				</>}
@@ -391,6 +399,85 @@ function useRollbackProgress(rollback: ReturnType<typeof useAction>, last: Rollb
 		const moved = version !== null && version !== sent.version;
 		if ((sent.doneAt !== null && (moved || now - sent.doneAt > 120_000)) || now - ui.at > 300_000) setUi({ phase: "idle" });
 	}, [ui, sent, last, version, now, setUi]);
+}
+
+type UpdateState = { units: UpdateUnitView[]; last: { result: string; exitStatus: number | null; at: string | null } | null };
+
+/**
+ * Update to the latest stable release (work-wolfpack-7eP9W3Z): GET /api/health/update every 15 s (2 s while an update runs) gives the
+ * units behind and the manual unit's last run. After a send, "Updating" lasts until the unit reports a run newer than the one seen at
+ * send. hubd and the console restart mid-update, so a failed poll is not an error: it shows "reconnecting" and polling goes on, and the
+ * state clears on the first finished report, or after 10 min with none (never a stuck spinner).
+ */
+function UpdatePanel({ actions, canAct }: { actions: HealthActionsView | undefined; canAct: boolean }) {
+	const update = useAction("/api/health/update", "update", updateOutcome, null);
+	const { ui, setUi } = update;
+	const [state, setState] = useState<UpdateState | null>(null);
+	const [offline, setOffline] = useState(false);
+	const [sent, setSent] = useState<{ after: string | null } | null>(null);
+	const [done, setDone] = useState<{ ok: boolean; at: number } | null>(null);
+	const [now, setNow] = useState(() => Date.now());
+	const running = ui.phase === "issued";
+	useEffect(() => {
+		let stop = false;
+		const poll = async () => {
+			try {
+				const r = await fetch("/api/health/update", { cache: "no-store" });
+				if (!r.ok) throw new Error(String(r.status));
+				const b = (await r.json()) as UpdateState;
+				if (!stop) {
+					setState({ units: Array.isArray(b.units) ? b.units : [], last: b.last ?? null });
+					setOffline(false);
+				}
+			} catch {
+				if (!stop) setOffline(true);
+			}
+			if (!stop) setNow(Date.now());
+		};
+		void poll();
+		const t = setInterval(() => void poll(), running ? 2_000 : 15_000);
+		return () => {
+			stop = true;
+			clearInterval(t);
+		};
+	}, [running]);
+	useEffect(() => {
+		if (!running) return void (sent && setSent(null));
+		if (!sent) return;
+		const fin = updateFinished(state?.last, sent.after, state?.units.length ?? 0);
+		if (fin && !fin.ok) return void setUi({ phase: "error", message: fin.message });
+		if (fin?.ok) {
+			setDone({ ok: true, at: Date.now() });
+			return void setUi({ phase: "idle" });
+		}
+		if (now - ui.at > 600_000) setUi({ phase: "error", message: "No result from the update after 10 min — see Logs" });
+	}, [running, sent, state, now, ui, setUi]);
+	const units = state?.units ?? [];
+	const recentlyDone = done !== null && now - done.at < 120_000;
+	if (!updateOffered(actions, units) && ui.phase === "idle" && !recentlyDone) return null;
+	return (
+		<div data-testid="pack-health-update" className="mb-3 rounded-lg border bg-card px-3 py-2">
+			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+				<span className="font-medium text-foreground">Update available</span>
+				{units.map((u) => (
+					<span key={u.component} className="text-muted-foreground/80">{u.component} {u.from ? `v${u.from}` : "?"} → v{u.to}</span>
+				))}
+				<span className="ml-auto flex items-center gap-1.5">
+					{running ? (
+						<span data-testid="pack-health-update-running" className="flex items-center gap-1.5 text-muted-foreground">
+							<BrailleSpinner className="h-[1.25em]" label="Updating" />
+							{offline ? "Updating; reconnecting…" : "Updating…"}
+						</span>
+					) : ui.phase === "idle" && recentlyDone ? (
+						<span data-testid="pack-health-update-done" className="text-green-600 dark:text-green-400">Updated</span>
+					) : (
+						<ActionControl verb="Update" sentText="" testId="pack-health-update-button" ui={ui} waitS={update.waitS} disabled={!canAct} question={updateQuestion(units)} onAsk={() => setUi({ phase: "confirm" })} onCancel={() => setUi({ phase: "idle" })} onConfirm={() => { setDone(null); setSent({ after: state?.last?.at ?? null }); void update.send(); }} />
+					)}
+				</span>
+			</div>
+			{ui.phase === "error" && <p data-testid="pack-health-update-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
+		</div>
+	);
 }
 
 /** The console's own row (it is not a probed link): only roll back, since it is the thing serving this page. */

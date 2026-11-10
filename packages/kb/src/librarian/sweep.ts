@@ -62,6 +62,9 @@ import {
   type RelationResolver,
 } from "../schema/knowledge.js";
 import type { Engine } from "@wolfpack/engine";
+import { performance } from "node:perf_hooks";
+import { listEntryFiles, readEntryCached } from "./entry-cache.js";
+import type { Timings } from "./timings.js";
 import { entriesDir, type KbRoots, type DecisionSummary, type DecisionRouting } from "../shared/index.js";
 
 /** Structured sweep progress for hosts that surface it (wolfd's event stream). Metadata only. */
@@ -91,6 +94,10 @@ export interface SweepContext {
   lane?: string;
   /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
   writer?: SweepWriter;
+  /** The tick's once-per-tick ledger read (memoized by the caller, so vectors and sweep parse the file once). Default: read it. */
+  readLog?: () => KbEvent[];
+  /** Step timings for the tick's one log line (see timings.ts). */
+  timings?: Timings;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -336,7 +343,8 @@ export function emptyResult(): SweepResult {
  * stay-in-parent rule keeps leftovers there and the sweep never reorganises, so this is the signal a rebuild is due.
  * Called once per sweep. Grouped entries follow their holder and are not counted.
  */
-export function oversizedParents(roots: KbRoots, sections: Section[]): string[] {
+export async function oversizedParents(roots: KbRoots, sections: Section[], timings?: Timings): Promise<string[]> {
+  let seen = 0;
   const out: string[] = [];
   for (const domain of new Set(sections.map((s) => String(s.domain)))) {
     const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
@@ -344,12 +352,14 @@ export function oversizedParents(roots: KbRoots, sections: Section[]): string[] 
     const counts = new Map<string, number>();
     const dir = join(roots.kbBase, "domains", domain, "entries");
     if (!existsSync(dir)) continue;
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith(".md") || f.startsWith(".")) continue;
-      let raw: string;
-      try { raw = readFileSync(join(dir, f), "utf-8"); } catch { continue; }
-      if (groupOf(raw)) continue;
-      const sec = String(parseFrontmatter(raw).fields.section ?? "");
+    for (const f of listEntryFiles(dir)) {
+      if (f.startsWith(".")) continue;
+      if (seen++ % 25 === 24) await new Promise<void>((r) => setImmediate(r)); // read-only: let the hub's loop run
+      let e;
+      const t0 = performance.now();
+      try { e = readEntryCached(join(dir, f)); } catch { continue; } finally { timings?.add("oversized", performance.now() - t0); }
+      if (!e || e.group()) continue;
+      const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
     }
     for (const [id, n] of [...counts].sort()) if (n > DEFAULT_RULES.splitAbove) out.push(`${id} (${n})`);
@@ -396,7 +406,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // Already-seen duplicates are retired right away, before the embedder and the
   // vectors load; the first unseen one is this run's contribution. The rest
   // wait for the next tick.
-  const log = readLedger(roots);
+  const T = ctx.timings;
+  const timed = <X>(step: string, fn: () => X): X => (T ? T.time(step, fn) : fn());
+  // The sweep appends to its own copy: the tick's memoized ledger (ctx.readLog) is shared with the vector scan and must not see mid-sweep events.
+  // The "ledger" step is timed here only (the tick's memo is not timed separately).
+  const log = timed("ledger", () => (ctx.readLog ? ctx.readLog().slice() : readLedger(roots)));
   const seen = seenHashes(log);
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));
@@ -415,9 +429,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     return { ...emptyResult(), remaining: unseen.length, paused: state.reason };
   }
   // Section tree, folded from the ledger / _sections.json.
-  let sections: Section[] = readSections(roots);
+  let sections: Section[] = timed("sections", () => readSections(roots));
   {
-    const big = oversizedParents(roots, sections);
+    const big = await oversizedParents(roots, sections, T);
     if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
   }
 
@@ -1060,8 +1074,12 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // The ledger already has this run's events; if rendering fails, the next tick
   // or a reorg re-renders, so log it and carry on to the registry and commit.
   try {
+    const tw = performance.now();
     if (touchedDomains.size > 0 && sections.length > 0) await w.writeSections(roots, sections);
+    T?.add("writeSections", performance.now() - tw);
+    const tr = performance.now();
     for (const domain of touchedDomains) await w.renderDomain(roots, domain);
+    T?.add("render", performance.now() - tr);
   } catch (err) {
     ctx.notify?.(`sweep: index/digest rendering failed (ledger is written; next tick or reorg re-renders): ${cleanError(err)}`);
   }
@@ -1069,9 +1087,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // ── PERSIST ────────────────────────────────────────────────────────────────
   try {
     if (batch.length > 0 || committed) {
+      const tc = performance.now();
       if (batch.length > 0) await w.appendLedger(roots, batch);
       await w.renderRegistry(roots, foldRegistry([...log, ...batch]));
       await w.gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+      T?.add("commit", performance.now() - tc);
     }
   } finally {
     for (const e of itemEvents) emit(e);

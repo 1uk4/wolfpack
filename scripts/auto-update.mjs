@@ -459,6 +459,19 @@ export function sfoDeps(env, { dir = path.dirname(fileURLToPath(import.meta.url)
 	};
 }
 
+/**
+ * Exit code of `run`. 1: failed or manifest-error. With --now only (the console's Update button reads the exit status of
+ * wolfpack-auto-update-now.service): 3 = kill switch set (`disabled`), 4 = another run holds the lock (`locked`), so a run that
+ * did nothing is never shown as success. Timer runs keep exiting 0 for those, so the timer unit does not show failed.
+ * Exit 2 is usage; 203 is systemd's "cannot exec" (the script is missing).
+ */
+export function exitCodeFor(result, manual) {
+	if (result === "failed" || result === "manifest-error") return 1;
+	if (manual && result === "disabled") return 3;
+	if (manual && result === "locked") return 4;
+	return 0;
+}
+
 export function sfoPaths(env) {
 	const state = env.WOLFPACK_AUTO_UPDATE_STATE || "/var/lib/wolfpack-auto-update";
 	return { statusFile: path.join(state, "status.json"), disabledFile: path.join(state, "auto-update.disabled"), lockFile: "/run/wolfpack-auto-update.lock" };
@@ -482,7 +495,7 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 			log: console.log,
 		});
 		console.log(`auto-update: ${result}`);
-		process.exitCode = result === "failed" || result === "manifest-error" ? 1 : 0;
+		process.exitCode = exitCodeFor(result, flags.includes("--now"));
 	} else {
 		console.error("usage: auto-update.mjs run [--now] [--clear-failed] | status");
 		process.exitCode = 2;

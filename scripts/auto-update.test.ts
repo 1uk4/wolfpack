@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { acquireLock, createReleaseVerifier, readStatus, runAutoUpdate, sfoDeps } from "./auto-update.mjs";
+import { acquireLock, createReleaseVerifier, exitCodeFor, readStatus, runAutoUpdate, sfoDeps } from "./auto-update.mjs";
 
 type Entry = { version: string; tag: string };
 type Unit = { id: string; component: string };
@@ -236,5 +236,22 @@ describe("createReleaseVerifier", () => {
 		const v = createReleaseVerifier({ assets, fetch: github(`${DIGEST}  ${ASSET}\n`) as typeof fetch });
 		expect(await v(unit, { version: "0.1.14", tag: "hubd/v0.1.13" })).toMatchObject({ ok: false, code: "checksum" });
 		expect(await v(unit, { version: "0.1.14+b1", tag: "hubd/v0.1.14+b1" })).toMatchObject({ ok: false, code: "checksum" });
+	});
+});
+
+describe("exitCodeFor", () => {
+	it("a manual run exits non-zero when the kill switch or the lock stopped it, so the Update button cannot report a false success", () => {
+		expect(exitCodeFor("disabled", true)).toBe(3);
+		expect(exitCodeFor("locked", true)).toBe(4);
+		expect(exitCodeFor("ok", true)).toBe(0);
+		expect(exitCodeFor("updated", true)).toBe(0);
+		expect(exitCodeFor("failed", true)).toBe(1);
+		expect(exitCodeFor("manifest-error", true)).toBe(1);
+	});
+
+	it("a timer run keeps exiting 0 when disabled or locked, so the timer unit never shows failed", () => {
+		expect(exitCodeFor("disabled", false)).toBe(0);
+		expect(exitCodeFor("locked", false)).toBe(0);
+		expect(exitCodeFor("failed", false)).toBe(1);
 	});
 });

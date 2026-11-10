@@ -122,6 +122,14 @@ describe("hubd token auth", () => {
     expect(createTokenStore(dir).list().find((t) => t.id === b.tokenId)?.lastUsedAt).not.toBeNull();
   });
 
+  it("50 requests with one token write last-used.json nothing until the flush, then once", async () => {
+    const { token, tokenId } = await mint("console");
+    for (let i = 0; i < 50; i++) store.touch(store.verify(token)!.id);
+    expect(existsSync(store.lastUsedFile)).toBe(false); // debounced: no per-request write
+    store.flush(); // hub shutdown
+    expect(Object.keys(JSON.parse(readFileSync(store.lastUsedFile, "utf8")))).toEqual([tokenId]);
+  });
+
   it("a corrupt tokens.json is 401 (not 500) for bearers, and is not overwritten by writers", async () => {
     const { token } = await mint("console");
     writeFileSync(store.file, "{not json");

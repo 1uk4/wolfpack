@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
+import { WorkIdChip } from "@/components/work-id-chip";
 import { ContextSection } from "@/components/context-section";
 import { useMemoryEvents } from "@/components/memory-events";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
@@ -133,13 +134,18 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 			if (g.kind === "work") keys.add(g.key);
 			if (g.blockedKey) keys.add(g.blockedKey);
 		}
-		for (const key of keys) {
-			if (now - (infoAt.current.get(key) ?? -Infinity) < INFO_TTL_MS) continue;
+		const load = (key: string, withParent: boolean) => {
+			if (now - (infoAt.current.get(key) ?? -Infinity) < INFO_TTL_MS) return;
 			infoAt.current.set(key, now);
 			void fetchWorkRecord(wolf, key).then((r) => {
-				if (r.ok) setGroupInfo((m) => ({ ...m, [key]: { title: r.data.title || key, stage: r.data.stage || undefined } }));
+				if (!r.ok) return;
+				const partOf = r.data.partOf || undefined;
+				setGroupInfo((m) => ({ ...m, [key]: { title: r.data.title || key, stage: r.data.stage || undefined, partOf } }));
+				// the parent feature: its title and stage head the tree (a feature has no parent of its own to follow)
+				if (partOf && withParent) load(partOf, false);
 			});
-		}
+		};
+		for (const key of keys) load(key, true);
 	}, [obsPool, wolf]);
 
 	// Trailing-debounced refetch of status + pool: event bursts coalesce.
@@ -305,15 +311,18 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	);
 }
 
-const TOUCH = "min-h-11";
-
-/** "3 pending · 5 archived", zero parts left out. */
-const countsText = (c: { pending: number; archived: number }): string => [c.pending ? `${c.pending} pending` : "", c.archived ? `${c.archived} archived` : ""].filter(Boolean).join(" · ") || "none";
+const chipOf = (id: string) => (
+	<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
+		<WorkIdChip id={id} />
+	</span>
+);
 
 /**
- * The observation tree: feature → tasks with their observation counts (pending in the pool, archived over the last 7 days),
- * then unresolved work and the den. Tapping a feature (its own observations) or a task replaces the list with that node's
- * observations (pending first, then archived with outcome and target); Back returns. Blocked/backoff notes come from the pool.
+ * The observation tree, live only (the home branch's `/memory/tree` endpoint; its `archived` counts are never shown).
+ * The Den is the first entry, a category of its own set apart by a divider; then each feature (title, chip, total pending)
+ * with its "Feature notes" row and its tasks indented beneath, one line each; then unresolved work. Items whose stage is
+ * archived, or with nothing pending, are left out (a feature header stays while it has live tasks). Tapping a row lists
+ * that node's pending observations; Back returns. Blocked/backoff notes come from the pool.
  */
 export function ObservationsSection({ wolf, observations }: {
 	wolf: string;
@@ -331,18 +340,12 @@ export function ObservationsSection({ wolf, observations }: {
 }) {
 	const { tree, pool, info, open } = observations;
 	const rows = tree ? buildMemoryTreeRows(tree) : [];
-	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+	const archivedStage = (id: string, stage?: string) => (stage ?? info[id]?.stage) === "archived";
 	const blocked = new Map((pool ? groupObservations(pool) : []).filter((g) => g.blocked).map((g) => [g.key, g]));
 	const blockedNote = (id: string) => {
 		const g = blocked.get(id);
-		return g ? <span className="text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, info)}</span> : null;
+		return g ? <span className="block truncate text-[11px] text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, info)}</span> : null;
 	};
-	const toggle = (id: string) =>
-		setExpanded((s) => {
-			const n = new Set(s);
-			if (!n.delete(id)) n.add(id);
-			return n;
-		});
 	const titleOf = (id: string): string => {
 		if (id === DEN_GROUP) return "Den";
 		for (const r of rows) {
@@ -357,64 +360,64 @@ export function ObservationsSection({ wolf, observations }: {
 
 	if (open) return <NodeDetail wolf={wolf} id={open} label={titleOf(open)} version={observations.version ?? 0} onBack={() => observations.onOpen(null)} />;
 
-	const rowBtn = `flex w-full ${TOUCH} items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring`;
+	// A row: optional inline chip, then a button with the label (empty = chip alone), the pending count and the blocked line.
+	const item = (key: string, id: string, label: string, count: number, o: { nested?: boolean; chip?: boolean; den?: boolean; divider?: boolean }) => (
+		<li key={key} className={`flex items-center gap-1.5 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent${o.nested ? " ml-4" : ""}${o.divider ? " mb-1 border-b border-border pb-1" : ""}`} {...(o.den ? { "data-testid": "memory-den" } : {})}>
+			{o.chip ? chipOf(id) : null}
+			<button type="button" className="flex min-w-0 flex-1 flex-col text-left focus-visible:ring-2 focus-visible:ring-ring" data-testid={`memory-obs-group-${id}`} data-count={count} onClick={() => observations.onOpen(id)}>
+				<span className="flex w-full min-w-0 items-center justify-between gap-2">
+					<span className="min-w-0 truncate">{label}</span>
+					<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+						<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{count}</span>
+						<ChevronRightIcon className="size-3" />
+					</span>
+				</span>
+				{blockedNote(id)}
+			</button>
+		</li>
+	);
+
+	const den = rows.find((r) => r.kind === "den");
+	const featureRows = rows.flatMap((r) => {
+		if (r.kind !== "feature") return [];
+		const tasks = r.tasks.filter((t) => t.pending > 0 && !archivedStage(t.id, t.stage));
+		const notes = r.own.pending > 0 && !archivedStage(r.id, r.stage) ? r.own.pending : 0;
+		if (tasks.length === 0 && notes === 0) return [];
+		return [{ f: r, tasks, notes, total: notes + tasks.reduce((n, t) => n + t.pending, 0) }];
+	});
+	const otherRows = rows.filter((r) => r.kind === "other" && r.pending > 0 && !archivedStage(r.id));
+	const workCount = featureRows.length + otherRows.length;
+	const showDen = !!den && den.pending > 0;
+	const empty = !showDen && workCount === 0;
+
 	return (
 		<section data-testid="memory-feed" className="min-w-0">
 			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Observations</h3>
 			{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 			{tree === null ? (
 				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
-			) : rows.every((r) => r.pending + r.archived === 0 && r.kind !== "feature") && rows.length <= 1 ? (
-				<p className="text-xs text-muted-foreground">Nothing captured yet.</p>
+			) : empty ? (
+				<p className="text-xs text-muted-foreground">No pending observations.</p>
 			) : (
 				<ul className="flex min-w-0 flex-col gap-1" data-testid="memory-obs-groups">
-					{rows.map((r) => {
-						if (r.kind !== "feature") {
-							const label = r.kind === "den" ? "Den" : r.id;
-							return (
-								<li key={r.id}>
-									<button type="button" className={rowBtn} data-testid={`memory-obs-group-${r.id}`} data-count={r.pending + r.archived} onClick={() => observations.onOpen(r.id)}>
-										<span className="min-w-0 break-words">{label}</span>
-										<span className="flex shrink-0 flex-col items-end text-muted-foreground">{blockedNote(r.id)}<span data-testid="memory-obs-count">{countsText(r)}</span></span>
-									</button>
-								</li>
-							);
-						}
-						const isOpen = expanded.has(r.id);
-						return (
-							<li key={r.id} data-testid={`memory-obs-feature-${r.id}`}>
-								<div className="flex items-stretch">
-									<button type="button" aria-label={isOpen ? "Collapse tasks" : "Expand tasks"} aria-expanded={isOpen} className={`flex ${TOUCH} min-w-11 items-center justify-center rounded hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring`} data-testid={`memory-obs-toggle-${r.id}`} onClick={() => toggle(r.id)}>
-										{isOpen ? <ChevronDownIcon className="size-4" /> : <ChevronRightIcon className="size-4" />}
-									</button>
-									<button type="button" className={rowBtn} data-testid={`memory-obs-group-${r.id}`} data-count={r.own.pending + r.own.archived} onClick={() => observations.onOpen(r.id)}>
-										<span className="min-w-0 break-words">{r.title}<span className="block text-[10px] text-muted-foreground">{r.id}{r.stage ? ` · ${r.stage.replace(/_/g, " ")}` : ""}</span></span>
-										<span className="flex shrink-0 flex-col items-end text-muted-foreground">{blockedNote(r.id)}<span data-testid="memory-obs-count">{countsText(r)}</span></span>
-									</button>
-								</div>
-								{isOpen ? (
-									<ul className="ml-6 flex flex-col gap-1" data-testid="memory-obs-tasks">
-										{r.tasks.length === 0 ? <li className="px-1.5 py-2 text-xs text-muted-foreground">No tasks with observations.</li> : null}
-										{r.tasks.map((t) => (
-											<li key={t.id}>
-												<button type="button" className={rowBtn} data-testid={`memory-obs-group-${t.id}`} data-count={t.pending + t.archived} onClick={() => observations.onOpen(t.id)}>
-													<span className="min-w-0 break-words">{t.title}<span className="block text-[10px] text-muted-foreground">{t.id}</span></span>
-													<span className="flex shrink-0 flex-col items-end text-muted-foreground">{blockedNote(t.id)}<span data-testid="memory-obs-count">{countsText(t)}</span></span>
-												</button>
-											</li>
-										))}
-									</ul>
-								) : null}
-							</li>
-						);
-					})}
+					{showDen ? item("den", DEN_GROUP, "Den", den!.pending, { den: true, divider: workCount > 0 }) : null}
+					{featureRows.flatMap(({ f, tasks, notes, total }) => [
+						<li key={`feature-${f.id}`} className="flex items-center gap-1.5 px-1.5 py-1 text-xs" data-testid="memory-obs-feature" data-count={total}>
+							<span className="min-w-0 truncate font-medium">{f.title && f.title !== f.id ? f.title : ""}</span>
+							{chipOf(f.id)}
+							<span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground" data-testid="memory-obs-total">{total}</span>
+						</li>,
+						...(notes ? [item(`notes-${f.id}`, f.id, "Feature notes", notes, { nested: true })] : []),
+						...tasks.map((t) => item(t.id, t.id, t.title && t.title !== t.id ? t.title : "", t.pending, { nested: true, chip: true })),
+					])}
+					{otherRows.map((r) => item(r.id, r.id, info[r.id]?.title && info[r.id]!.title !== r.id ? info[r.id]!.title : "", r.pending, { chip: true }))}
 				</ul>
 			)}
 		</section>
 	);
 }
 
-/** One node's observations: pending first, then archived (outcome + target), with a note when the archived list was cut. */
+/** One node's pending observations (archived ones are never listed). */
 function NodeDetail({ wolf, id, label, version, onBack }: { wolf: string; id: string; label: string; version: number; onBack: () => void }) {
 	const [node, setNode] = useState<MemoryNodeObservations | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -435,45 +438,26 @@ function NodeDetail({ wolf, id, label, version, onBack }: { wolf: string; id: st
 		<section data-testid="memory-feed" className="min-w-0">
 			<button
 				type="button"
-				className={`-ml-1 mb-1 flex ${TOUCH} w-full items-center gap-1 rounded px-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring`}
+				className="-ml-1 mb-1 flex min-h-11 w-full items-center gap-1 rounded px-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 				aria-label="Back to observations"
 				data-testid="memory-obs-back"
 				onClick={onBack}
 			>
 				<ChevronLeftIcon className="size-4 shrink-0" />
-				<span className="min-w-0 break-words">{label}{label !== id && id !== DEN_GROUP ? <span className="block text-[10px]">{id}</span> : null}</span>
+				<span className="min-w-0 break-words">{label}</span>
 			</button>
 			{node === null ? (
 				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{error ? `Observations unavailable: ${error}` : "Loading…"}</p>
 			) : (
-				<div className="flex min-w-0 flex-col gap-3" data-testid="memory-obs-items" data-group={id}>
-					<div>
-						<h4 className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">Pending ({node.pending.length})</h4>
-						<ul className="flex flex-col gap-2">
-							{node.pending.map((o) => (
-								<li key={o.id} className="text-xs" data-testid="memory-obs-item" data-state="pending">
-									{o.recordedAt ? <div className="text-muted-foreground">{o.recordedAt}</div> : null}
-									<div className="whitespace-pre-wrap break-words">{o.content}</div>
-								</li>
-							))}
-							{node.pending.length === 0 ? <li className="text-xs text-muted-foreground">Nothing pending.</li> : null}
-						</ul>
-					</div>
-					<div>
-						<h4 className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">Archived, last 7 days ({node.archived.length})</h4>
-						<ul className="flex flex-col gap-2">
-							{node.archived.map((o) => (
-								<li key={o.id} className="text-xs" data-testid="memory-obs-item" data-state="archived">
-									<div className="text-muted-foreground">{o.at}</div>
-									<div className="whitespace-pre-wrap break-words">{o.content}</div>
-									<div className="break-words text-[10px] text-muted-foreground" data-testid="memory-obs-outcome">{o.outcome} → {o.target}</div>
-								</li>
-							))}
-							{node.archived.length === 0 ? <li className="text-xs text-muted-foreground">Nothing archived.</li> : null}
-						</ul>
-						{node.truncated ? <p className="mt-1 text-[11px] text-muted-foreground" data-testid="memory-obs-truncated">Older archived observations are not shown.</p> : null}
-					</div>
-				</div>
+				<ul className="flex min-w-0 flex-col gap-2" data-testid="memory-obs-items" data-group={id}>
+					{node.pending.map((o) => (
+						<li key={o.id} className="text-xs" data-testid="memory-obs-item">
+							{o.recordedAt ? <div className="text-muted-foreground">{o.recordedAt}</div> : null}
+							<div className="whitespace-pre-wrap break-words">{o.content}</div>
+						</li>
+					))}
+					{node.pending.length === 0 ? <li className="text-xs text-muted-foreground">Nothing pending.</li> : null}
+				</ul>
 			)}
 		</section>
 	);

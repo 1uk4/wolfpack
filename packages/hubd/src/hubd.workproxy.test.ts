@@ -1,5 +1,6 @@
 /** The hub-proxied Work API (work-proxy.ts): shapes of the agent's /work routes, whitelist, and worker-token scoping. */
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +48,20 @@ describe("hub work proxy", () => {
     expect(await r.json()).toEqual({ items: [] });
     // the key is NOT accepted on any other prefix
     expect((await fetch(`${hub.url}/v1/work?domain=personal`, { headers: { "X-API-Key": A } })).status).toBe(401);
+  });
+
+  it("GET /work?ids= returns only the named items: deduped, unknown skipped, empty = absent, over 200 = 400", async () => {
+    const { call, A } = await rig();
+    const mk = async (title: string) => ((await (await call(A, "POST", "", { ...feature, title })).json()) as { id: string }).id;
+    const [a, b, c] = [await mk("a"), await mk("b"), await mk("c")];
+    const ids = async (q: string) => ((await (await call(A, "GET", q)).json()) as { items: { id: string }[] }).items.map((i) => i.id).sort();
+    expect(await ids(`?domain=personal&ids=${a},${b},${a},work-personal-Zzzzzzz`)).toEqual([a, b].sort());
+    expect(await ids(`?domain=other&ids=${a}`)).toEqual([]); // the other filters still apply
+    expect(await ids("?domain=personal&ids=")).toEqual([a, b, c].sort()); // empty ids= is as if absent
+    const many = Array.from({ length: 201 }, (_, i) => `work-personal-X${String(i).padStart(6, "0")}`).join(",");
+    const r = await call(A, "GET", `?ids=${many}`);
+    expect(r.status).toBe(400);
+    expect(await r.json()).toMatchObject({ error: expect.stringContaining("200") });
   });
 
   it("create / get / patch / graduate keep the agent shapes for the wolf's own host", async () => {
@@ -509,5 +524,40 @@ describe("hub work proxy", () => {
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
     expect((await call(OP_TOKEN, "GET", `/${id}`)).status).toBe(200);
     expect((await call(OP_TOKEN, "GET", "")).status).toBe(200);
+  });
+
+  it("a read sees a note written through the proxy, and a ledger replaced by tmp+rename (same size and mtime, new inode)", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).not.toContain("zzfreshzz");
+    expect((await call(A, "PATCH", `/${id}`, { note: "zzfreshzz" })).status).toBe(200);
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).toContain("zzfreshzz");
+    // replace the ledger file with an equal-size copy that differs in content, keeping mtime: only the inode tells
+    const file = workLedgerFile(hubRoots(hub.dataDir));
+    const pinned = new Date("2026-11-01T00:00:00Z");
+    utimesSync(file, pinned, pinned);
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).toContain("zzfreshzz"); // caches the state under the pinned mtime
+    const tmpFile = `${file}.swap`;
+    writeFileSync(tmpFile, readFileSync(file, "utf-8").replace("zzfreshzz", "yyswapyyy"));
+    utimesSync(tmpFile, pinned, pinned);
+    renameSync(tmpFile, file);
+    const body = JSON.stringify(await (await call(A, "GET", `/${id}`)).json());
+    expect(body).toContain("yyswapyyy");
+    expect(body).not.toContain("zzfreshzz");
+  });
+
+  it("a GET whose client hangs up before the answer neither wedges nor crashes the hub", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const port = Number(new URL(hub.url).port);
+    for (let i = 0; i < 20; i++) {
+      const s = connect(port, "127.0.0.1");
+      s.on("error", () => undefined);
+      s.write(`GET /v1/workapi/work/${id} HTTP/1.1\r\nHost: x\r\nX-API-Key: ${A}\r\n\r\n`);
+      s.destroy(); // gone before the hub can answer
+    }
+    const r = await call(A, "GET", `/${id}`); // a normal client is still served in full
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { item: { id: string } }).item.id).toBe(id);
   });
 });

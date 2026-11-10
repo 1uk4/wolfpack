@@ -37,6 +37,7 @@ export {
   moveWork,
   graduateWork,
   queryWork,
+  filterWork,
   getWorkTree,
   type CreateWorkInput,
   type CreateWorkResult,

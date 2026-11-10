@@ -22,7 +22,7 @@
 import { HubError } from "./errors.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
-import { loadModelTable, type Engine } from "@wolfpack/engine";
+import { loadModelTable, warmClaudeAgentSdk, type Engine } from "@wolfpack/engine";
 import {
   acquireLease,
   appendLedger,
@@ -80,6 +80,8 @@ export interface CuratorOptions {
   afterEntryRead?: (entryId: string) => void;
   /** @internal TEST-ONLY: wraps the tick's writer (failure injection). */
   wrapWriter?: (w: SweepWriter) => SweepWriter;
+  /** Test seam: the SDK warm-up run ~2 s after start() (default: load the Claude Agent SDK, only when the engine is the real librarian engine on the claude-agent-sdk provider). */
+  warmSdk?: () => Promise<void>;
   /** @internal TEST-ONLY: called at the end of start() (simulates a later startup step failing). */
   afterStart?: () => void;
 }
@@ -139,6 +141,19 @@ export function curatorEngineFactory(o: CuratorOptions): () => Engine {
 export function curatorEmbedderFactory(roots: KbRoots, o: CuratorOptions): () => CachedEmbedder {
   return o.getEmbedder ?? (() => createEmbedder(roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }));
 }
+
+/** The warm-up for the real engine: loads the SDK only when no engine is injected and the smart tier uses claude-agent-sdk. */
+function defaultWarmSdk(o: CuratorOptions): (() => Promise<void>) | undefined {
+  if (o.createEngine) return undefined;
+  try {
+    const table = loadModelTable(o.modelsFile ? { file: o.modelsFile } : {}).table;
+    return table.tiers.smart.provider === "claude-agent-sdk" ? warmClaudeAgentSdk : undefined;
+  } catch {
+    return undefined; // the tick reports a bad model table itself
+  }
+}
+
+const SDK_WARM_DELAY_MS = 2000;
 
 const err1 = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
 
@@ -273,6 +288,7 @@ export function createCurator(deps: CuratorDeps): Curator {
   const pollMs = o.pollMs ?? DEFAULT_CURATOR_POLL_MS;
   let lease: LeaseHandle | undefined;
   let timer: NodeJS.Timeout | undefined;
+  let warmTimer: NodeJS.Timeout | undefined;
   let inflight: Promise<CuratorRun | undefined> | undefined;
   let closing = false;
   let pausedBy = 0;
@@ -401,6 +417,19 @@ export function createCurator(deps: CuratorDeps): Curator {
       if (!enabled || pollMs <= 0 || timer) return;
       timer = setInterval(() => void runOnce().catch((e) => console.error("[curator] tick failed:", err1(e))), pollMs);
       timer.unref();
+      const warm = o.warmSdk ?? defaultWarmSdk(o);
+      if (warm) {
+        warmTimer = setTimeout(() => {
+          warmTimer = undefined;
+          if (closing) return;
+          const t0 = Date.now();
+          void warm().then(
+            () => console.log(`[curator] sdk warmed in ${Date.now() - t0}ms`),
+            (e) => console.warn(`[curator] sdk warm-up failed: ${err1(e)}`),
+          );
+        }, SDK_WARM_DELAY_MS);
+        warmTimer.unref();
+      }
       o.afterStart?.();
     },
     runOnce,
@@ -423,6 +452,8 @@ export function createCurator(deps: CuratorDeps): Curator {
       closing = true; // from here every writer call of a tick in flight is refused
       if (timer) clearInterval(timer);
       timer = undefined;
+      if (warmTimer) clearTimeout(warmTimer);
+      warmTimer = undefined;
       const p = inflight;
       if (p) {
         let to: NodeJS.Timeout | undefined;

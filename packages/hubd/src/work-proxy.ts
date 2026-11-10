@@ -27,17 +27,20 @@
  * Console/operator tokens can do anything (same whitelist). Errors are `{error: string}` like the agent's.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadWorkState, queryWork, resolveWorkItem, type CreateWorkInput, type WorkQuery } from "@wolfpack/kb/client";
+import { filterWork, loadWorkState, resolveWorkItem, type CreateWorkInput, type WorkId, type WorkQuery } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type Actor } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
+import { cachedWorkState } from "./work-state.js";
 import { idempotencyKeyOf, type WorkIdempotency } from "./work-idempotency.js";
 import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY, RECORD_CLOSED, LOG_FULL } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
 /** The refusal for a worker's loose create for another wolf: names who can do it. */
 export const LOOSE_CREATE_FOREIGN_WOLF = "a wolf can only create a loose item for itself; only the owner can assign one to another wolf";
+/** Most ids one `GET /work?ids=` may name. */
+const MAX_IDS = 200;
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 
 interface WolfRow {
@@ -120,18 +123,26 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     };
     const itemOf = (id: string) => {
       if (!WORK_ID.test(id)) throw new HubError("invalid_request", "malformed work item id");
-      const item = loadWorkState(d.roots).get(id as never);
+      const item = cachedWorkState(d.roots).get(id as never);
       if (!item || !domainOk(item.domain)) throw new HubError("not_found", `Work item not found: ${id}`); // a foreign domain looks absent
       return item;
     };
 
+    // A reader that already hung up gets nothing: skip the state load and the serialization (a retry storm must not queue work nobody reads).
+    const gone = (): boolean => req.socket?.destroyed === true || res.destroyed || res.writableEnded;
+    if (method === "GET" && gone()) return;
     if (rest.length === 0 && method === "GET") {
       const q: WorkQuery = {};
       for (const k of ["domain", "kind", "stage", "assignee", "area", "partOf"] as const) {
         const v = url.searchParams.get(k);
         if (v) (q as Record<string, string>)[k] = v;
       }
-      const items = queryWork(d.roots, q).filter((i) => domainOk(i.domain));
+      // `ids`: comma-separated full work ids; only those items, IN REQUEST ORDER (deduped, unknown skipped), other filters still apply (filterWork keeps input order). Empty `ids=` = absent; over MAX_IDS = 400.
+      const wanted = [...new Set((url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean))];
+      if (wanted.length > MAX_IDS) throw new HubError("invalid_request", `ids: at most ${MAX_IDS} ids per request`);
+      const state = cachedWorkState(d.roots);
+      const pool = wanted.length ? wanted.flatMap((id) => { const it = state.get(id as WorkId); return it ? [it] : []; }) : [...state.values()];
+      const items = filterWork(pool, q).filter((i) => domainOk(i.domain));
       return respond(res, 200, { items });
     }
     if (rest.length === 0 && method === "POST") {

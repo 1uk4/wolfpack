@@ -307,19 +307,84 @@ const ARCHIVE_FILES_MAX = 3;
 export const NODE_ARCHIVED_DEFAULT_LIMIT = 100;
 
 interface LookedUp { title: string; stage?: string; partOf?: string }
-/** Per-process, keyed by work id only (not by endpoint or token): fine for one wolf per process, wrong if a process ever serves two Work APIs. */
-const lookupCache = new Map<string, { at: number; value: LookedUp | null }>();
+const FAILURE_TTL_MS = 15_000;
+/** The list calls are cached and shared, so they may be slower than a single-item read. */
+const LIST_TIMEOUT_MS = 10_000;
+/** Ids per `GET /work?domain=&ids=` request (keeps the URL short). */
+const IDS_CHUNK = 100;
+/** The hub's work id pattern (work-proxy.ts); anything else is never sent. */
+const HUB_WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
+/** Past this many cached ids, expired entries are dropped, and everything if that is not enough. */
+const ITEM_CACHE_MAX = 5000;
+/** Per-process, keyed by endpoint + id. A failed fetch is cached too (null, FAILURE_TTL_MS) so a slow hub is not hit by every poll. */
+const itemCache = new Map<string, { at: number; ttl: number; value: LookedUp | null }>();
+/** One in-flight request per endpoint + id, shared by concurrent reads. */
+const itemInflight = new Map<string, Promise<void>>();
 /** Test hook: forget cached work lookups. */
-export const resetWorkLookupCache = (): void => lookupCache.clear();
+export const resetWorkLookupCache = (): void => { itemCache.clear(); itemInflight.clear(); };
 
-async function lookupWork(id: string, api: { endpoint?: string; token?: string }, now: number): Promise<LookedUp | null> {
-  const hit = lookupCache.get(id);
-  if (hit && now - hit.at < LOOKUP_TTL_MS) return hit.value;
-  const r = await fetchWorkItem(id, api);
-  // Only a real answer is cached; a transient error is retried next time.
-  const value: LookedUp | null = r.kind === "ok" ? { title: r.item.title ?? id, ...(r.item.stage ? { stage: r.item.stage } : {}), ...(r.item.partOf ? { partOf: r.item.partOf } : {}) } : null;
-  if (r.kind === "ok" || r.kind === "not_found") lookupCache.set(id, { at: now, value });
-  return value;
+function boundItemCache(): void {
+  if (itemCache.size <= ITEM_CACHE_MAX) return;
+  const t = Date.now();
+  for (const [k, v] of itemCache) if (t - v.at >= v.ttl) itemCache.delete(k);
+  if (itemCache.size > ITEM_CACHE_MAX) itemCache.clear();
+}
+
+/**
+ * One `GET /work?domain=<d>&ids=<ids>` (archived included). Fills the cache for every id asked. An older hub ignores `ids`
+ * and returns the whole domain: those extra items are cached too, so the parent-feature wave needs no second request.
+ */
+async function fetchChunk(base: string, token: string, domain: string, ids: string[]): Promise<void> {
+  let found: Map<string, LookedUp> | null = null;
+  try {
+    const res = await fetch(`${base}/work?domain=${encodeURIComponent(domain)}&ids=${ids.map(encodeURIComponent).join(",")}`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
+    if (res.ok) {
+      const data = (await res.json()) as { items?: ApiWorkItem[] };
+      if (Array.isArray(data.items)) {
+        found = new Map();
+        for (const w of data.items) {
+          if (typeof w.id === "string") found.set(w.id, { title: w.title ?? w.id, ...(w.stage ? { stage: w.stage } : {}), ...(w.partOf ? { partOf: w.partOf } : {}) });
+        }
+      }
+    }
+  } catch { /* cached as a failure below */ }
+  const at = Date.now();
+  const ttl = found ? LOOKUP_TTL_MS : FAILURE_TTL_MS;
+  for (const [id, value] of found ?? []) itemCache.set(`${base}\n${id}`, { at, ttl, value });
+  for (const id of ids) if (!found?.has(id)) itemCache.set(`${base}\n${id}`, { at, ttl, value: null });
+  boundItemCache();
+}
+
+/**
+ * Resolve work ids with at most one request per domain (more only past IDS_CHUNK ids): ids not cached and not already in flight
+ * are fetched together. Unknown, unparsable or unreachable ids map to null. Never a per-id request.
+ */
+async function lookupMany(ids: Iterable<string>, api: { endpoint?: string; token?: string }, now: number): Promise<Map<string, LookedUp | null>> {
+  const base = (api.endpoint ?? "").replace(/\/$/, "");
+  const out = new Map<string, LookedUp | null>();
+  const wait: Promise<void>[] = [];
+  const todo = new Map<string, string[]>();
+  for (const id of new Set(ids)) {
+    const domain = HUB_WORK_ID.test(id) ? /^work-(.+)-[^-]+$/.exec(id)?.[1] : undefined;
+    if (!domain || !base || !api.token) { out.set(id, null); continue; }
+    const key = `${base}\n${id}`;
+    const hit = itemCache.get(key);
+    if (hit && now - hit.at < hit.ttl) continue;
+    const flying = itemInflight.get(key);
+    if (flying) { wait.push(flying); continue; }
+    todo.set(domain, [...(todo.get(domain) ?? []), id]);
+  }
+  for (const [domain, all] of todo) {
+    for (let i = 0; i < all.length; i += IDS_CHUNK) {
+      const chunk = all.slice(i, i + IDS_CHUNK);
+      const p = fetchChunk(base, api.token!, domain, chunk).finally(() => { for (const id of chunk) itemInflight.delete(`${base}\n${id}`); });
+      for (const id of chunk) itemInflight.set(`${base}\n${id}`, p);
+      wait.push(p);
+    }
+  }
+  await Promise.all(wait);
+  for (const id of new Set(ids)) if (!out.has(id)) out.set(id, itemCache.get(`${base}\n${id}`)?.value ?? null);
+  return out;
 }
 
 /** The last bytes of a JSONL file as parsed lines (a cut first line is dropped). Missing file: none. */
@@ -386,7 +451,7 @@ async function bucketize(entries: TreeEntry[], api: { endpoint?: string; token?:
     if (e.work && e.work !== e.feature) needed.add(e.work);
     if (e.feature) needed.add(e.feature);
   }
-  const info = new Map(await Promise.all([...needed].map(async (id) => [id, await lookupWork(id, api, now)] as const)));
+  const info = await lookupMany(needed, api, now);
   const buckets = entries.map((e): Bucket => {
     if (e.feature) {
       if (!e.work || e.work === e.feature) return { t: "own", f: e.feature };
@@ -399,7 +464,7 @@ async function bucketize(entries: TreeEntry[], api: { endpoint?: string; token?:
   });
   // A feature reached only through a task's partOf still needs its title.
   const missing = [...new Set(buckets.flatMap((b) => (b.t === "task" && !info.has(b.f) ? [b.f] : [])))];
-  for (const [id, v] of await Promise.all(missing.map(async (id) => [id, await lookupWork(id, api, now)] as const))) info.set(id, v);
+  for (const [id, v] of await lookupMany(missing, api, now)) info.set(id, v);
   return { buckets, info };
 }
 

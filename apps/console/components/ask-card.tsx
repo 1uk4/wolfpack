@@ -238,8 +238,18 @@ function shownIds(card: InteractionCardProps["card"], draft: CardDraft, stepIdx:
 	return (steps[Math.min(stepIdx, steps.length - 1)]?.fields ?? []).map((f) => f.id);
 }
 
-/** Esc in a card field cancels a live dictation (the hook listens for this event; the Esc is claimed). */
+let enterFinishing = false;
+/** Esc in a card field cancels a live dictation (the hook listens for this event; the Esc is claimed). Plain Enter while
+ *  dictating only finishes the run (the last words land in the field) and is claimed, so it adds no newline, moves no
+ *  step and submits nothing; a press while the run settles does nothing. The next Enter behaves as without dictation. */
 function stopDictationOnEscape(e: React.KeyboardEvent) {
+	if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && isDictationActive()) {
+		e.preventDefault();
+		if (enterFinishing) return;
+		enterFinishing = true;
+		void finishDictation().finally(() => void (enterFinishing = false));
+		return;
+	}
 	if (e.key !== "Escape" || !isDictationActive()) return;
 	e.preventDefault();
 	e.stopPropagation();

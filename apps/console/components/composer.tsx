@@ -1,7 +1,9 @@
 "use client";
 
-import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, Loader2Icon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { endOnFocus, endOnOutsideMouseDown } from "@/components/caret-end";
+import { RecordingMarker } from "@/components/recording-marker";
 import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } from "@/components/attachments";
 
 /**
@@ -60,6 +62,8 @@ export function Composer({
 	onSend,
 	onStop,
 	canSend,
+	finishing,
+	recording,
 	autoFocus,
 	inputRef,
 	onEscape,
@@ -91,6 +95,10 @@ export function Composer({
 	onSend: () => void;
 	onStop: () => void;
 	canSend: boolean;
+	/** A dictation run is flushing its last words (the mic is already off): the send button shows a spinner meanwhile. */
+	finishing?: boolean;
+	/** This field is where the live dictation lands: a marker sits at its inner right edge (spinner while the run stops). */
+	recording?: "live" | "stopping";
 	autoFocus?: boolean;
 	/** The page's handle to the textarea — the dictation-end focus (owner,
 	 *  2026-10-01): a run ending hands the cursor to the bare composer. */
@@ -165,10 +173,13 @@ export function Composer({
 						</button>
 					</>
 				)}
+				<div className="relative flex min-w-0 flex-1">
 				<textarea
 					ref={inputRef}
 					value={value}
 					onChange={(e) => onChange(e.target.value)}
+					onMouseDown={endOnOutsideMouseDown}
+					onFocus={endOnFocus}
 					onPaste={(e) => {
 						if (!onFiles) return;
 						const files = pastedImages(e.clipboardData);
@@ -198,8 +209,10 @@ export function Composer({
 					placeholder={placeholder}
 					autoFocus={autoFocus}
 					rows={1}
-					className="field-sizing-content wp-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
+					className={cn("field-sizing-content wp-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground", recording && "pr-7")}
 				/>
+				{recording && <RecordingMarker state={recording} className="absolute right-1.5 top-3" />}
+				</div>
 				{controls}
 				{/* The button follows the text (owner report 2026-10-03): while
 					 a turn runs WITH text typed it stays the SEND affordance
@@ -216,6 +229,7 @@ export function Composer({
 				<button
 					type="submit"
 					data-armed={armed ? "true" : undefined}
+					data-finishing={finishing ? "true" : undefined}
 					aria-label={labelled ? (sendAriaLabel ?? sendLabel) : busy && !canSend ? "Stop" : "Send"}
 					disabled={!busy && !canSend}
 					className={cn(
@@ -228,7 +242,9 @@ export function Composer({
 							: "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
 					)}
 				>
-					{labelled ? (
+					{finishing ? (
+						<Loader2Icon className="size-5 animate-spin" aria-label="Finishing dictation" />
+					) : labelled ? (
 						<span key={sendLabel} className="wp-swap-in whitespace-nowrap">{sendLabel}</span>
 					) : busy && !canSend ? (
 						<SquareIcon className="size-4 max-md:fill-current" />

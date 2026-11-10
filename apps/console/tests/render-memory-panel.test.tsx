@@ -37,6 +37,7 @@ describe("MemoryPanel SSR", () => {
 		const html = renderToStaticMarkup(<ObservationsSection wolf="w" observations={treeProps()} />);
 		assert.match(html, />Observations</);
 		assert.match(html, /memory-obs-group-den/);
-		assert.match(html, /1 pending/);
+		assert.match(html, /data-testid="memory-obs-count">1</);
+		assert.doesNotMatch(html, /pending|archived/);
 	});
 });

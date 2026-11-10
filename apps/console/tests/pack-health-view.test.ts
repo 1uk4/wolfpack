@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, type HealthLink } from "../src/core/pack-health-view.ts";
+import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, updateFinished, updateOffered, updateOutcome, updateQuestion, type HealthLink } from "../src/core/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-09T14:10:00Z");
 const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink> = {}): HealthLink => ({
@@ -155,6 +155,56 @@ describe("rollback unit result", () => {
 		assert.deepEqual(rollbackFinished({ result: "timeout", exitStatus: 0, at }, before), { ok: false, message: "Rollback failed (timed out) — see Logs" });
 		// A start the unit's assert refused: the server reports it at the assert time, newer than the success seen at send.
 		assert.deepEqual(rollbackFinished({ result: "assert", exitStatus: null, at }, before), { ok: false, message: "Rollback failed (rollback script or previous release missing on the host) — see Logs" });
+	});
+});
+
+describe("update button", () => {
+	const units = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: null, to: "0.1.19" }];
+
+	it("is offered only under systemd and when at least one unit has a newer target", () => {
+		assert.equal(updateOffered({ systemd: true, rollback: [] }, units), true);
+		assert.equal(updateOffered({ systemd: true, rollback: [] }, []), false);
+		assert.equal(updateOffered({ systemd: false, rollback: [] }, units), false);
+		assert.equal(updateOffered(undefined, units), false);
+	});
+
+	it("asks with every unit's current → target and warns that hubd and the console restart", () => {
+		assert.equal(
+			updateQuestion(units),
+			"Update to the latest stable release? hubd v0.1.14 → v0.1.15, console (unknown) → v0.1.19. hubd and the console restart, so this page drops for a few seconds.",
+		);
+	});
+
+	it("is finished only by a run newer than the one seen at send; a failure says so and points to Logs", () => {
+		const before = "2026-11-09T09:00:00.000Z";
+		const at = "2026-11-09T10:00:00.000Z";
+		assert.equal(updateFinished({ result: "running", exitStatus: null, at: null }, before), null);
+		assert.equal(updateFinished({ result: "exit-code", exitStatus: 1, at: before }, before), null);
+		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before), { ok: true });
+		assert.deepEqual(updateFinished({ result: "exit-code", exitStatus: 1, at }, before), { ok: false, message: "Update failed (exit 1) — see Logs" });
+		assert.deepEqual(updateFinished({ result: "timeout", exitStatus: 0, at }, null), { ok: false, message: "Update failed (timed out) — see Logs" });
+	});
+
+	it("names a switched-off host, a held lock and a missing script instead of a false 'Updated', and refuses 'Updated' while a component is still behind", () => {
+		const before = "2026-11-09T09:00:00.000Z";
+		const at = "2026-11-09T10:00:00.000Z";
+		const fin = (result: string, exitStatus: number) => updateFinished({ result, exitStatus, at }, before);
+		assert.deepEqual(fin("exit-code", 3), { ok: false, message: "Update failed (auto-update is switched off on the host (kill switch)) — see Logs" });
+		assert.deepEqual(fin("exit-code", 4), { ok: false, message: "Update failed (another update run holds the lock) — see Logs" });
+		assert.deepEqual(fin("exit-code", 203), { ok: false, message: "Update failed (update script missing on the host) — see Logs" });
+		assert.deepEqual(fin("exec", 203), { ok: false, message: "Update failed (update script missing on the host) — see Logs" });
+		// A run that ended ok but left a component behind changed nothing for the owner.
+		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before, 1), { ok: false, message: "Nothing changed — see Logs" });
+		// The run finished before the first poll after send: the baseline taken before the send still counts it.
+		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before, 0), { ok: true });
+	});
+
+	it("turns the POST status into started, nothing to update, already running, or a countdown", () => {
+		assert.deepEqual(updateOutcome(202, null), { kind: "issued" });
+		assert.deepEqual(updateOutcome(409, null, { code: "no_update" }), { kind: "error", message: "Nothing is behind the latest stable release" });
+		assert.deepEqual(updateOutcome(409, null, { code: "running" }), { kind: "error", message: "An update is already running" });
+		assert.deepEqual(updateOutcome(429, "240"), { kind: "wait", retryS: 240 });
+		assert.deepEqual(updateOutcome(502, null), { kind: "error", message: "systemctl refused the update (is the update unit and polkit rule installed?)" });
 	});
 });
 

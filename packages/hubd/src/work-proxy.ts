@@ -27,11 +27,12 @@
  * Console/operator tokens can do anything (same whitelist). Errors are `{error: string}` like the agent's.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadWorkState, queryWork, resolveWorkItem, type CreateWorkInput, type WorkQuery } from "@wolfpack/kb/client";
+import { loadWorkState, resolveWorkItem, type CreateWorkInput, type WorkQuery } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type Actor } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
+import { cachedWorkState } from "./work-state.js";
 import { idempotencyKeyOf, type WorkIdempotency } from "./work-idempotency.js";
 import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY, RECORD_CLOSED, LOG_FULL } from "./work-writes.js";
 
@@ -120,7 +121,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     };
     const itemOf = (id: string) => {
       if (!WORK_ID.test(id)) throw new HubError("invalid_request", "malformed work item id");
-      const item = loadWorkState(d.roots).get(id as never);
+      const item = cachedWorkState(d.roots).get(id as never);
       if (!item || !domainOk(item.domain)) throw new HubError("not_found", `Work item not found: ${id}`); // a foreign domain looks absent
       return item;
     };
@@ -131,7 +132,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         const v = url.searchParams.get(k);
         if (v) (q as Record<string, string>)[k] = v;
       }
-      const items = queryWork(d.roots, q).filter((i) => domainOk(i.domain));
+      const items = [...cachedWorkState(d.roots).values()].filter((i) => (!q.domain || i.domain === q.domain) && (!q.assignee || i.assignee === q.assignee) && (!q.area || i.area === q.area) && (!q.stage || i.stage === q.stage) && (!q.kind || i.kind === q.kind) && (!q.partOf || i.partOf === q.partOf) && domainOk(i.domain));
       return respond(res, 200, { items });
     }
     if (rest.length === 0 && method === "POST") {

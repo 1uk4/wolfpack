@@ -1,5 +1,5 @@
 /** The hub-proxied Work API (work-proxy.ts): shapes of the agent's /work routes, whitelist, and worker-token scoping. */
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -509,5 +509,25 @@ describe("hub work proxy", () => {
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
     expect((await call(OP_TOKEN, "GET", `/${id}`)).status).toBe(200);
     expect((await call(OP_TOKEN, "GET", "")).status).toBe(200);
+  });
+
+  it("a read sees a note written through the proxy, and a ledger replaced by tmp+rename (same size and mtime, new inode)", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).not.toContain("zzfreshzz");
+    expect((await call(A, "PATCH", `/${id}`, { note: "zzfreshzz" })).status).toBe(200);
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).toContain("zzfreshzz");
+    // replace the ledger file with an equal-size copy that differs in content, keeping mtime: only the inode tells
+    const file = workLedgerFile(hubRoots(hub.dataDir));
+    const pinned = new Date("2026-11-01T00:00:00Z");
+    utimesSync(file, pinned, pinned);
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).toContain("zzfreshzz"); // caches the state under the pinned mtime
+    const tmpFile = `${file}.swap`;
+    writeFileSync(tmpFile, readFileSync(file, "utf-8").replace("zzfreshzz", "yyswapyyy"));
+    utimesSync(tmpFile, pinned, pinned);
+    renameSync(tmpFile, file);
+    const body = JSON.stringify(await (await call(A, "GET", `/${id}`)).json());
+    expect(body).toContain("yyswapyyy");
+    expect(body).not.toContain("zzfreshzz");
   });
 });

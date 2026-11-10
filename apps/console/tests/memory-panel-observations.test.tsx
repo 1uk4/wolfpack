@@ -89,18 +89,18 @@ afterEach(async () => {
 });
 
 describe("observation pool in the Memory panel", () => {
-	it("loads the persisted pool on open (no live event needed) and groups it: work items with title, stage and count, then the Den", async () => {
+	it("loads the persisted pool on open (no live event needed) and groups it: the Den first, then work items with title, stage and count", async () => {
 		await mount();
 		assert.equal(poolFetches >= 1, true);
 		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.includes("No pending observations"), false);
 		const rows = qa('[data-testid="memory-obs-groups"] button');
-		assert.deepEqual(rows.map((r) => r.getAttribute("data-testid")), ["memory-obs-group-work-f", "memory-obs-group-work-a", "memory-obs-group-den"]);
-		assert.deepEqual(rows.map((r) => r.getAttribute("data-count")), ["1", "2", "2"]);
-		assert.match(rows[0]!.textContent!, /Auth feature/);
-		assert.match(rows[0]!.textContent!, /approved/);
-		assert.match(rows[1]!.textContent!, /Fix the login/);
-		assert.match(rows[1]!.textContent!, /in build/);
-		assert.match(rows[2]!.textContent!, /^Den/);
+		assert.deepEqual(rows.map((r) => r.getAttribute("data-testid")), ["memory-obs-group-den", "memory-obs-group-work-f", "memory-obs-group-work-a"]);
+		assert.deepEqual(rows.map((r) => r.getAttribute("data-count")), ["2", "1", "2"]);
+		assert.match(rows[0]!.textContent!, /^Den/);
+		assert.match(rows[1]!.textContent!, /Auth feature/);
+		assert.match(rows[1]!.textContent!, /approved/);
+		assert.match(rows[2]!.textContent!, /Fix the login/);
+		assert.match(rows[2]!.textContent!, /in build/);
 	});
 
 	it("shows \"waiting for Work API\" on a group whose observations are blocked, and only on that group", async () => {
@@ -158,10 +158,14 @@ describe("observation pool in the Memory panel", () => {
 		assert.equal(q('[data-testid="memory-obs-items"]'), null);
 	});
 
-	it("puts the Den section below the pool gauge and the work observations", async () => {
+	it("puts the Den inside the Observations list as its first entry, set apart from the work groups, below the pool", async () => {
 		await mount();
-		const order = qa('[data-testid="memory-den"], [data-testid="memory-pool"], [data-testid="memory-feed"]').map((e) => e.getAttribute("data-testid"));
-		assert.deepEqual(order, ["memory-pool", "memory-feed", "memory-den"]);
+		const order = qa('[data-testid="memory-pool"], [data-testid="memory-feed"]').map((e) => e.getAttribute("data-testid"));
+		assert.deepEqual(order, ["memory-pool", "memory-feed"]);
+		const first = q('[data-testid="memory-obs-groups"] > li')!;
+		assert.equal(first.getAttribute("data-testid"), "memory-den");
+		assert.match(first.className, /border-b/);
+		assert.equal(qa('section[data-testid="memory-den"]').length, 0);
 	});
 
 	it("an empty pool says nothing captured; a failed load says unavailable", async () => {

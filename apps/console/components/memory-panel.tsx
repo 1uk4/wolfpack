@@ -277,9 +277,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 				</div>
 			)}
 
-			<ObservationsSection scope="work" observations={obsProps} />
-
-			<ObservationsSection scope="den" observations={obsProps} />
+			<ObservationsSection observations={obsProps} />
 		</div>
 	);
 	if (embedded) return content;
@@ -307,26 +305,27 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	);
 }
 /**
- * The observation pool, grouped. `scope="den"` is the Den section (below the work observations; nothing when the den is
- * empty); `scope="work"` lists the live work-item groups (archived items are left out). Opening a group lists its observations.
+ * The observation pool, grouped. The Den is the first entry, a category of its own set apart from the work groups;
+ * then the live work-item groups as a tree (archived items are left out). Opening a group lists its observations.
  */
-export function ObservationsSection({ observations, scope = "work" }: {
+export function ObservationsSection({ observations }: {
 	/** The loaded observations (null until the first load), grouped; `open` is the group being read. */
 	observations: { list: PoolObservation[] | null; pending?: PoolPending | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
-	scope?: "den" | "work";
 }) {
 	const list = observations.list;
-	const groups = (list ? liveGroups(groupObservations(list), observations.info) : []).filter((g) => (g.kind === "den") === (scope === "den"));
+	const groups = list ? liveGroups(groupObservations(list), observations.info) : [];
 	// a group that emptied (consolidated away) falls back to the list
 	const openKey = observations.open && groups.some((g) => g.key === observations.open) ? observations.open : null;
-	if (scope === "den" && groups.length === 0) return null;
-	// the den as it is; work groups as a tree: a feature header, then its notes and its tasks (one level), indented
-	type Row = { header: GroupNode; g?: undefined; nested?: undefined; notes?: undefined } | { header?: undefined; g: ObservationGroup; nested: boolean; notes: boolean };
-	const rows: Row[] = scope === "den" ? groups.map((g) => ({ g, nested: false, notes: false })) : nestGroups(groups, observations.info).flatMap((n): Row[] => n.header
+	// the den first, as its own category; then work groups as a tree: a feature header, then its notes and its tasks (one level), indented
+	type Row = { header: GroupNode; g?: undefined; nested?: undefined; notes?: undefined; den?: undefined } | { header?: undefined; g: ObservationGroup; nested: boolean; notes: boolean; den?: boolean };
+	const denRows: Row[] = groups.filter((g) => g.kind === "den").map((g) => ({ g, nested: false, notes: false, den: true }));
+	const workRows: Row[] = nestGroups(groups.filter((g) => g.kind !== "den"), observations.info).flatMap((n): Row[] => n.header
 		? [{ header: n }, ...(n.own ? [{ g: n.own, nested: true, notes: true }] : []), ...n.children.map((g) => ({ g, nested: true, notes: false }))]
 		: n.own ? [{ g: n.own, nested: false, notes: false }] : []);
+	const rows: Row[] = [...denRows, ...workRows];
+	const denSplit = denRows.length > 0 && workRows.length > 0;
 	return (
-		<section data-testid={scope === "den" ? "memory-den" : "memory-feed"}>
+		<section data-testid="memory-feed">
 			<div className="mb-1 flex items-center justify-between gap-2">
 				{openKey ? (
 					<button
@@ -340,7 +339,7 @@ export function ObservationsSection({ observations, scope = "work" }: {
 						<span className="truncate">{groupLabel(openKey, observations.info)}</span>
 					</button>
 				) : (
-					<h3 className="text-xs font-medium uppercase text-muted-foreground">{scope === "den" ? "Den" : "Observations"}</h3>
+					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
 				)}
 			</div>
 			{list === null ? (
@@ -358,7 +357,7 @@ export function ObservationsSection({ observations, scope = "work" }: {
 				</ul>
 			) : (
 				<>
-					{scope === "work" && pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
+					{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 					<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
 						{rows.map((row) => {
 							if (row.header) {
@@ -373,7 +372,7 @@ export function ObservationsSection({ observations, scope = "work" }: {
 									</li>
 								);
 							}
-							const { g, nested, notes } = row;
+							const { g, nested, notes, den } = row;
 							const info = observations.info[g.key];
 							// title unknown (lookup failed or pending): the chip stands alone instead of repeating the id
 							const titled = notes || g.kind === "den" || (!!info?.title && info.title !== g.key);
@@ -383,7 +382,7 @@ export function ObservationsSection({ observations, scope = "work" }: {
 								</span>
 							) : null;
 							return (
-								<li key={g.key} className={`flex flex-col rounded transition-colors hover:bg-accent${nested ? " ml-4" : ""}`}>
+								<li key={g.key} className={`flex flex-col rounded transition-colors hover:bg-accent${nested ? " ml-4" : ""}${den && denSplit ? " mb-1 border-b border-border pb-1" : ""}`} {...(den ? { "data-testid": "memory-den" } : {})}>
 									<div className="flex items-center gap-1.5 px-1.5 py-1 text-xs">
 										{!titled || (nested && !notes) ? chip : null}
 										<button

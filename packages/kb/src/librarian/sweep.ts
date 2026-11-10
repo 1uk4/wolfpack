@@ -62,6 +62,8 @@ import {
   type RelationResolver,
 } from "../schema/knowledge.js";
 import type { Engine } from "@wolfpack/engine";
+import { performance } from "node:perf_hooks";
+import type { Timings } from "./timings.js";
 import { entriesDir, type KbRoots, type DecisionSummary, type DecisionRouting } from "../shared/index.js";
 
 /** Structured sweep progress for hosts that surface it (wolfd's event stream). Metadata only. */
@@ -91,6 +93,8 @@ export interface SweepContext {
   lane?: string;
   /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
   writer?: SweepWriter;
+  /** Step timings for the tick's one log line (see timings.ts). */
+  timings?: Timings;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -396,7 +400,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // Already-seen duplicates are retired right away, before the embedder and the
   // vectors load; the first unseen one is this run's contribution. The rest
   // wait for the next tick.
-  const log = readLedger(roots);
+  const T = ctx.timings;
+  const timed = <X>(step: string, fn: () => X): X => (T ? T.time(step, fn) : fn());
+  const log = timed("ledger", () => readLedger(roots));
   const seen = seenHashes(log);
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));
@@ -415,9 +421,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     return { ...emptyResult(), remaining: unseen.length, paused: state.reason };
   }
   // Section tree, folded from the ledger / _sections.json.
-  let sections: Section[] = readSections(roots);
+  let sections: Section[] = timed("sections", () => readSections(roots));
   {
-    const big = oversizedParents(roots, sections);
+    const big = timed("oversized", () => oversizedParents(roots, sections));
     if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
   }
 
@@ -1060,8 +1066,12 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // The ledger already has this run's events; if rendering fails, the next tick
   // or a reorg re-renders, so log it and carry on to the registry and commit.
   try {
+    const tw = performance.now();
     if (touchedDomains.size > 0 && sections.length > 0) await w.writeSections(roots, sections);
+    T?.add("writeSections", performance.now() - tw);
+    const tr = performance.now();
     for (const domain of touchedDomains) await w.renderDomain(roots, domain);
+    T?.add("render", performance.now() - tr);
   } catch (err) {
     ctx.notify?.(`sweep: index/digest rendering failed (ledger is written; next tick or reorg re-renders): ${cleanError(err)}`);
   }
@@ -1069,9 +1079,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // ── PERSIST ────────────────────────────────────────────────────────────────
   try {
     if (batch.length > 0 || committed) {
+      const tc = performance.now();
       if (batch.length > 0) await w.appendLedger(roots, batch);
       await w.renderRegistry(roots, foldRegistry([...log, ...batch]));
       await w.gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+      T?.add("commit", performance.now() - tc);
     }
   } finally {
     for (const e of itemEvents) emit(e);

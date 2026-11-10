@@ -27,6 +27,7 @@ import { withBudget } from "./park.js";
 import { noteDrainProgress, flushDrain } from "./drain.js";
 import { flushWorkLinks, hasPendingWorkLinks, httpNotePoster, type NotePoster } from "./work-links.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
+import { createTimings, TICK_STEPS } from "./timings.js";
 import { acquireLease, freshLeaseIn, wolfLeaseDirs } from "./curator-lease.js";
 
 export interface SweepTickOptions {
@@ -188,8 +189,10 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   let embedder: CachedEmbedder | undefined;
   const getEmbedder = () => (embedder ??= opts.getEmbedder?.() ?? createEmbedder(roots));
   let liveEntries = 0;
+  const timings = createTimings();
   const loadEntryVectors = async () => {
-    const vectors = await buildEntryVectors(roots, foldRegistry(readLedger(roots)), getEmbedder());
+    const reg = timings.time("ledger", () => foldRegistry(readLedger(roots)));
+    const vectors = await buildEntryVectors(roots, reg, getEmbedder(), undefined, timings);
     liveEntries = vectors.length;
     return vectors;
   };
@@ -197,7 +200,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   // A hung call must never hold the tick: past the run budget plus slack, give
   // up (the KB lock still guards against overlap).
   const swept = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
-    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer })
+    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer, timings })
   );
 
   let reorged: ReorgResult | undefined;
@@ -217,12 +220,14 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   // holds far more vectors than there are entries.
   if (embedder && (reorged || embedder.shouldCompact(liveEntries))) {
     try {
-      const dropped = embedder.compact(currentEntryHashes(roots));
+      const live = embedder;
+      const dropped = timings.time("compact", () => live.compact(currentEntryHashes(roots)));
       if (dropped > 0) notify?.(`Vector cache compacted: dropped ${dropped} stale vector(s)`);
     } catch (err) {
       notify?.(`Vector cache compaction failed: ${err instanceof Error ? err.message : err}`);
     }
   }
 
+  notify?.(timings.line(TICK_STEPS));
   return { outcome: "ran", sweep: swept, reorg: reorged };
 }

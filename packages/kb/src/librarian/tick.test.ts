@@ -154,6 +154,17 @@ describe("runSweepTick", () => {
     expect(t.reorg).toBeDefined();
   });
 
+  it("logs exactly one timings line per working tick, naming every synchronous step", async () => {
+    drop("a");
+    const msgs: string[] = [];
+    await runSweepTick({ roots, postSweepReorg: false, createEngine, notify: (m) => void msgs.push(m), alert: () => {}, budgetMs: 1000 });
+    const lines = msgs.filter((m) => m.startsWith("tick timings:"));
+    expect(lines).toHaveLength(1);
+    for (const step of ["ledger", "scan", "sections", "oversized", "writeSections", "render", "compact", "commit", "loopMax"]) {
+      expect(lines[0]).toMatch(new RegExp(`${step} \\d+ms`));
+    }
+  });
+
   it("does not reorg when the item was not committed", async () => {
     drop("a");
     mode = "junk";

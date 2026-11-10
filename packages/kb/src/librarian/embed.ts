@@ -19,6 +19,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite, parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
+import { performance } from "node:perf_hooks";
+import type { Timings } from "./timings.js";
 import { InfraError } from "./backoff.js";
 import { groupOf } from "./anchors.js";
 import {
@@ -348,7 +350,8 @@ export async function buildEntryVectors(
   roots: KbRoots,
   reg: Registry,
   embedder: Embedder,
-  model: string = resolveEmbedConfig().model
+  model: string = resolveEmbedConfig().model,
+  timings?: Timings
 ): Promise<EntryVector[]> {
   // entryId → canonicalId lookup from the registry.
   const canonicalOf = new Map<string, string>();
@@ -357,7 +360,13 @@ export async function buildEntryVectors(
   }
 
   const out: EntryVector[] = [];
-  for (const e of scanEntries(roots, model)) {
+  const it = scanEntries(roots, model);
+  for (;;) {
+    const t0 = performance.now();
+    const n = it.next();
+    timings?.add("scan", performance.now() - t0);
+    if (n.done) break;
+    const e = n.value;
     // A grouped entry follows its holder's section: it takes no part in
     // similarity placement, so it is neither embedded nor vectored.
     if (e.grouped) continue;

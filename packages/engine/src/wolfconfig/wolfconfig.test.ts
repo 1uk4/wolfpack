@@ -330,7 +330,7 @@ describe("wolf.yaml models:", () => {
         fast: tier("claude-haiku-5-5", "pack", "claude-stateless"),
       },
       steps: {
-        classify: fast, consolidate: smart, distill: smart, workRecord: smart, produce: smart, contradict: fast,
+        classify: fast, consolidate: smart, distill: smart, workRecord: smart, workLog: fast, workDistill: smart, produce: smart, contradict: fast,
         classifyToSection: fast, matchSubject: fast, confirmSubject: fast, sectionSummary: fast, labelSection: fast,
       },
       warnings: [],

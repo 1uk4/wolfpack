@@ -147,20 +147,24 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     expect(r.presence()).toBe("online");
   });
 
-  it("a replaced worker goes to the 'replaced' state and stops reconnecting instead of fighting", async () => {
+  it("a replaced worker waits in the 'replaced' state and retries slowly (replacedRetryMs), not on kick() and not at the backoff cap", async () => {
     const r = await rig({ noHub: true });
-    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], baseMs: 20, capMs: 30_000 });
+    const logs: string[] = [];
+    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], baseMs: 20, capMs: 30, replacedRetryMs: 1500, rand: () => 0.5, log: (m) => logs.push(m) });
     cleanup.push(() => link.stop());
     link.start();
     await r.waitPresence("online");
     const b = await r.rawLink(r.mintWorker().token);
     b.hello();
-    await until(() => link.status().state === "replaced", 5000, "replaced state");
-    expect(link.status().nextRetryInMs).toBeNull(); // no reconnect is scheduled
-    link.kick(); // a wake must not start the fight again
+    await until(() => link.status().state === "replaced" && link.status().nextRetryInMs !== null, 5000, "replaced state");
+    expect(link.status().nextRetryInMs!).toBeGreaterThan(500); // the slow interval, not the 30ms cap
+    expect(logs.some((l) => /replaced.*next attempt/.test(l))).toBe(true);
+    link.kick(); // a wake must not start the fight early
     expect(link.status().state).toBe("replaced");
-    expect(r.presence()).toBe("online");
-  });
+    expect(link.status().nextRetryInMs!).toBeGreaterThan(500);
+    expect(link.status().state).toBe("replaced"); // kick() did not reconnect
+    await until(() => link.status().state === "online", 6000, "the slow retry takes the link back");
+  }, 15_000);
 
   it("revoking the token drops the link; the worker stays 'unauthorized' with the re-pair detail across retries", async () => {
     const r = await rig();

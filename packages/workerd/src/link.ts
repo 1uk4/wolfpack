@@ -4,7 +4,7 @@
  *
  * Uses the `ws` client (not the global WebSocket) because only `ws` exposes the HTTP status of a refused upgrade (401/403).
  * "unauthorized", "incompatible" and "replaced" are sticky: the state and detail survive retries (unauthorized retries at the cap,
- * incompatible every 15 min, replaced not at all: restart workerd) until a welcome arrives.
+ * incompatible every 15 min, replaced every 30 min +-20%) until a welcome arrives.
  */
 import WebSocket from "ws";
 import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWelcome, type LinkWolf } from "@wolfpack/protocol";
@@ -66,12 +66,20 @@ export interface HubLinkOptions {
   maxItemRetries?: number;
   /** Reconnect interval while the hub says "incompatible", ms. Default 15 min. */
   incompatibleRetryMs?: number;
+  /** Reconnect interval (+-20% jitter) while another workerd holds this host id ("replaced"), ms. Default 30 min. */
+  replacedRetryMs?: number;
+  /** A parked item is not retried again sooner than this after the welcome that unparks it, ms. Default 60 s. */
+  parkedRetryMs?: number;
 }
 
 /** Automatic retries of an item the hub answers `internal` (or an unknown code) before it is parked in the outbox. */
 export const MAX_ITEM_RETRIES = 10;
 /** Reconnect interval while the hub is protocol-incompatible: retrying every minute cannot fix it. */
 export const INCOMPATIBLE_RETRY_MS = 15 * 60_000;
+/** Reconnect interval while another workerd holds this host id: fighting for the link every minute helps nobody, but a short-lived replacer must not strand us. */
+export const REPLACED_RETRY_MS = 30 * 60_000;
+/** Floor between welcomes and the one extra try of a parked item, so a hub that reconnects every few seconds cannot make a poison item retry on every connect. */
+export const PARKED_RETRY_MS = 60_000;
 
 export interface LinkStatus {
   state: LinkState;
@@ -79,7 +87,8 @@ export interface LinkStatus {
   detail?: string;
   attempts: number;
   nextRetryInMs: number | null;
-  /** Outbox items given up on for automatic retry (still queued on disk); retried once after the next reconnect or a restart. */
+  /** Outbox items given up on for automatic retry (still queued on disk). Memory-only: the count resets to 0 on restart, and every parked item then gets one more try.
+   *  While running, each is retried once per welcome, no sooner than parkedRetryMs (60 s) after it. */
   parked: number;
 }
 
@@ -130,7 +139,7 @@ export class HubLink {
     this.connect();
   }
 
-  /** Reconnect now (wake / network change): says bye on a live socket, skips any backoff wait. A "replaced" link stays put. */
+  /** Reconnect now (wake / network change): says bye on a live socket, skips any backoff wait. A "replaced" link stays put: it only retries on its slow replacedRetryMs timer. */
   kick(): void {
     if (this.stopped || this.st === "replaced") return;
     if (this.timer) clearTimeout(this.timer);
@@ -366,7 +375,7 @@ export class HubLink {
         const t = this.retry.get(id);
         if (t) {
           t.tries = (this.o.maxItemRetries ?? MAX_ITEM_RETRIES) - 1; // one more attempt; a further failure parks it again
-          t.notBefore = 0;
+          t.notBefore = Date.now() + (this.o.parkedRetryMs ?? PARKED_RETRY_MS);
         }
       }
       this.parked.clear();
@@ -457,10 +466,17 @@ export class HubLink {
     if (this.timer) clearTimeout(this.timer);
     this.failures += 1;
     if (this.st === "replaced") {
-      // Another workerd with this host id took over. Reconnecting would only make the two fight for the link, so stop until restart.
-      this.retryAt = null;
-      this.timer = null;
-      this.log("replaced by another connection from this host id; not reconnecting (restart workerd to take the link back)");
+      // Another workerd with this host id took over. Retry slowly (+-20%): with two live workerds the link changes hands at most about twice an hour,
+      // and a short-lived replacer (dev run, sleeping laptop) does not strand this one until a restart. kick() does not bypass this.
+      const delay = Math.round((this.o.replacedRetryMs ?? REPLACED_RETRY_MS) * (0.8 + 0.4 * this.rand()));
+      this.retryAt = Date.now() + delay;
+      this.log(`replaced by another connection from this host id; next attempt at ${new Date(this.retryAt).toISOString()} (in ${Math.round(delay / 60_000)} min)`);
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.retryAt = null;
+        this.connect();
+      }, delay);
+      this.timer.unref();
       return;
     }
     const cap = this.o.capMs ?? 60_000;

@@ -23,18 +23,41 @@ describe("thread API: answerCard", () => {
 describe("thread API: paged ask routes", () => {
 	const paged = (over: object) => createThreadApi(() => Object.assign(new MockConsoleClient({ delayMs: 0 }), over));
 
-	it("answerCardPage rejects a bad page number and a missing answers object", async () => {
-		const api = paged({ answerCardPage: async () => ({ ok: true }) });
-		assert.equal((await api.answerCardPage(ref, "c1", "-1", post({ answers: {} }))).status, 400);
-		assert.equal((await api.answerCardPage(ref, "c1", "x", post({ answers: {} }))).status, 400);
-		assert.equal((await api.answerCardPage(ref, "c1", "0", post({ answers: [] }))).status, 400);
-		assert.equal((await api.answerCardPage(ref, "c1", "0", post({}))).status, 400);
-		assert.equal((await api.answerCardPage(ref, "c1", "0", post({ answers: {} }))).status, 200);
+	it("saveCardPage rejects a bad page number or answers, and passes goto and stepsKey through", async () => {
+		const seen: unknown[] = [];
+		const api = paged({ saveCardPage: async (...a: unknown[]) => void seen.push(a.slice(1)) });
+		const put = (body: unknown) => new Request("http://t/draft", { method: "PUT", body: JSON.stringify(body) });
+		assert.equal((await api.saveCardPage(ref, "c1", "-1", put({ answers: {} }))).status, 400);
+		assert.equal((await api.saveCardPage(ref, "c1", "x", put({ answers: {} }))).status, 400);
+		assert.equal((await api.saveCardPage(ref, "c1", "0", put({ answers: [] }))).status, 400);
+		assert.equal((await api.saveCardPage(ref, "c1", "0", put({ answers: {}, goto: "x" }))).status, 400);
+		assert.equal((await api.saveCardPage(ref, "c1", "1", put({ answers: { q: { value: "a" } }, goto: 0, stepsKey: "q" }))).status, 200);
+		assert.deepEqual(seen, [["c1", 1, { q: { value: "a" } }, { goto: 0, stepsKey: "q" }]]);
+	});
+
+	it("submitCard passes answers, note and stepsKey through, and refuses a malformed note", async () => {
+		const seen: unknown[] = [];
+		const api = paged({ submitCard: async (_t: string, c: string, b: unknown) => (seen.push([c, b]), { done: true }) });
+		assert.equal((await api.submitCard(ref, "c1", post({ answers: { q: { value: "a" } }, note: { text: "hi", attachments: ["a1"] }, stepsKey: "q" }))).status, 200);
+		assert.equal((await api.submitCard(ref, "c1", post({ note: { text: 3 } }))).status, 400);
+		assert.equal((await api.submitCard(ref, "c1", post({ answers: [] }))).status, 400);
+		assert.deepEqual(seen, [["c1", { answers: { q: { value: "a" } }, note: { text: "hi", attachments: ["a1"] }, stepsKey: "q" }]]);
+	});
+
+	it("putCardNote validates the note; an empty note is accepted (it clears)", async () => {
+		const seen: unknown[] = [];
+		const api = paged({ putCardNote: async (_t: string, _c: string, n: unknown) => void seen.push(n) });
+		const put = (body: unknown) => new Request("http://t/note", { method: "PUT", body: JSON.stringify(body) });
+		assert.equal((await api.putCardNote(ref, "c1", put({ text: "x".repeat(4001) }))).status, 400);
+		assert.equal((await api.putCardNote(ref, "c1", put({ attachments: "a" }))).status, 400);
+		assert.equal((await api.putCardNote(ref, "c1", put({}))).status, 200);
+		assert.equal((await api.putCardNote(ref, "c1", put({ text: "n", attachments: ["a1"] }))).status, 200);
+		assert.deepEqual(seen, [{}, { text: "n", attachments: ["a1"] }]);
 	});
 
 	it("a conflict from the wolf is a 409 with code conflict", async () => {
-		const api = paged({ answerCardPage: async () => { throw Object.assign(new Error("page moved"), { name: "ProtocolError", code: "conflict" }); } });
-		const res = await api.answerCardPage(ref, "c1", "0", post({ answers: {} }));
+		const api = paged({ submitCard: async () => { throw Object.assign(new Error("page moved"), { name: "ProtocolError", code: "conflict" }); } });
+		const res = await api.submitCard(ref, "c1", post({}));
 		assert.equal(res.status, 409);
 		assert.equal(((await res.json()) as { code: string }).code, "conflict");
 	});

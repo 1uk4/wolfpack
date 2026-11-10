@@ -62,6 +62,16 @@ function json(body: unknown, status = 200): Response {
 	return Response.json(body, { status });
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A card note off the wire: `{text?, attachments?}`; null when malformed. */
+function parseNote(v: unknown): { text?: string; attachments?: string[] } | null {
+	if (!isRecord(v)) return null;
+	if (v.text !== undefined && typeof v.text !== "string") return null;
+	if (v.attachments !== undefined && (!Array.isArray(v.attachments) || v.attachments.some((a) => typeof a !== "string"))) return null;
+	return { ...(v.text !== undefined ? { text: v.text as string } : {}), ...(v.attachments !== undefined ? { attachments: v.attachments as string[] } : {}) };
+}
+
 // Errors are matched by NAME, not instanceof: Next bundles @wolfpack/client
 // per route/page, so the class the client threw and the class imported here
 // can be different copies of the same module.
@@ -275,16 +285,52 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
-		/** Submit one page of a paged `ask` card: `POST /v1/threads/:id/cards/:callId/pages/:page/answer`. 409 `conflict` = the page moved on. */
-		async answerCardPage(ref: ThreadRef, callId: string, page: string, req: Request): Promise<Response> {
+		/** Save one page of a paged `ask` as a draft and move the cursor: `PUT /v1/threads/:id/cards/:callId/pages/:page/draft`. 409 `conflict` = the questions changed. */
+		async saveCardPage(ref: ThreadRef, callId: string, page: string, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { answers?: unknown } | null;
+				const body = (await req.json().catch(() => null)) as { answers?: unknown; goto?: unknown; stepsKey?: unknown } | null;
 				const n = Number(page);
 				if (!Number.isInteger(n) || n < 0) return json({ error: "page must be a non-negative integer" }, 400);
-				if (!body || typeof body.answers !== "object" || body.answers === null || Array.isArray(body.answers)) return json({ error: "answers is required" }, 400);
+				if (!body || !isRecord(body.answers)) return json({ error: "answers is required" }, 400);
+				if (body.goto !== undefined && (typeof body.goto !== "number" || !Number.isInteger(body.goto) || body.goto < 0)) return json({ error: "goto must be a non-negative integer" }, 400);
+				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
 				const client = source();
-				if (!client.answerCardPage) return json({ error: "this client has no paged cards" }, 501);
-				return json(await client.answerCardPage(await resolve(client, ref), callId, n, body.answers as CardAnswers));
+				if (!client.saveCardPage) return json({ error: "this client has no paged cards" }, 501);
+				await client.saveCardPage(await resolve(client, ref), callId, n, body.answers as CardAnswers, { ...(body.goto !== undefined ? { goto: body.goto as number } : {}), ...(body.stepsKey !== undefined ? { stepsKey: body.stepsKey as string } : {}) });
+				return json({ accepted: true });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Submit a paged `ask` once (current page's answers + the note): `POST /v1/threads/:id/cards/:callId/submit`. */
+		async submitCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { answers?: unknown; note?: unknown; stepsKey?: unknown } | null;
+				if (!body) return json({ error: "a JSON body is required" }, 400);
+				if (body.answers !== undefined && !isRecord(body.answers)) return json({ error: "answers must be an object" }, 400);
+				const note = body.note === undefined ? undefined : parseNote(body.note);
+				if (note === null) return json({ error: "note must be {text?, attachments?}" }, 400);
+				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
+				const client = source();
+				if (!client.submitCard) return json({ error: "this client has no paged cards" }, 501);
+				return json(await client.submitCard(await resolve(client, ref), callId, { ...(body.answers !== undefined ? { answers: body.answers as CardAnswers } : {}), ...(note ? { note } : {}), ...(body.stepsKey !== undefined ? { stepsKey: body.stepsKey as string } : {}) }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Store the note typed beside an open questionnaire (an empty note clears it): `PUT /v1/threads/:id/cards/:callId/note`. */
+		async putCardNote(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as unknown;
+				const note = parseNote(body);
+				if (note === null) return json({ error: "note must be {text?, attachments?}" }, 400);
+				if ((note.text ?? "").length > 4000) return json({ error: "note text is limited to 4000 characters" }, 400);
+				const client = source();
+				if (!client.putCardNote) return json({ error: "this client has no paged cards" }, 501);
+				await client.putCardNote(await resolve(client, ref), callId, note);
+				return json({ accepted: true });
 			} catch (err) {
 				return failure(err);
 			}

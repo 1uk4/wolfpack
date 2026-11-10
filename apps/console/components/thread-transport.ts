@@ -27,9 +27,19 @@ export function cardAnswerUrl(wolf: string, slug: string, callId: string): strin
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/answer`;
 }
 
-/** Where one page of a paged `ask` card is POSTed. */
-export function cardPageAnswerUrl(wolf: string, slug: string, callId: string, page: number): string {
-	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/pages/${page}/answer`;
+/** Where one page of a paged `ask` card is saved (PUT) as a draft. */
+export function cardPageDraftUrl(wolf: string, slug: string, callId: string, page: number): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/pages/${page}/draft`;
+}
+
+/** Where a paged `ask` card is submitted (POST). */
+export function cardSubmitUrl(wolf: string, slug: string, callId: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/submit`;
+}
+
+/** Where the note beside a paged `ask` card is stored (PUT). */
+export function cardNoteUrl(wolf: string, slug: string, callId: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/note`;
 }
 
 /** Where typed text bound to one question ("answering Qn") is POSTed. */

@@ -4,14 +4,32 @@
  * entries (subagent reports, status, notifications) are not read; the
  * orchestrator relays what matters in its own words.
  */
+const SUBAGENT_TOOLS = new Set(["subagent", "subagent_message", "subagent_merge", "subagent_stop", "subagents_list"]);
+// A delivered subagent report keeps no customType/details in the durable entries (captured from wolf 1uk4's session
+// store: it is a plain `user` message), so only its text identifies it: the leading line, or the trailing delivery tag.
+const SUBAGENT_LEAD = /^Sub-agent "[^"\n]+" (?:completed|failed|stopped|error|merge:)/;
+const SUBAGENT_TRAILER = /\n\[delivery sub-[0-9a-f]+\.[0-9a-f]+\]\s*$/;
+
+function isSubagentReport(msg: any): boolean {
+  if (msg.role !== "user") return false;
+  const text = typeof msg.content === "string"
+    ? msg.content
+    : Array.isArray(msg.content) ? msg.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n") : "";
+  return SUBAGENT_LEAD.test(text) || SUBAGENT_TRAILER.test(text);
+}
+
 export function serializeBranchEntries(
   entries: any[],
-  opts: { tools?: boolean } = {},
+  opts: { tools?: boolean; excludeSubagentTraffic?: boolean } = {},
 ): Array<{ id: string; text: string; tokens: number }> {
   // `tools` (the durable observer only): also read pi-ai's `toolCall` blocks and `toolResult` messages.
   // Pi's own path leaves it off and its output is unchanged.
   const withTools = opts.tools === true;
   const chunks: Array<{ id: string; text: string; tokens: number }> = [];
+  // `excludeSubagentTraffic` (memory.subagentMemory on): subagents record their own observations, so the
+  // orchestrator skips delivered reports and the results of its subagent tool calls. Its own calls stay.
+  const skipSub = opts.excludeSubagentTraffic === true;
+  const subCallIds = new Set<string>();
 
   for (const entry of entries) {
     // Pi session entries: { type: "message", message: { role, content, ... } }
@@ -23,6 +41,16 @@ export function serializeBranchEntries(
 
     const role: string = msg.role ?? "unknown";
     let text = "";
+
+    if (skipSub) {
+      if (Array.isArray(msg.content)) {
+        for (const b of msg.content) {
+          if ((b?.type === "toolCall" || b?.type === "tool_use") && SUBAGENT_TOOLS.has(b.name) && b.id) subCallIds.add(b.id);
+        }
+      }
+      if (isSubagentReport(msg)) continue;
+      if ((role === "toolResult" || role === "tool") && (SUBAGENT_TOOLS.has(msg.toolName) || subCallIds.has(msg.toolCallId ?? msg.tool_use_id))) continue;
+    }
 
     if (role === "user" || role === "assistant") {
       if (typeof msg.content === "string") {

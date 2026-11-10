@@ -156,6 +156,9 @@ function renderBar(pct: number, width: number): string {
 
 // ── PiRuntime — implements AgentRuntime ─────────────────────────────────────
 
+/** `memory.subagentMemory: on` in wolf.yaml (default off): the observer skips subagent traffic. Set at load. */
+let excludeSubagentTraffic = false;
+
 class PiRuntime implements AgentRuntime {
   readonly name = "pi";
   private pi: ExtensionAPI;
@@ -223,7 +226,7 @@ class PiRuntime implements AgentRuntime {
     const newEntries = branch.slice(startIdx);
     if (newEntries.length === 0) return [];
 
-    const serialized = serializeBranchEntries(newEntries);
+    const serialized = serializeBranchEntries(newEntries, { excludeSubagentTraffic });
     if (serialized.length === 0) return [];
 
     const CHUNK_TOKEN_LIMIT = 5000;
@@ -1596,6 +1599,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     const wolfYamlPath = path.join(wolfDen, "..", "wolf.yaml");
     if (fs.existsSync(wolfYamlPath)) {
       const raw = fs.readFileSync(wolfYamlPath, "utf-8");
+      excludeSubagentTraffic = /^\s+subagentMemory:\s*["']?on\b/m.test(raw);
       const match = raw.match(/domains:\s*\n((?:\s+-\s+\S+\n?)*)/)
       if (match) {
         wolfDomains = match[1].match(/- (\S+)/g)?.map(m => m.slice(2)) ?? [];

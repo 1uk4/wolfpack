@@ -66,6 +66,8 @@ export interface MemoryConfig {
   };
   /** `memory.defaultDomain` in wolf.yaml: domain for observations the observer leaves untagged (default: first of `domains`). */
   defaultDomain?: string;
+  /** `memory.subagentMemory: "on"` in wolf.yaml: subagents record their own observations, so the orchestrator's observer skips subagent traffic (default "off"). */
+  subagentMemory?: "on" | "off";
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;
 }
@@ -231,6 +233,7 @@ export function newObserverChunks(
   current: AssistantMessage,
   watermark: Watermark,
   settled: boolean,
+  excludeSubagentTraffic = false,
 ): { chunks: Array<{ id: string; text: string; tokenCount: number }>; next: Watermark } | undefined {
   let rest = committed;
   if (watermark.tail && watermark.tailAfter !== undefined) {
@@ -244,7 +247,7 @@ export function newObserverChunks(
     const message = withoutCrawlChatter(m.message);
     return message ? [{ type: "message", id: String(m.entryId), message }] : [];
   });
-  const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true }));
+  const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true, excludeSubagentTraffic }));
 
   const fp = fingerprint(current.content);
   // Any unobserved assistant entry may be the reported response: when the observer lags (a tool round runs on while
@@ -471,7 +474,7 @@ export default function createMemoryExtension(
     for (let attempt = 0; !planned; attempt++) {
       if (attempt === 0) await new Promise((r) => setImmediate(r));
       const committed = await reads.messagesSince(watermark.lastEntryId);
-      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length);
+      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length, config.subagentMemory === "on");
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
     // Planning may have begun (or begun and ended) while we waited for the response to commit. Whatever is pending

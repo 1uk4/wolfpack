@@ -36,6 +36,8 @@ import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
+import { durableSubagent, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
+import { WorkClient } from "./work-client.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
 import { DEFAULT_CONSOLIDATION_INTERVAL_MS, parseConsolidationInterval, effectiveConsolidationInterval, assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
@@ -443,13 +445,22 @@ export default function createMemoryExtension(
   let warnedNoReads = false;
   let consolidating: Promise<void> | null = null;
   const mem = memoryEmitter(wolfDen, wolfName, defaultDomain);
+  // Subagent memory: responses seen since a subagent conversation last observed, and the cached task → feature lookup.
+  const subTurns = new Map<number, number>();
+  const featureOf = featureResolver(() => (context.env
+    ? new WorkClient(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, undefined, wolfName)
+    : new WorkClient(undefined, undefined, undefined, undefined, wolfName)));
+  const subTag = async (sub: SubagentTag) => {
+    const featureId = await featureOf(sub.taskId);
+    return { taskId: sub.taskId, ...(featureId ? { featureId } : {}) };
+  };
 
   /**
    * Observe what a conversation said since its watermark. Any conversation that is not task-owned captures (root or
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean } = {}): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean; final?: boolean } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -459,7 +470,28 @@ export default function createMemoryExtension(
       return;
     }
     const cls = await reads.classify();
-    if (!cls || cls.kind === "task") return;
+    if (!cls) return;
+    // Task-owned conversations (subagents) capture nothing, unless memory.subagentMemory is on and the child is an
+    // observing agent with a task: then it runs the observer only, tagged with that task (never binds, never consolidates).
+    let sub: SubagentTag | null = null;
+    if (cls.kind === "task") {
+      if (config.subagentMemory !== "on") return;
+      sub = durableSubagent(ctx.wolfDen, ctx.conversationId);
+      if (!sub) return;
+    }
+    if (sub && FINAL_ONLY_AGENTS.has(sub.agent)) {
+      // Final-report-only: one observe call on the last assistant message, when the run ends.
+      if (!opts.final) return;
+      const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+      if (!text) return;
+      const result = await observe({ engine: getEngine(), chunkText: `[assistant]\n${text}`, mode: "conversation", domainContext: domainContext || undefined });
+      if (result.observations.length > 0) {
+        const bound = await subTag(sub);
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true);
+        mem.observed(result.observations, bound, ctx.conversationId);
+      }
+      return;
+    }
     // A crawl interview/plan is in progress here: reading source files must not reach the den (pi's crawlPlanMode).
     // `opts.planning` is the state when the hook fired: runs are queued and may execute after planning has ended.
     const mode = crawlMode.status(ctx.wolfDen, ctx.conversationId); // one stat per response when nothing is planning
@@ -481,14 +513,24 @@ export default function createMemoryExtension(
     for (let attempt = 0; !planned; attempt++) {
       if (attempt === 0) await new Promise((r) => setImmediate(r));
       const committed = await reads.messagesSince(watermark.lastEntryId);
-      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length, config.subagentMemory === "on");
+      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length, !sub && config.subagentMemory === "on");
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
     // Planning may have begun (or begun and ended) while we waited for the response to commit. Whatever is pending
     // (planning, or its re-seed) means the chunks may hold planning turns; the re-seed happens on the next run.
     if (mode !== undefined || crawlMode.pending(ctx.wolfDen, ctx.conversationId)) return;
     const { chunks, next } = planned;
-    if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
+    const newChars = chunks.reduce((n, c) => n + c.text.length, 0);
+    if (!opts.flush && newChars < minTextLength) return; // keep accumulating
+    if (sub && !opts.flush) {
+      // A subagent observes about every 3 responses or ~1,500 new tokens, and once more when its run ends.
+      const turns = (subTurns.get(ctx.conversationId) ?? 0) + 1;
+      if (!opts.final && turns < SUBAGENT_OBSERVE_EVERY_TURNS && newChars < SUBAGENT_OBSERVE_TOKENS * 4) {
+        subTurns.set(ctx.conversationId, turns);
+        return;
+      }
+    }
+    if (sub) subTurns.delete(ctx.conversationId);
 
     const eng = getEngine();
     let at = watermark.lastEntryId;
@@ -496,7 +538,7 @@ export default function createMemoryExtension(
       const chunk = chunks[i];
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined });
       if (result.observations.length > 0) {
-        const bound = await readBoundTask(ctx); // re-read every chunk, never cached
+        const bound = sub ? await subTag(sub) : await readBoundTask(ctx); // re-read every chunk, never cached
         await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true);
         mem.observed(result.observations, bound, ctx.conversationId);
       }
@@ -506,6 +548,7 @@ export default function createMemoryExtension(
       await writeWatermark(ctx.wolfDen, ctx.conversationId, last ? next : { lastEntryId: at });
     }
 
+    if (sub) return; // a subagent never consolidates or promotes
     startTimer(ctx.conversation as Parameters<typeof startTimer>[0]);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
   }
@@ -1221,7 +1264,7 @@ export default function createMemoryExtension(
           console.error("[memory] crawl planning check failed:", e instanceof Error ? e.message : e);
         }
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
-        const run = prev.then(() => observeConversation(message, ctx, { planning })).catch((err) => {
+        const run = prev.then(() => observeConversation(message, ctx, { planning, final: !message.content.some((b) => b.type === "toolCall") })).catch((err) => {
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

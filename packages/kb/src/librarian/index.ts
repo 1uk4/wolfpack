@@ -29,6 +29,7 @@ export { createLibrarianEngine } from "./engine.js";
 export {
   readLedger,
   appendLedger,
+  invalidateLedgerCache,
   seenHashes,
   foldRegistry,
 } from "./ledger.js";

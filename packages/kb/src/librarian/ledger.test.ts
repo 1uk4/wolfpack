@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, appendFileSync, writeFileSync, renameSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, appendFileSync, writeFileSync, renameSync, readFileSync, mkdirSync, truncateSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { appendLedger, readLedger, readLedgerAsync } from "./ledger.js";
+import { appendLedger, readLedger, readLedgerAsync, invalidateLedgerCache } from "./ledger.js";
 import { ev, ledgerFile, type KbEvent, type KbRoots } from "../shared/index.js";
 
 describe("readLedgerAsync", () => {
@@ -51,11 +51,10 @@ describe("readLedgerAsync", () => {
     expect(await readLedgerAsync(roots)).toEqual([]);
   });
 
-  it("does not leak caller mutation into the next read", async () => {
+  it("refuses caller mutation of the shared result, so it cannot leak into the next read", async () => {
     appendLedger(roots, batch(0, 3));
     const first = await readLedgerAsync(roots);
-    first.pop();
-    first.length = 0;
+    expect(() => first.pop()).toThrow();
     expect(await readLedgerAsync(roots)).toHaveLength(3);
     const again = await readLedgerAsync(roots);
     expect(() => { (again[0] as { t: string }).t = "x"; }).toThrow();
@@ -115,6 +114,22 @@ describe("readLedgerAsync", () => {
     const after = await readLedgerAsync(roots);
     expect(after).toEqual(readLedger(roots));
     expect(after).toHaveLength(2);
+  });
+
+  it("re-reads after an in-place truncate and re-append that leaves the file longer than the cached offset, once invalidated as the rollback does", async () => {
+    const line = (id: string) => JSON.stringify(ev.entryWritten(id, "kb-wp-T1", "create")) + "\n";
+    const sameTail = line("kb-wp-Same001");
+    mkdirSync(dirname(ledgerFile(roots)), { recursive: true });
+    writeFileSync(ledgerFile(roots), line("kb-wp-Old0001") + sameTail);
+    expect(await readLedgerAsync(roots)).toHaveLength(2);
+    // rollback cuts the same inode back; later appends differ in the first line but end with the same bytes
+    truncateSync(ledgerFile(roots), 0);
+    writeFileSync(ledgerFile(roots), line("kb-wp-New0001") + sameTail + line("kb-wp-More001"));
+    invalidateLedgerCache(roots);
+    const got = await readLedgerAsync(roots);
+    expect(got).toEqual(readLedger(roots));
+    expect(got).toHaveLength(3);
+    expect(JSON.stringify(got[0])).toContain("kb-wp-New0001");
   });
 });
 

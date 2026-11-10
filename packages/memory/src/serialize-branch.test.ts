@@ -55,6 +55,11 @@ describe("excludeSubagentTraffic", () => {
     const out = serializeBranchEntries([msg("u", "user", "please go on"), result, merge], opts);
     expect(out.map((o) => o.id)).toEqual(["u"]);
   });
+  it("drops a failed and an error subagent delivery too", () => {
+    const failed = msg("f", "user", 'Sub-agent "x" failed (3s).\n\nboom\n\n[delivery sub-a858a5ef.228c6390]');
+    const errored = msg("e", "user", 'Sub-agent "y" error: model unavailable\n\n[delivery sub-0e5b1c22.9a3f4d10]');
+    expect(serializeBranchEntries([msg("u", "user", "go on"), failed, errored], opts).map((o) => o.id)).toEqual(["u"]);
+  });
   it("drops toolResults of subagent tools (matched by call id), keeps the brief toolCall and other tool results", () => {
     const out = serializeBranchEntries([brief, subResult, bashResult], opts);
     expect(out.map((o) => o.id)).toEqual(["b", "k"]);

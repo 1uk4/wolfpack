@@ -26,8 +26,8 @@ describe("distillTaskToFeature", () => {
     const { store, run } = setup();
     expect(await run()).toEqual({ ok: true, status: "distilled", lines: 2 });
     const body = (await store.get("f"))!.body;
-    expect(body).toContain("### Decisions\n\n- 10:30 [hal\u00b7Decisions] Use a TTL map <!-- src:distilled:t,distilled:t:1 -->");
-    expect(body).toContain("### Findings\n\n- 10:30 [hal\u00b7Findings] Eviction ran on every read <!-- src:distilled:t,distilled:t:2 -->");
+    expect(body).toContain("### Decisions\n\n- 10:30 [hal\u00b7decision] Use a TTL map <!-- src:distilled:t,distilled:t:1 -->");
+    expect(body).toContain("### Findings\n\n- 10:30 [hal\u00b7finding] Eviction ran on every read <!-- src:distilled:t,distilled:t:2 -->");
     expect(body).toContain("### Changes\n\n- 09:00 [x\u00b7Changes] earlier");
   });
 

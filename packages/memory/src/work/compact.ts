@@ -56,7 +56,7 @@ function parse(record: string): Line[] {
     const ids = c ? c[1]!.split(/[,\s]+/).filter(Boolean) : [];
     const body = c ? raw.slice(0, c.index) : raw;
     const m = LINE.exec(body);
-    out.push(m ? { group, time: m[1]!, src: m[2]!, kind: m[3]!, text: m[4]!.trim(), ids } : { group, time: "00:00", src: "", kind: group || "change", text: body.slice(2).trim(), ids });
+    out.push(m ? { group, time: m[1]!, src: m[2]!, kind: m[3]!, text: m[4]!.trim(), ids } : { group, time: "00:00", src: "", kind: GROUP_KIND[group] ?? "change", text: body.slice(2).trim(), ids });
   }
   return out;
 }
@@ -79,7 +79,7 @@ function applyModel(lines: Line[], answer: unknown): Line[] | null {
     const cited = uniq(p.from).flatMap((f) => { const l = lines[Number(f.slice(1)) - 1]; return l ? [l] : []; });
     if (!cited.length) continue;
     const first = cited[0]!;
-    out.push({ group: first.group, time: first.time, src: first.src, kind: first.group ? first.group : p.kind, text: noComments(p.text), ids: uniq(cited.flatMap((l) => l.ids)), cited });
+    out.push({ group: first.group, time: first.time, src: first.src, kind: p.kind, text: noComments(p.text), ids: uniq(cited.flatMap((l) => l.ids)), cited });
   }
   if (!out.length) return null;
   const citedSet = new Set(out.flatMap((o) => o.cited));
@@ -91,7 +91,7 @@ function applyModel(lines: Line[], answer: unknown): Line[] | null {
     if (!markers.length) continue;
     const host = result.find((r) => r.group === l.group);
     if (host) host.ids = uniq([...host.ids, ...markers]);
-    else result.push({ group: l.group, time: l.time, src: l.src, kind: l.group || "change", text: COMPACTED, ids: markers });
+    else result.push({ group: l.group, time: l.time, src: l.src, kind: "change", text: COMPACTED, ids: markers });
   }
   return result;
 }
@@ -108,7 +108,7 @@ function trim(lines: Line[], cap: number): Line[] {
     if (!markers.length) return kept;
     const g = feature ? "Changes" : "";
     const at = kept.findIndex((l) => l.group === g);
-    const mark: Line = { group: g, time: "00:00", src: "", kind: feature ? g : "change", text: COMPACTED, ids: markers };
+    const mark: Line = { group: g, time: "00:00", src: "", kind: "change", text: COMPACTED, ids: markers };
     const first = [...dropped][0]!;
     mark.time = first.time;
     mark.src = first.src;

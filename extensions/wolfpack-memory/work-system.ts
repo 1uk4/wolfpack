@@ -66,6 +66,7 @@ import {
   syncFeatureStage,
   recordFeatureId,
   renderFeatureView,
+  renderFeatureRecord,
   bindingLabel,
   readyBoundContext,
   readyBoundReply,
@@ -315,6 +316,8 @@ export interface WorkSystemConfig {
   distillOnShip?: (taskId: string) => Promise<unknown>;
   /** Final feature pass, set only when wolf.yaml has `memory.workLog: append`. Called when a feature ships and at graduation; never blocks. */
   finalPassOnShip?: (featureId: string) => Promise<unknown>;
+  /** `memory.workLog: append`: the bound-task context shows the feature view and the newest Record lines. Otherwise it is the fold-mode prompt, unchanged. */
+  workLogAppend?: boolean;
   /** Callback when task completes (for summarization) */
   onTaskComplete?: (taskId: string, item: WorkItem) => Promise<void>;
   /** Append mode (`memory.workLog: append`): write the pending work observations to their logs now. Called on ship and unbind. */
@@ -671,7 +674,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     let docBody = "";
     try {
       const { body } = await client.getWithBody(activeTask.workId);
-      docBody = renderWorkingDocument(body ?? "");
+      docBody = renderWorkingDocument(body ?? "", undefined, { tail: !!config.workLogAppend });
     } catch {
       // No document this turn; the rest of the context still goes in.
     }
@@ -682,10 +685,16 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       const boundId = activeTask.workId;
       try {
         const f = await client.getWithBody(activeTask.featureId);
-        const kids = await client.query({ partOf: activeTask.featureId }) ?? [];
-        const open = kids.filter((k: any) => k.id !== boundId && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
-        const tasks = await Promise.all(open.map(async (k: any) => ({ id: k.id, title: k.title, stage: k.stage, body: (await client.getWithBody(k.id).catch(() => null))?.body ?? "" })));
-        featureRecord = renderFeatureView({ title: f.item.title, body: f.body ?? "" }, [...tasks, ...kids.filter((k: any) => !open.includes(k) && k.id !== boundId).map((k: any) => ({ id: k.id, title: k.title, stage: k.stage }))], boundId);
+        featureRecord = renderFeatureRecord(f.item.title, f.body ?? "");
+        if (config.workLogAppend) {
+          // Append mode: add the open siblings' live tails. Their own try, so a failure still leaves the feature Record alone.
+          try {
+            const kids = await client.query({ domain: activeItem.domain as string, partOf: activeTask.featureId }) ?? [];
+            const open = kids.filter((k: any) => k.id !== boundId && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
+            const tasks = await Promise.all(open.map(async (k: any) => ({ id: k.id, title: k.title, stage: k.stage, body: (await client.getWithBody(k.id).catch(() => null))?.body ?? "" })));
+            featureRecord = renderFeatureView({ title: f.item.title, body: f.body ?? "" }, [...tasks, ...kids.filter((k: any) => !open.includes(k) && k.id !== boundId).map((k: any) => ({ id: k.id, title: k.title, stage: k.stage }))], boundId);
+          } catch { /* the feature Record alone */ }
+        }
       } catch { /* the task's own context still goes in */ }
     }
 

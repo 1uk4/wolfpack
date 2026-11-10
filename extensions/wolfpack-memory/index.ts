@@ -1707,6 +1707,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   workHandle = initWorkSystem(pi, {
     ...workConfig,
+    workLogAppend,
     // `memory.workLog: append` in wolf.yaml gates the ship distill (read like subagentMemory above; needs the engine and the Work API).
     ...(workLogAppend && workRecordStore.configured
       ? { distillOnShip: async (taskId: string) => (engine ? distillTaskToFeature({ store: workRecordStore, engine, taskId, src: wolfName }) : { ok: false, reason: "no engine" }) }

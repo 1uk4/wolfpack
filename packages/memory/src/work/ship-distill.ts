@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { WORK_DISTILL_SYSTEM, buildWorkDistillPrompt, parseWorkDistillOutput, type Engine } from "@wolfpack/engine";
-import { extractRecord, RECORD_HEADING, type WorkRecordStore, type RecordAppendLine } from "../work-record.js";
+import { extractRecord, RECORD_HEADING, type WorkRecordStore, type RecordAppendLine, type RecordLineKind } from "../work-record.js";
 import { appendCompacting } from "./compact.js";
 import { outcomesText } from "./rollup.js";
 
@@ -25,6 +25,10 @@ export type ShipDistillResult =
 export const distilledId = (taskId: string): string => `distilled:${taskId}`;
 
 const MAX_TEXT = 240;
+
+/** The model's group heading → the protocol's line kind (the hub accepts only these four). */
+const GROUP_LINE_KIND: Record<string, RecordLineKind> = { Decisions: "decision", Changes: "change", Findings: "finding", "Problems & fixes": "problem" };
+const kindOfGroup = (group: string): RecordLineKind => GROUP_LINE_KIND[group] ?? "change";
 
 const recordLines = (body: string): string[] =>
   (extractRecord(body) ?? "")
@@ -71,7 +75,7 @@ export async function distillTaskToFeature(opts: {
 
     const at = (opts.now?.() ?? new Date()).toISOString();
     if (!lines.length) {
-      const r = await appendCompacting({ store, engine, id: feature.id, kind: feature.kind, src: opts.src, group: "Changes", lines: [{ at, src: opts.src, kind: "Changes" as unknown as RecordAppendLine["kind"], text: `${taskId}: nothing durable to add`, ids: [marker] }] });
+      const r = await appendCompacting({ store, engine, id: feature.id, kind: feature.kind, src: opts.src, group: "Changes", lines: [{ at, src: opts.src, kind: "change", text: `${taskId}: nothing durable to add`, ids: [marker] }] });
       return r.ok ? { ok: true, status: "marker-only", lines: 0 } : { ok: false, reason: `append failed: ${r.code}` };
     }
     // One append per group (the hub places a call's lines under one heading); the marker id is on every line.
@@ -79,7 +83,7 @@ export async function distillTaskToFeature(opts: {
     for (const group of [...new Set(lines.map((l) => l.group))]) {
       const batch: RecordAppendLine[] = lines
         .filter((l) => l.group === group)
-        .map((l) => ({ at, src: opts.src, kind: group as unknown as RecordAppendLine["kind"], text: l.text.slice(0, MAX_TEXT), ids: [marker, `${marker}:${++n}`] }));
+        .map((l) => ({ at, src: opts.src, kind: kindOfGroup(group), text: l.text.slice(0, MAX_TEXT), ids: [marker, `${marker}:${++n}`] }));
       const r = await appendCompacting({ store, engine, id: feature.id, kind: feature.kind, src: opts.src, group, lines: batch });
       if (!r.ok) return { ok: false, reason: `append failed: ${r.code}` };
     }

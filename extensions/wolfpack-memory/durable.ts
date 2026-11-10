@@ -29,7 +29,8 @@ export default function createWolfpackMemoryExtension(
   // Forward every MemoryConfig field: a hand-picked copy silently drops whatever gets added later.
   const { tasks, ...memoryConfig } = config;
   
-  const tasksConfig: TasksConfig = tasks ?? {};
+  // memory.workLog is a memory-block field; the tasks extension needs it for its ship/archive/unbind hooks.
+  const tasksConfig: TasksConfig = { ...(memoryConfig.workLog ? { workLog: memoryConfig.workLog } : {}), ...(tasks ?? {}) };
   
   const memoryExt = createMemoryExtension(memoryConfig, context);
   const tasksExt = createTasksExtension(tasksConfig, context);

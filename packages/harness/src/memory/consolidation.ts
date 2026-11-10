@@ -54,6 +54,7 @@ import {
   appendArchive,
   withPoolLock as withPoolFileLock,
   observationIds,
+  shouldFlushWorkLog,
   type ArchiveItem,
   type ArchiveOutcome,
 } from "@wolfpack/memory";
@@ -153,7 +154,7 @@ export interface ConsolidationConfig {
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
   workStore?: WorkRecordStore;
-  /** `memory.workLog`: "fold" (default) rewrites the Record; "append" appends a few log lines per task, batched by `shouldFlush`. */
+  /** `memory.workLog`: "fold" (default) rewrites the Record; "append" appends a few log lines per task, batched by `shouldFlushWorkLog`. */
   workLog?: "fold" | "append";
   /** Clock (tests); append mode's age check uses it. */
   now?: () => Date;
@@ -218,22 +219,17 @@ function overflowAbove(pool: PoolObservation[], target: number): PoolObservation
   return pool.slice(0, firstKept);
 }
 
-/** Append mode batches per target: flush at 6 or more pending, or when the oldest has waited 10 minutes. */
-export const FLUSH_COUNT = 6;
-export const FLUSH_AGE_MS = 10 * 60 * 1000;
-export function shouldFlush(pendingForTarget: Array<{ recordedAt?: string; timestamp: string }>, now: Date): boolean {
-  if (pendingForTarget.length >= FLUSH_COUNT) return true;
-  return pendingForTarget.some((o) => {
-    const t = Date.parse(o.recordedAt ?? o.timestamp);
-    return Number.isFinite(t) && now.getTime() - t >= FLUSH_AGE_MS;
-  });
+/** Append mode batches per target by the memory package's one rule (`shouldFlushWorkLog`): the oldest pending observation decides the age. */
+function dueToFlush(pendingForTarget: Array<{ recordedAt?: string; timestamp: string }>, now: Date): boolean {
+  const times = pendingForTarget.map((o) => Date.parse(o.recordedAt ?? o.timestamp)).filter(Number.isFinite);
+  return shouldFlushWorkLog(pendingForTarget.length, times.length ? Math.min(...times) : undefined, now.getTime());
 }
 
 type WorkObs = { id: string; timestamp: string; content: string; work: string; feature?: string };
 
 /**
  * The work step over tagged observations: fold (rewrite the Record) or append (log lines). Append mode holds back targets
- * that `shouldFlush` says wait (no outcome: they stay in the pool) unless `force`. Outcomes carry `target`.
+ * that `shouldFlushWorkLog` says wait (no outcome: they stay in the pool) unless `force`. Outcomes carry `target`.
  */
 async function runWorkStep(a: {
   mode: "fold" | "append" | undefined;
@@ -263,7 +259,7 @@ async function runWorkStep(a: {
     const key = x.o.work || x.o.feature!;
     groups.set(key, [...(groups.get(key) ?? []), x]);
   }
-  const due = [...groups.values()].filter((g) => a.force || shouldFlush(g.map((x) => x.o), now)).flat();
+  const due = [...groups.values()].filter((g) => a.force || dueToFlush(g.map((x) => x.o), now)).flat();
   if (due.length === 0 || !a.store) {
     if (due.length > 0) throw new Error("no Work API configured");
     return [];
@@ -736,7 +732,7 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
     provider: tier.provider,
     apiKey,
     defaultModel: steps.consolidate.model,
-    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord, workLog: steps.workLog },
+    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord, workLog: steps.workLog, workDistill: steps.workDistill, workCompact: steps.workCompact },
   });
 }
 

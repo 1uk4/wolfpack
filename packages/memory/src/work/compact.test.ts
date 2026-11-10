@@ -44,7 +44,7 @@ describe("compactRecord", () => {
     const { store, run } = setup(body, "feature", { lines: [{ kind: "finding", text: "only y", from: ["l2"] }] });
     await run();
     const out = await rec(store);
-    expect(out).toMatch(/### Decisions\n\n- \d\d:\d\d \[hal\u00b7Decisions\] earlier lines compacted <!-- src:distilled:t2,distilled:t2:1 -->/);
+    expect(out).toMatch(/### Decisions\n\n- \d\d:\d\d \[hal\u00b7change\] earlier lines compacted <!-- src:distilled:t2,distilled:t2:1 -->/);
     expect(out).toMatch(/### Findings\n\n- .*only y <!-- src:y -->/);
   });
 

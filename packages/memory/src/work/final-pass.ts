@@ -23,6 +23,8 @@ export type FinalPassResult =
 export const finalPassId = (featureId: string): string => `final-pass:${featureId}`;
 
 const GROUPS = ["Decisions", "Changes", "Findings", "Problems & fixes"];
+/** The label after `·` is always a protocol kind; the `###` heading keeps the group. */
+const GROUP_KIND: Record<string, string> = { Decisions: "decision", Changes: "change", Findings: "finding", "Problems & fixes": "problem" };
 
 interface Parsed { group: string; text: string; ids: string[] }
 
@@ -109,7 +111,7 @@ export async function finalFeaturePass(opts: {
     }
     const parts = GROUPS.map((g) => [g, lines.filter((l) => l.group === g)] as const)
       .filter(([, ls]) => ls.length)
-      .map(([g, ls]) => `### ${g}\n\n${ls.map((l) => `- ${hhmm} [${opts.src}\u00b7${g}] ${l.text}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`).join("\n")}`);
+      .map(([g, ls]) => `### ${g}\n\n${ls.map((l) => `- ${hhmm} [${opts.src}\u00b7${GROUP_KIND[g] ?? "change"}] ${l.text}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`).join("\n")}`);
     const record = [RECORD_HEADING, ...parts].join("\n\n");
     if (record.length > APPEND_CAP_FEATURE) return markerOnly(before);
     await store.setRecord(featureId, record);

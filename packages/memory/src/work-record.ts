@@ -130,7 +130,7 @@ function clipRecordTail(record: string, room: number): string {
  * priority: when the whole document does not fit, the plan is clipped first
  * (it keeps at least PLAN_MIN characters). Document order is kept: plan, then Record.
  */
-export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP): string {
+export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP, opts: { tail?: boolean } = {}): string {
   const doc = stripSources(body).trim();
   if (doc.length <= cap) return doc;
   const record = extractRecord(doc) ?? "";
@@ -138,7 +138,13 @@ export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP):
   const recordRoom = Math.max(0, Math.min(record.length, cap - Math.min(plan.length, PLAN_MIN) - 2));
   const planRoom = Math.max(0, cap - recordRoom - 2);
   const clip = (t: string, n: number) => (t.length <= n ? t : n <= 5 ? "" : t.slice(0, n - 5).trimEnd() + " […]");
-  return [plan ? clip(plan, planRoom) : "", record ? clipRecordTail(record, recordRoom) : ""].filter(Boolean).join("\n\n");
+  // Append mode (`tail`): newest whole lines win, falling back to the head clip when no whole line fits. Default: the head, as before.
+  const clipRecord = (): string => {
+    if (!opts.tail) return clip(record, recordRoom);
+    const tailed = clipRecordTail(record, recordRoom);
+    return /^… \d+ earlier lines$/m.test(tailed) && tailed.split("\n").length <= 2 ? clip(record, recordRoom) : tailed;
+  };
+  return [plan ? clip(plan, planRoom) : "", record ? clipRecord() : ""].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -534,6 +540,9 @@ export class InMemoryWorkRecordStore implements WorkRecordStore {
     const it = this.items[id];
     if (!it) return { ok: false, code: "error", message: "not found" };
     if (it.stage === "archived") return { ok: false, code: "archived", message: "item is archived; its Record is closed" };
+    // The hub answers 400 to a kind outside the protocol's set; the stand-in refuses it the same way.
+    const badKind = lines.find((l) => !["decision", "change", "finding", "problem"].includes(l.kind));
+    if (badKind) return { ok: false, code: "error", message: `invalid line kind: ${String(badKind.kind)}` };
     const rec = extractRecord(it.body)?.slice(RECORD_HEADING.length).trim() ?? "";
     const seen = new Set<string>();
     for (const m of rec.matchAll(/<!-- src:([^>]*?) -->/g)) for (const i of m[1]!.split(",")) seen.add(i);

@@ -131,14 +131,36 @@ describe("renderWorkingDocument", () => {
     expect(out).toContain("## Record");
   });
 
-  it("keeps the newest log lines and marks the dropped older ones", () => {
-    const lines = Array.from({ length: 200 }, (_, i) => `- 10:00 [w·note] log line number ${i} padding padding`);
-    const out = renderWorkingDocument(`## Plan\n\nthe plan\n\n## Record\n\n${lines.join("\n")}`);
+  const lines = Array.from({ length: 200 }, (_, i) => `- 10:00 [w·note] log line number ${i} padding padding`);
+  const logDoc = `## Plan\n\nthe plan\n\n## Record\n\n${lines.join("\n")}`;
+
+  it("append mode keeps the newest log lines and marks the dropped older ones", () => {
+    const out = renderWorkingDocument(logDoc, DOCUMENT_CAP, { tail: true });
     expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
     expect(out).toContain("log line number 199 ");
     expect(out).not.toContain("log line number 0 ");
     expect(out).toMatch(/… \d+ earlier lines/);
   });
+
+  it("fold mode (default) keeps the head of an over-long Record, as before", () => {
+    const out = renderWorkingDocument(logDoc);
+    expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+    expect(out).toContain("log line number 0 ");
+    expect(out).not.toContain("log line number 199 ");
+    expect(out).not.toMatch(/earlier lines/);
+  });
+
+  it.each([["paragraph Record", `## Record\n\n${"A sentence of prose. ".repeat(400)}`], ["single over-long line", `## Record\n\n- ${"x".repeat(5000)}`]])(
+    "clips a %s to the cap in both modes, never to an empty Record",
+    (_n, record) => {
+      for (const opts of [undefined, { tail: true }]) {
+        const out = renderWorkingDocument(`## Plan\n\nthe plan\n\n${record}`, DOCUMENT_CAP, opts);
+        expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+        expect(out).toContain("the plan");
+        expect(out).toMatch(/## Record\n\n(A sentence|- x)/);
+      }
+    },
+  );
 });
 
 // ── consolidateWorkRecords ───────────────────────────────────────────────────

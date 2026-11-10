@@ -8,7 +8,7 @@ const REC = [
   "### Decisions",
   "",
   "- 09:00 [hal·Decisions] Use a map <!-- src:distilled:t1,distilled:t1:1 -->",
-  "- 09:10 [hal·Decisions] Use a TTL map instead <!-- src:distilled:t2,distilled:t2:1 -->",
+  "- 09:10 [hal·decision] Use a TTL map instead <!-- src:distilled:t2,distilled:t2:1 -->",
   "",
   "### Changes",
   "",
@@ -39,8 +39,8 @@ describe("finalFeaturePass", () => {
     const { store, run } = setup();
     expect((await run()).ok).toBe(true);
     const body = (await store.get("f"))!.body;
-    expect(body).toContain("### Decisions\n\n- 11:00 [hal·Decisions] Use a TTL map <!-- src:distilled:t2,distilled:t2:1,final-pass:f,distilled:t1,distilled:t1:1 -->");
-    expect(body).toContain("### Changes\n\n- 11:00 [hal·Changes] Cache wired into reads <!-- src:distilled:t3,o7 -->");
+    expect(body).toContain("### Decisions\n\n- 11:00 [hal·decision] Use a TTL map <!-- src:distilled:t2,distilled:t2:1,final-pass:f,distilled:t1,distilled:t1:1 -->");
+    expect(body).toContain("### Changes\n\n- 11:00 [hal·change] Cache wired into reads <!-- src:distilled:t3,o7 -->");
     expect(body.match(/final-pass:f/g)).toHaveLength(1);
     expect(body).not.toContain("Use a map");
   });

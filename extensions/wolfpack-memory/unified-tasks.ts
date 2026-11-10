@@ -43,6 +43,7 @@ import {
   rollupToParent,
   recordFeatureId,
   renderFeatureView,
+  renderFeatureRecord,
   shouldBindOnCreate,
   createSerial,
   notBoundReason,
@@ -56,6 +57,9 @@ import {
   clearUnboundNotice,
   writeUnboundNotice,
   HttpWorkRecordStore,
+  distillTaskToFeature,
+  sweepPendingDistills,
+  runFinalPass,
   type WorkRecordStore,
   readThreadAutoShip,
 } from "@wolfpack/memory";
@@ -95,6 +99,8 @@ export interface TasksConfig {
   kbRoots?: KbRoots;
   /** Work API store for graduation's pool drain (default: from context.env, else the process env). Test seam. */
   workStore?: WorkRecordStore;
+  /** `memory.workLog` (durable.ts copies it from the memory block): `append` flushes a task's log before ship/unbind and distills it into its feature on ship/archive. Default fold: nothing changes. */
+  workLog?: "fold" | "append";
 }
 
 interface ActiveBinding {
@@ -546,10 +552,13 @@ export default function createTasksExtension(
         siblings = await client.query({ domain: task.domain as string, partOf: task.partOf as string });
         if (parent.kind === "feature" && !parent.container) {
           const f = await client.getWithBody(parent.id as string);
+          featureRecord = renderFeatureRecord(parent.title, f.body ?? "") || undefined;
+          if (appendMode) try {
           const open = (siblings ?? []).filter((k) => k.id !== task.id && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
           const tasks = await Promise.all(open.map(async (k) => ({ id: k.id as string, title: k.title, stage: k.stage as string, body: (await client.getWithBody(k.id as string).catch(() => null))?.body ?? "" })));
           const rest = (siblings ?? []).filter((k) => k.id !== task.id && !open.includes(k)).map((k) => ({ id: k.id as string, title: k.title, stage: k.stage as string }));
           featureRecord = renderFeatureView({ title: parent.title, body: f.body ?? "" }, [...tasks, ...rest], task.id as string) || undefined;
+          } catch { /* the feature Record alone */ }
         }
       } catch { /* best effort */ }
     }
@@ -643,19 +652,64 @@ export default function createTasksExtension(
   }
 
   /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
-  const drain = (workIds: string[]) => {
+  const appendMode = config.workLog === "append";
+  const workStoreNow = (): WorkRecordStore | undefined => {
     // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
-    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN, undefined, context.wolfName) : undefined;
-    return drainWorkObservations({
+    const explicit = new HttpWorkRecordStore(context.env?.WORK_ENDPOINT, context.env?.WORK_TOKEN, undefined, context.wolfName);
+    return config.workStore ?? (explicit.configured ? explicit : undefined);
+  };
+  const drain = (workIds: string[]) =>
+    drainWorkObservations({
       wolfDen,
       engine: graduationEngine(),
-      workStore: config.workStore ?? (explicit?.configured ? explicit : undefined),
+      workStore: workStoreNow(),
       workIds,
+      workLog: config.workLog,
+      wolfName,
     });
-  };
 
-  /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). */
-  const ship = (id: string) => shipAndRollup(client, id, rollupToParent);
+  // ── memory.workLog: append — the task's log is flushed, then distilled into its feature (never fails the caller) ──
+  /** Force-drain one item's pending log observations. */
+  async function flushLog(id: string): Promise<void> {
+    if (!appendMode) return;
+    try { await drain([id]); } catch (err) { console.warn("[tasks] work log flush failed:", err instanceof Error ? err.message : String(err)); }
+  }
+  async function distillTask(id: string, kind: unknown): Promise<void> {
+    if (!appendMode || kind !== "task") return;
+    const store = workStoreNow();
+    if (!store) return;
+    try {
+      const r = await distillTaskToFeature({ store, engine: graduationEngine(), taskId: id, src: wolfName });
+      if (!r.ok) console.warn("[tasks] ship distill failed:", r.reason);
+    } catch (err) { console.warn("[tasks] ship distill failed:", err instanceof Error ? err.message : String(err)); }
+  }
+
+  /** Final feature pass: catch-up distills, then one tidy of the feature's Record. Append mode only; never fails the caller. */
+  async function finalPass(featureId: string): Promise<void> {
+    if (!appendMode) return;
+    const store = workStoreNow();
+    if (!store) return;
+    try {
+      const r = await runFinalPass({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), store, engine: graduationEngine(), featureId, src: wolfName });
+      if (!r.ok) console.warn("[tasks] final pass failed:", r.reason);
+    } catch (err) { console.warn("[tasks] final pass failed:", err instanceof Error ? err.message : String(err)); }
+  }
+
+  /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). Append mode: flush first, distill after; a feature gets its final pass. */
+  const ship = async (id: string) => {
+    await flushLog(id);
+    const item = await shipAndRollup(client, id, rollupToParent);
+    await distillTask(id, item.kind);
+    if (item.kind === "feature") await finalPass(id);
+    return item;
+  };
+  /** Move an item to a stage; archiving a task distills it like a ship (flush first). */
+  const stageItem = async (id: string, to: string) => {
+    if (to === "archived") await flushLog(id);
+    const item = await client.stage(id, to);
+    if (to === "archived") await distillTask(id, item.kind);
+    return item;
+  };
 
   const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
 
@@ -681,7 +735,7 @@ export default function createTasksExtension(
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
   // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
-  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion });
+  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, ...(appendMode ? { finalPass } : {}) });
   registerGraduationActions(wolfDen, graduation.actions);
 
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */
@@ -807,7 +861,7 @@ export default function createTasksExtension(
     }
     lines.push(`Kind: ${task.kind}`, `Domain: ${task.domain}`);
     if (task.successCriteria) lines.push("", `**Success Criteria:** ${task.successCriteria}`);
-    const doc = cached.body ? renderWorkingDocument(cached.body) : "";
+    const doc = cached.body ? renderWorkingDocument(cached.body, undefined, { tail: appendMode }) : "";
     if (doc) {
       lines.push("", "## Working Document (plan + Record)", doc);
       lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
@@ -821,6 +875,14 @@ export default function createTasksExtension(
     runtimes: ["pi-durable"],
 
     lifecycle: { stop: () => unregisterGraduationActions(wolfDen, graduation.actions) },
+
+    // Boot-time catch-up for ship distills (append mode, main wolf only): once, in the background, failures swallowed.
+    onEngineReady: () => {
+      if (!appendMode || isSubagent()) return;
+      const store = workStoreNow();
+      if (!store) return;
+      void sweepPendingDistills({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), store, engine: graduationEngine(), src: wolfName }).catch(() => {});
+    },
 
     sections: [
       // Task tools instructions
@@ -1003,6 +1065,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             };
           }
 
+          void flushLog(binding.taskId); // append mode: the log is complete when the binding ends (fire-and-forget)
           await clearBinding(ctx);
           clearCache(binding.taskId);
           return {
@@ -1352,7 +1415,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           }
 
           try {
-            const moved = args.to === "shipped" ? await ship(target) : await client.stage(target, args.to);
+            const moved = args.to === "shipped" ? await ship(target) : await stageItem(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
             if (moved.stage === "in_build" && !binding && !isSubagent() && !(await resolveBindingRoot(ctx)).readOnly && ["task", "issue", "spike"].includes(moved.kind)) {

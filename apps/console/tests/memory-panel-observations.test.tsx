@@ -9,7 +9,7 @@ import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
-interface Obs { id: string; timestamp: string; recordedAt: string; content: string; tokenCount: number; work?: string; feature?: string; blocked?: string }
+interface Obs { id: string; timestamp: string; recordedAt: string; content: string; tokenCount: number; work?: string; feature?: string; blocked?: string; blockedMessage?: string }
 let pool: Obs[] = [];
 let poolStatus = 200;
 let poolPending: { count: number; oldestAgeMs?: number } | undefined;
@@ -118,6 +118,12 @@ describe("observation pool in the Memory panel", () => {
 		await mount();
 		assert.match(q('[data-testid="memory-obs-pending-warning"]')!.textContent!, /waited over 25 h/);
 		assert.match(q('[data-testid="memory-obs-blocked"]')!.textContent!, /consolidation failed/);
+	});
+
+	it("shows the hub's message on a group whose fold was refused", async () => {
+		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-a" }), blocked: "forbidden", blockedMessage: "assigned to hal; only hal or the owner can change it" }];
+		await mount();
+		assert.match(q('[data-testid="memory-obs-blocked"]')!.textContent!, /refused by the hub: assigned to hal; only hal or the owner can change it/);
 	});
 
 	it("shows no warning for a fresh, small backlog", async () => {

@@ -73,7 +73,7 @@ import {
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
-import { WorkClient, WorkQueuedError, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
+import { WorkClient, WorkQueuedError, handoffText, overrideNote, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
@@ -239,9 +239,9 @@ function formatHierarchy(
  * With an explicit context.env (sandbox) the client never falls back to process.env. Writes that cannot reach the hub wait in
  * <den>/factory/work-outbox and are sent in order once it is back (see WorkClient.flush).
  */
-function makeClient(wolfDen: string, env?: NodeJS.ProcessEnv): WorkClient {
+function makeClient(wolfDen: string, wolfName: string, env?: NodeJS.ProcessEnv): WorkClient {
   const outbox = join(wolfDen, "factory", "work-outbox");
-  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox);
+  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox, wolfName) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox, wolfName);
 }
 
 /** How often saved writes are retried when no new write comes along to push them. */
@@ -285,7 +285,7 @@ export default function createTasksExtension(
   // <den>/factory/conversations/<cid>/thread-settings.json, so a flip applies to the very next task_done).
   const envAuto = resolveShipPolicy(env) === "auto";
   const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
-  const client = makeClient(wolfDen, context.env);
+  const client = makeClient(wolfDen, wolfName, context.env);
   // Drain the outbox while the wolf is idle too; unref'd so it never keeps a process alive.
   setInterval(() => { if (client.queued) client.flush().catch(() => {}); }, OUTBOX_FLUSH_MS).unref();
 
@@ -643,7 +643,7 @@ export default function createTasksExtension(
   /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
   const drain = (workIds: string[]) => {
     // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
-    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN) : undefined;
+    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN, undefined, context.wolfName) : undefined;
     return drainWorkObservations({
       wolfDen,
       engine: graduationEngine(),
@@ -1160,9 +1160,11 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
           "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. " +
           "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
-          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else.",
+          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. " +
+          "Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.",
         parameters: Type.Object({
           kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
+          assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone." })),
           domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
           title: Type.String({ description: "Short title" }),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
@@ -1178,6 +1180,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           successCriteria?: string;
           standing?: boolean;
           bind?: boolean;
+          assignee?: string;
         }, ctx: ToolContext): Promise<ToolResult> {
           if (!domains.includes(args.domain)) {
             return {
@@ -1226,12 +1229,14 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               partOf: partOf || undefined,
               successCriteria: args.successCriteria,
               standing: args.standing,
-              assignee: ctx.wolfName,
+              assignee: args.assignee || ctx.wolfName,
             };
             
             const result = await client.create(input);
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
+            if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
+            reply += overrideNote(args.assignee, result.item.assignee as string | undefined, ctx.wolfName, result.assignedTo);
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
@@ -1551,12 +1556,13 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_move ───────────────────────────────────────────────────────
       defineTool({
         name: "task_move",
-        description: "Move the active task under a different parent.",
+        description: "Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it. Moving the bound task itself does not refresh its cached feature (the memory fold resolves the feature at fold time anyway).",
         parameters: Type.Object({
           to: Type.String({ description: "New parent ID, 'inbox', or 'none'" }),
+          id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
         }),
-        async execute(args: { to: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx);
+        async execute(args: { to: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
+          const binding = args.id ? { taskId: args.id } : await readBinding(ctx);
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
@@ -1568,9 +1574,9 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           
           try {
             const newParent = args.to === "none" ? null : args.to;
-            await client.move(binding.taskId, newParent);
+            const moved = await client.moveReport(binding.taskId, newParent);
             return {
-              content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}` }],
+              content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}${handoffText(moved.reassigned)}` }],
             };
           } catch (err) {
             return failed(err);

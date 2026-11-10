@@ -3,7 +3,11 @@ import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { workLedgerFile } from "@wolfpack/kb/shared";
 import { createHubServer as createRaw, type HubServer } from "./server.js";
+import { hubRoots } from "./layout.js";
+import { applyOps } from "./work-writes.js";
 import { OP, OP_TOKEN, seedTokens, workerTokenFor } from "./testing/tokens.js";
 
 const tmp: string[] = [];
@@ -25,11 +29,11 @@ async function rig() {
   await reg("/v1/registry/wolves", { name: "wa", host: "hA", domains: ["personal"] });
   await reg("/v1/registry/wolves", { name: "wb", host: "hB", domains: ["other"] });
   // the proxy speaks X-API-Key (what the Work clients send); a bearer is accepted too
-  const call = (key: string, method: string, path: string, body?: unknown) =>
-    fetch(`${hub.url}/v1/workapi/work${path}`, { method, headers: { "X-API-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const call = (key: string, method: string, path: string, body?: unknown, wolf?: string) =>
+    fetch(`${hub.url}/v1/workapi/work${path}`, { method, headers: { "X-API-Key": key, ...(wolf ? { "X-Wolf": wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const A = workerTokenFor("hA");
   const B = workerTokenFor("hB");
-  return { hub, call, A, B };
+  return { hub, call, A, B, reg };
 }
 const feature = { kind: "feature", domain: "personal", title: "Proxy me", assignee: "wa", body: "x" };
 
@@ -81,26 +85,28 @@ describe("hub work proxy", () => {
   it("a worker token cannot see, change or graduate another host's work, nor create for a foreign wolf/domain", async () => {
     const { call, A, B } = await rig();
     const mine = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
-    // B (host hB, domain other): the item is absent for it
+    // B (host hB, domain other): the item is absent for reads
     expect((await call(B, "GET", `/${mine}`)).status).toBe(404);
     expect(((await (await call(B, "GET", "")).json()) as { items: unknown[] }).items).toEqual([]);
-    expect((await call(B, "PATCH", `/${mine}`, { note: "x" })).status).toBe(404);
-    expect((await call(B, "POST", `/${mine}/graduate`)).status).toBe(404);
+    // writes: only the assignee gate applies (no domain check); another wolf's item is refused, notes excepted
+    expect((await call(B, "PATCH", `/${mine}`, { stage: "approved" })).status).toBe(403);
+    expect((await call(B, "POST", `/${mine}/graduate`)).status).toBe(403);
     // create: foreign assignee, foreign domain
-    expect((await call(A, "POST", "", { ...feature, assignee: "wb" })).status).toBe(403);
+    const foreign = await call(A, "POST", "", { ...feature, assignee: "wb" });
+    expect(foreign.status).toBe(403);
+    expect(((await foreign.json()) as { error: string }).error).toContain("only the owner can assign one to another wolf");
     expect((await call(A, "POST", "", { ...feature, domain: "other" })).status).toBe(403);
     // an item in A's domain assigned to a wolf A does not own is read-only to A
     const op = ((await (await call(OP_TOKEN, "POST", "", { ...feature, assignee: "wb" })).json()) as { id: string }).id;
     expect((await call(A, "GET", `/${op}`)).status).toBe(200);
-    expect((await call(A, "PATCH", `/${op}`, { note: "x" })).status).toBe(403);
+    expect((await call(A, "PATCH", `/${op}`, { stage: "approved" })).status).toBe(403);
     expect((await call(A, "POST", `/${op}/graduate`)).status).toBe(403);
   });
 
-  it("whitelist: no DELETE, no assignee changes, no unknown paths; malformed ids and bodies are 400", async () => {
+  it("whitelist: no DELETE, no unknown paths; malformed ids and bodies are 400", async () => {
     const { call, A, hub } = await rig();
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
     expect((await call(A, "DELETE", `/${id}`)).status).toBe(400);
-    expect((await call(A, "PATCH", `/${id}`, { assignee: "wa" })).status).toBe(403);
     expect((await call(A, "GET", `/${id}/extra/segments`)).status).toBe(404);
     expect((await call(A, "GET", "/not-an-id")).status).toBe(400);
     expect((await call(A, "POST", "", { kind: "feature" })).status).toBe(400);
@@ -171,6 +177,202 @@ describe("hub work proxy", () => {
     expect(((await (await keyed("k-old")).json()) as { id: string }).id).toBe(id);
     t += 2 * day;
     expect(((await (await keyed("k-old")).json()) as { id: string }).id).not.toBe(id);
+  });
+
+  // ── the per-wolf assignee gate: wa and wa2 share host hA; the owner is OP_TOKEN ──
+  async function gateRig() {
+    const r = await rig();
+    await r.reg("/v1/registry/wolves", { name: "wa2", host: "hA", domains: ["personal"] });
+    const as = (w: string, method: string, path: string, body?: unknown) => r.call(r.A, method, path, body, w);
+    const owner = (method: string, path: string, body?: unknown) => r.call(OP_TOKEN, method, path, body);
+    type Out = { id: string; error: string; item: { assignee: string }; reassigned?: { id: string; from: string; to: string }[]; assignedTo?: string };
+    const json = async (x: Response) => (await x.json()) as Out;
+    const mk = async (b: object) => (await json(await owner("POST", "", { domain: "personal", assignee: "wa", ...b }))).id;
+    const who = async (id: string) => (await json(await owner("GET", `/${id}`))).item.assignee;
+    return { ...r, as, owner, json, mk, who };
+  }
+
+  it("the owner assigns any item", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "loose", body: "x", assignee: "wb" });
+    const o = await g.owner("PATCH", `/${id}`, { assignee: "wa" });
+    expect(o.status).toBe(200);
+    expect((await g.json(o)).item.assignee).toBe("wa");
+  });
+
+  it("a wolf hands off its own item and is then refused it", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    expect((await g.as("wa", "PATCH", `/${id}`, { assignee: "wa2" })).status).toBe(200);
+    const after = await g.as("wa", "PATCH", `/${id}`, { stage: "approved" });
+    expect(after.status).toBe(403);
+    expect((await g.json(after)).error).toBe("assigned to wa2; only wa2 or the owner can change it");
+  });
+
+  it("a wolf is refused another wolf's item on the same host, with the exact message", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    const r = await g.as("wa2", "PATCH", `/${id}`, { title: "mine now" });
+    expect(r.status).toBe(403);
+    expect((await g.json(r)).error).toBe("assigned to wa; only wa or the owner can change it");
+  });
+
+  it("graduate by a non-assignee is refused", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    expect((await g.as("wa2", "POST", `/${id}/graduate`)).status).toBe(403);
+  });
+
+  it("a note on another wolf's item is allowed, but a batch of a note plus another op is refused", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    expect((await g.as("wa2", "PATCH", `/${id}`, { note: "fyi" })).status).toBe(200);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ note: "fyi" }, { title: "x" }] })).status).toBe(403);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ note: "one" }, { note: "two" }] })).status).toBe(200);
+  });
+
+  it("any wolf replaces the Record section of another wolf's item; plan, full body and mixed batches stay gated", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "the plan" });
+    expect((await g.owner("PATCH", `/${id}`, { section: { name: "Plan", text: "the plan" } })).status).toBe(200);
+    const rec = await g.as("wa2", "PATCH", `/${id}`, { section: { name: "Record", text: "### Decisions\n\n- one" } });
+    expect(rec.status).toBe(200);
+    const body = ((await (await g.as("wa2", "GET", `/${id}`)).json()) as { body: string }).body;
+    expect(body).toContain("## Record\n\n### Decisions\n\n- one");
+    expect(body).toContain("the plan");
+    const refusal = "assigned to wa; only wa or the owner can change it";
+    const plan = await g.as("wa2", "PATCH", `/${id}`, { section: { name: "Plan", text: "mine" } });
+    expect(plan.status).toBe(403);
+    expect((await g.json(plan)).error).toBe(refusal);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { body: "all mine" })).status).toBe(403);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ section: { name: "Record", text: "x" } }, { section: { name: "Plan", text: "mine" } }] })).status).toBe(403);
+    // a ledger op beside a section is refused by the batch rule, never applied
+    expect((await g.as("wa2", "PATCH", `/${id}`, { ops: [{ section: { name: "Record", text: "x" } }, { stage: "approved" }] })).status).toBe(400);
+  });
+
+  it("only the exact name \"Record\" opens the gate: other spellings and Record text with a Plan or Log heading are refused, the body unchanged", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "the plan" });
+    const bodyOf = async () => ((await (await g.as("wa", "GET", `/${id}`)).json()) as { body: string }).body;
+    const before = await bodyOf();
+    const attempts: Array<[string, { name: string; text: string }, number]> = [
+      ["record", { name: "record", text: "x" }, 400],
+      ["trailing space", { name: "Record ", text: "x" }, 400],
+      ["RECORD", { name: "RECORD", text: "x" }, 400],
+      ["## Plan in the text", { name: "Record", text: "x\n\n## Plan\n\nforged" }, 400],
+      ["## Log in the text", { name: "Record", text: "x\n\n## Log\n\n- forged" }, 400],
+    ];
+    for (const [label, section, status] of attempts) {
+      const r = await g.as("wa2", "PATCH", `/${id}`, { section });
+      expect([label, r.status]).toEqual([label, status]);
+      expect(await bodyOf()).toBe(before);
+    }
+  });
+
+  it("a worker cannot write the Record of an archived item, held or not; the owner can; a note is still accepted", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    await g.owner("PATCH", `/${id}`, { stage: "archived" });
+    const bodyOf = async () => ((await (await g.owner("GET", `/${id}`)).json()) as { body: string }).body;
+    const before = await bodyOf();
+    for (const wolf of ["wa", "wa2"]) {
+      const r = await g.as(wolf, "PATCH", `/${id}`, { section: { name: "Record", text: "late" } });
+      expect(r.status).toBe(409);
+      expect(await g.json(r)).toEqual({ error: "item is archived; its Record is closed", code: "record_closed" });
+    }
+    expect(await bodyOf()).toBe(before);
+    expect((await g.owner("PATCH", `/${id}`, { section: { name: "Record", text: "owner" } })).status).toBe(200);
+    expect((await g.as("wa2", "PATCH", `/${id}`, { note: "fyi" })).status).toBe(200);
+  });
+
+  it("an unknown assign target is a 400 that names it, for the owner too", async () => {
+    const g = await gateRig();
+    const id = await g.mk({ kind: "feature", title: "F", body: "x" });
+    for (const call of [() => g.owner("PATCH", `/${id}`, { assignee: "ghost" }), () => g.as("wa", "PATCH", `/${id}`, { assignee: "ghost" })]) {
+      const r = await call();
+      expect(r.status).toBe(400);
+      expect((await g.json(r)).error).toContain("\"ghost\"");
+    }
+    expect(await g.who(id)).toBe("wa");
+  });
+
+  it("a wolf reassigns a child task it holds, and moves one to the Inbox with the assignee unchanged", async () => {
+    const g = await gateRig();
+    const feat = await g.mk({ kind: "feature", title: "F", body: "x" });
+    const t1 = await g.mk({ kind: "task", title: "t1", partOf: feat, successCriteria: "ok" });
+    const t2 = await g.mk({ kind: "task", title: "t2", partOf: feat, successCriteria: "ok" });
+    expect((await g.as("wa", "PATCH", `/${t1}`, { assignee: "wa2" })).status).toBe(200);
+    expect(await g.who(t1)).toBe("wa2");
+    const loose = await g.mk({ kind: "task", title: "loose", successCriteria: "ok" }); // lands in the domain's Inbox
+    const inbox = ((await (await g.owner("GET", `/${loose}`)).json()) as { item: { partOf: string } }).item.partOf;
+    const mv = await g.as("wa", "PATCH", `/${t2}`, { moveTo: inbox });
+    expect(mv.status).toBe(200);
+    expect((await g.json(mv)).reassigned).toBeUndefined();
+    expect(await g.who(t2)).toBe("wa");
+  });
+
+  it("moving a task under another wolf's feature hands it to that wolf and says so", async () => {
+    const g = await gateRig();
+    const featX = await g.mk({ kind: "feature", title: "X's", body: "x", assignee: "wa2" });
+    const t = await g.mk({ kind: "task", title: "t", successCriteria: "ok" });
+    const mv = await g.as("wa", "PATCH", `/${t}`, { moveTo: featX });
+    expect(mv.status).toBe(200);
+    expect((await g.json(mv)).reassigned).toEqual([{ id: t, from: "wa", to: "wa2" }]);
+    expect(await g.who(t)).toBe("wa2");
+    // the handoff is on the ledger as a work.assigned event for the task
+    const events = readFileSync(workLedgerFile(hubRoots(g.hub.dataDir)), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { type: string; id: string; assignee?: string });
+    expect(events.filter((e) => e.type === "work.assigned" && e.id === t).map((e) => e.assignee)).toEqual(["wa2"]);
+  });
+
+  it("an owner feature assign cascades to all open children, skipping shipped and archived", async () => {
+    const g = await gateRig();
+    const feat = await g.mk({ kind: "feature", title: "F", body: "x" });
+    const task = (title: string, assignee = "wa") => g.mk({ kind: "task", title, partOf: feat, successCriteria: "ok", assignee });
+    const mine = await task("mine");
+    const theirs = await task("theirs", "wa2");
+    const done = await task("done");
+    const arch = await task("arch");
+    await g.owner("PATCH", `/${done}`, { stage: "shipped" });
+    await g.owner("PATCH", `/${arch}`, { stage: "archived" });
+    expect((await g.owner("PATCH", `/${feat}`, { assignee: "wb" })).status).toBe(200);
+    expect([await g.who(feat), await g.who(mine), await g.who(theirs), await g.who(done), await g.who(arch)]).toEqual(["wb", "wb", "wb", "wa", "wa"]);
+  });
+
+  it("a worker feature assign cascades only to the children it holds, leaving others alone", async () => {
+    const g = await gateRig();
+    const feat = await g.mk({ kind: "feature", title: "F", body: "x" });
+    const mine = await g.mk({ kind: "task", title: "mine", partOf: feat, successCriteria: "ok" });
+    const theirs = await g.mk({ kind: "task", title: "theirs", partOf: feat, successCriteria: "ok", assignee: "wa2" });
+    expect((await g.as("wa", "PATCH", `/${feat}`, { assignee: "wb" })).status).toBe(200);
+    expect([await g.who(feat), await g.who(mine), await g.who(theirs)]).toEqual(["wb", "wb", "wa2"]);
+  });
+
+  it("a feature assign whose cascade fails changes nothing", async () => {
+    const g = await gateRig();
+    const feat = await g.mk({ kind: "feature", title: "F", body: "x" });
+    const kids = [await g.mk({ kind: "task", title: "a", partOf: feat, successCriteria: "ok" }), await g.mk({ kind: "task", title: "b", partOf: feat, successCriteria: "ok" })];
+    const scratch = mkdtempSync(join(tmpdir(), "hubd-wproxy-stage-"));
+    tmp.push(scratch);
+    // fails after the feature and the children were assigned in the scratch copy, before anything reaches the real ledger
+    expect(() => applyOps(hubRoots(g.hub.dataDir), feat, [{ op: "assign", to: "wb" }], { afterStaged: () => { throw new Error("boom"); }, tmpRoot: scratch })).toThrow("boom");
+    expect([await g.who(feat), await g.who(kids[0]!), await g.who(kids[1]!)]).toEqual(["wa", "wa", "wa"]);
+  });
+
+  it("creating under another wolf's feature inherits that wolf; creating loose for another wolf is refused", async () => {
+    const g = await gateRig();
+    const featX = await g.mk({ kind: "feature", title: "X's", body: "x", assignee: "wa2" });
+    const made = await g.json(await g.as("wa", "POST", "", { kind: "task", domain: "personal", title: "N", assignee: "wa", partOf: featX, successCriteria: "ok" }));
+    expect(made.item.assignee).toBe("wa2");
+    expect(made.assignedTo).toBe("wa2");
+    expect((await g.as("wa", "POST", "", { kind: "feature", domain: "personal", title: "L", assignee: "wa2", body: "x" })).status).toBe(403);
+  });
+
+  it("creating under a feature held by an unknown wolf is refused", async () => {
+    const g = await gateRig();
+    const featG = await g.mk({ kind: "feature", title: "Ghost's", body: "x", assignee: "ghost" });
+    const r = await g.as("wa", "POST", "", { kind: "task", domain: "personal", title: "N", assignee: "wa", partOf: featG, successCriteria: "ok" });
+    expect(r.status).toBe(400);
+    expect((await g.json(r)).error).toContain("\"ghost\"");
   });
 
   it("an operator token is unrestricted over the whitelist", async () => {

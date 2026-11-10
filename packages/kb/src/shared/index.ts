@@ -18,3 +18,4 @@ export * from "./workLinks.js";
 export * from "./retired.js";
 export * from "./last-sweep.js";
 export * from "./mirror-guard.js";
+export * from "./section-edit.js";

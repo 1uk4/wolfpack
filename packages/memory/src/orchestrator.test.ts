@@ -7,6 +7,7 @@ import { createOrchestrator } from "./orchestrator.js";
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
 import { readTopics } from "./session/memory.js";
 import { stripSources } from "./record-sources.js";
+import { replaceRecordSection } from "./work-record.js";
 import { readArchive } from "./work-pending.js";
 
 type RawObs = { timestamp: string; content: string; domain?: string };
@@ -211,9 +212,9 @@ describe("orchestrator work tagging and Records", () => {
       writes,
       store: {
         get: async (id: string) => (items[id] ? { id, successCriteria: undefined, ...items[id] } : null),
-        setBody: async (id: string, body: string) => {
+        setRecord: async (id: string, record: string) => {
           if (failSet) throw new Error("HTTP 503");
-          writes.push({ id, body });
+          writes.push({ id, body: replaceRecordSection(items[id]?.body ?? "", record) });
         },
       },
     };
@@ -273,7 +274,7 @@ describe("orchestrator work tagging and Records", () => {
     expect(orch.getActiveObservations().map((o) => o.content)).toEqual([OBS[0].content]);
     expect(prompts.consolidate).toEqual([]); // nothing leaked to the den
     // an immediate retry waits out the backoff
-    s.store.setBody = async (id: string, body: string) => { s.writes.push({ id, body }); };
+    s.store.setRecord = async (id: string, body: string) => { s.writes.push({ id, body }); };
     await orch.consolidateNow();
     expect(s.writes).toHaveLength(0);
     // later, the Work API is back

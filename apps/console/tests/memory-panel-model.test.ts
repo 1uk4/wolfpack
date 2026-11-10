@@ -151,8 +151,10 @@ describe("memory panel model", () => {
 		const g = groupObservations([o("1", blocked), o("2", blocked), o("3", {})])[0]!;
 		assert.equal(g.blockedCount, 2);
 		assert.equal(g.assignee, "hal");
-		assert.equal(blockedLabel(g, { f1: { title: "Polish (November)" } }), "not allowed: assigned to hal · waiting on Polish (November)'s Record");
-		assert.equal(blockedLabel({ ...g, assignee: undefined, blockedKey: g.key }, {}), "not allowed (another host)");
+		const info = { f1: { title: "Polish (November)" } };
+		assert.equal(blockedLabel(g, info), "refused by the hub: assigned to hal · waiting on Polish (November)'s Record");
+		assert.equal(blockedLabel({ ...g, blockedMessage: "assigned to hal; only hal or the owner can change it" }, info), "refused by the hub: assigned to hal; only hal or the owner can change it · waiting on Polish (November)'s Record");
+		assert.equal(blockedLabel({ ...g, assignee: undefined, blockedKey: g.key }, {}), "refused by the hub");
 		assert.equal(blockedLabel({ ...g, blocked: "work-api-unavailable", blockedKey: g.key }, {}), "waiting for Work API");
 	});
 	it("the consolidate result reports pending observations and the retry time", () => {

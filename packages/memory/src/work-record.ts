@@ -286,34 +286,41 @@ export interface WorkRecordItem {
   /** Holding container (the domain Inbox): never a Record's home. */
   container?: boolean;
   successCriteria?: string;
+  /** The parent item (null: none). Undefined: the store does not say, so the observation's stored feature is used. */
+  partOf?: string | null;
   /** The wolf the item is assigned to, when the API says. */
   assignee?: string;
   /** The working document ("" when none written yet). */
   body: string;
 }
 
+/** A Work API refusal: the HTTP status and the hub's own message. */
+export class WorkApiError extends Error {
+  constructor(public status: number, message: string, public code?: string) {
+    super(message);
+    this.name = "WorkApiError";
+  }
+}
+
 export interface WorkRecordStore {
   /** The item and its document; null when it no longer exists. Throws on any other failure (the run stays pending). */
   get(id: string): Promise<WorkRecordItem | null>;
-  /** Replace the whole document. */
-  setBody(id: string, body: string): Promise<void>;
+  /** Replace ONLY the Record section; `record` is the full section starting at its heading. Throws WorkApiError on a refusal. */
+  setRecord(id: string, record: string): Promise<void>;
   /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
   healthy?(): Promise<boolean>;
 }
 
 /** The Work API over HTTP (WORK_ENDPOINT / WORK_TOKEN, like the extensions' client). */
-/** The Work API refused the write (403): the item belongs to another wolf or host. Not an outage. */
-export class WorkForbiddenError extends Error {
-  constructor(message: string, public assignee?: string) {
-    super(message);
-  }
-}
-
 export class HttpWorkRecordStore implements WorkRecordStore {
   private endpoint: string;
   private token: string;
 
-  constructor(endpoint?: string, token?: string, private fetchImpl: typeof fetch = fetch) {
+  private wolf: string | undefined;
+
+  /** `wolf`: the acting wolf sent as X-Wolf; defaults to WOLF_NAME (always set in a wolf's process, see wolf-manager writeEnv). */
+  constructor(endpoint?: string, token?: string, private fetchImpl: typeof fetch = fetch, wolf?: string) {
+    this.wolf = wolf ?? process.env.WOLF_NAME;
     this.endpoint = (endpoint ?? process.env.WORK_ENDPOINT ?? "").replace(/\/$/, "");
     this.token = token ?? process.env.WORK_TOKEN ?? "";
   }
@@ -326,7 +333,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
     return this.fetchImpl(`${this.endpoint}/work/${encodeURIComponent(id)}`, {
       method,
-      headers: { "X-API-Key": this.token, ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
   }
@@ -355,14 +362,24 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       container: it.container === true,
       ...(typeof it.assignee === "string" && it.assignee ? { assignee: it.assignee } : {}),
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
+      partOf: typeof it.partOf === "string" ? it.partOf : it.partOf === null ? null : undefined,
       body: data.body ?? "",
     };
   }
 
-  async setBody(id: string, body: string): Promise<void> {
-    const res = await this.call("PATCH", id, { body });
-    if (res.status === 403) throw new WorkForbiddenError(`Work API PATCH ${id}: HTTP 403 (not allowed from this host)`);
-    if (!res.ok) throw new Error(`Work API PATCH ${id}: HTTP ${res.status}`);
+  async setRecord(id: string, record: string): Promise<void> {
+    // The hub adds the `## Record` heading itself; the text must not hold a level-2 heading.
+    const text = record.startsWith(RECORD_HEADING) ? record.slice(RECORD_HEADING.length).replace(/^\s+/, "") : record;
+    const res = await this.call("PATCH", id, { section: { name: "Record", text } });
+    if (res.ok) return;
+    let message = `Work API PATCH ${id}: HTTP ${res.status}`;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { error?: unknown; code?: unknown };
+      if (typeof j.error === "string" && j.error) message = j.error;
+      if (typeof j.code === "string") code = j.code;
+    } catch { /* keep the generic message */ }
+    throw new WorkApiError(res.status, message, code);
   }
 }
 
@@ -391,6 +408,9 @@ export type WorkRecordOutcome =
   | { work: string; ids: string[]; status: "discarded"; reason: string }
   /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
   | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause; /** Next attempt (ms epoch) while the group backs off. */ retryAt?: number; assignee?: string };
+
+/** The hub's code for a Record write to an archived item (hubd RECORD_CLOSED). */
+export const RECORD_CLOSED_CODE = "record_closed";
 
 /** The reason a pending outcome carries when the Work API is missing or unreachable. */
 export const WORK_API_UNAVAILABLE = "work-api-unavailable";
@@ -447,14 +467,32 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
   const groups = new Map<string, WorkObservation[]>();
   // The key is the feature when it is a real, live feature; anything else
   // (no feature, the Inbox, deleted, archived, store unreachable) keeps the item's own.
-  const featureOk = new Map<string, boolean>();
+  // Each item is read at most once per run: every read (task, feature, group key) goes through this cache. A failed read is cached too;
+  // the grouping treats it as "unknown" (null: a task falls back to its stored `o.feature`, a feature is not live), but the group loop
+  // below rethrows it, so the group stays pending instead of being taken for deleted.
+  const reads = new Map<string, { item: WorkRecordItem | null } | { err: unknown }>();
+  const readItem = async (id: string) => {
+    if (!reads.has(id)) {
+      try { reads.set(id, { item: await store!.get(id) }); } catch (err) { reads.set(id, { err }); }
+    }
+    return reads.get(id)!;
+  };
+  const getOrNull = async (id: string): Promise<WorkRecordItem | null> => {
+    const r = await readItem(id);
+    return "item" in r ? r.item : null;
+  };
+  const liveFeature = async (id: string): Promise<boolean> => isRecordFeature(await getOrNull(id));
+  // The feature is resolved NOW from the task's current parent (a task moved since the observation was tagged follows it).
+  // Only a task that cannot be read (or a store that does not report parents) falls back to the stored feature, then to the task.
   for (const o of opts.observations) {
     let key = o.work;
-    if (o.feature && store) {
-      if (!featureOk.has(o.feature)) {
-        try { featureOk.set(o.feature, isRecordFeature(await store.get(o.feature))); } catch { featureOk.set(o.feature, false); }
-      }
-      if (featureOk.get(o.feature)) key = o.feature;
+    if (store) {
+      const task = await getOrNull(o.work);
+      if (task && task.partOf !== undefined) {
+        const parent = task.partOf;
+        if (isRecordFeature(task)) key = task.id; // bound to the feature itself
+        else if (parent && (await liveFeature(parent))) key = parent;
+      } else if (o.feature && (await liveFeature(o.feature))) key = o.feature;
     }
     groups.set(key, [...(groups.get(key) ?? []), o]);
   }
@@ -470,13 +508,15 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
     }
     if (state && !opts.ignoreBackoff && !state.due(work)) {
       onProgress?.(`  work ${work}: backing off, ${obs.length} observation(s) stay pending`);
-      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable", retryAt: state.entry(work)?.nextAttemptAt, ...(state.entry(work)?.assignee ? { assignee: state.entry(work)!.assignee } : {}) });
+      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable", ...(state.entry(work)?.nextAttemptAt ? { retryAt: state.entry(work)!.nextAttemptAt } : {}), ...(state.entry(work)?.assignee ? { assignee: state.entry(work)!.assignee } : {}) });
       continue;
     }
     let phase: PendingCause = "work-api-unavailable";
     let assignee: string | undefined;
     try {
-      const item = await store.get(work);
+      const read = await readItem(work);
+      if ("err" in read) throw read.err;
+      const item = read.item;
       assignee = item?.assignee;
       if (!item && store.healthy && !(await store.healthy())) throw new Error("Work API unhealthy: a 404 proves nothing");
       if (!item && state && !state.missing(work)) {
@@ -515,21 +555,34 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       // The cap counts what is read; the sources ride along as comments.
       rendered = renderLines(resolveSources(record, current ? parseRecordLines(current) : [], obs.map((o) => ({ id: o.id, ...(o.timestamp ? { timestamp: o.timestamp } : {}) }))), true);
 
-      // Re-read right before the write so a plan edit made while the model
-      // ran is not overwritten (only the Record section is ours).
-      const fresh = (await store.get(work)) ?? item;
-      await store.setBody(work, replaceRecordSection(fresh.body, rendered));
+      // Only the Record section is written (a section op), so a plan edit made while the model ran cannot be overwritten:
+      // no re-read before the write.
+      await store.setRecord(work, rendered);
       clearEntries(state, work, obs);
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
       outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: stripSources(rendered).length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      // The item was archived between the read and the write: same as the archived path, the observations are discarded.
+      if (err instanceof WorkApiError && err.status === 409 && err.code === RECORD_CLOSED_CODE) {
+        clearEntries(state, work, obs);
+        onProgress?.(`  work ${work}: item is archived, ${obs.length} observation(s) are discarded`);
+        outcomes.push({ work, ids, status: "discarded", reason: "archived" });
+        continue;
+      }
+      // A 403 is final, not an outage: kept pending with the hub's message, no backoff, retried on the next run only.
+      if (err instanceof WorkApiError && err.status === 403) {
+        onProgress?.(`  work ${work}: refused by the hub, ${obs.length} observation(s) stay pending — ${reason}`);
+        // Deliberate: nextAttemptAt stays 0 for "forbidden", so a refused item costs one model call per run. Refusals are rare now that
+        // the Record is open to every wolf, and that cost is accepted.
+        state?.pending(work, "forbidden", { message: reason, ...(assignee ? { assignee } : {}) });
+        outcomes.push({ work, ids, status: "pending", reason, cause: "forbidden", ...(assignee ? { assignee } : {}) });
+        continue;
+      }
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
-      const cause: PendingCause = err instanceof WorkForbiddenError ? "forbidden" : phase;
-      const who = err instanceof WorkForbiddenError ? (err.assignee ?? assignee) : undefined;
-      state?.pending(work, cause, who);
+      state?.pending(work, phase);
       const retryAt = state?.entry(work)?.nextAttemptAt;
-      outcomes.push({ work, ids, status: "pending", reason, cause, ...(retryAt ? { retryAt } : {}), ...(who ? { assignee: who } : {}) });
+      outcomes.push({ work, ids, status: "pending", reason, cause: phase, ...(retryAt ? { retryAt } : {}) });
     }
   }
   state?.save();

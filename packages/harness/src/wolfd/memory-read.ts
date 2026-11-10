@@ -120,11 +120,11 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
     const r = p.recordedAt ? Date.parse(p.recordedAt) : NaN;
     for (const k of [p.feature, p.work]) if (k) oldestRec.set(k, Math.min(oldestRec.get(k) ?? Infinity, Number.isNaN(r) ? -Infinity : r));
   }
-  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed" | "forbidden"; since: number; key?: string; assignee?: string } | undefined => {
+  const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed" | "forbidden"; since: number; key?: string; assignee?: string; message?: string } | undefined => {
     const rec = o.recordedAt ? Date.parse(o.recordedAt) : NaN;
     for (const k of [o.feature, o.work]) {
       const t = k ? waiting.firstPendingAt[k] : undefined;
-      if (k && t !== undefined && t >= (oldestRec.get(k) ?? -Infinity)) return { cause: waiting.keys[k]!, since: t, key: k, ...(waiting.assignees[k] ? { assignee: waiting.assignees[k] } : {}) };
+      if (k && t !== undefined && t >= (oldestRec.get(k) ?? -Infinity)) return { cause: waiting.keys[k]!, since: t, key: k, ...(waiting.assignees[k] ? { assignee: waiting.assignees[k] } : {}), ...(waiting.messages[k] ? { message: waiting.messages[k] } : {}) };
     }
     return unavailable && (o.work || o.feature) ? { cause: "work-api-unavailable", since: Number.isNaN(rec) ? now : rec } : undefined;
   };
@@ -144,7 +144,7 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
       ...(o.domain ? { domain: o.domain } : {}),
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
-      ...(w ? { blocked: w.cause, ...(w.key ? { blockedKey: w.key } : {}), ...(w.assignee ? { assignee: w.assignee } : {}) } : {}),
+      ...(w ? { blocked: w.cause, ...(w.key ? { blockedKey: w.key } : {}), ...(w.assignee ? { assignee: w.assignee } : {}), ...(w.message ? { blockedMessage: w.message } : {}) } : {}),
       _i: i,
     };
   });

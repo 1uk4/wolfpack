@@ -200,6 +200,8 @@ export interface ConsoleClient {
    * the holder) when another wolf holds it or its feature. Optional like watchMemory.
    */
   claimWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
+  /** Hub only: one single-field PATCH of a work item (e.g. `{assignee}`); rejects with the hub's error. Optional like watchMemory. */
+  patchWork?(workId: string, op: { assignee: string } | { moveTo: string | null }): Promise<WorkItemResponse>;
   /** Hub only: release a claim (the holder or the operator). Leaves the stage alone. Rejects `conflict` for anyone else. */
   releaseWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
   /** Hub only: paired devices / revoke one / mint a pairing code for a new one (device management routes). Optional like watchMemory. */

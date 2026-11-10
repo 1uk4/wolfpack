@@ -7,6 +7,7 @@
  * `code` is the protocol error code when the server sent one (e.g.
  * "memory_busy", "promote_unavailable") so callers can tell 409s apart.
  */
+import type { WorkItemResponse } from "@wolfpack/protocol";
 import type {
 	ConsolidateResponse,
 	GraduationJob,
@@ -133,6 +134,11 @@ export function postGraduateConfirm(wolf: string, workId: string, token: string)
 /** Where the feature's graduation job stands on this wolf (none, running, preview_ready, graduated, error). */
 export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbResult<GraduationStatus>> {
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/status`);
+}
+
+/** Owner work op through the hub (console route PATCH /api/work/:id): `{assignee}` now, `{moveTo}` for moves. */
+export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<WorkItemResponse>> {
+	return request(`/api/work/${seg(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op) });
 }
 
 /** The pending observations in the wolf's pool a graduation of the feature would fold, per task. */

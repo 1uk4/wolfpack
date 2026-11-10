@@ -75,6 +75,8 @@ export interface TableRow {
 	stage: string;
 	stageLabel: string;
 	assignee: string;
+	/** The owner may set the assignee here: a feature row or a loose task (depth 1). A feature's child tasks follow its assignee, so they get no control. */
+	assignable: boolean;
 	/** YYYY-MM-DD, "" when unknown. */
 	created: string;
 	progress: ProgressCell | null;
@@ -120,6 +122,42 @@ export const isInboxContainer = (it: WorkListItem): boolean =>
 
 const isGraduated = (it: WorkListItem): boolean => it.graduated !== undefined || it.stage === "archived";
 
+export interface MoveOption {
+	/** The new parent's id; null = no parent. */
+	to: string | null;
+	label: string;
+	/** The drop target is the Inbox group (tasks: the Inbox; features: no initiative), not a row. */
+	inbox: boolean;
+}
+
+/**
+ * Where the owner may move an item (the drop targets and the "Move to…" menu, one rule): a live task goes to another live feature or
+ * the Inbox (the Inbox container's id, or null when the domain has none); a live feature goes under another live initiative, or to none.
+ * The current parent is left out. Nothing else moves (initiatives, issues, spikes, ideas, graduated or archived items).
+ */
+export function moveOptions(items: readonly WorkListItem[], id: string): MoveOption[] {
+	const it = items.find((x) => x.id === id);
+	// The Inbox is the container flag only: a real feature titled "Inbox" is an ordinary target.
+	const isBox = (x: WorkListItem): boolean => x.container === true;
+	if (!it || isGraduated(it) || isBox(it)) return [];
+	const live = (x: WorkListItem): boolean => !isGraduated(x) && !isBox(x);
+	const inboxId = items.find(isBox)?.id;
+	if (it.kind === "task") {
+		const out: MoveOption[] = items.filter((x) => x.kind === "feature" && live(x) && x.id !== it.partOf).map((x) => ({ to: x.id, label: x.title, inbox: false }));
+		const parent = it.partOf ? items.find((x) => x.id === it.partOf) : undefined;
+		// Only when a container exists: the hub refuses a task with no parent and never creates the Inbox.
+		if (parent && !isBox(parent) && inboxId !== undefined) out.push({ to: inboxId, label: "Inbox (no feature)", inbox: true });
+		return out;
+	}
+	if (it.kind === "feature") {
+		const out: MoveOption[] = items.filter((x) => x.kind === "initiative" && live(x) && x.id !== it.partOf).map((x) => ({ to: x.id, label: x.title, inbox: false }));
+		const parent = it.partOf ? items.find((x) => x.id === it.partOf) : undefined;
+		if (parent && !isBox(parent)) out.push({ to: null, label: "No initiative", inbox: true });
+		return out;
+	}
+	return [];
+}
+
 function chipOf(it: WorkListItem, blocked: ReadonlySet<string>): Chip {
 	let state: ChipState = "plain";
 	if (it.kind === "feature" && it.stage === "shipped") state = "ready";
@@ -162,7 +200,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		else kidsOf.set(p, [it]);
 	}
 
-	const rowOf = (it: WorkListItem, depth: 1 | 2, kind: RowKind, sibIds: ReadonlySet<string>): TableRow => {
+	const rowOf = (it: WorkListItem, depth: 1 | 2, kind: RowKind, sibIds: ReadonlySet<string>, underInitiative = false): TableRow => {
 		const dependsOn = it.dependsOn.filter((d) => sibIds.has(d) && d !== it.id);
 		const notes: DepNote[] = [];
 		for (const d of it.dependsOn) {
@@ -185,6 +223,8 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 			stage: it.stage,
 			stageLabel: stageLabel(it.stage, it.kind),
 			assignee: it.assignee ?? "",
+			// The owner can reassign features, and tasks that belong to no feature; not issues/spikes/ideas, a task directly under an initiative, or finished items.
+			assignable: depth === 1 && (it.kind === "feature" || (it.kind === "task" && !underInitiative)) && !isGraduated(it),
 			created: it.created ?? "",
 			progress: kind === "feature" && tasks.length > 0 ? { shipped, total: tasks.length, label: `${shipped}/${tasks.length} shipped` } : null,
 			dependsOn,
@@ -197,14 +237,14 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		};
 	};
 
-	const featureRows = (list: WorkListItem[]): TableRow[] => {
+	const featureRows = (list: WorkListItem[], underInitiative = false): TableRow[] => {
 		const sibIds = new Set(list.map((f) => f.id));
-		return list.map((f) => rowOf(f, 1, f.kind === "feature" ? "feature" : "task", sibIds));
+		return list.map((f) => rowOf(f, 1, f.kind === "feature" ? "feature" : "task", sibIds, underInitiative));
 	};
 
 	const groups: TableRow[] = [];
 	for (const init of live.filter((it) => it.kind === "initiative")) {
-		const rows = featureRows(kidsOf.get(init.id) ?? []);
+		const rows = featureRows(kidsOf.get(init.id) ?? [], true);
 		groups.push(groupOf(items, init, rows, init.title, init.id, init.id));
 	}
 	// Everything not under a live feature or initiative: loose features, and loose tasks/ideas as leaf rows.
@@ -238,6 +278,7 @@ function groupOf(allItems: readonly WorkListItem[], init: WorkListItem | null, r
 		stage: init?.stage ?? "",
 		stageLabel: init ? stageLabel(init.stage, init.kind) : "",
 		assignee: init?.assignee ?? "",
+		assignable: false,
 		created: init?.created ?? "",
 		progress: features.length > 0 ? { shipped, total: features.length, label: `${shipped}/${features.length} shipped` } : null,
 		dependsOn: [],

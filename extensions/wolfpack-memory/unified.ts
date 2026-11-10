@@ -406,7 +406,7 @@ export default function createMemoryExtension(
   // Record store from context.env when given (sandbox): never falls back to process.env.WORK_ENDPOINT.
   function recordStore(): HttpWorkRecordStore | undefined {
     if (!context.env) return undefined; // consolidatePool then reads the process env, as before
-    return new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "");
+    return new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, context.wolfName);
   }
 
   // KB roots from env

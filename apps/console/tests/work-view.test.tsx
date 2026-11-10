@@ -18,8 +18,10 @@ Object.assign(globalThis, {
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,
 	HTMLInputElement: dom.window.HTMLInputElement,
+	HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
 	KeyboardEvent: dom.window.KeyboardEvent,
 	Event: dom.window.Event,
+	CustomEvent: dom.window.CustomEvent,
 	IS_REACT_ACT_ENVIRONMENT: true,
 	self: globalThis, // next/link (the reader's Full page link) reads `self` when it mounts
 	requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0),
@@ -31,6 +33,12 @@ Object.assign(globalThis, {
 		removeItem: (k: string) => void store.delete(k),
 	},
 });
+
+// linkedom's focus() does not move document.activeElement: track it here (compared by testid, never by node).
+let focusedEl: Element | null = null;
+const focusedId = () => focusedEl?.getAttribute("data-testid") ?? null;
+dom.window.HTMLElement.prototype.focus = function (this: Element) { focusedEl = this; };
+Object.defineProperty(dom.document, "activeElement", { get: () => focusedEl });
 
 const { WorkList, WORK_DOMAIN_KEY } = await import("../components/work-view.tsx");
 const { WorkReaderHost } = await import("../components/work-reader.tsx");
@@ -78,14 +86,14 @@ afterEach(() => {
 	document.body.innerHTML = "";
 });
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 10)); });
-const mount = async (client: WorkClient, start = "/work") => {
+const mount = async (client: WorkClient, start = "/work", extra: { undoMs?: number } = {}) => {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	await act(async () => {
 		root!.render(
 			<FakeNav start={start}>
-				<WorkList client={client} />
+				<WorkList client={client} {...extra} />
 				<WorkReaderHost />
 			</FakeNav>,
 		);
@@ -103,6 +111,11 @@ const open = async (client: WorkClient = fake()) => {
 	await mount(client);
 	await settle();
 };
+/** Calls a React handler (onDragStart, onDrop…) on the element directly. */
+const fire = (el: HTMLElement, name: string) => act(async () => {
+	const key = Object.keys(el).find((k) => k.startsWith("__reactProps"))!;
+	(el as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]![name]!({ preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {} } });
+});
 const rows = () => qa('[data-testid^="work-row-"]').map((r) => r.getAttribute("data-testid")!.slice("work-row-".length));
 
 describe("the Work page", () => {
@@ -410,5 +423,415 @@ describe("graduated toggle, refresh and select", () => {
 		await act(async () => { window.dispatchEvent(new dom.window.Event("focus")); });
 		await settle();
 		assert.ok(rows().includes("i1"));
+	});
+});
+
+describe("the assignee column", () => {
+	const ok = async () => ({ ok: true as const, data: {} });
+	const withOwner = (over: Partial<Fake> = {}) => fake({ assignees: async () => ({ ok: true, data: ["hal", "luka"] }), assign: ok, ...over });
+	const cell = (key: string) => q(`work-assignee-${key}`) as HTMLButtonElement;
+	const optionKeys = (key: string) => qa(`[data-testid^="work-assignee-option-${key}-"]`).map((o) => o.getAttribute("data-testid")!.slice(`work-assignee-option-${key}-`.length));
+	/** Open the row's assignee menu and pick a wolf, the way a click does. */
+	const assignTo = async (key: string, wolf: string) => {
+		await click(cell(key));
+		await click(q(`work-assignee-option-${key}-${wolf}`)!);
+	};
+	const deferred = <T,>() => {
+		let resolve!: (v: T) => void;
+		const promise = new Promise<T>((r) => (resolve = r));
+		return { promise, resolve };
+	};
+	const TREE = [
+		item("f1", "feature", { assignee: "hal", title: "F1" }),
+		item("t1", "task", { partOf: "f1", assignee: "hal" }),
+		item("lt", "task", { assignee: "luka" }),
+	];
+	const openTree = async (c: Fake) => {
+		await open(c);
+		await click(q("work-toggle-no-initiative")!);
+		await click(q("work-toggle-f1")!);
+	};
+
+	it("has an Assignee column between Name and Status; every row shows the wolf icon and name, a muted dash when unassigned; only features and loose tasks are buttons", async () => {
+		await openTree(withOwner({ items: TREE.concat(item("nb", "task", { title: "NB" })) }));
+		const heads = qa('[data-testid^="work-sort-"], [data-testid="work-header-assignee"]').map((h) => h.textContent!.trim());
+		assert.deepEqual(heads, ["Name", "Assignee", "Status", "Created"]);
+		assert.equal(cell("f1").textContent, "hal");
+		assert.equal(cell("f1").tagName, "BUTTON");
+		assert.equal(cell("f1").querySelectorAll("svg").length, 2, "wolf icon + dropdown chevron");
+		assert.equal(cell("lt").textContent, "luka");
+		assert.equal(cell("nb").textContent, "—");
+		assert.equal(cell("t1").tagName, "SPAN", "a feature's child task is static");
+		assert.equal(cell("t1").textContent, "hal");
+		assert.equal(cell("t1").querySelectorAll("svg").length, 1);
+	});
+	it("an assignable assignee carries the accent colour and a dropdown chevron; a static one carries neither", async () => {
+		await openTree(withOwner({ items: TREE }));
+		assert.ok(cell("f1").className.split(" ").includes("text-primary"));
+		assert.ok(q("work-assignee-chevron-f1"));
+		assert.ok(!cell("t1").className.includes("text-primary"));
+		assert.equal(q("work-assignee-chevron-t1"), null);
+	});
+	it("the menu lists the other wolves only; picking one assigns and closes it; Escape closes it without assigning", async () => {
+		const calls: [string, string][] = [];
+		await openTree(withOwner({ items: TREE, assign: async (id, w) => (calls.push([id, w]), { ok: true, data: {} }) }));
+		assert.equal(q("work-assignee-menu-f1"), null);
+		await click(cell("f1"));
+		assert.ok(q("work-assignee-menu-f1"));
+		assert.deepEqual(optionKeys("f1"), ["luka"]);
+		await act(async () => { document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true }), { key: "Escape" })); });
+		assert.equal(q("work-assignee-menu-f1"), null);
+		assert.deepEqual(calls, []);
+		await assignTo("f1", "luka");
+		await settle();
+		assert.deepEqual(calls, [["f1", "luka"]]);
+		assert.equal(q("work-assignee-menu-f1"), null);
+	});
+	it("an outside click closes the menu", async () => {
+		await openTree(withOwner({ items: TREE }));
+		await click(cell("f1"));
+		await act(async () => { document.body.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true })); });
+		assert.equal(q("work-assignee-menu-f1"), null);
+	});
+	it("a refused change shows the hub's message on that row and leaves the old assignee", async () => {
+		await openTree(withOwner({ items: TREE, assign: async () => ({ ok: false, reason: "error", message: 'unknown assignee "zed"' }) }));
+		await assignTo("f1", "luka");
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, 'unknown assignee "zed"');
+		assert.equal(q("work-assignee-error-lt"), null);
+		assert.equal(cell("f1").textContent, "hal");
+		assert.equal(cell("f1").disabled, false);
+	});
+	it("after a successful change the reloaded list shows the new assignee on the feature and on its child tasks", async () => {
+		const c = withOwner({ items: TREE });
+		c.assign = async (id, wolf) => {
+			c.items = [item(id, "feature", { assignee: wolf, title: "F1" }), item("t1", "task", { partOf: id, assignee: wolf }), TREE[2]!];
+			return { ok: true, data: {} };
+		};
+		await openTree(c);
+		await assignTo("f1", "luka");
+		await settle();
+		assert.equal(cell("f1").textContent, "luka");
+		assert.equal(cell("t1").textContent, "luka");
+	});
+	it("disables only the row being changed, and one row finishing neither re-enables the other nor clears its error", async () => {
+		const a = deferred<{ ok: false; reason: "error"; message: string }>();
+		const b = deferred<{ ok: true; data: object }>();
+		const c = withOwner({ items: TREE, assign: (id) => (id === "f1" ? a.promise : b.promise) });
+		await openTree(c);
+		await assignTo("f1", "luka");
+		await assignTo("lt", "hal");
+		assert.deepEqual([cell("f1").disabled, cell("lt").disabled], [true, true]);
+		await act(async () => a.resolve({ ok: false, reason: "error", message: "f1 refused" }));
+		assert.deepEqual([cell("f1").disabled, cell("lt").disabled], [false, true]);
+		assert.equal(q("work-assignee-error-f1")!.textContent, "f1 refused");
+		await act(async () => b.resolve({ ok: true, data: {} }));
+		await settle();
+		assert.equal(cell("lt").disabled, false);
+		assert.equal(q("work-assignee-error-f1")!.textContent, "f1 refused", "row B's success leaves row A's error");
+	});
+	it("a row's error clears on its next successful change", async () => {
+		let fail = true;
+		const c = withOwner({ items: TREE, assign: async () => (fail ? { ok: false, reason: "error", message: "nope" } : { ok: true, data: {} }) });
+		await openTree(c);
+		await assignTo("f1", "luka");
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, "nope");
+		fail = false;
+		await assignTo("f1", "luka");
+		await settle();
+		assert.equal(q("work-assignee-error-f1"), null);
+	});
+	it("a thrown assign shows an error and re-enables the cell", async () => {
+		await openTree(withOwner({ items: TREE, assign: async () => { throw new Error("boom"); } }));
+		await assignTo("f1", "luka");
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, "boom");
+		assert.equal(cell("f1").disabled, false);
+	});
+	it("says so when the change worked but the list could not be read again", async () => {
+		const c = withOwner({ items: TREE });
+		c.assign = async () => {
+			c.list = async () => ({ ok: false, reason: "error", message: "down" });
+			return { ok: true, data: {} };
+		};
+		await openTree(c);
+		await assignTo("f1", "luka");
+		await settle();
+		assert.equal(q("work-assignee-error-f1")!.textContent, "assigned, but the list couldn't refresh");
+	});
+	const evt = (el: Element, type: string, props: object = {}) => act(async () => { el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), props)); });
+	it("the menu has menu/menuitem roles, arrow keys walk the options, and a pick hands focus back to the button", async () => {
+		await openTree(withOwner({ items: TREE, assignees: async () => ({ ok: true, data: ["hal", "luka", "zed"] }) }));
+		assert.equal(cell("f1").getAttribute("aria-haspopup"), "menu");
+		await click(cell("f1"));
+		assert.equal(qa('[role="menu"]').length, 1);
+		assert.deepEqual(qa('[role="menuitem"]').map((o) => o.getAttribute("data-testid")), ["work-assignee-option-f1-luka", "work-assignee-option-f1-zed"]);
+		const first = q("work-assignee-option-f1-luka")!;
+		first.focus();
+		await evt(first, "keydown", { key: "ArrowDown" });
+		assert.equal(focusedId(), q("work-assignee-option-f1-zed")!.getAttribute("data-testid"));
+		await click(q("work-assignee-option-f1-zed")!);
+		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
+	});
+	it("Escape and an outside click close the menu and focus the button; a press on the menu's own body (not an option) keeps it open", async () => {
+		await openTree(withOwner({ items: TREE }));
+		await click(cell("f1"));
+		await evt(q("work-assignee-menu-f1")!, "pointerdown");
+		assert.ok(q("work-assignee-menu-f1"), "the menu body's padding is inside");
+		await evt(document.body, "pointerdown");
+		assert.equal(q("work-assignee-menu-f1"), null);
+		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
+		focusedEl = null;
+		await click(cell("f1"));
+		await evt(document, "keydown", { key: "Escape" });
+		assert.equal(q("work-assignee-menu-f1"), null);
+		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
+	});
+	it("shows \"can't load wolves\" inside the menu when the wolves cannot be loaded", async () => {
+		await openTree(withOwner({ items: TREE, assignees: async () => ({ ok: false, reason: "error", message: "HTTP 502" }) }));
+		await click(cell("f1"));
+		assert.match(q("work-assignee-menu-f1")!.textContent ?? "", /can't load wolves: HTTP 502/);
+		assert.deepEqual(optionKeys("f1"), []);
+	});
+});
+
+describe("moving items", () => {
+	const MV = [
+		item("i1", "initiative", { title: "Phase 1" }),
+		item("f1", "feature", { partOf: "i1", assignee: "hal", title: "F1" }),
+		item("f2", "feature", { partOf: "i1", assignee: "luka", title: "F2" }),
+		item("t1", "task", { partOf: "f1" }),
+		item("lt", "task", { title: "LT" }),
+		item("inbox", "feature", { container: true, title: "Inbox" }),
+	];
+	type Moves = [string, string | null][];
+	const withMove = (move: NonNullable<WorkClient["move"]>, over: Partial<Fake> = {}) => fake({ items: MV, move, ...over });
+	const openAll = async (c: Fake) => {
+		await open(c);
+		await click(q("work-toggle-i1")!);
+		await click(q("work-toggle-f1")!);
+		await click(q("work-toggle-no-initiative")!);
+	};
+	const drag = async (id: string, target: string) => {
+		await fire(q(`work-row-${id}`)!, "onDragStart");
+		await fire(q(`work-row-${target}`)!, "onDrop");
+		await settle();
+	};
+	const draggable = (id: string) => q(`work-row-${id}`)!.getAttribute("draggable");
+	it("moving is drag-only: no Move to menu; tasks and features drag, initiatives and the Inbox container do not", async () => {
+		await openAll(withMove(async () => ({ ok: true, data: {} })));
+		assert.equal(q("work-move-t1"), null);
+		assert.equal(q("work-move-menu-t1"), null);
+		assert.equal(qa("select").filter((e) => e.getAttribute("data-testid") !== "work-domain").length, 0);
+		assert.equal(draggable("t1"), "true");
+		assert.equal(draggable("f1"), "true");
+		assert.equal(draggable("i1"), null);
+	});
+	it("dragging shows only valid targets, and dropping on one calls move; a drop elsewhere does nothing", async () => {
+		const moves: Moves = [];
+		await openAll(withMove(async (id, to) => (moves.push([id, to]), { ok: true, data: {} })));
+		await fire(q("work-row-t1")!, "onDragStart");
+		const marked = qa("[data-drop-target]").map((r) => r.getAttribute("data-testid"));
+		assert.deepEqual(marked, ["work-row-f2", "work-row-no-initiative"]);
+		const props = (el: HTMLElement) => (el as unknown as Record<string, Record<string, unknown>>)[Object.keys(el).find((k) => k.startsWith("__reactProps"))!]!;
+		assert.equal(props(q("work-row-lt")!).onDrop, undefined, "a non-target row ignores drops");
+		assert.equal(props(q("work-row-f1")!).onDrop, undefined, "so does the item's own parent");
+		assert.deepEqual(moves, []);
+		await fire(q("work-row-f2")!, "onDrop");
+		await settle();
+		assert.deepEqual(moves, [["t1", "f2"]]);
+		assert.equal(qa("[data-drop-target]").length, 0, "highlight ends with the drop");
+	});
+	it("says the task was handed to the other wolf only when the hub reports it, and keeps it after the reload", async () => {
+		let reassigned = true;
+		await openAll(withMove(async (id) => ({ ok: true, data: reassigned ? { reassigned: [{ id, from: "hal", to: "luka" }] } : {} })));
+		await drag("t1", "f2");
+		assert.equal(q("work-move-msg-t1")!.textContent, "Moved under F2; now assigned to luka");
+		reassigned = false;
+		await drag("t1", "f2");
+		assert.equal(q("work-move-msg-t1"), null);
+	});
+	it("a cancelled drag (dragend, no drop) clears the highlights, even when the row is gone", async () => {
+		await openAll(withMove(async () => ({ ok: true, data: {} })));
+		await fire(q("work-row-t1")!, "onDragStart");
+		assert.equal(qa("[data-drop-target]").length, 2);
+		await act(async () => { window.dispatchEvent(new dom.window.Event("dragend")); });
+		assert.equal(qa("[data-drop-target]").length, 0);
+	});
+	it("drops the handoff note once the list has been read again after the move's own reload", async () => {
+		await openAll(withMove(async (id) => ({ ok: true, data: { reassigned: [{ id, from: "hal", to: "luka" }] } })));
+		await drag("t1", "f2");
+		assert.equal(q("work-move-msg-t1")?.getAttribute("data-kind"), "handoff");
+		await act(async () => { window.dispatchEvent(new dom.window.Event("focus")); });
+		await settle();
+		assert.equal(q("work-move-msg-t1"), null);
+	});
+	it("a refused move shows the hub message on that row and leaves the list as it was", async () => {
+		const c = withMove(async () => ({ ok: false, reason: "error", message: "wolf luka is not here" }));
+		await openAll(c);
+		const before = rows();
+		await drag("t1", "f2");
+		assert.equal(q("work-move-msg-t1")!.textContent, "wolf luka is not here");
+		assert.equal(q("work-move-msg-t1")!.getAttribute("data-kind"), "error");
+		assert.deepEqual(rows(), before);
+		assert.equal(draggable("t1"), "true");
+	});
+	it("disables only the moving row while its move runs, then re-enables it", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		await openAll(withMove(async () => (await gate, { ok: true, data: {} })));
+		await fire(q("work-row-t1")!, "onDragStart");
+		await fire(q("work-row-f2")!, "onDrop");
+		assert.equal(draggable("t1"), null);
+		assert.equal(draggable("lt"), "true");
+		release();
+		await settle();
+		assert.equal(draggable("t1"), "true");
+	});
+});
+
+describe("undoing a move", () => {
+	const UI = [
+		item("i1", "initiative", { title: "Phase 1" }),
+		item("f1", "feature", { partOf: "i1", assignee: "hal", title: "F1" }),
+		item("f2", "feature", { partOf: "i1", assignee: "luka", title: "F2" }),
+		item("t1", "task", { partOf: "f1", title: "T1" }),
+		item("lt", "task", { title: "LT" }),
+		item("lf", "feature", { title: "LF" }),
+		item("it", "task", { partOf: "inbox", title: "IT" }),
+		item("inbox", "feature", { container: true, title: "Inbox" }),
+	];
+	type Call = [string, string | null];
+	interface Rec { moves: Call[]; assigns: Call[] }
+	const setup = async (opts: { move?: (id: string, to: string | null, n: number) => ReturnType<NonNullable<WorkClient["move"]>>; assign?: NonNullable<WorkClient["assign"]>; items?: WorkListItem[]; undoMs?: number } = {}): Promise<Rec & { c: Fake }> => {
+		if (root) { act(() => root!.unmount()); root = null; document.body.innerHTML = ""; }
+		const rec: Rec = { moves: [], assigns: [] };
+		const c = fake({
+			items: opts.items ?? UI,
+			move: async (id, to) => (rec.moves.push([id, to]), opts.move ? opts.move(id, to, rec.moves.length) : { ok: true, data: {} }),
+			assign: async (id, w) => (rec.assigns.push([id, w]), opts.assign ? opts.assign(id, w) : { ok: true, data: {} }),
+		});
+		await mount(c, "/work", opts.undoMs === undefined ? {} : { undoMs: opts.undoMs });
+		await settle();
+		for (const k of ["i1", "f1", "no-initiative"]) await click(q(`work-toggle-${k}`)!);
+		return Object.assign(rec, { c });
+	};
+	/** Where each draggable row is dropped: the first valid target. */
+	const DROP: Record<string, string> = { t1: "f2", lf: "i1", it: "f1", lt: "f1" };
+	const pick = async (key: string) => {
+		await fire(q(`work-row-${key}`)!, "onDragStart");
+		await fire(q(`work-row-${DROP[key]!}`)!, "onDrop");
+		await settle();
+	};
+	const text = () => q("work-move-toast-msg")?.textContent;
+	const handoff = (id: string, from: string | null) => async () => ({ ok: true as const, data: { reassigned: [{ id, from, to: "luka" }] } });
+
+	it("announces a move with an Undo, adding the new assignee after a handoff", async () => {
+		await setup();
+		await pick("t1");
+		assert.equal(text(), "Moved T1 to F2");
+		assert.ok(q("work-move-undo"));
+		await setup({ move: handoff("t1", "hal") });
+		await pick("t1");
+		assert.equal(text(), "Moved T1 to F2 and assigned to luka");
+	});
+	it("undo moves back to the old parent: a feature to no initiative (null), a task to its Inbox container", async () => {
+		const r = await setup();
+		await pick("lf");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r.moves, [["lf", "i1"], ["lf", null]]);
+		assert.equal(text(), "Move undone");
+		assert.equal(q("work-move-undo"), null, "no redo chain");
+		await pick("it");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r.moves.slice(2), [["it", "f1"], ["it", "inbox"]]);
+	});
+	it("undo after a handoff gives the old assignee back, unless the move-back already did", async () => {
+		const r = await setup({ move: (id, _to, n) => handoff(id, "hal")().then((x) => (n === 2 ? { ok: true as const, data: { reassigned: [{ id, from: "luka", to: "hal" }] } } : x)) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r.moves, [["t1", "f2"], ["t1", "f1"]]);
+		assert.deepEqual(r.assigns, [], "the move-back handed it to hal already");
+		const r2 = await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.deepEqual(r2.assigns, [["t1", "hal"]]);
+	});
+	it("a failed undo shows the hub's message, keeps the notification and leaves the list alone", async () => {
+		const r = await setup({ move: (_id, _to, n) => Promise.resolve(n === 1 ? { ok: true as const, data: {} } : { ok: false as const, reason: "error" as const, message: "hub says no" }) });
+		await pick("t1");
+		const before = rows();
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.equal(text(), "hub says no");
+		assert.ok(q("work-move-undo"));
+		assert.deepEqual(rows(), before);
+		assert.equal(r.assigns.length, 0);
+	});
+	it("says so when the move-back worked but the assignee could not be restored", async () => {
+		await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()), assign: async () => ({ ok: false, reason: "error", message: "hal is offline" }) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.equal(text(), "moved back, but couldn't restore the assignee: hal is offline");
+	});
+	it("the notification goes after its timeout, and a second move replaces it", async () => {
+		await setup({ undoMs: 60 });
+		await pick("t1");
+		await pick("lf");
+		assert.equal(qa('[data-testid="work-move-toast"]').length, 1);
+		assert.equal(text(), "Moved LF to Phase 1");
+		await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
+		assert.equal(q("work-move-toast"), null);
+	});
+	it("a double click on Undo sends one undo, not two", async () => {
+		const r = await setup({ move: (id, _to, n) => (n === 2 ? Promise.resolve({ ok: true as const, data: {} }) : handoff(id, "hal")()) });
+		await pick("t1");
+		const btn = q("work-move-undo")!;
+		await act(async () => {
+			btn.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+			btn.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+		});
+		await settle();
+		assert.equal(r.moves.length, 2);
+		assert.deepEqual(r.assigns, [["t1", "hal"]]);
+	});
+	it("a failed undo's notification times out too, Undo with it", async () => {
+		await setup({ undoMs: 60, move: (_id, _to, n) => Promise.resolve(n === 1 ? { ok: true as const, data: {} } : { ok: false as const, reason: "error" as const, message: "hub says no" }) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await settle();
+		assert.equal(text(), "hub says no");
+		await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
+		assert.equal(q("work-move-toast"), null);
+		assert.equal(q("work-move-undo"), null);
+	});
+	it("an undo finishing after a newer move leaves the newer notification and its Undo alone", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		await setup({ move: async (_id, _to, n) => (n === 2 ? (await gate, { ok: true as const, data: {} }) : { ok: true as const, data: {} }) });
+		await pick("t1");
+		await click(q("work-move-undo")!);
+		await pick("lf");
+		assert.equal(text(), "Moved LF to Phase 1");
+		release();
+		await settle();
+		assert.equal(text(), "Moved LF to Phase 1");
+		assert.ok(q("work-move-undo"));
+	});
+	it("offers no Undo when the previous parent is unknown or its Inbox container is gone", async () => {
+		await setup();
+		await pick("lt");
+		assert.equal(text(), "Moved LT to F1");
+		assert.equal(q("work-move-undo"), null);
+		await setup({ items: UI.filter((x) => x.id !== "inbox") });
+		await pick("it");
+		assert.ok(q("work-move-toast"));
+		assert.equal(q("work-move-undo"), null);
 	});
 });

@@ -30,6 +30,7 @@ const STATUS_BY_CODE: Record<string, number> = {
 	busy: 409,
 	not_found: 404,
 	unauthorized: 401,
+	forbidden: 403,
 	version_mismatch: 426,
 	engine_error: 502,
 	invalid_request: 400,
@@ -78,6 +79,8 @@ function failure(err: unknown): Response {
 
 const unsupported = (code: "memory_unavailable" | "kb_unavailable", what: string): Response =>
 	json({ error: `${what} is not supported by this client`, code }, 409);
+
+const WORK_ID_RE = /^work-[a-z0-9-]+-[A-Za-z0-9]+$/;
 
 const flag = (v: string | null): boolean | undefined => (v === null ? undefined : v === "1" || v === "true");
 
@@ -134,6 +137,35 @@ export function createMemoryApi(source: ClientSource) {
 				if (!domain) return json({ error: "domain is required", code: "invalid_request" }, 400);
 				return json(await client.listWork(wolf, { domain, graduated }));
 			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/**
+		 * Owner work ops, a thin pass-through to the hub's PATCH: exactly one of `{assignee: "<wolf>"}` or `{moveTo: "<id>"|null}`.
+		 * Anything else is refused here (400) without calling the hub; the hub's own refusals come back with its message.
+		 * An assignee must be in the same wolf list the dropdown reads (`listWolves`, which the hub already limits to non-retired wolves; it
+		 * exposes no retired flag). That is only a guard: the hub's `knownWolf` check is the real gate (the hub deployed today does not have it).
+		 * It fails closed: no list, or an empty one, refuses the assign without calling the hub.
+		 */
+		async workOp(id: string, body: unknown): Promise<Response> {
+			try {
+				if (!WORK_ID_RE.test(id)) return json({ error: "malformed work item id", code: "invalid_request" }, 400);
+				const keys = typeof body === "object" && body !== null && !Array.isArray(body) ? Object.keys(body) : [];
+				const b = (body ?? {}) as { assignee?: unknown; moveTo?: unknown };
+				const ok = keys.length === 1 && ((keys[0] === "assignee" && typeof b.assignee === "string" && b.assignee !== "") || (keys[0] === "moveTo" && (b.moveTo === null || (typeof b.moveTo === "string" && b.moveTo !== ""))));
+				if (!ok) return json({ error: "body must be {assignee} or {moveTo}", code: "invalid_request" }, 400);
+				const client = source();
+				if (!client.patchWork) return unsupported("memory_unavailable", "work changes");
+				if (keys[0] === "assignee") {
+					const wolves = (await client.listWolves()).map((w) => w.name);
+					if (wolves.length === 0) return json({ error: "hub unreachable: no wolves known", code: "engine_error" }, 502);
+					if (!wolves.includes(b.assignee as string)) return json({ error: `unknown assignee "${String(b.assignee).slice(0, 64)}": not a wolf known to this hub`, code: "invalid_request" }, 400);
+				}
+				return json(await client.patchWork(id, keys[0] === "assignee" ? { assignee: b.assignee as string } : { moveTo: b.moveTo as string | null }));
+			} catch (err) {
+				// A fetch that never got an answer is a plain Error (not a ProtocolError): say the hub is unreachable, not "Internal error".
+				if (err instanceof Error && err.name !== "ProtocolError" && err.name !== "NotFoundError" && err.name !== "BusyError") return json({ error: "hub unreachable", code: "engine_error" }, 502);
 				return failure(err);
 			}
 		},

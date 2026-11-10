@@ -53,7 +53,7 @@ export const PatchWorkOpSchema = z
     body: z.string().optional(),
     standing: z.boolean().optional(),
     schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
-    /** Replace the `plan` or `notes` section of the body. Any other name (e.g. the generated `record`/`log`) is `invalid_request`. */
+    /** Replace the `plan`, `notes` or `Record` section of the body. `Record` is matched exactly (case and spacing); any other name (e.g. `log`) is `invalid_request`. */
     section: z.object({ name: z.string(), text: z.string() }).strict().optional(),
   })
   .strict();
@@ -63,7 +63,8 @@ export const PATCH_BATCH_MAX = 50;
 export const PatchWorkBatchSchema = z.object({ ops: z.array(PatchWorkOpSchema).min(1).max(PATCH_BATCH_MAX) }).strict();
 export const PatchWorkRequestSchema = z.union([PatchWorkBatchSchema, PatchWorkOpSchema]);
 export type PatchWorkRequest = z.infer<typeof PatchWorkRequestSchema>;
-export const WorkItemResponseSchema = z.object({ item: WorkWriteItemSchema });
+/** `reassigned`: set by a move that handed a task to another wolf (the task's new holder). Without it zod would strip the field from the client's parse. */
+export const WorkItemResponseSchema = z.object({ item: WorkWriteItemSchema, reassigned: z.array(z.object({ id: z.string(), from: z.string().nullable(), to: z.string() })).optional() });
 export type WorkItemResponse = z.infer<typeof WorkItemResponseSchema>;
 
 export const DeleteWorkResponseSchema = z.object({ deleted: z.array(z.string()) });

@@ -161,17 +161,35 @@ export function tryOutboxLock(dir: string, hooks: { beforeTakeover?: () => void 
   return undefined;
 }
 
+/** The wolf-facing words for a handoff or an inherited assignee: "; now assigned to hal" (empty when nothing was reassigned). */
+export function handoffText(reassigned: { id: string; from: string | null; to: string }[]): string {
+  return reassigned.map((r) => `; now assigned to ${r.to}`).join("");
+}
+
+/**
+ * The note a create adds when the item did not get the assignee the wolf asked for (a feature's assignee wins). Empty when nothing
+ * was asked, the ask was met, or the ask was the wolf's own name and the hub's "now assigned to X" already said it.
+ */
+export function overrideNote(requested: string | undefined, got: string | undefined, wolf: string, assignedTo?: string): string {
+  if (!requested || !got || got === requested) return "";
+  if (assignedTo && requested === wolf) return "";
+  return `; the feature's assignee ${got} applies, not ${requested}`;
+}
+
 export class WorkClient {
   private endpoint: string;
   private token: string;
   private timeoutMs: number;
   private outboxDir: string | undefined;
+  /** The wolf this client acts as: sent as X-Wolf so the hub knows which wolf of a multi-wolf host is writing. */
+  private wolf: string | undefined;
 
   /**
    * `outboxDir`: where writes wait while the hub is unreachable (one file per write, sent oldest first with its Idempotency-Key, so a
    * resend never applies twice). Without it a write that cannot reach the hub throws as before.
    */
-  constructor(endpoint?: string, token?: string, timeoutMs: number = WORK_TIMEOUT_MS, outboxDir?: string) {
+  constructor(endpoint?: string, token?: string, timeoutMs: number = WORK_TIMEOUT_MS, outboxDir?: string, wolf?: string) {
+    this.wolf = wolf ?? process.env.WOLF_NAME;
     this.outboxDir = outboxDir;
     this.timeoutMs = timeoutMs;
     this.endpoint = (endpoint ?? process.env.WORK_ENDPOINT ?? "").replace(/\/$/, "");
@@ -180,7 +198,7 @@ export class WorkClient {
 
   /** The same hub and token with another per-request limit (the default stays WORK_TIMEOUT_MS). */
   withTimeout(ms: number): WorkClient {
-    return new WorkClient(this.endpoint, this.token, ms, this.outboxDir);
+    return new WorkClient(this.endpoint, this.token, ms, this.outboxDir, this.wolf);
   }
 
   get configured(): boolean {
@@ -198,6 +216,7 @@ export class WorkClient {
         method,
         headers: {
           "X-API-Key": this.token,
+          ...(this.wolf ? { "X-Wolf": this.wolf } : {}),
           ...(body ? { "Content-Type": "application/json" } : {}),
           ...(key ? { "Idempotency-Key": key } : {}),
         },
@@ -413,7 +432,7 @@ export class WorkClient {
     return r.data as T;
   }
 
-  async create(input: CreateWorkInput): Promise<{ id: string; item: WorkItem }> {
+  async create(input: CreateWorkInput): Promise<{ id: string; item: WorkItem; assignedTo?: string }> {
     return this.request("POST", "", input);
   }
 
@@ -472,8 +491,13 @@ export class WorkClient {
   }
 
   async move(id: string, to: string): Promise<WorkItem> {
-    const res = await this.request<{ item: WorkItem }>("PATCH", `/${id}`, { moveTo: to });
-    return res.item;
+    return (await this.moveReport(id, to)).item;
+  }
+
+  /** Move, and report a handoff: a task moved under another wolf's feature is also assigned to that wolf (`reassigned`). */
+  async moveReport(id: string, to: string | null): Promise<{ item: WorkItem; reassigned: { id: string; from: string | null; to: string }[] }> {
+    const res = await this.request<{ item: WorkItem; reassigned?: { id: string; from: string | null; to: string }[] }>("PATCH", `/${id}`, { moveTo: to });
+    return { item: res.item, reassigned: res.reassigned ?? [] };
   }
 
   async link(id: string, rel: string, target: string): Promise<WorkItem> {

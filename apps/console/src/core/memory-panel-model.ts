@@ -331,6 +331,8 @@ export interface PoolObservation {
 	blockedKey?: string;
 	/** Cause forbidden: the wolf the blocking item is assigned to. */
 	assignee?: string;
+	/** The hub's message when blocked is "forbidden". */
+	blockedMessage?: string;
 }
 
 export type BlockedCause = "work-api-unavailable" | "consolidation-failed" | "forbidden";
@@ -347,6 +349,8 @@ export interface ObservationGroup {
 	/** The key that blocks them (the feature, when it is not the group's own key). */
 	blockedKey?: string;
 	assignee?: string;
+	/** The hub's message when the cause is forbidden. */
+	blockedMessage?: string;
 	/** Sort stamp of the group's newest observation. */
 	latest: string;
 }
@@ -384,6 +388,7 @@ export function groupObservations(obs: readonly PoolObservation[]): ObservationG
 			g2.blockedCount = (g2.blockedCount ?? 0) + 1;
 			if (o.blockedKey) g2.blockedKey = o.blockedKey;
 			if (o.assignee) g2.assignee = o.assignee;
+			if (o.blockedMessage) g2.blockedMessage = o.blockedMessage;
 		}
 	}
 	const rows = [...groups.values()];
@@ -396,12 +401,14 @@ export const observationsInGroup = (obs: readonly PoolObservation[], key: string
 
 /** The note a blocked group shows. */
 export const BLOCKED_LABEL = "waiting for Work API";
-export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying", forbidden: "not allowed (another host)" } as const;
+export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying", forbidden: "refused by the hub" } as const;
 
 /** What a blocked group shows: the cause, and the feature's Record when that (not the group's own item) is what blocks it. */
-export function blockedLabel(g: Pick<ObservationGroup, "key" | "blocked" | "blockedKey" | "assignee">, info: Readonly<Record<string, GroupInfo | undefined>>): string {
+export function blockedLabel(g: Pick<ObservationGroup, "key" | "blocked" | "blockedKey" | "assignee" | "blockedMessage">, info: Readonly<Record<string, GroupInfo | undefined>>): string {
 	if (!g.blocked) return "";
-	const cause = g.blocked === "forbidden" && g.assignee ? `not allowed: assigned to ${g.assignee}` : BLOCKED_LABELS[g.blocked];
+	const cause = g.blocked === "forbidden" && g.blockedMessage ? `${BLOCKED_LABELS.forbidden}: ${g.blockedMessage}`
+		: g.blocked === "forbidden" && g.assignee ? `${BLOCKED_LABELS.forbidden}: assigned to ${g.assignee}`
+		: BLOCKED_LABELS[g.blocked];
 	const via = g.blockedKey && g.blockedKey !== g.key ? ` \u00b7 waiting on ${info[g.blockedKey]?.title || g.blockedKey}'s Record` : "";
 	return cause + via;
 }

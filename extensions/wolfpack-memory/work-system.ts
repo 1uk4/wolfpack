@@ -26,7 +26,7 @@ import {
   type WorkItem,
   type WorkId,
 } from "@wolfpack/kb/client";
-import { WorkClient, shipAndRollup } from "./work-client.js";
+import { WorkClient, handoffText, overrideNote, shipAndRollup } from "./work-client.js";
 import {
   startFileTracking,
   stopFileTracking,
@@ -340,7 +340,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return;
   }
 
-  const client = new WorkClient();
+  const client = new WorkClient(undefined, undefined, undefined, undefined, wolfName);
 
   /**
    * A subagent child (PI_SUBAGENT_AGENT) never binds: the binding belongs to the
@@ -1423,12 +1423,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             to.toLowerCase() === "inbox" ? (await client.ensureInbox(item.domain as string, wolfName)).id
             : to.toLowerCase() === "none" ? null
             : to;
-          const moved = await client.move(id, parentId);
+          const { item: moved, reassigned } = await client.moveReport(id, parentId);
           await refreshActiveItem();
           updateWidget(ctx);
           let where = "no parent";
           if (moved.partOf) { try { where = (await client.get(moved.partOf as string)).title; } catch {} }
-          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}` }] };
+          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}${handoffText(reassigned)}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }
@@ -1452,7 +1452,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         title: Type.String({ description: "Short title for the work item" }),
         area: Type.Optional(Type.String({ description: "Horizontal area: marketing, engineering, analysis…" })),
         successCriteria: Type.Optional(Type.String({ description: "Done-condition (required for tasks)" })),
-        assignee: Type.Optional(Type.String({ description: "Wolf to assign (default: current wolf)" })),
+        assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone." })),
         partOf: Type.Optional(Type.String({ description: "Parent work item ID (a feature for task/issue/spike; an initiative or none for a feature)" })),
         standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
         bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
@@ -1499,6 +1499,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           const result = await client.create(input);
           let reply = `Created ${result.id}: ${result.item.title} [${result.item.stage}]`;
+          if (result.assignedTo) reply += handoffText([{ id: result.id, from: null, to: result.assignedTo }]);
+          reply += overrideNote(params.assignee, result.item.assignee as string | undefined, wolfName, result.assignedTo);
           // One at a time, from the binding as it is now: the first task created binds, the rest see it.
           reply += await bindSerial(async () => {
             await syncBinding(ctx);

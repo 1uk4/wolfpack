@@ -27,6 +27,7 @@ import {
   HttpWorkRecordStore,
   distillTaskToFeature,
   sweepPendingDistills,
+  runFinalPass,
   serializeBranchEntries,
   type MemoryOrchestrator,
   type Observation,
@@ -1660,11 +1661,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
+        return previewGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain, finalPass: finalPassHook });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-        const done = await confirmGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
+        const done = await confirmGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, finalPass: finalPassHook, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
         unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;
@@ -1699,12 +1700,18 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     }
   } catch { /* best effort */ }
 
+  // Final feature pass (same gate as the ship distill): drains pending task distills, then tidies the feature Record once.
+  const finalPassHook = workLogAppend && workRecordStore.configured
+    ? async (featureId: string) => (engine ? runFinalPass({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName), store: workRecordStore, engine, featureId, src: wolfName }) : { ok: false, reason: "no engine" })
+    : undefined;
+
   workHandle = initWorkSystem(pi, {
     ...workConfig,
     // `memory.workLog: append` in wolf.yaml gates the ship distill (read like subagentMemory above; needs the engine and the Work API).
     ...(workLogAppend && workRecordStore.configured
       ? { distillOnShip: async (taskId: string) => (engine ? distillTaskToFeature({ store: workRecordStore, engine, taskId, src: wolfName }) : { ok: false, reason: "no engine" }) }
       : {}),
+    ...(finalPassHook ? { finalPassOnShip: finalPassHook } : {}),
     domains: wolfDomains,
     getCurrentDomain: () => currentDomain,
   }) ?? null;

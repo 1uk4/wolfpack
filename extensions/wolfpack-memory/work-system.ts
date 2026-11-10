@@ -313,6 +313,8 @@ export interface WorkSystemConfig {
   getStageContext?: (item: WorkItem) => string;
   /** Ship distill hook, set only when wolf.yaml has `memory.workLog: append`. Called after a task ships and its rollup ran. */
   distillOnShip?: (taskId: string) => Promise<unknown>;
+  /** Final feature pass, set only when wolf.yaml has `memory.workLog: append`. Called when a feature ships and at graduation; never blocks. */
+  finalPassOnShip?: (featureId: string) => Promise<unknown>;
   /** Callback when task completes (for summarization) */
   onTaskComplete?: (taskId: string, item: WorkItem) => Promise<void>;
   /** Append mode (`memory.workLog: append`): write the pending work observations to their logs now. Called on ship and unbind. */
@@ -370,6 +372,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         if (r && r.ok === false) debugLog("ship distill failed", { id, reason: r.reason });
       } catch (err) {
         debugLog("ship distill failed", { id, err: String(err) });
+      }
+    }
+    if (config.finalPassOnShip && (item as { kind?: string }).kind === "feature") {
+      try {
+        const r = (await config.finalPassOnShip(id)) as { ok?: boolean; reason?: string } | undefined;
+        if (r && r.ok === false) debugLog("final pass failed", { id, reason: r.reason });
+      } catch (err) {
+        debugLog("final pass failed", { id, err: String(err) });
       }
     }
     return item;

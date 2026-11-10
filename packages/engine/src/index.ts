@@ -54,3 +54,4 @@ export * from "./usage-log.js";
 
 // Pipeline — parse, search, commit, index
 export * from "./pipeline/index.js";
+export * from "./work-tidy.js";

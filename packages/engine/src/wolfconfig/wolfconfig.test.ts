@@ -345,6 +345,8 @@ describe("wolf.yaml models:", () => {
     const after = JSON.parse(fs.readFileSync(mj, "utf8")) as typeof current & { steps: Record<string, unknown> };
     expect(after.steps.splitSection).toEqual({ tier: "fast" });
     delete after.steps.splitSection;
+    expect(after.steps.workTidy).toEqual({ tier: "smart" });
+    delete after.steps.workTidy;
     expect(after).toEqual(current);
     // With that step present (the current shape) it is `unchanged`.
     expect(regen().status).toBe("unchanged");

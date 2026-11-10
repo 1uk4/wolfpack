@@ -49,6 +49,7 @@ export const ENGINE_STEPS = [
   "sectionSummary",
   "labelSection",
   "splitSection",
+  "workTidy",
 ] as const;
 export type EngineStep = (typeof ENGINE_STEPS)[number];
 
@@ -69,6 +70,7 @@ export const STEP_TIERS: Record<EngineStep, Tier> = {
   sectionSummary: "fast",
   labelSection: "fast",
   splitSection: "fast",
+  workTidy: "smart",
 };
 
 /** pi's thinking levels (`pi --help`), used everywhere thinking is set. */

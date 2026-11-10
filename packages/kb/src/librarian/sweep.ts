@@ -63,6 +63,7 @@ import {
 } from "../schema/knowledge.js";
 import type { Engine } from "@wolfpack/engine";
 import { performance } from "node:perf_hooks";
+import { listEntryFiles, readEntryCached } from "./entry-cache.js";
 import type { Timings } from "./timings.js";
 import { entriesDir, type KbRoots, type DecisionSummary, type DecisionRouting } from "../shared/index.js";
 
@@ -93,6 +94,8 @@ export interface SweepContext {
   lane?: string;
   /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
   writer?: SweepWriter;
+  /** The tick's once-per-tick ledger read (memoized by the caller, so vectors and sweep parse the file once). Default: read it. */
+  readLog?: () => KbEvent[];
   /** Step timings for the tick's one log line (see timings.ts). */
   timings?: Timings;
 }
@@ -348,12 +351,12 @@ export function oversizedParents(roots: KbRoots, sections: Section[]): string[] 
     const counts = new Map<string, number>();
     const dir = join(roots.kbBase, "domains", domain, "entries");
     if (!existsSync(dir)) continue;
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith(".md") || f.startsWith(".")) continue;
-      let raw: string;
-      try { raw = readFileSync(join(dir, f), "utf-8"); } catch { continue; }
-      if (groupOf(raw)) continue;
-      const sec = String(parseFrontmatter(raw).fields.section ?? "");
+    for (const f of listEntryFiles(dir)) {
+      if (f.startsWith(".")) continue;
+      let e;
+      try { e = readEntryCached(join(dir, f)); } catch { continue; }
+      if (!e || e.group()) continue;
+      const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
     }
     for (const [id, n] of [...counts].sort()) if (n > DEFAULT_RULES.splitAbove) out.push(`${id} (${n})`);
@@ -402,7 +405,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // wait for the next tick.
   const T = ctx.timings;
   const timed = <X>(step: string, fn: () => X): X => (T ? T.time(step, fn) : fn());
-  const log = timed("ledger", () => readLedger(roots));
+  const log = timed("ledger", () => ctx.readLog?.() ?? readLedger(roots));
   const seen = seenHashes(log);
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));

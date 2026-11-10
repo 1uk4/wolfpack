@@ -5,7 +5,7 @@
  * truth, _sections.json is a derived snapshot for fast reads, and the tree
  * is folded on each sweep.
  */
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
 import type { KbRoots, KbEvent } from "../shared/index.js";
@@ -19,13 +19,28 @@ export const sectionsFile = (r: KbRoots) =>
 
 // ── persistence ──────────────────────────────────────────────────────────────
 
+// The snapshot is ~1 MB: parse it once per (path, mtimeMs, size). Any outside write changes mtime or size, so it is re-read.
+// Callers get their own structuredClone of the parsed value and may mutate it, as with an uncached read.
+const sectionsCache = new Map<string, { mtimeMs: number; size: number; parsed: Section[] }>();
+
 /** Read the current section tree snapshot. */
 export function readSections(roots: KbRoots): Section[] {
   const file = sectionsFile(roots);
-  if (!existsSync(file)) return [];
+  let st;
   try {
-    return JSON.parse(readFileSync(file, "utf-8"));
+    st = statSync(file);
   } catch {
+    sectionsCache.delete(file);
+    return [];
+  }
+  try {
+    const hit = sectionsCache.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return structuredClone(hit.parsed);
+    const parsed = JSON.parse(readFileSync(file, "utf-8")) as Section[];
+    sectionsCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, parsed });
+    return structuredClone(parsed);
+  } catch {
+    sectionsCache.delete(file);
     return [];
   }
 }

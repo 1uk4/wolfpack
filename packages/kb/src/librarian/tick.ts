@@ -15,7 +15,7 @@ import { DomainsFileError } from "../shared/domain-registry.js";
 import { readDeclaredDomains } from "./domains.js";
 import { rebuildJournalFile } from "./rebuild-commit.js";
 import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
-import type { KbRoots } from "../shared/index.js";
+import type { KbRoots, KbEvent } from "../shared/index.js";
 import type { SweepWriter } from "./sweep-writer.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
@@ -190,8 +190,11 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const getEmbedder = () => (embedder ??= opts.getEmbedder?.() ?? createEmbedder(roots));
   let liveEntries = 0;
   const timings = createTimings();
+  // The ledger is parsed once per tick; the sweep's duplicate check and the vectors share it (nothing appends before both ran).
+  let ledgerMemo: KbEvent[] | undefined;
+  const readLog = () => (ledgerMemo ??= timings.time("ledger", () => readLedger(roots)));
   const loadEntryVectors = async () => {
-    const reg = timings.time("ledger", () => foldRegistry(readLedger(roots)));
+    const reg = foldRegistry(readLog());
     const vectors = await buildEntryVectors(roots, reg, getEmbedder(), undefined, timings);
     liveEntries = vectors.length;
     return vectors;
@@ -200,7 +203,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   // A hung call must never hold the tick: past the run budget plus slack, give
   // up (the KB lock still guards against overlap).
   const swept = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
-    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer, timings })
+    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer, timings, readLog })
   );
 
   let reorged: ReorgResult | undefined;

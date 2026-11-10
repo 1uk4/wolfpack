@@ -188,7 +188,8 @@ export function useAskSession(target: Pick<AttachedRef, "wolf" | "slug">, card: 
 	const flushNote = useCallback(() => {
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = null;
-		if (!dirty.current) return;
+		// While the submit is in flight wolfd has claimed the card: a note PUT would be a 409 ("questions changed").
+		if (!dirty.current || inFlight.current) return;
 		dirty.current = false;
 		void request(cardNoteUrl(wolf, slug, callId), "PUT", noteBody(noteRef.current)).then((r) => {
 			if (!r.ok) setError(r.error ?? "Could not save the note.");
@@ -287,12 +288,19 @@ export function useAskSession(target: Pick<AttachedRef, "wolf" | "slug">, card: 
 		inFlight.current = false;
 		setBusy(false);
 		if (r.ok) {
-			setNote({ text: "", atts: [] });
+			// Only the note that was sent is cleared; text typed meanwhile stays as a normal draft and is saved.
+			if (JSON.stringify(noteBody(noteRef.current)) === JSON.stringify(n)) {
+				noteRef.current = { text: "", atts: [] };
+				setNote(noteRef.current);
+			} else {
+				dirty.current = true;
+				timer.current = setTimeout(flushNote, NOTE_DEBOUNCE_MS);
+			}
 			return hooksRef.current.onSubmitted?.();
 		}
 		dirty.current = Object.keys(n).length > 0;
 		failure(r, "submit");
-	}, [wolf, slug, callId, fieldsOf, failure]);
+	}, [wolf, slug, callId, fieldsOf, failure, flushNote]);
 	const sendNoteAsMessage = useCallback(async (send: SendNote) => {
 		const n = noteRef.current;
 		const ok = await send(n.text.trim(), readyRefs(n.atts));
@@ -321,7 +329,7 @@ export function useAskSession(target: Pick<AttachedRef, "wolf" | "slug">, card: 
 		const n = noteRef.current;
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = null;
-		dirty.current = true; // the cleared note goes to wolfd with the next flush
+		dirty.current = !inFlight.current; // the cleared note goes to wolfd with the next flush (not while a submit is in flight: wolfd has the card claimed)
 		noteRef.current = { text: "", atts: [] };
 		setNote(noteRef.current);
 		flushNote();

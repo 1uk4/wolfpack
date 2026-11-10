@@ -126,7 +126,7 @@ export interface ConsoleClient {
   /** Store the owner's note (text, upload ids) on a paged card; an empty note clears it. Optional. */
   putCardNote?(threadId: string, callId: string, note: { text?: string; attachments?: string[] }): Promise<void>;
   /** Hold typed text as the answer of question `qid` of a paged card, any page (not a chat message). Optional. */
-  bindCardText?(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }): Promise<void>;
+  bindCardText?(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }, stepsKey?: string): Promise<void>;
   /** Bytes of a rendered diagram by id (a card field's `diagram`). NotFoundError for anything but a published diagram. Optional. */
   getDiagram?(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
   /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */

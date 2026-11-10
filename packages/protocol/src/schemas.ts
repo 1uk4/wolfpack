@@ -1687,6 +1687,8 @@ export const BindCardTextBodySchema = z
     /** Multi questions only: the whole picked/custom list, replacing the question's draft (`text` is ignored). Images stay unless `attachments` is given. */
     picked: z.array(z.string()).max(50).optional(),
     others: z.array(z.string().max(BIND_TEXT_MAX)).max(50).optional(),
+    /** `stepsKey(card)` of the pages the client saw: a mismatch after an ask_revise is a 409. */
+    stepsKey: z.string().optional(),
   })
   .refine((b) => (b.text ?? "").trim() !== "" || (b.attachments?.length ?? 0) > 0 || b.others !== undefined, { message: "give non-blank text, at least one attachment or a list of custom answers" });
 export type BindCardTextBody = z.infer<typeof BindCardTextBodySchema>;

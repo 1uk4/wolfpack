@@ -54,8 +54,11 @@ let session: ReturnType<typeof useAskSession>;
 const submitted: string[] = [];
 const collapsed: { text: string }[] = [];
 const realFetch = globalThis.fetch;
+/** Holds the submit POST in flight until released. */
+let submitGate: Promise<void> | undefined;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	calls.push({ method: String(init?.method), url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+	if (String(input).endsWith("/submit") && submitGate) await submitGate;
 	return Response.json({ accepted: true, disposition: "started" });
 }) as typeof fetch;
 
@@ -103,7 +106,9 @@ afterEach(async () => {
 	sendOk = true;
 	submitted.length = 0;
 	collapsed.length = 0;
+	submitGate = undefined;
 });
+const notePuts = () => calls.filter((c) => c.method === "PUT" && c.url.endsWith("/note"));
 
 describe("questionnaire note", () => {
 	it("typing a note stores it once through the note route after the debounce", async () => {
@@ -135,6 +140,47 @@ describe("questionnaire note", () => {
 		assert.deepEqual(post.body.note, { text: "thanks" });
 		assert.deepEqual(submitted, ["s"]);
 		assert.equal(noteText(), ""); // cleared after the submit
+		await wait(480);
+		assert.equal(notePuts().length, 0); // the submit carried the note: no debounced PUT follows
+	});
+
+	it("text typed while the submit is in flight is kept as a draft and saved, not cleared", async () => {
+		await render(pending({ draft: { q1: { value: "b" } } as never }));
+		await type("thanks");
+		let release!: () => void;
+		submitGate = new Promise<void>((r) => (release = r));
+		await press();
+		await type("thanks, and one more thing");
+		release();
+		await wait(0);
+		assert.equal(noteText(), "thanks, and one more thing");
+		await wait(480);
+		assert.deepEqual(notePuts().map((c) => c.body), [{ text: "thanks, and one more thing" }]);
+	});
+
+	it("collapsing or flushing the note during an in-flight submit sends no note PUT", async () => {
+		await render(pending({ draft: { q1: { value: "b" } } as never }));
+		await type("thanks");
+		submitGate = new Promise<void>(() => {});
+		await press();
+		await act(async () => void session.collapse());
+		await wait(480);
+		assert.equal(notePuts().length, 0);
+	});
+
+	it("Enter in the composer and a real form submit (the button's click) each arm, then send", async () => {
+		await render(pending());
+		await type("just ship it");
+		// linkedom cannot carry a real keydown into React's textarea input polyfill, so Enter goes through the textarea's own handler.
+		const enter = () => act(async () => void props(q("textarea")!, "onKeyDown")({ key: "Enter", shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {} }));
+		await enter();
+		assert.equal(armed(), true);
+		assert.deepEqual(sent, []);
+		await enter();
+		assert.deepEqual(sent, ["just ship it"]);
+		await type("again");
+		await act(async () => void q('form[data-testid="composer"]')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+		assert.equal(armed(), true);
 	});
 
 	it("the first press arms 'Send anyway?' without sending: label, hint and accessible name name the open questions", async () => {

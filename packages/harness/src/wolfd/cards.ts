@@ -76,6 +76,8 @@ export class CardTracker {
   private readonly paged = new Map<string, PagedState>();
   /** Why the last ask_revise of a card was not applied when its transcript entry was folded; told to the agent with the submit. */
   private readonly reviseRejected = new Map<string, string>();
+  /** Rejections of an ask_revise folded after the submit claimed the card (its answer is already on its way): the thread tells the agent in a follow-up. */
+  private readonly lateRevise: string[] = [];
   /** Cards whose content changed through the transcript (a revise): the thread re-announces them. */
   private readonly changed = new Set<string>();
 
@@ -87,9 +89,15 @@ export class CardTracker {
     this.claimed.clear();
     this.paged.clear();
     this.reviseRejected.clear();
+    this.lateRevise.length = 0;
     this.changed.clear();
     for (const e of entries) this.apply(e);
     this.changed.clear();
+  }
+
+  /** Rejected ask_revise reasons that came too late for the submit (cleared). */
+  takeLateRevise(): string[] {
+    return this.lateRevise.splice(0);
   }
 
   /** Card ids whose content changed since the last call (cleared). */
@@ -136,7 +144,10 @@ export class CardTracker {
         this.reviseRejected.delete(card.revises);
         this.changed.add(card.revises);
       } else if (orig) {
-        this.reviseRejected.set(card.revises, "problem" in plan ? plan.problem : "the replacement pages are not a valid questionnaire (a question id is reused?)");
+        const why = "problem" in plan ? plan.problem : "the replacement pages are not a valid questionnaire (a question id is reused?)";
+        // A claimed card's answer text was already built: the rejection cannot ride it, so it is told separately.
+        if (this.claimed.has(card.revises)) this.lateRevise.push(why);
+        else this.reviseRejected.set(card.revises, why);
       }
       return closed;
     }
@@ -316,7 +327,8 @@ export class CardTracker {
     const st = this.paged.get(callId) ?? freshState();
     const text = note.text ?? "";
     const atts = [...new Set(note.attachments ?? [])];
-    const held = imageCount(st.answers) + imageCount(st.draft);
+    const { note: _n, ...withoutNote } = st;
+    const held = imagesHeld(withoutNote);
     if (held + atts.length > ATTACHMENT_MAX_PER_SUBMIT) return `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${held} already attached to questions)`;
     const bad = owned ? atts.find((id) => !owned(id)) : undefined;
     if (bad !== undefined) return `unknown attachment ${bad}`;

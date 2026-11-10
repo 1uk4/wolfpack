@@ -192,9 +192,9 @@ export class HttpConsoleClient implements ConsoleClient {
     await this.json("putCardNote", { id: threadId, callId }, ROUTES.putCardNote.response.schema, { ...(note.text ? { text: note.text } : {}), ...(note.attachments?.length ? { attachments: note.attachments } : {}) }, threadId);
   }
 
-  async bindCardText(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }): Promise<void> {
+  async bindCardText(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }, stepsKey?: string): Promise<void> {
     // Empty text and empty attachments are left out of the body, so "neither" reaches the server as `{}` and is refused there (400).
-    await this.json("bindCardText", { id: threadId, callId, qid }, ROUTES.bindCardText.response.schema, { ...(text ? { text } : {}), ...(attachments?.length ? { attachments } : {}), ...(multi ?? {}) }, threadId);
+    await this.json("bindCardText", { id: threadId, callId, qid }, ROUTES.bindCardText.response.schema, { ...(text ? { text } : {}), ...(attachments?.length ? { attachments } : {}), ...(multi ?? {}), ...(stepsKey ? { stepsKey } : {}) }, threadId);
   }
 
   async getDiagram(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {

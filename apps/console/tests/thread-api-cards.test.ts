@@ -95,6 +95,17 @@ describe("thread API: bindCardText custom answers", () => {
 	});
 });
 
+describe("thread API: bindCardText stepsKey", () => {
+	it("passes the stepsKey through for text and for custom lists, and refuses a non-string", async () => {
+		const seen: unknown[] = [];
+		const api = createThreadApi(() => Object.assign(new MockConsoleClient({ delayMs: 0 }), { bindCardText: async (_t: string, _c: string, _q: string, _text: string, _att?: string[], _multi?: unknown, key?: string) => void seen.push(key) }));
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "why", stepsKey: "k1" }))).status, 200);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ picked: [], others: ["x"], stepsKey: "k2" }))).status, 200);
+		assert.deepEqual(seen, ["k1", "k2"]);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ text: "why", stepsKey: 3 }))).status, 400);
+	});
+});
+
 describe("thread API: skipCard", () => {
 	const api = createThreadApi(() => new MockConsoleClient({ delayMs: 0 }));
 

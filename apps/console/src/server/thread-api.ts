@@ -339,8 +339,10 @@ export function createThreadApi(source: ClientSource) {
 		/** "Answering Qn": hold typed text as question `qid`'s answer (not a chat message): `POST .../questions/:qid/text`. */
 		async bindCardText(ref: ThreadRef, callId: string, qid: string, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { text?: unknown; attachments?: unknown; picked?: unknown; others?: unknown } | null;
+				const body = (await req.json().catch(() => null)) as { text?: unknown; attachments?: unknown; picked?: unknown; others?: unknown; stepsKey?: unknown } | null;
 				if (!body) return json({ error: "text or attachments is required" }, 400);
+				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
+				const key = body.stepsKey as string | undefined;
 				const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 				// A multi question's whole picked/custom list (replaces its draft); `text` is not used then.
 				if (body.others !== undefined) {
@@ -349,7 +351,7 @@ export function createThreadApi(source: ClientSource) {
 					const atts = Array.isArray(body.attachments) && body.attachments.every((a) => typeof a === "string") ? (body.attachments as string[]) : [];
 					const c = source();
 					if (!c.bindCardText) return json({ error: "this client has no paged cards" }, 501);
-					await c.bindCardText(await resolve(c, ref), callId, qid, "", atts.length ? atts : undefined, multi);
+					await c.bindCardText(await resolve(c, ref), callId, qid, "", atts.length ? atts : undefined, multi, key);
 					return json({ accepted: true });
 				}
 				if (body.text !== undefined && typeof body.text !== "string") return json({ error: "text must be a string" }, 400);
@@ -359,7 +361,7 @@ export function createThreadApi(source: ClientSource) {
 				if (text.trim() === "" && attachments.length === 0) return json({ error: "text or attachments is required" }, 400);
 				const client = source();
 				if (!client.bindCardText) return json({ error: "this client has no paged cards" }, 501);
-				await client.bindCardText(await resolve(client, ref), callId, qid, text, attachments.length ? attachments : undefined);
+				await client.bindCardText(await resolve(client, ref), callId, qid, text, attachments.length ? attachments : undefined, undefined, key);
 				return json({ accepted: true });
 			} catch (err) {
 				return failure(err);

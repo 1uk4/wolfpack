@@ -313,6 +313,9 @@ export class ThreadRuntime {
         this.syncCards(closed);
         const changedIds = this.cards.takeChanged();
         for (const id of changedIds) this.announceHeld(id);
+        for (const why of this.cards.takeLateRevise()) {
+          this.submit(`Note: your earlier ask_revise was NOT applied: ${why}`, "followUp", [], { internal: true }).catch((e) => this.host.onError(e));
+        }
         if (changedIds.length || [...closed.values()].some((c) => c !== "answered")) this.notify();
       }
     }
@@ -847,6 +850,9 @@ export class ThreadRuntime {
       if (problem && problem !== "not_found") throw new HttpError("invalid_request", problem);
     }
     // Synchronous from here to the claim: a concurrent submit finds the card claimed (409).
+    // The on-screen page's answers are saved first, so the restore state (if the submit is withdrawn for good) has them.
+    // NOTE: body.note replaces the stored note (setNote above) even if the claim is later released.
+    if (lastAnswers) this.cards.savePage(callId, pending.pageIndex ?? 0, lastAnswers, pending.pageIndex ?? 0);
     const ready = this.cards.claimSubmit(callId, answers);
     if (!ready) throw new HttpError("not_found", `card ${callId}`);
     const before = this.turnStarts;
@@ -935,7 +941,9 @@ export class ThreadRuntime {
   }
 
   /** "Answering Qn": hold typed text and/or uploaded images as that question's answer (not a chat message, supersedes nothing). */
-  bindCardText(callId: string, qid: string, text: string, attachments: readonly string[] = [], multi?: { picked: string[]; others: string[] }): void {
+  bindCardText(callId: string, qid: string, text: string, attachments: readonly string[] = [], multi?: { picked: string[]; others: string[] }, stepsKey?: string): void {
+    // Same answers as save and note: 409 while the submit is in flight, 409 for other pages than the client saw.
+    this.checkStepsKey(this.pagedCard(callId), stepsKey);
     const ids = [...new Set(attachments)];
     if (ids.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
     // The tracker checks card, question and kind first, then calls `owned`: the id must be an upload of THIS thread (a stat).
@@ -966,7 +974,7 @@ export class ThreadRuntime {
   async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
-    if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: answer it page by page (submitCard)`);
+    if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: save its pages as drafts (saveCardPage) and send them once (submitCard)`);
     const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
     const answers = dropHiddenAnswers(pending.card, rawAnswers);

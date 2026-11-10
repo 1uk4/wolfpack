@@ -170,6 +170,11 @@ describe("memory panel model", () => {
 		assert.match(promoteLine(reconcilePromote(s, done)) ?? "", /3 consolidated, 2 contributed/);
 		assert.deepEqual(reconcilePromote(PROMOTE_IDLE, st("live")), PROMOTE_IDLE);
 	});
+	it("a tree response of the wrong shape gives no rows instead of throwing", () => {
+		for (const bad of [{}, { features: [] }, { features: [{ id: "x" }], other: [], den: { pending: 1 } }, null]) {
+			assert.deepEqual(buildMemoryTreeRows(bad as never), []);
+		}
+	});
 	it("the tree rows nest tasks under features, order by live work then size, and end with other and den", () => {
 		const rows = buildMemoryTreeRows({
 			features: [

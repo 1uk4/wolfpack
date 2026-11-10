@@ -17,6 +17,18 @@ export type MemoryTreeRow =
 	| { kind: "other"; id: string; pending: number; archived: number }
 	| { kind: "den"; id: string; pending: number; archived: number };
 
+const isCounts = (v: unknown): boolean => typeof v === "object" && v !== null && typeof (v as { pending?: unknown }).pending === "number";
+function isMemoryTree(t: unknown): t is MemoryTree {
+	if (typeof t !== "object" || t === null) return false;
+	const { features, other, den } = t as Partial<MemoryTree>;
+	return (
+		Array.isArray(features) &&
+		Array.isArray(other) &&
+		isCounts(den) &&
+		features.every((f) => typeof f === "object" && f !== null && isCounts(f.own) && Array.isArray(f.tasks))
+	);
+}
+
 /** Busiest first: pending observations (work waiting to be folded), then everything archived. The tree carries no timestamps, so this stands in for newest activity. */
 const busiest = <T extends { pending: number; archived: number }>(a: T, b: T): number => b.pending - a.pending || b.archived - a.archived;
 
@@ -25,6 +37,8 @@ const busiest = <T extends { pending: number; archived: number }>(a: T, b: T): n
  * then the unresolved work items, then the den.
  */
 export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
+	// A wolfd or test stub that answers this route with another shape renders as an empty tree, never a crash.
+	if (!isMemoryTree(tree)) return [];
 	const features = tree.features.map((f): Extract<MemoryTreeRow, { kind: "feature" }> => ({
 		kind: "feature",
 		id: f.id,

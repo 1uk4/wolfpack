@@ -30,10 +30,17 @@ interface Slot extends CachedEntry {
 
 const cache = new Map<string, Slot>();
 
-const once = <T>(fn: () => T): (() => T) => {
+/** Run `fn` on first use and keep its result. A throw is not cached: the next call runs `fn` again (and throws again). */
+export const once = <T>(fn: () => T): (() => T) => {
   let done = false;
   let v: T;
-  return () => (done ? v : ((done = true), (v = fn())));
+  return () => {
+    if (!done) {
+      v = fn();
+      done = true;
+    }
+    return v;
+  };
 };
 
 function load(raw: string, mtimeMs: number, size: number): Slot {

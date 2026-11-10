@@ -530,6 +530,10 @@ describe("KbActivityResponseSchema", () => {
     expect(KbActivityResponseSchema.parse(full)).toEqual(full);
     expect(KbActivityResponseSchema.parse(empty)).toEqual(empty);
   });
+  it("keeps sweep.stuckSince when the hub reports a stuck curator", () => {
+    const stuck = { ...full, sweep: { running: true, stuckSince: "2026-11-05T09:45:00.000Z" } };
+    expect(KbActivityResponseSchema.parse(stuck).sweep?.stuckSince).toBe("2026-11-05T09:45:00.000Z");
+  });
   it("tolerates unknown fields and rejects unknown outcomes", () => {
     expect(KbActivityResponseSchema.safeParse({ ...empty, extra: 1 }).success).toBe(true);
     const bad = { ...full, decisions: { ...full.decisions, items: [{ ...full.decisions.items[0], outcome: "weird" }] } };

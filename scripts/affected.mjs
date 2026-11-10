@@ -34,6 +34,14 @@ function distImports(root, dir) {
   return [...found];
 }
 
+/** Package dirs the root scripts/*.mjs import from dist (e.g. dev-stack-extensions.mjs loads packages/cli/dist): the scripts suite needs them built. */
+export function scriptsDistImports(root) {
+  const found = new Set();
+  for (const e of readdirSync(join(root, "scripts"), { withFileTypes: true }))
+    if (e.isFile() && /\.[cm]?js$/.test(e.name)) for (const m of readFileSync(join(root, "scripts", e.name), "utf8").matchAll(/packages\/([\w-]+)\/dist\b/g)) found.add(`packages/${m[1]}`);
+  return [...found].sort();
+}
+
 /** Workspaces: [{name, dir, deps:[workspace names], inTsRoot}] from the root package.json globs. */
 const name_is_console = (n) => n === COMPONENTS.console;
 export function loadWorkspaces(root) {
@@ -60,7 +68,7 @@ export function loadWorkspaces(root) {
 }
 
 /** Pure: changed files (or null = unknown) + workspaces -> result. */
-export function computeAffected(changed, workspaces) {
+export function computeAffected(changed, workspaces, scriptsDist = []) {
   const all = changed === null || changed.some((f) => ROOT_CONFIG.some((r) => r.test(f)));
   const files = (changed ?? []).filter((f) => !DOC.some((r) => r.test(f)));
   const hit = new Set();
@@ -81,7 +89,10 @@ export function computeAffected(changed, workspaces) {
   // ...plus packages imported from dist by relative path (e.g. packages/harness/dist/wolfd/scripted-model.js), derived by scanning console sources
   const con = byName.get("@wolfpack/console");
   const consoleDeps = !all && consoleTests ? [...(con?.deps ?? []).map((n) => byName.get(n)?.dir), ...(con?.distImports ?? [])].filter((d) => workspaces.some((w) => w.dir === d && w.inTsRoot)) : [];
-  const tsProjects = all ? ["."] : [...new Set([...dirs((w) => w.inTsRoot), ...consoleDeps])];
+  const scriptsTests = has(/^scripts\/[^/]*\.test\.ts$|^scripts\/(runtime-update|dev-stack-extensions)\./);
+  // the scripts suite loads these packages from dist, so build them too when it runs
+  const scriptsDeps = !all && scriptsTests ? scriptsDist.filter((d) => workspaces.some((w) => w.dir === d && w.inTsRoot)) : [];
+  const tsProjects = all ? ["."] : [...new Set([...dirs((w) => w.inTsRoot), ...consoleDeps, ...scriptsDeps])];
   const tracerPk = ["@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/harness"];
   return {
     all,
@@ -94,7 +105,7 @@ export function computeAffected(changed, workspaces) {
     vitestPaths: all ? [] : dirs((w) => w.inTsRoot).map((d) => `${d}/src`),
     /** root-level vitest suites outside packages/ */
     extensionsTests: has(/^extensions\//) || packages.includes("@wolfpack/harness") || packages.includes("@wolfpack/memory"),
-    scriptsTests: has(/^scripts\/[^/]*\.test\.ts$|^scripts\/(runtime-update|dev-stack-extensions)\./),
+    scriptsTests,
     consoleTests,
     tracer: tracerPk.some((p) => hit.has(p)) || has(/^infra\/tracer\//),
     release: has(/^infra\/release\//) || has(/^scripts\/[^/]*release[^/]*$/) || has(/^package-lock\.json$/),
@@ -113,7 +124,7 @@ export function changedFiles(base, head, cwd) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [base, head, flag] = process.argv.slice(2);
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-  const result = computeAffected(changedFiles(base, head, root), loadWorkspaces(root));
+  const result = computeAffected(changedFiles(base, head, root), loadWorkspaces(root), scriptsDistImports(root));
   console.log(JSON.stringify(result, null, 2));
   if (flag === "--github-output" && process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `affected=${JSON.stringify(result)}\n`);
 }

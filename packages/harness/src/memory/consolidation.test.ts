@@ -172,6 +172,16 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(poolLines()).toEqual([]);
   });
 
+  it("an untagged observation with origin goes the den way and is never offered to the Record path", async () => {
+    poolWith([o(0), o(1, { origin: { work: "work-t1", feature: "work-f1" } }), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+
+    expect(r.recordsWritten).toBe(0);
+    expect(m.prompts.record).toEqual([]);
+    expect(m.prompts.consolidate[0]).toContain("observation 1");
+  });
+
   it("the archive gets written, discarded and den observations, with the id the pool and the Record use", async () => {
     // 6 untagged + 1 for a task whose item is gone + 1 for a live task
     const pool = [o(0), o(1, { work: "work-t1" }), o(2), o(3, { work: "gone" }), o(4), o(5), o(6), o(7)];

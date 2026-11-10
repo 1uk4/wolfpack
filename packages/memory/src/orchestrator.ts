@@ -64,6 +64,8 @@ export interface OrchestratorConfig {
    * Record instead of den topics.
    */
   getBoundWork?: () => BoundWork | null | undefined;
+  /** `memory.generalToDen`: observations the observer flags `general` skip the work tag (origin only) and go to the den. Default off. */
+  generalToDen?: boolean;
   /** Where Records are written (the Work API). Absent: tagged observations fall back to the den. */
   workRecordStore?: WorkRecordStore;
   /** The wolf's den root: the discard log and retry state live in `<denRoot>/.memory/pool/` (default: WOLF_DEN; none: not persisted). */
@@ -209,13 +211,18 @@ export function createOrchestrator(
         // time, so a later domain switch can't reroute them at promote.
         let bound: BoundWork | null | undefined;
         try { bound = cfg.getBoundWork?.(); } catch { bound = undefined; }
-        const observations: Observation[] = uniqueObs.map((o) => ({
-          timestamp: o.timestamp,
-          content: o.content,
-          tokenCount: estimateTokens(o.content),
-          domain: o.domain || cfg.defaultDomain,
-          ...(bound?.taskId ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
-        }));
+        const observations: Observation[] = uniqueObs.map((o) => {
+          const ids = bound?.taskId ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : null;
+          // General observations (preferences, rules, tooling facts) go to the den: keep the bound ids as origin only.
+          const toDen = !!ids && cfg.generalToDen === true && o.general === true;
+          return {
+            timestamp: o.timestamp,
+            content: o.content,
+            tokenCount: estimateTokens(o.content),
+            domain: o.domain || cfg.defaultDomain,
+            ...(ids ? (toDen ? { origin: ids } : ids) : {}),
+          };
+        });
 
         appendEvent({
           type: "observations_recorded",

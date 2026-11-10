@@ -239,6 +239,27 @@ describe("orchestrator work tagging and Records", () => {
     expect(b.feature).toBeUndefined();
   });
 
+  it("a general observation goes to the den untagged, with origin, only when generalToDen is on", async () => {
+    const bound = { taskId: "work-t1", featureId: "work-f1" };
+    const gen = { timestamp: "2026-10-19 10:00", content: "owner never wants gh pr merge run", general: true };
+    const run = async (generalToDen: boolean, obs: object) => {
+      const { engine } = engineWithRecord([[obs as RawObs]]);
+      const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => bound, generalToDen });
+      await orch.processChunks([chunk("c1")]);
+      return orch.getActiveObservations()[0];
+    };
+    const on = await run(true, gen);
+    expect(on.work).toBeUndefined();
+    expect(on.feature).toBeUndefined();
+    expect(on.origin).toEqual({ work: "work-t1", feature: "work-f1" });
+    // bound, not general: tagged as before
+    expect(await run(true, OBS[0])).toMatchObject({ work: "work-t1", feature: "work-f1" });
+    // flag off: tagged as before, no origin
+    const off = await run(false, gen);
+    expect(off).toMatchObject({ work: "work-t1", feature: "work-f1" });
+    expect(off.origin).toBeUndefined();
+  });
+
   it("den consolidation skips tagged observations; the Record gets them", async () => {
     const { engine, prompts } = engineWithRecord([[OBS[0]], [OBS[1]]]);
     const s = store({ "work-t1": { title: "Fix cache", kind: "task", stage: "in_build", body: "## Plan\n\nplan text" } });

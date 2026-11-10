@@ -68,6 +68,8 @@ export interface MemoryConfig {
   defaultDomain?: string;
   /** `memory.subagentMemory: "on"` in wolf.yaml: subagents record their own observations, so the orchestrator's observer skips subagent traffic (default "off"). */
   subagentMemory?: "on" | "off";
+  /** `memory.generalToDen` in wolf.yaml: observations flagged `general` skip the work tag (origin only) and go to the den. Default off. */
+  generalToDen?: boolean;
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;
 }
@@ -270,6 +272,7 @@ async function writeToPool(
   observations: RawObservation[],
   bound: { taskId: string; featureId?: string } | null = null,
   defaultDomain?: string,
+  generalToDen = false,
 ): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
@@ -279,10 +282,14 @@ async function writeToPool(
   const lines = observations.map(obs =>
     JSON.stringify({
       ...obs,
+      general: undefined, // routing flag only; the pool line carries origin instead
       // Stamped at observe time (as pi's orchestrator does), so consolidation never has to guess a domain.
       ...(defaultDomain ? { domain: obs.domain || defaultDomain } : {}),
       recordedAt: timestamp,
-      ...(bound ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
+      ...(bound ? (() => {
+        const ids = { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) };
+        return generalToDen && obs.general === true ? { origin: ids } : ids;
+      })() : {}),
     }) + "\n"
   );
   await appendFile(poolFile, lines.join(""));
@@ -490,7 +497,7 @@ export default function createMemoryExtension(
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined });
       if (result.observations.length > 0) {
         const bound = await readBoundTask(ctx); // re-read every chunk, never cached
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain);
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true);
         mem.observed(result.observations, bound, ctx.conversationId);
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.

@@ -15,6 +15,10 @@ export const RawObservationSchema = z.object({
     .string()
     .optional()
     .describe("The knowledge domain this observation belongs to"),
+  general: z
+    .boolean()
+    .optional()
+    .describe("True only for owner preferences, standing rules, and environment/tooling facts that outlive the task; absent means false"),
 });
 
 export type RawObservation = z.infer<typeof RawObservationSchema>;

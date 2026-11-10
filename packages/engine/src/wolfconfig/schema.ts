@@ -116,6 +116,7 @@ export const WolfFileSchema = z.object({
       live: z.boolean().optional(),
       librarian: z.boolean().optional(),
       hubKb: z.boolean().optional(),
+      generalToDen: z.boolean().optional(),
       defaultDomain: z.string().min(1).optional(),
       sweepInterval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30s", "1m", "1h"').optional(),
       consolidation: z
@@ -199,6 +200,8 @@ export interface WolfConfig {
     librarian: boolean;
     /** Declaration for the hub/workerd only: this wolf runs in hub-KB mode (its .env has WOLFPACK_HUB_KB=1), so workerd reports it kbReadable. wolfd ignores it and keeps reading its own env. */
     hubKb?: boolean;
+    /** General observations (owner preferences, standing rules, tooling facts) go to the den even while a task is bound. Default off. */
+    generalToDen?: boolean;
     /** Librarian sweep interval (e.g. "1m"); default 1m. */
     sweepInterval?: string;
     /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */

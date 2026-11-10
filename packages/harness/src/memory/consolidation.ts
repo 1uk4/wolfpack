@@ -66,6 +66,8 @@ export interface PoolObservation {
   work?: string;
   /** The bound task's parent feature. */
   feature?: string;
+  /** Bound ids of a general observation that went to the den untagged. Trace only; nothing routes on it. */
+  origin?: { work?: string; feature?: string };
 }
 
 /**

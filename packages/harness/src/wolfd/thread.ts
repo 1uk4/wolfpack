@@ -873,11 +873,11 @@ export class ThreadRuntime {
   }
 
   /** "Answering Qn": hold typed text and/or uploaded images as that question's answer (not a chat message, supersedes nothing). */
-  bindCardText(callId: string, qid: string, text: string, attachments: readonly string[] = []): void {
+  bindCardText(callId: string, qid: string, text: string, attachments: readonly string[] = [], multi?: { picked: string[]; others: string[] }): void {
     const ids = [...new Set(attachments)];
     if (ids.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
     // The tracker checks card, question and kind first, then calls `owned`: the id must be an upload of THIS thread (a stat).
-    const problem = this.cards.bindText(callId, qid, text, ids, (id) => attachmentExists(this.host.den!, this.summary.id, id));
+    const problem = this.cards.bindText(callId, qid, text, ids, (id) => attachmentExists(this.host.den!, this.summary.id, id), multi);
     if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
     if (problem) throw new HttpError("invalid_request", problem);
     this.announceHeld(callId);

@@ -97,6 +97,12 @@ describe("ask record in the transcript", () => {
 		assert.deepEqual(lines(), ["Which DB? → pg · 1 image", "Why? → 2 images", "Ship it? → yes", "How many? → 7"]);
 	});
 
+	it("a multi answer lists every custom answer, marked as custom", async () => {
+		const multi: Card = { tool: "ask", paged: true, fields: [{ id: "t", kind: "multi", label: "Tags?", allowOther: true, options: [{ label: "A", value: "a" }] }], steps: [{ fields: ["t"] }] } as never;
+		await render(<AskRecordCard {...base} card={multi} closed="answered" pageAnswers={{ t: { value: ["a", "red", "blue"], other: ["red", "blue"] } } as never} pagesDone={1} />);
+		assert.deepEqual(lines(), ['Tags? → a, other: "red", other: "blue"']);
+	});
+
 	it("text typed but not submitted shows marked 'typed, not sent'; a pending set reads 'questions open'", async () => {
 		await render(<AskRecordCard {...base} pending pageAnswers={{ db: { value: "pg" } }} pagesDone={1} draft={{ ship: { value: false } }} />);
 		assert.match(q('[data-testid="ask-record-header"]')!.textContent!, /questions open/i);

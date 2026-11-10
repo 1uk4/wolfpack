@@ -237,17 +237,37 @@ export class CardTracker {
    * Free text takes it as the value; single and multi take it as their Other entry unless the question has `allowOther:
    * false` (`noOther`); slider and confirm take no text. Blank text and text over BIND_TEXT_MAX are refused.
    */
-  bindText(callId: string, qid: string, text: string, attachments: readonly string[] = [], owned?: (id: string) => boolean): string | undefined {
+  bindText(callId: string, qid: string, text: string, attachments: readonly string[] = [], owned?: (id: string) => boolean, multi?: { picked: string[]; others: string[] }): string | undefined {
     const p = this.get(callId);
     if (!p) return "not_found";
     if (!p.card.paged) return "this card is not a questionnaire";
-    if (text.trim() === "" && attachments.length === 0) return "give non-blank text or at least one attachment";
+    if (!multi && text.trim() === "" && attachments.length === 0) return "give non-blank text or at least one attachment";
     if (text.length > BIND_TEXT_MAX) return `text is over ${BIND_TEXT_MAX} characters`;
     const st = this.paged.get(callId) ?? { pagesDone: 0, answers: {}, draft: {} };
     const page = pageCard(p.card, st.pagesDone);
     const f = page?.fields.find((x) => x.id === qid);
     if (!f) return `question "${qid}" is not on the current page`;
     const typed = text.trim() !== "";
+    if (multi) {
+      // A multi question holds a LIST of custom answers: this call replaces the whole picked/custom list (images stay unless new ones are given).
+      if (f.kind !== "multi" || f.allowOther === false) return `question "${qid}" takes no list of custom answers`;
+      const optionValues = (f.options as { value: string }[]).map((o) => o.value);
+      const others = multi.others.map((o) => o.trim());
+      if (others.some((o) => o === "")) return "a custom answer cannot be blank";
+      if (new Set(others).size !== others.length) return "duplicate custom answers";
+      const dup = others.find((o) => optionValues.includes(o));
+      if (dup !== undefined) return `custom answer "${dup}" duplicates an option value`;
+      const bad = multi.picked.find((v) => !optionValues.includes(v));
+      if (bad !== undefined) return `"${bad}" is not an option of "${qid}"`;
+      const keep = attachments.length ? [...attachments] : attachmentIds((st.draft[qid] ?? {}) as AnyAnswer);
+      const elsewhere = Object.entries(st.draft).filter(([id]) => id !== qid).reduce((n, [, d]) => n + attachmentIds(d as AnyAnswer).length, 0);
+      if (elsewhere + keep.length > ATTACHMENT_MAX_PER_SUBMIT) return `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${elsewhere} already attached to other questions)`;
+      const badImg = owned ? attachments.find((id) => !owned(id)) : undefined;
+      if (badImg !== undefined) return `unknown attachment ${badImg}`;
+      const m = { value: [...multi.picked, ...others], ...(others.length ? { other: others } : {}), ...(keep.length ? { attachments: keep } : {}) } as CardFieldAnswer;
+      this.paged.set(callId, { ...st, draft: { ...st.draft, [qid]: m } });
+      return undefined;
+    }
     // Images only: no text, so no fake Other entry: `{value: ""}` (multi `{value: []}`) plus the attachments.
     let a: CardFieldAnswer;
     if (f.kind === "free-text") a = { value: text };

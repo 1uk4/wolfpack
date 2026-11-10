@@ -203,6 +203,26 @@ describe("ask questionnaire over /v1", () => {
   });
 });
 
+describe("ask multi custom answers", () => {
+  it("holds a list of custom answers for a multi question, replaced as a whole, and reports all of them when superseded", async () => {
+    let seen = "";
+    const args = { pages: [{ title: "One", questions: [{ id: "tags", ask: "Tags", kind: "multi", choices: [{ label: "A", value: "a", tradeoff: "t" }] }] }] };
+    const { w, callId } = await askWolf([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("ok"); }], args);
+    const bind = (picked: string[], others: string[]) => w.client.bindCardText!(w.home, callId, "tags", "", undefined, { picked, others });
+    await bind(["a"], ["red"]);
+    await bind(["a"], ["red", "blue"]);
+    expect((await w.client.getThread(w.home)).pendingCards![0].draft).toEqual({ tags: { value: ["a", "red", "blue"], other: ["red", "blue"] } });
+    await bind(["a"], ["blue"]); // red unchecked
+    expect((await w.client.getThread(w.home)).pendingCards![0].draft).toEqual({ tags: { value: ["a", "blue"], other: ["blue"] } });
+    await expect(bind(["zzz"], ["blue"])).rejects.toMatchObject({ code: "invalid_request" }); // not an option
+    await expect(bind([], ["a"])).rejects.toMatchObject({ code: "invalid_request" }); // duplicates an option
+    await bind(["a"], ["blue", "green"]);
+    await w.client.submit(w.home, "never mind", { whenBusy: "reject" });
+    await drain(w);
+    expect(seen).toContain('other: "blue", other: "green"');
+  });
+});
+
 describe("ask diagrams", () => {
   const diagram = "viz-flow-1731000000000.png";
 

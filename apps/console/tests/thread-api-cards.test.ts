@@ -60,6 +60,18 @@ describe("thread API: bindCardText attachments", () => {
 	});
 });
 
+describe("thread API: bindCardText custom answers", () => {
+	it("passes a multi question's picked and custom lists through, and refuses malformed lists", async () => {
+		const seen: unknown[] = [];
+		const api = createThreadApi(() => Object.assign(new MockConsoleClient({ delayMs: 0 }), { bindCardText: async (_t: string, _c: string, _q: string, _text: string, _att?: string[], multi?: unknown) => void seen.push(multi) }));
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ picked: ["a"], others: ["red", "blue"] }))).status, 200);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ picked: ["a"], others: [] }))).status, 200);
+		assert.deepEqual(seen, [{ picked: ["a"], others: ["red", "blue"] }, { picked: ["a"], others: [] }]);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ picked: ["a"], others: "red" }))).status, 400);
+		assert.equal((await api.bindCardText(ref, "c1", "q1", post({ picked: [3], others: [] }))).status, 400);
+	});
+});
+
 describe("thread API: skipCard", () => {
 	const api = createThreadApi(() => new MockConsoleClient({ delayMs: 0 }));
 

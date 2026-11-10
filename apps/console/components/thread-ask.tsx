@@ -24,6 +24,8 @@ export interface OwnAsk {
 	pending: boolean;
 	/** A question is being answered in the sheet's inline composer: the page composer is hidden meanwhile. */
 	composing: boolean;
+	/** The phone's full-screen layer is open above the dock: the dock drops its fade strip so the layer sits right on the composer. */
+	covers?: boolean;
 }
 
 export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: number | null, dictation: Dictation): OwnAsk {
@@ -70,5 +72,6 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 			</div>
 		),
 		composing,
+		covers: !composing,
 	};
 }

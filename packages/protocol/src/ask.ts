@@ -36,7 +36,10 @@ export function plainAnswer(field: CardField, a: CardFieldAnswer): string {
   const tail = imgs?.length ? " [images attached below]" : "";
   // An image-only draft has an empty value: the images are the answer.
   const text = (s: string) => (s === "" && tail ? "(image only)" : s) + tail;
-  if (Array.isArray(v)) return text(v.join(", "));
+  if (Array.isArray(v)) {
+    const custom = Array.isArray((a as { other?: unknown }).other) ? ((a as { other: string[] }).other) : [];
+    return text(v.map((x) => (custom.includes(x as string) ? `other: ${JSON.stringify(x)}` : String(x))).join(", "));
+  }
   if (typeof v === "boolean") return (v ? "yes" : "no") + tail;
   if (typeof v === "string") return text((a as { other?: boolean }).other === true ? `other: ${JSON.stringify(v)}` : v);
   return String(v) + tail;

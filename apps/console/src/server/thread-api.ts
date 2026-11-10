@@ -293,8 +293,19 @@ export function createThreadApi(source: ClientSource) {
 		/** "Answering Qn": hold typed text as question `qid`'s answer (not a chat message): `POST .../questions/:qid/text`. */
 		async bindCardText(ref: ThreadRef, callId: string, qid: string, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { text?: unknown; attachments?: unknown } | null;
+				const body = (await req.json().catch(() => null)) as { text?: unknown; attachments?: unknown; picked?: unknown; others?: unknown } | null;
 				if (!body) return json({ error: "text or attachments is required" }, 400);
+				const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+				// A multi question's whole picked/custom list (replaces its draft); `text` is not used then.
+				if (body.others !== undefined) {
+					if (!strings(body.others) || (body.picked !== undefined && !strings(body.picked))) return json({ error: "picked and others must be lists of strings" }, 400);
+					const multi = { picked: (body.picked as string[] | undefined) ?? [], others: body.others };
+					const atts = Array.isArray(body.attachments) && body.attachments.every((a) => typeof a === "string") ? (body.attachments as string[]) : [];
+					const c = source();
+					if (!c.bindCardText) return json({ error: "this client has no paged cards" }, 501);
+					await c.bindCardText(await resolve(c, ref), callId, qid, "", atts.length ? atts : undefined, multi);
+					return json({ accepted: true });
+				}
 				if (body.text !== undefined && typeof body.text !== "string") return json({ error: "text must be a string" }, 400);
 				if (body.attachments !== undefined && (!Array.isArray(body.attachments) || body.attachments.some((a) => typeof a !== "string"))) return json({ error: "attachments must be a list of ids" }, 400);
 				const text = (body.text as string | undefined) ?? "";

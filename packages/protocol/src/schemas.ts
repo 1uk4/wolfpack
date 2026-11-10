@@ -1650,8 +1650,11 @@ export const BindCardTextBodySchema = z
     text: z.string().max(BIND_TEXT_MAX).optional(),
     /** Ids from `uploadAttachment` on this thread (same rules as `SubmitRequest.attachments`: at most ATTACHMENT_MAX_PER_SUBMIT). */
     attachments: z.array(z.string()).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
+    /** Multi questions only: the whole picked/custom list, replacing the question's draft (`text` is ignored). Images stay unless `attachments` is given. */
+    picked: z.array(z.string()).max(50).optional(),
+    others: z.array(z.string().max(BIND_TEXT_MAX)).max(50).optional(),
   })
-  .refine((b) => (b.text ?? "").trim() !== "" || (b.attachments?.length ?? 0) > 0, { message: "give non-blank text or at least one attachment" });
+  .refine((b) => (b.text ?? "").trim() !== "" || (b.attachments?.length ?? 0) > 0 || b.others !== undefined, { message: "give non-blank text, at least one attachment or a list of custom answers" });
 export type BindCardTextBody = z.infer<typeof BindCardTextBodySchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */

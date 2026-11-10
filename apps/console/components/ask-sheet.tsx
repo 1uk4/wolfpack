@@ -15,6 +15,7 @@ import { InertImage, mdComponents } from "@/components/md-blocks";
 import { CardTextInput, isOther, otherText } from "@/components/card-fields/shared";
 import { attachmentUrl, cardPageAnswerUrl, diagramUrl } from "@/components/thread-transport";
 import { imagesOf, withImages } from "@/components/ask-images";
+import { postReply } from "@/components/ask-reply-send";
 import { hasUnsent, InlineAnswerComposer, useInlineAnswers, type InlineDraft } from "@/components/ask-inline-composer";
 import { replyLabel } from "@/components/ask-reply";
 import type { Dictation } from "@/components/dictation";
@@ -55,6 +56,14 @@ export function typable(f: CardField): boolean {
 	if (f.kind === "single") return (f as { allowOther?: boolean }).allowOther !== false;
 	if (f.kind === "multi") return (f as { allowOther?: boolean }).allowOther === true;
 	return false;
+}
+
+/** A multi answer split into its option picks and its custom entries. */
+function multiParts(a: CardFieldAnswer | undefined): { picked: string[]; custom: string[] } {
+	const cur = read<AnyA>(a);
+	const custom = Array.isArray(cur?.other) ? (cur.other as string[]) : [];
+	const picked = Array.isArray(cur?.value) ? (cur.value as string[]).filter((v) => !custom.includes(v)) : [];
+	return { picked, custom };
 }
 
 /** Does a kept draft still fit its field (kind unchanged, option still there, number in range)? */
@@ -177,10 +186,22 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 		if (f.kind === "free-text") return set(f.id, make({ value: text }));
 		if (f.kind === "single") return set(f.id, make({ value: text, other: true }));
 		if (f.kind !== "multi") return;
-		const cur = read<AnyA>(draft[f.id]);
-		const custom = Array.isArray(cur?.other) ? (cur.other as string[]) : [];
-		const picked = Array.isArray(cur?.value) ? (cur.value as string[]).filter((v) => !custom.includes(v)) : [];
-		set(f.id, make({ value: [...picked, text], other: [text] } satisfies MultiA));
+		const { picked, custom } = multiParts(draft[f.id]);
+		const others = custom.includes(text) ? custom : [...custom, text];
+		set(f.id, make({ value: [...picked, ...others], other: others } satisfies MultiA));
+	};
+	/** A multi question keeps a LIST of custom answers: the whole picked/custom lists go to the server, replacing its draft. */
+	const multiOf = (f: CardField) => (text: string) => {
+		const { picked, custom } = multiParts(draft[f.id]);
+		return { picked, others: text === "" || custom.includes(text) ? custom : [...custom, text] };
+	};
+	/** Unchecking a custom row drops it from the server's draft too (the superseded note reads that). */
+	const syncCustoms = (f: CardField, a: CardFieldAnswer) => {
+		if (f.kind !== "multi") return;
+		const before = multiParts(draft[f.id]).custom;
+		const now = multiParts(a);
+		if (before.length === now.custom.length) return;
+		void postReply(target.wolf, target.slug, pc.callId, f.id, "", [], { picked: now.picked, others: now.custom });
 	};
 	const composer = (f: CardField): React.ReactNode =>
 		composingId === f.id ? (
@@ -192,7 +213,12 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 				onText={(v) => inline.setText(f.id, v)}
 				onFiles={(files) => inline.addFiles(f.id, files)}
 				onRemove={(k) => inline.removeAtt(f.id, k)}
-				onSend={() => inline.send(pc.callId, f.id).then((sent) => { if (sent !== null) { setAnswering(null); bindLocal(f, sent); } })}
+				onSend={() => inline.send(pc.callId, f.id, f.kind === "multi" ? multiOf(f) : undefined).then((sent) => {
+					if (sent === null) return;
+					bindLocal(f, sent);
+					// A multi question stays open for the next custom answer; the others bind and close.
+					if (f.kind !== "multi") setAnswering(null);
+				})}
 				onClose={() => setAnswering(null)}
 			/>
 		) : null;
@@ -266,6 +292,18 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 							onKeyDown={skipped ? (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); unskip(f.id); } } : undefined}
 							className={cn("relative rounded-lg", skipped && "cursor-pointer focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", on && "ring-1 ring-(color:--thread-accent) ring-offset-4 ring-offset-card")}
 						>
+							{/* Header row: the label wraps, Skip question / Answer stays at the right and outside the greyed part. */}
+							<div data-testid="ask-question-header" className="mb-2 flex items-start justify-between gap-2">
+								<div id={labelId} className={cn("flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 text-sm font-medium [overflow-wrap:anywhere]", skipped && "opacity-50")}>
+									<MessageResponse components={SAFE_MD}>{escapeRawHtml(f.label)}</MessageResponse>
+									{f.optional && <span className="rounded-full bg-accent px-1.5 py-px font-ui text-[10px] font-normal uppercase tracking-wider text-muted-foreground">optional</span>}
+								</div>
+								{(skipped || f.optional) && (
+									<button type="button" data-testid={skipped ? "ask-unskip" : "ask-skip"} className={cn("-mt-1 shrink-0 rounded-md px-1.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skipped ? unskip(f.id) : skip(f.id); }}>
+										{skipped ? "Answer" : "Skip question"}
+									</button>
+								)}
+							</div>
 							<div className={cn(skipped && "opacity-50")}>
 							{f.description && (
 								<div data-testid="ask-context" className={cn("mb-2 text-[13px] leading-relaxed text-muted-foreground")}>
@@ -273,24 +311,13 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 								</div>
 							)}
 							{f.diagram && <Diagram target={target} id={f.diagram} />}
-							<div id={labelId} className={cn("mb-2 flex flex-wrap items-baseline gap-x-2 text-sm font-medium [overflow-wrap:anywhere]")}>
-								<MessageResponse components={SAFE_MD}>{escapeRawHtml(f.label)}</MessageResponse>
-								{f.optional && <span className="rounded-full bg-accent px-1.5 py-px font-ui text-[10px] font-normal uppercase tracking-wider text-muted-foreground">optional</span>}
-							</div>
 							{skipped && <span data-testid="ask-skipped" className="mb-1 block font-ui text-[11px] text-muted-foreground">Skipped</span>}
 							<div data-testid="ask-choices" role={skipped ? "group" : undefined} aria-labelledby={skipped ? labelId : undefined} aria-disabled={skipped ? true : undefined}>
 								{/* A click on a greyed choice only brings the question back; it never selects. */}
-								<Control field={f} labelId={labelId} qn={`Q${n}`} composer={composer(f)} unsent={inline.drafts[f.id]} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => (skipped ? unskip(f.id) : set(f.id, a))} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
+								<Control field={f} labelId={labelId} qn={`Q${n}`} composer={composer(f)} unsent={inline.drafts[f.id]} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => { if (skipped) return unskip(f.id); syncCustoms(f, a); set(f.id, a); }} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
 							</div>
 							{imagesOf(draft[f.id]).length > 0 && <Images target={target} ids={imagesOf(draft[f.id])} />}
 							</div>
-							{(skipped || f.optional) && (
-								<div className="mt-1 flex justify-end">
-									<button type="button" data-testid={skipped ? "ask-unskip" : "ask-skip"} className={cn("rounded-md px-1.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skipped ? unskip(f.id) : skip(f.id); }}>
-										{skipped ? "Answer" : "Skip question"}
-									</button>
-								</div>
-							)}
 						</section>
 					);
 				})}
@@ -379,7 +406,7 @@ function Control({ field, labelId, qn, composer, unsent, onReply, value, onChang
 	const cur = read<AnyA>(value);
 	const custom = multi && Array.isArray(cur?.other) ? (cur!.other as string[]) : [];
 	const picked = multi ? (Array.isArray(cur?.value) ? (cur!.value as string[]).filter((v) => !custom.includes(v)) : []) : [];
-	const write = (opts: string[], text: string) => onChange(text.trim() === "" ? make({ value: opts } satisfies MultiA) : make({ value: [...opts, text], other: [text] } satisfies MultiA));
+	const write = (opts: string[], customs: string[]) => onChange(customs.length === 0 ? make({ value: opts } satisfies MultiA) : make({ value: [...opts, ...customs], other: customs } satisfies MultiA));
 	const otherAllowed = multi ? f.allowOther === true : f.allowOther !== false;
 	return (
 		<div className="flex flex-col gap-1.5 text-sm" role={multi ? "group" : "radiogroup"} aria-labelledby={labelId} onClick={stop}>
@@ -393,7 +420,7 @@ function Control({ field, labelId, qn, composer, unsent, onReply, value, onChang
 						aria-checked={sel}
 						data-testid="ask-option"
 						data-value={o.value}
-						onClick={() => (multi ? write(sel ? picked.filter((x) => x !== o.value) : [...picked, o.value], custom[0] ?? "") : sel ? onClear() : onChange(make({ value: o.value } satisfies SingleA)))}
+						onClick={() => (multi ? write(sel ? picked.filter((x) => x !== o.value) : [...picked, o.value], custom) : sel ? onClear() : onChange(make({ value: o.value } satisfies SingleA)))}
 						className={cn(CHOICE, sel && ACCENT_TINT)}
 					>
 						<span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 [overflow-wrap:anywhere]">
@@ -407,11 +434,18 @@ function Control({ field, labelId, qn, composer, unsent, onReply, value, onChang
 					</button>
 				);
 			})}
+			{/* Custom answers of a multi question: checked rows like a picked option; unchecking removes one. */}
+			{custom.map((c) => (
+				<button key={`custom:${c}`} type="button" role="checkbox" aria-checked data-testid="ask-option" data-custom="true" data-value={c} onClick={() => write(picked, custom.filter((x) => x !== c))} className={cn(CHOICE, ACCENT_TINT)}>
+					<span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 [overflow-wrap:anywhere]"><span className="font-medium">{c}</span></span>
+					<span aria-hidden data-testid="card-indicator" data-on className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full", ACCENT_BG)}><CheckIcon className="size-3" strokeWidth={3} /></span>
+				</button>
+			))}
 			{otherAllowed && !multi && (
 				composer ? composer : <div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, isOther(value) && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer" value={otherText(value) ?? ""} onChange={() => {}} readOnly {...replyKeys} />{unsentNote}</div>
 			)}
 			{otherAllowed && multi && (
-				composer ? composer : <div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, custom[0] && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer" value={custom[0] ?? ""} onChange={() => {}} readOnly {...replyKeys} />{unsentNote}</div>
+				composer ? composer : <div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS)} placeholder={custom.length ? "Add another answer" : "Other: tap to answer"} value="" onChange={() => {}} readOnly {...replyKeys} />{unsentNote}</div>
 			)}
 		</div>
 	);

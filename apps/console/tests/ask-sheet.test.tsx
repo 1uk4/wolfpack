@@ -437,6 +437,37 @@ describe("ask sheet inline composer", () => {
 		assert.equal(q('[data-testid="ask-other"]') === null, true);
 	});
 
+	it("in a multi question Send adds a checked custom row, clears the composer and keeps it open; several customs go in the body and unchecking drops one", async () => {
+		await render(one([{ id: "q1", kind: "multi", label: "Tags", allowOther: true, options: OPTS }]));
+		await click(q('[data-testid="ask-other"]'));
+		await type("red");
+		await sendNow();
+		await settle();
+		assert.deepEqual(texts()[0]!.body, { picked: [], others: ["red"] });
+		assert.equal(composer() !== null, true);
+		assert.equal(props(area(), "value"), "");
+		await type("blue");
+		await sendNow();
+		await settle();
+		assert.deepEqual(texts()[1]!.body, { picked: [], others: ["red", "blue"] });
+		const rows = () => qa('[data-testid="ask-option"][data-custom="true"]');
+		assert.deepEqual(rows().map((r) => r.getAttribute("aria-checked") + ":" + r.textContent), ["true:red", "true:blue"]);
+		await click(rows()[0]!); // uncheck red
+		await settle();
+		assert.deepEqual(rows().map((r) => r.textContent), ["blue"]);
+		assert.deepEqual(texts()[2]!.body, { picked: [], others: ["blue"] });
+		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await settle();
+		assert.deepEqual(posts.at(-1)!.body, { answers: { q1: { value: ["blue"], other: ["blue"] } } });
+	});
+
+	it("Skip question sits in the question's header row for every kind, free text included", async () => {
+		await render(one([{ id: "q1", kind: "free-text", label: "Anything else?", optional: true }]));
+		assert.equal(q('[data-testid="ask-question-header"] [data-testid="ask-skip"]') !== null, true);
+		await click(q('[data-testid="ask-skip"]'));
+		assert.equal(q('[data-testid="ask-question-header"] [data-testid="ask-unskip"]') !== null, true);
+	});
+
 	it("Send binds the text and closes the composer; a double Send posts once", async () => {
 		await render(FREE());
 		await open();

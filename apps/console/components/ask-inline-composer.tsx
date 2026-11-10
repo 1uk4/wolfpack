@@ -44,7 +44,7 @@ export function useInlineAnswers(target: Pick<AttachedRef, "wolf" | "slug">, onB
 	const removeAtt = useCallback((qid: string, key: string) => update(qid, (d) => ({ ...d, atts: d.atts.filter((a) => a.key !== key) })), [update]);
 
 	/** Bind the draft as the question's answer. Text and ready images leave the draft BEFORE the POST (a second Send finds nothing); a failure puts them back. Resolves the saved text ("" for images alone) or null when it failed. */
-	const send = useCallback(async (callId: string, qid: string): Promise<string | null> => {
+	const send = useCallback(async (callId: string, qid: string, multi?: (text: string) => { picked: string[]; others: string[] }): Promise<string | null> => {
 		const cur = ref.current[qid] ?? EMPTY;
 		const t = cur.text.trim();
 		const refs = readyInfos(cur.atts);
@@ -52,7 +52,7 @@ export function useInlineAnswers(target: Pick<AttachedRef, "wolf" | "slug">, onB
 		inFlight.current = true;
 		update(qid, (d) => ({ text: "", atts: d.atts.filter((a) => a.status === "uploading") }));
 		setErrors(({ [qid]: _e, ...rest }) => rest);
-		const err = await postReply(target.wolf, target.slug, callId, qid, t, refs.map((r) => r.id));
+		const err = await postReply(target.wolf, target.slug, callId, qid, t, refs.map((r) => r.id), multi?.(t));
 		inFlight.current = false;
 		if (!err) {
 			setDrafts(({ [qid]: _d, ...rest }) => rest);
@@ -100,7 +100,7 @@ export function InlineAnswerComposer({ label, draft, error, dictation, onText, o
 	}, [dictation]);
 	const live = dictation?.active === true;
 	return (
-		<div data-testid="ask-inline-composer" className="overflow-hidden rounded-xl border border-(color:--thread-accent) bg-background/60">
+		<div data-testid="ask-inline-composer" className="overflow-hidden rounded-xl bg-background/60 transition-colors focus-within:bg-background/80">
 			<ReplyingChip label={label} onClear={onClose} className="px-2 pt-1.5" />
 			{error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
 			<Composer

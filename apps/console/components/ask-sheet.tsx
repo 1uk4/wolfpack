@@ -9,7 +9,7 @@
  * text and images to `questions/:qid/text` and the server's `draft` prefills the answer here. The host hides its bottom composer meanwhile.
  */
 import { useEffect, useState } from "react";
-import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, PencilIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { InertImage, mdComponents } from "@/components/md-blocks";
 import { CardTextInput, isOther, otherText } from "@/components/card-fields/shared";
@@ -19,7 +19,7 @@ import { postReply } from "@/components/ask-reply-send";
 import { hasUnsent, InlineAnswerComposer, useInlineAnswers, type InlineDraft } from "@/components/ask-inline-composer";
 import { replyLabel } from "@/components/ask-reply";
 import { make, read, type AnyA, type MultiA, type Opt, type SingleA } from "@/components/ask-answers";
-import type { AskSession } from "@/components/ask-session";
+import { askTarget, type AskQueueView, type AskSession } from "@/components/ask-session";
 import type { Dictation } from "@/components/dictation";
 import { cn } from "@/lib/utils";
 import { escapeRawHtml, type AttachedRef } from "@/src/core";
@@ -59,15 +59,23 @@ function multiParts(a: CardFieldAnswer | undefined): { picked: string[]; custom:
 	return { picked, custom };
 }
 
-export function AskSheet({ target, session, answering, setAnswering, dictation }: {
+export function AskSheet({ target: host, session, queue, answering, setAnswering, dictation }: {
 	target: Pick<AttachedRef, "wolf" | "slug">;
 	session: AskSession;
+	/** The questionnaires waiting on this thread: with two or more the header counts them and switches between them. */
+	queue?: AskQueueView;
 	answering: Answering | null;
 	setAnswering: (a: Answering | null) => void;
 	/** The host's dictation run: the inline composer shows its Dictate row and takes the transcript. */
 	dictation?: Dictation;
 }) {
 	const { pc, page: pageIndex, fields, draft, set, clear, error } = session;
+	// Every request of a card (text, images, diagrams) goes to its asker's thread, a subagent's included.
+	const target = askTarget(host, pc);
+	const switchTo = (go: () => void) => () => {
+		setAnswering(null);
+		go();
+	};
 	const steps = pc.card.steps ?? [];
 	// Skipped questions (optional ones the owner passed on): greyed until Answer or a click brings them back. A draft that arrives (bound text) also ends the skip.
 	const [skippedIds, setSkippedIds] = useState<ReadonlySet<string>>(new Set());
@@ -148,6 +156,17 @@ export function AskSheet({ target, session, answering, setAnswering, dictation }
 						<span className="truncate text-sm font-semibold text-foreground" data-testid="ask-page-title">{steps[pageIndex]?.title ?? pc.card.title ?? "Questions"}</span>
 					</span>
 					<span className="flex shrink-0 items-center gap-1">
+						{queue && queue.count >= 2 && (
+							<span data-testid="ask-queue" className="flex min-w-0 items-center gap-0.5 font-ui text-xs text-muted-foreground">
+								<button type="button" data-testid="ask-queue-prev" aria-label="Previous questions" onClick={switchTo(queue.prev)} className={cn("flex size-6 items-center justify-center rounded-md hover:bg-accent hover:text-foreground", FOCUS)}>
+									<ChevronLeftIcon aria-hidden className="size-3.5" />
+								</button>
+								<span data-testid="ask-queue-label" className="max-w-[40vw] truncate">{queue.index + 1} of {queue.count} · {queue.label}</span>
+								<button type="button" data-testid="ask-queue-next" aria-label="Next questions" onClick={switchTo(queue.next)} className={cn("flex size-6 items-center justify-center rounded-md hover:bg-accent hover:text-foreground", FOCUS)}>
+									<ChevronRightIcon aria-hidden className="size-3.5" />
+								</button>
+							</span>
+						)}
 						<span data-testid="ask-page-count" className="font-ui text-xs text-muted-foreground">page {pageIndex + 1} of {steps.length}</span>
 						<button type="button" data-testid="ask-collapse" aria-label="Collapse the questions" onClick={session.collapse} className={cn("flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)}>
 							<ChevronDownIcon aria-hidden className="size-4" />

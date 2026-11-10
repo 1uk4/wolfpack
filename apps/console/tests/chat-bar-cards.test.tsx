@@ -251,6 +251,26 @@ describe("ChatBar cards", () => {
 		assert.equal(bottomComposers().length, 1); // bound: the bar's composer is back
 	});
 
+	it("a plain message after collapsing supersedes only the thread's own questionnaires: a subagent's stays queued", async () => {
+		const page = { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] };
+		const kid = { ...card("k1", page, "w/kid"), source: { kind: "subagent", label: "worker: sheet" } };
+		const mine = { ...card("m1", page), source: { kind: "self", label: "you" } };
+		raise("a", kid, mine);
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "1 of 2 \u00b7 worker: sheet");
+		await click(q('[data-testid="ask-collapse"]'));
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent!.includes("Questions waiting (2)"), true);
+		await type("never mind");
+		await submit();
+		await until(() => calls.some((c) => c.url.endsWith("/threads/a/submit")), "the plain message");
+		await flush();
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent!.includes("Questions waiting"), true);
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent!.includes("("), false); // only the child's is left: no count
+		await click(q('[data-testid="ask-sheet-reopen"]'));
+		assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "k1");
+	});
+
 	it("the answering chip clears when its question leaves the page; a text-only send cannot go out empty; other cards still show beside the sheet", async () => {
 		const fields = [{ id: "q1", kind: "free-text", label: "Why", optional: true }, { id: "q2", kind: "free-text", label: "How", optional: true }];
 		const paged = (steps: object[], pageIndex = 0) => ({ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", pageIndex, card: { tool: "ask", paged: true, fields, steps } });

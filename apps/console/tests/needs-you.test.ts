@@ -55,6 +55,47 @@ describe("needs-you list", () => {
 		assert.equal(threadListItem("1uk4", { id: HOME, title: "Home", status: "idle" }).needsYou, false);
 	});
 
+	it("a subagent's questionnaire opens the parent thread and notifies once together with the parent's own", () => {
+		const p = (callId: string, threadId: string, source: PendingCard["source"]): PendingCard => ({ callId, threadId, card: ask(callId), raisedAt: "2026-10-26T09:00:00.000Z", source });
+		const items = buildNeedsYou([
+			{
+				wolf: "1uk4",
+				cards: [p("mine", "1uk4/feat", { kind: "self", label: "you" }), p("kid", "1uk4/sub", { kind: "subagent", label: "worker: sheet" })],
+				threads: [{ id: "1uk4/feat", title: "Feature" }, { id: "1uk4/sub", title: "sheet", parentThreadId: "1uk4/feat" }],
+			},
+		]);
+		assert.deepEqual(items.map((i) => [i.callId, i.href]), [["mine", "/wolf/1uk4/thread/feat"], ["kid", "/wolf/1uk4/thread/feat"]]);
+		const s = planNotifications(INITIAL_NOTIFY_STATE, [], { focused: false }).state;
+		const r = planNotifications(s, items, { focused: false });
+		assert.deepEqual(r.notifications.map((n) => n.href), ["/wolf/1uk4/thread/feat"]);
+		assert.deepEqual(planNotifications(r.state, items, { focused: false }).notifications, []);
+	});
+
+	it("a grandchild's questionnaire opens the top thread and notifies under its title; an unknown parent keeps the child's own page", () => {
+		const p = (callId: string, threadId: string): PendingCard => ({ callId, threadId, card: ask(callId), raisedAt: "2026-10-26T09:00:00.000Z", source: { kind: "subagent", label: "worker" } });
+		const items = buildNeedsYou([
+			{
+				wolf: "1uk4",
+				cards: [p("grand", "1uk4/gc"), p("orphan", "1uk4/orphan"), p("loop", "1uk4/x")],
+				threads: [
+					{ id: "1uk4/feat", title: "Feature" },
+					{ id: "1uk4/sub", title: "sub", parentThreadId: "1uk4/feat" },
+					{ id: "1uk4/gc", title: "grandchild", parentThreadId: "1uk4/sub" },
+					{ id: "1uk4/orphan", title: "orphan", parentThreadId: "1uk4/gone" },
+					{ id: "1uk4/x", title: "x", parentThreadId: "1uk4/y" },
+					{ id: "1uk4/y", title: "y", parentThreadId: "1uk4/x" },
+				],
+			},
+		]);
+		const by = (id: string) => items.find((i) => i.callId === id)!;
+		assert.equal(by("grand").href, "/wolf/1uk4/thread/feat");
+		assert.equal(by("orphan").href, "/wolf/1uk4/thread/orphan");
+		assert.equal(by("loop").href.startsWith("/wolf/1uk4/thread/"), true); // a parent cycle ends
+		const s = planNotifications(INITIAL_NOTIFY_STATE, [], { focused: false }).state;
+		const r = planNotifications(s, [by("grand")], { focused: false });
+		assert.equal(r.notifications[0]!.title, "1uk4 · Feature");
+	});
+
 	it("merges wolves; a wolf that fails is skipped, not fatal", () => {
 		const p = (callId: string, threadId: string, raisedAt: string): PendingCard => ({ callId, threadId, card: ask(callId), raisedAt });
 		const items = buildNeedsYou([

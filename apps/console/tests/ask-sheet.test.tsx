@@ -54,7 +54,11 @@ const submitted: boolean[] = [];
 const realFetch = globalThis.fetch;
 let textStatus = 200;
 let hold: Promise<void> | null = null;
+/** Holds submit and page-draft requests until released (a request still in flight). */
+let gate: Promise<void> | null = null;
+const uploads: string[] = [];
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+	if (init?.method === "POST" && String(input).endsWith("/attachments")) uploads.push(String(input));
 	if (init?.method === "POST" && String(input).endsWith("/attachments")) return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
 	if (init?.method !== "POST" && init?.method !== "PUT") return new Response("{}", { status: 404 });
 	if (String(input).endsWith("/text")) {
@@ -63,6 +67,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return textStatus === 200 ? Response.json({ ok: true }) : Response.json({ error: "nope" }, { status: textStatus });
 	}
 	posts.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+	if (gate && /\/(submit|draft)$/.test(String(input))) await gate;
 	return status === 200 ? Response.json({ disposition: "started", accepted: true }) : Response.json({ error: "bad page" }, { status });
 }) as typeof fetch;
 
@@ -104,6 +109,8 @@ afterEach(async () => {
 	status = 200;
 	textStatus = 200;
 	hold = null;
+	gate = null;
+	uploads.length = 0;
 	refetched.length = 0;
 	submitted.length = 0;
 	aimed.length = 0;
@@ -549,6 +556,145 @@ describe("ask sheet inline composer", () => {
 		await sendNow(); // an image alone is an answer
 		await settle();
 		assert.deepEqual(texts().map((p) => p.body), [{ text: "", attachments: ["up-1"] }]);
+	});
+});
+
+const { askQueue, useAskQueue } = await import("../components/ask-session.ts");
+const oneStep = (label: string, extra: object = {}) => ({ ...card(), fields: [{ id: "q1", kind: "free-text", label }], steps: [{ fields: ["q1"] }], ...extra }) as PendingCard["card"];
+/** The thread's host: the queue of its waiting questionnaires, the current one in the sheet, a stand-in note box. */
+function QueueHost({ cards }: { cards: PendingCard[] }) {
+	const [done, setDone] = React.useState<string[]>([]);
+	const queue = useAskQueue(askQueue(cards.filter((p) => !done.includes(p.callId))));
+	const session = useAskSession(target, queue.current, { onSubmitted: (id) => setDone((d) => [...d, id]), queued: queue.ids, onRefetch: () => {} });
+	return queue.current ? (
+		<>
+			<AskSheet target={target} session={session} queue={queue} answering={null} setAnswering={() => {}} dictation={undefined as never} />
+			<textarea data-testid="note" value={session.note.text} onChange={(e) => session.setNoteText(e.target.value)} />
+			<button data-testid="attach-note" onClick={() => session.addNoteFiles([new File(["abc"], "a.png", { type: "image/png" })])} />
+			<button data-testid="press" disabled={session.action.disabled} onClick={() => session.press()}>{session.busy ? "Sending…" : session.action.label}</button>
+			{session.error ? <p data-testid="host-error">{session.error}</p> : null}
+		</>
+	) : null;
+}
+describe("queued questionnaires", () => {
+	const mine = pending({ callId: "c1", threadId: "w/a", source: { kind: "self", label: "you" }, card: oneStep("Mine") });
+	const kid = pending({ callId: "c2", threadId: "w/kid", source: { kind: "subagent", label: "worker: ask-sheet" }, card: { ...oneStep("Theirs"), fields: [{ id: "q1", kind: "free-text", label: "Theirs", optional: true }] } });
+	const show = (cards: PendingCard[]) => act(async () => { root ??= createRoot(host); root.render(<QueueHost cards={cards} />); });
+
+	it("counts the cards with their source, switches without submitting, keeps each note, and submits to the asker's own thread", async () => {
+		await show([kid, mine]);
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "1 of 2 \u00b7 worker: ask-sheet");
+		await change(q('[data-testid="note"]')!, "for the child");
+		await click(q('[data-testid="ask-queue-next"]'));
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "2 of 2 \u00b7 you");
+		assert.equal((q('[data-testid="note"]') as HTMLTextAreaElement).value, "");
+		await click(q('[data-testid="ask-queue-prev"]'));
+		assert.equal((q('[data-testid="note"]') as HTMLTextAreaElement).value, "for the child");
+		assert.equal(posts.filter((p) => p.url.endsWith("/submit")).length, 0);
+		await click(q('[data-testid="press"]'));
+		await settle();
+		const sub = posts.find((p) => p.url.endsWith("/submit"))!;
+		assert.equal(sub.url, "/api/wolves/w/threads/kid/cards/c2/submit");
+		assert.equal(sub.body.note.text, "for the child");
+		assert.equal(q('[data-testid="ask-queue"]') === null, true); // one left: no counter
+		assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "c1");
+	});
+
+	const PUTS = () => posts.filter((p) => p.url.includes("/note") || p.url.endsWith("/draft"));
+	const wait = (ms: number) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+	const typeNote = (v: string) => change(q('[data-testid="note"]')!, v);
+	const kidTwoPage = pending({ callId: "c2", threadId: "w/kid", source: { kind: "subagent", label: "worker: ask-sheet" } });
+	let release: () => void = () => {};
+	const hold2 = () => (gate = new Promise<void>((r) => (release = r)));
+
+	it("a submit still in flight when the owner switches settles its own card and leaves the one on screen alone", async () => {
+		hold2();
+		await show([kid, mine]);
+		await typeNote("for the child");
+		await click(q('[data-testid="press"]'));
+		await click(q('[data-testid="ask-queue-next"]'));
+		await typeNote("mine only");
+		status = 200;
+		release();
+		await settle();
+		await wait(480);
+		assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "c1"); // c2 settled, c1 is what is left
+		assert.equal((q('[data-testid="note"]') as HTMLTextAreaElement).value, "mine only");
+		assert.equal(posts.some((p) => p.url.includes("/threads/kid/") && p.url.endsWith("/note")), false);
+		assert.deepEqual(posts.filter((p) => p.url.endsWith("/cards/c1/note")).map((p) => p.body), [{ text: "mine only" }]);
+		assert.notEqual(q('[data-testid="press"]')!.textContent, "Sending\u2026"); // not stuck busy
+	});
+
+	it("a refused submit for a card the owner left shows no error on the card on screen", async () => {
+		hold2();
+		await show([kid, mine]);
+		await click(q('[data-testid="press"]'));
+		await click(q('[data-testid="ask-queue-next"]'));
+		status = 400;
+		release();
+		await settle();
+		assert.equal(q('[data-testid="host-error"]') === null, true);
+		assert.equal(q('[data-testid="ask-error"]') === null, true);
+		assert.notEqual(q('[data-testid="press"]')!.textContent, "Sending\u2026");
+	});
+
+	it("a page change still in flight when the owner switches does not move or blame the card on screen", async () => {
+		hold2();
+		await show([kidTwoPage, mine]);
+		await click(q('[data-testid="press"]')); // Next
+		await click(q('[data-testid="ask-queue-next"]'));
+		status = 400;
+		release();
+		await settle();
+		const d = posts.find((p) => p.url.endsWith("/draft"))!;
+		assert.equal(d.url, "/api/wolves/w/threads/kid/cards/c2/pages/0/draft");
+		assert.equal(q('[data-testid="host-error"]') === null, true);
+		assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "c1");
+		assert.notEqual(q('[data-testid="press"]')!.textContent, "Sending\u2026");
+	});
+
+	it("a card's answers survive a switch, but a field the server changed meanwhile shows the server's value", async () => {
+		const a = pending({ callId: "c2", threadId: "w/kid", source: { kind: "subagent", label: "worker: ask-sheet" } });
+		const picked = () => qa('[data-testid="ask-option"]').map((o) => o.getAttribute("aria-checked"));
+		await show([a, mine]);
+		await click(qa('[data-testid="ask-option"]')[0]!);
+		assert.deepEqual(picked(), ["true", "false"]);
+		await click(q('[data-testid="ask-queue-next"]'));
+		await click(q('[data-testid="ask-queue-prev"]'));
+		assert.deepEqual(picked(), ["true", "false"]); // kept across the switch
+		await click(q('[data-testid="ask-queue-next"]'));
+		await show([{ ...a, pageAnswers: { q1: { value: "b" } } } as PendingCard, mine]);
+		await click(q('[data-testid="ask-queue-prev"]'));
+		assert.deepEqual(picked(), ["false", "true"]);
+	});
+
+	it("a note left unsaved because its page change was in flight is saved after switching back", async () => {
+		hold2();
+		await show([kidTwoPage, mine]);
+		await click(q('[data-testid="press"]')); // Next, held in flight
+		await typeNote("late thought");
+		await click(q('[data-testid="ask-queue-next"]'));
+		release();
+		await settle();
+		await click(q('[data-testid="ask-queue-prev"]'));
+		await wait(480);
+		const saved = posts.filter((p) => p.url === "/api/wolves/w/threads/kid/cards/c2/note");
+		assert.deepEqual(saved.map((p) => p.body), [{ text: "late thought" }]);
+		assert.equal(PUTS().length > 0, true);
+	});
+
+	it("a child card's note upload goes to the child's thread", async () => {
+		await show([kid, mine]);
+		await click(q('[data-testid="attach-note"]'));
+		await settle();
+		assert.deepEqual(uploads, ["/api/wolves/w/threads/kid/attachments"]);
+	});
+
+	it("a late older card does not take the sheet from the one the owner is on", async () => {
+		await show([mine]);
+		await show([kid, mine]);
+		assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "c1");
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "2 of 2 \u00b7 you");
 	});
 });
 

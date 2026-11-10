@@ -24,7 +24,7 @@ import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { useThreadColor } from "@/components/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar-cards";
 import type { Answering } from "@/components/ask-sheet";
-import { useAskSession, type NoteState } from "@/components/ask-session";
+import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask-session";
 import { replyLabel } from "@/components/ask-reply";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { attachable, BAR_EXTRAS, kbdEventForAction, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
@@ -336,7 +336,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const router = useRouter();
 	const rawCards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.ask);
 	// A paged `ask` questionnaire has its own sheet (never the classic card path: the whole-card route refuses it). The other cards and the peek follow their extras.
-	const askCard = BAR_EXTRAS.ask ? rawCards.pending.find((p) => p.card.paged === true) : undefined;
+	const queue = useAskQueue(BAR_EXTRAS.ask ? askQueue(rawCards.pending) : []);
+	const askCard = queue.current;
 	const cards: BarCards = {
 		...rawCards,
 		pending: BAR_EXTRAS.cards ? rawCards.pending.filter((p) => !p.card.paged) : [],
@@ -361,7 +362,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const noteSink = useRef<((n: NoteState) => void) | null>(null);
 	const registerNoteSink = useCallback((fn: ((n: NoteState) => void) | null) => void (noteSink.current = fn), []);
 	const session = useAskSession(target, askCard, {
-		onSubmitted: () => (askCard ? rawCards.settle(askCard.callId) : undefined),
+		onSubmitted: (id) => rawCards.settle(id),
+		queued: queue.ids,
 		onRefetch: rawCards.refetch,
 		onCollapse: (n) => {
 			if (n.text.trim() !== "") appendToDraft(draftKey(target.wolf, target.threadId), n.text);
@@ -371,11 +373,11 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const sheetCard = askCard ? (
 		session.expanded ? (
 			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone || composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? "flex-1" : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
-				<AskSheet key={askCard.callId} target={target} session={session} answering={answering} setAnswering={setAnswering} dictation={dictation} />
+				<AskSheet key={askCard.callId} target={target} session={session} queue={queue} answering={answering} setAnswering={setAnswering} dictation={dictation} />
 			</div>
 		) : (
 			<button type="button" data-testid="ask-sheet-reopen" onClick={() => session.setExpanded(true)} className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-				<span className="font-medium text-foreground">Questions waiting</span>
+				<span className="font-medium text-foreground">{queue.count >= 2 ? `Questions waiting (${queue.count})` : "Questions waiting"}</span>
 				<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
 			</button>
 		)

@@ -91,6 +91,8 @@ class CardClient extends MockConsoleClient {
 	/** The next answer/skip is steered into a running turn (the ack says steered; no turn starts). */
 	steerNext = false;
 	submitTexts: string[] = [];
+	/** Further pending cards after the thread's own (a subagent's questionnaire queued here). */
+	extraPending: Record<string, unknown>[] = [];
 	override async submit(threadId: string, text: string, opts?: import("@wolfpack/client").SubmitOptions) {
 		this.submitTexts.push(text);
 		return super.submit(threadId, text, opts);
@@ -109,7 +111,7 @@ class CardClient extends MockConsoleClient {
 			tools: [{ callId: CALL, name: "ask_user_question", args: { question: "q" }, result, card: this.card, ...(this.answered ? { answer: this.answered } : {}), ...(this.superseded ? { dismissed: true, closed: "superseded" as const } : {}), ...(this.skippedState ? { dismissed: true, closed: "skipped" as const, result: "(skipped by the user)" } : {}) }],
 		};
 		const pending = !this.answered && !this.superseded && !this.skippedState;
-		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}), ...(this.heldSkip ? { heldSkip: true } : {}) }];
+		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}), ...(this.heldSkip ? { heldSkip: true } : {}) }, ...this.extraPending] as never[];
 		return { ...base, messages: [asked, ...base.messages], ...(pending ? { pendingCards } : {}) };
 	}
 	async skipCard(threadId: string, callId: string) {
@@ -808,6 +810,22 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		release();
 		await settle();
 		assert.deepEqual(textPosts.map((p) => p.body), [{ text: "look", attachments: ["up-1"] }]);
+	});
+
+	it("a subagent's queued questionnaire: the strip counts both, and the replace-hint shows for the thread's own card but not the child's", async () => {
+		const client = new CardClient(PAGED);
+		client.extraPending = [{ callId: "kid-1", threadId: "1uk4/kid", card: { ...PAGED, fields: [{ id: "q1", kind: "free-text", label: "Theirs", optional: true }] }, raisedAt: new Date().toISOString(), source: { kind: "subagent", label: "worker: sheet" } }];
+		await mount(client);
+		await settle();
+		await click(q('[data-testid="ask-collapse"]')!);
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent, "Questions waiting (2)");
+		await typeText("never mind");
+		assert.equal(q('[data-testid="ask-replace-hint"]') !== null, true); // the thread's own card: a message replaces it
+		await click(q('[data-testid="ask-sheet-reopen"]')!);
+		await click(q('[data-testid="ask-queue-next"]')!);
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "2 of 2 \u00b7 worker: sheet");
+		await click(q('[data-testid="ask-collapse"]')!);
+		assert.equal(q('[data-testid="ask-replace-hint"]') === null, true); // a subagent's card is never replaced by a message
 	});
 
 	it("phone: Esc and the close button put the questions away to a strip that reopens them; the composer stays", async () => {

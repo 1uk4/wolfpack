@@ -20,14 +20,12 @@ beforeEach(() => {
   writeFileSync(join(den, ".memory", "pool", "observations.jsonl"), JSON.stringify(row) + "\n");
   vi.stubGlobal("fetch", ((real) => async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
-    if (!u.includes("/work/")) return real(url, init);
-    const id = decodeURIComponent(u.split("/work/")[1]!);
-    const items: Record<string, object> = {
-      "work-d-FEAT": { id: "work-d-FEAT", title: "Feature", kind: "feature", stage: "build" },
-      "work-d-TASK": { id: "work-d-TASK", title: "Task", kind: "task", stage: "plan", partOf: "work-d-FEAT" },
-    };
-    const item = items[id];
-    return item ? new Response(JSON.stringify({ item, body: "" }), { status: 200 }) : new Response("{}", { status: 404 });
+    if (!u.includes("/work?")) return real(url, init);
+    const items = [
+      { id: "work-d-FEAT", title: "Feature", kind: "feature", stage: "build" },
+      { id: "work-d-TASK", title: "Task", kind: "task", stage: "plan", partOf: "work-d-FEAT" },
+    ];
+    return new Response(JSON.stringify({ items }), { status: 200 });
   })(globalThis.fetch));
 });
 afterEach(async () => {

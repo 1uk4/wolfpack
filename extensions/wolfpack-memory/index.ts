@@ -25,6 +25,7 @@ import {
   foldLedger,
   poolTokens,
   HttpWorkRecordStore,
+  distillTaskToFeature,
   serializeBranchEntries,
   type MemoryOrchestrator,
   type Observation,
@@ -1595,11 +1596,13 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   // Read wolf's subscribed domains from wolf.yaml
   let wolfDomains: string[] = [];
+  let workLogAppend = false;
   try {
     const wolfYamlPath = path.join(wolfDen, "..", "wolf.yaml");
     if (fs.existsSync(wolfYamlPath)) {
       const raw = fs.readFileSync(wolfYamlPath, "utf-8");
       excludeSubagentTraffic = /^\s+subagentMemory:\s*["']?on\b/m.test(raw);
+      workLogAppend = /^\s+workLog:\s*["']?append\b/m.test(raw);
       const match = raw.match(/domains:\s*\n((?:\s+-\s+\S+\n?)*)/)
       if (match) {
         wolfDomains = match[1].match(/- (\S+)/g)?.map(m => m.slice(2)) ?? [];
@@ -1609,6 +1612,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   workHandle = initWorkSystem(pi, {
     ...workConfig,
+    // `memory.workLog: append` in wolf.yaml gates the ship distill (read like subagentMemory above; needs the engine and the Work API).
+    ...(workLogAppend && workRecordStore.configured
+      ? { distillOnShip: async (taskId: string) => (engine ? distillTaskToFeature({ store: workRecordStore, engine, taskId, src: wolfName }) : { ok: false, reason: "no engine" }) }
+      : {}),
     domains: wolfDomains,
     getCurrentDomain: () => currentDomain,
   }) ?? null;

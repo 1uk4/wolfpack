@@ -59,6 +59,8 @@ export {
   type WorkPattern,
 } from "./file-observation.js";
 
+export { distillTaskToFeature, type ShipDistillResult } from "./ship-distill.js";
+
 // Rollup (child → parent feature body)
 export {
   extractDistilled,

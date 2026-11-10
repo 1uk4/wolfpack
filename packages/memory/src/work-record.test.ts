@@ -687,4 +687,18 @@ describe("appendRecord", () => {
     expect((await mem.get("t"))!.body).toBe(full);
     expect(await mem.appendRecord("a", [line("o1")])).toMatchObject({ ok: false, code: "archived" });
   });
+
+  it("sends group in the PATCH, and the in-memory store inserts under that ### heading (creating it) like the hub", async () => {
+    const { calls, store } = capture();
+    await store.appendRecord("f", [line("o1")], { group: "Findings" });
+    expect(JSON.parse(calls[0].init.body)).toMatchObject({ op: "recordAppend", group: "Findings" });
+    const mem = new InMemoryWorkRecordStore({
+      f: { id: "f", title: "F", kind: "feature", stage: "in_build", body: "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->" },
+    });
+    await mem.appendRecord("f", [line("o2", "new change")], { group: "Changes" });
+    await mem.appendRecord("f", [line("o3", "new decision")], { group: "Decisions" });
+    expect((await mem.get("f"))!.body).toBe(
+      "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n- 10:05 [hal\u00b7Changes] new change <!-- src:o2 -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->\n\n### Decisions\n\n- 10:05 [hal\u00b7Changes] new decision <!-- src:o3 -->\n",
+    );
+  });
 });

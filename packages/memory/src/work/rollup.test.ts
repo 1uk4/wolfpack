@@ -226,6 +226,33 @@ describe("rollupToParent (orchestrator)", () => {
     expect(client.writes["feat-1"]).toContain("- Duration: **2:18**");
   });
 
+  it("keeps a Record line appended after the rollup's first read of the parent", async () => {
+    const parent = "# W\n\n## Record\n\n- 09:00 [x·Changes] before <!-- src:a -->\n";
+    const store = { body: parent };
+    let reads = 0;
+    const client: RollupClient = {
+      async query({ ids }) {
+        return [
+          { id: "task-1", kind: "task", title: "T", partOf: "feat-1", updated: "2026-10-16" },
+          { id: "feat-1", kind: "feature", title: "W", partOf: null, updated: "2026-10-15" },
+        ].filter((i) => (ids ?? []).includes(i.id));
+      },
+      async getBody(id) {
+        if (id === "task-1") return "# T\n";
+        const seen = store.body;
+        // a hub append lands right after the first read of the parent
+        if (reads++ === 0) store.body += "- 10:00 [hal·Changes] appended mid-rollup <!-- src:b -->\n";
+        return seen;
+      },
+      async updateBody(_id, body) {
+        store.body = body;
+      },
+    };
+    expect(await rollupToParent(client, "task-1")).toBe("written");
+    expect(store.body).toContain("appended mid-rollup");
+    expect(store.body).toContain("## Outcomes");
+  });
+
   it("a feature without a zone gets an ## Outcomes section: the task's one line", async () => {
     const doc = "# W\n\n## Plan\n\nkeep   this\texactly\n\n## Record\n\n### Decisions\n\n- x\n";
     const client = makeClient(

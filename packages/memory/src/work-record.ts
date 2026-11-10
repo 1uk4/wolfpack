@@ -413,7 +413,7 @@ export interface WorkRecordStore {
   /** Replace ONLY the Record section; `record` is the full section starting at its heading. Throws WorkApiError on a refusal. */
   setRecord(id: string, record: string): Promise<void>;
   /** Atomically append lines to the item's Record (hub `recordAppend`). Never throws on a refusal; a resend with the same key (default: derived from item + line ids) adds nothing. */
-  appendRecord(id: string, lines: RecordAppendLine[], opts?: { idempotencyKey?: string }): Promise<AppendRecordResult>;
+  appendRecord(id: string, lines: RecordAppendLine[], opts?: { idempotencyKey?: string; group?: string }): Promise<AppendRecordResult>;
   /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
   healthy?(): Promise<boolean>;
 }
@@ -474,11 +474,11 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     };
   }
 
-  async appendRecord(id: string, lines: RecordAppendLine[], opts: { idempotencyKey?: string } = {}): Promise<AppendRecordResult> {
+  async appendRecord(id: string, lines: RecordAppendLine[], opts: { idempotencyKey?: string; group?: string } = {}): Promise<AppendRecordResult> {
     const key = opts.idempotencyKey ?? appendKey(id, lines);
     let res: Response;
     try {
-      res = await this.call("PATCH", id, { op: "recordAppend", lines }, { "Idempotency-Key": key });
+      res = await this.call("PATCH", id, { op: "recordAppend", lines, ...(opts.group ? { group: opts.group } : {}) }, { "Idempotency-Key": key });
     } catch (err) {
       return { ok: false, code: "error", message: err instanceof Error ? err.message : String(err) };
     }
@@ -526,7 +526,7 @@ export class InMemoryWorkRecordStore implements WorkRecordStore {
     it.body = replaceRecordSection(it.body, record);
   }
 
-  async appendRecord(id: string, lines: RecordAppendLine[]): Promise<AppendRecordResult> {
+  async appendRecord(id: string, lines: RecordAppendLine[], opts: { group?: string } = {}): Promise<AppendRecordResult> {
     const it = this.items[id];
     if (!it) return { ok: false, code: "error", message: "not found" };
     if (it.stage === "archived") return { ok: false, code: "archived", message: "item is archived; its Record is closed" };
@@ -540,7 +540,20 @@ export class InMemoryWorkRecordStore implements WorkRecordStore {
       fresh.push(`- ${/T(\d\d:\d\d)/.exec(l.at)?.[1] ?? "00:00"} [${l.src}\u00b7${l.kind}] ${l.text.trim()}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`);
     }
     if (!fresh.length) return { ok: true };
-    const next = rec ? `${rec}\n${fresh.join("\n")}` : fresh.join("\n");
+    let next: string;
+    if (opts.group && it.kind === "feature") {
+      const rl = rec ? rec.split("\n") : [];
+      const h = rl.findIndex((x) => x.trim() === `### ${opts.group}`);
+      if (h < 0) rl.push(...(rl.length ? [""] : []), `### ${opts.group}`, "", ...fresh);
+      else {
+        let end = rl.length;
+        for (let i = h + 1; i < rl.length; i++) if (/^### /.test(rl[i]!)) { end = i; break; }
+        let at = end;
+        while (at > h + 1 && rl[at - 1]!.trim() === "") at--;
+        rl.splice(at, 0, ...fresh);
+      }
+      next = rl.join("\n");
+    } else next = rec ? `${rec}\n${fresh.join("\n")}` : fresh.join("\n");
     if (next.length > (it.kind === "feature" ? APPEND_CAP_FEATURE : APPEND_CAP_TASK)) return { ok: false, code: "log_full" };
     it.body = replaceRecordSection(it.body, `${RECORD_HEADING}\n\n${next}`);
     return { ok: true };

@@ -311,6 +311,8 @@ export interface WorkSystemConfig {
   getCurrentDomain?: () => string | undefined;
   /** Callback to get stage context for prompt injection */
   getStageContext?: (item: WorkItem) => string;
+  /** Ship distill hook, set only when wolf.yaml has `memory.workLog: append`. Called after a task ships and its rollup ran. */
+  distillOnShip?: (taskId: string) => Promise<unknown>;
   /** Callback when task completes (for summarization) */
   onTaskComplete?: (taskId: string, item: WorkItem) => Promise<void>;
   /** Graduation: `g` previews the distilled contributions, then sends after the owner confirms. */
@@ -356,7 +358,17 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // Every feature keeps the section (the Inbox does not). Errors are logged —
   // a bad rollup never blocks the ship.
   async function shipWithRollup(id: string): Promise<WorkItem> {
-    return shipAndRollup(client, id, rollupToParent, (err) => debugLog("rollupToParent failed", { id, err: String(err) }));
+    const item = await shipAndRollup(client, id, rollupToParent, (err) => debugLog("rollupToParent failed", { id, err: String(err) }));
+    // Ship distill (memory.workLog: append): one model call folds the task's log into its feature's Record. Tasks only; never blocks the ship.
+    if (config.distillOnShip && (item as { kind?: string }).kind === "task") {
+      try {
+        const r = (await config.distillOnShip(id)) as { ok?: boolean; reason?: string } | undefined;
+        if (r && r.ok === false) debugLog("ship distill failed", { id, reason: r.reason });
+      } catch (err) {
+        debugLog("ship distill failed", { id, err: String(err) });
+      }
+    }
+    return item;
   }
 
   // Session-specific task binding

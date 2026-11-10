@@ -4,7 +4,9 @@ import {
   BindThreadRequestSchema,
   BindThreadResponseSchema,
   AnswerCardRequestSchema,
-  AnswerCardPageBodySchema,
+  SaveCardPageBodySchema,
+  SubmitCardBodySchema,
+  CardNoteBodySchema,
   BindCardTextBodySchema,
   ConsolidateResponseSchema,
   CreateThreadBodyVariantsSchema,
@@ -72,7 +74,7 @@ export type CreateThreadBody = z.infer<typeof CreateThreadBodySchema>;
 
 export const AnswerCardBodySchema = AnswerCardRequestSchema.omit({ threadId: true, callId: true });
 export type AnswerCardBody = z.infer<typeof AnswerCardBodySchema>;
-export { AnswerCardPageBodySchema, BindCardTextBodySchema } from "./schemas.js";
+export { SaveCardPageBodySchema, SubmitCardBodySchema, CardNoteBodySchema, BindCardTextBodySchema } from "./schemas.js";
 // --- feature progress: bind ---
 export const BindThreadBodySchema = BindThreadRequestSchema;
 // --- end feature progress ---
@@ -227,23 +229,54 @@ export const ROUTES = {
     error: err,
   },
   /**
-   * Submit one page of a paged (`ask`) card (`PendingCard.card.paged`). The page's answers are delivered to the agent
-   * at once (ack as `answerCard`: `started` or `steered`), but the card stays pending until the last page; the agent
-   * is told to hold its turn until then. `:page` must equal `PendingCard.pageIndex` (else 400 `invalid_request`); a
-   * required question without an answer is 400. Draft text bound with `bindCardText` fills questions not answered in
-   * the body. 404 `not_found` for an unknown/closed card, 400 when the card is not paged.
+   * Save one page of a paged (`ask`) card as a draft (Next / Back). Nothing reaches the agent. Body
+   * `{answers, goto?, stepsKey?}`: the page's answers (shape-checked only: required answers are enforced at submit; a
+   * `showIf`-hidden answer is dropped), `goto` the page now viewed (default min(page+1, last)), `stepsKey` the
+   * `stepsKey` of the pages the client saw. Moving forward raises `PendingCard.reached`; it never goes down. Text
+   * bound to the page's questions is folded into the saved answers. Answers `{accepted: true}`; `card-pending` then
+   * carries the new `pageIndex`/`reached`/`pageAnswers`. 404 unknown/closed card, 400 not paged / page or goto out of
+   * range / invalid answer, 409 a submit is in flight or `stepsKey` no longer matches (the pages were revised).
    */
-  answerCardPage: {
+  saveCardPage: {
+    method: "PUT",
+    path: "/v1/threads/:id/cards/:callId/pages/:page/draft",
+    body: SaveCardPageBodySchema,
+    response: { kind: "json", schema: z.object({ accepted: z.literal(true) }) },
+    status: [200],
+    error: err,
+  },
+  /**
+   * Submit a paged card: ONE tool result with every page's saved answers (plus `answers`, the page on screen, when
+   * given) and the note. Ack as `answerCard` (`started` | `steered`). Every page's required questions are checked:
+   * a miss is one 400 naming them ("Q3 \"Name\", ..."). Body `{answers?, note?: {text?, attachments?}, stepsKey?}`
+   * (`note` replaces the stored note when given). 404 unknown/closed card, 400 not paged / invalid, 409 a submit is
+   * already in flight or `stepsKey` mismatch.
+   */
+  submitCard: {
     method: "POST",
-    path: "/v1/threads/:id/cards/:callId/pages/:page/answer",
-    body: AnswerCardPageBodySchema,
+    path: "/v1/threads/:id/cards/:callId/submit",
+    body: SubmitCardBodySchema,
     response: { kind: "json", schema: SubmitAckSchema },
     status: [200],
     error: err,
   },
   /**
-   * "Answering Qn": hold typed text as the free-text / Other answer of question `:qid` on the current page of a paged
-   * card. Not a chat message: nothing is superseded and no turn starts. Answers `{accepted: true}`; the card's
+   * The owner's note on a paged card, stored on wolfd (shared by every client, survives a reload). Body
+   * `{text?, attachments?: string[]}` (upload ids; counted with the images bound to questions against
+   * ATTACHMENT_MAX_PER_SUBMIT, else 400; an id not an upload of this thread is 400); an empty note clears it.
+   * Answers `{accepted: true}`; `card-pending` carries `note`. 404 unknown/closed card, 400 not paged, 409 submit in flight.
+   */
+  putCardNote: {
+    method: "PUT",
+    path: "/v1/threads/:id/cards/:callId/note",
+    body: CardNoteBodySchema,
+    response: { kind: "json", schema: z.object({ accepted: z.literal(true) }) },
+    status: [200],
+    error: err,
+  },
+  /**
+   * "Answering Qn": hold typed text as the free-text / Other answer of question `:qid` of a paged
+   * card (any page). Not a chat message: nothing is superseded and no turn starts. Answers `{accepted: true}`; the card's
    * `draft` (card-pending event) then shows it.
    * Body `{text?, attachments?: string[]}`: at least one is required (blank text with no attachments is 400).
    * Attachment ids come from `uploadAttachment` on this thread; an id that is not an upload of this thread is 400.
@@ -253,7 +286,7 @@ export const ROUTES = {
    * `{value: "", attachments}`, multi `{value: [], attachments}` (no `other`, nothing counts toward `max`).
    * A later bind replaces the earlier draft of that question. Picking an option for the question when the page is
    * submitted keeps the draft's images. Direct answers to a page never carry attachments (400).
-   * 400 for a slider/confirm question, one not on the current page, or a single/multi with `noOther`; 404 for an
+   * 400 for a slider/confirm question, one not on the card, or a single/multi with `noOther`; 404 for an
    * unknown card.
    */
   bindCardText: {

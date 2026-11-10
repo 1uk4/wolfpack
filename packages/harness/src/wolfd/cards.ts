@@ -10,10 +10,11 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  *
- * Paged (`ask`) cards: page progress (`pagesDone`, the submitted answers) is re-derived from the transcript like
- * everything else, so it and the "hold your turn" state (`holdOf`) survive a restart. DRAFTS (text bound to a question
- * with `bindText`) live in memory only and are lost on a restart: persisting them would need a new transcript entry
- * kind for little gain (the owner retypes a line).
+ * Paged (`ask`) cards: the owner's progress is a DRAFT kept in memory on wolfd (`PagedState`): the saved answers of
+ * every page, the page being viewed, how many pages were moved past (`reached`), text/images bound to questions
+ * (`bindText`) and the owner's note. Nothing reaches the model before the single submit (`claimSubmit`), which becomes
+ * one card-answer entry. A restart loses the draft (the card is pending again, unanswered): persisting it would need a
+ * new transcript entry kind for little gain.
  */
 import { ATTACHMENT_MAX_PER_SUBMIT, BIND_TEXT_MAX, pageCard, reviseCard, visibleFields, type AnyField, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type PendingCard } from "@wolfpack/protocol";
 import { fieldKind, type AnyAnswer } from "./card-kinds/index.js";
@@ -22,30 +23,49 @@ import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerDa
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
+/** The owner's note on a questionnaire: text and uploaded images, delivered with the answers. */
+export interface CardNote {
+  text?: string;
+  attachments?: string[];
+}
+
 export interface ReadyAnswer {
   callId: string;
   card: Card;
   answers: CardAnswers;
   /** The operator skipped this card: `answers` is empty and the model is told it was skipped. */
   skipped?: true;
-  /** Paged (`ask`) card: the page these answers belong to (0-based) and whether it is the last. */
-  page?: number;
-  final?: true;
-  /** Paged card, in memory only: the answers of the earlier pages (to restore progress if this submission is withdrawn for good). */
-  prior?: CardAnswers;
+  /** Paged card: the owner's note (text, images) that goes with the answers. */
+  note?: CardNote;
   /** Paged card: a line for the agent, e.g. that its earlier ask_revise was not applied. */
-  note?: string;
+  reviseNote?: string;
+  /** Paged card, in memory only: the draft as it stood before the submit claim, to restore it if the submit is withdrawn for good. */
+  restore?: PagedState;
 }
 
-/** Progress of a paged card: pages submitted, their answers, and text bound to questions of the current page. */
-interface PagedState {
-  pagesDone: number;
+/** Draft state of a paged card on wolfd. */
+export interface PagedState {
+  /** The page the owner is viewing. */
+  pageIndex: number;
+  /** Pages moved past with Next (never goes down); an ask_revise cannot change them. */
+  reached: number;
+  /** Saved answers of every page. */
   answers: CardAnswers;
+  /** Text/images bound to questions (any page), not yet folded into `answers`. */
   draft: CardAnswers;
+  note?: CardNote;
 }
+
+const freshState = (): PagedState => ({ pageIndex: 0, reached: 0, answers: {}, draft: {} });
 
 /** A sibling's recorded resolution while the others still wait: answers, or an explicit skip. */
 type Held = { answers: CardAnswers } | { skipped: true };
+
+const imageCount = (answers: CardAnswers, except?: string): number =>
+  Object.entries(answers).reduce((n, [id, a]) => (id === except ? n : n + attachmentIds(a as AnyAnswer).length), 0);
+
+/** Images held on the card besides those of question `except`: saved answers, drafts and the note share one cap. */
+const imagesHeld = (st: PagedState, except?: string): number => imageCount(st.answers, except) + imageCount(st.draft, except) + (st.note?.attachments?.length ?? 0);
 
 export class CardTracker {
   /** Raised, unanswered cards in raise order. */
@@ -54,13 +74,9 @@ export class CardTracker {
   /** Calls whose answer is being submitted: no longer answerable. */
   private readonly claimed = new Set<string>();
   private readonly paged = new Map<string, PagedState>();
-  /** The page being submitted per paged card (and whether it is the last): a revise may not touch it. */
-  private readonly claimedPage = new Map<string, { page: number; final: boolean }>();
-  /** Why the last ask_revise of a card was not applied when its transcript entry was folded; told to the agent with the next page answer. */
+  /** Why the last ask_revise of a card was not applied when its transcript entry was folded; told to the agent with the submit. */
   private readonly reviseRejected = new Map<string, string>();
-  /** A revise rejected while the final page was being submitted: told to the agent right after that submission (takeLateNote). */
-  private readonly lateNote = new Map<string, string>();
-  /** Cards whose content changed through the transcript (a revise or a page answer): the thread re-announces them. */
+  /** Cards whose content changed through the transcript (a revise): the thread re-announces them. */
   private readonly changed = new Set<string>();
 
   constructor(private readonly threadId: string) {}
@@ -70,25 +86,10 @@ export class CardTracker {
     this.held.clear();
     this.claimed.clear();
     this.paged.clear();
-    this.claimedPage.clear();
     this.reviseRejected.clear();
-    this.lateNote.clear();
     this.changed.clear();
     for (const e of entries) this.apply(e);
     this.changed.clear();
-  }
-
-  /** The reason a revise was rejected after the final page was claimed (cleared), for the thread to tell the agent. */
-  takeLateNote(callId: string): string | undefined {
-    const n = this.lateNote.get(callId);
-    this.lateNote.delete(callId);
-    return n;
-  }
-
-  /** For a final page about to be submitted: fold a revise rejection that arrived since the claim into its answer note, so it travels with "complete, proceed". */
-  foldLateNote(ready: ReadyAnswer): ReadyAnswer {
-    const late = ready.final ? this.takeLateNote(ready.callId) : undefined;
-    return late ? { ...ready, note: ready.note ? `${ready.note} ${late}` : late } : ready;
   }
 
   /** Card ids whose content changed since the last call (cleared). */
@@ -103,18 +104,6 @@ export class CardTracker {
     const closed = new Map<string, CardClosed>();
     if (entry.kind === CARD_ANSWER_KIND) {
       for (const c of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
-        if (c.page !== undefined && !c.final) {
-          // A page of a paged card: the card stays pending on the next page. Progress only moves forward: an entry for a
-          // page already counted (the thread counts it as soon as the engine accepts it) changes nothing, draft included.
-          if (this.raised.has(c.callId)) {
-            const st = this.paged.get(c.callId) ?? { pagesDone: 0, answers: {}, draft: {} };
-            if (c.page + 1 > st.pagesDone) {
-              this.paged.set(c.callId, { pagesDone: c.page + 1, answers: { ...st.answers, ...c.answers }, draft: {} });
-              this.changed.add(c.callId);
-            }
-          }
-          continue;
-        }
         if (this.raised.has(c.callId)) closed.set(c.callId, c.skipped ? "skipped" : "answered");
         this.drop(c.callId);
       }
@@ -129,27 +118,25 @@ export class CardTracker {
     const msg = entry.model?.[0] as { toolCallId?: string; timestamp?: number } | undefined;
     const card = cardOfToolMessage(msg);
     if (card?.revises) {
-      // ask_revise: replaces the unanswered pages of the open paged card; it is not a card of its own.
-      // The same rules the tool was checked against (`reviseTarget`); a revise folded while a page answer is in flight
-      // keeps that page. A fold that no longer fits is dropped and the agent hears it with the next page answer.
+      // ask_revise: replaces the pages the owner has not moved past; it is not a card of its own.
+      // The same rules the tool was checked against (`reviseTarget`). A fold that no longer fits is dropped and the
+      // agent hears it with the submit.
       const plan = this.reviseTarget(card.revises);
       const orig = this.raised.get(card.revises);
       const next = "problem" in plan ? undefined : reviseCard(plan.card, plan.keep, card);
       if (orig && next) {
         this.raised.set(card.revises, { ...orig, card: next });
         const st = this.paged.get(card.revises);
-        // Text typed for a question that is no longer on the current page is dropped; the rest stays.
         if (st) {
-          const here = new Set(pageCard(next, st.pagesDone)?.fields.map((f) => f.id));
-          this.paged.set(card.revises, { ...st, draft: Object.fromEntries(Object.entries(st.draft).filter(([id]) => here.has(id))) });
+          // Saved answers and drafts of questions that are gone are dropped; the rest stays.
+          const here = new Set(next.fields.map((f) => f.id));
+          const keep = (a: CardAnswers) => Object.fromEntries(Object.entries(a).filter(([id]) => here.has(id)));
+          this.paged.set(card.revises, { ...st, pageIndex: Math.min(st.pageIndex, (next.steps?.length ?? 1) - 1), answers: keep(st.answers), draft: keep(st.draft) });
         }
         this.reviseRejected.delete(card.revises);
         this.changed.add(card.revises);
       } else if (orig) {
-        const why = "problem" in plan ? plan.problem : "the replacement pages are not a valid questionnaire (a question id is reused?)";
-        // Folded while the LAST page is in flight: no later page answer will carry the note, so the thread sends it on its own.
-        if (this.claimedPage.get(card.revises)?.final) this.lateNote.set(card.revises, why);
-        else this.reviseRejected.set(card.revises, why);
+        this.reviseRejected.set(card.revises, "problem" in plan ? plan.problem : "the replacement pages are not a valid questionnaire (a question id is reused?)");
       }
       return closed;
     }
@@ -162,7 +149,6 @@ export class CardTracker {
     this.held.delete(callId);
     this.claimed.delete(callId);
     this.paged.delete(callId);
-    this.claimedPage.delete(callId);
     this.reviseRejected.delete(callId);
   }
 
@@ -185,22 +171,14 @@ export class CardTracker {
     return { ids, heldDiscarded };
   }
 
-  /** The re-send of a withdrawn answer failed for good: the card is pending again, unanswered, so the owner can answer it. */
+  /** The re-send of a withdrawn answer failed for good: the card is pending again, unanswered, so the owner can answer it. A questionnaire gets its drafts and note back. */
   reraise(cards: readonly ReadyAnswer[]): void {
     for (const c of cards) {
       this.claimed.delete(c.callId);
-      this.claimedPage.delete(c.callId);
       this.held.delete(c.callId);
       if (!this.raised.has(c.callId)) this.raised.set(c.callId, { card: c.card, raisedAt: new Date().toISOString() });
-      if (c.page !== undefined) {
-        // A withdrawn PAGE answer never reached the agent (no transcript entry): progress and answers go back to before
-        // that page, and what the owner submitted comes back as the draft so nothing typed is lost. Both the non-final
-        // case (progress already advanced) and the final one (card was settled, `prior` restores the earlier pages).
-        const card = this.raised.get(c.callId)!.card;
-        const ids = new Set(pageCard(card, c.page)?.fields.map((f) => f.id));
-        const st = this.paged.get(c.callId);
-        const kept = c.prior ?? Object.fromEntries(Object.entries(st?.answers ?? {}).filter(([id]) => !ids.has(id)));
-        this.paged.set(c.callId, { pagesDone: c.page, answers: kept, draft: Object.fromEntries(Object.entries(c.answers).filter(([id]) => ids.has(id))) });
+      if (c.restore) {
+        this.paged.set(c.callId, c.restore);
         this.changed.add(c.callId);
       }
     }
@@ -227,15 +205,17 @@ export class CardTracker {
     });
   }
 
-  private pagedView(callId: string): Pick<PendingCard, "pageIndex" | "pageAnswers" | "draft"> {
-    const st = this.paged.get(callId);
-    return { pageIndex: st?.pagesDone ?? 0, ...(st && Object.keys(st.answers).length ? { pageAnswers: st.answers } : {}), ...(st && Object.keys(st.draft).length ? { draft: st.draft } : {}) };
+  private pagedView(callId: string): Pick<PendingCard, "pageIndex" | "reached" | "pageAnswers" | "draft" | "note"> {
+    const st = this.paged.get(callId) ?? freshState();
+    const note = st.note && ((st.note.text ?? "") !== "" || (st.note.attachments?.length ?? 0) > 0) ? { note: st.note } : {};
+    return { pageIndex: st.pageIndex, reached: st.reached, ...(Object.keys(st.answers).length ? { pageAnswers: st.answers } : {}), ...(Object.keys(st.draft).length ? { draft: st.draft } : {}), ...note };
   }
 
   /**
-   * Hold typed text as the answer of question `qid` on the current page ("answering Qn"). Returns a problem or undefined.
-   * Free text takes it as the value; single and multi take it as their Other entry unless the question has `allowOther:
-   * false` (`noOther`); slider and confirm take no text. Blank text and text over BIND_TEXT_MAX are refused.
+   * Hold typed text as the answer of question `qid` ("answering Qn"), on any page of the card. Returns a problem or
+   * undefined. Free text takes it as the value; single and multi take it as their Other entry unless the question has
+   * `allowOther: false` (`noOther`); slider and confirm take no text. Blank text and text over BIND_TEXT_MAX are
+   * refused. The draft replaces the question's saved answer; its images stay unless new ones are given.
    */
   bindText(callId: string, qid: string, text: string, attachments: readonly string[] = [], owned?: (id: string) => boolean, multi?: { picked: string[]; others: string[] }): string | undefined {
     const p = this.get(callId);
@@ -243,13 +223,19 @@ export class CardTracker {
     if (!p.card.paged) return "this card is not a questionnaire";
     if (!multi && text.trim() === "" && attachments.length === 0) return "give non-blank text or at least one attachment";
     if (text.length > BIND_TEXT_MAX) return `text is over ${BIND_TEXT_MAX} characters`;
-    const st = this.paged.get(callId) ?? { pagesDone: 0, answers: {}, draft: {} };
-    const page = pageCard(p.card, st.pagesDone);
-    const f = page?.fields.find((x) => x.id === qid);
-    if (!f) return `question "${qid}" is not on the current page`;
+    const st = this.paged.get(callId) ?? freshState();
+    const f = p.card.fields.find((x) => x.id === qid);
+    if (!f) return `question "${qid}" is not on this questionnaire`;
     const typed = text.trim() !== "";
+    // The question's earlier images (saved answer or draft) stay when no new ones come.
+    const earlier = attachmentIds((st.draft[qid] ?? st.answers[qid] ?? {}) as AnyAnswer);
+    const capMsg = (n: number) => `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${n} already attached elsewhere)`;
+    const settle = (a: CardFieldAnswer): void => {
+      const { [qid]: _gone, ...answers } = st.answers;
+      this.paged.set(callId, { ...st, answers, draft: { ...st.draft, [qid]: a } });
+    };
     if (multi) {
-      // A multi question holds a LIST of custom answers: this call replaces the whole picked/custom list (images stay unless new ones are given).
+      // A multi question holds a LIST of custom answers: this call replaces the whole picked/custom list.
       if (f.kind !== "multi" || f.allowOther === false) return `question "${qid}" takes no list of custom answers`;
       const optionValues = (f.options as { value: string }[]).map((o) => o.value);
       const others = multi.others.map((o) => o.trim());
@@ -259,13 +245,12 @@ export class CardTracker {
       if (dup !== undefined) return `custom answer "${dup}" duplicates an option value`;
       const bad = multi.picked.find((v) => !optionValues.includes(v));
       if (bad !== undefined) return `"${bad}" is not an option of "${qid}"`;
-      const keep = attachments.length ? [...attachments] : attachmentIds((st.draft[qid] ?? {}) as AnyAnswer);
-      const elsewhere = Object.entries(st.draft).filter(([id]) => id !== qid).reduce((n, [, d]) => n + attachmentIds(d as AnyAnswer).length, 0);
-      if (elsewhere + keep.length > ATTACHMENT_MAX_PER_SUBMIT) return `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${elsewhere} already attached to other questions)`;
+      const keep = attachments.length ? [...attachments] : earlier;
+      const elsewhere = imagesHeld(st, qid);
+      if (elsewhere + keep.length > ATTACHMENT_MAX_PER_SUBMIT) return capMsg(elsewhere);
       const badImg = owned ? attachments.find((id) => !owned(id)) : undefined;
       if (badImg !== undefined) return `unknown attachment ${badImg}`;
-      const m = { value: [...multi.picked, ...others], ...(others.length ? { other: others } : {}), ...(keep.length ? { attachments: keep } : {}) } as CardFieldAnswer;
-      this.paged.set(callId, { ...st, draft: { ...st.draft, [qid]: m } });
+      settle({ value: [...multi.picked, ...others], ...(others.length ? { other: others } : {}), ...(keep.length ? { attachments: keep } : {}) } as CardFieldAnswer);
       return undefined;
     }
     // Images only: no text, so no fake Other entry: `{value: ""}` (multi `{value: []}`) plus the attachments.
@@ -275,81 +260,116 @@ export class CardTracker {
     else if (f.kind === "multi" && f.allowOther !== false) a = typed ? { value: [text], other: [text] } : { value: [] };
     else return `question "${qid}" takes no typed answer`;
     if (attachments.length) {
-      // Kind checks are done: now the images. Cap is over the drafts of every question of the card (a rebind replaces its own).
-      const others = Object.entries(st.draft).filter(([id]) => id !== qid).reduce((n, [, d]) => n + attachmentIds(d as AnyAnswer).length, 0);
-      if (others + attachments.length > ATTACHMENT_MAX_PER_SUBMIT) return `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${others} already attached to other questions)`;
+      // Kind checks are done: now the images (a rebind replaces its own).
+      const elsewhere = imagesHeld(st, qid);
+      if (elsewhere + attachments.length > ATTACHMENT_MAX_PER_SUBMIT) return capMsg(elsewhere);
       const bad = owned ? attachments.find((id) => !owned(id)) : undefined;
       if (bad !== undefined) return `unknown attachment ${bad}`;
       a = { ...a, attachments: [...attachments] } as CardFieldAnswer;
-    }
-    this.paged.set(callId, { ...st, draft: { ...st.draft, [qid]: a } });
+    } else if (earlier.length) a = { ...a, attachments: earlier } as CardFieldAnswer;
+    settle(a);
     return undefined;
   }
 
   /**
-   * Claim the current page of a paged card for submission with `answers` (draft text fills unanswered questions).
-   * `final` is computed against the card as it stands now, and the page is pinned: a revise folded while it is in
-   * flight can only replace the pages after it. Undefined when the card is not an open questionnaire.
+   * Fold `own` (the client's answers for the questions of page `page`) with the draft and the images already held:
+   * a client answer wins over the drafted text of its question, and the images of the question's draft or earlier saved
+   * answer stay attached (images change only through `bindText`). Questions of the page without an answer take their draft.
    */
-  claimPage(callId: string, answers: CardAnswers): { ready: ReadyAnswer; merged: CardAnswers } | undefined {
-    const p = this.get(callId);
-    if (!p || !p.card.paged) return undefined;
-    const st = this.paged.get(callId) ?? { pagesDone: 0, answers: {}, draft: {} };
-    // A question's drafted images stay attached when the submitted answer replaces its value (the pick is the answer).
-    const merged: CardAnswers = { ...st.draft, ...answers };
-    for (const [id, d] of Object.entries(st.draft)) {
-      const imgs = attachmentIds(d as AnyAnswer);
-      if (imgs.length && id in answers) merged[id] = { ...answers[id], attachments: imgs } as CardFieldAnswer;
+  private foldPage(card: Card, st: PagedState, page: number, own: CardAnswers | undefined): { answers: CardAnswers; draft: CardAnswers } {
+    const ids = new Set(pageCard(card, page)?.fields.map((f) => f.id));
+    const answers = Object.fromEntries(Object.entries(st.answers).filter(([id]) => !ids.has(id)));
+    const draft = Object.fromEntries(Object.entries(st.draft).filter(([id]) => !ids.has(id)));
+    for (const id of ids) {
+      const given = own?.[id];
+      const d = st.draft[id];
+      const imgs = [...new Set([...attachmentIds(d as AnyAnswer), ...attachmentIds(st.answers[id] as AnyAnswer)])];
+      const base = given ?? d ?? (own ? undefined : st.answers[id]);
+      if (!base) continue;
+      const { attachments: _drop, ...rest } = base as { attachments?: string[] };
+      answers[id] = (imgs.length ? { ...rest, attachments: imgs } : rest) as CardFieldAnswer;
     }
-    const final = st.pagesDone >= (p.card.steps?.length ?? 1) - 1;
-    const note = this.reviseRejected.get(callId);
-    this.reviseRejected.delete(callId);
-    this.claimed.add(callId);
-    this.claimedPage.set(callId, { page: st.pagesDone, final });
-    return { merged, ready: { callId, card: p.card, answers: merged, page: st.pagesDone, prior: st.answers, ...(final ? { final: true as const } : {}), ...(note ? { note } : {}) } };
-  }
-
-  /** A non-final page was accepted: the card is answerable again on the next page. Progress never moves back. */
-  pageDone(callId: string, page: number, answers: CardAnswers): void {
-    const st = this.paged.get(callId) ?? { pagesDone: 0, answers: {}, draft: {} };
-    const card = this.raised.get(callId)?.card;
-    const ids = new Set(card ? card.fields.map((f) => f.id) : Object.keys(answers));
-    const own = Object.fromEntries(Object.entries(answers).filter(([id]) => ids.has(id)));
-    this.paged.set(callId, { pagesDone: Math.max(st.pagesDone, page + 1), answers: { ...st.answers, ...own }, draft: {} });
-    this.claimed.delete(callId);
-    this.claimedPage.delete(callId);
+    return { answers, draft };
   }
 
   /**
-   * What an `ask_revise` of `callId` may do right now: how many pages stay (answered ones, plus the one being
-   * submitted) and the question ids that therefore cannot be reused. A `problem` is model-facing.
+   * Save page `page` as a draft and move the cursor to `goto` (the caller checks the ranges). Moving forward raises
+   * `reached`; it never goes down. The page's bound drafts are folded into the saved answers. Returns a problem
+   * (`not_found` for an unknown or claimed card) or undefined.
+   */
+  savePage(callId: string, page: number, answers: CardAnswers, goto: number): string | undefined {
+    const p = this.get(callId);
+    if (!p) return "not_found";
+    if (!p.card.paged) return "this card is not a questionnaire";
+    const st = this.paged.get(callId) ?? freshState();
+    const ids = new Set(pageCard(p.card, page)?.fields.map((f) => f.id));
+    const folded = this.foldPage(p.card, st, page, Object.fromEntries(Object.entries(answers).filter(([id]) => ids.has(id))));
+    this.paged.set(callId, { ...st, ...folded, pageIndex: goto, reached: goto > page ? Math.max(st.reached, page + 1) : st.reached });
+    return undefined;
+  }
+
+  /** Store the owner's note (an empty one clears it). Returns a problem or undefined. */
+  setNote(callId: string, note: CardNote, owned?: (id: string) => boolean): string | undefined {
+    const p = this.get(callId);
+    if (!p) return "not_found";
+    if (!p.card.paged) return "this card is not a questionnaire";
+    const st = this.paged.get(callId) ?? freshState();
+    const text = note.text ?? "";
+    const atts = [...new Set(note.attachments ?? [])];
+    const held = imageCount(st.answers) + imageCount(st.draft);
+    if (held + atts.length > ATTACHMENT_MAX_PER_SUBMIT) return `at most ${ATTACHMENT_MAX_PER_SUBMIT} images per questionnaire answer (${held} already attached to questions)`;
+    const bad = owned ? atts.find((id) => !owned(id)) : undefined;
+    if (bad !== undefined) return `unknown attachment ${bad}`;
+    const { note: _old, ...rest } = st;
+    this.paged.set(callId, text.trim() === "" && atts.length === 0 ? rest : { ...rest, note: { ...(text.trim() !== "" ? { text } : {}), ...(atts.length ? { attachments: atts } : {}) } });
+    return undefined;
+  }
+
+  /**
+   * The answers a submit would deliver: saved answers of every page, the drafts, and `lastAnswers` (the page on screen)
+   * folded in. Pure; hidden-field answers are NOT dropped here. Undefined when the card is not an open questionnaire.
+   */
+  mergedAnswers(callId: string, lastAnswers?: CardAnswers): CardAnswers | undefined {
+    const p = this.get(callId);
+    if (!p || !p.card.paged) return undefined;
+    const st = this.paged.get(callId) ?? freshState();
+    const ids = new Set(pageCard(p.card, st.pageIndex)?.fields.map((f) => f.id));
+    const folded = this.foldPage(p.card, st, st.pageIndex, lastAnswers && Object.fromEntries(Object.entries(lastAnswers).filter(([id]) => ids.has(id))));
+    // Drafts of the other pages (never saved with Next) are answers too.
+    const out: CardAnswers = { ...folded.answers };
+    for (const [id, d] of Object.entries(folded.draft)) if (!(id in out)) out[id] = d;
+    return out;
+  }
+
+  /**
+   * Claim the whole questionnaire for submission: one ready answer with every page's answers (`answers`, from
+   * `mergedAnswers` after the caller validated them) and the note (`note` replaces the stored one when given). The draft is
+   * kept in `restore` in case the submit is withdrawn for good. Undefined when the card is not an open questionnaire.
+   */
+  claimSubmit(callId: string, answers: CardAnswers, note?: CardNote): ReadyAnswer | undefined {
+    const p = this.get(callId);
+    if (!p || !p.card.paged) return undefined;
+    const st = this.paged.get(callId) ?? freshState();
+    const finalNote = note ?? st.note;
+    const reviseNote = this.reviseRejected.get(callId);
+    this.reviseRejected.delete(callId);
+    this.claimed.add(callId);
+    const hasNote = finalNote && ((finalNote.text ?? "").trim() !== "" || (finalNote.attachments?.length ?? 0) > 0);
+    return { callId, card: p.card, answers, ...(hasNote ? { note: finalNote } : {}), ...(reviseNote ? { reviseNote } : {}), restore: st };
+  }
+
+  /**
+   * What an `ask_revise` of `callId` may do right now: how many pages stay (those the owner moved past) and the
+   * question ids that therefore cannot be reused. A `problem` is model-facing.
    */
   reviseTarget(callId: string): { keep: number; usedIds: string[]; card: Card } | { problem: string } {
     const r = this.raised.get(callId);
     if (!r) return { problem: `ask_revise: there is no open questionnaire with call id "${callId}" (unknown, already complete, skipped or superseded).` };
     if (!r.card.paged || !r.card.steps) return { problem: `ask_revise: call "${callId}" is not an ask questionnaire.` };
-    const done = this.paged.get(callId)?.pagesDone ?? 0;
-    const pinned = this.claimedPage.get(callId);
-    if (pinned?.final) return { problem: `ask_revise: the last page of "${callId}" is being submitted; nothing left to replace.` };
-    const keep = Math.max(done, pinned ? pinned.page + 1 : 0);
-    if (keep >= r.card.steps.length) return { problem: `ask_revise: every page of "${callId}" is already answered or being submitted; there is nothing left to replace.` };
+    if (this.claimed.has(callId)) return { problem: `ask_revise: "${callId}" is being submitted; nothing left to replace.` };
+    const keep = this.paged.get(callId)?.reached ?? 0;
+    if (keep >= r.card.steps.length) return { problem: `ask_revise: the owner has moved past every page of "${callId}"; there is nothing left to replace.` };
     return { keep, usedIds: r.card.steps.slice(0, keep).flatMap((s) => s.fields), card: r.card };
-  }
-
-  /** Hold-your-turn: the paged card, if any, whose first page was answered and that is not yet complete. Derived, so it survives a restart. */
-  holdOf(): { callId: string; page: number; total: number } | undefined {
-    for (const [callId, r] of this.raised) {
-      const done = this.paged.get(callId)?.pagesDone ?? 0;
-      if (this.claimedPage.get(callId)?.final) continue; // the last page is being submitted: the agent may proceed
-      if (r.card.paged && done >= 1) return { callId, page: done + 1, total: r.card.steps?.length ?? 1 };
-    }
-    return undefined;
-  }
-
-  /** The paged progress of a card, for notes and records. */
-  pagedProgress(callId: string): { pagesDone: number; answers: CardAnswers; draft: CardAnswers } | undefined {
-    const st = this.paged.get(callId);
-    return st ? { pagesDone: st.pagesDone, answers: st.answers, draft: st.draft } : undefined;
   }
 
   get(callId: string): PendingCard | undefined {
@@ -384,15 +404,17 @@ export class CardTracker {
 
   /** The submission failed: the claimed cards are pending again, answers held. */
   release(callIds: readonly string[]): void {
-    for (const id of callIds) {
-      this.claimed.delete(id);
-      this.claimedPage.delete(id);
-    }
+    for (const id of callIds) this.claimed.delete(id);
   }
 
   /** The submission was accepted: the answered cards are no longer raised. */
   settle(callIds: readonly string[]): void {
     for (const id of callIds) this.drop(id);
+  }
+
+  /** Is the call raised but claimed (its submit is in flight)? */
+  isClaimed(callId: string): boolean {
+    return this.claimed.has(callId);
   }
 }
 
@@ -417,22 +439,30 @@ export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | 
 
 export { attachmentIds };
 
+/** Question numbers across the whole card: Q1, Q2, ... in page order (what the owner sees and what errors cite). */
+export function questionNumbers(card: Card): Map<string, number> {
+  const order = card.steps ? card.steps.flatMap((st) => st.fields) : card.fields.map((f) => f.id);
+  return new Map(order.map((id, i) => [id, i + 1]));
+}
+
 /** The model-facing user message for an answer submission: every card's questions with their answers (or skip), in raise order. */
 export function answerText(cards: readonly ReadyAnswer[]): string {
   const lines: string[] = [];
-  for (const { callId, card, answers, skipped, page, final, note } of cards) {
-    if (page !== undefined && card.paged) {
-      if (note) lines.push(`Note: your earlier ask_revise was NOT applied: ${note}`);
-      const total = card.steps?.length ?? 1;
-      const step = card.steps?.[page];
-      lines.push(`The user submitted page ${page + 1} of ${total}${step?.title ? ` ("${step.title}")` : ""} of your ask questionnaire (call ${callId}):`);
-      const ids = new Set(step?.fields ?? []);
-      for (const f of card.fields.filter((x) => ids.has(x.id))) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
-      lines.push(
-        final
-          ? "That was the last page. The questionnaire is complete: you may proceed."
-          : `${total - page - 1} page(s) remain. HOLD YOUR TURN: end this turn with text only. Start no work and make no tool calls (no edits, no commands, no subagents, no task changes) until the last page is submitted; only read-only tools and ask_revise are allowed, and wolfd refuses the rest. You may reply briefly, or call ask_revise with callId "${callId}" and replacement pages for the ones not yet answered.`,
-      );
+  for (const { callId, card, answers, skipped, note, reviseNote } of cards) {
+    if (card.paged && !skipped) {
+      if (reviseNote) lines.push(`Note: your earlier ask_revise was NOT applied: ${reviseNote}`);
+      const steps = card.steps ?? [{ fields: card.fields.map((f) => f.id) }];
+      const nums = questionNumbers(card);
+      lines.push(`The user submitted your ask questionnaire (call ${callId}), ${steps.length} page${steps.length === 1 ? "" : "s"}:`);
+      steps.forEach((step, i) => {
+        const title = (step as { title?: string }).title;
+        lines.push(`Page ${i + 1} of ${steps.length}${title ? ` ("${title}")` : ""}:`);
+        const ids = new Set(step.fields);
+        for (const f of card.fields.filter((x) => ids.has(x.id))) lines.push(`- Q${nums.get(f.id)} ${f.label}: ${answerValue(f, answers[f.id])}`);
+      });
+      const n = note?.attachments?.length ?? 0;
+      if ((note?.text ?? "").trim() !== "" || n > 0) lines.push(`Note from the user: ${(note?.text ?? "").trim() || "(no text)"}${n ? ` [${n} image${n === 1 ? "" : "s"} attached below]` : ""}`);
+      lines.push("The questionnaire is complete: you may proceed.");
       continue;
     }
     if (skipped) {

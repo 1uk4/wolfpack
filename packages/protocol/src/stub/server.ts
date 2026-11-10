@@ -311,7 +311,9 @@ export class StubServer {
         this.thread(params.id);
         throw new HttpError("not_found", `unknown diagram ${params.diagramId}`);
       case "skipCard":
-      case "answerCardPage":
+      case "saveCardPage":
+      case "submitCard":
+      case "putCardNote":
       case "bindCardText": {
         const t = this.thread(params.id);
         if (m.name === "bindCardText") {

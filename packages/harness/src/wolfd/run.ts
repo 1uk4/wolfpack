@@ -37,7 +37,6 @@ import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
 import { createBriefExtension } from "../extensions/brief.js";
 import { AskBridge, createAskExtension } from "../extensions/ask.js";
-import { createAskHoldExtension } from "./ask-hold.js";
 import { diagramProblem } from "../diagrams.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
@@ -211,7 +210,7 @@ async function startConfigured(
   // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
   // A tool another extension already defines keeps that definition.
   const readonlyOptIn = config.capability.tools.includes("readonly");
-  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), objectsExtension, brief, ask, createAskHoldExtension(askBridge), cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
+  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), objectsExtension, brief, ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const taken = new Set(others.flatMap((e) => (e.tools ?? []).map((t) => t.name)));
   const readonlyExt = readOnlyToolsExcluding(taken, (m) => log(`warning: ${m}`));
   const ownReadonly = new Set((readonlyExt?.tools ?? []).map((t) => t.name));

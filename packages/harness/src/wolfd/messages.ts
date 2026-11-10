@@ -209,24 +209,10 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
   }
   if (entry.kind === CARD_ANSWER_KIND) {
     // A card answer is not a chat message: it resolves the call that raised the card (the answer is that call's result).
-    for (const { callId, answers, skipped, page, final } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
+    for (const { callId, answers, skipped } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
       for (let i = list.length - 1; i >= 0; i--) {
         const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
         if (!call) continue;
-        if (page !== undefined && !skipped) {
-          // A page of a paged (ask) card: progress only moves forward; the card closes on the final page.
-          if (page + 1 > (call.pagesDone ?? 0)) {
-            call.pagesDone = page + 1;
-            call.pageAnswers = { ...(call.pageAnswers ?? {}), ...answers };
-          }
-          if (final) {
-            call.answer = call.pageAnswers;
-            call.closed = "answered";
-            call.result = "questionnaire complete";
-            call.isError = false;
-          }
-          break;
-        }
         if (skipped) {
           // `dismissed` stays true for clients that predate `closed`.
           call.dismissed = true;

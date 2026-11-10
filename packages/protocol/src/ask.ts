@@ -46,10 +46,10 @@ export function plainAnswer(field: CardField, a: CardFieldAnswer): string {
 }
 
 /**
- * Record of a paged card. `submittedPages` is how many pages were submitted (their unanswered questions are
- * `skipped`); questions on later pages are `unanswered`. `closed` is how the card ended, undefined while pending.
- * `draft` is text typed for questions of the current page but not submitted: it counts as an answer (marked `draft`),
- * never as `unanswered`.
+ * Record of a paged card. `submittedPages` is how many pages the owner moved past (`reached`; their unanswered
+ * questions are `skipped`) or, for a finished card, all of them; questions on later pages are `unanswered`. `closed` is
+ * how the card ended, undefined while pending. `draft` is text typed for questions of any page but not saved into the
+ * answers: it counts as an answer (marked `draft`), never as `unanswered`.
  */
 export function askRecord(card: Card, pageAnswers: CardAnswers | undefined, submittedPages: number, closed?: CardClosed, draft?: CardAnswers): AskRecord {
   const items: AskRecordItem[] = [];
@@ -57,8 +57,8 @@ export function askRecord(card: Card, pageAnswers: CardAnswers | undefined, subm
     for (const id of ids) {
       const f = card.fields.find((x) => x.id === id);
       if (!f) continue;
-      const submitted = page < submittedPages;
-      const typed = !submitted ? draft?.[id] : undefined;
+      const submitted = page < submittedPages; // pages the owner moved past (Next): a blank question there is skipped
+      const typed = draft?.[id]; // bound text of any page counts as an answer
       const a = pageAnswers?.[id] ?? typed;
       const state: AskQuestionState = a !== undefined ? "answered" : submitted ? "skipped" : "unanswered";
       items.push({ id, page, ask: f.label, ...(f.description ? { context: f.description } : {}), ...(f.diagram ? { diagram: f.diagram } : {}), state, ...(a !== undefined ? { answer: a } : {}), ...(a !== undefined && pageAnswers?.[id] === undefined ? { draft: true as const } : {}) });
@@ -80,7 +80,21 @@ export function askSupersedeDetail(card: Card, pageAnswers: CardAnswers | undefi
     const f = card.fields.find((x) => x.id === i.id)!;
     return `${one(i.ask)} => ${i.state === "answered" ? one(plainAnswer(f, i.answer!)) + (i.draft ? " (typed, not submitted)" : "") : i.state}`;
   };
-  return rec.items.map(part).join("; ");
+  // One line, grouped per page ("Page 2 of 3 (Title): ...") when the questionnaire has several.
+  const pages = pagesOf(card).length;
+  if (pages <= 1) return rec.items.map(part).join("; ");
+  return Array.from({ length: pages }, (_, page) => {
+    const title = card.steps?.[page]?.title;
+    return `Page ${page + 1} of ${pages}${title ? ` (${title})` : ""}: ${rec.items.filter((i) => i.page === page).map(part).join("; ")}`;
+  }).join(" | ");
+}
+
+/**
+ * A key for the pages of a paged card (their question ids): the client sends it with a save or submit so wolfd can
+ * refuse (409) when an ask_revise changed the pages since the client rendered them.
+ */
+export function stepsKey(card: Card): string {
+  return pagesOf(card).map((ids) => ids.join(",")).join("|");
 }
 
 /** The sub-card holding only page `page` of a paged card (what one page submission is validated against). */

@@ -1,10 +1,9 @@
 /** The `ask` questionnaire end to end over /v1: real pi-durable turns, scripted model, real wolfd server and client. */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it } from "vitest";
-import { NotFoundError, ProtocolError } from "@wolfpack/client";
+import { NotFoundError } from "@wolfpack/client";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf, type TestWolfOptions } from "./test-wolf.js";
 
@@ -42,131 +41,62 @@ async function askWolf(rest: TestWolfOptions["script"], args: any = threePages()
 const toolResults = async (w: TestWolf, name: string) => (await w.client.getThread(w.home)).messages.flatMap((m) => m.tools ?? []).filter((t) => t.name === name);
 
 describe("ask questionnaire over /v1", () => {
-  it("rejects a wrong page number, a missing required question, a double submit and the whole-card route", async () => {
-    const { w, callId } = await askWolf([fauxAssistantMessage("one")]);
-    await expect(w.client.answerCardPage!(w.home, callId, 1, { pick: { value: "a" } })).rejects.toMatchObject({ code: "invalid_request" });
-    await expect(w.client.answerCardPage!(w.home, callId, 0, {})).rejects.toMatchObject({ code: "invalid_request" }); // "name" is required
-    await expect(w.client.answerCard!(w.home, callId, { name: { value: "x" } })).rejects.toMatchObject({ code: "invalid_request" }); // old route
-    const ack = await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
+  const a0 = { name: { value: "Ada" } };
+
+  it("saving a page delivers nothing to the model; submit delivers one result with every page and the note", async () => {
+    let seen = "";
+    const { w, callId } = await askWolf([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("done"); }]);
+    await w.client.saveCardPage!(w.home, callId, 0, a0);
+    await w.client.saveCardPage!(w.home, callId, 1, { pick: { value: "a" } });
+    await w.client.putCardNote!(w.home, callId, { text: "mind the budget" });
+    const open = (await w.client.getThread(w.home)).pendingCards![0];
+    expect(open).toMatchObject({ pageIndex: 2, reached: 2, pageAnswers: { ...a0, pick: { value: "a" } }, note: { text: "mind the budget" } });
+    expect(seen).toBe(""); // nothing reached the model yet
+    const ack = await w.client.submitCard!(w.home, callId, { answers: { size: { value: 7 } } });
     expect(ack.disposition).toBe("started");
     await drain(w);
-    await expect(w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } })).rejects.toMatchObject({ code: "conflict" });
-    const err = await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } }).catch((e) => e);
-    expect(err).toBeInstanceOf(ProtocolError);
-  });
-
-  it("the final page closes the card and the transcript carries the page answers", async () => {
-    const { w, callId } = await askWolf([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("done")]);
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-    await drain(w);
-    let call = (await toolResults(w, "ask"))[0];
-    expect(call).toMatchObject({ pagesDone: 1, pageAnswers: { name: { value: "Ada" } } });
-    expect(call.closed).toBeUndefined();
-    await w.client.answerCardPage!(w.home, callId, 1, { pick: { value: "a" } });
-    await drain(w);
-    await w.client.answerCardPage!(w.home, callId, 2, { size: { value: 7 } });
-    await drain(w);
+    expect(seen).toContain("- Q1 Name?: Ada");
+    expect(seen).toContain("- Q2 Pick:");
+    expect(seen).toContain("- Q3 Size: 7");
+    expect(seen).toContain("Note from the user: mind the budget");
+    expect(seen).toContain("The questionnaire is complete: you may proceed.");
     expect((await w.client.getThread(w.home)).pendingCards).toBeUndefined();
-    call = (await toolResults(w, "ask"))[0];
-    expect(call).toMatchObject({ closed: "answered", pagesDone: 3, pageAnswers: { name: { value: "Ada" }, pick: { value: "a" }, size: { value: 7 } } });
+    expect((await toolResults(w, "ask"))[0]).toMatchObject({ closed: "answered" });
   });
 
-  it("refuses a state-changing tool mid-questionnaire, allows reads and ask_revise, and lifts the hold after the last page", async () => {
-    const file = "held.txt";
-    const ids = { call: "" };
-    const { w, callId } = await askWolf([
-      toolUse(fauxToolCall("write", { path: file, content: "x" })), // page 1 answered: refused
-      toolUse(fauxToolCall("read", { path: "nothing-here.txt" })), // allowed (fails as a missing file, not as a hold)
-      () => toolUse(fauxToolCall("ask_revise", { callId: ids.call, pages: [{ title: "Two b", questions: [{ id: "pick2", ask: "Pick", kind: "free" }] }] })),
-      toolUse(fauxToolCall("write", { path: file, content: "y" })), // last page answered: allowed
-      fauxAssistantMessage("done"),
-    ]);
-    ids.call = callId;
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-    await drain(w);
-    const writes = await toolResults(w, "write");
-    expect(writes[0].isError).toBe(true);
-    expect(writes[0].result).toMatch(/questionnaire in progress: page 2 of 3 pending; end your turn with text, or call ask_revise/);
-    expect(existsSync(join(w.root, "work", file))).toBe(false);
-    expect((await toolResults(w, "read"))[0].result).not.toMatch(/questionnaire in progress/);
-    expect((await toolResults(w, "ask_revise"))[0].isError).toBe(false);
-    const open = (await w.client.getThread(w.home)).pendingCards![0];
-    expect(open.card.steps!.map((s) => s.title)).toEqual(["One", "Two b"]);
-    await w.client.answerCardPage!(w.home, callId, 1, { pick2: { value: "ok" } });
-    await drain(w);
-    expect((await toolResults(w, "write")).at(-1)!.isError).toBe(false);
-    expect(existsSync(join(w.root, "work", file))).toBe(true);
-  });
-
-  it("does not refuse a render tool between pages, and an ask_revise call is not a second pending card", async () => {
-    const render = defineExtension({
-      name: "fake-render",
-      tools: [defineTool({ name: "render_svg", description: "r", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return { output: [{ type: "text" as const, text: "rendered" }] }; } })],
-    });
-    const ids = { call: "" };
-    const { w, callId } = await askWolf(
-      [
-        toolUse(fauxToolCall("render_svg", {})),
-        () => toolUse(fauxToolCall("ask_revise", { callId: ids.call, pages: [{ title: "Two b", questions: [{ id: "pick2", ask: "Pick", kind: "free" }] }] })),
-        fauxAssistantMessage("ok"),
-      ],
-      threePages(),
-      { extensions: [render] },
-    );
-    ids.call = callId;
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-    await drain(w);
-    expect((await toolResults(w, "render_svg"))[0]).toMatchObject({ isError: false, result: "rendered" });
-    const revise = (await toolResults(w, "ask_revise"))[0];
-    expect(revise.isError).toBe(false);
-    const asks = (await w.client.getThread(w.home)).messages.flatMap((m) => m.tools ?? []).filter((t) => t.card && !t.closed);
-    expect(asks.map((t) => t.name)).toEqual(["ask"]); // exactly one pending ask card
-    expect(revise.card).toBeUndefined();
-  });
-
-  it("answers a double-submitted page once: the other request is a conflict", async () => {
+  it("refuses a bad page, a bad goto, the whole-card route and a missing required question at submit", async () => {
     const { w, callId } = await askWolf([fauxAssistantMessage("one")]);
-    const go = () => w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
+    await expect(w.client.saveCardPage!(w.home, callId, 5, {})).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(w.client.saveCardPage!(w.home, callId, 0, {}, { goto: 9 })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(w.client.answerCard!(w.home, callId, { name: { value: "x" } })).rejects.toMatchObject({ code: "invalid_request" });
+    await w.client.saveCardPage!(w.home, callId, 0, {}); // required answers are not enforced when saving
+    await expect(w.client.submitCard!(w.home, callId, {})).rejects.toThrow(/Q1 "Name\?"/);
+  });
+
+  it("Back returns the saved answers and reached never goes down", async () => {
+    const { w, callId } = await askWolf([fauxAssistantMessage("one")]);
+    await w.client.saveCardPage!(w.home, callId, 0, a0);
+    await w.client.saveCardPage!(w.home, callId, 1, { pick: { value: "a" } }, { goto: 2 });
+    await w.client.saveCardPage!(w.home, callId, 2, {}, { goto: 0 }); // Back to the start
+    const p = (await w.client.getThread(w.home)).pendingCards![0];
+    expect(p).toMatchObject({ pageIndex: 0, reached: 2, pageAnswers: { ...a0, pick: { value: "a" } } });
+  });
+
+  it("answers a double-submitted questionnaire once: the other request is a conflict", async () => {
+    const { w, callId } = await askWolf([fauxAssistantMessage("one")]);
+    const go = () => w.client.submitCard!(w.home, callId, { answers: a0 });
     const results = await Promise.allSettled(Array.from({ length: 8 }, go)); // several, so some land while the first is still in flight
     await drain(w);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    const lost = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
-    expect(lost.map((l) => l.reason.code)).toEqual(Array(7).fill("conflict"));
+    // Those that land while the first is in flight are a conflict; later ones find the card closed (not found).
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(7);
   });
 
-  it("still refuses a write tool after a wolfd restart, while read is allowed", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ask-restart-"));
-    try {
-      const first = await startTestWolf({ root, script: [toolUse(fauxToolCall("ask", threePages())), fauxAssistantMessage("one")] });
-      await first.submit("start");
-      const callId = (await first.client.getThread(first.home)).pendingCards![0].callId;
-      await first.client.answerCardPage!(first.home, callId, 0, { name: { value: "Ada" } });
-      for await (const _ of first.client.watch(first.home));
-      await first.stop();
-      tw = await startTestWolf({
-        root,
-        script: [toolUse(fauxToolCall("write", { path: "restart.txt", content: "x" })), toolUse(fauxToolCall("read", { path: "nothing-here.txt" })), fauxAssistantMessage("ok")],
-      });
-      await tw.client.answerCardPage!(tw.home, callId, 1, { pick: { value: "a" } });
-      await drain(tw);
-      const write = (await toolResults(tw, "write"))[0];
-      expect(write.isError).toBe(true);
-      expect(write.result).toMatch(/questionnaire in progress: page 3 of 3/);
-      expect(existsSync(join(root, "work", "restart.txt"))).toBe(false);
-      expect((await toolResults(tw, "read"))[0].result).not.toMatch(/questionnaire in progress/);
-    } finally {
-      await tw?.stop();
-      tw = undefined;
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("lifts the hold when a plain message supersedes the set, and tells the agent the partials and the typed draft", async () => {
+  it("a plain message supersedes the set and tells the agent the partials of every page and the typed draft", async () => {
     let seen = "";
-    const args: any = { pages: [threePages().pages[0], { title: "Two", questions: [{ id: "why", ask: "Why", kind: "free" }, { id: "other", ask: "Other", kind: "free" }] }, threePages().pages[2]].map((p, i) => (i === 2 ? { ...p, questions: [{ id: "last", ask: "Last", kind: "free" }] } : p)) };
+    const args: any = { pages: [threePages().pages[0], { title: "Two", questions: [{ id: "why", ask: "Why", kind: "free" }, { id: "other", ask: "Other", kind: "free" }] }, { title: "Three", questions: [{ id: "last", ask: "Last", kind: "free" }] }] };
     const { w, callId } = await askWolf(
       [
-        fauxAssistantMessage("one"),
         (context) => {
           seen = lastUserText(context as never);
           return toolUse(fauxToolCall("write", { path: "free.txt", content: "z" }));
@@ -175,30 +105,26 @@ describe("ask questionnaire over /v1", () => {
       ],
       args,
     );
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-    await drain(w);
+    await w.client.saveCardPage!(w.home, callId, 0, a0);
     await w.client.bindCardText!(w.home, callId, "why", "because");
     await w.client.submit(w.home, "forget the form", { whenBusy: "reject" });
     await drain(w);
-    expect(seen).toContain("state when replaced: Name? => Ada; Why => because (typed, not submitted); Other => unanswered; Last => unanswered");
+    expect(seen).toContain("Page 1 of 3 (One): Name? => Ada | Page 2 of 3 (Two): Why => because (typed, not submitted); Other => unanswered | Page 3 of 3 (Three): Last => unanswered");
     expect((await toolResults(w, "write"))[0].isError).toBe(false);
-    expect(existsSync(join(w.root, "work", "free.txt"))).toBe(true);
     const user = (await w.client.getThread(w.home)).messages.filter((m) => m.role === "user").at(-1)!;
     expect(user.text).toBe("forget the form"); // the note is stripped from what the owner sees
+    await expect(w.client.submitCard!(w.home, callId, { answers: a0 })).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("rejects bound text that is off the page, on noOther, on a slider, too long or blank", async () => {
-    const { w, callId } = await askWolf([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-    await drain(w);
-    await w.client.answerCardPage!(w.home, callId, 1, { pick: { value: "a" } });
-    await drain(w);
+  it("binds text to a question on any page and rejects a slider, blank or too-long text", async () => {
+    const { w, callId } = await askWolf([fauxAssistantMessage("one")]);
     const bind = (qid: string, text: string) => w.client.bindCardText!(w.home, callId, qid, text);
-    await expect(bind("name", "again")).rejects.toMatchObject({ code: "invalid_request" }); // page 0, not current
     await expect(bind("size", "5")).rejects.toMatchObject({ code: "invalid_request" }); // slider
+    await expect(bind("pick", "mine")).rejects.toMatchObject({ code: "invalid_request" }); // noOther
     await expect(bind("why", "   ")).rejects.toMatchObject({ code: "invalid_request" }); // blank
     await expect(bind("why", "x".repeat(4001))).rejects.toMatchObject({ code: "invalid_request" }); // too long
-    await expect(bind("why", "fine")).resolves.toBeUndefined();
+    await expect(bind("nope", "x")).rejects.toMatchObject({ code: "invalid_request" }); // not on the card
+    await expect(bind("why", "fine")).resolves.toBeUndefined(); // page 3 while viewing page 1
     expect((await w.client.getThread(w.home)).pendingCards![0].draft).toEqual({ why: { value: "fine" } });
   });
 });
@@ -288,20 +214,15 @@ describe("ask diagrams", () => {
 });
 
 describe("ask_revise errors reach the agent", () => {
-  it("an unknown call id and an answered question id are error results", async () => {
-    const ids = { call: "" };
-    const { w, callId } = await askWolf([
+  it("an unknown call id is an error result", async () => {
+    const { w } = await askWolf([
       toolUse(fauxToolCall("ask_revise", { callId: "nope", pages: [{ title: "x", questions: [{ id: "n1", ask: "q", kind: "free" }] }] })),
-      () => toolUse(fauxToolCall("ask_revise", { callId: ids.call, pages: [{ title: "x", questions: [{ id: "name", ask: "q", kind: "free" }] }] })),
       fauxAssistantMessage("ok"),
     ]);
-    ids.call = callId;
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
+    await w.client.submitCard!(w.home, (await w.client.getThread(w.home)).pendingCards![0].callId, { answers: { name: { value: "Ada" } } });
     await drain(w);
     const rev = await toolResults(w, "ask_revise");
-    expect(rev.map((r) => r.isError)).toEqual([true, true]);
+    expect(rev.map((r) => r.isError)).toEqual([true]);
     expect(rev[0].result).toMatch(/no open questionnaire/);
-    expect(rev[1].result).toMatch(/"name" is used twice/);
-    expect((await w.client.getThread(w.home)).pendingCards![0].card.steps).toHaveLength(3); // unchanged
   });
 });

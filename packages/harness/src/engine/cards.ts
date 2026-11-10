@@ -35,10 +35,6 @@ export interface CardAnswerData {
     callId: string;
     answers: CardAnswers;
     skipped?: true;
-    /** Paged (`ask`) cards: 0-based page these answers belong to. Absent = a whole-card answer. */
-    page?: number;
-    /** Paged cards: this was the last page, so the card closes. */
-    final?: true;
   }[];
 }
 

@@ -180,8 +180,16 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers }, threadId)) as SubmitAck;
   }
 
-  async answerCardPage(threadId: string, callId: string, page: number, answers: CardAnswers): Promise<SubmitAck> {
-    return (await this.json("answerCardPage", { id: threadId, callId, page: String(page) }, ROUTES.answerCardPage.response.schema, { answers }, threadId)) as SubmitAck;
+  async saveCardPage(threadId: string, callId: string, page: number, answers: CardAnswers, opts: { goto?: number; stepsKey?: string } = {}): Promise<void> {
+    await this.json("saveCardPage", { id: threadId, callId, page: String(page) }, ROUTES.saveCardPage.response.schema, { answers, ...(opts.goto !== undefined ? { goto: opts.goto } : {}), ...(opts.stepsKey ? { stepsKey: opts.stepsKey } : {}) }, threadId);
+  }
+
+  async submitCard(threadId: string, callId: string, body: { answers?: CardAnswers; note?: { text?: string; attachments?: string[] }; stepsKey?: string } = {}): Promise<SubmitAck> {
+    return (await this.json("submitCard", { id: threadId, callId }, ROUTES.submitCard.response.schema, body, threadId)) as SubmitAck;
+  }
+
+  async putCardNote(threadId: string, callId: string, note: { text?: string; attachments?: string[] }): Promise<void> {
+    await this.json("putCardNote", { id: threadId, callId }, ROUTES.putCardNote.response.schema, { ...(note.text ? { text: note.text } : {}), ...(note.attachments?.length ? { attachments: note.attachments } : {}) }, threadId);
   }
 
   async bindCardText(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }): Promise<void> {

@@ -119,7 +119,7 @@ export function askCard(args: AskArgs, revises?: string): Card {
 }
 
 export const ASK_TURN_RULE =
-  "The owner answers page by page. After EACH page you get that page's answers in a new message. HOLD YOUR TURN: end your turn with text only and start no work and no tool calls (no edits, commands, subagents or task changes) until the last page is submitted (you will be told); wolfd refuses state-changing tools while the questionnaire is in progress. Read-only tools and `ask_revise` stay allowed: if the answers change what you need to ask, call `ask_revise` with replacement pages for the ones not yet answered. A plain chat message from the owner replaces the whole set and arrives with whatever was already answered.";
+  "The owner fills in the pages at their own pace, going back and forth, and submits ONCE: you then get one message with every page's answers and an optional note from the owner. Nothing arrives before that. `ask_revise` can still replace the pages the owner has not moved past yet. A plain chat message from the owner replaces the whole set and arrives with whatever was already answered.";
 
 const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true as const });
 
@@ -146,8 +146,6 @@ export function reviseResult(args: { callId: string; pages: AskPage[] }, usedIds
 export interface AskHost {
   /** The open questionnaire `callId` of the thread owning conversation `conversationId`: the ids a revise may not reuse, or why it cannot be revised. */
   reviseTarget(conversationId: string, callId: string): { usedIds: string[] } | { problem: string };
-  /** The hold-your-turn state of the thread owning conversation `conversationId` (a paged ask with answered pages, not complete), or undefined. */
-  holdFor(conversationId: string): { callId: string; page: number; total: number } | undefined;
 }
 
 /** Late-bound handle to wolfd's thread state: the tools are installed in the engine before the server exists (like SubagentBridge). */
@@ -174,7 +172,7 @@ export function createAskExtension(bridge: AskBridge = new AskBridge(), opts: As
       defineTool({
         name: "ask",
         description:
-          "Ask the owner structured questions after you have given the big picture in your normal chat message. pages[] each with a title and questions[]; every question has its own markdown `context`. kinds: single, multi, confirm, free, slider. Every choice needs a non-empty `tradeoff`. Questions are skippable unless `required`; single/multi offer an Other box unless `noOther`. A question may show a `diagram` you rendered (render_mermaid / render_svg with save_as and persist: true; pass the returned filename). Answers come back after each page; hold your turn until the last page is submitted. " + ASK_TURN_RULE,
+          "Ask the owner structured questions after you have given the big picture in your normal chat message. pages[] each with a title and questions[]; every question has its own markdown `context`. kinds: single, multi, confirm, free, slider. Every choice needs a non-empty `tradeoff`. Questions are skippable unless `required`; single/multi offer an Other box unless `noOther`. A question may show a `diagram` you rendered (render_mermaid / render_svg with save_as and persist: true; pass the returned filename). The answers come back together in one message when the owner submits. " + ASK_TURN_RULE,
         parameters: AskParams,
         raisesCard: true,
         async execute(args) {
@@ -183,7 +181,7 @@ export function createAskExtension(bridge: AskBridge = new AskBridge(), opts: As
       }),
       defineTool({
         name: "ask_revise",
-        description: "Replace the pages of an open `ask` questionnaire that are not yet answered (use the call id from the page result). Keeps answered pages. Errors if the call id is not an open questionnaire or a question id repeats an answered one.",
+        description: "Replace the pages of an open `ask` questionnaire that the owner has not moved past yet (use the call id from the ask result). Keeps the pages they moved past. Errors if the call id is not an open questionnaire or a question id repeats an answered one.",
         parameters: ReviseParams,
         raisesCard: true,
         async execute(args, ctx) {

@@ -275,12 +275,16 @@ export const PendingCardSchema = z.object({
   /** The operator skipped this card while sibling cards still wait (held, changeable like a held answer). */
   heldSkip: z.boolean().optional(),
   /**
-   * Paged (`ask`) cards: how many pages are already submitted (the current page is `pageIndex`), and the answers given
-   * on them. `draft` holds answers typed so far on the current page (including text bound to a question), not submitted.
+   * Paged (`ask`) cards, all drafts kept on wolfd until submit: `pageIndex` is the page the owner is viewing,
+   * `reached` the furthest page left with Next (never goes down; `ask_revise` cannot touch those pages),
+   * `pageAnswers` the saved answers of every page, `draft` text/images bound to questions (any page) and `note` the
+   * owner's note for the agent. Nothing reaches the model before submit.
    */
   pageIndex: z.number().int().min(0).optional(),
+  reached: z.number().int().min(0).optional(),
   pageAnswers: CardAnswersSchema.optional(),
   draft: CardAnswersSchema.optional(),
+  note: z.object({ text: z.string().optional(), attachments: z.array(z.string()).optional() }).optional(),
   /** ISO time the card was raised (the tool call's result time). */
   raisedAt: z.iso.datetime({ offset: true }),
 });
@@ -1628,17 +1632,45 @@ export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
 export const SkipCardRequestSchema = z.object({ threadId: z.string(), callId: z.string() });
 export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
 
-/**
- * Submit one page of a paged (`ask`) card. `answers` covers the questions of that page (a skippable question may be
- * omitted = skipped). Wire: thread id, `callId` and `page` (0-based, must be the next unanswered page) ride the path.
- */
-export const AnswerCardPageBodySchema = z.object({
-  // Images reach a question only through bindCardText (the draft): a direct answer with `attachments` is refused.
-  answers: CardAnswersSchema.refine((a) => Object.values(a).every((x) => (x as { attachments?: unknown }).attachments === undefined), {
-    message: "answers carry no attachments: attach images with bindCardText",
-  }),
+/** Direct answers carry no images: they reach a question only through bindCardText (the draft). */
+const NoAttachmentAnswersSchema = CardAnswersSchema.refine((a) => Object.values(a).every((x) => (x as { attachments?: unknown }).attachments === undefined), {
+  message: "answers carry no attachments: attach images with bindCardText",
 });
-export type AnswerCardPageBody = z.infer<typeof AnswerCardPageBodySchema>;
+
+/**
+ * Save one page of a paged (`ask`) card as a draft ("Next", or leaving a page). `answers` covers the questions of that
+ * page; shape only, required questions are checked at submit. `goto` is the page the owner views next (default
+ * min(page+1, last)). `stepsKey` (optional) is `stepsKey(card)` of the pages the client saw: a mismatch after an
+ * ask_revise is 409. Wire: thread id, `callId` and `page` (0-based) ride the path.
+ */
+export const SaveCardPageBodySchema = z.object({
+  answers: NoAttachmentAnswersSchema,
+  goto: z.number().int().min(0).optional(),
+  stepsKey: z.string().optional(),
+});
+export type SaveCardPageBody = z.infer<typeof SaveCardPageBodySchema>;
+
+/**
+ * The owner's note on a paged card: text and images, delivered with the answers at submit. Images are upload ids from
+ * `uploadAttachment`; they count against the same cap (ATTACHMENT_MAX_PER_SUBMIT) as images bound to questions.
+ * An empty note (no text, no images) clears it.
+ */
+export const CardNoteBodySchema = z.object({
+  text: z.string().max(4000).optional(),
+  attachments: z.array(z.string()).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
+});
+export type CardNoteBody = z.infer<typeof CardNoteBodySchema>;
+
+/**
+ * Submit a paged card: ONE tool result with every page's saved answers (plus `answers` for the page on screen) and
+ * the note. Wire: thread id and `callId` ride the path.
+ */
+export const SubmitCardBodySchema = z.object({
+  answers: NoAttachmentAnswersSchema.optional(),
+  note: CardNoteBodySchema.optional(),
+  stepsKey: z.string().optional(),
+});
+export type SubmitCardBody = z.infer<typeof SubmitCardBodySchema>;
 
 /**
  * Bind typed text to one question of the current page ("answering Q2"): it is that question's free-text / Other

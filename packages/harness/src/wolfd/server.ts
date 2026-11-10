@@ -20,7 +20,9 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_NAME_HEADER,
   AnswerCardBodySchema,
-  AnswerCardPageBodySchema,
+  SaveCardPageBodySchema,
+  SubmitCardBodySchema,
+  CardNoteBodySchema,
   BindCardTextBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
@@ -233,7 +235,6 @@ export class WolfServer {
       const threadOf = (cid: string) => [...this.threads.values()].find((t) => String(t.conv.id) === String(cid));
       opts.askBridge.host = {
         reviseTarget: (cid, callId) => threadOf(cid)?.reviseTarget(callId) ?? { problem: "ask_revise: this conversation has no questionnaire." },
-        holdFor: (cid) => threadOf(cid)?.holdState(),
       };
     }
     this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home", ...(opts.den ? { settings: loadHomeSettings(opts.den) } : {}) }, opts.conversation);
@@ -697,12 +698,28 @@ export class WolfServer {
         if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
         return this.json(res, 200, await t.answerCard(params.callId, body.data.answers));
       }
-      case "answerCardPage": {
+      case "saveCardPage": {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);
-        const body = AnswerCardPageBodySchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<questionId>: {value, other?}}}");
-        return this.json(res, 200, await t.answerCardPage(params.callId, Number(params.page), body.data.answers));
+        const body = SaveCardPageBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers, goto?, stepsKey?}");
+        t.saveCardPage(params.callId, Number(params.page), body.data);
+        return this.json(res, 200, { accepted: true });
+      }
+      case "putCardNote": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = CardNoteBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {text?, attachments?: string[]}");
+        t.putCardNote(params.callId, body.data);
+        return this.json(res, 200, { accepted: true });
+      }
+      case "submitCard": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = SubmitCardBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers?, note?: {text?, attachments?}, stepsKey?}");
+        return this.json(res, 200, await t.submitCard(params.callId, body.data));
       }
       case "bindCardText": {
         const t = this.checkThread(params.id);

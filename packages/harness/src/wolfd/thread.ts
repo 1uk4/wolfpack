@@ -46,9 +46,9 @@ import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentExists, attachmentsInText, imageParts, inlineAttachments, recordSubmission } from "./attachments.js";
 import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
-import { ATTACHMENT_MAX_PER_SUBMIT, askSupersedeDetail, pageCard } from "@wolfpack/protocol";
+import { ATTACHMENT_MAX_PER_SUBMIT, askSupersedeDetail, pageCard, stepsKey, visibleFields, type CardNoteBody, type SaveCardPageBody, type SubmitCardBody } from "@wolfpack/protocol";
 import { isImageOnly } from "./card-kinds/types.js";
-import { CardTracker, answerText, attachmentIds, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
+import { CardTracker, answerText, attachmentIds, questionNumbers, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
 
@@ -96,7 +96,7 @@ interface QueuedOwner {
 }
 
 const cardAnswersOf = (ready: readonly ReadyAnswer[]) => ({
-  cards: ready.map(({ callId: id, answers: a, skipped, page, final }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}), ...(page !== undefined ? { page } : {}), ...(final ? { final } : {}) })),
+  cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })),
 });
 
 export class ThreadRuntime {
@@ -311,8 +311,9 @@ export class ThreadRuntime {
         // A dismissal (a skip, or a plain submit superseding cards) changes thread status: wake waiters.
         const closed = this.cards.apply(entry);
         this.syncCards(closed);
-        for (const id of this.cards.takeChanged()) this.announceHeld(id);
-        if ([...closed.values()].some((c) => c !== "answered")) this.notify();
+        const changedIds = this.cards.takeChanged();
+        for (const id of changedIds) this.announceHeld(id);
+        if (changedIds.length || [...closed.values()].some((c) => c !== "answered")) this.notify();
       }
     }
     this.applyMapped(this.mapper!.push(batch));
@@ -743,12 +744,7 @@ export class ThreadRuntime {
       const live = this.liveAttachments(attachmentIds(a));
       return [id, live.length ? { ...rest, attachments: live } : rest];
     })) as CardAnswers | undefined;
-    return { ...base, paged: true, detail: askSupersedeDetail(p.card, p.pageAnswers, p.pageIndex ?? 0, draft) };
-  }
-
-  /** Hold-your-turn: set while a paged questionnaire has answered pages and is not complete (derived from the tracker). */
-  holdState(): { callId: string; page: number; total: number } | undefined {
-    return this.cards.holdOf();
+    return { ...base, paged: true, detail: askSupersedeDetail(p.card, p.pageAnswers, p.reached ?? 0, draft) };
   }
 
   /** What an ask_revise of `callId` may do now (see CardTracker.reviseTarget). */
@@ -757,32 +753,107 @@ export class ThreadRuntime {
     return "problem" in t ? t : { usedIds: t.usedIds };
   }
 
-  /**
-   * Submit one page of a paged (`ask`) card. The page's answers reach the agent now; the card stays pending until the
-   * last page. `rawAnswers` are completed by text bound to questions of the page (`bindCardText`).
-   */
-  async answerCardPage(callId: string, page: number, rawAnswers: CardAnswers): Promise<SubmitAck> {
+  /** The page of a paged card the request names, or the HttpError for an unknown/closed card, a non-paged card or a page out of range. */
+  private pagedCard(callId: string, page?: number): PendingCard {
     const pending = this.cards.get(callId);
     if (!pending) {
-      // Being submitted right now (a double submit): conflict, not "unknown card".
-      if (this.cards.raisedCards().some((c) => c.callId === callId)) throw new HttpError("conflict", `page ${page} of card ${callId} is already being submitted`);
+      // Being submitted right now: conflict, not "unknown card".
+      if (this.cards.isClaimed(callId)) throw new HttpError("conflict", `card ${callId} is already being submitted`);
       throw new HttpError("not_found", `card ${callId}`);
     }
     if (!pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is not a paged questionnaire`);
-    const current = pending.pageIndex ?? 0;
-    if (page < current) throw new HttpError("conflict", `page ${page} of card ${callId} was already submitted (current page: ${current})`);
-    if (page !== current) throw new HttpError("invalid_request", `page ${page} is not the current page (${current})`);
+    const n = pending.card.steps?.length ?? 1;
+    if (page !== undefined && (!Number.isInteger(page) || page < 0 || page >= n)) throw new HttpError("invalid_request", `page ${page} is out of range (0-${n - 1})`);
+    return pending;
+  }
+
+  private checkStepsKey(pending: PendingCard, key: string | undefined): void {
+    if (key !== undefined && key !== stepsKey(pending.card)) throw new HttpError("conflict", `the pages of card ${pending.callId} changed (ask_revise); reload the questionnaire`);
+  }
+
+  /** The draft changed: tell every client (card-pending with the full card) and wake waiters. */
+  private draftChanged(callId: string): void {
+    this.announceHeld(callId);
+    this.notify();
+  }
+
+  /**
+   * Save one page of a paged (`ask`) card as a draft and move the cursor (Next / Back). Nothing reaches the agent.
+   * Shape only: required answers are checked at submit.
+   */
+  saveCardPage(callId: string, page: number, body: SaveCardPageBody): void {
+    const pending = this.pagedCard(callId, page);
+    this.checkStepsKey(pending, body.stepsKey);
+    const n = pending.card.steps?.length ?? 1;
+    const goto = body.goto ?? Math.min(page + 1, n - 1);
+    if (goto >= n) throw new HttpError("invalid_request", `goto ${goto} is out of range (0-${n - 1})`);
     const sub = pageCard(pending.card, page)!;
-    const merged = { ...(pending.draft ?? {}), ...rawAnswers };
-    const bad = validateAnswers(sub, merged);
+    const answers = dropHiddenAnswers(sub, body.answers);
+    const bad = this.shapeProblem(sub, answers);
     if (bad) throw new HttpError("invalid_request", bad);
-    const claim = this.cards.claimPage(callId, rawAnswers)!;
+    const problem = this.cards.savePage(callId, page, answers, goto);
+    if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
+    if (problem) throw new HttpError("invalid_request", problem);
+    this.draftChanged(callId);
+  }
+
+  /** Each given answer must be valid for its question (required answers may be missing). */
+  private shapeProblem(card: PendingCard["card"], answers: CardAnswers): string | undefined {
+    const known = new Set(card.fields.map((f) => f.id));
+    const extra = Object.keys(answers).find((k) => !known.has(k));
+    if (extra) return `unknown field "${extra}"`;
+    for (const f of card.fields) {
+      const a = answers[f.id];
+      if (a === undefined) continue;
+      const bad = validateAnswers({ ...card, fields: [{ ...f, optional: true }] }, { [f.id]: a });
+      if (bad) return bad;
+    }
+    return undefined;
+  }
+
+  /** Store (or clear) the owner's note on a paged card. */
+  putCardNote(callId: string, body: CardNoteBody): void {
+    this.pagedCard(callId);
+    const ids = [...new Set(body.attachments ?? [])];
+    if (ids.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+    const problem = this.cards.setNote(callId, { ...(body.text ? { text: body.text } : {}), ...(ids.length ? { attachments: ids } : {}) }, (id) => attachmentExists(this.host.den!, this.summary.id, id));
+    if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
+    if (problem) throw new HttpError("invalid_request", problem);
+    this.draftChanged(callId);
+  }
+
+  /**
+   * Submit a paged card: ONE card-answer carrying every page's answers and the note. All pages' required questions
+   * are checked; the 400 names the missing ones by number and label.
+   */
+  async submitCard(callId: string, body: SubmitCardBody = {}): Promise<SubmitAck> {
+    const pending = this.pagedCard(callId);
+    this.checkStepsKey(pending, body.stepsKey);
+    const card = pending.card;
+    const last = pageCard(card, pending.pageIndex ?? 0)!;
+    const lastAnswers = body.answers && dropHiddenAnswers(last, body.answers);
+    const merged = this.cards.mergedAnswers(callId, lastAnswers)!;
+    const nums = questionNumbers(card);
+    const shown = new Set(visibleFields(card, merged).map((f) => f.id));
+    const answers = Object.fromEntries(Object.entries(merged).filter(([id]) => shown.has(id)));
+    const missing = card.fields.filter((f) => shown.has(f.id) && !f.optional && answers[f.id] === undefined);
+    if (missing.length) throw new HttpError("invalid_request", `required question${missing.length === 1 ? "" : "s"} not answered: ${missing.map((f) => `Q${nums.get(f.id)} "${f.label}"`).join(", ")}`);
+    const bad = validateAnswers(card, answers);
+    if (bad) throw new HttpError("invalid_request", bad);
+    const noteIds = [...new Set(body.note?.attachments ?? [])];
+    if (body.note) {
+      if (noteIds.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+      const problem = this.cards.setNote(callId, { ...(body.note.text ? { text: body.note.text } : {}), ...(noteIds.length ? { attachments: noteIds } : {}) }, (id) => attachmentExists(this.host.den!, this.summary.id, id));
+      if (problem && problem !== "not_found") throw new HttpError("invalid_request", problem);
+    }
+    // Synchronous from here to the claim: a concurrent submit finds the card claimed (409).
+    const ready = this.cards.claimSubmit(callId, answers);
+    if (!ready) throw new HttpError("not_found", `card ${callId}`);
     const before = this.turnStarts;
     if (this.answering++ === 0 && !this.running) this.answerStartedAt = new Date().toISOString();
     this.syncStatus();
     try {
       let r;
-      const ready = this.cards.foldLateNote(claim.ready);
       try {
         r = await this.conv.submit({ input: this.answerInput([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
       } catch (e) {
@@ -790,19 +861,9 @@ export class ThreadRuntime {
         if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
         throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
       }
+      this.cards.settle([callId]);
       this.trackQueued(r, { text: "", refs: [], cardAnswers: [ready] });
-      // `final` was computed against the card as it stood when the page was claimed; a revise can only replace later pages.
-      if (ready.final) {
-        const late = this.cards.takeLateNote(callId);
-        this.cards.settle([callId]);
-        // Only a rejection that landed after the final submit needs its own message.
-        if (late) await this.conv.submit({ input: `Note about the questionnaire you just completed (call ${callId}): your earlier ask_revise was NOT applied: ${late}`, whenBusy: "steer" }).catch((e) => this.host.onError(e));
-        this.syncCards(new Map([[callId, "answered" as CardClosed]]));
-      } else {
-        this.cards.pageDone(callId, page, claim.merged);
-        this.announceHeld(callId);
-        this.notify();
-      }
+      this.syncCards(new Map([[callId, "answered" as CardClosed]]));
       if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
       return { messageId: r.messageId, disposition: r.disposition };
     } finally {
@@ -812,17 +873,15 @@ export class ThreadRuntime {
   }
 
   /**
-   * The model input for card answers: the answer text, plus the images bound to questions (`bindCardText` attachments).
+   * The model input for card answers: the answer text, plus the images bound to questions and the owner's note.
    * HOW IMAGES REACH THE MODEL: a card answer is delivered as a user message (the engine places it as a card-answer entry
    * whose content is this input), and a user message can carry image parts, exactly like a chat message with attachments
    * (`inlineAttachments`). So the images ride that same user turn, each preceded by a text label naming its question.
-   * (A tool result is not used: the `ask` call already returned when the card was raised.)
    */
   private answerInput(ready: readonly ReadyAnswer[]): SubmitOptions["input"] {
     const parts: Exclude<SubmitOptions["input"], string> = [];
-    // Each page's drafted images ride only that page's submission (the draft is cleared when the page is accepted), so every image is sent once.
     const sendable = ready.map((r) => {
-      if (r.page === undefined) return r;
+      if (!r.card.paged || r.skipped) return r;
       const answers = { ...r.answers };
       for (const f of r.card.fields) {
         const a = answers[f.id];
@@ -834,7 +893,10 @@ export class ThreadRuntime {
         answers[f.id] = (ids.length ? { ...rest, attachments: ids } : gone ? { ...rest, imagesGone: true } : rest) as typeof a;
         if (ids.length) parts.push(...this.imagesFor(`Images the user attached to the answer of "${f.label}" (call ${r.callId}, question ${f.id}):`, ids));
       }
-      return { ...r, answers };
+      const noteIds = this.liveAttachments(r.note?.attachments ?? []);
+      if (noteIds.length) parts.push(...this.imagesFor(`Images the user attached to their note (call ${r.callId}):`, noteIds));
+      const note = r.note && { ...(r.note.text ? { text: r.note.text } : {}), ...(noteIds.length ? { attachments: noteIds } : {}) };
+      return { ...r, answers, ...(note ? { note } : {}) };
     });
     const text = answerText(sendable);
     return parts.length ? [{ type: "text", text }, ...parts] : text;
@@ -904,7 +966,7 @@ export class ThreadRuntime {
   async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
-    if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: answer it page by page (answerCardPage)`);
+    if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: answer it page by page (submitCard)`);
     const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
     const answers = dropHiddenAnswers(pending.card, rawAnswers);

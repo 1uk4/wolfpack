@@ -56,8 +56,7 @@ const upload = (w: TestWolf, n = 1, thread = w.home) => w.client.uploadAttachmen
 const draftOf = async (w: TestWolf) => (await w.client.getThread(w.home)).pendingCards![0].draft;
 /** Go to page 1 of the questionnaire. */
 const toPageTwo = async (w: TestWolf, callId: string) => {
-  await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-  await drain(w);
+  await w.client.saveCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
 };
 
 describe("ask answers with images", () => {
@@ -85,7 +84,7 @@ describe("ask answers with images", () => {
     await toPageTwo(w, callId);
     const a = await upload(w);
     for (const qid of ["size", "ok", "strict"]) await expect(w.client.bindCardText!(w.home, callId, qid, "", [a.id])).rejects.toMatchObject({ code: "invalid_request" });
-    await expect(w.client.answerCardPage!(w.home, callId, 1, { why: { value: "x", attachments: [a.id] } } as never)).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(w.client.saveCardPage!(w.home, callId, 1, { why: { value: "x", attachments: [a.id] } } as never)).rejects.toMatchObject({ code: "invalid_request" });
     expect(await draftOf(w)).toBeUndefined();
   });
 
@@ -110,35 +109,43 @@ describe("ask answers with images", () => {
     await expect(w.client.bindCardText!(w.home, callId, "why", "", ids.slice(0, 5))).resolves.toBeUndefined();
   });
 
-  it("delivers each question's images once with its own label, keeps them when an option is picked, and does not resend them later", async () => {
+  it("delivers each question's images and the note's images once, in one message, each with its own label; picking an option keeps the draft's images", async () => {
     const seen: Part[][] = [];
     const take = (reply: string) => (context: unknown) => (seen.push(lastUserParts(context)), fauxAssistantMessage(reply));
-    const { w, callId } = await askWolf([take("one"), take("two"), take("three")]);
-    const [a, b, c] = [png(1), png(2), png(3)];
-    const up = async (n: number) => (await upload(w, n)).id;
+    const { w, callId } = await askWolf([take("one")]);
+    const [a, b, c, n] = [png(1), png(2), png(3), png(4)];
+    const up = async (k: number) => (await upload(w, k)).id;
     await w.client.bindCardText!(w.home, callId, "name", "Ada", [await up(1)]);
-    await w.client.answerCardPage!(w.home, callId, 0, {});
-    await drain(w);
+    await w.client.saveCardPage!(w.home, callId, 0, {});
     await w.client.bindCardText!(w.home, callId, "why", "", [await up(2)]);
     await w.client.bindCardText!(w.home, callId, "pick", "", [await up(3)]);
     // The pick answer replaces the draft's value; its image stays attached.
-    await w.client.answerCardPage!(w.home, callId, 1, { pick: { value: "a" } });
+    await w.client.saveCardPage!(w.home, callId, 1, { pick: { value: "a" } });
+    await w.client.putCardNote!(w.home, callId, { text: "see", attachments: [await up(4)] });
+    await w.client.submitCard!(w.home, callId, {});
     await drain(w);
-    await w.client.answerCardPage!(w.home, callId, 2, {});
-    await drain(w);
-    expect(seen).toHaveLength(3);
-    expect(imagesOf(seen[0])).toEqual([a.toString("base64")]);
-    expect(textOf(seen[0])).toContain('Images the user attached to the answer of "Name?"');
-    expect(imagesOf(seen[1])).toEqual([b.toString("base64"), c.toString("base64")]);
-    const t1 = textOf(seen[1]);
-    expect(t1).toContain("- Pick: A (a) [1 image attached below]");
-    expect(t1.indexOf('answer of "Why"')).toBeLessThan(t1.indexOf('answer of "Pick"'));
-    expect(imagesOf(seen[2])).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect(imagesOf(seen[0])).toEqual([a, b, c, n].map((p) => p.toString("base64")));
+    const t = textOf(seen[0]);
+    expect(t).toContain('Images the user attached to the answer of "Name?"');
+    expect(t).toContain("- Q4 Pick: A (a) [1 image attached below]");
+    expect(t).toContain("Note from the user: see [1 image attached below]");
+    expect(t.indexOf('answer of "Why"')).toBeLessThan(t.indexOf('answer of "Pick"'));
+    expect(t.indexOf('answer of "Pick"')).toBeLessThan(t.indexOf("attached to their note"));
+  });
+
+  it("counts the note's images against the same cap of 8 as the images bound to questions", async () => {
+    const { w, callId } = await askWolf([fauxAssistantMessage("one")]);
+    const ids: string[] = [];
+    for (let i = 0; i < 9; i++) ids.push((await upload(w, i + 1)).id);
+    await w.client.bindCardText!(w.home, callId, "why", "", ids.slice(0, 5));
+    await expect(w.client.putCardNote!(w.home, callId, { attachments: ids.slice(5, 9) })).rejects.toThrow(/at most 8 images/);
+    await w.client.putCardNote!(w.home, callId, { attachments: ids.slice(5, 8) });
   });
 
   it("a plain message that supersedes the set carries the drafted images as image parts, labelled by question", async () => {
     let seen: Part[] = [];
-    const { w, callId } = await askWolf([fauxAssistantMessage("one"), (context) => ((seen = lastUserParts(context)), fauxAssistantMessage("ok"))]);
+    const { w, callId } = await askWolf([(context) => ((seen = lastUserParts(context)), fauxAssistantMessage("ok"))]);
     await toPageTwo(w, callId);
     const att = await upload(w, 7);
     await w.client.bindCardText!(w.home, callId, "why", "see this", [att.id]);
@@ -151,7 +158,7 @@ describe("ask answers with images", () => {
 
   it("a superseding message sends a draft image already attached to it once, and stays within the per-message cap, naming what was left out", async () => {
     let seen: Part[] = [];
-    const { w, callId } = await askWolf([fauxAssistantMessage("one"), (context) => ((seen = lastUserParts(context)), fauxAssistantMessage("ok"))]);
+    const { w, callId } = await askWolf([(context) => ((seen = lastUserParts(context)), fauxAssistantMessage("ok"))]);
     await toPageTwo(w, callId);
     const own: string[] = [];
     for (let i = 1; i <= 7; i++) own.push((await upload(w, i)).id);
@@ -166,41 +173,15 @@ describe("ask answers with images", () => {
     expect(textOf(seen)).toContain("1 more image was not sent");
   });
 
-  it("a message typed while a turn runs carries the draft image parts exactly once", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    let steered: Part[][] = [];
-    const { w, callId } = await askWolf([
-      async () => {
-        await gate;
-        return fauxAssistantMessage("held");
-      },
-      (context) => {
-        steered = (context as { messages: { role: string; content: unknown }[] }).messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? [{ type: "text", text: m.content }] : (m.content as Part[])));
-        return fauxAssistantMessage("done");
-      },
-    ]);
-    // Answering page 0 starts a turn that stays running at the gate; page 1 is then current.
-    await w.client.answerCardPage!(w.home, callId, 0, { name: { value: "Ada" } });
-    const att = await upload(w, 9);
-    await w.client.bindCardText!(w.home, callId, "why", "", [att.id]);
-    const ack = await w.client.submit(w.home, "change of plan", { whenBusy: "steer" });
-    expect(ack.disposition).toBe("steered");
-    release();
-    await drain(w);
-    const all = steered.flat();
-    expect(imagesOf(all)).toEqual([png(9).toString("base64")]);
-  });
-
   it("says the image is no longer available when every drafted file of an image-only answer is gone", async () => {
     let seen: Part[] = [];
-    const { w, callId } = await askWolf([fauxAssistantMessage("one"), (context) => ((seen = lastUserParts(context)), fauxAssistantMessage("two"))]);
+    const { w, callId } = await askWolf([(context) => ((seen = lastUserParts(context)), fauxAssistantMessage("two"))]);
     await toPageTwo(w, callId);
     const a = await upload(w, 5);
     await w.client.bindCardText!(w.home, callId, "why", "", [a.id]);
     const dir = join(w.wolf.config.den, "attachments", w.home);
     for (const f of readdirSync(dir)) if (f.startsWith(a.id)) rmSync(join(dir, f));
-    await w.client.answerCardPage!(w.home, callId, 1, {});
+    await w.client.submitCard!(w.home, callId, {});
     await drain(w);
     expect(textOf(seen)).toContain("Why: (image no longer available)");
     expect(textOf(seen)).not.toContain("(no answer)");

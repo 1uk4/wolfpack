@@ -56,6 +56,8 @@ export interface KbSyncOptions {
   fetchImpl?: typeof fetch;
   baseMs?: number;
   capMs?: number;
+  /** Test hook: random source (0..1) for backoff jitter. */
+  rand?: () => number;
   /** Safety poll interval; 0 disables. Default 5 min. */
   pollMs?: number;
   /** Run a manifest diff on the first sync after start even with a saved revision. Default true. */
@@ -440,7 +442,8 @@ export class KbSync {
     if (this.stopped || !this.subscribed.has(d)) return;
     const base = this.o.baseMs ?? 1000;
     const cap = this.o.capMs ?? 60_000;
-    const delay = Math.min(cap, base * 2 ** Math.min(n - 1, 16));
+    // +-20% jitter so hosts that failed together do not retry together; the cap stays a hard ceiling. Retries never stop (this syncs the mirror).
+    const delay = Math.min(cap, Math.round(Math.min(cap, base * 2 ** Math.min(n - 1, 16)) * (0.8 + 0.4 * (this.o.rand ?? Math.random)())));
     if (n === 1 || n % 10 === 0) this.log(`${d}: ${e.message} (retry in ${delay}ms)`);
     const t = setTimeout(() => {
       this.timers.delete(d);

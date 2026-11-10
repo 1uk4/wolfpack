@@ -3,8 +3,8 @@
  * reconnects with backoff 1s -> 60s (+-20% jitter, never above the cap) and at once on kick() (wake / network change).
  *
  * Uses the `ws` client (not the global WebSocket) because only `ws` exposes the HTTP status of a refused upgrade (401/403).
- * "unauthorized", "incompatible" and "replaced" are sticky: the state and detail survive retries (made at the cap, or a long delay
- * for "replaced") until a welcome arrives.
+ * "unauthorized", "incompatible" and "replaced" are sticky: the state and detail survive retries (unauthorized retries at the cap,
+ * incompatible every 15 min, replaced not at all: restart workerd) until a welcome arrives.
  */
 import WebSocket from "ws";
 import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWelcome, type LinkWolf } from "@wolfpack/protocol";
@@ -62,7 +62,16 @@ export interface HubLinkOptions {
   retryBaseMs?: number;
   /** `foreign_wolf` rejections retried before the item is dead-lettered. Default 3. */
   foreignRetries?: number;
+  /** `internal` / unknown-code rejections retried before the item is parked. Default MAX_ITEM_RETRIES. */
+  maxItemRetries?: number;
+  /** Reconnect interval while the hub says "incompatible", ms. Default 15 min. */
+  incompatibleRetryMs?: number;
 }
+
+/** Automatic retries of an item the hub answers `internal` (or an unknown code) before it is parked in the outbox. */
+export const MAX_ITEM_RETRIES = 10;
+/** Reconnect interval while the hub is protocol-incompatible: retrying every minute cannot fix it. */
+export const INCOMPATIBLE_RETRY_MS = 15 * 60_000;
 
 export interface LinkStatus {
   state: LinkState;
@@ -70,6 +79,8 @@ export interface LinkStatus {
   detail?: string;
   attempts: number;
   nextRetryInMs: number | null;
+  /** Outbox items given up on for automatic retry (still queued on disk); retried once after the next reconnect or a restart. */
+  parked: number;
 }
 
 /** 1s, 2s, 4s ... capped at 60s, each +-20% (the cap is a hard ceiling, jitter included). `failures` is the consecutive failure count (>= 1). */
@@ -93,6 +104,8 @@ export class HubLink {
   private inflight = new Map<string, number>();
   /** Per-item retry state after a non-terminal rejection (in memory; a restart starts over). */
   private retry = new Map<string, { tries: number; foreign: number; notBefore: number }>();
+  /** Items that used up their retries: kept in the outbox, not sent again until a reconnect gives them one more try. */
+  private parked = new Set<string>();
   private resendTimer: NodeJS.Timeout | null = null;
   private readonly laptop: boolean;
   private readonly rand: () => number;
@@ -103,7 +116,7 @@ export class HubLink {
   }
 
   status(): LinkStatus {
-    return { state: this.st, ...(this.detail ? { detail: this.detail } : {}), attempts: this.failures, nextRetryInMs: this.retryAt === null ? null : Math.max(0, this.retryAt - Date.now()) };
+    return { state: this.st, ...(this.detail ? { detail: this.detail } : {}), attempts: this.failures, nextRetryInMs: this.retryAt === null ? null : Math.max(0, this.retryAt - Date.now()), parked: this.parked.size };
   }
   private log(m: string) {
     (this.o.log ?? (() => {}))(`[workerd] hub link: ${m}`);
@@ -188,6 +201,7 @@ export class HubLink {
     for (const it of this.o.outbox.list()) {
       if (awaiting >= window) break;
       if (this.inflight.has(it.id)) continue;
+      if (this.parked.has(it.id)) continue;
       if ((this.retry.get(it.id)?.notBefore ?? 0) > now) continue;
       if (this.send({ t: "contribute", id: it.id, wolf: it.wolf, contribution: it.contribution })) {
         this.inflight.set(it.id, now);
@@ -201,8 +215,12 @@ export class HubLink {
     const r = this.retry.get(id) ?? { tries: 0, foreign: 0, notBefore: 0 };
     r.tries++;
     if (foreign) r.foreign++;
-    r.notBefore = Date.now() + Math.min(60_000, (this.o.retryBaseMs ?? 1000) * 2 ** (r.tries - 1));
+    r.notBefore = Date.now() + linkBackoff(r.tries, this.rand, this.o.retryBaseMs ?? 1000);
     this.retry.set(id, r);
+    if (!foreign && r.tries >= (this.o.maxItemRetries ?? MAX_ITEM_RETRIES)) {
+      this.parked.add(id);
+      this.log(`contribution ${JSON.stringify(id.slice(0, 64))} parked after ${r.tries} failed attempts; it stays in the outbox and is retried once after the next reconnect (${this.parked.size} parked)`);
+    }
     return r.foreign;
   }
 
@@ -210,6 +228,7 @@ export class HubLink {
     this.log(`hub rejected contribution ${JSON.stringify(id.slice(0, 64))}: ${code ?? "?"} ${message ?? ""}`);
     this.o.outbox?.reject(id, `${code ?? "rejected"}: ${message ?? ""}`); // throws (item stays queued) if the dead letter cannot be made durable
     this.retry.delete(id);
+    this.parked.delete(id);
     this.o.onContributionRejected?.(id, code ?? "rejected", message);
   }
 
@@ -302,7 +321,7 @@ export class HubLink {
       if (code === 4001) {
         this.st = "incompatible";
         this.detail = "hub incompatible";
-        this.log("hub incompatible (link protocol major mismatch); will keep retrying");
+        this.log(`hub incompatible (link protocol major mismatch); next attempt in ${Math.round((this.o.incompatibleRetryMs ?? INCOMPATIBLE_RETRY_MS) / 60_000)} min (update workerd or the hub)`);
       } else if (code === 4401) {
         this.st = "unauthorized";
         this.detail = "token rejected or revoked; re-pair with `workerd pair`";
@@ -343,6 +362,14 @@ export class HubLink {
       }
       this.syncDiff();
       this.o.onWelcome?.(f);
+      for (const id of this.parked) {
+        const t = this.retry.get(id);
+        if (t) {
+          t.tries = (this.o.maxItemRetries ?? MAX_ITEM_RETRIES) - 1; // one more attempt; a further failure parks it again
+          t.notBefore = 0;
+        }
+      }
+      this.parked.clear();
       this.inflight.clear(); // a new connection: everything unacked is replayed (the hub dedups on the idempotency id)
       this.flushOutbox();
       if (this.resendTimer) clearInterval(this.resendTimer);
@@ -356,6 +383,7 @@ export class HubLink {
       try {
         if (f.status !== "rejected") {
           this.retry.delete(f.id);
+          this.parked.delete(f.id);
           this.o.outbox?.remove(f.id);
         } else if (f.code === "invalid" || f.code === "too_large") {
           this.terminal(f.id, f.code, f.message);
@@ -428,9 +456,17 @@ export class HubLink {
     if (this.stopped) return;
     if (this.timer) clearTimeout(this.timer);
     this.failures += 1;
+    if (this.st === "replaced") {
+      // Another workerd with this host id took over. Reconnecting would only make the two fight for the link, so stop until restart.
+      this.retryAt = null;
+      this.timer = null;
+      this.log("replaced by another connection from this host id; not reconnecting (restart workerd to take the link back)");
+      return;
+    }
     const cap = this.o.capMs ?? 60_000;
     // Sticky reasons retry at the cap; the failure count keeps growing across them.
-    const delay = this.sticky() ? linkBackoff(Number.MAX_SAFE_INTEGER, this.rand, this.o.baseMs, cap) /* sticky reasons (incl. replaced) retry at the cap so two workerds with one host id do not fight */ : linkBackoff(this.failures, this.rand, this.o.baseMs, cap);
+    // incompatible: the protocol will not fix itself, so wait long; unauthorized keeps retrying at the cap (a re-pair fixes it without a restart).
+    const delay = this.st === "incompatible" ? (this.o.incompatibleRetryMs ?? INCOMPATIBLE_RETRY_MS) : this.sticky() ? linkBackoff(Number.MAX_SAFE_INTEGER, this.rand, this.o.baseMs, cap) : linkBackoff(this.failures, this.rand, this.o.baseMs, cap);
     if (!this.sticky()) this.st = "backoff";
     this.retryAt = Date.now() + delay;
     this.timer = setTimeout(() => {

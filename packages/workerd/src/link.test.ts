@@ -66,7 +66,7 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
       }
     };
     const logs: string[] = [];
-    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], WebSocketImpl: Skewed as typeof WebSocket, baseMs: 10, capMs: 40, log: (m) => logs.push(m) });
+    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], WebSocketImpl: Skewed as typeof WebSocket, baseMs: 10, capMs: 40, incompatibleRetryMs: 20, log: (m) => logs.push(m) });
     cleanup.push(() => link.stop());
     link.start();
     await until(() => link.status().attempts >= 3, 5000, "backing off");
@@ -74,6 +74,22 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     expect(link.status().detail).toBe("hub incompatible");
     expect(logs.some((l) => l.includes("hub incompatible"))).toBe(true);
     expect(r.presence()).toBe("offline");
+  });
+
+  it("an incompatible hub is retried every 15 minutes with one log line per attempt, not at the 60s cap", async () => {
+    const r = await rig({ noHub: true });
+    const Skewed = class extends WebSocket {
+      override send(d: any, ...rest: any[]) {
+        return (super.send as any)(typeof d === "string" ? d.replace(/"v":1/, '"v":2') : d, ...rest);
+      }
+    };
+    const logs: string[] = [];
+    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], WebSocketImpl: Skewed as typeof WebSocket, log: (m) => logs.push(m) });
+    cleanup.push(() => link.stop());
+    link.start();
+    await until(() => link.status().state === "incompatible" && link.status().nextRetryInMs !== null, 5000, "incompatible scheduled");
+    expect(link.status().nextRetryInMs!).toBeGreaterThan(14 * 60_000);
+    expect(logs.filter((l) => l.includes("hub incompatible"))).toHaveLength(1);
   });
 
   it("silence past the dead-after window turns presence offline", async () => {
@@ -131,7 +147,7 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     expect(r.presence()).toBe("online");
   });
 
-  it("a replaced worker goes to the 'replaced' state and retries slowly instead of fighting", async () => {
+  it("a replaced worker goes to the 'replaced' state and stops reconnecting instead of fighting", async () => {
     const r = await rig({ noHub: true });
     const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], baseMs: 20, capMs: 30_000 });
     cleanup.push(() => link.stop());
@@ -140,7 +156,7 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     const b = await r.rawLink(r.mintWorker().token);
     b.hello();
     await until(() => link.status().state === "replaced", 5000, "replaced state");
-    expect(link.status().nextRetryInMs!).toBeGreaterThan(10_000);
+    expect(link.status().nextRetryInMs).toBeNull(); // no reconnect is scheduled
     link.kick(); // a wake must not start the fight again
     expect(link.status().state).toBe("replaced");
     expect(r.presence()).toBe("online");
@@ -240,6 +256,7 @@ describe("backoff and wake", () => {
     expect(linkBackoff(3, () => 0)).toBe(3200);
     expect(linkBackoff(3, () => 1)).toBe(4800);
     expect(linkBackoff(20, () => 1)).toBe(60000);
+    expect(linkBackoff(1, () => 0, 1000)).toBe(800); // per-item retries use the same jittered curve
   });
 
   it("wake monitor fires on a wall-clock gap > 15s and on an interface change", () => {

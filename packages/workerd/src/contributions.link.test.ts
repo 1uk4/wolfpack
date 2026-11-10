@@ -330,6 +330,23 @@ describe("non-terminal rejections and crash safety", () => {
     expect(existsSync(join(r.outboxDir, "rejected"))).toBe(false);
   });
 
+  it("internal rejections are capped: the item is parked in the outbox, reported in status, and retried once after a reconnect", async () => {
+    const r = await rig({ linkOptions: { maxItemRetries: 2, retryBaseMs: 20 } });
+    await r.waitPresence("online");
+    mkdirSync(r.inboxRoot, { recursive: true });
+    writeFileSync(join(r.inboxRoot, "alpha"), "in the way");
+    r.workerd.link!.contribute("alpha", contribution("alpha", "stuck"));
+    await r.eventually(() => r.workerd.link!.status().parked === 1, "parked after the cap");
+    expect(r.logs.some((l) => l.includes("parked"))).toBe(true);
+    expect(outboxIds(r)).toHaveLength(1); // never dropped
+    rmSync(join(r.inboxRoot, "alpha")); // cause cleared, but a parked item is not retried on its own
+    await new Promise((res) => setTimeout(res, 400));
+    expect(outboxIds(r)).toHaveLength(1);
+    expect(r.workerd.link!.status().parked).toBe(1);
+    r.workerd.link!.kick();
+    await r.eventually(() => outboxIds(r).length === 0 && r.workerd.link!.status().parked === 0, "delivered after the reconnect", 8000);
+  });
+
   it("a crash between storing and recording the id delivers exactly one inbox file", async () => {
     let n = 0;
     const r = await rig({ hubOptions: { linkFaults: { beforeSeenAdd: () => { if (n++ === 0) throw new Error("boom"); } } } });

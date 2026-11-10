@@ -47,11 +47,6 @@ export function cardTextUrl(wolf: string, slug: string, callId: string, qid: str
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/questions/${encodeURIComponent(qid)}/text`;
 }
 
-/** A rendered diagram by id (the client's getDiagram route, relayed). */
-export function diagramUrl(wolf: string, slug: string, id: string): string {
-	return `${threadBase(wolf, slug)}/diagrams/${encodeURIComponent(id)}`;
-}
-
 /** Where one uploaded image of a thread is served (the same URL the transcript uses for message images). */
 export function attachmentUrl(wolf: string, slug: string, id: string): string {
 	return `${threadBase(wolf, slug)}/attachments/${encodeURIComponent(id)}`;

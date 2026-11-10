@@ -234,7 +234,8 @@ describe("ChatBar cards", () => {
 		assert.equal(q('[data-testid="bar-card"]'), null); // not the classic card path
 		assert.equal(q('[data-testid="ask-replace-hint"]'), null);
 		await type("typed");
-		assert.equal(q('[data-testid="ask-replace-hint"]')!.textContent, "Sending a message replaces the open questions.");
+		assert.equal(q('[data-testid="ask-replace-hint"]') === null, true); // while the sheet is open, typing is its note, not a replacing message
+		assert.match(sendBtn().textContent!, /Submit/); // the composer button is the sheet's (last page)
 		await type("");
 		assert.equal(bottomComposers().length, 1);
 		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[1]!);
@@ -344,7 +345,8 @@ describe("ChatBar cards", () => {
 		assert.equal(q('[data-testid="answering-chip"]') === null, true);
 		assert.equal(bottomComposers().length, 1);
 		await type("typed");
-		assert.equal(q('[data-testid="ask-replace-hint"]')!.textContent, "Sending a message replaces the open questions.");
+		assert.equal(q('[data-testid="ask-replace-hint"]') === null, true); // while the sheet is open, typing is its note, not a replacing message
+		assert.match(sendBtn().textContent!, /Submit/); // the composer button is the sheet's (last page)
 	});
 
 	it("keeps the input usable with a card open; Reply instead supersedes the card and shows it superseded", async () => {

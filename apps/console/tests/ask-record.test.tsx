@@ -97,6 +97,20 @@ describe("ask record in the transcript", () => {
 		assert.deepEqual(lines(), ["Which DB? → pg · 1 image", "Why? → 2 images", "Ship it? → yes", "How many? → 7"]);
 	});
 
+	it("a submitted set shows every page's answers, then a Note with its text and thumbnails", async () => {
+		await render(
+			<AskRecordCard {...base} closed="answered" answer={{ n: { value: 7 } }} note={{ text: "mind the budget", attachments: ["a1", "a2"] }} attachmentUrl={(id: string) => `/att/${id}`} />,
+		);
+		const note = q('[data-testid="ask-record-note"]')!;
+		assert.equal(note.textContent!.includes("mind the budget"), true);
+		assert.deepEqual([...note.querySelectorAll("img")].map((i) => i.getAttribute("src")), ["/att/a1", "/att/a2"]);
+	});
+
+	it("no note, no Note section", async () => {
+		await render(<AskRecordCard {...base} closed="answered" answer={{ n: { value: 7 } }} />);
+		assert.equal(q('[data-testid="ask-record-note"]') === null, true);
+	});
+
 	it("a multi answer lists every custom answer, marked as custom", async () => {
 		const multi: Card = { tool: "ask", paged: true, fields: [{ id: "t", kind: "multi", label: "Tags?", allowOther: true, options: [{ label: "A", value: "a" }] }], steps: [{ fields: ["t"] }] } as never;
 		await render(<AskRecordCard {...base} card={multi} closed="answered" pageAnswers={{ t: { value: ["a", "red", "blue"], other: ["red", "blue"] } } as never} pagesDone={1} />);
@@ -153,7 +167,7 @@ describe("ask record in the transcript", () => {
 
 describe("pending card whose ask call left the history", () => {
 	it("the record shows the answered pages and the draft from the pending card alone", async () => {
-		const cards = cardsOfThread({ messages: [], pendingCards: [{ callId: "c9", tool: "ask", card: ASK, pageIndex: 1, pageAnswers: { db: { value: "pg" } }, draft: { ship: { value: false } } } as never] });
+		const cards = cardsOfThread({ messages: [], pendingCards: [{ callId: "c9", tool: "ask", card: ASK, pageIndex: 0, reached: 1, pageAnswers: { db: { value: "pg" } }, draft: { ship: { value: false } } } as never] });
 		const call = cards.calls.c9!;
 		await render(<AskRecordCard {...base} callId="c9" card={call.card} pending pageAnswers={call.pageAnswers} pagesDone={call.pagesDone} draft={call.draft} />);
 		assert.deepEqual(lines(), ["Which DB? → pg", "Why? → skipped", "Ship it? → no typed, not sent", "How many? → unanswered"]);

@@ -25,6 +25,7 @@ Object.assign(globalThis, {
 
 type PendingCard = import("@wolfpack/client").PendingCard;
 const { AskSheet } = await import("../components/ask-sheet.tsx");
+const { useAskSession } = await import("../components/ask-session.ts");
 
 const OPTS = [
 	{ label: "Alpha", value: "a", tradeoff: "fast but loose" },
@@ -55,14 +56,14 @@ let textStatus = 200;
 let hold: Promise<void> | null = null;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	if (init?.method === "POST" && String(input).endsWith("/attachments")) return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
-	if (init?.method !== "POST") return new Response("{}", { status: 404 });
+	if (init?.method !== "POST" && init?.method !== "PUT") return new Response("{}", { status: 404 });
 	if (String(input).endsWith("/text")) {
 		posts.push({ url: String(input), body: JSON.parse(String(init.body)) });
 		await hold;
 		return textStatus === 200 ? Response.json({ ok: true }) : Response.json({ error: "nope" }, { status: textStatus });
 	}
 	posts.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-	return status === 200 ? Response.json({ disposition: "started" }) : Response.json({ error: "bad page" }, { status });
+	return status === 200 ? Response.json({ disposition: "started", accepted: true }) : Response.json({ error: "bad page" }, { status });
 }) as typeof fetch;
 
 const target = { wolf: "w", slug: "a" };
@@ -80,7 +81,15 @@ function Host({ pc }: { pc: PendingCard }) {
 		if (a) aimed.push(a.qid);
 		setAnswering(a);
 	};
-	return <AskSheet target={target} pc={pc} answering={answering} setAnswering={set} onSubmitted={(l) => void submitted.push(l)} onRefetch={() => void refetched.push("r")} />;
+	const session = useAskSession(target, pc, { onSubmitted: () => void submitted.push(true), onRefetch: () => void refetched.push("r"), onCollapse: () => {} });
+	// Stand-in for the host composer: its button (Next / Submit) and the hint under the sheet.
+	return (
+		<>
+			<AskSheet target={target} session={session} answering={answering} setAnswering={set} dictation={undefined as never} />
+			{session.action.hint ? <p data-testid="ask-missing" aria-live="polite">{session.action.hint}</p> : null}
+			<button data-testid="press" disabled={session.action.disabled} onClick={() => session.press()}>{session.busy ? "Sending…" : session.action.label}</button>
+		</>
+	);
 }
 const render = (pc: PendingCard) =>
 	act(async () => {
@@ -105,22 +114,22 @@ describe("ask sheet", () => {
 		await render(pending());
 		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 1 of 2");
 		assert.equal(q('[data-testid="ask-page-title"]')!.textContent, "First");
-		assert.equal(q('[data-testid="ask-next"]')!.textContent, "Next");
+		assert.equal(q('[data-testid="press"]')!.textContent, "Next");
 		assert.deepEqual(qa('[data-testid="ask-tradeoff"]').map((e) => e.textContent), ["fast but loose", "slow but sure"]);
 		await render(pending({ pageIndex: 1 }));
 		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
-		assert.equal(q('[data-testid="ask-submit"]')!.textContent, "Submit");
+		assert.equal(q('[data-testid="press"]')!.textContent, "Submit");
 	});
 
 	it("sends this page's answers only: skipped questions and an untouched slider are omitted", async () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[1]!);
-		await click(q('[data-testid="ask-next"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		assert.equal(posts.length, 1);
-		assert.ok(posts[0]!.url.endsWith("/cards/c1/pages/0/answer"));
-		assert.deepEqual(posts[0]!.body, { answers: { q1: { value: "b" } } });
-		assert.deepEqual(submitted, [false]);
+		assert.ok(posts[0]!.url.endsWith("/cards/c1/pages/0/draft"));
+		assert.equal(posts[0]!.body.goto, 1);
+		assert.deepEqual(posts[0]!.body.answers, { q1: { value: "b" } });
 	});
 
 	it("sends a moved slider but shows the default (and min/max labels) while untouched", async () => {
@@ -130,9 +139,9 @@ describe("ask sheet", () => {
 		const input = q('[data-testid="ask-slider-input"]')!;
 		await act(async () => void props(input, "onChange")({ target: { value: "8" } }));
 		assert.equal(q('[data-testid="ask-slider-value"]')!.textContent, "8");
-		await click(q('[data-testid="ask-next"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: { q2: { value: 8 } } });
+		assert.deepEqual(posts[0]!.body.answers, { q2: { value: 8 } });
 	});
 
 	it("card-pending updates in place: a higher pageIndex shows the next page, and bound text prefills the answer", async () => {
@@ -142,9 +151,9 @@ describe("ask sheet", () => {
 		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
 		assert.equal(qa('[data-testid="ask-question"]').length, 1);
 		assert.equal((q('[data-testid="ask-free"]') as HTMLTextAreaElement).value, "typed so far");
-		await click(q('[data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: { q3: { value: "typed so far" } } });
+		assert.deepEqual(posts[0]!.body.answers, { q3: { value: "typed so far" } });
 		assert.deepEqual(submitted, [true]);
 	});
 
@@ -170,12 +179,12 @@ describe("ask sheet", () => {
 	it("409 refetches and says the questions changed; 400 shows the message inline", async () => {
 		await render(pending());
 		status = 409;
-		await click(q('[data-testid="ask-next"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		assert.deepEqual(refetched, ["r"]);
 		assert.equal(q('[data-testid="ask-error"]')!.textContent, "The questions changed, check your answers.");
 		status = 400;
-		await click(q('[data-testid="ask-next"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		assert.equal(q('[data-testid="ask-error"]')!.textContent, "bad page");
 	});
@@ -187,7 +196,7 @@ const change = (el: HTMLElement, v: string) => act(async () => void props(el, "o
 describe("ask sheet answers and guards", () => {
 	it("a required question blocks Next and names the question", async () => {
 		await render(one([{ id: "q1", kind: "single", label: "Pick", options: OPTS }]));
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		assert.equal(posts.length, 0);
 		assert.equal(q('[data-testid="ask-missing"]')!.textContent, "Answer to continue: Q1");
@@ -197,15 +206,15 @@ describe("ask sheet answers and guards", () => {
 	it("a required slider left at its default sends the default", async () => {
 		await render(one([{ id: "q1", kind: "slider", label: "How much", min: 0, max: 10, step: 1, default: 5 }]));
 		assert.equal(q('[data-testid="ask-missing"]'), null);
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: { q1: { value: 5 } } });
+		assert.deepEqual(posts[0]!.body.answers, { q1: { value: 5 } });
 	});
 
 	it("404 says the set is gone and refetches", async () => {
 		await render(pending());
 		status = 404;
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		assert.equal(q('[data-testid="ask-error"]')!.textContent, "This question set is gone.");
 		assert.deepEqual(refetched, ["r"]);
@@ -213,26 +222,26 @@ describe("ask sheet answers and guards", () => {
 
 	it("a double click POSTs once", async () => {
 		await render(pending());
-		const next = q('[data-testid="ask-next"], [data-testid="ask-submit"]')!;
+		const next = q('[data-testid="press"]')!;
 		await act(async () => {
 			props(next, "onClick")({});
 			props(next, "onClick")({});
 		});
 		await settle();
 		assert.equal(posts.length, 1);
-		assert.equal(q('[data-testid="ask-next"], [data-testid="ask-submit"]')!.textContent, "Sending…"); // stays busy until the card moves on
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
 	});
 
 	it("Other text bound from the composer sends as {value, other:true} for single and {value:[..], other:[text]} for multi", async () => {
 		await render({ ...one([{ id: "q1", kind: "single", label: "Pick", options: OPTS }]), draft: { q1: { value: "mine", other: true } } as never });
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: { q1: { value: "mine", other: true } } });
+		assert.deepEqual(posts[0]!.body.answers, { q1: { value: "mine", other: true } });
 		await render({ ...one([{ id: "q1", kind: "multi", label: "Pick", allowOther: true, options: OPTS }]), callId: "c2", draft: { q1: { value: ["extra"], other: ["extra"] } } as never });
 		await click(qa('[data-testid="ask-option"]')[0]!);
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[1]!.body, { answers: { q1: { value: ["a", "extra"], other: ["extra"] } } });
+		assert.deepEqual(posts[1]!.body.answers, { q1: { value: ["a", "extra"], other: ["extra"] } });
 	});
 
 	it("Skip question shows on every optional question from the start, not once it has an answer", async () => {
@@ -246,9 +255,9 @@ describe("ask sheet answers and guards", () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[0]!);
 		await click(q('[data-testid="ask-skip"]'));
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: {} });
+		assert.deepEqual(posts[0]!.body.answers, {});
 	});
 
 	it("skip greys the question with a Skipped label; Answer un-skips it", async () => {
@@ -286,28 +295,28 @@ describe("ask sheet answers and guards", () => {
 		await click(qa('[data-testid="ask-option"]')[0]!);
 		await click(q('[data-testid="ask-skip"]'));
 		assert.equal(q('[data-testid="ask-missing"]'), null);
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: {} });
+		assert.deepEqual(posts[0]!.body.answers, {});
 	});
 
-	it("after card-pending moves the page away and back, the old q1 draft is not sent", async () => {
+	it("after card-pending moves the page away and back, the q1 answer is kept and sent with the page", async () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[0]!);
 		await render(pending({ pageIndex: 1 }));
 		await render(pending({ pageIndex: 0 }));
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: {} });
+		assert.deepEqual(posts[0]!.body.answers, { q1: { value: "a" } }); // answers now live with the set, not the page: Back must show them
 	});
 
 	it("a kept draft whose option vanished in a revise is dropped", async () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[1]!);
 		await render(pending({ card: card({ fields: [{ id: "q1", kind: "single", label: "Pick one", optional: true, options: [OPTS[0]] }, { id: "q2", kind: "slider", label: "How much", optional: true, min: 0, max: 10, step: 1 }, { id: "q3", kind: "free-text", label: "Why", optional: true }] }) }));
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: {} });
+		assert.deepEqual(posts[0]!.body.answers, {});
 	});
 
 	it("clicking or pressing Enter on a free or Other field enters reply mode, focus alone does not (no keyboard trap); slider, confirm and no-Other choices never do", async () => {
@@ -351,25 +360,31 @@ describe("ask sheet answers and guards", () => {
 	it("the 409 notice and a 400 message survive a refetch that hands back a fresh card object for the same page", async () => {
 		await render(pending());
 		status = 409;
-		await click(q('[data-testid="ask-next"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		await render(pending());
 		assert.equal(q('[data-testid="ask-error"]')?.textContent, "The questions changed, check your answers.");
 		status = 400;
-		await click(q('[data-testid="ask-next"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
 		await render(pending());
 		assert.equal(q('[data-testid="ask-error"]')?.textContent, "bad page");
 	});
 
-	it("after an accepted non-final page, the same page coming back as a new card object re-enables Next", async () => {
+	it("Next moves to page 2 at once (Back appears, Submit replaces Next); Back sends goto 0 and returns, keeping the answers", async () => {
 		await render(pending());
-		await click(q('[data-testid="ask-next"]'));
+		assert.equal(q('[data-testid="ask-back"]') === null, true); // no Back on page 1
+		await click(qa('[data-testid="ask-option"]')[1]!);
+		await click(q('[data-testid="press"]'));
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
+		assert.equal(q('[data-testid="press"]')!.textContent, "Submit");
 		await settle();
-		assert.equal(q('[data-testid="ask-next"]')!.textContent, "Sending…");
-		await render(pending());
-		assert.equal(q('[data-testid="ask-next"]')!.textContent, "Next");
-		assert.equal(props(q('[data-testid="ask-next"]')!, "disabled"), false);
+		await click(q('[data-testid="ask-back"]'));
+		await settle();
+		assert.equal(posts[1]!.body.goto, 0);
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 1 of 2");
+		assert.equal(q('[data-testid="press"]')!.textContent, "Next");
+		assert.equal(posts.length, 2);
 	});
 });
 
@@ -380,9 +395,9 @@ describe("ask sheet image answers", () => {
 		assert.equal(q('[data-testid="ask-missing"]'), null);
 		assert.deepEqual(qa('[data-testid="ask-images"]').map((e) => e.textContent), ["2 images", "1 image"]);
 		assert.deepEqual(qa('[data-testid="ask-images"] img').map((i) => i.getAttribute("src")), ["/api/wolves/w/threads/a/attachments/i1", "/api/wolves/w/threads/a/attachments/i2", "/api/wolves/w/threads/a/attachments/i3"]);
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts[0]!.body, { answers: { q2: { value: "a" } } });
+		assert.deepEqual(posts[0]!.body.answers, { q2: { value: "a" } });
 	});
 
 	it("picking an option keeps the images bound to that question", async () => {
@@ -456,9 +471,9 @@ describe("ask sheet inline composer", () => {
 		await settle();
 		assert.deepEqual(rows().map((r) => r.textContent), ["blue"]);
 		assert.deepEqual(texts()[2]!.body, { picked: [], others: ["blue"] });
-		await click(q('[data-testid="ask-next"], [data-testid="ask-submit"]'));
+		await click(q('[data-testid="press"]'));
 		await settle();
-		assert.deepEqual(posts.at(-1)!.body, { answers: { q1: { value: ["blue"], other: ["blue"] } } });
+		assert.deepEqual(posts.at(-1)!.body.answers, { q1: { value: ["blue"], other: ["blue"] } });
 	});
 
 	it("Skip question sits in the question's header row for every kind, free text included", async () => {

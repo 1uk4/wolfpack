@@ -696,11 +696,13 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		await settle();
 		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
 		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why it/);
+		assert.equal(q('[data-testid="ask-sheet-host"]')!.getAttribute("data-composing") === "true", true); // the question, not the card, carries the accent
 		assert.equal(q('[data-testid="thread-composer-card"]') === null, true);
 		assert.equal(q('[data-testid="composer-controls"]') === null, true);
 		await typeText("because");
 		await enter();
 		await settle();
+		assert.equal(q('[data-testid="ask-sheet-host"]')!.getAttribute("data-composing") === null, true);
 		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
 		assert.equal(textPosts.length, 1);
 		assert.match(textPosts[0]!.url, /\/cards\/call-1\/questions\/q1\/text$/);
@@ -713,6 +715,7 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		assert.equal(q('[data-testid="answering-chip"]') === null, true);
 		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
 		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: draft/);
+		await act(async () => void propsOf(q('[data-testid="ask-collapse"]')!, "onClick")({})); // collapsed: a normal composer again
 		await typeText("plain message");
 		await enter();
 		await settle(400);

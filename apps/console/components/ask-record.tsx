@@ -19,6 +19,10 @@ export interface AskRecordProps {
 	answer?: CardAnswers;
 	pageAnswers?: CardAnswers;
 	pagesDone?: number;
+	/** The note that went with the submit. */
+	note?: { text?: string; attachments?: string[] };
+	/** URL of an attached image of the thread (the note's thumbnails). */
+	attachmentUrl?(id: string): string;
 	/** Text typed for the open page and never submitted. */
 	draft?: CardAnswers;
 	pending: boolean;
@@ -78,7 +82,7 @@ function Line({ item, card, diagramUrl }: { item: AskRecordItem; card: Card; dia
 }
 
 /** The transcript's compact record of a paged `ask`: one "Q → A" line per question under a header saying how it ended. */
-export function AskRecordCard({ card, closed, dismissed, answer, pageAnswers, pagesDone = 0, draft, pending, diagramUrl }: AskRecordProps) {
+export function AskRecordCard({ card, closed, dismissed, answer, pageAnswers, pagesDone = 0, note, attachmentUrl, draft, pending, diagramUrl }: AskRecordProps) {
 	const how = closed ?? (answer ? "answered" : dismissed ? "superseded" : undefined);
 	const answers = answer || pageAnswers ? { ...pageAnswers, ...answer } : undefined;
 	const rec = askRecord(card, answers, how === "answered" ? card.steps!.length : pagesDone, how === "skipped" ? undefined : how, draft);
@@ -97,6 +101,20 @@ export function AskRecordCard({ card, closed, dismissed, answer, pageAnswers, pa
 					<Line key={i.id} item={i} card={card} diagramUrl={diagramUrl} />
 				))}
 			</ul>
+			{note && ((note.text ?? "") !== "" || (note.attachments?.length ?? 0) > 0) && (
+				<div data-testid="ask-record-note" className="mt-2 border-t border-border/60 pt-2 [overflow-wrap:anywhere]">
+					<div className="text-xs text-muted-foreground">Note</div>
+					{note.text ? <p className="mt-0.5 whitespace-pre-wrap text-sm text-foreground">{note.text}</p> : null}
+					{attachmentUrl && (note.attachments?.length ?? 0) > 0 && (
+						<div className="mt-1.5 flex flex-wrap gap-1.5">
+							{note.attachments!.map((id) => (
+								// eslint-disable-next-line @next/next/no-img-element
+								<img key={id} src={attachmentUrl(id)} alt="" className="size-14 rounded-md border object-cover" />
+							))}
+						</div>
+					)}
+				</div>
+			)}
 		</div>
 	);
 }

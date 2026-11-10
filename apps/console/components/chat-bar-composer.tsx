@@ -13,18 +13,19 @@ import { threadBase } from "@/components/thread-transport";
 import { newUploadState, startUploads } from "@/components/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/attachments";
 import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
-import { useComposerDraft } from "@/lib/composer-draft";
+import { draftKey, readDraft, useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
 
 import { mergeRestored } from "@/components/composer-restore";
+import { type AskSession, type NoteState } from "@/components/ask-session";
 
 /**
  * `dictation` is owned by ChatBar (it must outlive this component: the composer unmounts when the bar is minimized or the
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, dictation, registerAppend, session, registerNoteSink }: { session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -90,30 +91,53 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		void dictation.finish().then(() => sendRef.current()).finally(() => void (sendInFlight.current = false));
 	}, [dictation, send]);
 
+	// While the questionnaire is expanded this composer is the NOTE's (Next / Submit); collapsing hands the note's images to the normal attachments (the text goes through the draft store).
+	const noteMode = !!session && session.active && session.expanded;
+	useEffect(() => {
+		registerNoteSink?.((n) => setAttachments((prev) => [...prev, ...n.atts]));
+		return () => registerNoteSink?.(null);
+	}, [registerNoteSink]);
+	// The text went to the draft store on collapse: re-read it into this composer.
+	const wasNote = useRef(noteMode);
+	useEffect(() => {
+		if (wasNote.current && !noteMode) applyText(readDraft(draftKey(target.wolf, target.threadId)));
+		wasNote.current = noteMode;
+	}, [noteMode, applyText, target.wolf, target.threadId]);
+	const sendNote = useCallback(async (t: string, refs: { id: string }[]) => {
+		api.markSent();
+		const ok = await submitToThread(target, t, working, refs);
+		if (ok) onReplied?.();
+		else api.clearSent();
+		return ok;
+	}, [api, target, working, onReplied]);
+
 	return (
 		<>
-			{error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
+			{noteMode && <p data-testid="ask-armed-live" aria-live="polite" className="sr-only">{session.action.armed ? session.action.ariaLabel : ""}</p>}
+			{noteMode && session.action.hint && <p data-testid="ask-missing" role="status" aria-live="polite" className="px-3 pt-2 font-ui text-xs text-muted-foreground">{session.action.hint}</p>}
+			{noteMode && session.error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{session.error}</p>}
+			{error && !noteMode && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
 			{waiting > 0 && (
 				<p data-testid="chat-bar-attachments-waiting" className="px-3 pt-1 font-ui text-xs text-muted-foreground">
 					{waiting} attachment{waiting === 1 ? "" : "s"} waiting in the thread
 				</p>
 			)}
-			{askOpen && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
+			{askOpen && !noteMode && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 			<Composer
-				busy={working}
-				{...(cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
-				value={text}
-				onChange={onChange}
-				onSend={onSend}
+				busy={noteMode ? false : working}
+				{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
+				value={noteMode ? session.note.text : text}
+				onChange={noteMode ? session.setNoteText : onChange}
+				onSend={noteMode ? () => session.press(sendNote) : onSend}
 				onStop={stop}
-				canSend={canSendWith(text, attachments) || (dictation.active && !working)}
+				canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !working)}
 				onEscape={dictation.active ? dictation.cancel : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}
 				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
-				onFiles={onFiles}
-				onPickFiles={onFiles}
-				chips={<AttachmentChips items={attachments} onRemove={(k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
+				onFiles={noteMode ? session.addNoteFiles : onFiles}
+				onPickFiles={noteMode ? session.addNoteFiles : onFiles}
+				chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : (k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>
 			<div className="px-3 pb-2" data-testid="dictation-slot">
 				<DictationBar dictation={dictation} />

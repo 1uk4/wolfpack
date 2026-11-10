@@ -366,21 +366,6 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
-		/** A diagram the wolf rendered, relayed as an image. Only a published render's file name is accepted (never a path or URL). */
-		async diagram(ref: ThreadRef, diagramId: string): Promise<Response> {
-			try {
-				if (!/^viz-[a-z0-9]+(?:-[a-z0-9]+)*-\d+\.png$/.test(diagramId)) return json({ error: "unknown diagram" }, 404);
-				const client = source();
-				if (!client.getDiagram) return json({ error: "unknown diagram" }, 404);
-				const { bytes } = await client.getDiagram(await resolve(client, ref), diagramId);
-				return new Response(bytes as BodyInit, {
-					headers: { "Content-Type": "image/png", "Content-Length": String(bytes.byteLength), "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "private, max-age=31536000, immutable" },
-				});
-			} catch (err) {
-				return failure(err);
-			}
-		},
-
 		/** Skip a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/skip`. */
 		async skipCard(ref: ThreadRef, callId: string): Promise<Response> {
 			try {

@@ -16,6 +16,8 @@ export interface CardCall {
 	/** Paged (`ask`) cards: the answers of the pages submitted, how many pages were, and text typed but not submitted. */
 	pageAnswers?: CardAnswers;
 	pagesDone?: number;
+	/** The note that went with the submit (text, image ids). */
+	note?: { text?: string; attachments?: string[] };
 	draft?: CardAnswers;
 	/** Answered while sibling cards still wait: held by the wolf, changeable until the last one is answered. */
 	heldAnswer?: CardAnswers;
@@ -41,11 +43,11 @@ export function cardsOfThread(detail: Pick<ThreadDetail, "messages" | "pendingCa
 	const calls: Record<string, CardCall> = {};
 	for (const m of detail.messages) {
 		for (const t of m.tools ?? []) {
-			if (t.card) calls[t.callId] = { card: t.card, ...(t.answer ? { answer: t.answer } : {}), ...(t.dismissed ? { dismissed: true } : {}), ...(t.closed ? { closed: t.closed } : {}), ...(t.pageAnswers ? { pageAnswers: t.pageAnswers } : {}), ...(t.pagesDone !== undefined ? { pagesDone: t.pagesDone } : {}) };
+			if (t.card) calls[t.callId] = { card: t.card, ...(t.answer ? { answer: t.answer } : {}), ...(t.dismissed ? { dismissed: true } : {}), ...(t.closed ? { closed: t.closed } : {}), ...(t.pageAnswers ? { pageAnswers: t.pageAnswers } : {}), ...(t.pagesDone !== undefined ? { pagesDone: t.pagesDone } : {}), ...(t.note ? { note: t.note } : {}) };
 		}
 	}
 	// A pending card whose call fell out of the (compacted) history still renders from the pending list.
-	for (const p of detail.pendingCards ?? []) calls[p.callId] = { ...(calls[p.callId] ?? { card: p.card }), ...(p.heldAnswer ? { heldAnswer: p.heldAnswer } : {}), ...(p.heldSkip ? { heldSkip: true } : {}), ...(p.draft ? { draft: p.draft } : {}), ...(p.pageAnswers && !calls[p.callId]?.pageAnswers ? { pageAnswers: p.pageAnswers } : {}), ...(p.pageIndex !== undefined && calls[p.callId]?.pagesDone === undefined ? { pagesDone: p.pageIndex } : {}) };
+	for (const p of detail.pendingCards ?? []) calls[p.callId] = { ...(calls[p.callId] ?? { card: p.card }), ...(p.heldAnswer ? { heldAnswer: p.heldAnswer } : {}), ...(p.heldSkip ? { heldSkip: true } : {}), ...(p.draft ? { draft: p.draft } : {}), ...(p.pageAnswers && !calls[p.callId]?.pageAnswers ? { pageAnswers: p.pageAnswers } : {}), ...((p.reached ?? p.pageIndex) !== undefined && calls[p.callId]?.pagesDone === undefined ? { pagesDone: (p.reached ?? p.pageIndex)! } : {}) };
 	return { pending: detail.pendingCards ?? [], calls };
 }
 

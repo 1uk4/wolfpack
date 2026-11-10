@@ -20,6 +20,7 @@ import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { TurnTimer, useTurnStart } from "@/components/turn-timer";
 import { useOwnAsk } from "@/components/thread-ask";
+import { submitToThread } from "@/components/chat-bar-io";
 import { useAttachedStripRow } from "@/components/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
@@ -35,7 +36,7 @@ import { appendToDraft, draftKey, useComposerDraft, useRereadDraftWhenShown, use
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { AskRecordCard } from "@/components/ask-record";
-import { cardAnswerUrl, cardSkipUrl, diagramUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
+import { cardAnswerUrl, cardSkipUrl, attachmentUrl, diagramUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import { ThreadGitRow } from "@/components/thread-git-tree";
@@ -139,6 +140,8 @@ function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
 				answer={call.answer}
 				pageAnswers={call.pageAnswers}
 				pagesDone={call.pagesDone}
+				note={call.note}
+				attachmentUrl={(id) => attachmentUrl(ctx.wolf, ctx.slug, id)}
 				draft={call.draft}
 				pending={ctx.cards.pending.some((p) => p.callId === callId)}
 				diagramUrl={(id) => diagramUrl(ctx.wolf, ctx.slug, id)}
@@ -522,8 +525,6 @@ function ThreadChatInner({
 	const subagents = useSubagentChildren(wolf, slug, threadId);
 	const attachedRow = useAttachedStripRow(wolf, threadId);
 	const stripReserve = stripReservePx(subagents, Date.now(), attachedRow);
-	// A paged `ask` pending on this thread: its questionnaire sheet lives here (the floating bar never mounts on this page).
-	const ask = useOwnAsk({ wolf, slug, threadId }, busy, dockHeight, dictation);
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
 		[messages],
@@ -546,6 +547,14 @@ function ThreadChatInner({
 		return () => publishAttachments?.(threadId, 0);
 	}, [publishAttachments, threadId, waitingAttachments]);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
+	// A paged `ask` pending on this thread: its questionnaire sheet lives here (the floating bar never mounts on this page). Collapsing it moves the note into this composer's own draft.
+	const ask = useOwnAsk({ wolf, slug, threadId }, busy, dockHeight, dictation, (n) => {
+		if (n.text.trim() !== "") applyText(joinDictation(textRef.current, n.text));
+		if (n.atts.length > 0) setAttachments((prev) => [...prev, ...n.atts]);
+	});
+	const session = ask.session;
+	/** The composer is the questionnaire note's (Next / Submit), not the chat's. */
+	const noteMode = ask.pending && ask.sheetShown && session.expanded && !ask.composing;
 
 	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
 	const dictationWasActive = useRef(false);
@@ -790,33 +799,38 @@ function ThreadChatInner({
 									) : barOwnsInput ? null : (
 									<>
 									{ask.sheet}
-									{ask.pending && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
+									{ask.pending && !noteMode && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 									{!ask.composing && (
 									<div
 										data-testid="thread-composer-card"
+										data-note-mode={noteMode ? "true" : undefined}
 										{...(dictation.active ? { "data-listening": "true" } : {})}
-										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dictation.active ? " border-transparent ring-2" : dragging ? " ring-2 ring-(color:--thread-accent)" : " focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)"}`}
+										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${noteMode ? " rounded-t-none border-t-0 border-(color:--thread-accent)" : ""}${dictation.active ? " border-transparent ring-2" : dragging ? " ring-2 ring-(color:--thread-accent)" : noteMode ? "" : " focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)"}`}
 										style={dictation.active ? ({ "--tw-ring-color": tintHex, boxShadow: `0 0 24px ${tintHex}66` } as CSSProperties) : undefined}
 									>
+										{noteMode && <p data-testid="ask-armed-live" aria-live="polite" className="sr-only">{session.action.armed ? session.action.ariaLabel : ""}</p>}
+										{noteMode && session.action.hint && <p data-testid="ask-missing" role="status" aria-live="polite" className="px-3 pt-2 font-ui text-xs text-muted-foreground">{session.action.hint}</p>}
+										{noteMode && session.error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{session.error}</p>}
 										<Composer
-											busy={busy}
-											value={text}
-											onChange={applyText}
-											onSend={onSend}
+											busy={noteMode ? false : busy}
+											value={noteMode ? session.note.text : text}
+											onChange={noteMode ? session.setNoteText : applyText}
+											onSend={noteMode ? () => session.press((t, refs) => submitToThread({ wolf, slug }, t, busy, refs).then((ok) => { if (ok) ask.settle(); return ok; })) : onSend}
+											{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : {})}
 											onStop={onStop}
 											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
-											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
+											canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !busy)}
 											onEscape={dictation.active ? dictation.cancel : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
 											enterSends={dictation.active}
-											onFiles={onFiles}
-											onPickFiles={onFiles}
-											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
+											onFiles={noteMode ? session.addNoteFiles : onFiles}
+											onPickFiles={noteMode ? session.addNoteFiles : onFiles}
+											chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
+											controls={noteMode ? null : threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
 											autoFocus
-											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
+											placeholder={noteMode ? "Add a note for the agent…" : busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>
 										{/* Dictation sits under the message field (owner, 2026-10-27). */}
 										<div className="px-3 pb-2" data-testid="dictation-slot">

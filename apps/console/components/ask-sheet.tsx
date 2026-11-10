@@ -1,27 +1,32 @@
 "use client";
 
 /**
- * The questionnaire sheet of a paged `ask` card (work-wolfpack-ssPFrEw): one page at a time, each question with its
- * markdown context, optional diagram, kind-specific control, tradeoff lines, skip (unless required) and Other. A page is
- * submitted on its own (`pages/:n/answer`); the card stays pending and comes back with a higher `pageIndex`.
+ * The questionnaire sheet of a paged `ask` card (work-wolfpack-ssPFrEw): one page at a time, each question with its markdown
+ * context, optional diagram, kind-specific control, tradeoff lines, skip (unless required) and Other. It has no footer button and
+ * no border of its own: the host draws ONE card around the sheet and the bottom composer, whose send button reads Next / Submit
+ * (see ask-session.ts, which also holds the answers, the page cursor and the note). Back sits in the header from page 2.
  * A free-text or Other field turns into a composer in place when tapped ("answering Qn", see `Answering`): Send POSTs the
  * text and images to `questions/:qid/text` and the server's `draft` prefills the answer here. The host hides its bottom composer meanwhile.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, PencilIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useState } from "react";
+import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, PencilIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { InertImage, mdComponents } from "@/components/md-blocks";
 import { CardTextInput, isOther, otherText } from "@/components/card-fields/shared";
-import { attachmentUrl, cardPageAnswerUrl, diagramUrl } from "@/components/thread-transport";
-import { imagesOf, withImages } from "@/components/ask-images";
+import { attachmentUrl, diagramUrl } from "@/components/thread-transport";
+import { imagesOf } from "@/components/ask-images";
 import { postReply } from "@/components/ask-reply-send";
 import { hasUnsent, InlineAnswerComposer, useInlineAnswers, type InlineDraft } from "@/components/ask-inline-composer";
 import { replyLabel } from "@/components/ask-reply";
+import { make, read, type AnyA, type MultiA, type Opt, type SingleA } from "@/components/ask-answers";
+import type { AskSession } from "@/components/ask-session";
 import type { Dictation } from "@/components/dictation";
 import { cn } from "@/lib/utils";
 import { escapeRawHtml, type AttachedRef } from "@/src/core";
-import type { CardAnswers, CardField, CardFieldAnswer, PendingCard } from "@wolfpack/client";
+import type { CardField, CardFieldAnswer } from "@wolfpack/client";
+import { DIAGRAM_ID_RE } from "@wolfpack/protocol";
+
+export { pageBody, pageFieldIds } from "@/components/ask-answers";
 
 /** The question whose inline composer is open. */
 export interface Answering {
@@ -37,18 +42,6 @@ const CHOICE = cn("flex w-full items-start gap-2.5 rounded-lg border bg-backgrou
 /** A read-only field that hands typing to the composer: an input-like surface with a pencil and the hint. */
 const PREVIEW = "w-full cursor-text rounded-lg border border-dashed bg-background/40 py-2 pl-8 pr-3 text-sm placeholder:text-muted-foreground/80 hover:bg-accent/40";
 const SAFE_MD = { ...mdComponents, img: InertImage };
-const DIAGRAM_ID = /^viz-[a-z0-9]+(?:-[a-z0-9]+)*-\d+\.png$/;
-type Opt = { label: string; value: string; description?: string; tradeoff?: string };
-
-/** Ids of the questions on the card's current page, in order. */
-export const pageFieldIds = (pc: PendingCard): string[] => pc.card.steps?.[pc.pageIndex ?? 0]?.fields ?? [];
-
-type SingleA = { value: string; other?: boolean };
-type MultiA = { value: string[]; other?: string[] };
-type AnyA = { value?: unknown; other?: unknown };
-/** The one place an answer is read by its kind's shape (the protocol's answer union is wider than any one control needs). */
-const read = <T extends AnyA>(a: CardFieldAnswer | undefined): Partial<T> | undefined => a as unknown as Partial<T> | undefined;
-const make = (a: AnyA): CardFieldAnswer => a as unknown as CardFieldAnswer;
 
 /** Can typed text answer this question? Free text always; single unless allowOther is false; multi only when allowOther is true (the server refuses the rest). */
 export function typable(f: CardField): boolean {
@@ -66,100 +59,16 @@ function multiParts(a: CardFieldAnswer | undefined): { picked: string[]; custom:
 	return { picked, custom };
 }
 
-/** Does a kept draft still fit its field (kind unchanged, option still there, number in range)? */
-function fits(f: CardField, a: CardFieldAnswer): boolean {
-	const v = read<AnyA>(a);
-	if (!v) return false;
-	// An image-only draft (no text, no option) belongs to a free, single or multi question and stays.
-	if (imagesOf(a).length > 0 && (v.value === "" || (Array.isArray(v.value) && v.value.length === 0)) && (f.kind === "free-text" || f.kind === "single" || f.kind === "multi")) return true;
-	const opts = ((f as { options?: Opt[] }).options ?? []).map((o) => o.value);
-	switch (f.kind) {
-		case "free-text": return typeof v.value === "string";
-		case "confirm": return typeof v.value === "boolean";
-		case "slider": {
-			const s = f as Extract<CardField, { kind: "slider" }>;
-			return typeof v.value === "number" && v.value >= s.min && v.value <= s.max;
-		}
-		case "single": return typeof v.value === "string" && (v.other === true || opts.includes(v.value));
-		case "multi": {
-			const other = Array.isArray(v.other) ? (v.other as string[]) : [];
-			return Array.isArray(v.value) && (v.value as unknown[]).every((x) => typeof x === "string" && (opts.includes(x) || other.includes(x)));
-		}
-		default: return false;
-	}
-}
-
-/** One page's answers as sent: skipped (blank) questions and untouched optional sliders are left out; a required slider left at its default sends the default (the server has no answer to accept otherwise). */
-export function pageBody(fields: CardField[], draft: Record<string, CardFieldAnswer>): CardAnswers {
-	const out: CardAnswers = {};
-	for (const f of fields) {
-		if (f.kind === "slider" && !f.optional && draft[f.id] === undefined && (f as { default?: number }).default !== undefined) {
-			out[f.id] = { value: (f as { default: number }).default };
-			continue;
-		}
-		const a = draft[f.id];
-		if (!a) continue;
-		const v = read<AnyA>(a)!.value;
-		if (typeof v === "string" && v.trim() === "") continue;
-		if (Array.isArray(v) && v.length === 0) continue;
-		// The images live in the server's draft, which it merges; a page answer carrying `attachments` is refused (400).
-		out[f.id] = withImages(a, []);
-	}
-	return out;
-}
-
-export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onRefetch, dictation }: {
+export function AskSheet({ target, session, answering, setAnswering, dictation }: {
 	target: Pick<AttachedRef, "wolf" | "slug">;
-	pc: PendingCard;
+	session: AskSession;
 	answering: Answering | null;
 	setAnswering: (a: Answering | null) => void;
-	/** The page was accepted; `last` = it was the final page (the card is done). */
-	onSubmitted: (last: boolean) => void;
-	onRefetch: () => void;
 	/** The host's dictation run: the inline composer shows its Dictate row and takes the transcript. */
 	dictation?: Dictation;
 }) {
-	const pageIndex = pc.pageIndex ?? 0;
+	const { pc, page: pageIndex, fields, draft, set, clear, error } = session;
 	const steps = pc.card.steps ?? [];
-	const ids = pageFieldIds(pc);
-	const fields = useMemo(() => ids.map((id) => pc.card.fields.find((f) => f.id === id)).filter((f): f is CardField => !!f), [pc.card, pageIndex]); // eslint-disable-line react-hooks/exhaustive-deps
-	const last = pageIndex >= steps.length - 1;
-	const [draft, setDraft] = useState<Record<string, CardFieldAnswer>>(() => seed(pc, ids));
-	const [error, setError] = useState<string | null>(null);
-	const [busy, setBusy] = useState(false);
-	const inFlight = useRef(false);
-	const idsKey = ids.join("\0");
-	// A successful non-final submit keeps the button busy until the card moves to its next page.
-	useEffect(() => {
-		inFlight.current = false;
-		setBusy(false);
-	}, [pageIndex, pc.callId, pc.card]);
-	// Safety net: if the card never comes back (refetch lost), release the button after a while.
-	useEffect(() => {
-		if (!busy) return;
-		const t = setTimeout(() => {
-			inFlight.current = false;
-			setBusy(false);
-		}, 10_000);
-		return () => clearTimeout(t);
-	}, [busy]);
-	// A message belongs to the page it was raised on: it clears on a new page or card, not on a refetch of the same page.
-	useEffect(() => setError(null), [pageIndex, pc.callId]);
-	// card-pending is an in-place update: ids that left the page lose their draft; bound text from the server lands in its question.
-	useEffect(() => {
-		setDraft((d) => {
-			const keep: Record<string, CardFieldAnswer> = {};
-			for (const f of fields) if (d[f.id] && fits(f, d[f.id]!)) keep[f.id] = d[f.id]!;
-			return { ...keep, ...seed(pc, ids) };
-		});
-	}, [idsKey, pageIndex, fields, JSON.stringify(pc.draft ?? null)]); // eslint-disable-line react-hooks/exhaustive-deps
-	const key = `${target.wolf}:${target.slug}`;
-	const keyRef = useRef(key);
-	keyRef.current = key;
-
-	// Picking keeps the images bound to the question (wolfd keeps them in the draft too).
-	const set = (id: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [id]: withImages(a, imagesOf(d[id])) }));
-	const clear = (id: string) => setDraft((d) => (({ [id]: _g, ...rest }) => rest)(d));
 	// Skipped questions (optional ones the owner passed on): greyed until Answer or a click brings them back. A draft that arrives (bound text) also ends the skip.
 	const [skippedIds, setSkippedIds] = useState<ReadonlySet<string>>(new Set());
 	useEffect(() => setSkippedIds(new Set()), [pageIndex, pc.callId]);
@@ -167,7 +76,7 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 	const unskip = (id: string) => setSkippedIds((s) => { const n = new Set(s); n.delete(id); return n; });
 	/** Open this question's composer in place. */
 	const reply = (id: string) => setAnswering({ callId: pc.callId, qid: id });
-	const inline = useInlineAnswers(target, onRefetch);
+	const inline = useInlineAnswers(target, session.refetch);
 	const composingId = answering !== null && answering.callId === pc.callId ? answering.qid : null;
 	// A click anywhere outside the open composer closes it (capture phase, so an option picked in the same click still gets it); the draft stays.
 	useEffect(() => {
@@ -180,6 +89,8 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 		document.addEventListener("click", onClick, true);
 		return () => document.removeEventListener("click", onClick, true);
 	}, [composingId, setAnswering]);
+	// Going to another page closes the open composer.
+	useEffect(() => setAnswering(null), [pageIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 	/** The sent text shows in its field at once (the server's draft, read back right after, says the same). */
 	const bindLocal = (f: CardField, text: string) => {
 		if (text === "") return;
@@ -222,52 +133,26 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 				onClose={() => setAnswering(null)}
 			/>
 		) : null;
-	const missing = fields.filter((f) => f.optional !== true && Object.keys(pageBody([f], draft)).length === 0 && imagesOf(draft[f.id]).length === 0);
-
-	const submit = async () => {
-		if (inFlight.current || missing.length > 0) return;
-		inFlight.current = true;
-		setBusy(true);
-		setError(null);
-		let keepBusy = false;
-		try {
-			const res = await fetch(cardPageAnswerUrl(target.wolf, target.slug, pc.callId, pageIndex), {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ answers: pageBody(fields, draft) }),
-			});
-			if (key !== keyRef.current) return;
-			if (res.ok) {
-				keepBusy = true;
-				setAnswering(null);
-				onSubmitted(last);
-				return;
-			}
-			const b = (await res.json().catch(() => null)) as { error?: string } | null;
-			if (res.status === 409) {
-				// the page moved on meanwhile: show where the card is now
-				setError("The questions changed, check your answers.");
-				onRefetch();
-			} else if (res.status === 404) {
-				setError("This question set is gone.");
-				onRefetch();
-			} else setError(b?.error ?? `Could not send the page (${res.status}).`);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Could not send.");
-		} finally {
-			if (!keepBusy) {
-				inFlight.current = false;
-				setBusy(false);
-			}
-		}
-	};
 
 	return (
-		<div data-testid="ask-sheet" data-call-id={pc.callId} data-page={pageIndex} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card text-card-foreground shadow-lg max-md:rounded-xl">
+		<div data-testid="ask-sheet" data-call-id={pc.callId} data-page={pageIndex} className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card text-card-foreground">
 			<div className="flex flex-col gap-2 border-b px-4 pb-2.5 pt-3">
 				<div className="flex items-baseline justify-between gap-2">
-					<span className="truncate text-sm font-semibold text-foreground" data-testid="ask-page-title">{steps[pageIndex]?.title ?? pc.card.title ?? "Questions"}</span>
-					<span data-testid="ask-page-count" className="shrink-0 font-ui text-xs text-muted-foreground">page {pageIndex + 1} of {steps.length}</span>
+					<span className="flex min-w-0 items-center gap-1">
+						{pageIndex > 0 && (
+							<button type="button" data-testid="ask-back" disabled={session.busy} onClick={session.back} className={cn("-ml-1.5 flex shrink-0 items-center gap-0.5 self-center rounded-md px-1.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40", FOCUS)}>
+								<ChevronLeftIcon aria-hidden className="size-3.5" />
+								Back
+							</button>
+						)}
+						<span className="truncate text-sm font-semibold text-foreground" data-testid="ask-page-title">{steps[pageIndex]?.title ?? pc.card.title ?? "Questions"}</span>
+					</span>
+					<span className="flex shrink-0 items-center gap-1">
+						<span data-testid="ask-page-count" className="font-ui text-xs text-muted-foreground">page {pageIndex + 1} of {steps.length}</span>
+						<button type="button" data-testid="ask-collapse" aria-label="Collapse the questions" onClick={session.collapse} className={cn("flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)}>
+							<ChevronDownIcon aria-hidden className="size-4" />
+						</button>
+					</span>
 				</div>
 				<div aria-hidden className="flex gap-1">
 					{steps.map((_, i) => (
@@ -323,24 +208,8 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 				})}
 			</div>
 			{error && <p role="alert" data-testid="ask-error" className="px-4 pb-1 font-ui text-xs text-destructive">{error}</p>}
-			<div className="flex items-center justify-end gap-2 border-t bg-card px-4 py-2.5">
-				{missing.length > 0 && <span data-testid="ask-missing" role="status" aria-live="polite" className="mr-auto min-w-0 font-ui text-xs text-muted-foreground">Answer to continue: {missing.map((f) => `Q${pc.card.fields.findIndex((x) => x.id === f.id) + 1}`).join(", ")}</span>}
-				<Button type="button" size="sm" className={cn(ACCENT_BG, "min-h-9 px-4 hover:opacity-90 disabled:opacity-40", FOCUS)} disabled={busy || missing.length > 0} onClick={() => void submit()} data-testid={last ? "ask-submit" : "ask-next"}>
-					{busy ? "Sending…" : last ? "Submit" : "Next"}
-				</Button>
-			</div>
 		</div>
 	);
-}
-
-/** Bound text (the server's draft) as the prefilled answer: Other text for single/multi, the value for free text. */
-function seed(pc: PendingCard, ids: string[]): Record<string, CardFieldAnswer> {
-	const out: Record<string, CardFieldAnswer> = {};
-	for (const id of ids) {
-		const d = pc.draft?.[id];
-		if (d) out[id] = d;
-	}
-	return out;
 }
 
 /** Small thumbnails of the images bound to an answer, with an "N images" badge; loaded through the thread's attachment URL. */
@@ -358,7 +227,7 @@ function Images({ target, ids }: { target: Pick<AttachedRef, "wolf" | "slug">; i
 
 function Diagram({ target, id }: { target: Pick<AttachedRef, "wolf" | "slug">; id: string }) {
 	const [failed, setFailed] = useState(false);
-	if (!DIAGRAM_ID.test(id) || failed) return <div data-testid="ask-diagram-missing" className="mb-2 rounded-xl border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">Diagram unavailable</div>;
+	if (!DIAGRAM_ID_RE.test(id) || failed) return <div data-testid="ask-diagram-missing" className="mb-2 rounded-xl border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">Diagram unavailable</div>;
 	return <img data-testid="ask-diagram" src={diagramUrl(target.wolf, target.slug, id)} alt="Diagram" onError={() => setFailed(true)} className="mb-2 max-h-72 w-full rounded-xl border bg-background object-contain" />;
 }
 

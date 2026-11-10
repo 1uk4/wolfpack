@@ -24,6 +24,7 @@ import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { useThreadColor } from "@/components/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar-cards";
 import type { Answering } from "@/components/ask-sheet";
+import { useAskSession, type NoteState } from "@/components/ask-session";
 import { replyLabel } from "@/components/ask-reply";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { attachable, BAR_EXTRAS, kbdEventForAction, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
@@ -355,10 +356,29 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	}, [answering, answeringNow]);
 	// While a question is answered in its sheet the bottom composer is hidden and the sheet fills the space it used.
 	const composing = answering !== null && answeringNow !== null;
+	// One questionnaire session for the bar: the answers, the page cursor and the note (the bar composer is the note's while the sheet is expanded).
+	// Collapsing moves the note into the bar's normal draft: the text through the draft store, the images through the composer's sink.
+	const noteSink = useRef<((n: NoteState) => void) | null>(null);
+	const registerNoteSink = useCallback((fn: ((n: NoteState) => void) | null) => void (noteSink.current = fn), []);
+	const session = useAskSession(target, askCard, {
+		onSubmitted: () => (askCard ? rawCards.settle(askCard.callId) : undefined),
+		onRefetch: rawCards.refetch,
+		onCollapse: (n) => {
+			if (n.text.trim() !== "") appendToDraft(draftKey(target.wolf, target.threadId), n.text);
+			noteSink.current?.(n);
+		},
+	});
 	const sheetCard = askCard ? (
-		<div data-testid="ask-sheet-host" className={cn("flex min-h-0 flex-col", phone ? "flex-1" : composing ? "max-h-[85vh]" : "max-h-[70vh]")}>
-			<AskSheet key={askCard.callId} target={target} pc={askCard} answering={answering} setAnswering={setAnswering} onSubmitted={(last) => (last ? rawCards.settle(askCard.callId) : rawCards.refetch())} onRefetch={rawCards.refetch} dictation={dictation} />
-		</div>
+		session.expanded ? (
+			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone || composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? "flex-1" : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
+				<AskSheet key={askCard.callId} target={target} session={session} answering={answering} setAnswering={setAnswering} dictation={dictation} />
+			</div>
+		) : (
+			<button type="button" data-testid="ask-sheet-reopen" onClick={() => session.setExpanded(true)} className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+				<span className="font-medium text-foreground">Questions waiting</span>
+				<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
+			</button>
+		)
 	) : null;
 	const raised = useRaisedAt(BAR_EXTRAS.badge && api.attached !== null);
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
@@ -480,7 +500,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
 				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[70]", askCard ? "" : "rounded-t-2xl") : "z-30")}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color, ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
 				{sheet && !minimized && (
@@ -547,7 +567,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />)}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
@@ -576,11 +596,11 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
 			{/* Card surface slot (PtJkpk6): the thread's pending question/brief cards and the last-reply peek mount here, above the input. */}
-			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="mb-2 empty:hidden">
+			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<div className="relative rounded-2xl border bg-card shadow-lg focus-within:ring-1 focus-within:ring-(color:--thread-accent)" style={{ borderColor: color }}>
+			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{badge}
@@ -590,7 +610,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						<ChevronDownIcon className="size-4" />
 					</button>
 				</div>
-				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>

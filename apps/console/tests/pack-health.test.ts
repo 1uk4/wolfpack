@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type CommandRunner, type HealthSnapshot, type LinkSnapshot } from "../src/server/pack-health.ts";
 import { createSessionWitness, setSessionWitness } from "../src/server/session-witness.ts";
-import { createLogReader, createReleaseReader, createRollbacker } from "../src/server/pack-actions.ts";
+import { createLogReader, createReleaseReader, createRollbacker, createUpdater, type UpdateUnit } from "../src/server/pack-actions.ts";
 import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 
 type Mode = "ok" | "hang" | "slow-lag" | "http500" | "http401" | "wrong-service" | "bad-body" | "legacy";
@@ -92,7 +92,7 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 	const showOut = new Map<string, string>();
 	const showRun: CommandRunner = async (file, args) => {
 		shows.push([file, ...args]);
-		const unit = args.find((a) => a.startsWith("wolfpack-rollback@")) ?? "";
+		const unit = args.find((a) => a.startsWith("wolfpack-rollback@") || a === "wolfpack-auto-update-now.service") ?? "";
 		return { code: 0, stderr: "", stdout: showOut.get(unit) ?? "" };
 	};
 	const releases = createReleaseReader({ optRoot: o.optRoot ?? path.join(os.tmpdir(), "wolfpack-no-opt"), ttlMs: 0, statusTtlMs: 5_000, run: showRun, now: clock.now });
@@ -107,7 +107,10 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 	const witness = createSessionWitness({ now: clock.now });
 	const logReader = createLogReader({ health, run, log: (m) => logs.push(m) });
 	const rollbacker = createRollbacker({ releases, run, now: clock.now, log: (m) => logs.push(m) });
-	const api = createHealthApi({ health, restarter, logs: logReader, rollbacker, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
+	let pending: UpdateUnit[] = [];
+	const availableCalls = { n: 0 };
+	const updater = createUpdater({ available: async () => { availableCalls.n++; return pending; }, run, show: showRun, now: clock.now, log: (m) => logs.push(m) });
+	const api = createHealthApi({ health, restarter, logs: logReader, rollbacker, updater, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
 	const get = async () => (await (await api.get()).json()) as HealthSnapshot;
 	const tick = async (at: number) => { clock.set(at); return health.tick(); };
 	return {
@@ -116,6 +119,9 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 		setStdout: (o: string) => { stdout = o; },
 		setOverflow: (v: boolean) => { overflow = v; },
 		setShow: (unit: string, out: string) => { showOut.set(unit, out); },
+		setPending: (u: UpdateUnit[]) => { pending = u; },
+		availableCalls,
+		updater,
 	};
 }
 
@@ -765,5 +771,87 @@ describe("pack health: POST /api/health/rollback", () => {
 		s.clock.set(T0 + 5_000);
 		await s.releases.refresh();
 		assert.deepEqual(await lastOf(), { result: "assert", exitStatus: null, at: "2026-11-09T11:00:00.000Z" });
+	});
+});
+
+const updateReq = (token?: string) =>
+	new Request("http://c/api/health/update", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: "{}" });
+const UPDATE_UNIT = "wolfpack-auto-update-now.service";
+const PENDING: UpdateUnit[] = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: "0.1.18", to: "0.1.19" }];
+
+describe("pack health: POST /api/health/update", () => {
+	it("needs a verified device; starts exactly the manual auto-update unit (argv, no shell) naming the units that will update; one start per 5 min", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.setPending(PENDING);
+		assert.equal((await s.api.update(updateReq())).status, 401);
+		assert.deepEqual(s.runs, []);
+		s.witness.verified("tok");
+		const ok = await s.api.update(updateReq("tok"));
+		assert.equal(ok.status, 202);
+		assert.deepEqual(((await ok.json()) as { units: UpdateUnit[] }).units, PENDING);
+		assert.deepEqual(s.runs, [["systemctl", "--no-ask-password", "--no-block", "start", UPDATE_UNIT]]);
+		s.clock.set(T0 + 4 * 60_000);
+		const limited = await s.api.update(updateReq("tok"));
+		assert.equal(limited.status, 429);
+		assert.equal(limited.headers.get("retry-after"), "60");
+		assert.equal(s.runs.length, 1);
+		s.clock.set(T0 + 5 * 60_000);
+		assert.equal((await s.api.update(updateReq("tok"))).status, 202);
+	});
+
+	it("refuses with 409 when nothing is behind, or while the unit is still activating, without starting it", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.witness.verified("tok");
+		const none = await s.api.update(updateReq("tok"));
+		assert.equal(none.status, 409);
+		assert.equal(((await none.json()) as { code: string }).code, "no_update");
+		s.setPending(PENDING);
+		s.setShow(UPDATE_UNIT, "ActiveState=activating\nResult=success\nExecMainStatus=0\n");
+		const busy = await s.api.update(updateReq("tok"));
+		assert.equal(busy.status, 409);
+		assert.equal(((await busy.json()) as { code: string }).code, "running");
+		assert.deepEqual(s.runs, []);
+	});
+
+	it("two concurrent presses start the unit once; the second is told an update is already running", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.setPending(PENDING);
+		// At the updater itself: through the API the bearer check staggers the two requests.
+		const [a, b] = await Promise.all([s.updater.update("a"), s.updater.update("b")]);
+		assert.deepEqual([a.ok, b.ok], [true, false]);
+		assert.equal(b.ok === false && b.code, "running");
+		assert.equal(s.runs.length, 1);
+	});
+
+	it("GET shows only component names, versions and the last run's {result, exitStatus, at}, and answers anonymous polling from a 2 s cache", async () => {
+		const s = await setup();
+		s.setPending(PENDING);
+		s.setShow(UPDATE_UNIT, "Result=exit-code\nExecMainStatus=3\nActiveState=failed\nExecMainExitTimestamp=@1794218400\nInvocationID=secret\n");
+		const first = await (await s.api.updateState()).json();
+		assert.deepEqual(first, {
+			units: PENDING,
+			last: { result: "exit-code", exitStatus: 3, at: "2026-11-09T10:00:00.000Z" },
+		});
+		const [b, c] = await Promise.all([s.api.updateState(), s.api.updateState()]);
+		assert.deepEqual(await b.json(), first);
+		assert.deepEqual(await c.json(), first);
+		assert.equal(s.availableCalls.n, 1);
+		s.clock.set(T0 + 2_500);
+		await s.api.updateState();
+		assert.equal(s.availableCalls.n, 2);
+	});
+
+	it("a start systemctl refuses (502) does not use up the 5 min slot", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.setPending(PENDING);
+		s.witness.verified("tok");
+		s.setExit(1);
+		assert.equal((await s.api.update(updateReq("tok"))).status, 502);
+		s.setExit(0);
+		assert.equal((await s.api.update(updateReq("tok"))).status, 202);
 	});
 });

@@ -331,3 +331,74 @@ export function createRollbacker(o: { releases: () => ReleaseInfo[]; run?: Comma
 		},
 	};
 }
+
+// ---- UPDATE (work-wolfpack-7eP9W3Z) ----
+
+export const UPDATE_UNIT = "wolfpack-auto-update-now.service";
+export const UPDATE_MIN_INTERVAL_MS = 5 * 60_000;
+
+/** One component that has a newer stable release than the one running. */
+export interface UpdateUnit {
+	component: string;
+	from: string | null;
+	to: string;
+}
+
+export type UpdateOutcome =
+	| { ok: true; service: "update"; at: string; units: UpdateUnit[] }
+	| { ok: false; service: "update"; code: "no_update" | "running" | "rate_limited" | "failed"; message: string; retryAfterS?: number };
+
+export interface Updater {
+	update(by: string): Promise<UpdateOutcome>;
+	/** The manual unit's last run (systemctl show, argv, 3 s timeout); null: never ran or unreadable. */
+	last(): Promise<RollbackLast | null>;
+	/** The components behind the latest stable release now. */
+	available(): Promise<UpdateUnit[]>;
+}
+
+/**
+ * Owner-initiated update: `systemctl --no-ask-password --no-block start wolfpack-auto-update-now.service` (root oneshot running
+ * `auto-update.mjs run --now`; polkit allows exactly that start). Refused while nothing is behind (`available`), while the unit is
+ * activating, and within `minIntervalMs` (default 5 min) of the last accepted start. The kill switch and the failed-hold stay the
+ * script's: it exits without installing. Never automatic: only POST /api/health/update calls it.
+ */
+export function createUpdater(o: { available: () => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; minIntervalMs?: number; log?: (m: string) => void }): Updater {
+	const run = o.run ?? execRunner;
+	const show = o.show ?? showRunner;
+	const now = o.now ?? Date.now;
+	const minInterval = o.minIntervalMs ?? UPDATE_MIN_INTERVAL_MS;
+	const log = o.log ?? ((m: string) => console.log(m));
+	let lastStart: number | undefined;
+	let starting = false;
+	const available = () => o.available().catch(() => [] as UpdateUnit[]);
+	const last = async (): Promise<RollbackLast | null> => {
+		const r = await show("systemctl", ["show", UPDATE_UNIT, "-p", SHOW_PROPS, "--timestamp=unix"]);
+		return r.code === 0 ? parseShow(r.stdout ?? "") : null;
+	};
+	return {
+		last,
+		available,
+		async update(by) {
+			const units = await available();
+			if (units.length === 0) return { ok: false, service: "update", code: "no_update", message: "nothing is behind the latest stable release" };
+			const t = now();
+			if (lastStart !== undefined && t - lastStart < minInterval) {
+				log(`console: health update RATE-LIMITED by ${by}`);
+				return { ok: false, service: "update", code: "rate_limited", message: `updated less than ${Math.round(minInterval / 60_000)} min ago`, retryAfterS: Math.ceil((minInterval - (t - lastStart)) / 1000) };
+			}
+			// `starting` is set before the first await, so a second press arriving while `last()` is read cannot also start the unit.
+			if (starting) return { ok: false, service: "update", code: "running", message: "an update is already running" };
+			starting = true;
+			let r: Awaited<ReturnType<CommandRunner>>;
+			try {
+				if ((await last())?.result === "running") return { ok: false, service: "update", code: "running", message: "an update is already running" };
+				r = await run("systemctl", ["--no-ask-password", "--no-block", "start", UPDATE_UNIT]);
+			} finally {
+				starting = false;
+			}
+			if (r.code === 0) lastStart = t;
+			log(`console: health update ${units.map((u) => `${u.component} ${u.from ?? "?"} -> ${u.to}`).join(", ")} by ${by}: ${r.code === 0 ? "started" : `FAILED (exit ${r.code}) ${r.stderr.trim()}`}`);
+			return r.code === 0 ? { ok: true, service: "update", at: new Date(t).toISOString(), units } : { ok: false, service: "update", code: "failed", message: `systemctl exited ${r.code}` };
+		},
+	};
+}

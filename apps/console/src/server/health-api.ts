@@ -11,6 +11,9 @@
  *                             | 502 journal_denied (console user not in systemd-journal) | 502 failed
  *   POST /api/health/rollback {service: "hubd" | "workerd" | "console"}; same auth; one per service per 10 min. Owner-initiated only.
  *                             202 {ok, service, at, to} | 400 | 401 | 409 no_previous / previous_is_newer | 429 (+Retry-After) | 502 failed
+ *   POST /api/health/update   {}; same auth; starts wolfpack-auto-update-now.service (work-wolfpack-7eP9W3Z); one start per 5 min. Owner-initiated only.
+ *                             202 {ok, at, units} | 401 | 409 no_update / running | 429 (+Retry-After) | 502 failed
+ *   GET  /api/health/update   {units: components behind the latest stable, last: the unit's last run}; unauthenticated like the snapshot.
  *
  * RESTART AUTH. The hub decides whenever it can: every attempt first checks the bearer LIVE, whatever the monitor currently thinks
  * of hubd, with the cheap authenticated call the console's hub client already makes (GET <hub>/v1/wolves: hubTarget().wolvesUrl,
@@ -29,7 +32,8 @@
  */
 import { bearerOf } from "../core/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
-import { createLogReader, createReleaseReader, createRollbacker, type LogReader, type ReleaseReader, type Rollbacker } from "./pack-actions.ts";
+import { createLogReader, createReleaseReader, createRollbacker, createUpdater, type LogReader, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
+import { createUpdatesHandler } from "./updates-api.ts";
 import { sessionWitness, type SessionWitness } from "./session-witness.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -62,6 +66,7 @@ export interface HealthApiDeps {
 	restarter: Restarter;
 	logs: LogReader;
 	rollbacker: Rollbacker;
+	updater: Updater;
 	witness: SessionWitness;
 	/** Live bearer check against the hub, tried first on every restart (see RESTART AUTH). */
 	checkToken: HubTokenCheck;
@@ -70,8 +75,12 @@ export interface HealthApiDeps {
 
 type AuthOutcome = { ok: true } | { ok: false; busy?: undefined } | { ok: false; busy: number };
 
+/** How long GET /api/health/update keeps its answer (it is unauthenticated). */
+const UPDATE_STATE_TTL_MS = 2_000;
+
 export function createHealthApi(d: HealthApiDeps) {
 	const now = d.now ?? Date.now;
+	let updateCache: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null }> } | undefined;
 	let inFlight = 0;
 	const started: number[] = []; // start times of the live checks in the last minute
 
@@ -103,7 +112,7 @@ export function createHealthApi(d: HealthApiDeps) {
 	};
 
 	/** The shared gate of every action: the bearer header, checked as in RESTART AUTH. Returns who asked, or the error response. */
-	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "domain change"): Promise<string | Response> => {
+	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change"): Promise<string | Response> => {
 		const token = bearerOf(req.headers.get("authorization"));
 		const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
 		if (!auth.ok && auth.busy !== undefined) {
@@ -202,6 +211,36 @@ export function createHealthApi(d: HealthApiDeps) {
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
 			return failure(out, { invalid_request: 400, no_previous: 409, previous_is_newer: 409, rate_limited: 429, failed: 502 }[out.code]);
 		},
+
+		/** POST /api/health/update: start the root oneshot wolfpack-auto-update-now (pack-actions.ts createUpdater). Same auth as restart. */
+		async update(req: Request): Promise<Response> {
+			const gate = await gateOf(req, "update");
+			if (gate instanceof Response) return gate;
+			const out = await d.updater.update(gate);
+			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
+			return failure(out, { no_update: 409, running: 409, rate_limited: 429, failed: 502 }[out.code]);
+		},
+
+		/** GET /api/health/update: what an update would change, and how the manual unit's last run ended. */
+		async updateState(): Promise<Response> {
+			// Unauthenticated, so anonymous polling must not multiply the manifest read and the systemctl spawn: one computation is
+			// shared while in flight and its result kept for UPDATE_STATE_TTL_MS.
+			const t = now();
+			if (!updateCache || (!updateCache.pending && t - updateCache.at >= UPDATE_STATE_TTL_MS)) {
+				const entry: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null }> } = {
+					at: t,
+					pending: true,
+					body: Promise.all([d.updater.available(), d.updater.last()]).then(([units, last]) => ({
+						units: units.map((u) => ({ component: u.component, from: u.from, to: u.to })),
+						last: last ? { result: last.result, exitStatus: last.exitStatus, at: last.at } : null,
+					})),
+				};
+				updateCache = entry;
+				const done = () => { entry.pending = false; };
+				entry.body.then(done, () => { done(); if (updateCache === entry) updateCache = undefined; });
+			}
+			return Response.json(await updateCache.body, { headers: NO_STORE });
+		},
 	};
 }
 
@@ -212,6 +251,11 @@ type Holder = { [KEY]?: ReturnType<typeof createHealthApi>; [MONITOR]?: PackHeal
 
 /** The process-wide rollback-target reader: the monitor's snapshot `actions` and the rollbacker read the same one. */
 const releaseReader = (): ReleaseReader => ((globalThis as Holder)[RELEASES] ??= createReleaseReader());
+/** The components /api/updates says are behind the latest stable release (same reader as the sidebar notice). */
+const availableUpdates = (env: Record<string, string | undefined>) => {
+	const handler = createUpdatesHandler({ env });
+	return async (): Promise<UpdateUnit[]> => (await handler()).components.flatMap((c) => (c.outdated === true && c.latest ? [{ component: c.component, from: c.running, to: c.latest }] : []));
+};
 const SYSTEMD = process.platform === "linux";
 
 /** The process-wide monitor (started on first use; probes every WOLFPACK_HEALTH_INTERVAL_MS, default 5000). The API and the client's direct route share it. */
@@ -241,6 +285,7 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 			restarter: createRestarter({ health, systemd: SYSTEMD }),
 			logs: createLogReader({ health }),
 			rollbacker: createRollbacker({ releases: releaseReader() }),
+			updater: createUpdater({ available: availableUpdates(env) }),
 			witness: sessionWitness(env),
 			checkToken: hubTokenCheck(hubTarget(env).wolvesUrl),
 		});

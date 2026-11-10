@@ -14,7 +14,7 @@ Goal: each thread checks its own worktree in its own browser tab, and never dist
 - The worktree needs `apps/console/node_modules` and built workspace packages, or `get` refuses. Run `pnpm install` / `pnpm build` in the worktree first (nothing is built for you).
 - The home checkout is refused: its console already runs on 3230. Use a feature worktree.
 - If both slots are taken, `get` refuses and lists them. Wait and retry later. Never release another thread's slot.
-- If `get --json` returns `noToken: true`, put the `tokenSetup` lines verbatim in a brief card to the owner. Never ask for a token or code in chat, and never write `~/.wolfpack/preview/hub-token` yourself.
+- If `get --json` returns `noToken: true`, put the `tokenSetup` lines verbatim in an `ask` to the owner. Never ask for a token or code in chat, and never write `~/.wolfpack/preview/hub-token` yourself.
 
 ## 3. Check it in your own tab
 - `browser_goto <url>`. Each thread has its own tab, so threads don't interfere. On a slot port the browser signs itself in. Never paste, print or ask for tokens.

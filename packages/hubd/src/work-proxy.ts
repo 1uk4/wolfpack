@@ -142,7 +142,10 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
       if (wanted.length > MAX_IDS) throw new HubError("invalid_request", `ids: at most ${MAX_IDS} ids per request`);
       const state = cachedWorkState(d.roots);
       const pool = wanted.length ? wanted.flatMap((id) => { const it = state.get(id as WorkId); return it ? [it] : []; }) : [...state.values()];
-      const items = filterWork(pool, q).filter((i) => domainOk(i.domain));
+      let items: readonly Record<string, unknown>[] = filterWork(pool, q).filter((i) => domainOk(i.domain));
+      // `archived=0` drops archived items; `fields=summary` drops the heavy `log` and `successCriteria`. Without them the list is unchanged.
+      if (url.searchParams.get("archived") === "0") items = items.filter((i) => i.stage !== "archived");
+      if (url.searchParams.get("fields") === "summary") items = items.map(({ log: _log, successCriteria: _sc, ...slim }) => slim);
       return respond(res, 200, { items });
     }
     if (rest.length === 0 && method === "POST") {

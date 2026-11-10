@@ -408,7 +408,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // wait for the next tick.
   const T = ctx.timings;
   const timed = <X>(step: string, fn: () => X): X => (T ? T.time(step, fn) : fn());
-  const log = timed("ledger", () => ctx.readLog?.() ?? readLedger(roots));
+  // The sweep appends to its own copy: the tick's memoized ledger (ctx.readLog) is shared with the vector scan and must not see mid-sweep events.
+  // The "ledger" step is timed here only (the tick's memo is not timed separately).
+  const log = timed("ledger", () => (ctx.readLog ? ctx.readLog().slice() : readLedger(roots)));
   const seen = seenHashes(log);
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));

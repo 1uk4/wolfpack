@@ -52,6 +52,14 @@ describe("sweep write hook", () => {
     for (const k of ["commitEntry", "appendLedger", "writeSections", "renderDomain", "renderRegistry", "writeReceipt", "markProcessed", "gitCommit"]) expect(calls).toContain(k);
   });
 
+  it("does not append its mid-sweep events to the ledger array the caller handed in", async () => {
+    const r = setup("inbox");
+    const shared = readLedger(r);
+    const res = await sweep(ctx(r, { readLog: () => shared }));
+    expect(res.created).toBe(1);
+    expect(shared).toEqual([]);
+  });
+
   it("reads another lane and leaves the item in place when a writer throws", async () => {
     const r = setup("contributions");
     const boom: SweepWriter = { ...defaultSweepWriter, commitEntry: () => { throw new Error("conflict"); } };

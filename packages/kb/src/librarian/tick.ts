@@ -192,7 +192,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const timings = createTimings();
   // The ledger is parsed once per tick; the sweep's duplicate check and the vectors share it (nothing appends before both ran).
   let ledgerMemo: KbEvent[] | undefined;
-  const readLog = () => (ledgerMemo ??= timings.time("ledger", () => readLedger(roots)));
+  const readLog = () => (ledgerMemo ??= readLedger(roots));
   const loadEntryVectors = async () => {
     const reg = foldRegistry(readLog());
     const vectors = await buildEntryVectors(roots, reg, getEmbedder(), undefined, timings);

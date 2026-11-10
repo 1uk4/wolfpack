@@ -11,6 +11,8 @@ export interface SubagentEnv {
   activityFile: string;
   agent?: string | null;
   agentDir?: string | null;
+  /** Work item id this child works on (memory tag only); undefined/null = PI_SUBAGENT_TASK unset. */
+  task?: string | null;
   /** The agents this child may spawn; undefined = no PI_SUBAGENT_ALLOWED. */
   allowed?: string[];
   surface?: string;
@@ -24,6 +26,7 @@ export function subagentEnvPrefix(e: SubagentEnv): string {
   parts.push("WOLFPACK_AGENT_RUN=1");
   parts.push(`PI_SUBAGENT_NAME=${shellEscape(e.name)}`);
   if (e.agent) parts.push(`PI_SUBAGENT_AGENT=${shellEscape(e.agent)}`);
+  if (e.task) parts.push(`PI_SUBAGENT_TASK=${shellEscape(e.task)}`);
   if (e.autoExit) parts.push("PI_SUBAGENT_AUTO_EXIT=1");
   parts.push(`PI_SUBAGENT_SESSION=${shellEscape(e.session)}`);
   parts.push(`PI_SUBAGENT_ID=${shellEscape(e.id)}`);

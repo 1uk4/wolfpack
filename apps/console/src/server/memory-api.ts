@@ -107,6 +107,27 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
+		async memoryTree(wolf: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getMemoryTree) return unsupported("memory_unavailable", "memory tree");
+				return json(await client.getMemoryTree(wolf));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		async memoryNode(wolf: string, workId: string, limit?: string | null): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getMemoryNodeObservations) return unsupported("memory_unavailable", "memory tree");
+				if (limit && !/^[1-9]\d{0,6}$/.test(limit)) return json({ error: "limit must be a positive integer", code: "invalid_request" }, 400);
+				return json(await client.getMemoryNodeObservations(wolf, workId, limit ? { limit: Number(limit) } : {}));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async memoryTopic(wolf: string, id: string, scope?: string | null): Promise<Response> {
 			try {
 				const client = source();

@@ -34,6 +34,7 @@ export * from "./sandbox/index.js";
 
 // Prompts — central registry of all system prompts
 export * from "./prompts.js";
+export * from "./work-log.js";
 
 // Config — the editable control surface (vocabularies + numeric knobs)
 export * from "./config/index.js";
@@ -53,3 +54,4 @@ export * from "./usage-log.js";
 
 // Pipeline — parse, search, commit, index
 export * from "./pipeline/index.js";
+export * from "./work-tidy.js";

@@ -59,6 +59,9 @@ export {
   type WorkPattern,
 } from "./file-observation.js";
 
+export { finalFeaturePass, runFinalPass, type FinalPassResult } from "./final-pass.js";
+export { distillTaskToFeature, sweepPendingDistills, type SweepClient, type ShipDistillResult } from "./ship-distill.js";
+
 // Rollup (child → parent feature body)
 export {
   extractDistilled,

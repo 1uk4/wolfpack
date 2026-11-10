@@ -17,10 +17,23 @@ export const RawObservationSchema = z.object({
     .describe("The knowledge domain this observation belongs to"),
 });
 
-export type RawObservation = z.infer<typeof RawObservationSchema>;
+/** Schema sent to the model when `memory.generalToDen` is on: adds the `general` flag. */
+export const RawObservationWithGeneralSchema = RawObservationSchema.extend({
+  general: z
+    .boolean()
+    .optional()
+    .describe("True only for owner preferences, standing rules, and environment/tooling facts that outlive the task; absent means false"),
+});
+
+// `general` is parse-tolerant: only present when the flag is on.
+export type RawObservation = z.infer<typeof RawObservationSchema> & { general?: boolean };
 
 export const ObserverResultSchema = z.object({
   observations: z.array(RawObservationSchema),
 });
 
 export type ObserverResult = z.infer<typeof ObserverResultSchema>;
+
+export const ObserverResultWithGeneralSchema = z.object({
+  observations: z.array(RawObservationWithGeneralSchema),
+});

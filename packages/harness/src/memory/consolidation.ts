@@ -44,13 +44,17 @@ import {
   subscribedDomain,
   envDomains,
   consolidateWorkRecords,
+  appendWorkLog,
+  type WorkRecordOutcome,
   HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
   type WorkRecordStore,
   refuseTagged,
   WorkPendingState,
   appendArchive,
+  withPoolLock as withPoolFileLock,
   observationIds,
+  shouldFlushWorkLog,
   type ArchiveItem,
   type ArchiveOutcome,
 } from "@wolfpack/memory";
@@ -66,6 +70,8 @@ export interface PoolObservation {
   work?: string;
   /** The bound task's parent feature. */
   feature?: string;
+  /** Bound ids of a general observation that went to the den untagged. Trace only; nothing routes on it. */
+  origin?: { work?: string; feature?: string };
 }
 
 /**
@@ -148,6 +154,12 @@ export interface ConsolidationConfig {
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
   workStore?: WorkRecordStore;
+  /** `memory.workLog`: "fold" (default) rewrites the Record; "append" appends a few log lines per task, batched by `shouldFlushWorkLog`. */
+  workLog?: "fold" | "append";
+  /** `memory.subagentMemory: on`: settle the pool under the cross-process pool lock. Default off: no lock file. */
+  poolLock?: boolean;
+  /** Clock (tests); append mode's age check uses it. */
+  now?: () => Date;
 }
 
 export interface ConsolidationResult {
@@ -209,6 +221,61 @@ function overflowAbove(pool: PoolObservation[], target: number): PoolObservation
   return pool.slice(0, firstKept);
 }
 
+/** Append mode batches per target by the memory package's one rule (`shouldFlushWorkLog`): the oldest pending observation decides the age. */
+function dueToFlush(pendingForTarget: Array<{ recordedAt?: string; timestamp: string }>, now: Date): boolean {
+  const times = pendingForTarget.map((o) => Date.parse(o.recordedAt ?? o.timestamp)).filter(Number.isFinite);
+  return shouldFlushWorkLog(pendingForTarget.length, times.length ? Math.min(...times) : undefined, now.getTime());
+}
+
+type WorkObs = { id: string; timestamp: string; content: string; work: string; feature?: string };
+
+/**
+ * The work step over tagged observations: fold (rewrite the Record) or append (log lines). Append mode holds back targets
+ * that `shouldFlushWorkLog` says wait (no outcome: they stay in the pool) unless `force`. Outcomes carry `target`.
+ */
+async function runWorkStep(a: {
+  mode: "fold" | "append" | undefined;
+  force?: boolean;
+  engine: Engine;
+  store: WorkRecordStore | undefined;
+  obs: Array<{ o: PoolObservation; w: WorkObs }>;
+  state?: WorkPendingState;
+  ignoreBackoff?: boolean;
+  src: string;
+  now?: () => Date;
+  onProgress?: (m: string) => void;
+}): Promise<Array<WorkRecordOutcome & { target?: string }>> {
+  if (a.mode !== "append") {
+    return consolidateWorkRecords({
+      engine: a.engine,
+      store: a.store,
+      ...(a.state ? { state: a.state } : {}),
+      ...(a.ignoreBackoff ? { ignoreBackoff: true } : {}),
+      observations: a.obs.map((x) => x.w),
+      onProgress: a.onProgress,
+    });
+  }
+  const now = (a.now ?? (() => new Date()))();
+  const groups = new Map<string, Array<{ o: PoolObservation; w: WorkObs }>>();
+  for (const x of a.obs) {
+    const key = x.o.work || x.o.feature!;
+    groups.set(key, [...(groups.get(key) ?? []), x]);
+  }
+  const due = [...groups.values()].filter((g) => a.force || dueToFlush(g.map((x) => x.o), now)).flat();
+  if (due.length === 0 || !a.store) {
+    if (due.length > 0) throw new Error("no Work API configured");
+    return [];
+  }
+  return appendWorkLog({
+    engine: a.engine,
+    store: a.store,
+    ...(a.state ? { pending: a.state } : {}),
+    now: a.now,
+    src: a.src,
+    observations: due.map((x) => ({ id: x.w.id, timestamp: x.w.timestamp, content: x.w.content, ...(x.o.work ? { work: x.o.work } : {}), ...(x.o.feature ? { feature: x.o.feature } : {}) })),
+  });
+}
+
 const poolKey = (o: PoolObservation) => `${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`;
 
 /** What became of an observation this run handled (it goes to `.memory/pool/archive.jsonl`). */
@@ -225,7 +292,14 @@ interface Handled {
  * the archive (id, content, outcome, target), then the pool is rewritten
  * without it, so nothing vanishes.
  */
-async function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
+function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void, poolLock?: boolean): Promise<void> {
+  // Only with `memory.subagentMemory: on` (subagents append to this pool from other processes): read, split and
+  // rewrite under the pool lock (no model call inside) so a concurrent append is never dropped. Otherwise unchanged.
+  if (poolLock !== true) return settlePoolLocked(wolfDen, handled, onError);
+  return withPoolFileLock(wolfDen, () => settlePoolLocked(wolfDen, handled, onError));
+}
+
+async function settlePoolLocked(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
   const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
   if (!existsSync(poolFile) || handled.length === 0) return;
 
@@ -289,8 +363,14 @@ export interface DrainWorkConfig {
   /** The Work API; absent → anything pending for these ids is an error. */
   workStore?: WorkRecordStore;
   workIds: string[];
+  /** "append": fold into the log (forced, thresholds ignored). Default "fold". */
+  workLog?: "fold" | "append";
+  /** Label on appended lines (default "wolf"). */
+  wolfName?: string;
   onProgress?: (msg: string) => void;
   onRecord?: ConsolidationConfig["onRecord"];
+  /** `memory.subagentMemory: on`: settle the pool under the cross-process pool lock. */
+  poolLock?: boolean;
   /** Gives up (and frees the pool lock) after this long; default 3 minutes. */
   timeoutMs?: number;
 }
@@ -319,26 +399,29 @@ export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ 
     const mine = pool.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
     if (mine.length === 0) return { folded: 0, discarded: 0 };
     onProgress?.(`Folding ${mine.length} pending observation(s) into the Record for graduation`);
-    const outcomes = await consolidateWorkRecords({
+    const outcomes = await runWorkStep({
+      mode: config.workLog,
+      force: true,
       engine,
       store: config.workStore ?? defaultWorkStore(),
-      observations: mine.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      src: config.wolfName ?? "wolf",
+      obs: mine.map((o) => ({ o, w: { id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) } })),
       onProgress,
     });
-    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
+    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.target ?? o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
     const handled: Handled[] = [];
     let discarded = 0;
     for (const o of mine) {
       const out = status.get(idOf.get(o)!);
-      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.work });
+      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.target ?? out.work });
       else if (out?.status === "discarded") {
         handled.push({ obs: o, outcome: "discarded", target: out.reason });
         discarded++;
       }
     }
     if (cancelled()) throw new Error("cancelled");
-    await settlePool(wolfDen, handled, onProgress);
+    await settlePool(wolfDen, handled, onProgress, config.poolLock);
     onProgress?.(`Graduation drain: ${handled.length - discarded} folded, ${discarded} discarded, ${mine.length - handled.length} pending`);
     const stuck = outcomes.find((o) => o.status === "pending");
     if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
@@ -424,19 +507,24 @@ async function consolidatePoolInner(
   const workObs = observations.filter(isTagged);
   if (workObs.length > 0) {
     const store = config.workStore ?? defaultWorkStore();
-    const outcomes = await consolidateWorkRecords({
+    const outcomes = await runWorkStep({
+      mode: config.workLog,
       engine,
       store,
       state: new WorkPendingState(wolfDen),
-      ...(config.ignoreBackoff ? { ignoreBackoff: true } : {}),
-      observations: workObs.map((o) => ({ id: poolIds.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      ignoreBackoff: config.ignoreBackoff,
+      // A manual consolidate (ignoreBackoff) flushes everything now, like a forced drain.
+      force: config.ignoreBackoff,
+      src: wolfName,
+      now: config.now,
+      obs: workObs.map((o) => ({ o, w: { id: poolIds.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) } })),
       onProgress,
     });
-    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
+    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.target ?? o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
     for (const o of workObs) {
       const out = status.get(poolIds.get(o)!);
-      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.work });
+      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.target ?? out.work });
       else if (out?.status === "discarded") {
         handled.push({ obs: o, outcome: "discarded", target: out.reason });
         discarded++;
@@ -450,13 +538,13 @@ async function consolidatePoolInner(
   }
   const denTokens = denObs.reduce((sum, o) => sum + Math.ceil(o.content.length / 4), 0);
   if (denObs.length === 0 || (workObs.length > 0 && denObs.length < minObservations && denTokens < minTokens)) {
-    await settlePool(wolfDen, handled, onProgress);
+    await settlePool(wolfDen, handled, onProgress, config.poolLock);
     return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending, ...(retryAt ? { retryAt } : {}) };
   }
 
   if (config.sessionTopics) {
     const folded = await consolidateToSessionTopics({ ...config, sessionTopics: config.sessionTopics }, engine, denObs, domainCtx);
-    await settlePool(wolfDen, [...handled, ...denHandled("den")], onProgress);
+    await settlePool(wolfDen, [...handled, ...denHandled("den")], onProgress, config.poolLock);
     return {
       observationsProcessed: handled.length + denObs.length,
       topicsCreated: folded.created,
@@ -626,7 +714,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   renderDenIndex(wolfDen);
 
   // Archive processed observations (move to .memory/archive/)
-  await settlePool(wolfDen, [...handled, ...denOutcomes()], onProgress);
+  await settlePool(wolfDen, [...handled, ...denOutcomes()], onProgress, config.poolLock);
 
   onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 
@@ -650,7 +738,7 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
     provider: tier.provider,
     apiKey,
     defaultModel: steps.consolidate.model,
-    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord },
+    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord, workLog: steps.workLog, workDistill: steps.workDistill, workCompact: steps.workCompact },
   });
 }
 

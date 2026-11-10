@@ -54,6 +54,7 @@ describe("graduated entries point back to the Record lines and the archived obse
     const pool = [0, 1, 2].map((n) => ({ timestamp: `2026-10-20T10:0${n}:00Z`, recordedAt: `2026-10-20T11:0${n}:00Z`, content: `observation ${n}`, work: n === 2 ? t2.id as string : t1.id as string, feature: feat.id as string }));
     const ids = observationIds(pool);
     const store: WorkRecordStore = {
+      appendRecord: async () => ({ ok: true }),
       get: async (id) => ({ id, title: id, kind: "feature", stage: "in_build", body: bodies[id] ?? PLAN }),
       setRecord: async (id, record) => { bodies[id] = replaceRecordSection(bodies[id] ?? PLAN, record); },
     };

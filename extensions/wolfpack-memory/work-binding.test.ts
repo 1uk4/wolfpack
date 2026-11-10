@@ -17,6 +17,7 @@ vi.mock("@earendil-works/pi-tui", () => ({
 }));
 
 import { initWorkSystem, type WorkSystemConfig } from "./work-system.js";
+import { subagentTask } from "./subagent-tag.js";
 
 // ── an in-memory Work API behind fetch ───────────────────────────────────────
 
@@ -297,6 +298,18 @@ describe("subagent sessions (PI_SUBAGENT_AGENT): no binding", () => {
     // the orchestrator's binding was never touched
     expect(readFileSync(file, "utf8")).toBe(before);
     expect(statuses).toEqual([]);
+  });
+
+  it("stays unbound while the memory tag getter returns the task it works on", async () => {
+    vi.stubEnv("PI_SUBAGENT_AGENT", "worker");
+    vi.stubEnv("PI_SUBAGENT_TASK", "work-wolfpack-abc1234");
+    const sub = fakePi();
+    const handle = initWorkSystem(sub.pi, { domains: ["wolfpack"] });
+    await sub.handlers["session_start"]({}, ctx);
+    expect(handle?.getBoundWork()).toBeNull();
+    expect(subagentTask()).toBe("work-wolfpack-abc1234");
+    vi.stubEnv("PI_SUBAGENT_AGENT", "researcher"); // an agent type that does not observe
+    expect(subagentTask()).toBeNull();
   });
 });
 

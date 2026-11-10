@@ -367,6 +367,11 @@ export function drainScope(item: WorkItem, all: WorkItem[]): string[] {
   return out;
 }
 
+async function finalPassFor(pass: ((id: string) => Promise<unknown>) | undefined, item: WorkItem): Promise<void> {
+  if (!pass || item.kind !== "feature") return;
+  try { await pass(item.id as string); } catch { /* the tidy is optional */ }
+}
+
 async function drainFor(drain: DrainWork | undefined, item: WorkItem, all: WorkItem[], onProgress?: (m: string) => void, timeoutMs = DRAIN_TIMEOUT_MS): Promise<number> {
   if (!drain) return 0;
   onProgress?.("folding pending observations into the Record…");
@@ -445,6 +450,8 @@ export async function previewGraduation(opts: {
   drain?: DrainWork;
   /** Drain time limit (default DRAIN_TIMEOUT_MS); tests shorten it. */
   drainTimeoutMs?: number;
+  /** Final feature pass (features only, once: the pass carries its own marker). Runs after the drain, before the distill. Never blocks. */
+  finalPass?: (featureId: string) => Promise<unknown>;
   onProgress?: (msg: string) => void;
   /** The items already loaded with loadGraduationScope for this id (saves a second fetch). */
   scope?: WorkItem[];
@@ -455,6 +462,7 @@ export async function previewGraduation(opts: {
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
 
   const folded = await drainFor(opts.drain, item, all, opts.onProgress, opts.drainTimeoutMs);
+  await finalPassFor(opts.finalPass, item);
   return distillPreview(opts, item, all, folded);
 }
 
@@ -607,6 +615,8 @@ export async function confirmGraduation(opts: {
   /** Folds what was observed since the preview, before anything is sent or archived. */
   drain?: DrainWork;
   drainTimeoutMs?: number;
+  /** Final feature pass (features only, once: the pass carries its own marker). Runs after the drain, before the distill. Never blocks. */
+  finalPass?: (featureId: string) => Promise<unknown>;
   /** Needed when the drain folds anything: the entry is distilled again from the updated Record. */
   engine?: Engine;
   today?: string;
@@ -621,6 +631,7 @@ export async function confirmGraduation(opts: {
 
   // Anything observed since the preview is folded now; a failure stops here, before anything is shipped or archived.
   const late = await drainFor(opts.drain, item, all, undefined, opts.drainTimeoutMs);
+  await finalPassFor(opts.finalPass, item);
   if (late > 0) {
     // The approved text predates those observations: distill again so the entry matches the Record that gets archived.
     if (!opts.engine) throw new Error(`graduation stopped, nothing archived: ${late} observation(s) arrived after the preview and no model is available to include them. Run it again.`);

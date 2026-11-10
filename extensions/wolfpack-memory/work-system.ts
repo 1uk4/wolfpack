@@ -65,6 +65,7 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   recordFeatureId,
+  renderFeatureView,
   renderFeatureRecord,
   bindingLabel,
   readyBoundContext,
@@ -311,8 +312,16 @@ export interface WorkSystemConfig {
   getCurrentDomain?: () => string | undefined;
   /** Callback to get stage context for prompt injection */
   getStageContext?: (item: WorkItem) => string;
+  /** Ship distill hook, set only when wolf.yaml has `memory.workLog: append`. Called after a task ships and its rollup ran. */
+  distillOnShip?: (taskId: string) => Promise<unknown>;
+  /** Final feature pass, set only when wolf.yaml has `memory.workLog: append`. Called when a feature ships and at graduation; never blocks. */
+  finalPassOnShip?: (featureId: string) => Promise<unknown>;
+  /** `memory.workLog: append`: the bound-task context shows the feature view and the newest Record lines. Otherwise it is the fold-mode prompt, unchanged. */
+  workLogAppend?: boolean;
   /** Callback when task completes (for summarization) */
   onTaskComplete?: (taskId: string, item: WorkItem) => Promise<void>;
+  /** Append mode (`memory.workLog: append`): write the pending work observations to their logs now. Called on ship and unbind. */
+  flushWorkLog?: (targets?: string[]) => Promise<unknown>;
   /** Graduation: `g` previews the distilled contributions, then sends after the owner confirms. */
   graduation?: {
     preview(id: string): Promise<GraduationPreview>;
@@ -356,7 +365,41 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // Every feature keeps the section (the Inbox does not). Errors are logged —
   // a bad rollup never blocks the ship.
   async function shipWithRollup(id: string): Promise<WorkItem> {
-    return shipAndRollup(client, id, rollupToParent, (err) => debugLog("rollupToParent failed", { id, err: String(err) }));
+    // Forced log flush BEFORE rollupToParent (and before any ship distill): the log must hold everything seen so far. Never blocks the ship.
+    try { await config.flushWorkLog?.(); } catch (err) { debugLog("flushWorkLog failed", { id, err: String(err) }); }
+    const item = await shipAndRollup(client, id, rollupToParent, (err) => debugLog("rollupToParent failed", { id, err: String(err) }));
+    // Ship distill (memory.workLog: append): one model call folds the task's log into its feature's Record. Tasks only; never blocks the ship.
+    if (config.distillOnShip && (item as { kind?: string }).kind === "task") {
+      try {
+        const r = (await config.distillOnShip(id)) as { ok?: boolean; reason?: string } | undefined;
+        if (r && r.ok === false) debugLog("ship distill failed", { id, reason: r.reason });
+      } catch (err) {
+        debugLog("ship distill failed", { id, err: String(err) });
+      }
+    }
+    if (config.finalPassOnShip && (item as { kind?: string }).kind === "feature") {
+      try {
+        const r = (await config.finalPassOnShip(id)) as { ok?: boolean; reason?: string } | undefined;
+        if (r && r.ok === false) debugLog("final pass failed", { id, reason: r.reason });
+      } catch (err) {
+        debugLog("final pass failed", { id, err: String(err) });
+      }
+    }
+    return item;
+  }
+
+  /** Move an item to a stage. Archiving a task runs the same gated distill as a ship (a no-op when already distilled or the log is empty); never blocks the archive. */
+  async function stageWithDistill(id: string, to: string): Promise<WorkItem> {
+    const item = await client.stage(id, to);
+    if (to === "archived" && config.distillOnShip && (item as { kind?: string }).kind === "task") {
+      try {
+        const r = (await config.distillOnShip(id)) as { ok?: boolean; reason?: string } | undefined;
+        if (r && r.ok === false) debugLog("archive distill failed", { id, reason: r.reason });
+      } catch (err) {
+        debugLog("archive distill failed", { id, err: String(err) });
+      }
+    }
+    return item;
   }
 
   // Session-specific task binding
@@ -546,6 +589,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   function unbindTask(ctx: any): void {
     ensureSessionLoaded(ctx);
     if (activeTask) stopFileTracking(activeTask.workId);
+    // Observations made while bound are tagged already; flush them now so the log is complete when the binding ends.
+    void Promise.resolve(config.flushWorkLog?.()).catch((err) => debugLog("flushWorkLog failed", { err: String(err) }));
     activeTask = null;
     activeItem = null;
     if (sessionId) writeActiveTask(wolfDen, sessionId, null);
@@ -591,7 +636,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (signal.to === "shipped") {
               await shipWithRollup(activeTask.workId);
             } else {
-              const moved = await client.stage(activeTask.workId, signal.to);
+              const moved = await stageWithDistill(activeTask.workId, signal.to);
               if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             }
             await client.note(activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
@@ -629,7 +674,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     let docBody = "";
     try {
       const { body } = await client.getWithBody(activeTask.workId);
-      docBody = renderWorkingDocument(body ?? "");
+      docBody = renderWorkingDocument(body ?? "", undefined, { tail: !!config.workLogAppend });
     } catch {
       // No document this turn; the rest of the context still goes in.
     }
@@ -637,9 +682,19 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     // The Record is kept on the feature: show it next to the task's own document.
     let featureRecord = "";
     if (activeTask.featureId && activeTask.featureId !== activeTask.workId) {
+      const boundId = activeTask.workId;
       try {
         const f = await client.getWithBody(activeTask.featureId);
         featureRecord = renderFeatureRecord(f.item.title, f.body ?? "");
+        if (config.workLogAppend) {
+          // Append mode: add the open siblings' live tails. Their own try, so a failure still leaves the feature Record alone.
+          try {
+            const kids = await client.query({ domain: activeItem.domain as string, partOf: activeTask.featureId }) ?? [];
+            const open = kids.filter((k: any) => k.id !== boundId && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
+            const tasks = await Promise.all(open.map(async (k: any) => ({ id: k.id, title: k.title, stage: k.stage, body: (await client.getWithBody(k.id).catch(() => null))?.body ?? "" })));
+            featureRecord = renderFeatureView({ title: f.item.title, body: f.body ?? "" }, [...tasks, ...kids.filter((k: any) => !open.includes(k) && k.id !== boundId).map((k: any) => ({ id: k.id, title: k.title, stage: k.stage }))], boundId);
+          } catch { /* the feature Record alone */ }
+        }
       } catch { /* the task's own context still goes in */ }
     }
 
@@ -1299,7 +1354,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           const item = params.to === "shipped" || params.to === "live"
             ? await shipWithRollup(target)
-            : await client.stage(target, params.to);
+            : await stageWithDistill(target, params.to);
           if (target === activeTask?.workId) activeItem = item;
           if (item.stage === "in_build") await syncFeatureStage(client, item).catch(() => {});
           let reply = `${item.title} → ${item.stage}`;

@@ -20,6 +20,8 @@ import {
   renderGraduationPreview,
   type GraduationClient,
 } from "./graduate.js";
+import { finalFeaturePass } from "./final-pass.js";
+import { InMemoryWorkRecordStore } from "../work-record.js";
 
 let n = 0;
 const w = (kind: string, title: string, partOf: string | null, extra: Record<string, unknown> = {}) =>
@@ -224,6 +226,22 @@ describe("graduation: preview then confirm", () => {
     expect((second.call.mock.calls[0] as any)[2].prompt).toContain("Late finding");
     expect(done.lateFolded).toBe(2);
     expect(sentTopics()).toEqual([f.id]); // the new distill, not the approved one (which also had the initiative's entry)
+  });
+
+  it("runs the final feature pass once across preview then confirm, after the drain and before the distill", async () => {
+    const rec = "## Record\n\n### Decisions\n\n- 09:00 [x·Decisions] aaaa bbbb cccc dddd <!-- src:distilled:t1 -->\n- 09:01 [x·Decisions] aaaa bbbb cccc dddd eeee <!-- src:distilled:t2 -->";
+    const store = new InMemoryWorkRecordStore({ [f.id as string]: { id: f.id as string, title: "Compose", kind: "feature", stage: "shipped", body: rec } });
+    const order: string[] = [];
+    const tidy = vi.fn(async () => { order.push("tidy"); return { lines: [{ group: "Decisions", text: "aaaa bbbb cccc dddd eeee", from: ["l1", "l2"] }] }; });
+    const finalPass = (id: string) => finalFeaturePass({ store, engine: { call: tidy } as never, featureId: id, src: "owner" });
+    const drain = vi.fn(async () => { order.push("drain"); return { folded: 0 }; });
+    const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const { engine, call } = engineOf(answer(f.id));
+    call.mockImplementation(async (_s: string, schema: { parse: (v: unknown) => unknown }) => { order.push("distill"); return schema.parse(answer(f.id)); });
+    const p = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22", drain, finalPass });
+    await confirmGraduation({ client, roots, wolf: "owner", preview: p, ship: async () => {}, drain, finalPass, today: "2026-10-22" });
+    expect(tidy).toHaveBeenCalledTimes(1);
+    expect(order.slice(0, 3)).toEqual(["drain", "tidy", "distill"]);
   });
 
   it("a late fold at confirm without a model stops with nothing archived", async () => {

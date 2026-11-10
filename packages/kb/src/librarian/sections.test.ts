@@ -2,7 +2,13 @@
  * sections.test.ts — Tests for section tree registry.
  */
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
+  readSections,
+  writeSections,
+  sectionsFile,
   foldSections,
   findSection,
   getChildren,
@@ -246,5 +252,23 @@ describe("sections — helpers", () => {
     // Children of sec-wp-000001
     const children = index.get("sec-wp-000001" as SectionId);
     expect(children!.length).toBe(2);
+  });
+});
+
+describe("sections — snapshot read cache", () => {
+  it("sees a same-size rewrite of the snapshot even when its mtime is put back", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kb-sec-"));
+    try {
+      const roots = { kbBase: join(dir, "b"), opsRoot: join(dir, "o"), denLocal: join(dir, "d") };
+      writeSections(roots, [{ id: "sec-wp-aaaaaa", domain: "wolfpack", parent: null }] as unknown as Section[]);
+      const file = sectionsFile(roots);
+      utimesSync(file, 1700000000, 1700000000);
+      expect(readSections(roots)[0].id).toBe("sec-wp-aaaaaa");
+      writeFileSync(file, readFileSync(file, "utf-8").replace("sec-wp-aaaaaa", "sec-wp-bbbbbb"));
+      utimesSync(file, 1700000000, 1700000000); // same size, same mtime: only ctime differs
+      expect(readSections(roots)[0].id).toBe("sec-wp-bbbbbb");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

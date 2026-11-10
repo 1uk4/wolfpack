@@ -19,9 +19,9 @@ export const sectionsFile = (r: KbRoots) =>
 
 // ── persistence ──────────────────────────────────────────────────────────────
 
-// The snapshot is ~1 MB: parse it once per (path, mtimeMs, size). Any outside write changes mtime or size, so it is re-read.
+// The snapshot is ~1 MB: parse it once per (path, mtimeMs, size, ino, ctimeMs). Any outside write changes at least ctime, so it is re-read.
 // Callers get their own structuredClone of the parsed value and may mutate it, as with an uncached read.
-const sectionsCache = new Map<string, { mtimeMs: number; size: number; parsed: Section[] }>();
+const sectionsCache = new Map<string, { mtimeMs: number; size: number; ino: number; ctimeMs: number; parsed: Section[] }>();
 
 /** Read the current section tree snapshot. */
 export function readSections(roots: KbRoots): Section[] {
@@ -35,9 +35,9 @@ export function readSections(roots: KbRoots): Section[] {
   }
   try {
     const hit = sectionsCache.get(file);
-    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return structuredClone(hit.parsed);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size && hit.ino === st.ino && hit.ctimeMs === st.ctimeMs) return structuredClone(hit.parsed);
     const parsed = JSON.parse(readFileSync(file, "utf-8")) as Section[];
-    sectionsCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, parsed });
+    sectionsCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, ino: st.ino, ctimeMs: st.ctimeMs, parsed });
     return structuredClone(parsed);
   } catch {
     sectionsCache.delete(file);

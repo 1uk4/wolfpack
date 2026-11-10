@@ -16,8 +16,9 @@ describe("withMaxTurnsAsTurnEnd (work-wolfpack-beKfWkW)", () => {
   it("logs one line with the sdkStopReason when it rewrites", async () => {
     const log = vi.fn();
     await collect(withMaxTurnsAsTurnEnd(fake([toolStart, { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "tool_use" } } }, maxTurns]), log)({}));
-    expect(log).toHaveBeenCalledOnce();
-    expect(log.mock.calls[0][0]).toContain("sdkStopReason=tool_use");
+    const rewrote = log.mock.calls.map((c) => c[0] as string).filter((l) => l.includes("rewrote error_max_turns"));
+    expect(rewrote).toHaveLength(1);
+    expect(rewrote[0]).toContain("sdkStopReason=tool_use");
     const quiet = vi.fn();
     await collect(withMaxTurnsAsTurnEnd(fake([maxTurns]), quiet)({}));
     expect(quiet).not.toHaveBeenCalled();
@@ -60,6 +61,14 @@ describe("withMaxTurnsAsTurnEnd (work-wolfpack-beKfWkW)", () => {
     const full = { ...maxTurns, usage: { input_tokens: 3 }, num_turns: 2, session_id: "sid", total_cost_usd: 0.5 };
     const r = (await collect(withMaxTurnsAsTurnEnd(fake([toolStart, full]), vi.fn())({}))).at(-1);
     expect(r).toMatchObject({ usage: { input_tokens: 3 }, num_turns: 2, session_id: "sid", total_cost_usd: 0.5 });
+  });
+  it("logs once that the dropped-call net is inactive when a round is rewritten with no round slot", async () => {
+    const log = vi.fn();
+    const wrapped = withMaxTurnsAsTurnEnd(fake([toolStart, maxTurns]), log);
+    await collect(wrapped({}));
+    await collect(wrapped({}));
+    const lines = log.mock.calls.map((c) => c[0] as string).filter((l) => l.includes("dropped-call net inactive: no round slot"));
+    expect(lines).toHaveLength(1);
   });
   it("the default logger is console.warn", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

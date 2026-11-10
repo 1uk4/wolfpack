@@ -20,7 +20,7 @@ import type { SweepWriter } from "./sweep-writer.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
 import { countPending } from "./intake.js";
-import { readLedger, foldRegistry } from "./ledger.js";
+import { readLedgerAsync, foldRegistry } from "./ledger.js";
 import { createEmbedder, buildEntryVectors, currentEntryHashes, type CachedEmbedder } from "./embed.js";
 import { backoffRemainingMs, classifyError, noteInfraFailure, type Alert } from "./backoff.js";
 import { BudgetExceeded, SweepStuck } from "./park.js";
@@ -256,10 +256,10 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   let liveEntries = 0;
   const timings = createTimings();
   // The ledger is parsed once per tick; the sweep's duplicate check and the vectors share it (nothing appends before both ran).
-  let ledgerMemo: KbEvent[] | undefined;
-  const readLog = () => (ledgerMemo ??= readLedger(roots));
+  let ledgerMemo: Promise<KbEvent[]> | undefined;
+  const readLog = () => (ledgerMemo ??= readLedgerAsync(roots));
   const loadEntryVectors = async () => {
-    const reg = foldRegistry(readLog());
+    const reg = foldRegistry(await readLog());
     const vectors = await buildEntryVectors(roots, reg, getEmbedder(), undefined, timings);
     liveEntries = vectors.length;
     return vectors;

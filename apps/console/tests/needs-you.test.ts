@@ -19,6 +19,7 @@ import {
 } from "../src/core/index.ts";
 import { abortableSleep, createActivityBridge, collectNeedsYou, createNeedsYouApi } from "../src/server/needs-you-api.ts";
 import { createThreadApi } from "../src/server/thread-api.ts";
+import { HubAuthError } from "../src/server/console-client.ts";
 
 const ask = (question: string, title?: string): Card => ({ tool: "ask_user_question", ...(title ? { title } : {}), fields: [{ id: "answer", kind: "free-text", label: question }] });
 const HOME = "1uk4/home";
@@ -112,6 +113,37 @@ describe("needs-you list", () => {
 		const res = await createNeedsYouApi(() => client).list();
 		const body = (await res.json()) as { items: NeedsYouItem[] };
 		assert.equal(body.items.length, 2);
+	});
+
+	it("an unpaired browser gets 401 + the hub-auth marker, so the client goes to /pair", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		client.listWolves = async () => {
+			throw new HubAuthError("this browser is not paired with the hub (no bearer token)");
+		};
+		const res = await createNeedsYouApi(() => client).list();
+		assert.equal(res.status, 401);
+		assert.equal(res.headers.get("X-Wolfpack-Hub-Auth"), "required");
+		assert.equal(((await res.json()) as { code?: string }).code, "unauthorized");
+	});
+
+	it("the single-wolf refetch of a revoked token also gets 401 + the marker (not an empty 200)", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		client.listCards = async () => {
+			throw new HubAuthError("revoked");
+		};
+		const res = await createNeedsYouApi(() => client).list("wolf");
+		assert.equal(res.status, 401);
+		assert.equal(res.headers.get("X-Wolfpack-Hub-Auth"), "required");
+	});
+
+	it("any other failure stays a 500", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		client.listWolves = async () => {
+			throw new Error("boom");
+		};
+		const res = await createNeedsYouApi(() => client).list();
+		assert.equal(res.status, 500);
+		assert.equal(res.headers.get("X-Wolfpack-Hub-Auth"), null);
 	});
 
 	it("answering from the list goes through the thread answer route and clears it", async () => {

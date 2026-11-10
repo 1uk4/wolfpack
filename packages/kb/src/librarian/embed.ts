@@ -225,7 +225,7 @@ export function createEmbedder(
       res = await fetch(`${config.baseUrl}/api/embeddings`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: config.model, prompt: text }),
+        body: JSON.stringify({ model: config.model, prompt: text, keep_alive: SWEEP.embedKeepAlive }),
         signal: AbortSignal.timeout(SWEEP.embedTimeoutMs),
       });
     } catch (err) {

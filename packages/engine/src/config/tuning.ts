@@ -79,6 +79,8 @@ export const SWEEP = {
   backoffMaxMs: 900_000,
   /** Timeout for one Ollama embedding call, so a hung server can't hold a tick. */
   embedTimeoutMs: 30_000,
+  /** Ollama keep_alive sent with each embedding call, so the model stays loaded across a curator burst (ticks ~60 s apart; host default is 30s). */
+  embedKeepAlive: "5m",
 } as const;
 
 /**

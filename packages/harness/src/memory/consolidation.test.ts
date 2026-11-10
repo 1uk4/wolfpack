@@ -154,6 +154,7 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
         if (opts.failSet) throw new Error("HTTP 502");
         writes.push({ id, body: replaceRecordSection("## Plan\n\np", record) });
       },
+      appendRecord: async () => ({ ok: true as const }),
     };
     return { engine, workStore, prompts, writes };
   }
@@ -397,6 +398,7 @@ describe("drainWorkObservations (graduation)", () => {
     const workStore = {
       get: async (id: string) => ({ id, title: "T", kind: "feature", stage: "in_build", body: "## Plan\n\np" }),
       setRecord: async (id: string) => { if (failSet) throw new Error("HTTP 502"); writes.push(id); },
+      appendRecord: async () => ({ ok: true as const }),
     };
     return { engine, workStore, prompts, writes };
   }
@@ -464,6 +466,7 @@ describe("drainWorkObservations (graduation)", () => {
     const workStore = {
       get: async (id: string) => ({ id, title: "T", kind: "task", stage: "in_build", body: "" }),
       setRecord: async (id: string) => { if (id === "fb" && failB) throw new Error("HTTP 502"); writes.push(id); },
+      appendRecord: async () => ({ ok: true as const }),
     };
     await expect(drainWorkObservations({ wolfDen: den, engine, workStore, workIds: ["fa", "fb"] })).rejects.toThrow(/HTTP 502/);
     expect(writes).toEqual(["fa"]);

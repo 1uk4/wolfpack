@@ -5,6 +5,7 @@ import { stripSources, parseRecordLines, formatSources } from "./record-sources.
 import {
   consolidateWorkRecords,
   HttpWorkRecordStore,
+  InMemoryWorkRecordStore,
   extractRecord,
   renderRecord,
   renderWorkingDocument,
@@ -136,6 +137,7 @@ function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failG
   const gets: string[] = [];
   const writes: Array<{ id: string; body: string }> = [];
   const store: WorkRecordStore = {
+    appendRecord: async () => ({ ok: true }),
     async get(id) {
       gets.push(id);
       if (opts.failGet) throw new Error("Work API unreachable");
@@ -568,5 +570,68 @@ describe("pending entries do not outlive their observations", () => {
     expect(out[0]?.status).toBe("discarded");
     expect(state.entry("t1")).toBeUndefined();
     expect(state.entry("t2")).toBeDefined();
+  });
+});
+
+// ── appendRecord ─────────────────────────────────────────────────────────────
+
+describe("appendRecord", () => {
+  const line = (id: string, text = "did x") => ({ at: "2026-11-09T10:05:00Z", src: "hal", kind: "Changes", text, ids: [id] });
+  const capture = (status = 200, json: unknown = {}) => {
+    const calls: Array<{ url: string; init: { method: string; headers: Record<string, string>; body: string } }> = [];
+    const fetchImpl = (async (url: string, init: { method: string; headers: Record<string, string>; body: string }) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(json), { status });
+    }) as unknown as typeof fetch;
+    return { calls, store: new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa") };
+  };
+
+  it("PATCHes {op:'recordAppend', lines} with an idempotency key and answers ok on 200", async () => {
+    const { calls, store } = capture();
+    const lines = [line("o1"), line("o2")];
+    expect(await store.appendRecord("work-x-1", lines)).toEqual({ ok: true });
+    expect(calls[0].url).toBe("http://h/v1/workapi/work/work-x-1");
+    expect(calls[0].init.method).toBe("PATCH");
+    expect(calls[0].init.headers["X-API-Key"]).toBe("tok");
+    expect(calls[0].init.headers["Idempotency-Key"]).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
+    expect(JSON.parse(calls[0].init.body)).toEqual({ op: "recordAppend", lines });
+  });
+
+  it("derives the same key for the same lines in any order, another for other lines, and uses an explicit key as given", async () => {
+    const { calls, store } = capture();
+    await store.appendRecord("t", [line("o1"), line("o2")]);
+    await store.appendRecord("t", [line("o2"), line("o1")]);
+    await store.appendRecord("t", [line("o3")]);
+    await store.appendRecord("t", [line("o1")], { idempotencyKey: "mine-1" });
+    const keys = calls.map((c) => c.init.headers["Idempotency-Key"]);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[3]).toBe("mine-1");
+  });
+
+  it("maps 409 log_full, an archived item, a refusal and an outage to results without throwing", async () => {
+    expect(await capture(409, { error: "full", code: "log_full" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "log_full" });
+    expect(await capture(409, { error: "closed", code: "record_closed" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "archived", message: "closed" });
+    expect(await capture(403, { error: "no" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "forbidden", message: "no" });
+    expect(await capture(502, {}).store.appendRecord("t", [line("o1")])).toMatchObject({ ok: false, code: "error" });
+  });
+
+  it("the in-memory store appends, dedupes by line ids, and refuses past the cap and on archived items", async () => {
+    const mem = new InMemoryWorkRecordStore({
+      t: { id: "t", title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" },
+      a: { id: "a", title: "A", kind: "task", stage: "archived", body: "" },
+    });
+    expect(await mem.appendRecord("t", [line("o1", "first")])).toEqual({ ok: true });
+    expect(await mem.appendRecord("t", [line("o1", "first"), line("o2", "second")])).toEqual({ ok: true });
+    const body = (await mem.get("t"))!.body;
+    expect(body).toContain("## Plan\n\np");
+    expect(body.match(/first/g)).toHaveLength(1);
+    expect(body).toContain("- 10:05 [hal\u00b7Changes] second <!-- src:o2 -->");
+    const big = (p: string) => Array.from({ length: 20 }, (_, i) => line(`${p}${i}`, "y".repeat(240)));
+    expect(await mem.appendRecord("t", big("b"))).toEqual({ ok: true });
+    const full = (await mem.get("t"))!.body;
+    expect(await mem.appendRecord("t", big("c"))).toEqual({ ok: false, code: "log_full" });
+    expect((await mem.get("t"))!.body).toBe(full);
+    expect(await mem.appendRecord("a", [line("o1")])).toMatchObject({ ok: false, code: "archived" });
   });
 });

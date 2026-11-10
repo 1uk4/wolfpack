@@ -26,6 +26,7 @@
  * observations pending for the next run; an item that is archived, deleted or
  * unreachable-by-config falls back to den consolidation.
  */
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
@@ -302,11 +303,31 @@ export class WorkApiError extends Error {
   }
 }
 
+/** A line for `appendRecord` (the hub's `recordAppend` line): `at` ISO time, `src` label, `kind` group word, one-line `text` (<= 240), source `ids`. */
+export interface RecordAppendLine { at: string; src: string; kind: string; text: string; ids: string[] }
+
+export type AppendRecordResult =
+  | { ok: true }
+  | { ok: false; code: "log_full" }
+  | { ok: false; code: "archived" | "forbidden" | "error"; message: string };
+
+/** Hub Record caps (hubd RECORD_CAP_TASK / RECORD_CAP_FEATURE). */
+export const APPEND_CAP_TASK = 6000;
+export const APPEND_CAP_FEATURE = 4000;
+
+/** Deterministic key for a batch: the item plus its sorted line ids (line text when a line has none), so a retry of the same lines replays. */
+export function appendKey(id: string, lines: RecordAppendLine[]): string {
+  const parts = lines.map((l) => (l.ids.length ? [...l.ids].sort().join(",") : `t:${l.text}`)).sort();
+  return `ra:${createHash("sha256").update(`${id}\n${parts.join("\n")}`).digest("hex").slice(0, 40)}`;
+}
+
 export interface WorkRecordStore {
   /** The item and its document; null when it no longer exists. Throws on any other failure (the run stays pending). */
   get(id: string): Promise<WorkRecordItem | null>;
   /** Replace ONLY the Record section; `record` is the full section starting at its heading. Throws WorkApiError on a refusal. */
   setRecord(id: string, record: string): Promise<void>;
+  /** Atomically append lines to the item's Record (hub `recordAppend`). Never throws on a refusal; a resend with the same key (default: derived from item + line ids) adds nothing. */
+  appendRecord(id: string, lines: RecordAppendLine[], opts?: { idempotencyKey?: string }): Promise<AppendRecordResult>;
   /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
   healthy?(): Promise<boolean>;
 }
@@ -329,11 +350,11 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     return !!(this.endpoint && this.token);
   }
 
-  private async call(method: string, id: string, body?: unknown): Promise<Response> {
+  private async call(method: string, id: string, body?: unknown, extra: Record<string, string> = {}): Promise<Response> {
     if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
     return this.fetchImpl(`${this.endpoint}/work/${encodeURIComponent(id)}`, {
       method,
-      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...extra },
       body: body ? JSON.stringify(body) : undefined,
     });
   }
@@ -367,6 +388,28 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     };
   }
 
+  async appendRecord(id: string, lines: RecordAppendLine[], opts: { idempotencyKey?: string } = {}): Promise<AppendRecordResult> {
+    const key = opts.idempotencyKey ?? appendKey(id, lines);
+    let res: Response;
+    try {
+      res = await this.call("PATCH", id, { op: "recordAppend", lines }, { "Idempotency-Key": key });
+    } catch (err) {
+      return { ok: false, code: "error", message: err instanceof Error ? err.message : String(err) };
+    }
+    if (res.ok) return { ok: true };
+    let message = `Work API PATCH ${id}: HTTP ${res.status}`;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { error?: unknown; code?: unknown };
+      if (typeof j.error === "string" && j.error) message = j.error;
+      if (typeof j.code === "string") code = j.code;
+    } catch { /* keep the generic message */ }
+    if (res.status === 409 && code === "log_full") return { ok: false, code: "log_full" };
+    if (res.status === 409 && code === RECORD_CLOSED_CODE) return { ok: false, code: "archived", message };
+    if (res.status === 403) return { ok: false, code: "forbidden", message };
+    return { ok: false, code: "error", message };
+  }
+
   async setRecord(id: string, record: string): Promise<void> {
     // The hub adds the `## Record` heading itself; the text must not hold a level-2 heading.
     const text = record.startsWith(RECORD_HEADING) ? record.slice(RECORD_HEADING.length).replace(/^\s+/, "") : record;
@@ -380,6 +423,41 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       if (typeof j.code === "string") code = j.code;
     } catch { /* keep the generic message */ }
     throw new WorkApiError(res.status, message, code);
+  }
+}
+
+/** A Work API stand-in that keeps bodies in memory: real append with the hub's caps and id dedupe (tests, offline use). */
+export class InMemoryWorkRecordStore implements WorkRecordStore {
+  constructor(public items: Record<string, WorkRecordItem> = {}) {}
+
+  async get(id: string): Promise<WorkRecordItem | null> {
+    return this.items[id] ?? null;
+  }
+
+  async setRecord(id: string, record: string): Promise<void> {
+    const it = this.items[id];
+    if (!it) throw new WorkApiError(404, "not found");
+    it.body = replaceRecordSection(it.body, record);
+  }
+
+  async appendRecord(id: string, lines: RecordAppendLine[]): Promise<AppendRecordResult> {
+    const it = this.items[id];
+    if (!it) return { ok: false, code: "error", message: "not found" };
+    if (it.stage === "archived") return { ok: false, code: "archived", message: "item is archived; its Record is closed" };
+    const rec = extractRecord(it.body)?.slice(RECORD_HEADING.length).trim() ?? "";
+    const seen = new Set<string>();
+    for (const m of rec.matchAll(/<!-- src:([^>]*?) -->/g)) for (const i of m[1]!.split(",")) seen.add(i);
+    const fresh: string[] = [];
+    for (const l of lines) {
+      if (l.ids.length && l.ids.every((i) => seen.has(i))) continue;
+      l.ids.forEach((i) => seen.add(i));
+      fresh.push(`- ${/T(\d\d:\d\d)/.exec(l.at)?.[1] ?? "00:00"} [${l.src}\u00b7${l.kind}] ${l.text.trim()}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`);
+    }
+    if (!fresh.length) return { ok: true };
+    const next = rec ? `${rec}\n${fresh.join("\n")}` : fresh.join("\n");
+    if (next.length > (it.kind === "feature" ? APPEND_CAP_FEATURE : APPEND_CAP_TASK)) return { ok: false, code: "log_full" };
+    it.body = replaceRecordSection(it.body, `${RECORD_HEADING}\n\n${next}`);
+    return { ok: true };
   }
 }
 

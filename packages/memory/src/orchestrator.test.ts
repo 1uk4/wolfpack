@@ -211,6 +211,7 @@ describe("orchestrator work tagging and Records", () => {
     return {
       writes,
       store: {
+        appendRecord: async () => ({ ok: true as const }),
         get: async (id: string) => (items[id] ? { id, successCriteria: undefined, ...items[id] } : null),
         setRecord: async (id: string, record: string) => {
           if (failSet) throw new Error("HTTP 503");

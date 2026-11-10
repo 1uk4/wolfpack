@@ -1348,6 +1348,37 @@ export const MemoryObservationsSchema = z.object({
 });
 export type MemoryObservations = z.infer<typeof MemoryObservationsSchema>;
 
+const nn = z.number().int().nonnegative();
+const MemoryCounts = z.object({ pending: nn, archived: nn });
+
+/** `GET /v1/wolves/:name/memory/tree`: observation counts per feature and task (archived: last 7 days). */
+export const MemoryTreeSchema = z.object({
+  features: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    stage: z.string().optional(),
+    /** Observations tagged to the feature itself (not to one of its tasks). */
+    own: MemoryCounts,
+    tasks: z.array(z.object({ id: z.string(), title: z.string(), stage: z.string().optional(), pending: nn, archived: nn })),
+  })),
+  /** Tagged work whose item could not be fetched or has no feature. */
+  other: z.array(z.object({ id: z.string(), pending: nn, archived: nn })),
+  /** Untagged observations still in the pool. */
+  den: z.object({ pending: nn }),
+});
+export type MemoryTree = z.infer<typeof MemoryTreeSchema>;
+
+/** `GET /v1/wolves/:name/memory/tree/:workId`: the observations funnelling into one node. */
+export const MemoryNodeObservationsSchema = z.object({
+  id: z.string(),
+  pending: z.array(z.object({ id: z.string(), content: z.string(), recordedAt: z.string().optional() })),
+  /** Newest first, last 7 days. */
+  archived: z.array(z.object({ id: z.string(), content: z.string(), at: z.string(), outcome: z.string(), target: z.string() })),
+  /** The archived list was cut at `limit`. */
+  truncated: z.boolean(),
+});
+export type MemoryNodeObservations = z.infer<typeof MemoryNodeObservationsSchema>;
+
 /** One child of a feature, as much as a task graph needs. */
 export const WorkChildSchema = z.object({
   id: z.string(),

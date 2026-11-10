@@ -15,9 +15,18 @@ import { writeReceipt } from "./commit.js";
 
 /** Thrown when a contribution runs past its time budget. */
 export class BudgetExceeded extends Error {
-  constructor(ms: number) {
-    super(`over its ${Math.round(ms / 1000)}s time budget`);
+  /** `scope` "sweep" is the outer tick budget; the default is the one item's budget. */
+  constructor(ms: number, scope: "item" | "sweep" = "item", message?: string) {
+    super(message ?? (scope === "sweep" ? `over the ${Math.round(ms / 1000)}s sweep time budget` : `over its ${Math.round(ms / 1000)}s time budget`));
     this.name = "BudgetExceeded";
+  }
+}
+
+/** The outer budget aborted the sweep and it still had not ended at the hard cap: the tick stops waiting for it (the KB lock stays the overlap guard). */
+export class SweepStuck extends BudgetExceeded {
+  constructor(ms: number, waitedMs: number) {
+    super(ms, "sweep", `over the ${Math.round(ms / 1000)}s sweep time budget; the aborted sweep has not ended after ${Math.round(waitedMs / 1000)}s, no longer waiting for it`);
+    this.name = "SweepStuck";
   }
 }
 

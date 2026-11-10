@@ -171,7 +171,7 @@ export interface HubServer {
    * Same validation, atomicity and kb.changed emission as POST /v1/kb/commits. A `wolf` actor rejects `forbidden`.
    */
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
-  /** Run one curator tick now (undefined when the curator is off or a tick is already running). */
+  /** Run one curator tick now (undefined when the curator is off or closing; outcome "busy" when a tick is already running). */
   runCuratorOnce(): Promise<CuratorRun | undefined>;
   /** Pause curator ticks (waits for the one in flight); returns the resume function. Used by the KB rebuild apply. */
   pauseCurator(): Promise<() => void>;

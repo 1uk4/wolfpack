@@ -87,6 +87,8 @@ export interface SweepContext {
   /** Time budget for the run's one contribution (default SWEEP.runBudgetMs).
    *  A test seam: lets tests exercise parking without waiting minutes. */
   budgetMs?: number;
+  /** The caller's outer budget: when it aborts, the sweep stops at the next item boundary and cancels the engine call in flight. */
+  signal?: AbortSignal;
   /** Called when the run starts real work ("started", once) and when a contribution ends in create/merge/reject/parked
    *  ("item"). Never called for an empty inbox. A throwing callback is ignored. */
   onEvent?: (event: SweepEvent) => void;
@@ -472,6 +474,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   );
 
   for (const c of contributions) {
+    if (ctx.signal?.aborted) {
+      ctx.notify?.("sweep: outer budget spent, stopping before the next item");
+      break;
+    }
     result.processed++;
 
     // One summary line per contribution: route, target size, LLM time, outcome.
@@ -516,7 +522,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         call: async (step, schema, opts) => {
           const t = Date.now();
           try {
-            return await engine.call(step, schema, { ...opts, signal });
+            const out = await engine.call(step, schema, { ...opts, signal: ctx.signal ? AbortSignal.any([signal, ctx.signal]) : signal });
+            // An engine that ignored the abort must not let the item commit after the outer budget ended.
+            ctx.signal?.throwIfAborted();
+            return out;
           } finally {
             llmMs += Date.now() - t;
           }
@@ -1018,6 +1027,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     } catch (err) {
       const reason = cleanError(err);
       result.processed--;
+      if (ctx.signal?.aborted) {
+        // The caller's outer budget ended mid-item: not the item's fault, so no attempt is counted and it stays queued.
+        outcome = "aborted by the outer sweep budget, stays queued";
+        break;
+      }
       result.errors++;
       if (classifyError(err) === "infra") {
         // Not the item's fault: no attempt is counted, the item stays queued,

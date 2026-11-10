@@ -426,44 +426,90 @@ describe("ChatBar cards", () => {
 	});
 
 	describe("producers", () => {
-		it("task_done multi-select ship card answers with the ticked ids", async () => {
-			const ship = { tool: "task_done", fields: [{ id: "ships", kind: "multi", label: "Ship these 2 tasks?", options: [{ label: "One (t1)", value: "t1" }, { label: "Two (t2)", value: "t2" }], default: ["t1", "t2"], min: 1, allowOther: false }] };
-			raise("a", card("s1", ship));
+		// Tool confirmations are paged ask cards (source kind "tool"): they join the questionnaire sheet queue, not the classic card path.
+		const tool = (callId: string, name: string, c: object) => ({ ...card(callId, { tool: name, paged: true, ...c }), source: { kind: "tool", label: name } });
+
+		it("a task_done multi-ship card opens in the sheet with its boxes ticked, names its tool, and Submit posts the ships", async () => {
+			const ship = tool("s1", "task_done", { fields: [{ id: "ships", kind: "multi", label: "Ship these 2 tasks?", options: [{ label: "One (t1)", value: "t1" }, { label: "Two (t2)", value: "t2" }], default: ["t1", "t2"], min: 1, allowOther: false }], steps: [{ title: "Ship", fields: ["ships"] }] });
+			raise("a", ship);
 			await mount();
-			assert.match(slot().textContent!, /Ship these 2 tasks\?/);
-			await click(q('[data-testid="card-submit"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/s1/answer")), "the answer POST");
-			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s1/answer"))!.body, { answers: { ships: { value: ["t1", "t2"] } } });
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="bar-card"]'), null); // not the classic card path
+			assert.equal(q('[data-testid="ask-source"]')!.textContent, "task_done"); // a lone tool card: the label sits by the title (no counter)
+			assert.equal(q('[data-testid="ask-queue"]') === null, true);
+			assert.deepEqual(qa('[data-testid="ask-option"]').map((o) => o.getAttribute("aria-checked")), ["true", "true"]);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/s1/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s1/submit"))!.body.answers, { ships: { value: ["t1", "t2"] } });
 		});
 
-		it("task_done single ship card (confirm) answers yes", async () => {
-			const ship = { tool: "task_done", brief: { headline: 'Ship "Fix it"?' }, fields: [{ id: "ok", kind: "confirm", label: 'Ship "Fix it" (t1)?', confirmLabel: "Ship", rejectLabel: "Not yet" }] };
-			raise("a", card("s2", ship));
+		it("a tool confirmation queues beside a subagent's questionnaire as 1 of 2 with its tool name", async () => {
+			const conf = tool("s2", "task_graduate", { fields: [{ id: "ok", kind: "confirm", label: "Graduate it?" }], steps: [{ fields: ["ok"] }] });
+			const kid = { ...card("k1", { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] }, "w/kid"), source: { kind: "subagent", label: "worker: sheet" } };
+			raise("a", conf, kid);
 			await mount();
-			assert.equal(q('[data-testid="brief-headline"]')!.textContent, 'Ship "Fix it"?');
-			await click(q('[data-testid="card-confirm"]'));
-			await click(q('[data-testid="card-submit"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/s2/answer")), "the answer POST");
-			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s2/answer"))!.body, { answers: { ok: { value: true } } });
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "1 of 2 \u00b7 task_graduate");
 		});
 
-		it("a subagent abandon card (confirm) is skippable", async () => {
-			const stop = { tool: "subagent_stop", brief: { headline: "Abandon the worker?" }, fields: [{ id: "ok", kind: "confirm", label: "Abandon worker w1?", confirmLabel: "Abandon", rejectLabel: "Keep" }] };
-			raise("a", card("p1", stop));
+		it("a single-confirm tool card (task_done 'Ship X?') is required: no Skip, a typed note never arms 'Send anyway?', and Submit posts the confirm", async () => {
+			const ship = tool("s3", "task_done", { title: "Ship?", fields: [{ id: "confirm", kind: "confirm", label: "Ship X?" }], steps: [{ title: "Ship?", fields: ["confirm"] }] });
+			raise("a", ship);
 			await mount();
-			assert.match(slot().textContent!, /Abandon worker w1\?/);
-			await click(q('[data-testid="card-skip"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/p1/skip")), "the skip POST");
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="ask-skip"]'), null);
+			assert.equal(sendBtn().hasAttribute("disabled") || sendBtn().getAttribute("aria-disabled") === "true", true);
+			await type("just a note");
+			await submit();
+			await submit();
+			await flush();
+			assert.equal(calls.some((c) => c.url.endsWith("/submit")), false, "nothing is sent while the confirm is unanswered");
+			assert.doesNotMatch(sendBtn().textContent ?? "", /Send anyway/);
+			await click(qa('[data-testid="ask-confirm"]').find((b) => b.getAttribute("data-value") === "true")!);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/s3/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s3/submit"))!.body.answers, { confirm: { value: true } });
 		});
 
-		it("a crawl_release card (single choice) answers with the picked run", async () => {
-			const rel = { tool: "crawl_release", title: "Release which crawl?", brief: { headline: "Release which crawl?" }, fields: [{ id: "run", kind: "single", label: "Pick a crawl — newest first.", options: [{ label: "Crawl A", value: "/runs/a" }, { label: "Crawl B", value: "/runs/b" }], allowOther: false }] };
-			raise("a", card("r1", rel));
+		it("the subagent_stop abandon card (confirmCard with Abandon / Keep) renders in the sheet and Submit posts the choice", async () => {
+			const gone = tool("ab1", "subagent_stop", { title: "Abandon branch?", fields: [{ id: "confirm", kind: "confirm", label: "Abandon feat/x (2 unmerged commits)?", description: "Its worktree is deleted.", confirmLabel: "Abandon", rejectLabel: "Keep" }], steps: [{ title: "Abandon branch?", fields: ["confirm"] }] });
+			raise("a", gone);
 			await mount();
-			await click(byText("button", "Crawl B"));
-			await click(q('[data-testid="card-submit"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/r1/answer")), "the answer POST");
-			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/r1/answer"))!.body, { answers: { run: { value: "/runs/b" } } });
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.deepEqual(qa('[data-testid="ask-confirm"]').map((b) => b.textContent?.trim()), ["Abandon", "Keep"]);
+			assert.equal(q('[data-testid="ask-skip"]'), null);
+			await click(qa('[data-testid="ask-confirm"]').find((b) => b.textContent?.trim() === "Abandon")!);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/ab1/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/ab1/submit"))!.body.answers, { confirm: { value: true } });
+		});
+
+		it("a plain message after collapsing supersedes the thread's own tool confirmation; a subagent's card stays", async () => {
+			const conf = tool("s4", "task_graduate", { fields: [{ id: "ok", kind: "confirm", label: "Graduate it?" }], steps: [{ fields: ["ok"] }] });
+			const kid = { ...card("k1", { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] }, "w/kid"), source: { kind: "subagent", label: "worker: sheet" } };
+			raise("a", conf, kid);
+			await mount();
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			await click(q('[data-testid="ask-collapse"]'));
+			await type("never mind");
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/threads/a/submit")), "the plain message");
+			await flush();
+			// The tool card is gone; the child's stays and a new card opens expanded.
+			assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "k1");
+			assert.equal(q('[data-testid="ask-queue"]'), null);
+		});
+
+		it("a crawl_release single chooser (options without a tradeoff) renders in the sheet and submits the picked run", async () => {
+			const rel = tool("r1", "crawl_release", { title: "Release which crawl?", fields: [{ id: "run", kind: "single", label: "Pick a crawl — newest first.", options: [{ label: "Crawl A", value: "/runs/a" }, { label: "Crawl B", value: "/runs/b" }], allowOther: false }], steps: [{ fields: ["run"] }] });
+			raise("a", rel);
+			await mount();
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="ask-tradeoff"]') === null, true);
+			await click(qa('[data-testid="ask-option"]').find((o) => o.textContent!.includes("Crawl B"))!);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/r1/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/r1/submit"))!.body.answers, { run: { value: "/runs/b" } });
 		});
 	});
 });

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Card, PendingCard } from "@wolfpack/client";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
-import { isOwnCard } from "@/components/ask-session";
+import { isSupersedable } from "@/components/ask-session";
 import { parseThreadCards, type AttachedRef } from "@/src/core";
 
 /** A card the owner's free text just closed: shown as superseded for a moment. */
@@ -142,10 +142,10 @@ export function useBarCards(target: AttachedRef, working: boolean, enabled = tru
 	const replied = useCallback(() => {
 		const k = keyRef.current;
 		// A plain message supersedes only this thread's own cards: a subagent's questionnaire stays queued.
-		const closing = pendingRef.current.filter(isOwnCard);
+		const closing = pendingRef.current.filter(isSupersedable);
 		for (const p of closing) gone.current.add(p.callId);
-		pendingRef.current = pendingRef.current.filter((p) => !isOwnCard(p));
-		update(k, (x) => ({ ...x, peekOn: false, pending: x.pending.filter((p) => !isOwnCard(p)), error: null, superseded: closing.map((p) => ({ callId: p.callId, card: p.card })) }));
+		pendingRef.current = pendingRef.current.filter((p) => !isSupersedable(p));
+		update(k, (x) => ({ ...x, peekOn: false, pending: x.pending.filter((p) => !isSupersedable(p)), error: null, superseded: closing.map((p) => ({ callId: p.callId, card: p.card })) }));
 		if (closing.length === 0) return;
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = setTimeout(() => update(k, (x) => ({ ...x, superseded: [] })), SUPERSEDED_MS);

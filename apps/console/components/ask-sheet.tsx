@@ -154,6 +154,8 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 							</button>
 						)}
 						<span className="truncate text-sm font-semibold text-foreground" data-testid="ask-page-title">{steps[pageIndex]?.title ?? pc.card.title ?? "Questions"}</span>
+						{/* A lone tool confirmation has no "1 of N · label" counter: name the tool here so the owner knows who asks. */}
+						{pc.source?.kind === "tool" && !(queue && queue.count >= 2) && <span data-testid="ask-source" className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{pc.source.label}</span>}
 					</span>
 					<span className="flex shrink-0 items-center gap-1">
 						{queue && queue.count >= 2 && (
@@ -268,7 +270,7 @@ function Control({ field, labelId, qn, composer, unsent, onReply, value, onChang
 				{[true, false].map((b) => (
 					<button key={String(b)} type="button" role="radio" data-testid="ask-confirm" data-value={String(b)} aria-checked={v === b} onClick={() => (v === b ? onClear() : onChange({ value: b }))} className={cn("flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent px-5 text-sm transition-colors sm:flex-none", FOCUS, v === b ? cn(ACCENT_TINT, "font-medium text-foreground") : "text-muted-foreground hover:bg-accent/60 hover:text-foreground")}>
 						{v === b && <CheckIcon aria-hidden className="size-3.5" />}
-						{b ? "Yes" : "No"}
+						{b ? ((field as { confirmLabel?: string }).confirmLabel ?? "Yes") : ((field as { rejectLabel?: string }).rejectLabel ?? "No")}
 					</button>
 				))}
 			</div>

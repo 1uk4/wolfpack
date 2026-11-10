@@ -43,11 +43,20 @@ describe("askComposerAction", () => {
 	});
 });
 
+describe("askComposerAction for a tool confirmation or subagent card (own: false)", () => {
+	it("never offers Send anyway: with the confirm unanswered and a note typed the button stays disabled with the hint, armed or not", () => {
+		const a = { ...base, page: 2, missing: ["Q1"], noteEmpty: false, own: false };
+		const want = { kind: "submit", label: "Submit", disabled: true, hint: "Answer to continue: Q1" };
+		assert.deepEqual(askComposerAction(a), want);
+		assert.deepEqual(askComposerAction({ ...a, armed: true }), want);
+	});
+});
+
 describe("askQueue", () => {
-	it("keeps the paged questionnaires (own and a subagent's) in order and leaves out classic and tool cards", () => {
+	it("keeps the paged questionnaires (own and a subagent's) in order, tool confirmations included, and leaves out classic cards", () => {
 		const pc = (callId: string, paged: boolean, source?: { kind: "self" | "subagent" | "tool"; label: string }) =>
 			({ callId, threadId: "w/a", raisedAt: "", card: { tool: "ask", fields: [], ...(paged ? { paged: true } : {}) }, ...(source ? { source } : {}) }) as never;
 		const q = askQueue([pc("own", true), pc("classic", false), pc("tool", true, { kind: "tool", label: "bash" }), pc("kid", true, { kind: "subagent", label: "worker" })]);
-		assert.deepEqual(q.map((p) => p.callId), ["own", "kid"]);
+		assert.deepEqual(q.map((p) => p.callId), ["own", "tool", "kid"]);
 	});
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { FEATURE_GRADUATED } from "@/components/thread-closed";
-import { isOwnCard } from "@/components/ask-session";
+import { isSupersedable } from "@/components/ask-session";
 import { createEarlierScroll } from "@/components/earlier-scroll";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
@@ -800,7 +800,7 @@ function ThreadChatInner({
 									) : barOwnsInput ? null : (
 									<>
 									{ask.sheet}
-									{ask.pending && isOwnCard(session.pc) && !noteMode && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
+									{ask.pending && isSupersedable(session.pc) && !noteMode && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">{session.pc.source?.kind === "tool" ? "Sending a message cancels this confirmation." : "Sending a message replaces the open questions."}</p>}
 									{!ask.composing && (
 									<div
 										data-testid="thread-composer-card"

@@ -597,7 +597,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
-			{/* Card surface slot (PtJkpk6): the thread's pending question/brief cards and the last-reply peek mount here, above the input. */}
+			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}

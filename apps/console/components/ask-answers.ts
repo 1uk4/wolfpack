@@ -5,6 +5,7 @@
  */
 import type { CardAnswers, CardField, CardFieldAnswer, PendingCard } from "@wolfpack/client";
 import { imagesOf, withImages } from "@/components/ask-images";
+import { visibleFields } from "@/src/core";
 
 export type Opt = { label: string; value: string; description?: string; tradeoff?: string };
 export type SingleA = { value: string; other?: boolean };
@@ -41,9 +42,12 @@ export function fits(f: CardField, a: CardFieldAnswer): boolean {
 }
 
 /** One page's answers as sent: skipped (blank) questions and untouched optional sliders are left out; a required slider left at its default sends the default (the server has no answer to accept otherwise). */
-export function pageBody(fields: CardField[], draft: Record<string, CardFieldAnswer>): CardAnswers {
+export function pageBody(fields: CardField[], draft: Record<string, CardFieldAnswer>, card?: PendingCard["card"]): CardAnswers {
 	const out: CardAnswers = {};
+	// With the card, a question hidden by `showIf` is never sent: the owner did not see it, so a seeded default must not ride along.
+	const shown = card ? new Set(visibleFields(card, draft).map((f) => f.id)) : undefined;
 	for (const f of fields) {
+		if (shown && !shown.has(f.id)) continue;
 		if (f.kind === "slider" && !f.optional && draft[f.id] === undefined && (f as { default?: number }).default !== undefined) {
 			out[f.id] = { value: (f as { default: number }).default };
 			continue;
@@ -64,9 +68,17 @@ export const unanswered = (f: CardField, draft: Record<string, CardFieldAnswer>)
 	f.optional !== true && Object.keys(pageBody([f], draft)).length === 0 && imagesOf(draft[f.id]).length === 0;
 
 /** What the card already holds per question: the saved page answers, with the text and images bound to questions over them. */
-export function seedAll(pc: PendingCard | undefined): Record<string, CardFieldAnswer> {
+export function seedAll(pc: PendingCard | undefined, defaults = true): Record<string, CardFieldAnswer> {
 	const out: Record<string, CardFieldAnswer> = {};
 	if (!pc) return out;
+	// A multi question's `default` pre-selects (never auto-submitted: the owner's Submit sends it). Saved answers win below.
+	// Only when `defaults`: a refetch (reconcile) must not bring back a default the owner cleared. A default naming a gone option is dropped.
+	if (defaults) for (const f of pc.card.fields) {
+		const d = f.kind === "multi" ? (f as { default?: unknown }).default : undefined;
+		if (!Array.isArray(d) || d.length === 0) continue;
+		const a = make({ value: d as string[] } satisfies MultiA);
+		if (fits(f, a)) out[f.id] = a;
+	}
 	for (const [id, a] of Object.entries(pc.pageAnswers ?? {})) out[id] = a as CardFieldAnswer;
 	for (const [id, a] of Object.entries(pc.draft ?? {})) out[id] = a as CardFieldAnswer;
 	return out;
@@ -76,7 +88,7 @@ export function seedAll(pc: PendingCard | undefined): Record<string, CardFieldAn
 export function reconcile(pc: PendingCard, local: Record<string, CardFieldAnswer>): Record<string, CardFieldAnswer> {
 	const keep: Record<string, CardFieldAnswer> = {};
 	for (const f of pc.card.fields) if (local[f.id] && fits(f, local[f.id]!)) keep[f.id] = local[f.id]!;
-	const server = seedAll(pc);
+	const server = seedAll(pc, false);
 	const out: Record<string, CardFieldAnswer> = { ...keep };
 	for (const f of pc.card.fields) {
 		const s = server[f.id];

@@ -61,15 +61,18 @@ function missingPhrase(missing: readonly string[]): string {
 	return `${list} ${missing.length === 1 ? "isn't" : "aren't"} answered`;
 }
 
-/** Does a plain message from this thread's composer supersede the card? Only the thread's own questionnaires (never a subagent's or a tool's). */
-export const isOwnCard = (p: Pick<PendingCard, "source">): boolean => p.source?.kind !== "subagent";
+/** Does a plain message from this thread's composer supersede the card? The thread's own questionnaires and tool confirmations (never a subagent's). */
+export const isSupersedable = (p: Pick<PendingCard, "source">): boolean => p.source?.kind !== "subagent";
+
+/** Does the card offer "Send anyway?" (a note sent as a plain message with questions open)? Only the thread's own `ask`; a tool confirmation or a subagent's card never does. */
+export const offersSendAnyway = (p: Pick<PendingCard, "source">): boolean => p.source?.kind !== "subagent" && p.source?.kind !== "tool";
 
 /**
- * The paged questionnaires waiting on this thread, in wolfd's order (oldest first): its own and its subagents'. Tool
- * confirmations (`source.kind === "tool"`) keep their own UI and never join.
+ * The paged cards waiting on this thread, in wolfd's order (oldest first): its own questionnaires, its subagents', and tool
+ * confirmations (`source.kind === "tool"`: crawl_run, crawl_release, task_done, task_graduate), which are paged ask cards too.
  */
 export function askQueue(pending: readonly PendingCard[]): PendingCard[] {
-	return pending.filter((p) => p.card.paged === true && p.source?.kind !== "tool");
+	return pending.filter((p) => p.card.paged === true);
 }
 
 /** Where a card's requests go: its asker's thread (a subagent's card is answered on the subagent), else the host's own. */
@@ -195,7 +198,7 @@ const NO_CARD: PendingCard = { callId: "", threadId: "", card: { tool: "ask", fi
 export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: PendingCard | undefined, hooks: AskHooks = {}): AskSession {
 	const pc = card ?? NO_CARD;
 	const { wolf, slug } = askTarget(host, card);
-	const own = card ? isOwnCard(card) : true;
+	const own = card ? offersSendAnyway(card) : true;
 	const callId = pc.callId;
 	const hooksRef = useRef(hooks);
 	hooksRef.current = hooks;
@@ -324,7 +327,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		const from = pageRef.current;
 		setError(null);
 		setPage(to);
-		const r = await request(cardPageDraftUrl(wolf, slug, cid, from), "PUT", { answers: pageBody(fieldsOf(from), draftRef.current), goto: to, stepsKey: stepsKey(pcRef.current.card) });
+		const r = await request(cardPageDraftUrl(wolf, slug, cid, from), "PUT", { answers: pageBody(fieldsOf(from), draftRef.current, pcRef.current.card), goto: to, stepsKey: stepsKey(pcRef.current.card) });
 		flying.current.delete(cid);
 		if (r.ok) return refetch();
 		if (callIdRef.current !== cid) {
@@ -347,7 +350,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		timer.current = null;
 		dirty.current = false; // the submit body carries the note
 		const n = noteBody(noteRef.current);
-		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers: pageBody(fieldsOf(pageRef.current), draftRef.current), ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
+		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers: pageBody(fieldsOf(pageRef.current), draftRef.current, pcRef.current.card), ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
 		flying.current.delete(cid);
 		setBusyIds((s) => {
 			const o = new Set(s);

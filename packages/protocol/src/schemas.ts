@@ -287,6 +287,12 @@ export const PendingCardSchema = z.object({
   note: z.object({ text: z.string().optional(), attachments: z.array(z.string()).optional() }).optional(),
   /** ISO time the card was raised (the tool call's result time). */
   raisedAt: z.iso.datetime({ offset: true }),
+  /**
+   * Who asked, for the parent's queued sheet (additive; absent from older servers = the thread itself):
+   * `self` (the thread's own ask/brief, label "you"), `subagent` (a child thread's card, label "<agent>: <name>"),
+   * `tool` (a tool's confirmation such as crawl_run, label = tool name). `threadId` stays the asker's thread.
+   */
+  source: z.object({ kind: z.enum(["self", "subagent", "tool"]), label: z.string() }).optional(),
 });
 export type PendingCard = z.infer<typeof PendingCardSchema>;
 

@@ -48,7 +48,7 @@ import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
 import { ATTACHMENT_MAX_PER_SUBMIT, askSupersedeDetail, pageCard, stepsKey, visibleFields, type CardNoteBody, type SaveCardPageBody, type SubmitCardBody } from "@wolfpack/protocol";
 import { isImageOnly } from "./card-kinds/types.js";
-import { CardTracker, answerText, attachmentIds, questionNumbers, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
+import { CardTracker, sourceOf, answerText, attachmentIds, questionNumbers, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
 
@@ -73,6 +73,10 @@ export interface ThreadHost {
    * (an `error` thread event) and aborted. Default 120000; 0 disables.
    */
   stallTimeoutMs?: number;
+  /** The threads above this one (its parent first), by `parentThreadId`. Unset: none. */
+  ancestorsOf?(id: string): ThreadRuntime[];
+  /** Every thread below this one (children, then theirs). Unset: none. */
+  descendantsOf?(id: string): ThreadRuntime[];
 }
 
 /**
@@ -149,7 +153,7 @@ export class ThreadRuntime {
     readonly conv: EngineConversation,
     private readonly host: ThreadHost,
   ) {
-    this.cards = new CardTracker(summary.id);
+    this.cards = new CardTracker(summary.id, (card) => sourceOf(card, this.summary));
     this.settings = summary.settings ?? { ...DEFAULT_THREAD_SETTINGS };
   }
 
@@ -495,18 +499,31 @@ export class ThreadRuntime {
       this.announced.delete(callId);
       const closed = closedBy.get(callId) ?? "answered";
       const outcome = closed === "answered" ? "answered" : "dismissed";
-      if (!this.isChild) this.host.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
+      this.host.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
       this.emit({ type: "card-settled", callId, outcome, closed });
+      this.relayToAncestors({ type: "card-settled", callId, outcome, closed });
     }
     for (const [callId, card] of live) {
       if (this.announced.has(callId)) continue;
       this.announced.add(callId);
-      if (!this.isChild) this.host.emitWolf({ type: "card-pending", card });
+      this.host.emitWolf({ type: "card-pending", card });
       this.emit({ type: "card-pending", card });
+      this.relayToAncestors({ type: "card-pending", card });
     }
+    this.refreshAncestorStatus();
   }
 
-  /** A subagent: its questions go to the parent, so its cards never reach the operator's needs-you. */
+  /** A descendant's card event also goes on this thread's stream (the parent's sheet queues it). */
+  private relayToAncestors(draft: ThreadEventDraft): void {
+    for (const a of this.host.ancestorsOf?.(this.summary.id) ?? []) a.emit(draft);
+  }
+
+  /** A descendant's card came or went: the parent's needs-you status may have changed. */
+  private refreshAncestorStatus(): void {
+    for (const a of this.host.ancestorsOf?.(this.summary.id) ?? []) a.syncStatus();
+  }
+
+  /** A subagent. Gates `status()`: a child never goes needs-you for its own or its children's cards (the top thread's sheet carries them). */
   get isChild(): boolean {
     return this.summary.kind === "subagent";
   }
@@ -516,7 +533,8 @@ export class ThreadRuntime {
     const card = this.cards.get(callId);
     if (!card) return;
     this.emit({ type: "card-pending", card });
-    if (!this.isChild) this.host.emitWolf({ type: "card-pending", card });
+    this.host.emitWolf({ type: "card-pending", card });
+    this.relayToAncestors({ type: "card-pending", card });
   }
 
   /** Thread status is derived; announce it whenever the derivation changes. */
@@ -626,7 +644,12 @@ export class ThreadRuntime {
   status(): ThreadStatus {
     // While an answer is submitted the thread is busy (needs-you never blips through idle); the dot and the
     // list/baseline agree because both read pending().
-    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 && !this.isChild ? "needs-you" : "idle";
+    return this.running || this.answering > 0 ? "busy" : !this.isChild && (this.cards.pending().length > 0 || this.descendantCards().length > 0) ? "needs-you" : "idle";
+  }
+
+  /** Pending cards of every thread below this one. */
+  private descendantCards(): PendingCard[] {
+    return (this.host.descendantsOf?.(this.summary.id) ?? []).flatMap((d) => d.cards.pending());
   }
 
   /** `turnStartedAt`: the running turn's start, or the start of the card answer that is about to begin one. */
@@ -656,8 +679,11 @@ export class ThreadRuntime {
       const list = den && m.role === "user" ? attachmentsInText(den, this.summary.id, m.text) : [];
       return list.length ? { attachments: list } : {};
     };
-    const pendingCards = this.cards.pending();
-    const page = pageRange(this.messages, { ...opts, requiredCallIds: pendingCards.map((c) => c.callId) });
+    const ownCards = this.cards.pending();
+    const pendingCards = [...ownCards, ...this.descendantCards()].map((c, i) => ({ c, i }))
+      .sort((a, b) => Date.parse(a.c.raisedAt) - Date.parse(b.c.raisedAt) || a.i - b.i) // by instant (Z and +00:00 forms mix), stable on ties
+      .map((x) => x.c);
+    const page = pageRange(this.messages, { ...opts, requiredCallIds: ownCards.map((c) => c.callId) });
     const messages = this.messages.slice(page.start, page.end).map((m) => ({
       ...m,
       // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
@@ -954,7 +980,7 @@ export class ThreadRuntime {
   }
 
   /** Close every pending card as superseded, now (the later pi.user entry then finds nothing to dismiss). */
-  private supersedePending(): void {
+  supersedePending(): void {
     // Claimed cards (an answer is mid-submit) are not touched: they end answered/skipped, exactly once.
     const { ids, heldDiscarded } = this.cards.dismissUnclaimed();
     if (ids.length === 0) return;

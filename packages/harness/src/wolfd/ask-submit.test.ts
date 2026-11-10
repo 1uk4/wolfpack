@@ -6,7 +6,7 @@ import { askCard } from "../extensions/ask.js";
 import { ThreadRuntime } from "./thread.js";
 
 /** A running turn that accepts steers; `gate` holds a submit in flight. */
-function fakeEngine(entries: unknown[]) {
+function fakeEngine(entries: unknown[], idle = false) {
   const queue: unknown[][] = [];
   let wake: (() => void) | undefined;
   let nextId = 1;
@@ -30,7 +30,7 @@ function fakeEngine(entries: unknown[]) {
     },
     async watch() {
       return {
-        snapshot: { type: "snapshot", run: { inputs: [1] }, entries, tools: [], nestedTools: [], compactions: [], inbox: [], agent: {}, usage: { models: {}, tools: {} } },
+        snapshot: { type: "snapshot", ...(idle ? {} : { run: { inputs: [1] } }), entries, tools: [], nestedTools: [], compactions: [], inbox: [], agent: {}, usage: { models: {}, tools: {} } },
         batches: (async function* () {
           while (true) {
             const n = queue.shift();
@@ -145,5 +145,136 @@ describe("questionnaire save, note and submit", () => {
     await tick(100);
     await ab;
     expect(rt.detail().pendingCards?.[0]).toMatchObject({ callId: "k", pageAnswers: { a: { value: "x" }, c: { value: "y" } } });
+  });
+});
+
+/** A parent thread and a subagent child sharing one host, as wolfd wires them (ancestorsOf / descendantsOf by parentThreadId). */
+async function family(opts: { parentCard?: boolean; grandchild?: boolean } = {}) {
+  const threads = new Map<string, ThreadRuntime>();
+  const wolfEvents: Array<{ type: string; [k: string]: unknown }> = [];
+  const rel = (id: string, up: boolean): ThreadRuntime[] => {
+    if (up) {
+      const out: ThreadRuntime[] = [];
+      for (let p = threads.get(id)?.summary.parentThreadId; p && threads.get(p); p = threads.get(p)?.summary.parentThreadId) out.push(threads.get(p) as ThreadRuntime);
+      return out;
+    }
+    const kids = [...threads.values()].filter((t) => t.summary.parentThreadId === id);
+    return [...kids, ...kids.flatMap((k) => rel(k.summary.id, false))];
+  };
+  const host = {
+    name: "w", settleMs: 200, closing: () => false, emitWolf: (e: never) => void wolfEvents.push(e), onError() {}, stallTimeoutMs: 0, den: undefined,
+    ancestorsOf: (id: string) => rel(id, true),
+    descendantsOf: (id: string) => rel(id, false),
+  } as never;
+  const askEntry = (callId: string, ts: number) => ({ id: 10, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: callId, toolName: "ask", content: [], timestamp: ts, details: { [CARD_DETAILS_KEY]: card } }] }) as never;
+  const parentEng = fakeEngine(opts.parentCard ? [askEntry("pk", 3000)] : [], true);
+  const parent = new ThreadRuntime({ id: "w/home", kind: "home", title: "home" } as never, parentEng.conv as never, host);
+  threads.set("w/home", parent);
+  const kidEng = fakeEngine([], true);
+  const kid = new ThreadRuntime({ id: "w/kid", kind: "subagent", title: "ask-sheet", agent: "worker", parentThreadId: "w/home" } as never, kidEng.conv as never, host);
+  threads.set("w/kid", kid);
+  const grandEng = fakeEngine([], true);
+  const grand = new ThreadRuntime({ id: "w/grand", kind: "subagent", title: "deep", agent: "worker", parentThreadId: "w/kid" } as never, grandEng.conv as never, host);
+  if (opts.grandchild) threads.set("w/grand", grand);
+  const parentEvents: ThreadEvent[] = [];
+  parent.observe((e) => parentEvents.push(e));
+  await parent.attach();
+  await kid.attach();
+  if (opts.grandchild) await grand.attach();
+  /** The child raises an `ask` card live at timestamp `ts`. */
+  const kidRaises = async (callId = "kk", ts = 2000) => {
+    kidEng.push([{ type: "message_end", entry: askEntry(callId, ts) }]);
+    await tick(10);
+  };
+  const grandRaises = async (callId = "gk", ts = 2500) => {
+    grandEng.push([{ type: "message_end", entry: askEntry(callId, ts) }]);
+    await tick(10);
+  };
+  return { parent, kid, grand, parentEng, kidEng, grandEng, parentEvents, wolfEvents, kidRaises, grandRaises };
+}
+
+describe("a subagent's questionnaire queues in the parent's sheet", () => {
+  it("shows in the parent's pendingCards, stamped with its source and the child's threadId, oldest first", async () => {
+    const f = await family({ parentCard: true });
+    await f.kidRaises("kk", 2000); // raised before the parent's own card (timestamp 3000)
+    expect(f.parent.detail().pendingCards?.map((c) => [c.callId, c.threadId, c.source])).toEqual([
+      ["kk", "w/kid", { kind: "subagent", label: "worker: ask-sheet" }],
+      ["pk", "w/home", { kind: "self", label: "you" }],
+    ]);
+  });
+
+  it("is also announced on the parent stream and the wolf stream, and its settle too", async () => {
+    const f = await family();
+    await f.kidRaises();
+    const raised = f.parentEvents.find((e) => e.type === "card-pending") as { card: PendingCard } | undefined;
+    expect(raised?.card).toMatchObject({ callId: "kk", threadId: "w/kid", source: { kind: "subagent", label: "worker: ask-sheet" } });
+    expect(f.wolfEvents.find((e) => e.type === "card-pending")).toMatchObject({ card: { callId: "kk", threadId: "w/kid" } });
+    f.kid.saveCardPage("kk", 0, { answers: { a: { value: "x" } } });
+    await f.kid.submitCard("kk", { answers: { c: { value: "y" } } });
+    await tick(10);
+    expect(f.parentEvents.find((e) => e.type === "card-settled")).toMatchObject({ callId: "kk", outcome: "answered" });
+  });
+
+  it("makes the parent needs-you while it is pending, and the child's own status stays idle", async () => {
+    const f = await family();
+    expect(f.parent.status()).toBe("idle");
+    await f.kidRaises();
+    expect(f.parent.status()).toBe("needs-you");
+    expect(f.kid.status()).toBe("idle");
+    expect(f.wolfEvents).toContainEqual({ type: "thread-status", threadId: "w/home", status: "needs-you" });
+  });
+
+  it("orders mixed Z and +00:00 raise times by the instant, not the text", async () => {
+    const f = await family({ parentCard: true });
+    await f.kidRaises("kk", 1000);
+    // The parent's own card was raised at 3000 ms (…03.000Z); a +00:00 form of an earlier instant must still sort first.
+    const kidCard = f.kid.cards.pending()[0] as PendingCard;
+    f.kid.cards.pending = () => [{ ...kidCard, raisedAt: "1970-01-01T01:00:01+01:00" }]; // 1 s: text sorts after "…00:00:03.000Z", the instant before
+    expect(f.parent.detail().pendingCards?.map((c) => c.callId)).toEqual(["kk", "pk"]);
+    f.kid.cards.pending = () => [{ ...kidCard, raisedAt: "1969-12-31T23:00:05-01:00" }]; // 5 s: text sorts before, the instant after
+    expect(f.parent.detail().pendingCards?.map((c) => c.callId)).toEqual(["pk", "kk"]);
+  });
+
+  it("a subagent with a card of its own child stays idle while its parent is needs-you", async () => {
+    const f = await family({ grandchild: true });
+    await f.grandRaises();
+    expect(f.kid.status()).toBe("idle");
+    expect(f.parent.status()).toBe("needs-you");
+    expect(f.parent.detail().pendingCards?.map((c) => c.callId)).toEqual(["gk"]);
+  });
+
+  it("leaves the parent's needs-you once the child's card is answered", async () => {
+    const f = await family();
+    await f.kidRaises();
+    expect(f.parent.status()).toBe("needs-you");
+    f.kid.saveCardPage("kk", 0, { answers: { a: { value: "x" } } });
+    await f.kid.submitCard("kk", { answers: { c: { value: "y" } } });
+    await tick(10);
+    expect(f.parent.detail().pendingCards).toBeUndefined();
+    expect(f.parent.status()).not.toBe("needs-you");
+  });
+
+  it("stamps a tool confirmation with the tool's name as its source", async () => {
+    const f = await family();
+    f.kidEng.push([{ type: "message_end", entry: { id: 11, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: "tc", toolName: "crawl_run", content: [], timestamp: 2000, details: { [CARD_DETAILS_KEY]: { ...card, tool: "crawl_run" } } }] } as never }]);
+    await tick(10);
+    expect(f.parent.detail().pendingCards?.[0]).toMatchObject({ callId: "tc", source: { kind: "tool", label: "crawl_run" } });
+  });
+
+  it("is left pending by a plain message to the parent, which dismisses only the parent's own card", async () => {
+    const f = await family({ parentCard: true });
+    await f.kidRaises();
+    await f.parent.submit("never mind", "steer");
+    await tick(10);
+    expect(f.parent.detail().pendingCards?.map((c) => c.callId)).toEqual(["kk"]);
+    expect(f.parentEvents.filter((e) => e.type === "card-settled")).toMatchObject([{ callId: "pk", closed: "superseded" }]);
+  });
+
+  it("settles as superseded on the parent stream when the child is discarded", async () => {
+    const f = await family();
+    await f.kidRaises();
+    f.kid.supersedePending();
+    expect(f.parentEvents.find((e) => e.type === "card-settled")).toMatchObject({ callId: "kk", outcome: "dismissed", closed: "superseded" });
+    expect(f.parent.status()).toBe("idle");
   });
 });

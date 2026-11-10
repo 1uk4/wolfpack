@@ -213,6 +213,7 @@ export class WolfServer {
           },
           detachChild: async (id) => {
             const t = this.threads.get(id);
+            t?.supersedePending(); // Only discard/close supersedes a child's cards (a stopped or failed child keeps them; answering resumes it).
             this.threads.delete(id);
             await t?.close();
           },
@@ -345,6 +346,8 @@ export class WolfServer {
       ...(this.opts.stallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.stallTimeoutMs } : {}),
       closing: () => this.closing,
       emitWolf: (d) => this.emitWolf(d),
+      ancestorsOf: (id) => this.relatives(id, "up"),
+      descendantsOf: (id) => this.relatives(id, "down"),
       onError: (e) => this.opts.onError?.(e),
       applyTier: (c, tier) => (this.opts.conversations?.setTier ? this.opts.conversations.setTier(c, tier) : Promise.resolve()),
       ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
@@ -689,8 +692,7 @@ export class WolfServer {
         return this.json(res, 200, { threads: await Promise.all([...this.threads.values()].map((t) => this.withWorkspace(t.threadSummary()))) });
       case "listCards":
         this.checkWolf(params.name);
-        // A subagent's questions go to its parent, not to the operator's needs-you list.
-        return this.json(res, 200, { cards: [...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()) });
+        return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });
       case "answerCard": {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);
@@ -1178,6 +1180,31 @@ export class WolfServer {
     if (name !== this.name) throw new HttpError("not_found", `wolf ${name}`);
   }
 
+  /** Threads above (parent first) or below (children, then theirs) `id`, walked by `parentThreadId`; a cycle ends the walk. */
+  private relatives(id: string, dir: "up" | "down"): ThreadRuntime[] {
+    const out: ThreadRuntime[] = [];
+    const seen = new Set<string>([id]);
+    if (dir === "up") {
+      for (let p = this.threads.get(id)?.summary.parentThreadId; p && !seen.has(p); p = this.threads.get(p)?.summary.parentThreadId) {
+        seen.add(p);
+        const t = this.threads.get(p);
+        if (t) out.push(t);
+      }
+      return out;
+    }
+    const queue = [id];
+    while (queue.length) {
+      const cur = queue.shift() as string;
+      for (const t of this.threads.values()) {
+        if (t.summary.parentThreadId !== cur || seen.has(t.summary.id)) continue;
+        seen.add(t.summary.id);
+        out.push(t);
+        queue.push(t.summary.id);
+      }
+    }
+    return out;
+  }
+
   private checkThread(id: string): ThreadRuntime {
     const t = this.threads.get(id);
     if (!t) throw new HttpError("not_found", `thread ${id}`);
@@ -1236,7 +1263,7 @@ export class WolfServer {
       const at = new Date().toISOString();
       return [
         ...[...this.threads.values()].map((t): WolfEvent => ({ type: "thread-status", id, wolf: this.name, at, threadId: t.summary.id, status: t.status() })),
-        ...[...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
+        ...[...this.threads.values()].flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
       ];
     };
     const firstId = this.wolfBuffer[0]?.id;

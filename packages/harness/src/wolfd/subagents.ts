@@ -329,7 +329,10 @@ export class SubagentManager {
     for (const r of this.records.filter((o) => o.parentThreadId === parentThreadId)) {
       if (seen.has(r.id)) continue;
       const thread = this.port.thread(r.id);
-      if (thread && !thread.summary.closed && this.closedOf(r).closed) this.announce(r);
+      if (thread && !thread.summary.closed && this.closedOf(r).closed) {
+        this.announce(r);
+        thread.supersedePending(); // Only close/discard supersedes a child's cards. A child that stops, fails or finishes keeps them: answering one starts a turn on it and resumes it.
+      }
       if (this.port.thread(r.id)?.summary.closed) out.push(r.id, ...this.closeChildrenOf(r.id, seen));
     }
     return out;

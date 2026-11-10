@@ -67,6 +67,13 @@ const imageCount = (answers: CardAnswers, except?: string): number =>
 /** Images held on the card besides those of question `except`: saved answers, drafts and the note share one cap. */
 const imagesHeld = (st: PagedState, except?: string): number => imageCount(st.answers, except) + imageCount(st.draft, except) + (st.note?.attachments?.length ?? 0);
 
+/** Who asked: a card from a tool other than ask/brief is a tool confirmation; a card on a subagent thread is the child's; else the thread's own. */
+export function sourceOf(card: Card, thread: { kind: string; agent?: string; title: string }): NonNullable<PendingCard["source"]> {
+  if (card.tool !== "ask" && card.tool !== "brief") return { kind: "tool", label: card.tool };
+  if (thread.kind === "subagent") return { kind: "subagent", label: thread.agent ? `${thread.agent}: ${thread.title}` : thread.title };
+  return { kind: "self", label: "you" };
+}
+
 export class CardTracker {
   /** Raised, unanswered cards in raise order. */
   private readonly raised = new Map<string, { card: Card; raisedAt: string }>();
@@ -81,7 +88,10 @@ export class CardTracker {
   /** Cards whose content changed through the transcript (a revise): the thread re-announces them. */
   private readonly changed = new Set<string>();
 
-  constructor(private readonly threadId: string) {}
+  constructor(
+    private readonly threadId: string,
+    private readonly sourceFor?: (card: Card) => NonNullable<PendingCard["source"]>,
+  ) {}
 
   reset(entries: readonly Entry[]): void {
     this.raised.clear();
@@ -209,6 +219,7 @@ export class CardTracker {
         threadId: this.threadId,
         card: r.card,
         raisedAt: r.raisedAt,
+        ...(this.sourceFor ? { source: this.sourceFor(r.card) } : {}),
         ...(held && "answers" in held ? { heldAnswer: held.answers } : {}),
         ...(held && "skipped" in held ? { heldSkip: true as const } : {}),
         ...(r.card.paged ? this.pagedView(callId) : {}),

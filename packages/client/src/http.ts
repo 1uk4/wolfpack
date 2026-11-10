@@ -40,6 +40,8 @@ import {
   type MemoryStatus,
   type MemoryTopic,
   type MemoryObservations,
+  type MemoryTree,
+  type MemoryNodeObservations,
   type WorkRecordResponse,
   type WorkItemResponse,
   type GraduationJob,
@@ -468,6 +470,15 @@ export class HttpConsoleClient implements ConsoleClient {
   async getMemoryObservations(wolf: string, opts: { limit?: number } = {}): Promise<MemoryObservations> {
     const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
     return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
+  }
+
+  async getMemoryTree(wolf: string): Promise<MemoryTree> {
+    return (await this.json("getMemoryTree", { name: wolf }, ROUTES.getMemoryTree.response.schema, undefined, wolf)) as MemoryTree;
+  }
+
+  async getMemoryNodeObservations(wolf: string, workId: string, opts: { limit?: number } = {}): Promise<MemoryNodeObservations> {
+    const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
+    return (await this.json("getMemoryNodeObservations", { name: wolf, workId }, ROUTES.getMemoryNodeObservations.response.schema, undefined, wolf, query)) as MemoryNodeObservations;
   }
 
   async listWork(wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {

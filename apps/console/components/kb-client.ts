@@ -16,6 +16,8 @@ import type {
 	KbEntryDetail,
 	KbGraph,
 	MemoryObservations,
+	MemoryTree,
+	MemoryNodeObservations,
 	MemoryStatus,
 	MemoryTopic,
 	PromoteResponse,
@@ -68,6 +70,16 @@ export function fetchMemoryStatus(wolf: string, thread?: string): Promise<KbResu
 /** The wolf's current observation pool, newest first (what the pool count counts). */
 export function fetchMemoryObservations(wolf: string): Promise<KbResult<MemoryObservations>> {
 	return request(`/api/wolves/${seg(wolf)}/memory/observations`);
+}
+
+/** Observation counts per feature → task (pending, and archived over the last 7 days). */
+export function fetchMemoryTree(wolf: string): Promise<KbResult<MemoryTree>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/tree`);
+}
+
+/** The observations behind one tree node: a work id or `den`. */
+export function fetchMemoryNode(wolf: string, workId: string): Promise<KbResult<MemoryNodeObservations>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/tree/${seg(workId)}`);
 }
 
 export function fetchMemoryTopic(wolf: string, id: string, scope?: "den" | "session"): Promise<KbResult<MemoryTopic>> {

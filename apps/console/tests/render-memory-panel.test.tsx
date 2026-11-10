@@ -23,8 +23,7 @@ describe("MemoryPanel SSR", () => {
 		assert.match(html, />Observations</);
 		assert.equal(html.match(/data-testid="memory-feed"/g)?.length, 1);
 	});
-	const poolObs = [{ id: "o1", timestamp: "2026-10-26 10:00", recordedAt: "2026-10-26T10:00:00Z", content: "saw it", tokenCount: 2 }];
-	const obsProps = (list: unknown = poolObs, open: string | null = null) => ({ list: list as never, error: null, info: {}, open, onOpen: () => {} });
+	const treeProps = () => ({ tree: { features: [], other: [], den: { pending: 1 } }, pool: null, error: null, info: {}, open: null, onOpen: () => {} });
 
 	it("shows memory only: no item viewer, bound plan, Record or bind button", () => {
 		const html = renderToStaticMarkup(
@@ -34,11 +33,10 @@ describe("MemoryPanel SSR", () => {
 		);
 		assert.doesNotMatch(html, /memory-record|memory-bind|memory-work-link|memory-back-bound|memory-feed-back/);
 	});
-	it("observations: the Den group with its count, not the observation text", () => {
-		const html = renderToStaticMarkup(<ObservationsSection observations={obsProps()} />);
+	it("observations: the Den row with its count, not observation text", () => {
+		const html = renderToStaticMarkup(<ObservationsSection wolf="w" observations={treeProps()} />);
 		assert.match(html, />Observations</);
 		assert.match(html, /memory-obs-group-den/);
-		assert.match(html, /data-count="1"/);
-		assert.doesNotMatch(html, /saw it/);
+		assert.match(html, /1 pending/);
 	});
 });

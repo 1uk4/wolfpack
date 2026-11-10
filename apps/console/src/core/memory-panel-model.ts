@@ -8,7 +8,40 @@
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
 import "./legacy-storage-boot.ts";
-import type { ConsolidateResponse, MemoryEventFrame, MemoryPoolStatus, MemoryStatus, WorkRecordResponse } from "./kb.ts";
+import type { ConsolidateResponse, MemoryEventFrame, MemoryNodeObservations, MemoryPoolStatus, MemoryStatus, MemoryTree, WorkRecordResponse } from "./kb.ts";
+
+/** One task under a feature in the memory tree. */
+export interface TreeTaskRow { id: string; title: string; stage?: string; pending: number; archived: number }
+export type MemoryTreeRow =
+	| { kind: "feature"; id: string; title: string; stage?: string; pending: number; archived: number; own: { pending: number; archived: number }; tasks: TreeTaskRow[] }
+	| { kind: "other"; id: string; pending: number; archived: number }
+	| { kind: "den"; id: string; pending: number; archived: number };
+
+/** Busiest first: pending observations (work waiting to be folded), then everything archived. The tree carries no timestamps, so this stands in for newest activity. */
+const busiest = <T extends { pending: number; archived: number }>(a: T, b: T): number => b.pending - a.pending || b.archived - a.archived;
+
+/**
+ * The tree response as rows: features (own + task counts summed) busiest first with their tasks nested busiest first,
+ * then the unresolved work items, then the den.
+ */
+export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
+	const features = tree.features.map((f): Extract<MemoryTreeRow, { kind: "feature" }> => ({
+		kind: "feature",
+		id: f.id,
+		title: f.title,
+		...(f.stage ? { stage: f.stage } : {}),
+		pending: f.own.pending + f.tasks.reduce((n, t) => n + t.pending, 0),
+		archived: f.own.archived + f.tasks.reduce((n, t) => n + t.archived, 0),
+		own: f.own,
+		tasks: [...f.tasks].sort(busiest),
+	}));
+	features.sort(busiest);
+	return [
+		...features,
+		...[...tree.other].sort(busiest).map((o): MemoryTreeRow => ({ kind: "other", id: o.id, pending: o.pending, archived: o.archived })),
+		{ kind: "den", id: "den", pending: tree.den.pending, archived: 0 },
+	];
+}
 
 export const FEED_CAP = 100;
 export const MEMORY_PANEL_OPEN_KEY = "wolfpack.memory-panel.open.v1";

@@ -443,7 +443,8 @@ export class KbSync {
     const base = this.o.baseMs ?? 1000;
     const cap = this.o.capMs ?? 60_000;
     // +-20% jitter so hosts that failed together do not retry together; the cap stays a hard ceiling. Retries never stop (this syncs the mirror).
-    const delay = Math.min(cap, Math.round(Math.min(cap, base * 2 ** Math.min(n - 1, 16)) * (0.8 + 0.4 * (this.o.rand ?? Math.random)())));
+    const raw = Math.min(cap, base * 2 ** Math.min(n - 1, 16));
+    const delay = Math.min(cap, Math.round(raw * (0.8 + 0.4 * (this.o.rand ?? Math.random)())));
     if (n === 1 || n % 10 === 0) this.log(`${d}: ${e.message} (retry in ${delay}ms)`);
     const t = setTimeout(() => {
       this.timers.delete(d);

@@ -24,6 +24,40 @@ const make = (opts: Partial<ConstructorParameters<typeof HttpConsoleClient>[0]> 
 
 runBehaviours("http ↔ stub", () => make());
 
+describe("request timeout (work-wolfpack-FpEanzS)", () => {
+  /** A fetch that never answers until its signal aborts, then rejects with the signal's reason like real fetch. */
+  const hang: typeof fetch = (_i, init) =>
+    new Promise((_res, rej) => init?.signal?.addEventListener("abort", () => rej(init.signal!.reason)));
+
+  it("a request nobody answers fails with a retryable engine_error flagged timedOut after requestTimeoutMs", async () => {
+    const c = make({ fetch: hang, requestTimeoutMs: 40 });
+    const err = await c.listWolves().then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ProtocolError);
+    expect(err).toMatchObject({ code: "engine_error", retryable: true, timedOut: true, message: "wolf did not answer in time (40 ms)" });
+  });
+
+  it("a stream request is not timed out", async () => {
+    const seen: AbortSignal[] = [];
+    const slow: typeof fetch = async (_i, init) => {
+      await new Promise((r) => setTimeout(r, 120));
+      seen.push(init!.signal!);
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          init!.signal!.addEventListener("abort", () => c.error(new DOMException("aborted", "AbortError")));
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    const ctl = new AbortController();
+    const c = make({ fetch: slow, requestTimeoutMs: 30 });
+    const next = c.watchMemory("alpha", { signal: ctl.signal })[Symbol.asyncIterator]().next();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(seen[0]!.aborted).toBe(false);
+    ctl.abort();
+    await next;
+  });
+});
+
 /** Wraps fetch so the first stream response dies (network error) after `frames` SSE frames. */
 function dropFirstStream(frames: number, calls: Request[] = []): typeof fetch {
   let dropped = false;

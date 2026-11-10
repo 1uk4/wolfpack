@@ -41,7 +41,7 @@ const stubEngine = (): Engine =>
     call: async (step: string, schema: { parse: (v: unknown) => unknown }, args: { prompt: string }) => {
       if (step !== "classify") throw new Error(`unexpected step ${step}`);
       const marks = [...new Set(args.prompt.match(/MARK_[A-Z0-9]+/g) ?? [])];
-      return schema.parse({ observations: [{ timestamp: "2026-10-25 10:00", content: `Obs ${marks.join(",") || "none"}` }] });
+      return schema.parse({ observations: [{ timestamp: "2026-10-25 10:00", content: `Obs ${marks.join(",") || "none"}`, ...(marks.includes("MARK_GENERAL") ? { general: true } : {}) }] });
     },
   }) as unknown as Engine;
 
@@ -83,11 +83,11 @@ async function devRoot(): Promise<string> {
 }
 
 let tasks!: ReturnType<typeof createTasksExtension>;
-function boot(dev: string, script: FauxResponseStep[]) {
+function boot(dev: string, script: FauxResponseStep[], memoryYaml = "") {
   const engine = stubEngine();
   return startTestWolf({
     script,
-    yaml: `sandbox:\n  root: ${dev}\n`,
+    yaml: `sandbox:\n  root: ${dev}\n${memoryYaml}`,
     hooks: {
       extensions: ({ config, den, env }) => {
         const c = { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env };
@@ -177,5 +177,74 @@ describe("subagents", () => {
     expect(obs.some((o) => o.content.includes("MARK_CHILDARG"))).toBe(false);
     expect(obs.some((o) => o.content.includes("MARK_CHILD"))).toBe(true);
     expect(existsSync(watermarkFile(den, childCid))).toBe(false);
+  }, 30_000);
+});
+
+const MEM_ON = "memory:\n  subagentMemory: on\n  generalToDen: true\n";
+
+/** A thread spawns `agent`; the child answers with `reply` (scout: first a read call carrying MARK_EARLY). */
+function spawnScript(agent: string, reply: string): FauxResponseStep {
+  return async (ctx) => {
+    const system = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
+    const last = ctx.messages[ctx.messages.length - 1];
+    const text = typeof last.content === "string" ? last.content : (last.content as Array<{ type: string; text?: string }>).map((b) => (b.type === "text" ? (b.text ?? "") : "")).join("");
+    if (!system.includes("You are the sub-agent")) {
+      if (last.role === "toolResult") return fauxAssistantMessage(say("PARENT_DONE"));
+      if (text.includes("spawn it")) return fauxAssistantMessage(fauxToolCall("subagent", { agent, task: "do the job and report" }), { stopReason: "toolUse" });
+      return fauxAssistantMessage(say("PARENT_IDLE"));
+    }
+    if (agent === "scout" && last.role !== "toolResult") {
+      return fauxAssistantMessage([{ type: "text", text: say("MARK_EARLY looking around") }, fauxToolCall("read", { path: "/nonexistent" })] as never, { stopReason: "toolUse" });
+    }
+    return fauxAssistantMessage(reply);
+  };
+}
+
+/** Spawns `agent` from a feature thread (task = the feature) or the home thread (no task); resolves when the child is done. */
+async function runChild(agent: string, reply: string, opts: { memory: string; task: boolean }): Promise<{ den: string; featureId: string }> {
+  const dev = await devRoot();
+  tw = await boot(dev, Array.from({ length: 30 }, () => spawnScript(agent, reply)), opts.memory);
+  const featureId = await newFeature(tw);
+  const thread = opts.task ? (await tw.client.createThread!("testwolf", { kind: "feature", workItemId: featureId })).id : tw.home;
+  await tw.client.submit(thread, say("MARK_PARENT spawn it"), { whenBusy: "reject" });
+  await drain(thread);
+  await vi.waitFor(async () => expect((await tw!.client.listChildren!(thread))[0]?.state).toBe("done"), { timeout: 8000 });
+  await new Promise((r) => setTimeout(r, 500)); // the child's observation is fire-and-forget
+  return { den: tw.wolf.config.den, featureId };
+}
+const childObs = (den: string) => pool(den).filter((o) => o.content.includes("MARK_CHILD") || o.content.includes("MARK_FINAL") || o.content.includes("MARK_GENERAL"));
+
+describe("subagent memory (memory.subagentMemory on)", () => {
+  it("a worker with a task observes into the pool tagged with the task, and never binds", async () => {
+    const { den, featureId } = await runChild("worker", say("MARK_CHILD finished"), { memory: MEM_ON, task: true });
+    const obs = childObs(den);
+    expect(obs.length).toBeGreaterThan(0);
+    for (const o of obs) expect(o).toMatchObject({ work: featureId });
+    const childCid = Number(JSON.parse(readFileSync(join(den, "wolfd", "subagents.json"), "utf8")).children[0].conversationId);
+    expect(readBindingFile(den, childCid)).toBeNull();
+  }, 30_000);
+
+  it("observes nothing with the flag off", async () => {
+    const { den } = await runChild("worker", say("MARK_CHILD finished"), { memory: "", task: true });
+    expect(childObs(den)).toEqual([]);
+  }, 30_000);
+
+  it("observes nothing without a task", async () => {
+    const { den } = await runChild("worker", say("MARK_CHILD finished"), { memory: MEM_ON, task: false });
+    expect(childObs(den)).toEqual([]);
+  }, 30_000);
+
+  it("a general observation lands untagged with origin when generalToDen is on", async () => {
+    const { den, featureId } = await runChild("worker", say("MARK_GENERAL finished"), { memory: MEM_ON, task: true });
+    const [o] = childObs(den) as Array<Record<string, unknown>>;
+    expect(o.work).toBeUndefined();
+    expect(o.origin).toMatchObject({ work: featureId });
+  }, 30_000);
+
+  it("a scout observes only its final message", async () => {
+    const { den, featureId } = await runChild("scout", say("MARK_FINAL report"), { memory: MEM_ON, task: true });
+    const obs = pool(den).filter((o) => o.content.includes("MARK_FINAL") || o.content.includes("MARK_EARLY"));
+    expect(obs.map((o) => o.content)).toEqual(["Obs MARK_FINAL"]);
+    expect(obs[0]).toMatchObject({ work: featureId });
   }, 30_000);
 });

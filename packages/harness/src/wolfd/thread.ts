@@ -15,6 +15,7 @@ import {
   type CardAnswers,
   type CardClosed,
   type InFlightPartial,
+  type PendingCard,
   type SubmitAck,
   DEFAULT_THREAD_SETTINGS,
   type ThreadSettings,
@@ -42,10 +43,12 @@ import {
   type ThreadEventDraft,
 } from "../engine/index.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
-import { AttachmentError, attachmentsInText, inlineAttachments, recordSubmission } from "./attachments.js";
+import { AttachmentError, attachmentExists, attachmentsInText, imageParts, inlineAttachments, recordSubmission } from "./attachments.js";
 import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
-import { CardTracker, answerText, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
+import { ATTACHMENT_MAX_PER_SUBMIT, askSupersedeDetail, pageCard, stepsKey, visibleFields, type CardNoteBody, type SaveCardPageBody, type SubmitCardBody } from "@wolfpack/protocol";
+import { isImageOnly } from "./card-kinds/types.js";
+import { CardTracker, sourceOf, answerText, attachmentIds, questionNumbers, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
 
@@ -70,6 +73,10 @@ export interface ThreadHost {
    * (an `error` thread event) and aborted. Default 120000; 0 disables.
    */
   stallTimeoutMs?: number;
+  /** The threads above this one (its parent first), by `parentThreadId`. Unset: none. */
+  ancestorsOf?(id: string): ThreadRuntime[];
+  /** Every thread below this one (children, then theirs). Unset: none. */
+  descendantsOf?(id: string): ThreadRuntime[];
 }
 
 /**
@@ -93,7 +100,7 @@ interface QueuedOwner {
 }
 
 const cardAnswersOf = (ready: readonly ReadyAnswer[]) => ({
-  cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })),
+  cards: ready.map(({ callId: id, answers: a, skipped, note }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}), ...(note && (note.text || note.attachments?.length) ? { note } : {}) })),
 });
 
 export class ThreadRuntime {
@@ -146,7 +153,7 @@ export class ThreadRuntime {
     readonly conv: EngineConversation,
     private readonly host: ThreadHost,
   ) {
-    this.cards = new CardTracker(summary.id);
+    this.cards = new CardTracker(summary.id, (card) => sourceOf(card, this.summary));
     this.settings = summary.settings ?? { ...DEFAULT_THREAD_SETTINGS };
   }
 
@@ -308,7 +315,12 @@ export class ThreadRuntime {
         // A dismissal (a skip, or a plain submit superseding cards) changes thread status: wake waiters.
         const closed = this.cards.apply(entry);
         this.syncCards(closed);
-        if ([...closed.values()].some((c) => c !== "answered")) this.notify();
+        const changedIds = this.cards.takeChanged();
+        for (const id of changedIds) this.announceHeld(id);
+        for (const why of this.cards.takeLateRevise()) {
+          this.submit(`Note: your earlier ask_revise was NOT applied: ${why}`, "followUp", [], { internal: true }).catch((e) => this.host.onError(e));
+        }
+        if (changedIds.length || [...closed.values()].some((c) => c !== "answered")) this.notify();
       }
     }
     this.applyMapped(this.mapper!.push(batch));
@@ -389,7 +401,7 @@ export class ThreadRuntime {
   }
 
   private async resubmitCardAnswers(ready: ReadyAnswer[]): Promise<void> {
-    const r = await this.conv.submit({ input: answerText(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
+    const r = await this.conv.submit({ input: this.answerInput(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
     this.trackQueued(r, { text: "", refs: [], cardAnswers: ready });
   }
 
@@ -487,18 +499,31 @@ export class ThreadRuntime {
       this.announced.delete(callId);
       const closed = closedBy.get(callId) ?? "answered";
       const outcome = closed === "answered" ? "answered" : "dismissed";
-      if (!this.isChild) this.host.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
+      this.host.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
       this.emit({ type: "card-settled", callId, outcome, closed });
+      this.relayToAncestors({ type: "card-settled", callId, outcome, closed });
     }
     for (const [callId, card] of live) {
       if (this.announced.has(callId)) continue;
       this.announced.add(callId);
-      if (!this.isChild) this.host.emitWolf({ type: "card-pending", card });
+      this.host.emitWolf({ type: "card-pending", card });
       this.emit({ type: "card-pending", card });
+      this.relayToAncestors({ type: "card-pending", card });
     }
+    this.refreshAncestorStatus();
   }
 
-  /** A subagent: its questions go to the parent, so its cards never reach the operator's needs-you. */
+  /** A descendant's card event also goes on this thread's stream (the parent's sheet queues it). */
+  private relayToAncestors(draft: ThreadEventDraft): void {
+    for (const a of this.host.ancestorsOf?.(this.summary.id) ?? []) a.emit(draft);
+  }
+
+  /** A descendant's card came or went: the parent's needs-you status may have changed. */
+  private refreshAncestorStatus(): void {
+    for (const a of this.host.ancestorsOf?.(this.summary.id) ?? []) a.syncStatus();
+  }
+
+  /** A subagent. Gates `status()`: a child never goes needs-you for its own or its children's cards (the top thread's sheet carries them). */
   get isChild(): boolean {
     return this.summary.kind === "subagent";
   }
@@ -508,7 +533,8 @@ export class ThreadRuntime {
     const card = this.cards.get(callId);
     if (!card) return;
     this.emit({ type: "card-pending", card });
-    if (!this.isChild) this.host.emitWolf({ type: "card-pending", card });
+    this.host.emitWolf({ type: "card-pending", card });
+    this.relayToAncestors({ type: "card-pending", card });
   }
 
   /** Thread status is derived; announce it whenever the derivation changes. */
@@ -618,7 +644,12 @@ export class ThreadRuntime {
   status(): ThreadStatus {
     // While an answer is submitted the thread is busy (needs-you never blips through idle); the dot and the
     // list/baseline agree because both read pending().
-    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 && !this.isChild ? "needs-you" : "idle";
+    return this.running || this.answering > 0 ? "busy" : !this.isChild && (this.cards.pending().length > 0 || this.descendantCards().length > 0) ? "needs-you" : "idle";
+  }
+
+  /** Pending cards of every thread below this one. */
+  private descendantCards(): PendingCard[] {
+    return (this.host.descendantsOf?.(this.summary.id) ?? []).flatMap((d) => d.cards.pending());
   }
 
   /** `turnStartedAt`: the running turn's start, or the start of the card answer that is about to begin one. */
@@ -648,8 +679,11 @@ export class ThreadRuntime {
       const list = den && m.role === "user" ? attachmentsInText(den, this.summary.id, m.text) : [];
       return list.length ? { attachments: list } : {};
     };
-    const pendingCards = this.cards.pending();
-    const page = pageRange(this.messages, { ...opts, requiredCallIds: pendingCards.map((c) => c.callId) });
+    const ownCards = this.cards.pending();
+    const pendingCards = [...ownCards, ...this.descendantCards()].map((c, i) => ({ c, i }))
+      .sort((a, b) => Date.parse(a.c.raisedAt) - Date.parse(b.c.raisedAt) || a.i - b.i) // by instant (Z and +00:00 forms mix), stable on ties
+      .map((x) => x.c);
+    const page = pageRange(this.messages, { ...opts, requiredCallIds: ownCards.map((c) => c.callId) });
     const messages = this.messages.slice(page.start, page.end).map((m) => ({
       ...m,
       // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
@@ -682,16 +716,25 @@ export class ThreadRuntime {
     }
     // (Only when idle, re-checked after the await: a turn may have started. A steer/followUp during a run finds nothing
     // pending, the run's first message superseded them, and carries no notice.)
-    if (this.running) notice = undefined;
-    else {
+    // A superseded questionnaire (paged ask) always says how far it got, even mid-turn: the owner's partial answers travel with the message.
+    const pagedNotes = supersededNotes(this.cards.pending().filter((p) => p.card.paged).map((p) => this.supersededOf(p)));
+    if (this.running) {
+      notice = undefined;
+      text = pagedNotes + text;
+    } else {
       // Order: superseded notes, then the notice, then the text (stripSupersededNotes / stripTaskNotice peel them in that order).
-      text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + withTaskNotice(notice?.text ?? "", text);
+      text = supersededNotes(this.cards.pending().map((p) => this.supersededOf(p))) + withTaskNotice(notice?.text ?? "", text);
     }
     let input: SubmitOptions["input"] = text;
+    // The questionnaires this message supersedes: their drafted images ride along (the note only says they are below).
+    // The message's own images come first and are never repeated as drafts; together they stay within one turn's cap.
+    const ownIds = new Set(refs.map((r) => r.id));
+    const draftParts = this.draftImages(this.running ? this.cards.pending().filter((p) => p.card.paged) : this.cards.pending(), ownIds, ATTACHMENT_MAX_PER_SUBMIT - ownIds.size);
+    if (draftParts.length) input = [{ type: "text", text }, ...draftParts];
     if (refs.length > 0) {
       if (!this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
       try {
-        input = inlineAttachments(this.host.den, this.summary.id, text, refs);
+        input = [...inlineAttachments(this.host.den, this.summary.id, text, refs), ...draftParts];
       } catch (e) {
         if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
         throw e;
@@ -720,8 +763,224 @@ export class ThreadRuntime {
     return { messageId: r.messageId, disposition: r.disposition };
   }
 
+  private supersededOf(p: PendingCard): { tool: string; callId: string; detail?: string; paged?: true } {
+    const base = { tool: p.card.tool, callId: p.callId };
+    // The partial answers AND the text typed for the current page (draft) travel with the note: a draft is not "unanswered".
+    if (!p.card.paged) return base;
+    // Only images that will actually travel with the message are mentioned in the note.
+    const draft = p.draft && Object.fromEntries(Object.entries(p.draft).map(([id, a]) => {
+      const { attachments: _drop, ...rest } = a as { attachments?: string[] };
+      const live = this.liveAttachments(attachmentIds(a));
+      return [id, live.length ? { ...rest, attachments: live } : rest];
+    })) as CardAnswers | undefined;
+    return { ...base, paged: true, detail: askSupersedeDetail(p.card, p.pageAnswers, p.reached ?? 0, draft) };
+  }
+
+  /** What an ask_revise of `callId` may do now (see CardTracker.reviseTarget). */
+  reviseTarget(callId: string): { usedIds: string[] } | { problem: string } {
+    const t = this.cards.reviseTarget(callId);
+    return "problem" in t ? t : { usedIds: t.usedIds };
+  }
+
+  /** The page of a paged card the request names, or the HttpError for an unknown/closed card, a non-paged card or a page out of range. */
+  private pagedCard(callId: string, page?: number): PendingCard {
+    const pending = this.cards.get(callId);
+    if (!pending) {
+      // Being submitted right now: conflict, not "unknown card".
+      if (this.cards.isClaimed(callId)) throw new HttpError("conflict", `card ${callId} is already being submitted`);
+      throw new HttpError("not_found", `card ${callId}`);
+    }
+    if (!pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is not a paged questionnaire`);
+    const n = pending.card.steps?.length ?? 1;
+    if (page !== undefined && (!Number.isInteger(page) || page < 0 || page >= n)) throw new HttpError("invalid_request", `page ${page} is out of range (0-${n - 1})`);
+    return pending;
+  }
+
+  private checkStepsKey(pending: PendingCard, key: string | undefined): void {
+    if (key !== undefined && key !== stepsKey(pending.card)) throw new HttpError("conflict", `the pages of card ${pending.callId} changed (ask_revise); reload the questionnaire`);
+  }
+
+  /** The draft changed: tell every client (card-pending with the full card) and wake waiters. */
+  private draftChanged(callId: string): void {
+    this.announceHeld(callId);
+    this.notify();
+  }
+
+  /**
+   * Save one page of a paged (`ask`) card as a draft and move the cursor (Next / Back). Nothing reaches the agent.
+   * Shape only: required answers are checked at submit.
+   */
+  saveCardPage(callId: string, page: number, body: SaveCardPageBody): void {
+    const pending = this.pagedCard(callId, page);
+    this.checkStepsKey(pending, body.stepsKey);
+    const n = pending.card.steps?.length ?? 1;
+    const goto = body.goto ?? Math.min(page + 1, n - 1);
+    if (goto >= n) throw new HttpError("invalid_request", `goto ${goto} is out of range (0-${n - 1})`);
+    const sub = pageCard(pending.card, page)!;
+    const answers = dropHiddenAnswers(sub, body.answers);
+    const bad = this.shapeProblem(sub, answers);
+    if (bad) throw new HttpError("invalid_request", bad);
+    const problem = this.cards.savePage(callId, page, answers, goto);
+    if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
+    if (problem) throw new HttpError("invalid_request", problem);
+    this.draftChanged(callId);
+  }
+
+  /** Each given answer must be valid for its question (required answers may be missing). */
+  private shapeProblem(card: PendingCard["card"], answers: CardAnswers): string | undefined {
+    const known = new Set(card.fields.map((f) => f.id));
+    const extra = Object.keys(answers).find((k) => !known.has(k));
+    if (extra) return `unknown field "${extra}"`;
+    for (const f of card.fields) {
+      const a = answers[f.id];
+      if (a === undefined) continue;
+      const bad = validateAnswers({ ...card, fields: [{ ...f, optional: true }] }, { [f.id]: a });
+      if (bad) return bad;
+    }
+    return undefined;
+  }
+
+  /** Store (or clear) the owner's note on a paged card. */
+  putCardNote(callId: string, body: CardNoteBody): void {
+    this.pagedCard(callId);
+    const ids = [...new Set(body.attachments ?? [])];
+    if (ids.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+    const problem = this.cards.setNote(callId, { ...(body.text ? { text: body.text } : {}), ...(ids.length ? { attachments: ids } : {}) }, (id) => attachmentExists(this.host.den!, this.summary.id, id));
+    if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
+    if (problem) throw new HttpError("invalid_request", problem);
+    this.draftChanged(callId);
+  }
+
+  /**
+   * Submit a paged card: ONE card-answer carrying every page's answers and the note. All pages' required questions
+   * are checked; the 400 names the missing ones by number and label.
+   */
+  async submitCard(callId: string, body: SubmitCardBody = {}): Promise<SubmitAck> {
+    const pending = this.pagedCard(callId);
+    this.checkStepsKey(pending, body.stepsKey);
+    const card = pending.card;
+    const last = pageCard(card, pending.pageIndex ?? 0)!;
+    const lastAnswers = body.answers && dropHiddenAnswers(last, body.answers);
+    const merged = this.cards.mergedAnswers(callId, lastAnswers)!;
+    const nums = questionNumbers(card);
+    const shown = new Set(visibleFields(card, merged).map((f) => f.id));
+    const answers = Object.fromEntries(Object.entries(merged).filter(([id]) => shown.has(id)));
+    const missing = card.fields.filter((f) => shown.has(f.id) && !f.optional && answers[f.id] === undefined);
+    if (missing.length) throw new HttpError("invalid_request", `required question${missing.length === 1 ? "" : "s"} not answered: ${missing.map((f) => `Q${nums.get(f.id)} "${f.label}"`).join(", ")}`);
+    const bad = validateAnswers(card, answers);
+    if (bad) throw new HttpError("invalid_request", bad);
+    const noteIds = [...new Set(body.note?.attachments ?? [])];
+    if (body.note) {
+      if (noteIds.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+      const problem = this.cards.setNote(callId, { ...(body.note.text ? { text: body.note.text } : {}), ...(noteIds.length ? { attachments: noteIds } : {}) }, (id) => attachmentExists(this.host.den!, this.summary.id, id));
+      if (problem && problem !== "not_found") throw new HttpError("invalid_request", problem);
+    }
+    // Synchronous from here to the claim: a concurrent submit finds the card claimed (409).
+    // The on-screen page's answers are saved first, so the restore state (if the submit is withdrawn for good) has them.
+    // NOTE: body.note replaces the stored note (setNote above) even if the claim is later released.
+    if (lastAnswers) this.cards.savePage(callId, pending.pageIndex ?? 0, lastAnswers, pending.pageIndex ?? 0);
+    const ready = this.cards.claimSubmit(callId, answers);
+    if (!ready) throw new HttpError("not_found", `card ${callId}`);
+    const before = this.turnStarts;
+    if (this.answering++ === 0 && !this.running) this.answerStartedAt = new Date().toISOString();
+    this.syncStatus();
+    try {
+      let r;
+      try {
+        r = await this.conv.submit({ input: this.answerInput([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
+      } catch (e) {
+        this.cards.release([callId]);
+        if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
+        throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
+      }
+      this.cards.settle([callId]);
+      this.trackQueued(r, { text: "", refs: [], cardAnswers: [ready] });
+      this.syncCards(new Map([[callId, "answered" as CardClosed]]));
+      if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
+      return { messageId: r.messageId, disposition: r.disposition };
+    } finally {
+      if (--this.answering === 0) this.answerStartedAt = null;
+      this.syncStatus();
+    }
+  }
+
+  /**
+   * The model input for card answers: the answer text, plus the images bound to questions and the owner's note.
+   * HOW IMAGES REACH THE MODEL: a card answer is delivered as a user message (the engine places it as a card-answer entry
+   * whose content is this input), and a user message can carry image parts, exactly like a chat message with attachments
+   * (`inlineAttachments`). So the images ride that same user turn, each preceded by a text label naming its question.
+   */
+  private answerInput(ready: readonly ReadyAnswer[]): SubmitOptions["input"] {
+    const parts: Exclude<SubmitOptions["input"], string> = [];
+    const sendable = ready.map((r) => {
+      if (!r.card.paged || r.skipped) return r;
+      const answers = { ...r.answers };
+      for (const f of r.card.fields) {
+        const a = answers[f.id];
+        const ids = this.liveAttachments(attachmentIds(a));
+        if (!a) continue;
+        // Images that cannot be delivered are not mentioned in the text either; an answer that was only images says so.
+        const { attachments: _drop, ...rest } = a as { attachments?: string[] };
+        const gone = ids.length === 0 && isImageOnly(a as never);
+        answers[f.id] = (ids.length ? { ...rest, attachments: ids } : gone ? { ...rest, imagesGone: true } : rest) as typeof a;
+        if (ids.length) parts.push(...this.imagesFor(`Images the user attached to the answer of "${f.label}" (call ${r.callId}, question ${f.id}):`, ids));
+      }
+      const noteIds = this.liveAttachments(r.note?.attachments ?? []);
+      if (noteIds.length) parts.push(...this.imagesFor(`Images the user attached to their note (call ${r.callId}):`, noteIds));
+      const note = r.note && { ...(r.note.text ? { text: r.note.text } : {}), ...(noteIds.length ? { attachments: noteIds } : {}) };
+      return { ...r, answers, ...(note ? { note } : {}) };
+    });
+    const text = answerText(sendable);
+    return parts.length ? [{ type: "text", text }, ...parts] : text;
+  }
+
+  /** Of these upload ids, the ones still stored for this thread (a stat each). */
+  private liveAttachments(ids: readonly string[]): string[] {
+    const den = this.host.den;
+    return den ? ids.filter((id) => attachmentExists(den, this.summary.id, id)) : [];
+  }
+
+  /** A text label plus the image parts of these (existing) uploads. */
+  private imagesFor(label: string, ids: readonly string[]) {
+    return this.host.den ? imageParts(this.host.den, this.summary.id, ids, label) : [];
+  }
+
+  /** The image parts of the questionnaires' drafted images, labelled per question (a plain message that supersedes them carries these). */
+  private draftImages(cards: readonly PendingCard[], exclude: ReadonlySet<string>, budget: number) {
+    const parts: ReturnType<ThreadRuntime["imagesFor"]> = [];
+    const seen = new Set(exclude);
+    let left = Math.max(0, budget);
+    let omitted = 0;
+    for (const p of cards) {
+      if (!p.card.paged) continue;
+      for (const f of p.card.fields) {
+        const fresh = this.liveAttachments(attachmentIds(p.draft?.[f.id])).filter((id) => !seen.has(id));
+        const ids = fresh.slice(0, left);
+        omitted += fresh.length - ids.length;
+        left -= ids.length;
+        for (const id of ids) seen.add(id);
+        if (ids.length) parts.push(...this.imagesFor(`Images the user attached to the unsubmitted answer of "${f.label}" (call ${p.callId}, question ${f.id}):`, ids));
+      }
+    }
+    if (omitted > 0) parts.push({ type: "text" as const, text: `${omitted} more image${omitted === 1 ? " was" : "s were"} not sent (the limit is ${ATTACHMENT_MAX_PER_SUBMIT} per message).` });
+    return parts;
+  }
+
+  /** "Answering Qn": hold typed text and/or uploaded images as that question's answer (not a chat message, supersedes nothing). */
+  bindCardText(callId: string, qid: string, text: string, attachments: readonly string[] = [], multi?: { picked: string[]; others: string[] }, stepsKey?: string): void {
+    // Same answers as save and note: 409 while the submit is in flight, 409 for other pages than the client saw.
+    this.checkStepsKey(this.pagedCard(callId), stepsKey);
+    const ids = [...new Set(attachments)];
+    if (ids.length > 0 && !this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+    // The tracker checks card, question and kind first, then calls `owned`: the id must be an upload of THIS thread (a stat).
+    const problem = this.cards.bindText(callId, qid, text, ids, (id) => attachmentExists(this.host.den!, this.summary.id, id), multi);
+    if (problem === "not_found") throw new HttpError("not_found", `card ${callId}`);
+    if (problem) throw new HttpError("invalid_request", problem);
+    this.announceHeld(callId);
+  }
+
   /** Close every pending card as superseded, now (the later pi.user entry then finds nothing to dismiss). */
-  private supersedePending(): void {
+  supersedePending(): void {
     // Claimed cards (an answer is mid-submit) are not touched: they end answered/skipped, exactly once.
     const { ids, heldDiscarded } = this.cards.dismissUnclaimed();
     if (ids.length === 0) return;
@@ -741,6 +1000,7 @@ export class ThreadRuntime {
   async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
+    if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: save its pages as drafts (saveCardPage) and send them once (submitCard)`);
     const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
     const answers = dropHiddenAnswers(pending.card, rawAnswers);
@@ -783,7 +1043,7 @@ export class ThreadRuntime {
     try {
       // Mid-turn the answer is steered like a chat message typed then (the engine queues it for the turn's next
       // boundary or its end); idle it starts the turn. "reject" would only matter if a turn began between the two.
-      r = await this.conv.submit({ input: answerText(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
+      r = await this.conv.submit({ input: this.answerInput(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
     } catch (e) {
       this.cards.release(ids);
       // Safety net: with whenBusy "steer" the engine never answers busy, so this should be unreachable.

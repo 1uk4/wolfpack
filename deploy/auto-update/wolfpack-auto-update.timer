@@ -1,0 +1,12 @@
+# Polls the stable manifest every 30 min (randomised), 5 min after boot. UNVERIFIED until enabled on the host.
+[Unit]
+Description=Wolfpack auto-update timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

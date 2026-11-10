@@ -17,9 +17,39 @@ export function threadBase(wolf: string, slug: string): string {
 	return `/api/wolves/${encodeURIComponent(wolf)}/threads/${encodeURIComponent(slug)}`;
 }
 
+/** Where a card's rendered diagram is served (the console relays the wolf's `getDiagram`; never a path the client builds itself). */
+export function diagramUrl(wolf: string, slug: string, diagramId: string): string {
+	return `${threadBase(wolf, slug)}/diagrams/${encodeURIComponent(diagramId)}`;
+}
+
 /** Where a pending card's answer is POSTed (the console's server layer, then the wolf's /v1). */
 export function cardAnswerUrl(wolf: string, slug: string, callId: string): string {
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/answer`;
+}
+
+/** Where one page of a paged `ask` card is saved (PUT) as a draft. */
+export function cardPageDraftUrl(wolf: string, slug: string, callId: string, page: number): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/pages/${page}/draft`;
+}
+
+/** Where a paged `ask` card is submitted (POST). */
+export function cardSubmitUrl(wolf: string, slug: string, callId: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/submit`;
+}
+
+/** Where the note beside a paged `ask` card is stored (PUT). */
+export function cardNoteUrl(wolf: string, slug: string, callId: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/note`;
+}
+
+/** Where typed text bound to one question ("answering Qn") is POSTed. */
+export function cardTextUrl(wolf: string, slug: string, callId: string, qid: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/questions/${encodeURIComponent(qid)}/text`;
+}
+
+/** Where one uploaded image of a thread is served (the same URL the transcript uses for message images). */
+export function attachmentUrl(wolf: string, slug: string, id: string): string {
+	return `${threadBase(wolf, slug)}/attachments/${encodeURIComponent(id)}`;
 }
 
 /** Where a pending card's skip is POSTed. */
@@ -71,7 +101,7 @@ export function threadTransport(
 				...(input.type === "text" && input.attachments?.length ? { attachments: input.attachments.map((a) => ({ id: a.id })) } : {}),
 			}),
 		uploadUrl: `${base}/attachments`,
-		attachmentUrl: (id) => `${base}/attachments/${encodeURIComponent(id)}`,
+		attachmentUrl: (id) => attachmentUrl(wolf, slug, id),
 		steersViaSubmit: true,
 		// The record is the newest page only: the full transcript is never refetched on a settle.
 		recordUrl: `${base}?limit=${THREAD_PAGE_SIZE}`,

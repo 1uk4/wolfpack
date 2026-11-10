@@ -19,7 +19,7 @@ export const HIDDEN_IDS: ReadonlySet<string> = new Set(["pipeline.breakdown-sugg
 export const visibleRows = <T extends { id: string }>(rows: T[]): T[] => rows.filter((r) => !HIDDEN_IDS.has(r.id));
 
 /** The order composeProjectContext (packages/harness/src/wolfd/context.ts) adds the system-prompt blocks. A block it did not add for this wolf is simply absent. */
-export const SYSTEM_ORDER = ["system.header", "system.identity", "system.orchestrator", "system.agents-md", "system.claude-md", "system.skills", "system.structured-output", "system.brief"] as const;
+export const SYSTEM_ORDER = ["system.header", "system.identity", "system.orchestrator", "system.agents-md", "system.claude-md", "system.skills", "system.structured-output", "system.ending-turn"] as const;
 
 /** The editable entry behind a composed block. (system.structured-output is edited on its own settings-backed card, which is the block's own card.) */
 export const EDITED_IN: Readonly<Record<string, string>> = { "system.identity": "identity", "system.orchestrator": "orchestrator-rules" };

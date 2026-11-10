@@ -28,7 +28,7 @@ writeFileSync(
   stub,
   `import fs from "node:fs"; import os from "node:os";
 const a = process.argv.slice(2);
-fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ args: a, nice: os.getPriority() }) + "\\n");
+fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ args: a, nice: os.getPriority(), cwd: process.cwd(), nodeEnv: process.env.NODE_ENV }) + "\\n");
 const o = a.find((x) => x.startsWith("--outputFile.json="));
 if (o) fs.writeFileSync(o.slice(18), JSON.stringify({ testResults: [{ name: process.env.STUB_FILE ?? "/r/packages/cli/src/x.test.ts" }] }));
 console.log("stub says hi");
@@ -49,7 +49,7 @@ const base = () => ({
   log: (l: string) => logs.push(l),
   sleep: async () => {},
 });
-const calls = () => (existsSync(join(tmp, "calls.log")) ? readFileSync(join(tmp, "calls.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { args: string[]; nice: number }) : []);
+const calls = () => (existsSync(join(tmp, "calls.log")) ? readFileSync(join(tmp, "calls.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { args: string[]; nice: number; cwd: string; nodeEnv?: string }) : []);
 const env = (extra: Record<string, string> = {}) => ({ PATH: process.env.PATH ?? "", STUB_LOG: join(tmp, "calls.log"), ...extra });
 
 describe("wolfpack test runner", () => {
@@ -177,6 +177,98 @@ describe("wolfpack test runner: interruption, timeouts, drift", () => {
   });
 });
 
+// The console's tests run with tsx --test, through the same queue, cache and process group as vitest.
+describe("wolfpack test runner: console tests", () => {
+  const consoleBase = () => ({ ...base(), tsxBin: stub, tsxVersion: "4.0.0", stdio: "ignore" as const });
+  const realTsx = join(__dirname, "..", "..", "..", "apps", "console", "node_modules", "tsx", "dist", "cli.mjs");
+  const writeConsoleFile = (name: string, body: string) => {
+    writeFileSync(join(repo, "apps", "console", "tests", name), body);
+  };
+  beforeEach(() => {
+    mkdirSync(join(repo, "apps", "console", "tests"), { recursive: true });
+    writeConsoleFile("a.test.ts", "");
+  });
+
+  it("runs named console files with tsx --test in apps/console, NODE_ENV=test, a 120 s per-file limit and the configured concurrency", async () => {
+    const code = await runTests({ ...consoleBase(), args: ["run", "apps/console/tests/a.test.ts", "-t", "quiz"], env: env({ WOLFPACK_AGENT_RUN: "1" }), settings: { slots: 1, workersPerRun: 3 } });
+    expect(code).toBe(0);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]!.args).toEqual(["--test", "--test-timeout=120000", "--test-concurrency=3", "--test-name-pattern=quiz", "tests/a.test.ts"]);
+    expect(calls()[0]!.cwd).toMatch(/apps\/console$/);
+    expect(calls()[0]!.nodeEnv).toBe("test");
+    expect(calls()[0]!.nice).toBeGreaterThanOrEqual(10);
+    expect(openQueue({ dir: join(tmp, "queue"), slots: 1 }).snapshot()).toEqual([]);
+  });
+
+  it("refuses a whole-suite console run from an agent, naming CI, and starts nothing", async () => {
+    expect(await runTests({ ...consoleBase(), args: ["run", "apps/console"], env: env({ WOLFPACK_AGENT_RUN: "1" }) })).toBe(2);
+    expect(logs.join("\n")).toMatch(/CI runs the whole console suite.*wolfpack test run apps\/console\/tests\/<file>/);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it("refuses related with console paths, for everyone, saying to name the test files", async () => {
+    expect(await runTests({ ...consoleBase(), args: ["related", "apps/console/src/server/jobs.ts", "--run"], env: env() })).toBe(2);
+    expect(logs.join("\n")).toMatch(/console tests have no related mode; name the test files/);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it("refuses glob characters, a missing file, a non-test console path and more than 5 files in an agent run", async () => {
+    for (let i = 1; i <= 6; i++) writeConsoleFile(`f${i}.test.ts`, "");
+    const agent = env({ WOLFPACK_AGENT_RUN: "1" });
+    const refused = async (args: string[], want: RegExp) => {
+      logs.length = 0;
+      expect(await runTests({ ...consoleBase(), args, env: agent })).toBe(2);
+      expect(logs.join("\n")).toMatch(want);
+    };
+    await refused(["run", "apps/console/tests/*.test.ts"], /glob/);
+    await refused(["run", "apps/console/tests/{a,f1}.test.ts"], /glob/);
+    await refused(["run", "apps/console/tests/nope.test.ts"], /nope\.test\.ts.*does not exist/);
+    await refused(["run", "apps/console/src/server/jobs.ts"], /jobs\.ts.*not a console test file/);
+    await refused(["run", "apps/console/tests"], /tests.*not a console test file/);
+    await refused(["run", ...[1, 2, 3, 4, 5, 6].map((i) => `apps/console/tests/f${i}.test.ts`)], /at most 5.*CI/);
+    expect(calls()).toHaveLength(0);
+    // five named files are fine
+    expect(await runTests({ ...consoleBase(), args: ["run", ...[1, 2, 3, 4, 5].map((i) => `apps/console/tests/f${i}.test.ts`)], env: agent })).toBe(0);
+  });
+
+  it("returns when the test process exits even if a grandchild keeps the output pipe open", async () => {
+    // a stand-in for tsx that leaves a child in its process group holding stdout, then exits 0 (as a test that leaks a process would)
+    const orphanTsx = join(tmp, "orphan-tsx.mjs");
+    writeFileSync(orphanTsx, 'import { spawn } from "node:child_process";\nspawn("sleep", ["60"], { stdio: ["ignore", "inherit", "inherit"] }).unref();\n');
+    const t0 = Date.now();
+    const code = await runTests({ ...base(), tsxBin: orphanTsx, tsxVersion: "x", args: ["run", "apps/console/tests/a.test.ts"], env: env(), noCache: true, stdio: "ignore" });
+    expect(code).toBe(0);
+    expect(Date.now() - t0).toBeLessThan(8_000);
+  }, 30_000);
+
+  it("refuses console paths mixed with package paths", async () => {
+    expect(await runTests({ ...consoleBase(), args: ["run", "apps/console/tests/a.test.ts", "packages/cli/src/x.test.ts"], env: env() })).toBe(2);
+    expect(logs.join("\n")).toMatch(/separately/);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it("serves a console pass from the cache and reruns when a console source changes", async () => {
+    const o = { ...consoleBase(), args: ["run", "apps/console/tests/a.test.ts"], env: env({ STUB_FILE: "/r/apps/console/tests/a.test.ts" }) };
+    expect(await runTests(o)).toBe(0);
+    expect(await runTests(o)).toBe(0);
+    expect(calls()).toHaveLength(1);
+    mkdirSync(join(repo, "apps", "console", "src"), { recursive: true });
+    writeFileSync(join(repo, "apps", "console", "src", "x.ts"), "export const x = 1;\n");
+    expect(await runTests(o)).toBe(0);
+    expect(calls()).toHaveLength(2);
+  });
+
+  it("fails a console file that never finishes within the per-file limit and names it", async () => {
+    writeConsoleFile("hang.test.mjs", 'import { it } from "node:test";\nit("ok", () => {});\nsetInterval(() => {}, 1000);\n');
+    const t0 = Date.now();
+    const out: string[] = [];
+    const code = await runTests({ ...base(), tsxBin: realTsx, tsxVersion: "x", args: ["run", "apps/console/tests/hang.test.mjs"], env: env(), noCache: true, fileTimeoutMs: 1500, log: (l) => out.push(l), stdio: "ignore" });
+    expect(code).not.toBe(0);
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(out.join("\n")).toMatch(/hang\.test\.mjs ran longer than 2 s and was stopped/);
+  }, 30_000);
+});
+
 describe("wolfpack test settings and arguments", () => {
   it("defaults to 2 slots and 2 workers; the config and then the env override; bad values are refused", () => {
     expect(testSettings({}, {})).toEqual({ slots: 2, workersPerRun: 2 });
@@ -207,6 +299,14 @@ describe("wolfpack test settings and arguments", () => {
     mkdirSync(join(sub, "src"), { recursive: true });
     expect(parseTestArgs(["test", "run", "src", "queue", "sub/dir", "x.test.ts"], ctx).args).toEqual(["run", "packages/x/src", "queue", "packages/x/sub/dir", "packages/x/x.test.ts"]);
     expect(() => parseTestArgs(["test", "related", "../../../outside.ts"], ctx)).toThrow(/outside the repo/);
+  });
+
+  it("takes a repo-root path typed from inside a subdirectory as it is, instead of doubling the directory", () => {
+    const sub = join(repo, "apps", "console");
+    mkdirSync(join(sub, "tests"), { recursive: true });
+    writeFileSync(join(sub, "tests", "w.test.ts"), "");
+    expect(parseTestArgs(["test", "run", "apps/console/tests/w.test.ts"], { cwd: sub, root: repo }).args).toEqual(["run", "apps/console/tests/w.test.ts"]);
+    expect(parseTestArgs(["test", "run", "tests/w.test.ts"], { cwd: sub, root: repo }).args).toEqual(["run", "apps/console/tests/w.test.ts"]);
   });
 
   it("accepts run and related with paths, and refuses anything else", () => {

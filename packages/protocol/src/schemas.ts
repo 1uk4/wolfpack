@@ -3,6 +3,7 @@ import {
   answerSchemaOf,
   cardKind,
   ConfirmFieldSchema,
+  SliderFieldSchema,
   fieldSchemaOf,
   FreeTextFieldSchema,
   MultiFieldSchema,
@@ -12,6 +13,7 @@ import {
   type ConfirmFieldAnswer,
   type FieldShowIf,
   type MultiFieldAnswer,
+  type SliderFieldAnswer,
   type TextFieldAnswer,
 } from "./card-kinds/index.js";
 export * from "./card-kinds/index.js";
@@ -101,7 +103,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
 // ---------------------------------------------------------------- cards
 
 /**
- * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `brief` or a
+ * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `ask` or a
  * tool such as `task_done`). A card holds one or more fields (question / options / free text). Additive: no version bump.
  *
  * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
@@ -112,7 +114,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
  * The static types below cover the four built-in kinds only: a registered kind parses and validates at runtime but is
  * not part of these unions.
  */
-export type CardField = z.infer<typeof FreeTextFieldSchema> | z.infer<typeof SingleFieldSchema> | z.infer<typeof MultiFieldSchema> | z.infer<typeof ConfirmFieldSchema>;
+export type CardField = z.infer<typeof FreeTextFieldSchema> | z.infer<typeof SingleFieldSchema> | z.infer<typeof MultiFieldSchema> | z.infer<typeof ConfirmFieldSchema> | z.infer<typeof SliderFieldSchema>;
 export const CardFieldSchema = fieldSchemaOf() as unknown as z.ZodType<CardField>;
 /** Kind names of the built-in fields only (see CardField). */
 export type CardFieldKind = CardField["kind"];
@@ -124,7 +126,7 @@ export const CardStepSchema = z.object({
 });
 export type CardStep = z.infer<typeof CardStepSchema>;
 
-/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the brief builder. */
+/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the ask builder. */
 export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: readonly CardField[]): string | undefined {
   const s = f.showIf;
   if (!s) return undefined;
@@ -135,28 +137,25 @@ export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: r
   return check(ctl as unknown as AnyField, s);
 }
 
-/** Limits of a brief header (owner decisions): the headline and the bullet count are hard, a bullet's length is soft (the console clamps it). */
-export const BRIEF_LIMITS = { headline: 80, contextBullets: 5, bulletSoftChars: 160, questions: 3 } as const;
-
 /**
- * The header of a card raised by the `brief` tool: what the owner needs to know before answering.
- * `context` bullets are short by convention (~160 chars) but never rejected for length; `more` points at detail in the thread.
+ * LEGACY, read-only: the header of a card raised by the retired `brief` tool. No tool writes it any more; the schema
+ * keeps it so old transcripts still parse and render. `context` bullets are short by convention but never rejected for length.
  */
 export const CardBriefSchema = z.object({
-  headline: z.string().min(1).max(BRIEF_LIMITS.headline),
-  context: z.array(z.string()).max(BRIEF_LIMITS.contextBullets).optional(),
+  headline: z.string().min(1).max(80),
+  context: z.array(z.string()).max(5).optional(),
   more: z.string().optional(),
 });
 export type CardBrief = z.infer<typeof CardBriefSchema>;
 
 export const CardSchema = z
   .object({
-    /** Tool that raised it, e.g. `brief`. Keys the console's card renderer. */
+    /** Tool that raised it, e.g. `ask` or `task_done`. Keys the console's card renderer. */
     tool: z.string(),
     title: z.string().optional(),
-    /** A card needs at least one field, except a brief card, which may have none (the owner then acknowledges with OK); a brief holds at most 3. */
+    /** A card needs at least one field. */
     fields: z.array(CardFieldSchema),
-    /** Brief header (the `brief` tool). Absent on cards from other tools. */
+    /** Legacy, read-only: the header of a card from the retired `brief` tool. Never written now; only old transcripts carry it. */
     brief: CardBriefSchema.optional(),
     /**
      * Optional stepped presentation: the fields grouped into ordered steps (every field in exactly one step; a step
@@ -164,9 +163,19 @@ export const CardSchema = z
      * Absent = a single-page form.
      */
     steps: z.array(CardStepSchema).min(1).optional(),
+    /**
+     * The `ask` tool: `steps` are PAGES and each page is answered on its own (`answerCardPage`); the agent gets the
+     * answers after every page and the card stays pending until the last one. Requires `steps`.
+     */
+    paged: z.boolean().optional(),
+    /**
+     * Set by the `ask_revise` tool: this card is not raised, it REPLACES the not-yet-answered pages of the paged card
+     * raised by that call id (`fields`/`steps` are the replacement pages only).
+     */
+    revises: z.string().optional(),
   })
-  .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field (only a brief card may have none)", path: ["fields"] })
-  .refine((c) => c.brief === undefined || c.fields.length <= BRIEF_LIMITS.questions, { message: `a brief card holds at most ${BRIEF_LIMITS.questions} questions`, path: ["fields"] })
+  .refine((c) => !c.paged || c.steps !== undefined, { message: "a paged card needs steps (its pages)", path: ["steps"] })
+  .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field", path: ["fields"] })
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
   .refine(
     (c) => {
@@ -187,6 +196,15 @@ export const CardSchema = z
       return ids.length === c.fields.length && ids.every((id, i) => id === c.fields[i].id);
     },
     { message: "steps must list every field exactly once, in the card's field order", path: ["steps"] },
+  )
+  .refine(
+    (c) => {
+      // Each page of a paged card is answered and validated alone, so a controller on another page would hide its field forever.
+      if (!c.paged || !c.steps) return true;
+      const page = new Map(c.steps.flatMap((s, i) => s.fields.map((id) => [id, i] as const)));
+      return c.fields.every((f) => f.showIf === undefined || page.get(f.showIf.field) === page.get(f.id));
+    },
+    { message: "a field's showIf controller must be on the same page as the field: put the question and the one it depends on on the same page", path: ["steps"] },
   )
   .refine(
     (c) => c.fields.every((f) => showIfProblem(f, c.fields) === undefined),
@@ -234,8 +252,8 @@ export function visibleFields(card: Card, answers: Readonly<Record<string, { val
  *   of `value`).
  * - confirm: `value` is true (confirm) or false (reject), with an optional `note`.
  */
-export type { TextFieldAnswer, MultiFieldAnswer, ConfirmFieldAnswer };
-export type CardFieldAnswer = TextFieldAnswer | MultiFieldAnswer | ConfirmFieldAnswer;
+export type { TextFieldAnswer, MultiFieldAnswer, ConfirmFieldAnswer, SliderFieldAnswer };
+export type CardFieldAnswer = TextFieldAnswer | MultiFieldAnswer | ConfirmFieldAnswer | SliderFieldAnswer;
 /** Any registered kind's answer shape (see card-kinds/). */
 export const CardFieldAnswerSchema = answerSchemaOf() as unknown as z.ZodType<CardFieldAnswer>;
 /** Answers keyed by field id. */
@@ -261,8 +279,25 @@ export const PendingCardSchema = z.object({
   heldAnswer: CardAnswersSchema.optional(),
   /** The operator skipped this card while sibling cards still wait (held, changeable like a held answer). */
   heldSkip: z.boolean().optional(),
+  /**
+   * Paged (`ask`) cards, all drafts kept on wolfd until submit: `pageIndex` is the page the owner is viewing,
+   * `reached` the furthest page left with Next (never goes down; `ask_revise` cannot touch those pages),
+   * `pageAnswers` the saved answers of every page, `draft` text/images bound to questions (any page) and `note` the
+   * owner's note for the agent. Nothing reaches the model before submit.
+   */
+  pageIndex: z.number().int().min(0).optional(),
+  reached: z.number().int().min(0).optional(),
+  pageAnswers: CardAnswersSchema.optional(),
+  draft: CardAnswersSchema.optional(),
+  note: z.object({ text: z.string().optional(), attachments: z.array(z.string()).optional() }).optional(),
   /** ISO time the card was raised (the tool call's result time). */
   raisedAt: z.iso.datetime({ offset: true }),
+  /**
+   * Who asked, for the parent's queued sheet (additive; absent from older servers = the thread itself):
+   * `self` (the thread's own ask, label "you"), `subagent` (a child thread's card, label "<agent>: <name>"),
+   * `tool` (a tool's confirmation such as crawl_run, label = tool name). `threadId` stays the asker's thread.
+   */
+  source: z.object({ kind: z.enum(["self", "subagent", "tool"]), label: z.string() }).optional(),
 });
 export type PendingCard = z.infer<typeof PendingCardSchema>;
 
@@ -450,6 +485,12 @@ export const ThreadToolCallSchema = z.object({
   dismissed: z.boolean().optional(),
   /** Additive: how the card closed. Absent while pending (and on servers that predate it: read `answer` / `dismissed`). */
   closed: CardClosedSchema.optional(),
+  /** Additive, paged (`ask`) cards: answers of the pages submitted so far, keyed by question id. Feeds the transcript record (`askRecord`). */
+  pageAnswers: CardAnswersSchema.optional(),
+  /** Additive, paged cards: how many pages were submitted so far. */
+  pagesDone: z.number().int().min(0).optional(),
+  /** Additive, paged cards: the owner's note that went with the submit (text, image ids). */
+  note: z.object({ text: z.string().optional(), attachments: z.array(z.string()).optional() }).optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });
@@ -1175,6 +1216,8 @@ export const ConsolidateResponseSchema = z.object({
   recordsWritten: z.number().int().nonnegative().optional(),
   /** Tagged observations left in the pool (the Work API or model was unavailable). */
   observationsPending: z.number().int().nonnegative().optional(),
+  /** Earliest next attempt (ms epoch) of a Record group that is backing off. */
+  retryAt: z.number().optional(),
   /** Ids of the session topics created or merged by this run. */
   topicIds: z.array(z.string()),
 });
@@ -1247,6 +1290,8 @@ export const MemoryStatusSchema = z.object({
   sessionTopics: z.array(MemoryTopicRefSchema),
   denTopics: z.array(MemoryTopicRefSchema),
   lastPromote: LastPromoteSchema.nullable(),
+  /** The promote job running in wolfd right now (absent: none). Lets a page that mounts mid-run show it. */
+  promoting: z.object({ jobId: z.string() }).optional(),
   /** `?thread=<id>`: that thread's bound work item; without it the home thread's. null = unbound. Absent on older servers. */
   bound: BoundWorkSchema.nullable().optional(),
 });
@@ -1281,7 +1326,13 @@ export const MemoryObservationSchema = z.object({
   work: z.string().optional(),
   feature: z.string().optional(),
   /** Set on a tagged observation that stays pending: the Work API is unreachable or not configured, or the model failed. */
-  blocked: z.enum(["work-api-unavailable", "consolidation-failed"]).optional(),
+  blocked: z.enum(["work-api-unavailable", "consolidation-failed", "forbidden"]).optional(),
+  /** The hub's own message when `blocked` is "forbidden" (e.g. "assigned to hal; only hal or the owner can change it"). */
+  blockedMessage: z.string().optional(),
+  /** The key (feature or work item) whose pending entry blocks this observation. */
+  blockedKey: z.string().optional(),
+  /** cause forbidden: the wolf the blocking item is assigned to, when known. */
+  assignee: z.string().optional(),
 });
 export type MemoryObservation = z.infer<typeof MemoryObservationSchema>;
 
@@ -1296,6 +1347,37 @@ export const MemoryObservationsSchema = z.object({
   pending: z.object({ count: z.number().int().nonnegative(), oldestAgeMs: z.number().nonnegative().optional() }).optional(),
 });
 export type MemoryObservations = z.infer<typeof MemoryObservationsSchema>;
+
+const nn = z.number().int().nonnegative();
+const MemoryCounts = z.object({ pending: nn, archived: nn });
+
+/** `GET /v1/wolves/:name/memory/tree`: observation counts per feature and task (archived: last 7 days). */
+export const MemoryTreeSchema = z.object({
+  features: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    stage: z.string().optional(),
+    /** Observations tagged to the feature itself (not to one of its tasks). */
+    own: MemoryCounts,
+    tasks: z.array(z.object({ id: z.string(), title: z.string(), stage: z.string().optional(), pending: nn, archived: nn })),
+  })),
+  /** Tagged work whose item could not be fetched or has no feature. */
+  other: z.array(z.object({ id: z.string(), pending: nn, archived: nn })),
+  /** Untagged observations still in the pool. */
+  den: z.object({ pending: nn }),
+});
+export type MemoryTree = z.infer<typeof MemoryTreeSchema>;
+
+/** `GET /v1/wolves/:name/memory/tree/:workId`: the observations funnelling into one node. */
+export const MemoryNodeObservationsSchema = z.object({
+  id: z.string(),
+  pending: z.array(z.object({ id: z.string(), content: z.string(), recordedAt: z.string().optional() })),
+  /** Newest first, last 7 days. */
+  archived: z.array(z.object({ id: z.string(), content: z.string(), at: z.string(), outcome: z.string(), target: z.string() })),
+  /** The archived list was cut at `limit`. */
+  truncated: z.boolean(),
+});
+export type MemoryNodeObservations = z.infer<typeof MemoryNodeObservationsSchema>;
 
 /** One child of a feature, as much as a task graph needs. */
 export const WorkChildSchema = z.object({
@@ -1603,6 +1685,65 @@ export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
  */
 export const SkipCardRequestSchema = z.object({ threadId: z.string(), callId: z.string() });
 export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
+
+/** Direct answers carry no images: they reach a question only through bindCardText (the draft). */
+const NoAttachmentAnswersSchema = CardAnswersSchema.refine((a) => Object.values(a).every((x) => (x as { attachments?: unknown }).attachments === undefined), {
+  message: "answers carry no attachments: attach images with bindCardText",
+});
+
+/**
+ * Save one page of a paged (`ask`) card as a draft ("Next", or leaving a page). `answers` covers the questions of that
+ * page; shape only, required questions are checked at submit. `goto` is the page the owner views next (default
+ * min(page+1, last)). `stepsKey` (optional) is `stepsKey(card)` of the pages the client saw: a mismatch after an
+ * ask_revise is 409. Wire: thread id, `callId` and `page` (0-based) ride the path.
+ */
+export const SaveCardPageBodySchema = z.object({
+  answers: NoAttachmentAnswersSchema,
+  goto: z.number().int().min(0).optional(),
+  stepsKey: z.string().optional(),
+});
+export type SaveCardPageBody = z.infer<typeof SaveCardPageBodySchema>;
+
+/**
+ * The owner's note on a paged card: text and images, delivered with the answers at submit. Images are upload ids from
+ * `uploadAttachment`; they count against the same cap (ATTACHMENT_MAX_PER_SUBMIT) as images bound to questions.
+ * An empty note (no text, no images) clears it.
+ */
+export const CardNoteBodySchema = z.object({
+  text: z.string().max(4000).optional(),
+  attachments: z.array(z.string()).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
+});
+export type CardNoteBody = z.infer<typeof CardNoteBodySchema>;
+
+/**
+ * Submit a paged card: ONE tool result with every page's saved answers (plus `answers` for the page on screen) and
+ * the note. Wire: thread id and `callId` ride the path.
+ */
+export const SubmitCardBodySchema = z.object({
+  answers: NoAttachmentAnswersSchema.optional(),
+  note: CardNoteBodySchema.optional(),
+  stepsKey: z.string().optional(),
+});
+export type SubmitCardBody = z.infer<typeof SubmitCardBodySchema>;
+
+/**
+ * Bind typed text to one question of the current page ("answering Q2"): it is that question's free-text / Other
+ * answer held as a draft, NOT a chat message, so it supersedes nothing. Wire: thread id, `callId`, `qid` ride the path.
+ */
+export const BIND_TEXT_MAX = 4000;
+export const BindCardTextBodySchema = z
+  .object({
+    text: z.string().max(BIND_TEXT_MAX).optional(),
+    /** Ids from `uploadAttachment` on this thread (same rules as `SubmitRequest.attachments`: at most ATTACHMENT_MAX_PER_SUBMIT). */
+    attachments: z.array(z.string()).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
+    /** Multi questions only: the whole picked/custom list, replacing the question's draft (`text` is ignored). Images stay unless `attachments` is given. */
+    picked: z.array(z.string()).max(50).optional(),
+    others: z.array(z.string().max(BIND_TEXT_MAX)).max(50).optional(),
+    /** `stepsKey(card)` of the pages the client saw: a mismatch after an ask_revise is a 409. */
+    stepsKey: z.string().optional(),
+  })
+  .refine((b) => (b.text ?? "").trim() !== "" || (b.attachments?.length ?? 0) > 0 || b.others !== undefined, { message: "give non-blank text, at least one attachment or a list of custom answers" });
+export type BindCardTextBody = z.infer<typeof BindCardTextBodySchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */
 export const AbortRequestSchema = z.object({ threadId: z.string() });

@@ -9,6 +9,12 @@ export interface CrashGuard {
   markStarted(): void;
 }
 
+let postStartRejections = 0;
+/** Unhandled rejections seen after startup completed (process-wide; the guard keeps the process up). */
+export const postStartRejectionCount = (): number => postStartRejections;
+/** Test helper. */
+export const resetPostStartRejectionCount = (): void => { postStartRejections = 0; };
+
 export function installCrashGuard(proc: Pick<NodeJS.Process, "on">, opts: { exit?: (code: number) => void; log?: (...a: unknown[]) => void } = {}): CrashGuard {
   const exit = opts.exit ?? ((c) => process.exit(c));
   const log = opts.log ?? ((...a) => console.error(...a));
@@ -20,7 +26,8 @@ export function installCrashGuard(proc: Pick<NodeJS.Process, "on">, opts: { exit
   proc.on("unhandledRejection", (reason) => {
     const detail = reason instanceof Error ? reason.stack ?? reason.message : reason;
     if (started) {
-      log("[harness] Unhandled rejection (startup complete, staying up):", detail);
+      postStartRejections++;
+      log(`[harness] Unhandled rejection #${postStartRejections} after start (staying up):`, detail);
       return;
     }
     log("[harness] Unhandled rejection during startup:", detail);

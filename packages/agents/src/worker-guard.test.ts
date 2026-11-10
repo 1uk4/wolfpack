@@ -67,6 +67,44 @@ const REFUSED = [
 // non-git commands the guard leaves alone
 const UNTOUCHED = ["rm -rf build", "echo hi > out.txt", "sed -i s/a/b/ f", "pnpm install", "python3 -c 'print(1)'", "node -e 'console.log(1)'", "cat .gitignore"];
 
+describe("console tests only through the queue", () => {
+  const BLOCKED = [
+    "cd apps/console && npx tsx --test tests/jobs.test.ts",
+    "NODE_ENV=test npx tsx --test tests/a.test.ts",
+    "./node_modules/.bin/tsx --test tests/a.test.ts",
+    "pnpm exec tsx --test tests/a.test.ts",
+    "pnpm --filter @wolfpack/console exec tsx --test tests/a.test.ts",
+    "node --import tsx --test tests/a.test.ts",
+    "node --loader tsx --test tests/a.test.ts",
+    "bash scripts/test.sh tests/a.test.ts",
+    "sh apps/console/scripts/test.sh",
+    "./scripts/test.sh tests/a.test.ts",
+    "ls tests/*.test.ts | xargs -n1 npx tsx --test",
+    "find tests -name '*.test.ts' -exec npx tsx --test {} ;",
+    "for f in tests/*.test.ts; do wolfpack test run $f; done",
+    "ls apps/console/tests/*.test.ts | while read f; do wolfpack test run $f; done",
+    "until false; do wolfpack test run a.test.ts; done",
+  ];
+  // (the guard is a nudge for a cooperative worker, not a sandbox: an interpreter or a script can still start tsx)
+  it.each(BLOCKED)("refuses %s and names wolfpack test run", (c) => {
+    const r = checkWorkerCommand(c);
+    expect(r).toMatch(/^Blocked by bash/);
+    expect(r).toContain("wolfpack test run");
+  });
+  it("words a loop refusal as running named files through wolfpack test run", () => {
+    expect(checkWorkerCommand("for f in a.test.ts b.test.ts; do echo $f; done")).toContain("run named files through `wolfpack test run`");
+  });
+  it.each([
+    "wolfpack test run apps/console/tests/a.test.ts",
+    "npx tsx scripts/x.ts",
+    "for f in a b; do echo $f; done",
+    "ls tests/*.test.ts",
+    'grep -n "while" foo.test.ts',
+    'echo "see x.test.ts for details"',
+    "git log --grep=for -- a.test.ts",
+  ])("allows %s", (c) => expect(checkWorkerCommand(c)).toBeNull());
+});
+
 describe("worker git allowlist", () => {
   it.each([...ALLOWED, ...UNTOUCHED])("allows %s", (c) => expect(checkWorkerCommand(c)).toBeNull());
   it.each(REFUSED)("refuses %s", (c) => expect(checkWorkerCommand(c)).toMatch(/^Blocked by bash/));

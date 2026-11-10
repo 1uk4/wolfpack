@@ -8,7 +8,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { after, afterEach, describe, it } from "node:test";
+import { after, afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 
@@ -31,6 +31,7 @@ Object.assign(globalThis, {
 const { buildFeatureGraph, featureStrip, GRAPH_STATUS_OF, isWorkItemId, isWorkEvent } = await import("../src/core/index.ts");
 type WorkRecordResponse = import("../src/core/index.ts").WorkRecordResponse;
 const { FeatureProgressPanel, useFeatureProgress } = await import("../components/feature-progress.tsx");
+const { resetOpenPanels, setOpenPanel } = await import("../components/pin-store.ts");
 const { FIXTURE_THREAD } = await import("@wolfpack/client");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
@@ -101,6 +102,7 @@ const click = (el: Element) => act(async () => void el.dispatchEvent(new dom.win
 const settle = (ms = 40) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
+beforeEach(() => resetOpenPanels());
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	root = null;
@@ -224,6 +226,25 @@ describe("FeatureProgressPanel", () => {
 		document.body.innerHTML = "";
 		await mountPanel({}, "w/feature-F-other");
 		assert.ok(q('[data-testid="feature-progress-panel"]') === null, "another thread: folded");
+	});
+	it("a pin that collapses the open progress panel keeps it closed after a reload; an open panel reopens", async () => {
+		const reload = async () => {
+			await act(async () => root!.unmount());
+			root = null;
+			document.body.innerHTML = "";
+			resetOpenPanels(); // a reload loses the in-memory open panel; only the persisted flag remains
+		};
+		await mountPanel({}, "w/feature-F-pin");
+		await click(q('[data-testid="feature-progress-toggle"]')!);
+		assert.ok(q('[data-testid="feature-progress-panel"]'));
+		await reload();
+		await mountPanel({}, "w/feature-F-pin");
+		assert.ok(q('[data-testid="feature-progress-panel"]'), "open before the reload: reopens");
+		await act(async () => setOpenPanel("w/feature-F-pin", "decision")); // a pin opens and collapses progress
+		assert.ok(q('[data-testid="feature-progress-panel"]') === null);
+		await reload();
+		await mountPanel({}, "w/feature-F-pin");
+		assert.ok(q('[data-testid="feature-progress-panel"]') === null, "collapsed by a pin: stays closed after the reload");
 	});
 });
 

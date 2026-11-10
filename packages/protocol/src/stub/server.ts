@@ -6,6 +6,7 @@ import {
   SSE_DONE,
   SubmitBodySchema,
   AnswerCardBodySchema,
+  BindCardTextBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
   matchRoute,
@@ -306,9 +307,22 @@ export class StubServer {
         return this.json(res, 200, { threadId: t.summary.id, workItemId: body.data.workItemId, ...(previous && previous !== body.data.workItemId ? { previousWorkItemId: previous } : {}) });
       }
       // --- end feature progress ---
-      case "skipCard":
+      case "getDiagram":
         this.thread(params.id);
+        throw new HttpError("not_found", `unknown diagram ${params.diagramId}`);
+      case "skipCard":
+      case "saveCardPage":
+      case "submitCard":
+      case "putCardNote":
+      case "bindCardText": {
+        const t = this.thread(params.id);
+        if (m.name === "bindCardText") {
+          const body = BindCardTextBodySchema.safeParse(await readJson(req));
+          if (!body.success) throw new HttpError("invalid_request", "body must be {text?, attachments?: string[]} with at least one non-blank");
+          for (const id of body.data.attachments ?? []) if (!this.uploads.has(`${t.summary.id}\n${id}`)) throw new HttpError("invalid_request", `unknown attachment ${id}`);
+        }
         throw new HttpError("not_found", `card ${params.callId}`);
+      }
       case "abort": {
         const t = this.thread(params.id);
         t.followUps = [];
@@ -337,6 +351,10 @@ export class StubServer {
         if (limit !== null && !/^[1-9]\d{0,6}$/.test(limit)) throw new HttpError("invalid_request", "limit must be a positive integer");
         throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
       }
+      case "getMemoryTree":
+      case "getMemoryNodeObservations":
+        this.wolf(params.name);
+        throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
       case "listWork": {
         this.wolf(params.name);
         if (!url.searchParams.get("domain")) throw new HttpError("invalid_request", "domain is required");

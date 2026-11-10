@@ -516,29 +516,31 @@ export async function rollupToParent(
   const parent = parents[0];
   if (!parent || parent.kind !== "feature" || parent.container) return "no-parent";
 
-  const original = await client.getBody(parent.id);
-  const { body: parentBody, legacy } = ensureOutcomesZone(original);
-
   const taskBody = await client.getBody(task.id);
   const when = (task.updated || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
-  let distilled: string;
-  let oneLine = false;
-  if (legacy) {
-    // A task nobody wrote a body for still records what it delivered.
-    distilled =
-      extractDistilled(taskBody) ||
-      (task.successCriteria ? `Delivered: ${task.successCriteria}` : "");
-    if (!distilled) return "no-content";
-  } else {
-    distilled = extractRollupSection(taskBody);
-    oneLine = !distilled;
-  }
+  const build = (original: string): { next: string } | "no-content" => {
+    const { body: parentBody, legacy } = ensureOutcomesZone(original);
+    let distilled: string;
+    let oneLine = false;
+    if (legacy) {
+      // A task nobody wrote a body for still records what it delivered.
+      distilled = extractDistilled(taskBody) || (task.successCriteria ? `Delivered: ${task.successCriteria}` : "");
+      if (!distilled) return "no-content";
+    } else {
+      distilled = extractRollupSection(taskBody);
+      oneLine = !distilled;
+    }
+    return { next: recomputeTotals(upsertRollupBlock(parentBody, { taskId: task.id, title: task.title, when, oneLine }, distilled)) };
+  };
 
-  let next = upsertRollupBlock(parentBody, { taskId: task.id, title: task.title, when, oneLine }, distilled);
-  next = recomputeTotals(next);
-
-  if (next !== original) {
-    await client.updateBody(parent.id, next);
+  if (build(await client.getBody(parent.id)) === "no-content") return "no-content";
+  // The write replaces the whole body, so a line the hub appended since the read above would be lost. Re-read
+  // right before writing and rebuild from that: the window shrinks to one round trip (a hub-side upsert op
+  // would close it; none exists).
+  const original = await client.getBody(parent.id);
+  const built = build(original);
+  if (built !== "no-content" && built.next !== original) {
+    await client.updateBody(parent.id, built.next);
   }
   return "written";
 }

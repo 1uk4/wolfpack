@@ -13,7 +13,7 @@ export const MultiFieldSchema = cardFieldBase.extend({
   max: z.number().int().min(1).optional(),
 });
 type Multi = z.infer<typeof MultiFieldSchema>;
-export const MultiFieldAnswerSchema = z.object({ value: z.array(z.string()), other: z.array(z.string()).optional() });
+export const MultiFieldAnswerSchema = z.object({ value: z.array(z.string()), other: z.array(z.string()).optional(), attachments: z.array(z.string()).optional() });
 export type MultiFieldAnswer = z.infer<typeof MultiFieldAnswerSchema>;
 
 export const multiKind: CardKind = {

@@ -62,9 +62,9 @@ export async function setBrowserNotify(on: boolean): Promise<boolean> {
 }
 
 /** Show one notification. `navigate` opens the thread when a browser notification is clicked. */
-export function deliverNotification(n: NeedsYouNotification, navigate: (href: string) => void): void {
+export function deliverNotification(n: NeedsYouNotification, navigate: (href: string) => void, opts: { always?: boolean } = {}): void {
 	if (isDesktopNotify()) {
-		desktopBridge()!.notify!({ key: n.key, title: n.title, body: n.body, href: n.href });
+		desktopBridge()!.notify!({ key: n.key, title: n.title, body: n.body, href: n.href, ...(opts.always ? { always: true } : {}) });
 		return;
 	}
 	if (!browserNotifyEnabled()) return;

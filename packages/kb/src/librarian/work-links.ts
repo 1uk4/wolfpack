@@ -60,13 +60,14 @@ export function httpNotePoster(
   endpoint = process.env.WORK_ENDPOINT,
   token = process.env.WORK_TOKEN,
   fetchImpl: typeof fetch = fetch,
+  wolf: string | undefined = process.env.WOLF_NAME,
 ): NotePoster | null {
   if (!endpoint || !token) return null;
   const base = endpoint.replace(/\/$/, "");
   return async (workId, text) => {
     const res = await fetchImpl(`${base}/work/${encodeURIComponent(workId)}`, {
       method: "PATCH",
-      headers: { "X-API-Key": token, "Content-Type": "application/json" },
+      headers: { "X-API-Key": token, ...(wolf ? { "X-Wolf": wolf } : {}), "Content-Type": "application/json" },
       body: JSON.stringify({ note: text }),
       signal: AbortSignal.timeout(10_000),
     });

@@ -13,6 +13,12 @@ export interface CardCall {
 	dismissed?: boolean;
 	/** How the card closed; absent while pending. A bare `dismissed` (an older server) reads as superseded. */
 	closed?: CardClosed;
+	/** Paged (`ask`) cards: the answers of the pages submitted, how many pages were, and text typed but not submitted. */
+	pageAnswers?: CardAnswers;
+	pagesDone?: number;
+	/** The note that went with the submit (text, image ids). */
+	note?: { text?: string; attachments?: string[] };
+	draft?: CardAnswers;
 	/** Answered while sibling cards still wait: held by the wolf, changeable until the last one is answered. */
 	heldAnswer?: CardAnswers;
 	/** Skipped while sibling cards still wait: held by the wolf, replaceable by an answer. */
@@ -37,11 +43,11 @@ export function cardsOfThread(detail: Pick<ThreadDetail, "messages" | "pendingCa
 	const calls: Record<string, CardCall> = {};
 	for (const m of detail.messages) {
 		for (const t of m.tools ?? []) {
-			if (t.card) calls[t.callId] = { card: t.card, ...(t.answer ? { answer: t.answer } : {}), ...(t.dismissed ? { dismissed: true } : {}), ...(t.closed ? { closed: t.closed } : {}) };
+			if (t.card) calls[t.callId] = { card: t.card, ...(t.answer ? { answer: t.answer } : {}), ...(t.dismissed ? { dismissed: true } : {}), ...(t.closed ? { closed: t.closed } : {}), ...(t.pageAnswers ? { pageAnswers: t.pageAnswers } : {}), ...(t.pagesDone !== undefined ? { pagesDone: t.pagesDone } : {}), ...(t.note ? { note: t.note } : {}) };
 		}
 	}
 	// A pending card whose call fell out of the (compacted) history still renders from the pending list.
-	for (const p of detail.pendingCards ?? []) calls[p.callId] = { ...(calls[p.callId] ?? { card: p.card }), ...(p.heldAnswer ? { heldAnswer: p.heldAnswer } : {}), ...(p.heldSkip ? { heldSkip: true } : {}) };
+	for (const p of detail.pendingCards ?? []) calls[p.callId] = { ...(calls[p.callId] ?? { card: p.card }), ...(p.heldAnswer ? { heldAnswer: p.heldAnswer } : {}), ...(p.heldSkip ? { heldSkip: true } : {}), ...(p.draft ? { draft: p.draft } : {}), ...(p.pageAnswers && !calls[p.callId]?.pageAnswers ? { pageAnswers: p.pageAnswers } : {}), ...((p.reached ?? p.pageIndex) !== undefined && calls[p.callId]?.pagesDone === undefined ? { pagesDone: (p.reached ?? p.pageIndex)! } : {}) };
 	return { pending: detail.pendingCards ?? [], calls };
 }
 
@@ -114,6 +120,7 @@ export interface CardDraft {
 const copyAnswer = (a: CardFieldAnswer): CardFieldAnswer => {
 	if (Array.isArray(a.value)) return { value: [...a.value], ...("other" in a && Array.isArray(a.other) && a.other.length > 0 ? { other: [...a.other] } : {}) };
 	if (typeof a.value === "boolean") return { value: a.value, ...("note" in a && a.note ? { note: a.note } : {}) };
+	if (typeof a.value === "number") return { value: a.value };
 	return { value: a.value, ...("other" in a && a.other ? { other: true } : {}) };
 };
 
@@ -228,6 +235,7 @@ export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];
 			out[f.id] = { value: a.value, ...(other.length > 0 ? { other } : {}) };
 		} else if (typeof a.value === "boolean") out[f.id] = { value: a.value, ...("note" in a && a.note?.trim() ? { note: a.note.trim() } : {}) };
+		else if (typeof a.value === "number") out[f.id] = { value: a.value };
 		else out[f.id] = { value: a.value.trim(), ...("other" in a && a.other ? { other: true } : {}) };
 	}
 	return out;

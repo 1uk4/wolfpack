@@ -17,6 +17,8 @@ export interface Observation {
   work?: string;
   /** The bound task's parent feature, when it had one. */
   feature?: string;
+  /** Set instead of work/feature on a general observation (memory.generalToDen): it goes to the den, and this keeps the bound ids for tracing. Nothing routes on it. */
+  origin?: { work?: string; feature?: string };
 }
 
 /**

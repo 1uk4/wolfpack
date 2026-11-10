@@ -14,8 +14,13 @@ import {
   DISTILL_GRADUATION,
   DISTILL_GRADUATION_STANDING,
   DISTILL_SYSTEM,
+  OBSERVER_GENERAL_FLAG,
   OBSERVER_SYSTEM,
+  WORK_COMPACT_SYSTEM,
+  WORK_DISTILL_SYSTEM,
+  WORK_LOG_SYSTEM,
   WORK_RECORD_SYSTEM,
+  WORK_TIDY_SYSTEM,
 } from "@wolfpack/engine";
 import {
   ACTIVE_WORK_CONTEXT_HEADER,
@@ -121,6 +126,8 @@ function pipeline(
   return { id: `pipeline.${id}`, group, label, kind: "pipeline", user, scope: "global", file, text, ...(contract ? { contract } : {}), placeholders: extra.placeholders ?? placeholdersOf(text), constants: extra.constants };
 }
 
+const LINES_NOTE = "Reply is an object with a lines array, parsed by the work-memory parser; no shared schema.";
+
 function pipelineEntries(): CatalogEntry[] {
   const OBS = "Memory pipeline (observer, per wolf)";
   const CON = "Memory pipeline (consolidation, per wolf)";
@@ -129,7 +136,7 @@ function pipelineEntries(): CatalogEntry[] {
     pipeline(`stage-context.${stage}`, "Work context", `Stage context: ${stage}`, "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, text, { constants: ["STAGE_CONTEXT"] }),
   );
   return [
-    pipeline("observer", "Memory observation", "Observer system prompt (live conversations)", OBS, MEMORY_PROMPTS, OBSERVER_SYSTEM, { schema: ObserverResultSchema, constants: ["OBSERVER_SYSTEM"] }),
+    pipeline("observer", "Memory observation", "Observer system prompt (live conversations)", OBS, MEMORY_PROMPTS, OBSERVER_SYSTEM, { schema: ObserverResultSchema, constants: ["OBSERVER_SYSTEM", "OBSERVER_GENERAL_FLAG"] }),
     pipeline("observer-user", "Memory observation", "Observer user template (live)", OBS, `${MEMORY_TEMPLATES}/observations.ts`, LIVE_OBSERVER_USER_PROMPT, { schema: ObserverResultSchema, constants: ["LIVE_OBSERVER_USER_PROMPT"] }),
     pipeline("consolidate", "Memory consolidation", "Consolidation system prompt", CON, MEMORY_PROMPTS, CONSOLIDATE_SYSTEM, { schema: ConsolidationResultSchema, constants: ["CONSOLIDATE_SYSTEM"] }),
     pipeline("consolidate-user", "Memory consolidation", "Session consolidation user template", CON, `${MEMORY_TEMPLATES}/consolidations.ts`, SESSION_CONSOLIDATION_USER_PROMPT, { schema: ConsolidationResultSchema, constants: ["SESSION_CONSOLIDATION_USER_PROMPT"] }),
@@ -144,6 +151,10 @@ function pipelineEntries(): CatalogEntry[] {
     pipeline("distill-graduation", "KB promotion", "Distill: graduation of a finished work item (appended)", "Graduation (wolf side)", ENGINE_PROMPTS, DISTILL_GRADUATION, { schema: DistillOutputSchema, constants: ["DISTILL_GRADUATION"] }),
     pipeline("distill-graduation-standing", "KB promotion", "Distill: standing feature (appended)", "Graduation (wolf side)", ENGINE_PROMPTS, DISTILL_GRADUATION_STANDING, { schema: DistillOutputSchema, constants: ["DISTILL_GRADUATION_STANDING"] }),
     pipeline("work-record", "Work memory", "Work record: rewrite a work item's Record", "Work-record consolidation (memory extension)", ENGINE_PROMPTS, WORK_RECORD_SYSTEM, { schema: WorkRecordSchema, constants: ["WORK_RECORD_SYSTEM"] }),
+    pipeline("work-log", "Work memory", "Work log: lines a task adds from new observations", "Work log (memory extension)", ENGINE_PROMPTS, WORK_LOG_SYSTEM, { constants: ["WORK_LOG_SYSTEM"], contractNote: LINES_NOTE }),
+    pipeline("work-compact", "Work memory", "Work compact: shrink a log that hit its size cap", "Work log compaction (memory extension)", ENGINE_PROMPTS, WORK_COMPACT_SYSTEM, { constants: ["WORK_COMPACT_SYSTEM"], contractNote: LINES_NOTE }),
+    pipeline("work-distill", "Work memory", "Work distill: shipped task log into the feature Record", "Ship distill (memory extension)", ENGINE_PROMPTS, WORK_DISTILL_SYSTEM, { constants: ["WORK_DISTILL_SYSTEM"], contractNote: LINES_NOTE }),
+    pipeline("work-tidy", "Work memory", "Work tidy: one-time tidy of a finished feature's Record", "Final pass (memory extension)", "packages/engine/src/work-tidy.ts", WORK_TIDY_SYSTEM, { constants: ["WORK_TIDY_SYSTEM"], contractNote: LINES_NOTE }),
     pipeline("task-summary", "Work memory", "Task summary on completion", "Work memory (task done)", `${MEMORY_TEMPLATES}/tasks.ts`, TASK_SUMMARY_SYSTEM, { schema: TaskSummaryResult, constants: ["TASK_SUMMARY_SYSTEM"] }),
     pipeline("breakdown-suggestion", "Work memory", "Breakdown suggestion (child tasks or features)", "Work memory (defined; no engine.call site uses it yet)", `${MEMORY_TEMPLATES}/tasks.ts`, BREAKDOWN_SUGGESTION_SYSTEM, { constants: ["BREAKDOWN_SUGGESTION_SYSTEM"], contractNote: "No call site parses a reply against a schema yet." }),
     pipeline("active-work-header", "Work context", "Active work context header", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, ACTIVE_WORK_CONTEXT_HEADER, { constants: ["ACTIVE_WORK_CONTEXT_HEADER"] }),

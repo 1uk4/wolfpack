@@ -6,7 +6,7 @@
  *   config   the effective options as loaded, with secrets masked.
  *   version  this package's version.
  */
-import { readFileSync } from "node:fs";
+import { stampedVersion } from "@wolfpack/protocol/health-lag";
 import {
   CONFIRM_SUBJECT_SYSTEM,
   CONTRADICT_SYSTEM,
@@ -38,15 +38,12 @@ export function hubPrompts(): HubPrompt[] {
 }
 
 let cachedVersion: string | undefined;
-/** The hubd package version (package.json next to src/ and dist/). */
+/**
+ * The hubd release version: the VERSION stamp next to the bundle (hubd.mjs) or the package root (packages/hubd/VERSION, written by
+ * `pnpm runtime:update`), else `<package.json version>-dev`. See @wolfpack/protocol/health-lag stampedVersion.
+ */
 export function hubVersion(): string {
-  if (cachedVersion) return cachedVersion;
-  try {
-    const v = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string }).version;
-    cachedVersion = v ?? "unknown";
-  } catch {
-    cachedVersion = "unknown";
-  }
+  cachedVersion ??= stampedVersion([new URL("./VERSION", import.meta.url), new URL("../VERSION", import.meta.url)], new URL("../package.json", import.meta.url)) ?? "unknown";
   return cachedVersion;
 }
 

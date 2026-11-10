@@ -45,6 +45,13 @@ describe("loadWolfConfig", () => {
     expect(loadWolfConfig(wolf("hk", "name: hk\nextensions: [memory]\nmemory:\n  live: true\n  hubKb: true\n"), { home: "/h" }).config.memory.hubKb).toBe(true);
     expect(loadWolfConfig(wolf("nk", "name: nk\nextensions: [memory]\nmemory:\n  live: true\n"), { home: "/h" }).config.memory.hubKb).toBeUndefined();
   });
+  it("memory.workLog / subagentMemory / generalToDen reach config.memory (what wolfd hands the memory extension) and absent ones stay unset", () => {
+    const r = loadWolfConfig(wolf("fl", "name: fl\nextensions: [memory]\nmemory:\n  workLog: append\n  subagentMemory: on\n  generalToDen: true\n"), { home: "/h" });
+    expect(r.config.memory).toMatchObject({ workLog: "append", subagentMemory: "on", generalToDen: true });
+    expect(r.warnings.filter((w) => /workLog|subagentMemory|generalToDen/.test(w))).toEqual([]);
+    const none = loadWolfConfig(wolf("nf", "name: nf\nextensions: [memory]\nmemory:\n  live: true\n"), { home: "/h" }).config.memory;
+    expect([none.workLog, none.subagentMemory, none.generalToDen]).toEqual([undefined, undefined, undefined]);
+  });
   it("warns when memory settings exist but the memory extension is not listed", () => {
     const warn = (yaml: string) => loadWolfConfig(wolf("w", yaml), { home: "/h" }).warnings.filter((w) => w.includes("memory configured but not in extensions: memory is off"));
     expect(warn("name: w\nmemory:\n  defaultDomain: x\ndomains: [x]\n")).toHaveLength(1);
@@ -330,7 +337,7 @@ describe("wolf.yaml models:", () => {
         fast: tier("claude-haiku-5-5", "pack", "claude-stateless"),
       },
       steps: {
-        classify: fast, consolidate: smart, distill: smart, workRecord: smart, produce: smart, contradict: fast,
+        classify: fast, consolidate: smart, distill: smart, workRecord: smart, workLog: fast, workDistill: smart, workCompact: fast, produce: smart, contradict: fast,
         classifyToSection: fast, matchSubject: fast, confirmSubject: fast, sectionSummary: fast, labelSection: fast,
       },
       warnings: [],
@@ -345,6 +352,8 @@ describe("wolf.yaml models:", () => {
     const after = JSON.parse(fs.readFileSync(mj, "utf8")) as typeof current & { steps: Record<string, unknown> };
     expect(after.steps.splitSection).toEqual({ tier: "fast" });
     delete after.steps.splitSection;
+    expect(after.steps.workTidy).toEqual({ tier: "smart" });
+    delete after.steps.workTidy;
     expect(after).toEqual(current);
     // With that step present (the current shape) it is `unchanged`.
     expect(regen().status).toBe("unchanged");

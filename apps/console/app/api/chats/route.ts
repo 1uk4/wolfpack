@@ -1,4 +1,4 @@
-import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
+import { createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (pending
@@ -12,7 +12,7 @@ export async function GET() {
 	const chats: ChatListItem[] = listChats().map((c) => ({
 		...c,
 		busy: isTurnRunning(c.id),
-		compacting: compactionInFlight(c.id),
+		compacting: false,
 	}));
 	return Response.json({ chats });
 }

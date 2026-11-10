@@ -28,7 +28,8 @@ function failure(err: unknown): Response {
 	if (err instanceof Error && err.name === "ProtocolError") {
 		const code = (err as Error & { code?: string }).code ?? "engine_error";
 		const hubAuth = (err as Error & { hubAuth?: boolean }).hubAuth === true;
-		return Response.json({ error: err.message, code }, { status: STATUS_BY_CODE[code] ?? 502, ...(hubAuth ? { headers: { [HUB_AUTH_HEADER]: "required" } } : {}) });
+		const timedOut = (err as Error & { timedOut?: boolean }).timedOut === true; // the client gave up waiting: 504, not 502
+		return Response.json({ error: err.message, code }, { status: timedOut ? 504 : (STATUS_BY_CODE[code] ?? 502), ...(hubAuth ? { headers: { [HUB_AUTH_HEADER]: "required" } } : {}) });
 	}
 	console.error("[prompts-api] unexpected error:", err);
 	return json({ error: "Internal error" }, 500);

@@ -702,6 +702,9 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				const fromEnv = env.WOLFPACK_HUB_TOKEN?.trim();
 				if (fromEnv && !tokens.includes(fromEnv)) tokens.push(fromEnv);
 				const label = `preview slot ${port} ${os.hostname()}`.slice(0, 64);
+				// --print-url is the wolf browser (kind "agent"); otherwise the owner's. Each kind revokes only its own previous token, so they do not sign each other out.
+				const kind = argv.includes("--print-url") ? "agent" : "owner";
+				await slots.revokeToken(port, kind); // a failure only warns, so the hub keeps one live token per port and kind
 				let paired;
 				let redeemFailed;
 				for (const token of tokens) {
@@ -719,6 +722,15 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 				if (!paired) {
 					const setup = tokenSetup();
 					return fail(`no token on this Mac can mint a browser pairing code for the slot. One-time setup:\n  ${setup[0]}\n  ${setup[1]}`);
+				}
+				if (typeof paired.tokenId === "string" && paired.tokenId) {
+					try {
+						await slots.recordToken(port, paired.tokenId, kind); // the id only, never the token
+					} catch (e) {
+						warn(`preview: could not record slot token id ${paired.tokenId} (${e.message}); revoking it so it is not orphaned`);
+						await slots.revokeTokenId(paired.tokenId);
+						return fail("could not record the new slot token, so it was revoked; run the command again");
+					}
 				}
 				const target = `http://127.0.0.1:${port}/pair#token=${encodeURIComponent(paired.token)}`;
 				const done = `signed in your browser on :${port} (token id ${paired.tokenId ?? "unknown"})`;

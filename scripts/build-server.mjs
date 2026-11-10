@@ -11,7 +11,7 @@
  *   <out>/apps/console/.next/static      copied in (Next does not trace it)
  *   <out>/apps/console/public            copied in
  *   <out>/node_modules                   traced runtime deps (hoisted)
- *   <out>/VERSION                        "<console version>+<short sha>"
+ *   <out>/VERSION                        the console/vX.Y.Z release version (scripts/release-version.mjs); "<package version>-dev+<sha>" when untagged
  * Run:  PORT=3210 HOSTNAME=127.0.0.1 WOLFPACK_HUB_URL=http://127.0.0.1:3150 node server.js
  *
  * Configuration is all RUNTIME env (the /pair link reads HUBD_PUBLIC_URL via /api/hub-url; nothing host-specific is baked in):
@@ -22,6 +22,7 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolveVersion } from "./release-version.mjs";
 
 const REPO = path.resolve(import.meta.dirname, "..");
 const APP = path.join(REPO, "apps", "console");
@@ -141,6 +142,6 @@ fs.writeFileSync(path.join(OUT, "server.js"), `// shim: run the standalone conso
 fs.writeFileSync(path.join(OUT, "package.json"), '{"private":true,"type":"module"}\n'); // self-contained: never inherit a parent package.json
 let sha = "nogit";
 try { sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: REPO, encoding: "utf8" }).trim(); } catch { /* not a checkout */ }
-const ver = JSON.parse(fs.readFileSync(path.join(APP, "package.json"), "utf8")).version;
-fs.writeFileSync(path.join(OUT, "VERSION"), `${ver}+${sha}\n`);
-console.log(`[build-server] ready: ${OUT} (${ver}+${sha}); run: cd ${path.relative(process.cwd(), OUT) || "."} && node server.js`);
+const ver = resolveVersion("console", REPO) ?? `${JSON.parse(fs.readFileSync(path.join(APP, "package.json"), "utf8")).version}-dev+${sha}`;
+fs.writeFileSync(path.join(OUT, "VERSION"), `${ver}\n`);
+console.log(`[build-server] ready: ${OUT} (${ver}); run: cd ${path.relative(process.cwd(), OUT) || "."} && node server.js`);

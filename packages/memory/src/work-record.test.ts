@@ -4,10 +4,13 @@ import { LlmInfraError } from "@wolfpack/engine";
 import { stripSources, parseRecordLines, formatSources } from "./record-sources.js";
 import {
   consolidateWorkRecords,
+  HttpWorkRecordStore,
+  InMemoryWorkRecordStore,
   extractRecord,
   renderRecord,
   renderWorkingDocument,
   renderFeatureRecord,
+  renderFeatureView,
   replaceRecordSection,
   withoutRecord,
   resolveSources,
@@ -18,6 +21,7 @@ import {
   type WorkRecord,
   type WorkRecordItem,
   type WorkRecordStore,
+  WorkApiError,
 } from "./work-record.js";
 import { WorkPendingState } from "./work-pending.js";
 
@@ -126,25 +130,62 @@ describe("renderWorkingDocument", () => {
     expect(out).toContain("the plan");
     expect(out).toContain("## Record");
   });
+
+  const lines = Array.from({ length: 200 }, (_, i) => `- 10:00 [w·note] log line number ${i} padding padding`);
+  const logDoc = `## Plan\n\nthe plan\n\n## Record\n\n${lines.join("\n")}`;
+
+  it("append mode keeps the newest log lines and marks the dropped older ones", () => {
+    const out = renderWorkingDocument(logDoc, DOCUMENT_CAP, { tail: true });
+    expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+    expect(out).toContain("log line number 199 ");
+    expect(out).not.toContain("log line number 0 ");
+    expect(out).toMatch(/… \d+ earlier lines/);
+  });
+
+  it("fold mode (default) keeps the head of an over-long Record, as before", () => {
+    const out = renderWorkingDocument(logDoc);
+    expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+    expect(out).toContain("log line number 0 ");
+    expect(out).not.toContain("log line number 199 ");
+    expect(out).not.toMatch(/earlier lines/);
+  });
+
+  it.each([["paragraph Record", `## Record\n\n${"A sentence of prose. ".repeat(400)}`], ["single over-long line", `## Record\n\n- ${"x".repeat(5000)}`]])(
+    "clips a %s to the cap in both modes, never to an empty Record",
+    (_n, record) => {
+      for (const opts of [undefined, { tail: true }]) {
+        const out = renderWorkingDocument(`## Plan\n\nthe plan\n\n${record}`, DOCUMENT_CAP, opts);
+        expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+        expect(out).toContain("the plan");
+        expect(out).toMatch(/## Record\n\n(A sentence|- x)/);
+      }
+    },
+  );
 });
 
 // ── consolidateWorkRecords ───────────────────────────────────────────────────
 
-function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failGet?: boolean; failSet?: boolean } = {}) {
+function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failGet?: boolean; failSet?: boolean; forbid?: string; closed?: boolean } = {}) {
+  const gets: string[] = [];
   const writes: Array<{ id: string; body: string }> = [];
   const store: WorkRecordStore = {
+    appendRecord: async () => ({ ok: true }),
     async get(id) {
+      gets.push(id);
       if (opts.failGet) throw new Error("Work API unreachable");
       const it = items[id];
       return it ? { id, title: "T", kind: "task", stage: "in_build", body: "", ...it } : null;
     },
-    async setBody(id, body) {
+    async setRecord(id, record) {
       if (opts.failSet) throw new Error("HTTP 502");
+      if (opts.forbid) throw new WorkApiError(403, opts.forbid);
+      if (opts.closed) throw new WorkApiError(409, "item is archived; its Record is closed", "record_closed");
+      const body = replaceRecordSection(items[id]?.body ?? "", record);
       writes.push({ id, body });
       items[id] = { ...items[id], body };
     },
   };
-  return { store, writes };
+  return { store, writes, gets };
 }
 
 const rec = (over: Partial<WorkRecord> = {}): WorkRecord => ({ decisions: [], changes: [], findings: [], problems: [], ...over });
@@ -231,6 +272,45 @@ describe("consolidateWorkRecords", () => {
   });
 });
 
+describe("a refused write is its own cause", () => {
+  const http = (patchStatus: number) =>
+    new HttpWorkRecordStore("http://w", "t", (async (_u: unknown, init?: RequestInit) =>
+      init?.method === "PATCH"
+        ? new Response("{}", { status: patchStatus })
+        : new Response(JSON.stringify({ item: { id: "a", title: "T", kind: "feature", stage: "in_build", assignee: "hal" }, body: "" }), { status: 200 })) as typeof fetch);
+
+  it("a 403 on the Record write is cause forbidden, with the assignee; the backoff state records it", async () => {
+    const state = new WorkPendingState(undefined);
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store: http(403), observations: obs("a", "x"), state });
+    expect(out[0]).toMatchObject({ status: "pending", cause: "forbidden", assignee: "hal" });
+    // both the hub's words and the assignee are stored, and a refusal has no backoff
+    expect(state.entry("a")).toMatchObject({ cause: "forbidden", assignee: "hal", message: "Work API PATCH a: HTTP 403", tries: 1, nextAttemptAt: 0 });
+    expect(state.due("a")).toBe(true);
+  });
+
+  it("a 502 on the write stays work-api-unavailable", async () => {
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store: http(502), observations: obs("a", "x") });
+    expect(out[0]).toMatchObject({ status: "pending", cause: "work-api-unavailable" });
+  });
+});
+
+describe("backoff", () => {
+  it("a group inside its backoff is skipped unless the run ignores backoff; a failed forced try still updates the state", async () => {
+    const state = new WorkPendingState(undefined, () => 1000);
+    state.pending("a", "work-api-unavailable");
+    const { store, writes } = fakeStore({ a: {} });
+    const auto = await consolidateWorkRecords({ engine: fakeEngine([]), store, observations: obs("a", "x"), state });
+    expect(auto[0]).toMatchObject({ status: "pending", reason: "backoff", retryAt: 1000 + 5 * 60_000 });
+    const manual = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store, observations: obs("a", "x"), state, ignoreBackoff: true });
+    expect(manual[0].status).toBe("written");
+    expect(writes).toHaveLength(1);
+    const { store: bad } = fakeStore({ a: {} }, { failSet: true });
+    state.pending("a", "work-api-unavailable");
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["f"] })]), store: bad, observations: obs("a", "x"), state, ignoreBackoff: true });
+    expect(state.entry("a")?.tries).toBe(2);
+  });
+});
+
 describe("Record per feature", () => {
   const withFeature = (feature: string | undefined, work: string, ...contents: string[]) =>
     contents.map((c, i) => ({ id: `${work}-${i}`, content: c, work, ...(feature ? { feature } : {}) }));
@@ -291,6 +371,129 @@ describe("Record per feature", () => {
     const { store, writes } = fakeStore({ f1: { kind: "feature" }, t1: { body: "## Plan\n\np\n\n## Record\n\n- old" } });
     await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["n"] })]), store, observations: withFeature("f1", "t1", "x") });
     expect(writes.map((w) => w.id)).toEqual(["f1"]);
+  });
+});
+
+describe("the Record follows the item", () => {
+  const one = (work: string, feature?: string) => [{ id: `${work}-0`, content: "c", work, ...(feature ? { feature } : {}) }];
+
+  it("a task moved to another feature folds into its CURRENT feature, not the one stored on the observation", async () => {
+    const { store, writes } = fakeStore({ fA: { kind: "feature" }, fB: { kind: "feature" }, t: { partOf: "fB" } });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t", "fA") });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["fB", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["fB"]);
+    expect(writes[0].body).toContain("### Findings");
+    expect(writes[0].body).toContain("- x");
+  });
+
+  it("a task moved out of its feature (partOf null) folds into its own Record, whatever feature the observation stored", async () => {
+    const { store, writes } = fakeStore({ fA: { kind: "feature" }, t: { partOf: null } });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t", "fA") });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["t", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["t"]);
+  });
+
+  it("reads each item at most once per run", async () => {
+    const { store, gets } = fakeStore({ f: { kind: "feature" }, t1: { partOf: "f" }, t2: { partOf: "f" } });
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: [...one("t1"), ...one("t2")] });
+    expect([...gets].sort()).toEqual(["f", "t1", "t2"]);
+  });
+
+  it("a write refused because the item was archived meanwhile discards the observations, like the archived path", async () => {
+    const { store } = fakeStore({ f: { kind: "feature" }, t: { partOf: "f" } }, { closed: true });
+    const state = new WorkPendingState(undefined, () => 1000);
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, state, observations: one("t") });
+    expect(out).toEqual([{ work: "f", ids: ["t-0"], status: "discarded", reason: "archived" }]);
+    expect(state.entry("f")).toBeUndefined();
+  });
+
+  it("the HTTP store carries the hub error code of a refusal", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "item is archived; its Record is closed", code: "record_closed" }), { status: 409 })) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await expect(store.setRecord("t", "### Findings\n\n- x")).rejects.toMatchObject({ status: 409, code: "record_closed" });
+  });
+
+  it("a task that cannot be read falls back to the feature stored on the observation", async () => {
+    const { store, writes } = fakeStore({ fA: { kind: "feature" } });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("gone", "fA") });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["fA", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["fA"]);
+  });
+
+  it("a 403 is a final 'forbidden' with the hub's message: kept pending, no backoff, tried again on the next run", async () => {
+    const msg = "assigned to hal; only hal or the owner can change it";
+    const { store } = fakeStore({ f: { kind: "feature" }, t: { partOf: "f" } }, { forbid: msg });
+    const state = new WorkPendingState(undefined, () => 1000);
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] }), rec({ findings: ["x"] })]), store, state, observations: one("t") });
+    expect(out[0]).toMatchObject({ work: "f", status: "pending", cause: "forbidden", reason: msg });
+    expect(state.entry("f")).toMatchObject({ cause: "forbidden", message: msg });
+    expect(state.due("f")).toBe(true);
+    const again = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, state, observations: one("t") });
+    expect(again[0]).toMatchObject({ cause: "forbidden", reason: msg });
+    expect(again[0].ids).toEqual(["t-0"]);
+  });
+
+  it("writes only the Record section through the hub, sending the section name 'Record' and no heading in the text", async () => {
+    const calls: Array<{ method: string; body: unknown }> = [];
+    const fetchImpl = (async (_u: string, init: { method: string; body?: string }) => {
+      calls.push({ method: init.method, body: init.body ? JSON.parse(init.body) : undefined });
+      return new Response(init.method === "GET" ? JSON.stringify({ item: { id: "t", kind: "task", stage: "in_build", title: "T" }, body: "## Plan\n\nmine" }) : "{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: one("t") });
+    const patch = calls.find((c) => c.method === "PATCH")!.body as { section: { name: string; text: string }; body?: string };
+    expect(patch.body).toBeUndefined();
+    expect(patch.section.name).toBe("Record");
+    expect(patch.section.text.startsWith("### Findings")).toBe(true);
+  });
+
+  it("the HTTP store reports a refused write as a WorkApiError with the status and the hub's message", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "assigned to hal; only hal or the owner can change it" }), { status: 403 })) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await expect(store.setRecord("t", "## Record\n\n### Findings\n\n- x")).rejects.toMatchObject({ status: 403, message: "assigned to hal; only hal or the owner can change it" });
+  });
+});
+
+describe("renderFeatureView", () => {
+  const logBody = (n: number, tag: string) =>
+    `## Plan\n\np\n\n## Record\n\n${Array.from({ length: n }, (_, i) => `- 10:00 [w·note] ${tag} line ${i} some words here`).join("\n")}`;
+  const task = (i: number, stage = "in_build", body = logBody(30, `t${i}`)) => ({ id: `work-wolfpack-T${i}`, title: `Task ${i}`, stage, body });
+  const feature = { title: "Feat", body: `## Record\n\n${Array.from({ length: 300 }, (_, i) => `- feature fact ${i} with padding words`).join("\n")}` };
+
+  it("stays within the caps with a large Record and 8 open tasks, and counts the rest", () => {
+    const open = Array.from({ length: 8 }, (_, i) => task(i));
+    const out = renderFeatureView(feature, open);
+    const [rec, tasks] = out.split("\n\n## Open tasks");
+    expect(rec.length).toBeLessThanOrEqual(2500);
+    expect(rec).toContain("feature fact 299 ");
+    expect(rec).not.toContain("feature fact 0 ");
+    expect(tasks.length + 10).toBeLessThanOrEqual(1500);
+    expect(tasks).toContain("work-wolfpack-T4");
+    expect(tasks).not.toContain("work-wolfpack-T5");
+    expect(tasks).toContain("+3 more");
+    expect(tasks).toContain("t0 line 29 "); // newest whole line
+    expect(tasks).not.toContain("t0 line 0 ");
+  });
+
+  it("leaves out shipped and archived siblings", () => {
+    const out = renderFeatureView(feature, [task(1, "shipped"), task(2, "archived"), task(3)]);
+    expect(out).not.toContain("work-wolfpack-T1");
+    expect(out).not.toContain("work-wolfpack-T2");
+    expect(out).toContain("work-wolfpack-T3");
+    expect(out).not.toContain("more");
+  });
+
+  it("leaves out the bound task", () => {
+    const out = renderFeatureView(feature, [task(1), task(2)], "work-wolfpack-T1");
+    expect(out).not.toContain("work-wolfpack-T1");
+    expect(out).toContain("work-wolfpack-T2");
+  });
+
+  it("shows only title and stage for a task with no Record", () => {
+    const out = renderFeatureView({ title: "Feat", body: "" }, [task(1, "plan", "## Plan\n\njust a plan")]);
+    expect(out).toContain('work-wolfpack-T1 "Task 1" (plan)');
+    expect(out).not.toContain("just a plan");
+    expect(out).not.toContain("Feature Record");
   });
 });
 
@@ -442,5 +645,85 @@ describe("pending entries do not outlive their observations", () => {
     expect(out[0]?.status).toBe("discarded");
     expect(state.entry("t1")).toBeUndefined();
     expect(state.entry("t2")).toBeDefined();
+  });
+});
+
+// ── appendRecord ─────────────────────────────────────────────────────────────
+
+describe("appendRecord", () => {
+  const line = (id: string, text = "did x") => ({ at: "2026-11-09T10:05:00Z", src: "hal", kind: "change" as const, text, ids: [id] });
+  const capture = (status = 200, json: unknown = {}) => {
+    const calls: Array<{ url: string; init: { method: string; headers: Record<string, string>; body: string } }> = [];
+    const fetchImpl = (async (url: string, init: { method: string; headers: Record<string, string>; body: string }) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(json), { status });
+    }) as unknown as typeof fetch;
+    return { calls, store: new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa") };
+  };
+
+  it("PATCHes {op:'recordAppend', lines} with an idempotency key and answers ok on 200", async () => {
+    const { calls, store } = capture();
+    const lines = [line("o1"), line("o2")];
+    expect(await store.appendRecord("work-x-1", lines)).toEqual({ ok: true });
+    expect(calls[0].url).toBe("http://h/v1/workapi/work/work-x-1");
+    expect(calls[0].init.method).toBe("PATCH");
+    expect(calls[0].init.headers["X-API-Key"]).toBe("tok");
+    expect(calls[0].init.headers["Idempotency-Key"]).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
+    expect(JSON.parse(calls[0].init.body)).toEqual({ op: "recordAppend", lines });
+  });
+
+  it("derives the same key for the same lines in any order, another for other lines, and uses an explicit key as given", async () => {
+    const { calls, store } = capture();
+    await store.appendRecord("t", [line("o1"), line("o2")]);
+    await store.appendRecord("t", [line("o2"), line("o1")]);
+    await store.appendRecord("t", [line("o3")]);
+    await store.appendRecord("t", [line("o1")], { idempotencyKey: "mine-1" });
+    const keys = calls.map((c) => c.init.headers["Idempotency-Key"]);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[3]).toBe("mine-1");
+  });
+
+  it("maps 409 log_full, an archived item, a refusal and an outage to results without throwing", async () => {
+    expect(await capture(409, { error: "full", code: "log_full" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "log_full" });
+    expect(await capture(409, { error: "closed", code: "record_closed" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "archived", message: "closed" });
+    expect(await capture(403, { error: "no" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "forbidden", message: "no" });
+    expect(await capture(502, {}).store.appendRecord("t", [line("o1")])).toMatchObject({ ok: false, code: "error" });
+    expect(await capture(500, { error: "boom" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "error", message: "boom" });
+    const down = new HttpWorkRecordStore("http://h/v1/workapi", "tok", (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch, "wa");
+    expect(await down.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "error", message: "ECONNREFUSED" });
+  });
+
+  it("the in-memory store appends, dedupes by line ids, and refuses past the cap and on archived items", async () => {
+    const mem = new InMemoryWorkRecordStore({
+      t: { id: "t", title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" },
+      a: { id: "a", title: "A", kind: "task", stage: "archived", body: "" },
+    });
+    expect(await mem.appendRecord("t", [line("o1", "first")])).toEqual({ ok: true });
+    expect(await mem.appendRecord("t", [line("o1", "first"), line("o2", "second")])).toEqual({ ok: true });
+    const body = (await mem.get("t"))!.body;
+    expect(body).toContain("## Plan\n\np");
+    expect(body.match(/first/g)).toHaveLength(1);
+    expect(body).toContain("- 10:05 [hal\u00b7change] second <!-- src:o2 -->");
+    const big = (p: string) => Array.from({ length: 20 }, (_, i) => line(`${p}${i}`, "y".repeat(240)));
+    expect(await mem.appendRecord("t", big("b"))).toEqual({ ok: true });
+    const full = (await mem.get("t"))!.body;
+    expect(await mem.appendRecord("t", big("c"))).toEqual({ ok: false, code: "log_full" });
+    expect((await mem.get("t"))!.body).toBe(full);
+    expect(await mem.appendRecord("a", [line("o1")])).toMatchObject({ ok: false, code: "archived" });
+  });
+
+  it("sends group in the PATCH, and the in-memory store inserts under that ### heading (creating it) like the hub", async () => {
+    const { calls, store } = capture();
+    await store.appendRecord("f", [line("o1")], { group: "Findings" });
+    expect(JSON.parse(calls[0].init.body)).toMatchObject({ op: "recordAppend", group: "Findings" });
+    const mem = new InMemoryWorkRecordStore({
+      f: { id: "f", title: "F", kind: "feature", stage: "in_build", body: "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->" },
+    });
+    await mem.appendRecord("f", [line("o2", "new change")], { group: "Changes" });
+    await mem.appendRecord("f", [line("o3", "new decision")], { group: "Decisions" });
+    expect((await mem.get("f"))!.body).toBe(
+      "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n- 10:05 [hal\u00b7change] new change <!-- src:o2 -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->\n\n### Decisions\n\n- 10:05 [hal\u00b7change] new decision <!-- src:o3 -->\n",
+    );
   });
 });

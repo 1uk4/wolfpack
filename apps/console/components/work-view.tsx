@@ -15,10 +15,12 @@
  * returns to it with its scroll, filters and domain intact.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/top-bar";
 import { useWorkReader } from "./work-reader";
+import { MenuShell } from "@/components/menu-shell";
+import { WolfpackMark } from "@/components/wolfpack-mark";
 import {
 	DEFAULT_WORK_SORT,
 	LANE_COLOR,
@@ -30,10 +32,13 @@ import {
 	laneKey,
 	lanePath,
 	laneState,
+	INBOX_KEY,
+	moveOptions,
 	nextWorkSort,
 	rowHeight,
 	rowTops,
 	type Chip,
+	type MoveOption,
 	type TableRow,
 	type WorkListItem,
 	type WorkSort,
@@ -47,6 +52,18 @@ import { useGraduated } from "./graduation-signal";
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
 export const DEFAULT_WORK_DOMAIN = "wolfpack";
 export const WORK_POLL_MS = 30_000;
+/** How long the move notification (with its Undo) stays. */
+export const WORK_UNDO_MS = 8000;
+
+/** The one move notification. `undo` reverses the move; `from` is the assignee to give back after a handoff. */
+interface MoveToast {
+	/** Which notification this is; a late undo only writes to the one it started from. */
+	id: number;
+	kind: "moved" | "undone" | "error";
+	text: string;
+	undo?: { id: string; prev: string | null; from: string | null };
+	busy?: boolean;
+}
 
 function readDomain(): string {
 	try {
@@ -61,16 +78,17 @@ function readDomain(): string {
 type Load = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; items: WorkListItem[] };
 
 /** Fetches the domain's items; refetches on focus, on a poll and on `reload`, keeping the last good list while it does. */
-function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => void } {
+function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => Promise<boolean> } {
 	const [load, setLoad] = useState<Load>({ state: "loading" });
 	const seq = useRef(0);
-	const refresh = useCallback(async () => {
+	const refresh = useCallback(async (): Promise<boolean> => {
 		const mine = ++seq.current;
 		// Always with the graduated ones: an initiative is ready when its features all graduated; the table hides them unless the toggle is on.
 		const res = await client.list(domain, true);
-		if (mine !== seq.current) return; // a newer request (another domain, the toggle) owns the answer
+		if (mine !== seq.current) return true; // a newer request (another domain, the toggle) owns the answer
 		if (res.ok) setLoad({ state: "ready", items: res.data.items });
 		else setLoad((cur) => (cur.state === "ready" ? cur : { state: "error", message: res.message }));
+		return res.ok;
 	}, [client, domain]);
 	useEffect(() => {
 		setLoad((cur) => (cur.state === "ready" ? cur : { state: "loading" }));
@@ -86,7 +104,7 @@ function useWorkItems(client: WorkClient, domain: string): { load: Load; reload:
 	}, [refresh]);
 	// A graduation elsewhere (this view's own dialog, the graph pane) changes the list: read it again now.
 	useGraduated(() => void refresh());
-	return { load, reload: () => void refresh() };
+	return { load, reload: () => refresh() };
 }
 
 // ---- View ------------------------------------------------------------------
@@ -130,6 +148,7 @@ function RowLinks({ row }: { row: TableRow }) {
 }
 
 const COLS = {
+	assignee: "w-24 shrink-0 md:w-32",
 	status: "w-24 shrink-0 md:w-56",
 	created: "w-24 shrink-0 max-md:hidden",
 	open: "flex w-6 shrink-0 justify-end md:w-16",
@@ -146,6 +165,155 @@ interface RowCtx {
 	gutter: number;
 	/** The graduation seam: each feature row's control reads and drives its job through it. */
 	graduate: GraduateClient;
+	/** The owner's assignee control (absent: assignees show as plain text). */
+	assign?: { wolves: readonly string[]; wolvesError: string | null; busy: ReadonlySet<string>; errors: ReadonlyMap<string, string>; onAssign: (id: string, wolf: string) => void };
+	/** The owner's move controls (absent: no drag, no menu). Drag and the menu both end in `onMove`. */
+	move?: {
+		options: (id: string) => MoveOption[];
+		busy: ReadonlySet<string>;
+		messages: ReadonlyMap<string, MoveMsg>;
+		dragId: string | null;
+		onDragStart: (id: string) => void;
+		onDragEnd: () => void;
+		onMove: (id: string, to: string | null) => void;
+	};
+}
+
+/** A row's move message; a handoff note goes once the list has been read again after the one that set it (`until` = the list count then). */
+interface MoveMsg {
+	kind: "error" | "handoff";
+	text: string;
+	until?: number;
+}
+
+/** The option a drop on this row would pick for the dragged item: a feature/initiative row by id, the Inbox group for the inbox option. */
+function dropOption(row: TableRow, ctx: RowCtx): MoveOption | null {
+	const m = ctx.move;
+	if (!m || m.dragId === null || m.dragId === row.id) return null;
+	const opts = m.options(m.dragId);
+	return (row.key === INBOX_KEY ? opts.find((o) => o.inbox) : opts.find((o) => !o.inbox && o.to === row.id)) ?? null;
+}
+
+/** A failed assignee change, on its own line under the title. */
+function AssignError({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const a = ctx.assign;
+	const error = a && row.id && row.assignable ? a.errors.get(row.id) : undefined;
+	if (error === undefined) return null;
+	return (
+		<span data-testid={`work-assignee-error-${row.key}`} role="alert" className="block truncate text-[11px] leading-4 text-destructive" title={error}>
+			{error}
+		</span>
+	);
+}
+
+/** The move message, on its own line under the title. */
+function MoveMessage({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const msg = row.id ? ctx.move?.messages.get(row.id) : undefined;
+	if (!msg) return null;
+	return (
+		<span data-testid={`work-move-msg-${row.key}`} data-kind={msg.kind} role={msg.kind === "error" ? "alert" : "status"} className={`block truncate text-[11px] leading-4 ${msg.kind === "error" ? "text-destructive" : "text-emerald-500"}`} title={msg.text}>
+			{msg.text}
+		</span>
+	);
+}
+
+/** The assignee column: wolf icon + name (muted "—" when none). On an assignable row it is a button opening a menu of the other wolves; elsewhere it is static. */
+function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
+	const a = ctx.assign;
+	const [open, setOpen] = useState(false);
+	const btn = useRef<HTMLButtonElement>(null);
+	const close = useCallback(() => setOpen(false), []);
+	// Escape and a pointer-down outside the button and the (portaled) menu close it; Escape hands focus back to the button.
+	useEffect(() => {
+		if (!open) return;
+		const down = (e: PointerEvent) => {
+			const t = e.target as Node;
+			if (btn.current?.contains(t) || (t as Element).closest?.(`[data-testid="work-assignee-menu-${row.key}"]`)) return;
+			close();
+			btn.current?.focus();
+		};
+		const key = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			close();
+			btn.current?.focus();
+		};
+		document.addEventListener("pointerdown", down);
+		// Capture phase, so stopPropagation keeps an open reader or dialog from also closing on this Escape.
+		document.addEventListener("keydown", key, true);
+		return () => {
+			document.removeEventListener("pointerdown", down);
+			document.removeEventListener("keydown", key, true);
+		};
+	}, [open, close, row.key]);
+	const face = row.assignee ? (
+		<>
+			<span className="inline-flex size-3 shrink-0">
+				<WolfpackMark className="size-full" />
+			</span>
+			<span className="truncate">{row.assignee}</span>
+		</>
+	) : (
+		<span aria-label="unassigned">—</span>
+	);
+	if (!a || !row.assignable || !row.id) {
+		return (
+			<span data-testid={`work-assignee-${row.key}`} className={`${COLS.assignee} flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground`}>
+				{face}
+			</span>
+		);
+	}
+	const id = row.id;
+	const others = a.wolves.filter((w) => w !== row.assignee);
+	return (
+		<span className={`${COLS.assignee} flex min-w-0 items-center`} onClick={(e) => e.stopPropagation()}>
+			<button
+				ref={btn}
+				type="button"
+				data-testid={`work-assignee-${row.key}`}
+				aria-haspopup="menu"
+				aria-expanded={open}
+				aria-label={`Assignee of ${row.title}: ${row.assignee || "none"}`}
+				disabled={a.busy.has(id)}
+				onClick={() => setOpen((o) => !o)}
+				className="flex min-w-0 max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] text-primary hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:text-muted-foreground disabled:opacity-50"
+			>
+				{face}
+				<ChevronDownIcon data-testid={`work-assignee-chevron-${row.key}`} aria-hidden className="size-3 shrink-0" />
+			</button>
+			{open && (
+				<MenuShell anchorRef={btn} testid={`work-assignee-menu-${row.key}`} preferredSide="down" align="left" menuClass="flex w-48 flex-col gap-0.5 rounded-xl border bg-card p-1.5 text-xs shadow-xl">
+					<span role="menu" className="flex flex-col gap-0.5">
+						{a.wolvesError !== null ? (
+							<span role="alert" className="px-2 py-1 text-destructive">
+								can't load wolves: {a.wolvesError}
+							</span>
+						) : (
+							others.map((w) => (
+								<button
+									key={w}
+									type="button"
+									role="menuitem"
+									data-testid={`work-assignee-option-${row.key}-${w}`}
+									onClick={() => {
+										close();
+										btn.current?.focus();
+										a.onAssign(id, w);
+									}}
+									className="flex items-center gap-2 rounded-lg px-2 py-1 text-left hover:bg-muted focus:bg-muted focus:outline-none"
+								>
+									<span className="inline-flex size-3 shrink-0">
+										<WolfpackMark className="size-full" />
+									</span>
+									<span className="truncate">{w}</span>
+								</button>
+							))
+						)}
+					</span>
+				</MenuShell>
+			)}
+		</span>
+	);
 }
 
 /** A row shows its children when it has some and is open (by hand or by search). */
@@ -162,6 +330,9 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 		if (hasKids) onToggle(row.key);
 		else if (row.id) onSelect(row.id);
 	};
+	const mv = ctx.move;
+	const target = dropOption(row, ctx);
+	const draggable = !!mv && !!row.id && !mv.busy.has(row.id) && mv.options(row.id).length > 0;
 	return (
 		<>
 			<div
@@ -169,6 +340,22 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				data-kind={row.kind}
 				data-graduated={row.graduated || undefined}
 				data-selected={ctx.openId === row.id || undefined}
+				data-drop-target={target ? true : undefined}
+				draggable={draggable || undefined}
+				onDragStart={draggable ? (e) => {
+					e.stopPropagation();
+					e.dataTransfer?.setData?.("text/plain", row.id);
+					mv!.onDragStart(row.id);
+				} : undefined}
+				onDragEnd={draggable ? () => mv!.onDragEnd() : undefined}
+				onDragOver={target ? (e) => { e.preventDefault(); e.stopPropagation(); } : undefined}
+				onDrop={target ? (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					const id = mv!.dragId!;
+					mv!.onDragEnd();
+					mv!.onMove(id, target.to);
+				} : undefined}
 				onClick={hasKids || row.id ? activate : undefined}
 				onKeyDown={(e) => {
 					if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
@@ -178,7 +365,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				tabIndex={hasKids || row.id ? 0 : undefined}
 				aria-expanded={hasKids ? open : undefined}
 				style={{ height: rowHeight(row), paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
-				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
+				className={`flex flex-col pr-2 md:pr-3 ${row.graduated ? "opacity-50" : ""} ${ctx.openId === row.id ? "bg-accent" : ""} ${target ? "bg-primary/15 outline outline-1 outline-primary" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
 				<div style={{ height: WORK_ROW_H }} className="flex shrink-0 items-center gap-1">
 					{hasKids ? (
@@ -204,11 +391,14 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 						) : (
 							<RowTitle row={row} />
 						)}
+						<MoveMessage row={row} ctx={ctx} />
+						<AssignError row={row} ctx={ctx} />
 					</span>
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
 					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
 					</span>
+					<AssigneeCell row={row} ctx={ctx} />
 					<span className={`${COLS.status} flex min-w-0 flex-col md:flex-row md:items-center md:gap-2`}>
 						<span
 							data-testid={`work-stage-${row.key}`}
@@ -297,7 +487,7 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 	{ col: "created", label: "Created", cls: `${COLS.created} justify-end` },
 ];
 
-export function WorkList({ client: injected, graduate: injectedGraduate }: { client?: WorkClient; graduate?: GraduateClient }) {
+export function WorkList({ client: injected, graduate: injectedGraduate, undoMs = WORK_UNDO_MS }: { client?: WorkClient; graduate?: GraduateClient; undoMs?: number }) {
 	const { open: openItem, itemId } = useWorkReader();
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
@@ -306,7 +496,25 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 	const [query, setQuery] = useState("");
 	const [sort, setSort] = useState<WorkSort>(DEFAULT_WORK_SORT);
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-	const { load } = useWorkItems(client, domain);
+	const { load, reload } = useWorkItems(client, domain);
+	const [wolves, setWolves] = useState<string[]>([]);
+	const [wolvesError, setWolvesError] = useState<string | null>(null);
+	const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+	const [assignErrors, setAssignErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+	const [busyMove, setBusyMove] = useState<ReadonlySet<string>>(() => new Set());
+	const [moveMsgs, setMoveMsgs] = useState<ReadonlyMap<string, MoveMsg>>(() => new Map());
+	const [toast, setToast] = useState<MoveToast | null>(null);
+	const toastSeq = useRef(0);
+	const undoing = useRef<number | null>(null);
+	const loads = useRef(0);
+	const [dragId, setDragId] = useState<string | null>(null);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
 	const graduateClient = useMemo(() => injectedGraduate ?? createGraduateClient(), [injectedGraduate]);
 
 	useEffect(() => {
@@ -318,6 +526,139 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 			cancelled = true;
 		};
 	}, [client]);
+	useEffect(() => {
+		let cancelled = false;
+		void client.assignees?.().then((res) => {
+			if (cancelled) return;
+			if (res.ok) {
+				setWolves(res.data);
+				setWolvesError(null);
+			} else setWolvesError(res.message);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+	// No optimistic update: the hub answers, then the list is read again.
+	const onAssign = async (id: string, wolf: string): Promise<void> => {
+		if (!client.assign) return;
+		const setErr = (message: string | null) =>
+			setAssignErrors((prev) => {
+				const next = new Map(prev);
+				if (message === null) next.delete(id);
+				else next.set(id, message);
+				return next;
+			});
+		setBusy((prev) => new Set(prev).add(id));
+		try {
+			const res = await client.assign(id, wolf);
+			if (!mounted.current) return;
+			if (!res.ok) setErr(res.message);
+			else {
+				const fresh = await reload();
+				if (mounted.current) setErr(fresh ? null : "assigned, but the list couldn't refresh");
+			}
+		} catch (err) {
+			if (mounted.current) setErr(err instanceof Error ? err.message : "assign failed");
+		} finally {
+			if (mounted.current)
+				setBusy((prev) => {
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				});
+		}
+	};
+
+	// Drag and the menu share this one path; no optimistic update: the hub answers, then the list is read again. An error stays until the next move of that row; a handoff note until the second list read after it.
+	const onMove = async (id: string, to: string | null): Promise<void> => {
+		if (!client.move || busyMove.has(id)) return;
+		const say = (m: MoveMsg | null) =>
+			setMoveMsgs((prev) => {
+				const next = new Map(prev);
+				if (m === null) next.delete(id);
+				else next.set(id, m);
+				return next;
+			});
+		// The parent before the move, from the loaded items (not the row label). Undo is offered only when it is known and still exists.
+		const before = items?.find((x) => x.id === id);
+		const prevParent = before && (before.partOf !== undefined || before.kind === "feature") ? (before.partOf ?? null) : undefined;
+		// Read from this render's items, before the move changes them.
+		const prevOk = prevParent !== undefined && (prevParent === null || !!items?.some((x) => x.id === prevParent));
+		setBusyMove((prev) => new Set(prev).add(id));
+		say(null);
+		try {
+			const res = await client.move(id, to);
+			if (!mounted.current) return;
+			if (!res.ok) say({ kind: "error", text: res.message });
+			else {
+				const handoff = res.data.reassigned?.find((r) => r.id === id);
+				const target = items?.find((x) => x.id === to);
+				const parent = target?.title ?? to;
+				const where = to === null ? "no initiative" : target?.container ? "Inbox" : String(parent);
+				setToast({
+					id: ++toastSeq.current,
+					kind: "moved",
+					text: `Moved ${before?.title ?? id} to ${where}${handoff ? ` and assigned to ${handoff.to}` : ""}`,
+					...(prevOk ? { undo: { id, prev: prevParent as string | null, from: handoff?.from ?? null } } : {}),
+				});
+				if (handoff) say({ kind: "handoff", text: `Moved under ${parent}; now assigned to ${handoff.to}`, until: loads.current + 1 });
+				const fresh = await reload();
+				if (!mounted.current) return;
+				if (!fresh) say({ kind: "error", text: "moved, but the list couldn't refresh" });
+			}
+		} catch (err) {
+			if (mounted.current) say({ kind: "error", text: err instanceof Error ? err.message : "move failed" });
+		} finally {
+			if (mounted.current)
+				setBusyMove((prev) => {
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				});
+		}
+	};
+
+	// Undo: move back with the same client path (no new notification), then give the old assignee back unless the move-back already did.
+	const onUndo = async (): Promise<void> => {
+		const u = toast?.undo;
+		if (!toast || !u || !client.move || toast.busy) return;
+		// A synchronous guard: a second click before the re-render must not send a second undo.
+		if (undoing.current === toast.id) return;
+		undoing.current = toast.id;
+		const tid = toast.id;
+		// Writes only while this toast is still the current one (a newer move replaces it).
+		const put = (t: Omit<MoveToast, "id">) => {
+			if (mounted.current && toastSeq.current === tid) setToast({ ...t, id: tid });
+		};
+		put({ ...toast, busy: true });
+		const fail = (text: string, keepUndo: boolean) => put({ kind: "error", text, ...(keepUndo ? { undo: u } : {}) });
+		try {
+			const res = await client.move(u.id, u.prev);
+			if (!mounted.current) return;
+			if (!res.ok) return fail(res.message, true);
+			const back = res.data.reassigned?.find((r) => r.id === u.id);
+			if (u.from !== null && client.assign && back?.to !== u.from) {
+				const a = await client.assign(u.id, u.from);
+				if (!a.ok) {
+					await reload();
+					return fail(`moved back, but couldn't restore the assignee: ${a.message}`, false);
+				}
+			}
+			await reload();
+			put({ kind: "undone", text: "Move undone" });
+		} catch (err) {
+			fail(err instanceof Error ? err.message : "undo failed", true);
+		} finally {
+			if (undoing.current === tid) undoing.current = null;
+		}
+	};
+	// The notification (an error too, with its Undo) goes after `undoMs`, unless an undo is running.
+	useEffect(() => {
+		if (!toast || toast.busy) return;
+		const t = setTimeout(() => setToast(null), undoMs);
+		return () => clearTimeout(t);
+	}, [toast, undoMs]);
 
 	const setDomain = (next: string) => {
 		setDomainState(next);
@@ -337,8 +678,26 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 		});
 
 	const items = load.state === "ready" ? load.items : null;
+	// Each new list: end a drag whose row went away (no dragend reaches an unmounted row), and age out handoff notes.
+	useEffect(() => {
+		loads.current++;
+		setDragId(null);
+		setMoveMsgs((prev) => {
+			if (![...prev.values()].some((m) => m.until !== undefined && m.until < loads.current)) return prev;
+			return new Map([...prev].filter(([, m]) => m.until === undefined || m.until >= loads.current));
+		});
+	}, [items]);
+	useEffect(() => {
+		const end = () => setDragId(null);
+		window.addEventListener("dragend", end);
+		window.addEventListener("drop", end);
+		return () => {
+			window.removeEventListener("dragend", end);
+			window.removeEventListener("drop", end);
+		};
+	}, []);
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.move && items ? { move: { options: (id: string) => moveOptions(items, id), busy: busyMove, messages: moveMsgs, dragId, onDragStart: setDragId, onDragEnd: () => setDragId(null), onMove: (id: string, to: string | null) => void onMove(id, to) } } : {}), ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 
@@ -388,16 +747,22 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 					<div className="min-h-0 flex-1 overflow-y-auto">
 						<div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background/80 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
 							{HEADERS.map((h) => (
-								<button
-									key={h.col}
-									type="button"
-									data-testid={`work-sort-${h.col}`}
-									aria-sort={sort.col === h.col ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
-									onClick={() => setSort((cur) => nextWorkSort(cur, h.col))}
-									className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${h.cls}`}
-								>
-									{h.label} {chevron(h.col)}
-								</button>
+								<Fragment key={h.col}>
+									{h.col === "stage" && (
+										<span data-testid="work-header-assignee" className={COLS.assignee}>
+											Assignee
+										</span>
+									)}
+									<button
+										type="button"
+										data-testid={`work-sort-${h.col}`}
+										aria-sort={sort.col === h.col ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
+										onClick={() => setSort((cur) => nextWorkSort(cur, h.col))}
+										className={`flex items-center gap-1 text-left transition-colors hover:text-foreground ${h.cls}`}
+									>
+										{h.label} {chevron(h.col)}
+									</button>
+								</Fragment>
 							))}
 							<span aria-hidden className={COLS.open} />
 						</div>
@@ -421,6 +786,18 @@ export function WorkList({ client: injected, graduate: injectedGraduate }: { cli
 						))}
 					</div>
 				</div>
+			{toast && (
+				<div data-testid="work-move-toast" data-kind={toast.kind} role={toast.kind === "error" ? "alert" : "status"} className="fixed bottom-4 left-1/2 z-50 flex max-w-[90vw] -translate-x-1/2 items-center gap-3 rounded-lg border bg-popover px-3 py-2 text-xs shadow-lg">
+					<span data-testid="work-move-toast-msg" className={`min-w-0 truncate ${toast.kind === "error" ? "text-destructive" : ""}`} title={toast.text}>
+						{toast.text}
+					</span>
+					{toast.undo && (
+						<button type="button" data-testid="work-move-undo" disabled={toast.busy} onClick={() => void onUndo()} className="shrink-0 rounded border px-2 py-0.5 font-medium hover:bg-accent disabled:opacity-50">
+							Undo
+						</button>
+					)}
+				</div>
+			)}
 		</div>
 	);
 }

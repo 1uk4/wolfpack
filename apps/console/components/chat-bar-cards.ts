@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Card, PendingCard } from "@wolfpack/client";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
+import { isSupersedable } from "@/components/ask-session";
 import { parseThreadCards, type AttachedRef } from "@/src/core";
 
 /** A card the owner's free text just closed: shown as superseded for a moment. */
@@ -112,6 +113,8 @@ export function useBarCards(target: AttachedRef, working: boolean, enabled = tru
 	});
 	useOptionalServerEvent("needs-you-changed", (ev) => {
 		if (mine(ev.wolf, ev.threadId) && ev.status !== "busy") refetch();
+		// A subagent's questionnaire joins (or leaves) this thread's queue: its card events carry the child's thread id.
+		else if (ev.wolf === target.wolf && ev.kind === "card") refetch();
 	});
 
 	// A turn ending arms the peek (and refetches the reply it produced); a turn starting clears it.
@@ -138,10 +141,11 @@ export function useBarCards(target: AttachedRef, working: boolean, enabled = tru
 	}, [refetch, update]);
 	const replied = useCallback(() => {
 		const k = keyRef.current;
-		const closing = pendingRef.current;
+		// A plain message supersedes only this thread's own cards: a subagent's questionnaire stays queued.
+		const closing = pendingRef.current.filter(isSupersedable);
 		for (const p of closing) gone.current.add(p.callId);
-		pendingRef.current = [];
-		update(k, (x) => ({ ...x, peekOn: false, pending: [], error: null, superseded: closing.map((p) => ({ callId: p.callId, card: p.card })) }));
+		pendingRef.current = pendingRef.current.filter((p) => !isSupersedable(p));
+		update(k, (x) => ({ ...x, peekOn: false, pending: x.pending.filter((p) => !isSupersedable(p)), error: null, superseded: closing.map((p) => ({ callId: p.callId, card: p.card })) }));
 		if (closing.length === 0) return;
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = setTimeout(() => update(k, (x) => ({ ...x, superseded: [] })), SUPERSEDED_MS);

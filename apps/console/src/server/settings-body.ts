@@ -14,13 +14,11 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { isHexColor, type ChatSettings } from "../core";
 import type {
-	AgentSettings,
 	AppearanceSettings,
-	CompactionSettings,
 	ModelsSettings,
 	RoleModelOverride,
 } from "../core/settings.ts";
-import { COMPACTION_THRESHOLD_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
+import { MODEL_SLOTS } from "../core/settings.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
 export type SettingsBodyResult<T> =
@@ -97,30 +95,6 @@ function parseRoleOverride(value: unknown, role: string): { ok: true; override: 
 }
 
 /** A boolean map (the prompts switches): every value must be boolean. */
-function parseBooleanMap(value: unknown, field: string): { map?: Record<string, boolean>; error?: string } {
-	if (value === undefined) return {};
-	const raw = asRecord(value);
-	if (!raw) return { error: `${field} must be an object` };
-	const out: Record<string, boolean> = {};
-	for (const [key, entry] of Object.entries(raw)) {
-		if (typeof entry !== "boolean") return { error: `${field}.${key} must be a boolean` };
-		out[key] = entry;
-	}
-	return { map: out };
-}
-
-/** agent: { prompts? } — prompt switch-on membership is checked by the
- *  route (needs the store). */
-export function parseAgentSettingsBody(body: unknown): SettingsBodyResult<AgentSettings> {
-	const raw = asRecord(body);
-	if (!raw) return { ok: false, error: "Invalid JSON body" };
-	const settings: AgentSettings = {};
-	const prompts = parseBooleanMap(raw.prompts, "prompts");
-	if (prompts.error) return { ok: false, error: prompts.error };
-	if (prompts.map) settings.prompts = prompts.map;
-	return { ok: true, settings };
-}
-
 /** A hex-or-null color field (appearance colors): null = default. */
 function parseHexOrNull(value: unknown, field: string): { color?: string | null; error?: string } {
 	if (value === null) return { color: null };
@@ -228,41 +202,11 @@ export function parseModelsSettingsBody(body: unknown): SettingsBodyResult<Model
 	return { ok: true, settings };
 }
 
-/** compaction (owner round 14): the context-compaction threshold — the
- *  projected-token budget over which a session summarizes its own history
- *  into the compaction marker. Strict write side: a present
- *  thresholdTokens must be a number at or above the floor (the floor is
- *  anti-churn: each compaction keeps a ~20k-token recent tail, so a
- *  smaller threshold would re-summarize the tail it just wrote). Absent =
- *  factory default 150k at resolution. Replace-whole, like every
- *  section. */
-export function parseCompactionSettingsBody(body: unknown): SettingsBodyResult<CompactionSettings> {
-	const raw = asRecord(body);
-	if (!raw) return { ok: false, error: "Invalid JSON body" };
-	const settings: CompactionSettings = {};
-	if (raw.thresholdTokens !== undefined) {
-		if (typeof raw.thresholdTokens !== "number" || !Number.isFinite(raw.thresholdTokens)) {
-			return { ok: false, error: "thresholdTokens must be a number" };
-		}
-		const floored = Math.floor(raw.thresholdTokens);
-		if (floored < COMPACTION_THRESHOLD_FLOOR) {
-			return {
-				ok: false,
-				error: `thresholdTokens must be at least ${COMPACTION_THRESHOLD_FLOOR} (compaction keeps a ~20k-token recent tail — smaller budgets would churn it)`,
-			};
-		}
-		settings.thresholdTokens = floored;
-	}
-	return { ok: true, settings };
-}
-
 /** The section→parser map for PUT /api/settings/[section] (the route also
  *  carries the special prompts sub-resource). */
 export const SETTINGS_SECTIONS = {
 	chat: parseSettingsBody,
-	agent: parseAgentSettingsBody,
 	appearance: parseAppearanceSettingsBody,
-	compaction: parseCompactionSettingsBody,
 	models: parseModelsSettingsBody,
 } as const;
 

@@ -4,6 +4,7 @@ import { getConsoleClient, isNotFound } from "@/src/server";
 import { withHistoryAttachments } from "@/components/attachments";
 import { THREAD_PAGE_SIZE } from "@/components/thread-transport";
 import { ThreadChat } from "@/components/thread-chat";
+import { FEATURE_GRADUATED } from "@/components/thread-closed";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				colorThreads={threads.map((t) => ({ id: t.id, kind: t.kind, parentThreadId: t.parentThreadId, settings: t.settings }))}
 				wolfColor={wolfColor}
 				initialBound={thread.boundItem ?? thread.boundWorkItem}
-				closedReason={thread.closed ? (thread.closedReason ?? "Feature graduated") : undefined}
+				closedReason={thread.closed ? (thread.closedReason ?? FEATURE_GRADUATED) : undefined}
 			/>
 		);
 	} catch (err) {

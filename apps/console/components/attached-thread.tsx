@@ -26,6 +26,7 @@ import {
 	type WolfLite,
 } from "@/src/core";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { FEATURE_GRADUATED } from "@/components/thread-closed";
 
 export interface AttachedThreadApi {
 	attached: AttachedRef | null;
@@ -44,6 +45,8 @@ export interface AttachedThreadApi {
 	attachedThread: BarThread | undefined;
 	/** A turn is running on the attached thread. */
 	working: boolean;
+	/** Why the attached thread closed while its turn still runs (the bar shows the notice + Stop, then docks when the turn settles). */
+	closedReason: string | undefined;
 	/** The bar just sent: show "working" until the wolf reports the turn's status. */
 	markSent: () => void;
 	/** A send failed: drop the optimistic "working". */
@@ -105,6 +108,7 @@ export function AttachedThreadProvider({
 	const [wolves, setWolves] = useState<readonly WolfLite[]>([]);
 	const [threads, setThreads] = useState<ThreadsByWolf>({});
 	const [sent, setSent] = useState(false);
+	const [closedBusy, setClosedBusy] = useState<{ threadId: string; reason: string } | null>(null);
 	const wolvesRef = useRef<readonly WolfLite[]>([]);
 	const threadsRef = useRef<ThreadsByWolf>({});
 	/** Bumped by every deliberate attach: a list fetch that started before it must not re-settle the target. */
@@ -211,6 +215,13 @@ export function AttachedThreadProvider({
 		const id = ev.thread.id;
 		if (ev.thread.status) patchStatus(ev.wolf, id, ev.thread.status);
 		if (a && ev.wolf === a.wolf && id === a.threadId) {
+			// A closed thread has no bar composer: dock now instead of waiting for the list refetch. A turn still running keeps the bar
+			// (closed notice + Stop) until it settles.
+			if (ev.thread.closed) {
+				const row = threadsRef.current[ev.wolf]?.find((t) => t.id === id);
+				if ((ev.thread.status ?? row?.status) === "busy") setClosedBusy({ threadId: id, reason: ev.thread.closedReason ?? FEATURE_GRADUATED });
+				else setAttached(null);
+			}
 			if (ev.thread.status !== "busy") {
 				if (ev.thread.status) setSent(false);
 				refreshWolf(ev.wolf);
@@ -237,6 +248,16 @@ export function AttachedThreadProvider({
 
 	const attachedThread = attached ? threads[attached.wolf]?.find((t) => t.id === attached.threadId) : undefined;
 	const working = attachedThread?.status === "busy" || sent;
+	const closedReason = attached && closedBusy?.threadId === attached.threadId ? closedBusy.reason : undefined;
+	const statusNow = attachedThread?.status;
+	useEffect(() => {
+		if (!closedBusy) return;
+		if (!attached || attached.threadId !== closedBusy.threadId) setClosedBusy(null);
+		else if (statusNow !== "busy") {
+			setClosedBusy(null);
+			setAttached(null);
+		}
+	});
 	const markSent = useCallback(() => setSent(true), []);
 	const clearSent = useCallback(() => setSent(false), []);
 	// An optimistic "sent" must not stick when no status frame ever arrives (an instant turn, a lost frame, a row that never
@@ -250,8 +271,8 @@ export function AttachedThreadProvider({
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, setPhoneSheet, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh }),
-		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, wolves, threads, groups, attachedThread, working, markSent, clearSent, attach, dock, refresh],
+		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, setPhoneSheet, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, dock, refresh }),
+		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, dock, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

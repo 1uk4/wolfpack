@@ -40,6 +40,8 @@ import {
   type MemoryStatus,
   type MemoryTopic,
   type MemoryObservations,
+  type MemoryTree,
+  type MemoryNodeObservations,
   type WorkRecordResponse,
   type WorkItemResponse,
   type GraduationJob,
@@ -87,6 +89,8 @@ export interface HttpClientOptions {
   maxStreamRetries?: number;
   /** Base reconnect backoff in ms (doubles per attempt, capped at 2s). Default 50. */
   retryDelayMs?: number;
+  /** Ms a non-stream request may wait for the server's response headers before failing with a retryable engine_error (`timedOut`). Default 20000. SSE routes are exempt. */
+  requestTimeoutMs?: number;
 }
 
 interface Frame {
@@ -101,6 +105,7 @@ export class HttpConsoleClient implements ConsoleClient {
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
@@ -108,6 +113,7 @@ export class HttpConsoleClient implements ConsoleClient {
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 20_000;
   }
 
   async listWolves(): Promise<WolfSummary[]> {
@@ -178,6 +184,28 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async answerCard(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck> {
     return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers }, threadId)) as SubmitAck;
+  }
+
+  async saveCardPage(threadId: string, callId: string, page: number, answers: CardAnswers, opts: { goto?: number; stepsKey?: string } = {}): Promise<void> {
+    await this.json("saveCardPage", { id: threadId, callId, page: String(page) }, ROUTES.saveCardPage.response.schema, { answers, ...(opts.goto !== undefined ? { goto: opts.goto } : {}), ...(opts.stepsKey ? { stepsKey: opts.stepsKey } : {}) }, threadId);
+  }
+
+  async submitCard(threadId: string, callId: string, body: { answers?: CardAnswers; note?: { text?: string; attachments?: string[] }; stepsKey?: string } = {}): Promise<SubmitAck> {
+    return (await this.json("submitCard", { id: threadId, callId }, ROUTES.submitCard.response.schema, body, threadId)) as SubmitAck;
+  }
+
+  async putCardNote(threadId: string, callId: string, note: { text?: string; attachments?: string[] }): Promise<void> {
+    await this.json("putCardNote", { id: threadId, callId }, ROUTES.putCardNote.response.schema, { ...(note.text ? { text: note.text } : {}), ...(note.attachments?.length ? { attachments: note.attachments } : {}) }, threadId);
+  }
+
+  async bindCardText(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }, stepsKey?: string): Promise<void> {
+    // Empty text and empty attachments are left out of the body, so "neither" reaches the server as `{}` and is refused there (400).
+    await this.json("bindCardText", { id: threadId, callId, qid }, ROUTES.bindCardText.response.schema, { ...(text ? { text } : {}), ...(attachments?.length ? { attachments } : {}), ...(multi ?? {}), ...(stepsKey ? { stepsKey } : {}) }, threadId);
+  }
+
+  async getDiagram(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    const res = await this.request("getDiagram", { id: threadId, diagramId }, {}, threadId);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
   }
 
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
@@ -444,6 +472,15 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
   }
 
+  async getMemoryTree(wolf: string): Promise<MemoryTree> {
+    return (await this.json("getMemoryTree", { name: wolf }, ROUTES.getMemoryTree.response.schema, undefined, wolf)) as MemoryTree;
+  }
+
+  async getMemoryNodeObservations(wolf: string, workId: string, opts: { limit?: number } = {}): Promise<MemoryNodeObservations> {
+    const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
+    return (await this.json("getMemoryNodeObservations", { name: wolf, workId }, ROUTES.getMemoryNodeObservations.response.schema, undefined, wolf, query)) as MemoryNodeObservations;
+  }
+
   async listWork(wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {
     const query = `?domain=${encodeURIComponent(opts.domain)}${opts.graduated ? "&graduated=true" : ""}`;
     if (this.hub) return (await this.json("hubListWork", {}, ROUTES.hubListWork.response.schema, undefined, undefined, query)) as WorkListResponse;
@@ -471,6 +508,12 @@ export class HttpConsoleClient implements ConsoleClient {
   async mintPairingCode(label?: string): Promise<MintPairingCodeResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "mintPairingCode needs a hub client", false);
     return (await this.json("hubMintPairingCode", {}, ROUTES.hubMintPairingCode.response.schema, label ? { label } : {})) as MintPairingCodeResponse;
+  }
+
+  /** Hub only: one single-field PATCH of a work item (the caller passes the op; the hub gates it by the token's identity). */
+  async patchWork(workId: string, op: { assignee: string } | { moveTo: string | null }): Promise<WorkItemResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "patchWork needs a hub client", false);
+    return (await this.json("hubPatchWork", { id: workId }, ROUTES.hubPatchWork.response.schema, op)) as WorkItemResponse;
   }
 
   /** `wolf`: which wolf a worker token acts for (sent as the `{wolf}` body); omit for operator tokens. */
@@ -606,11 +649,26 @@ export class HttpConsoleClient implements ConsoleClient {
     if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
     const viaHub = hubRoute || this.hub?.relay === true; // relay mode: every route goes through the hub
     const origin = viaHub ? this.hub!.base : this.base;
-    const res = await this.fetchFn(origin + buildPath(name, params) + query, {
-      ...init,
-      method: route.method,
-      headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
-    });
+    // Streams (SSE routes) are long-lived and run their own idle timeouts; every other request is bounded.
+    const bounded = route.response.kind !== "sse";
+    const timer = bounded ? new AbortController() : undefined;
+    let timedOut = false;
+    const handle = timer ? setTimeout(() => { timedOut = true; timer.abort(); }, this.requestTimeoutMs) : undefined;
+    const signal = timer ? (init.signal ? AbortSignal.any([init.signal, timer.signal]) : timer.signal) : init.signal;
+    let res: Response;
+    try {
+      res = await this.fetchFn(origin + buildPath(name, params) + query, {
+        ...init,
+        ...(signal ? { signal } : {}),
+        method: route.method,
+        headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      });
+    } catch (e) {
+      if (timedOut) throw Object.assign(new ProtocolError("engine_error", `wolf did not answer in time (${this.requestTimeoutMs} ms)`, true), { timedOut: true });
+      throw e;
+    } finally {
+      if (handle) clearTimeout(handle);
+    }
     if (res.ok) return res;
     if (viaHub && res.status === 401) {
       // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.

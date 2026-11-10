@@ -39,7 +39,16 @@ import {
   type WorkEvent,
   type WorkId,
 } from "@wolfpack/kb/client";
-import { now, workDir, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
+import {
+  now,
+  workDir,
+  workLedgerFile,
+  assertSectionText as assertSectionTextRaw,
+  replaceSection as replaceSectionRaw,
+  SectionTextError,
+  type KbRoots,
+  type SectionName,
+} from "@wolfpack/kb/shared";
 import { HubError } from "./errors.js";
 import type { Actor, CreateWorkRequest, ErrorCode, PatchWorkOp, PatchWorkRequest } from "@wolfpack/protocol";
 
@@ -58,121 +67,95 @@ export type WorkOp =
   | { op: "body"; text: string }
   | { op: "section"; name: SectionName; text: string }
   | { op: "standing"; value: boolean }
+  | { op: "recordAppend"; lines: RecordLine[]; group?: string }
   | { op: "schedule"; scheduledFor: string | null; durationMinutes?: number };
 
-export type SectionName = "plan" | "notes";
-const SECTION_HEADING: Record<SectionName, string> = { plan: "## Plan", notes: "## Notes" };
+
+export interface RecordLine { at: string; src: string; kind: string; text: string; ids: string[] }
+export const RECORD_MAX_LINES = 20;
+export const RECORD_MAX_TEXT = 240;
+export const RECORD_CAP_TASK = 6000;
+export const RECORD_CAP_FEATURE = 4000;
+/** The Record is full: 409 `log_full` (typed code in details). */
+export const LOG_FULL = "log_full";
+export const RECORD_GROUPS = ["Decisions", "Changes", "Findings", "Problems & fixes"] as const;
+
+/** The stored line: `- HH:MM [src·kind] text <!-- src:id1,id2 -->` (HH:MM is the UTC time of `at`). */
+function recordLineText(l: RecordLine): string {
+  const m = /T(\d\d:\d\d)/.exec(l.at);
+  if (!m) throw new HubError("invalid_request", "recordAppend line: at must be an ISO timestamp");
+  if (/[\r\n]/.test(l.text) || l.text.length > RECORD_MAX_TEXT) throw new HubError("invalid_request", `recordAppend line: text must be one line of at most ${RECORD_MAX_TEXT} characters`);
+  if (l.text.includes("<!--") || l.text.includes("-->")) throw new HubError("invalid_request", "recordAppend line: text must not contain comment markers");
+  if (/[\s\]\u00b7<>]/.test(l.src)) throw new HubError("invalid_request", "recordAppend line: src must be a plain label");
+  if (l.ids.some((i) => !/^[^\s,<>]+$/.test(i))) throw new HubError("invalid_request", "recordAppend line: ids must be plain tokens");
+  assertSectionText(l.text);
+  return `- ${m[1]} [${l.src}\u00b7${l.kind}] ${l.text.trim()}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`;
+}
+
+/** The `## Record` section text of a body ("" when absent): from the heading to the next H1/H2. */
+function recordSectionText(body: string): string {
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+  const start = lines.findIndex((l) => /^ {0,3}##[ \t]+Record[ \t]*$/.test(l));
+  if (start < 0) return "";
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) if (/^ {0,3}#{1,2}(?:[ \t]|$)/.test(lines[i]!)) { end = i; break; }
+  return lines.slice(start + 1, end).join("\n").trim();
+}
+
+/**
+ * Append lines to the Record of `body` (pure). Skips a line whose ids are all already in the Record. Returns the new body and how many lines
+ * were added; throws `log_full` (409) when the Record would pass the cap, `invalid_request` for bad lines or an unknown group.
+ */
+export function appendRecordLines(body: string, kind: string, lines: RecordLine[], group?: string): { body: string; added: number } {
+  if (lines.length > RECORD_MAX_LINES) throw new HubError("invalid_request", `recordAppend takes at most ${RECORD_MAX_LINES} lines per call`);
+  if (group !== undefined && !(RECORD_GROUPS as readonly string[]).includes(group)) throw new HubError("invalid_request", `group must be one of ${RECORD_GROUPS.join(", ")}`);
+  const stored = lines.map((l) => ({ l, text: recordLineText(l) }));
+  let rec = recordSectionText(body);
+  const seen = new Set<string>();
+  for (const m of rec.matchAll(/<!-- src:([^>]*?) -->/g)) for (const i of m[1]!.split(",")) seen.add(i);
+  const fresh: string[] = [];
+  for (const { l, text } of stored) {
+    if (l.ids.length && l.ids.every((i) => seen.has(i))) continue;
+    l.ids.forEach((i) => seen.add(i));
+    fresh.push(text);
+  }
+  if (fresh.length === 0) return { body, added: 0 };
+  if (group && kind === "feature") {
+    const rl = rec ? rec.split("\n") : [];
+    const h = rl.findIndex((x) => x.trim() === `### ${group}`);
+    if (h < 0) rl.push(...(rl.length ? [""] : []), `### ${group}`, "", ...fresh);
+    else {
+      let end = rl.length;
+      for (let i = h + 1; i < rl.length; i++) if (/^### /.test(rl[i]!)) { end = i; break; }
+      let at = end;
+      while (at > h + 1 && rl[at - 1]!.trim() === "") at--;
+      rl.splice(at, 0, ...fresh);
+    }
+    rec = rl.join("\n");
+  } else rec = rec ? `${rec}\n${fresh.join("\n")}` : fresh.join("\n");
+  const cap = kind === "feature" ? RECORD_CAP_FEATURE : RECORD_CAP_TASK;
+  if (rec.length > cap) throw new HubError("invalid_request", `the Record is full (limit ${cap} characters)`, { code: LOG_FULL });
+  return { body: replaceSection(body, "record", rec), added: fresh.length };
+}
+
+/** The only section name the Record writer sends, matched exactly (case and spacing): the heading `## Record`. */
+export const RECORD_SECTION_NAME = "Record";
 
 /** Ops only an operator may issue: whole-body replace and direct assignee writes. A non-operator gets 403 `forbidden`. */
 export function isOwnerOnlyOp(op: WorkOp): boolean {
   return op.op === "body" || op.op === "assign";
 }
-
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-const ATX_H12 = /^ {0,3}#{1,2}(?:[ \t]|$)/;
-const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
-const ATX_ANY = /^ {0,3}#{1,6}(?:[ \t]|$)/;
-const CONTAINER_PREFIX = /^(?: {0,3}>[ \t]?| {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
-
-/** CRLF / lone CR -> LF. The body is stored and compared with LF only. */
-function toLf(s: string): string {
-  return s.replace(/\r\n?/g, "\n");
-}
-
-/**
- * Per line: is it inside a fenced code block (``` or ~~~, CommonMark rules: closing fence is the same char, at least as long,
- * nothing else on the line). The fence lines themselves count as fenced. `unclosed` is true when the last fence never closes.
- */
-function fenceMap(lines: string[]): { fenced: boolean[]; unclosed: boolean } {
-  const fenced: boolean[] = [];
-  let open: { ch: string; len: number } | undefined;
-  for (const l of lines) {
-    if (open) {
-      fenced.push(true);
-      const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(l);
-      if (m && m[1][0] === open.ch && m[1].length >= open.len) open = undefined;
-      continue;
-    }
-    const m = FENCE_OPEN.exec(l);
-    if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
-      open = { ch: m[1][0], len: m[1].length };
-      fenced.push(true);
-    } else fenced.push(false);
+/** The kb section helpers (shared with the sandbox Work API) with their refusals turned into the hub's `invalid_request`. */
+const asHubError = <T>(fn: () => T): T => {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof SectionTextError) throw new HubError("invalid_request", e.message);
+    throw e;
   }
-  return { fenced, unclosed: open !== undefined };
-}
-
-/** Is line `i` (outside a fence) an H1/H2, ATX (also inside a quote / list-item prefix) or setext (underline under a text line)? */
-function isHeading12(lines: string[], fenced: boolean[], i: number): boolean {
-  if (fenced[i]) return false;
-  let l = lines[i];
-  for (let n = 0; n < 8; n++) {
-    if (ATX_H12.test(l)) return true;
-    const m = CONTAINER_PREFIX.exec(l);
-    if (!m) break;
-    l = l.slice(m[0].length);
-  }
-  // Setext: an underline right below a non-blank, non-fenced line turns that line into a heading. (After a blank line `---` is
-  // a thematic break and `===` plain text, both harmless.)
-  if (i === 0 || fenced[i - 1] || !SETEXT_UNDERLINE.test(lines[i])) return false;
-  const prev = lines[i - 1];
-  // Only a plain paragraph line can be a setext heading's text: not blank, an ATX heading, a list item, a quote, a table row,
-  // or another underline / thematic break.
-  return prev.trim() !== "" && !ATX_ANY.test(prev) && !CONTAINER_PREFIX.test(prev) && !prev.includes("|") && !SETEXT_UNDERLINE.test(prev) && !/^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$/.test(prev);
-}
-
-/**
- * Reject section text that could restructure the body. `stripGeneratedLog` cuts the body at a column-0 `## Log` + list item, and
- * any CommonMark parser would see an H1/H2 (ATX with 0-3 spaces indent or a bare `##`, setext `Log\n---` / `Log\n===`) as a new
- * section. Headings inside fenced code are legitimate content; an unclosed fence would swallow the next real heading, so it is refused.
- */
-export function assertSectionText(text: string): void {
-  const lines = toLf(text).split("\n");
-  const { fenced, unclosed } = fenceMap(lines);
-  if (unclosed) throw new HubError("invalid_request", "section text has an unclosed code fence");
-  for (let i = 0; i < lines.length; i++) {
-    if (isHeading12(lines, fenced, i)) {
-      throw new HubError("invalid_request", `section text must not contain level-1 or level-2 headings (line ${i + 1}); put them in a code fence`);
-    }
-  }
-}
-
-/**
- * Replace one `## <Heading>` section of a body, up to the next H1/H2 outside a code fence (or the end). Fence-aware for both the
- * start and the end heading; CRLF is normalised to LF. A missing section is added (Plan before Notes, else appended). Duplicate
- * headings are REJECTED (`invalid_request`): which one to replace would be a guess; an operator can fix the body with a `body` op.
- */
-export function replaceSection(body: string, name: SectionName, text: string): string {
-  const heading = SECTION_HEADING[name];
-  const lines = toLf(body).split("\n");
-  const { fenced } = fenceMap(lines);
-  // `## Plan`, also with a closing hash sequence (`## Plan ##`), outside code fences.
-  const at = (h: string) => {
-    const re = new RegExp(`^ {0,3}##[ \\t]+${h.slice(3)}(?:[ \\t]+#+)?[ \\t]*$`);
-    return lines.flatMap((l, i) => (!fenced[i] && re.test(l) ? [i] : []));
-  };
-  const starts = at(heading);
-  if (starts.length > 1) throw new HubError("invalid_request", `the body has more than one "${heading}" heading; fix it with a body replace`);
-  const block = [heading, "", ...(text.trim() ? [toLf(text).trim(), ""] : [])];
-  const join_ = (parts: string[][]) => parts.flat().join("\n").trim() + "\n";
-  if (starts.length === 1) {
-    const start = starts[0];
-    let end = lines.length;
-    for (let i = start + 1; i < lines.length; i++) {
-      if (isHeading12(lines, fenced, i)) {
-        // A setext heading starts at its text line, one above the underline.
-        end = !ATX_H12.test(lines[i]) && SETEXT_UNDERLINE.test(lines[i]) ? i - 1 : i;
-        break;
-      }
-    }
-    return join_([lines.slice(0, start), block, lines.slice(end)]);
-  }
-  const notes = name === "plan" ? at(SECTION_HEADING.notes) : [];
-  if (notes.length >= 1) return join_([lines.slice(0, notes[0]), block, lines.slice(notes[0])]);
-  const head = [...lines];
-  while (head.length && head[head.length - 1].trim() === "") head.pop();
-  return join_([head, head.length ? [""] : [], block]);
-}
+};
+export const assertSectionText = (text: string): void => asHubError(() => assertSectionTextRaw(text));
+export const replaceSection = (body: string, name: SectionName, text: string): string => asHubError(() => replaceSectionRaw(body, name, text));
 
 /** PATCH body -> ops. A single-op body has exactly one field; a batch is `{ ops: [...] }`, each element a single-field op. */
 export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
@@ -190,6 +173,13 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
     if (!v.trim()) throw new HubError("invalid_request", `${name} must not be empty`);
     return v;
   };
+  if (b.op !== undefined || b.lines !== undefined || b.group !== undefined) {
+    if (b.op !== "recordAppend" || b.lines === undefined) throw new HubError("invalid_request", "recordAppend needs op: \"recordAppend\" and lines");
+    if (Object.keys(b).some((k) => k !== "op" && k !== "lines" && k !== "group")) throw new HubError("invalid_request", "one field per op");
+    if (b.lines.length > RECORD_MAX_LINES) throw new HubError("invalid_request", `recordAppend takes at most ${RECORD_MAX_LINES} lines per call`);
+    b.lines.forEach(recordLineText); // validate now: a bad line is a 400 before the queue
+    return [{ op: "recordAppend", lines: b.lines, group: b.group }];
+  }
   if (b.stage !== undefined) ops.push({ op: "stage", to: nonEmpty("stage", b.stage) });
   if (b.note !== undefined) ops.push({ op: "note", text: nonEmpty("note", b.note) });
   if (b.title !== undefined) ops.push({ op: "title", title: nonEmpty("title", b.title) });
@@ -201,10 +191,11 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
   if (b.body !== undefined) ops.push({ op: "body", text: b.body });
   if (b.standing !== undefined) ops.push({ op: "standing", value: b.standing });
   if (b.section !== undefined) {
-    const name = b.section.name.trim().toLowerCase();
-    if (name !== "plan" && name !== "notes") {
-      throw new HubError("invalid_request", `section must be "plan" or "notes" (the Record is generated from the ledger and cannot be edited)`);
-    }
+    // The Record is addressed only by its exact name; "plan" / "notes" keep their forgiving match.
+    const isRecord = b.section.name === RECORD_SECTION_NAME;
+    const lower = b.section.name.trim().toLowerCase();
+    const name: SectionName | undefined = isRecord ? "record" : lower === "plan" || lower === "notes" ? lower : undefined;
+    if (!name) throw new HubError("invalid_request", `section must be "plan", "notes" or "Record"`);
     assertSectionText(b.section.text); // a heading in the text would restructure the body (or forge the generated Log)
     ops.push({ op: "section", name, text: b.section.text });
   }
@@ -225,7 +216,7 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
 
 /** `body` / `section` ops rewrite the .md only (no ledger event); every other op appends to the ledger. */
 export function isContentOp(op: WorkOp): boolean {
-  return op.op === "body" || op.op === "section";
+  return op.op === "body" || op.op === "section" || op.op === "recordAppend";
 }
 
 /**
@@ -314,17 +305,27 @@ export interface ApplyHooks {
  * NOTE: `body` / `section` append no ledger event, so they bump no `updated` and fire no work.changed (known gap, follow-up).
  * WRITES: probe file in the item's work dir; ledger append (one event per op, batch appended once); re-render of the touched items' .md files (body/section ops: the .md only).
  */
-export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}): Item {
+export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}, opts: ApplyOptions = {}): Item {
   assertNotMixed(ops);
   probeItemDomains(roots, [id]);
-  if (ops.length <= 1) return applyOpsUnchecked(roots, id, ops);
+  // An assign can cascade to child tasks: it must be all-or-nothing, so it takes the staged path even as a single op.
+  if (ops.length <= 1 && ops[0]?.op !== "assign") return applyOpsUnchecked(roots, id, ops, opts);
   const cur0 = loadWorkState(roots).get(id as never);
   if (!cur0) throw new Error(`work item ${id} not found`);
   const domain = cur0.domain as string;
   if (ops.every(isContentOp)) {
     // Fold every edit over the body first (any failure throws before a write), then ONE atomic .md write.
     let body = resolveWorkItem(roots, domain, id)?.body ?? "";
-    for (const o of ops) body = o.op === "body" ? o.text : o.op === "section" ? replaceSection(body, o.name, o.text) : body;
+    for (const o of ops) {
+      if (o.op === "body") body = o.text;
+      else if (o.op === "section") body = replaceSection(body, o.name, o.text);
+      else if (o.op === "recordAppend") {
+        if (cur0.stage === "archived") throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
+        const r = appendRecordLines(body, String(cur0.kind), o.lines, o.group);
+        body = r.body;
+        if (opts.recordAdded) opts.recordAdded.count += r.added;
+      }
+    }
     commitWorkItem(roots, cur0, body);
     return cur0;
   }
@@ -343,7 +344,7 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
     // Placement forbids a parent in another domain (placementError in kb schema/work.ts: `parent.domain !== child.domain`), so
     // every item a batch can touch, an auto-shipped parent feature included, lives in this one domain's work/ dir.
     // The kb ops read only the ledger and the item .md files, and write only those (see report): scratch is a faithful sandbox.
-    const item = applyOpsUnchecked(scratch, id, ops);
+    const item = applyOpsUnchecked(scratch, id, ops, opts);
     hooks.afterStaged?.();
 
     const bytes = readNewBytes(workLedgerFile(scratch), realSize);
@@ -394,7 +395,14 @@ function readNewBytes(file: string, offset: number): Buffer {
   return all.subarray(offset);
 }
 
-function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
+/** Who is applying the ops: a worker's wolf (`holder`) cascades a feature assign only to the children it holds; unset (the owner) cascades to all open children. */
+export interface ApplyOptions {
+  holder?: string;
+  /** Out: `count` is raised by the number of Record lines a recordAppend actually added (0 for a replay). */
+  recordAdded?: { count: number };
+}
+
+function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[], opts: ApplyOptions = {}): Item {
   let item: Item | undefined;
   for (const o of ops) {
     switch (o.op) {
@@ -402,7 +410,19 @@ function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
       case "note": item = noteWork(roots, id, o.text).item; break;
       case "title": item = retitleWork(roots, id, o.title).item; break;
       case "successCriteria": item = setCriteria(roots, id, o.text).item; break;
-      case "assign": item = assignWork(roots, id, o.to).item; break;
+      case "assign": {
+        const before = loadWorkState(roots);
+        const self = before.get(id as never);
+        // One snapshot of the open children, taken before any write: the actor's shortcut covers only those it may change.
+        const kids = self?.kind === "feature"
+          ? [...before.values()].filter((c) => c.partOf === id && c.kind === "task" && !["shipped", "live", "archived"].includes(String(c.stage)) && c.assignee !== o.to && (opts.holder === undefined || c.assignee === opts.holder))
+          : [];
+        item = assignWork(roots, id, o.to).item;
+        // Each child gets its own logged event, in the same (staged) write.
+        for (const c of kids) assignWork(roots, c.id as string, o.to);
+        if (kids.length) item = loadWorkState(roots).get(id as never) ?? item;
+        break;
+      }
       case "moveTo": item = moveWork(roots, id, o.partOf).item; break;
       case "link": item = linkWork(roots, id, o.rel, o.target).item; break;
       case "unlink": item = unlinkWork(roots, id, o.rel, o.target).item; break;
@@ -412,6 +432,16 @@ function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
         const cur = loadWorkState(roots).get(id as never);
         if (!cur) throw new Error(`work item ${id} not found`);
         commitWorkItem(roots, cur, o.text);
+        item = cur;
+        break;
+      }
+      case "recordAppend": {
+        const cur = loadWorkState(roots).get(id as never);
+        if (!cur) throw new Error(`work item ${id} not found`);
+        if (cur.stage === "archived") throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
+        const r = appendRecordLines(resolveWorkItem(roots, cur.domain as string, id)?.body ?? "", String(cur.kind), o.lines, o.group);
+        if (opts.recordAdded) opts.recordAdded.count += r.added;
+        if (r.added > 0) commitWorkItem(roots, cur, r.body);
         item = cur;
         break;
       }
@@ -572,6 +602,8 @@ export const WORK_STORE_READ_ONLY = "work_store_read_only";
 export const WORK_STORE_PERMISSION_DENIED = "work_store_permission_denied";
 /** The target parent graduated or is archived (thrown by kb createWork/moveWork as ParentClosedError). */
 export const PARENT_CLOSED = "parent_closed";
+/** A worker wrote the Record of an archived item (the work is no longer needed; its Record is closed). */
+export const RECORD_CLOSED = "record_closed";
 
 /**
  * THE errno table for write paths (applied by `mapWorkError(e, {write: true})` only; a failed read is never mapped here):

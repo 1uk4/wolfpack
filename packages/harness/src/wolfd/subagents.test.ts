@@ -2,6 +2,7 @@
  * Subagents on a real wolf (startTestWolf: real sqlite + pi-durable, one scripted model answering every conversation):
  * spawn -> child thread -> result steer to the parent, resume, depth 1, questions to the parent, stop, restart.
  */
+import { answerPaged } from "./test-ask-call.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
     calls.push({ child, request: JSON.stringify(ctx.messages), last: lastText });
     const tool = (name: string, args: Record<string, unknown>) => fauxAssistantMessage(fauxToolCall(name, args as never), { stopReason: "toolUse" });
     if (!child) {
-      if (lastText.startsWith("The user answered")) await opts.answerGate;
+      if (lastText.startsWith("The user submitted")) await opts.answerGate;
       if (last.role === "toolResult") return fauxAssistantMessage(`ok:${last.toolName}`);
       const spawn = /^spawn(?:\[(\w+)\])?: (.*)$/s.exec(lastText);
       if (spawn) return tool("subagent", { agent: "tester", task: spawn[2], ...(spawn[1] ? { name: spawn[1] } : {}) });
@@ -47,9 +48,9 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
       if (stop) return tool("subagent_stop", { name: stop[1] });
       if (lastText === "slowcard") {
         await opts.parentGate;
-        return tool("brief", { headline: "Question", questions: [{ id: "answer", ask: "Proceed?" }] });
+        return tool("ask", { pages: [{ title: "Question", questions: [{ id: "answer", ask: "Proceed?", kind: "free", required: true }] }] });
       }
-      if (lastText === "card") return tool("brief", { headline: "Question", questions: [{ id: "answer", ask: "Proceed?" }] });
+      if (lastText === "card") return tool("ask", { pages: [{ title: "Question", questions: [{ id: "answer", ask: "Proceed?", kind: "free", required: true }] }] });
       if (lastText === "list") return tool("subagents_list", {});
       if (lastText === "try-nested") return tool("subagent", { agent: "tester", task: "nested" });
       if (/Sub-agent "\w+" asks/.test(lastText)) return tool("subagent_message", { name: "tester", message: "use main" });
@@ -57,7 +58,8 @@ function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void>
       return fauxAssistantMessage(`parent: ${lastText.slice(0, 40)}`);
     }
     if (last.role === "toolResult") return fauxAssistantMessage(`child finished after ${last.toolName}`);
-    if (lastText.includes("ASK")) return tool("brief", { headline: "Question", questions: [{ id: "answer", ask: "Which branch?" }] });
+    if (lastText.includes("ASK")) return tool("ask", { pages: [{ title: "Question", questions: [{ id: "answer", ask: "Which branch?", kind: "free", required: true }] }] });
+    if (lastText.includes("CHOICE")) return tool("ask", { pages: [{ title: "Branching", questions: [{ id: "strategy", ask: "Which strategy?", kind: "single", required: true, context: "The repo has two long-lived branches.", choices: [{ label: "Rebase", value: "rebase", tradeoff: "clean history, rewrites hashes" }, { label: "Merge", value: "merge", tradeoff: "keeps hashes, noisy history" }] }] }] });
     if (lastText.includes("NEST")) return tool("subagent", { agent: "tester", task: "grandchild" });
     if (lastText.includes("SLOW")) {
       // Held until the gate opens or the request is cancelled (a stop, a shutdown).
@@ -297,7 +299,7 @@ describe("resume", () => {
         await new Promise((r) => setTimeout(r, 1));
       }
     })();
-    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await answerPaged(tw.client, tw.home, card.callId, { answer: { value: "yes" } });
     await vi.waitFor(() => expect(samples.some((x) => x.status === "busy")).toBe(true));
     await new Promise((r) => setTimeout(r, 30)); // sampled while the answer's turn is held
     const events: string[] = []; // a reattach now replays the running turn's buffer, turn-start first
@@ -359,6 +361,20 @@ describe("questions", () => {
     expect(await tw.client.listCards!("testwolf")).toEqual([]);
   });
 
+  it("the parent is shown a child's paged choice question with its page, context, choices and trade-offs", async () => {
+    tw = await boot(scriptedAgents());
+    await say(tw, "spawn: pick, CHOICE first");
+    await parentSaw(tw, 'Sub-agent "tester" asks');
+    const home = (await texts(tw, tw.home)).join("\n");
+    expect(home).toContain("Branching");
+    expect(home).toContain("Which strategy?");
+    expect(home).toContain("The repo has two long-lived branches.");
+    expect(home).toContain("Rebase");
+    expect(home).toContain("clean history, rewrites hashes");
+    expect(home).toContain("keeps hashes, noisy history");
+    expect(home).toContain('Reply with subagent_message({ name: "tester"');
+  });
+
   it("while it waits, the child is `waiting` and not needs-you", async () => {
     const agents = scriptedAgents();
     // the parent does not answer: a plain acknowledgement
@@ -373,7 +389,92 @@ describe("questions", () => {
     const [child] = await kids(tw);
     expect(child).toMatchObject({ state: "waiting", status: "idle" });
     expect((await tw.client.getThread(child.id)).pendingCards).toHaveLength(1);
-    expect(await tw.client.listCards!("testwolf")).toEqual([]);
+    // the child's question now also reaches the needs-you list, and the parent's sheet queues it
+    const listed = await tw.client.listCards!("testwolf");
+    expect(listed.map((c) => [c.threadId, c.source?.kind])).toEqual([[child.id, "subagent"]]);
+    expect((await tw.client.getThread(tw.home)).pendingCards?.map((c) => c.threadId)).toEqual([child.id]);
+    expect((await tw.client.getThread(tw.home)).status).toBe("needs-you");
+  });
+
+  /** A parent that never answers, so the child stays `waiting` with its card pending. */
+  async function bootWaiting(): Promise<ThreadSummary> {
+    const agents = scriptedAgents();
+    const base = agents.step as unknown as (ctx: never) => Promise<ReturnType<typeof fauxAssistantMessage>>;
+    const quiet: FauxResponseStep = async (ctx) => {
+      const r = await base(ctx as never);
+      return JSON.stringify(r.content).includes('"subagent_message"') ? fauxAssistantMessage("I will think about it") : r;
+    };
+    tw = await boot({ step: quiet });
+    await say(tw, "spawn: ASK me");
+    await parentSaw(tw, 'Sub-agent "tester" asks');
+    const [child] = await kids(tw);
+    expect(child.state).toBe("waiting");
+    return child;
+  }
+  const answer = { answers: { answer: { value: "main" } } };
+  type Mgr = { records: Array<{ id: string }>; discard(rec: unknown): Promise<void>; closeChildrenOf(id: string): string[] };
+  const mgr = (w: TestWolf) => (w.wolf.server as unknown as { subagents: Mgr }).subagents;
+
+  it("answering the child's card in the parent's sheet clears `waiting` and the parent's needs-you", async () => {
+    const child = await bootWaiting();
+    await answerPaged(tw!.client, child.id, (await tw!.client.getThread(child.id)).pendingCards![0].callId, answer.answers);
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).not.toBe("waiting"));
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    const home = await tw!.client.getThread(tw!.home);
+    expect(home.pendingCards).toBeUndefined();
+    expect(home.status).not.toBe("needs-you");
+  });
+
+  it("a stopped child keeps its card, and answering it resumes the child", async () => {
+    const child = await bootWaiting();
+    await tw!.client.abort(child.id);
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("stopped"));
+    expect((await tw!.client.getThread(tw!.home)).pendingCards?.map((c) => c.threadId)).toEqual([child.id]);
+    await answerPaged(tw!.client, child.id, (await tw!.client.getThread(child.id)).pendingCards![0].callId, answer.answers);
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    expect((await tw!.client.getThread(tw!.home)).pendingCards).toBeUndefined();
+  });
+
+  it("discarding a child drops its card from the parent's sheet", async () => {
+    const child = await bootWaiting();
+    const parent = (tw!.wolf.server as unknown as { threads: Map<string, { observe(f: (e: { type: string; closed?: string }) => void): () => void }> }).threads.get(tw!.home)!;
+    const seen: Array<{ type: string; closed?: string }> = [];
+    parent.observe((e) => seen.push(e)); // the parent's open sheet is told the card is gone, not left stale
+    await mgr(tw!).discard(mgr(tw!).records.find((r) => r.id === child.id));
+    const home = await tw!.client.getThread(tw!.home);
+    expect(home.pendingCards).toBeUndefined();
+    expect(home.status).not.toBe("needs-you");
+    expect(seen.filter((e) => e.type === "card-settled")).toMatchObject([{ closed: "superseded" }]);
+  });
+
+  it("closing the parent feature drops its child's card from the parent's sheet", async () => {
+    const agents = scriptedAgents();
+    const base = agents.step as unknown as (ctx: never) => Promise<ReturnType<typeof fauxAssistantMessage>>;
+    tw = await boot({ step: (async (ctx) => {
+      const r = await base(ctx as never);
+      return JSON.stringify(r.content).includes('"subagent_message"') ? fauxAssistantMessage("later") : r;
+    }) as FauxResponseStep });
+    const feature = await tw.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-clos0001" });
+    await say(tw, "spawn: ASK me", feature.id);
+    await parentSaw(tw, 'Sub-agent "tester" asks', 1, feature.id);
+    expect((await tw.client.getThread(feature.id)).status).toBe("needs-you");
+    const [kid] = await kids(tw, feature.id);
+    await tw.client.abort(kid.id); // closing only settles a child that has stopped, failed or finished
+    await vi.waitFor(async () => expect((await kids(tw!, feature.id))[0].state).toBe("stopped"));
+    expect((await tw.client.getThread(feature.id)).pendingCards).toHaveLength(1); // stopping alone keeps it
+    (tw.wolf.server as unknown as { closeFeatureThreads(i: string[]): string[] }).closeFeatureThreads(["work-wolfpack-clos0001"]);
+    const after = await tw.client.getThread(feature.id);
+    expect(after.pendingCards).toBeUndefined();
+    expect(after.status).not.toBe("needs-you");
+  });
+
+  it("a parent cycle between threads does not hang the parent's sheet", async () => {
+    const child = await bootWaiting();
+    const threads = (tw!.wolf.server as unknown as { threads: Map<string, { summary: { parentThreadId?: string } }> }).threads;
+    threads.get(tw!.home)!.summary.parentThreadId = child.id; // home <-> child
+    const home = await tw!.client.getThread(tw!.home);
+    expect(home.pendingCards?.map((c) => c.threadId)).toEqual([child.id]);
+    delete threads.get(tw!.home)!.summary.parentThreadId;
   });
 });
 
@@ -684,7 +785,7 @@ describe("delivery", () => {
     await new Promise((r) => setTimeout(r, 200));
     expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false);
     expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
-    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await answerPaged(tw.client, tw.home, card.callId, { answer: { value: "yes" } });
     await parentSaw(tw, 'Sub-agent "tester" completed');
     expect(readReg(tw).children[0].outbox).toEqual([]);
   });
@@ -707,7 +808,7 @@ describe("delivery", () => {
     const [card] = (await tw.client.getThread(tw.home)).pendingCards!;
     expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false);
     expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
-    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await answerPaged(tw.client, tw.home, card.callId, { answer: { value: "yes" } });
     await parentSaw(tw, 'Sub-agent "tester" completed');
     await new Promise((r) => setTimeout(r, 200));
     expect((await texts(tw, tw.home)).filter((t) => t.startsWith("Sub-agent"))).toHaveLength(1);
@@ -729,7 +830,7 @@ describe("delivery", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false);
     const [card] = (await tw.client.getThread(tw.home)).pendingCards!;
-    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await answerPaged(tw.client, tw.home, card.callId, { answer: { value: "yes" } });
     await parentSaw(tw, 'Sub-agent "tester" completed');
     await new Promise((r) => setTimeout(r, 200));
     expect((await texts(tw, tw.home)).filter((t) => t.startsWith("Sub-agent"))).toHaveLength(1);

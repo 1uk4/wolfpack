@@ -8,6 +8,8 @@ import { useOptionalMemoryEvents } from "@/components/memory-events";
 import { useOpenWorkItem } from "@/components/work-reader-nav";
 import { PlanGraphView } from "@/components/plan-graph-view";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { PANEL_PROGRESS, closePanel, setOpenPanel, togglePanel, useOpenPanel } from "@/components/pin-store";
+import { sessionFindHasForegroundLayer } from "@/components/session-find";
 import { cn } from "@/lib/utils";
 import { buildFeatureGraph, featureStrip, isWorkEvent, type FeatureGraph, type WorkRecordResponse } from "@/src/core";
 
@@ -180,30 +182,45 @@ export interface FeatureProgressPanelProps {
 }
 
 export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressPanelProps) {
-	const [open, setOpenState] = useState(() => isProgressOpen(threadId));
+	// One open panel per thread across the pinned column (pin-store). The persisted per-thread flag means "the progress panel is
+	// what is open now": it is written true when progress opens and false when anything collapses it (a pin, the checklist), so a
+	// panel collapsed that way stays closed after a reload. On first mount the flag reopens the panel (nothing else is open yet).
+	// The restore relies on ThreadChat being keyed by thread id (thread/[threadId]/page.tsx): a thread switch remounts this panel.
+	const open = useOpenPanel(threadId) === PANEL_PROGRESS;
+	const restored = useRef(false);
+	useEffect(() => {
+		if (!restored.current) {
+			restored.current = true;
+			if (isProgressOpen(threadId)) setOpenPanel(threadId, PANEL_PROGRESS);
+			return;
+		}
+		setProgressOpen(threadId, open);
+	}, [threadId, open]);
 	const panelId = useId();
 	const openWork = useOpenWorkItem();
 	const [full, setFull] = useState(false);
-	const setOpen = (v: boolean) => {
-		setProgressOpen(threadId, v);
-		setOpenState(v);
-	};
 	const openTask = (id: string) => {
 		setFull(false); // the modal covers the page: close it so the task view is visible
 		openWork(id);
 	};
 	const titleId = `${panelId}-full`;
 	return (
-		<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex max-h-full flex-col" data-testid="feature-progress" data-expanded={open} data-feature-id={model.featureId}>
+		<div className="pointer-events-none flex min-h-0 flex-col" data-testid="feature-progress" data-expanded={open} data-feature-id={model.featureId}>
 			<div className="mx-auto flex min-h-0 w-full max-w-[46rem] flex-col px-4 pt-2">
-				<div className="pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg">
+				<div
+					onKeyDown={(e) => {
+						if (e.key !== "Escape" || !open || full || sessionFindHasForegroundLayer(document)) return;
+						e.stopPropagation(); // one-Esc law, like the other pinned panels
+						closePanel(threadId, PANEL_PROGRESS);
+					}}
+					className="pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg">
 					<button
 						type="button"
 						aria-expanded={open}
 						aria-controls={open ? panelId : undefined}
-						onClick={() => setOpen(!open)}
+						onClick={() => togglePanel(threadId, PANEL_PROGRESS)}
 						data-testid="feature-progress-toggle"
-						className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+						className="flex w-full shrink-0 items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
 					>
 						<span className="min-w-0 flex-1 truncate font-medium" data-testid="feature-progress-title">
 							{featureStrip(model)}
@@ -217,7 +234,7 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 						<ChevronDownIcon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", open && "rotate-180")} />
 					</button>
 					{open && (
-						<div id={panelId} role="region" aria-label={`${model.title} graph`} data-testid="feature-progress-panel" className="max-h-[40vh] min-h-0 overflow-hidden border-t p-3">
+						<div id={panelId} role="region" aria-label={`${model.title} graph`} data-testid="feature-progress-panel" className="max-h-[40dvh] min-h-0 overflow-hidden border-t p-3">
 							{model.graph.nodes.length > 0 ? (
 								<PlanGraphView
 									draggable

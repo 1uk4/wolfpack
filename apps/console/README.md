@@ -21,8 +21,10 @@ See the repo-root [`docs/`](../../docs) (architecture, development guide, decisi
 ```bash
 npm run dev      # http://localhost:3000
 npm run build
-npm test
+npm test        # whole suite (CI, or you); runs scripts/test.sh
 ```
+
+Agents run console tests only as `wolfpack test run apps/console/tests/<file>` (shared queue, 120 s per file), never in a loop and never with `npx tsx --test` directly.
 
 Licensed AGPL-3.0 (see [NOTICE](../../NOTICE), [LICENSE](../../LICENSE) and [docs/provenance/learnharness.md](../../docs/provenance/learnharness.md)).
 

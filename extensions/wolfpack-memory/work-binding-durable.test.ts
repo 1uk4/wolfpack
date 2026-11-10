@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import createTasksExtension, { readBoundTask as readBound } from "./unified-tasks.js";
 import { bindingFile } from "./conversation-binding.js";
+import { LOOSE_CREATE_FOREIGN_WOLF } from "../../packages/hubd/src/work-proxy.js";
 
 // The same task tools on the durable stack: an in-memory Work API behind fetch.
 type Item = Record<string, any>;
@@ -19,7 +20,14 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   const u = new URL(String(url));
   const m = u.pathname.replace(/^\/work\/?/, "");
   const body = init.body ? JSON.parse(String(init.body)) : {};
-  if (init.method === "POST" && m === "") { const it = add(body); return json({ id: it.id, item: it }); }
+  if (init.method === "POST" && m === "") {
+    if (body.title === "Refused") return json({ error: LOOSE_CREATE_FOREIGN_WOLF }, 403);
+    // as the hub: under a real feature the item takes the feature's assignee
+    const parent = body.partOf ? items.get(body.partOf) : undefined;
+    const inherited = parent && !parent.container ? parent.assignee : undefined;
+    const it = add({ ...body, ...(inherited ? { assignee: inherited } : {}) });
+    return json({ id: it.id, item: it, ...(inherited && inherited !== body.assignee ? { assignedTo: inherited } : {}) });
+  }
   if (init.method === "GET" && m === "") {
     const partOf = u.searchParams.get("partOf");
     return json({ items: [...items.values()].filter((i) => !partOf || i.partOf === partOf) });
@@ -29,6 +37,7 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   if (init.method === "GET") return json({ item: it, body: it.body });
   if (init.method === "PATCH") {
     if (body.stage) it.stage = body.stage;
+    if ("moveTo" in body) it.partOf = body.moveTo;
     if (body.note) it.log.push({ at: "now", text: body.note });
     if (typeof body.body === "string") it.body = body.body;
     return json({ item: it });
@@ -75,6 +84,41 @@ describe("durable task tools: binding", () => {
     const r2 = await run("task_create", { kind: "task", domain: "wolfpack", title: "T2", partOf: f.id });
     expect(r2).toContain("Not bound: another item is already bound");
     expect((await readBoundTask(den))?.taskId).toBe("work-2");
+  });
+
+  it("task_move with an id moves that item and leaves the binding alone", async () => {
+    const f = add({ kind: "feature", title: "F" });
+    const a = add({ kind: "task", title: "A" });
+    const b = add({ kind: "task", title: "B" });
+    await run("task_bind", { id: a.id });
+    const before = await readBoundTask(den);
+    expect(await run("task_move", { id: b.id, to: f.id })).toContain(`Moved ${b.id} to ${f.id}`);
+    expect(items.get(b.id)!.partOf).toBe(f.id);
+    expect(items.get(a.id)!.partOf).toBeNull();
+    expect(await readBoundTask(den)).toEqual(before);
+  });
+
+  it("task_create under a feature takes the feature's assignee and says so, even when another is asked for", async () => {
+    const f = add({ kind: "feature", title: "F", assignee: "hal" });
+    const r = await run("task_create", { kind: "task", domain: "wolfpack", title: "T", partOf: f.id, assignee: "sam" });
+    expect(r).toContain("; now assigned to hal");
+    expect(r).toContain("the feature's assignee hal applies, not sam");
+    expect(items.get("work-2")!.assignee).toBe("hal");
+  });
+
+  it("task_create for a loose item sends the asked assignee to the hub, and shows a hub refusal as the hub's message", async () => {
+    await run("task_create", { kind: "task", domain: "wolfpack", title: "Loose", assignee: "hal" });
+    expect(items.get("work-1")!.assignee).toBe("hal");
+    const refused = await tool("task_create").execute({ kind: "task", domain: "wolfpack", title: "Refused", assignee: "hal" }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toBe("Failed to create: a wolf can only create a loose item for itself; only the owner can assign one to another wolf");
+  });
+
+  it("task_create under another wolf's feature without an assignee says it was assigned, with no override note", async () => {
+    const f = add({ kind: "feature", title: "F", assignee: "hal" });
+    const r = await run("task_create", { kind: "task", domain: "wolfpack", title: "T", partOf: f.id });
+    expect(r).toContain("; now assigned to hal");
+    expect(r).not.toContain("applies, not");
   });
 
   it("an Inbox task is bound without a feature (it keeps its own Record)", async () => {

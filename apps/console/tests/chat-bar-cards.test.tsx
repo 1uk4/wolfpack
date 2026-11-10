@@ -55,13 +55,14 @@ const th = (id: string, extra: object = {}) => ({ id, title: id, kind: "feature"
 const body = (slug: string) => bodies[slug] ?? { messages: [], pendingCards: [] };
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	const url = String(input);
+	if (init?.method === "POST" && url.endsWith("/attachments")) return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
 	if (init?.method === "POST") {
 		calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
 		if (failPost?.test(url)) return Response.json({ error: "nope" }, { status: 500 });
 		const slug = /\/threads\/([^/]+)\//.exec(url)![1]!;
 		if (url.endsWith("/submit")) body(slug).pendingCards = []; // the wolf closes every pending card as superseded
 		const m = /\/cards\/([^/]+)\//.exec(url);
-		if (m) body(slug).pendingCards = body(slug).pendingCards.filter((p) => p.callId !== m[1]);
+		if (m && !url.endsWith("/text")) body(slug).pendingCards = body(slug).pendingCards.filter((p) => p.callId !== m[1]);
 		return new Response(JSON.stringify({ disposition: "started" }), { status: 200 });
 	}
 	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
@@ -121,6 +122,8 @@ const click = (el: HTMLElement | null) => act(async () => void props(el!, "onCli
 const submit = () => act(async () => void ta().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
 const byText = (sel: string, t: string) => qa(sel).find((b) => b.textContent?.trim() === t) ?? null;
 const slot = () => q('[data-testid="chat-bar-card-surface"]')!;
+/** The bar's own composer(s): not the sheet's inline one. */
+const bottomComposers = () => qa('[data-testid="composer"]').filter((f) => !f.closest('[data-testid="ask-inline-composer"]'));
 const sendBtn = () => q('[data-testid="composer"] button[type="submit"]')!;
 const switchTo = async (id: string) => {
 	await click(q('[data-testid="chat-bar-chip"]'));
@@ -218,6 +221,154 @@ describe("ChatBar cards", () => {
 		await until(() => /Step 2 of 2/.test(slot().textContent!), "step 2");
 	});
 
+	it("a paged ask opens the sheet; the answering chip routes typed text to the question, plain typing to a normal message", async () => {
+		const paged = {
+			callId: "p1",
+			threadId: "w/a",
+			raisedAt: "2026-11-09T00:00:00+00:00",
+			card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }, { id: "q2", kind: "free-text", label: "How", optional: true }], steps: [{ fields: ["q1", "q2"] }] },
+		};
+		raise("a", paged);
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.equal(q('[data-testid="bar-card"]'), null); // not the classic card path
+		assert.equal(q('[data-testid="ask-replace-hint"]'), null);
+		await type("typed");
+		assert.equal(q('[data-testid="ask-replace-hint"]') === null, true); // while the sheet is open, typing is its note, not a replacing message
+		assert.match(sendBtn().textContent!, /Submit/); // the composer button is the sheet's (last page)
+		await type("");
+		assert.equal(bottomComposers().length, 1);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[1]!);
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: How/);
+		assert.equal(bottomComposers().length, 0); // the bar's composer gives way to the one in the sheet
+		assert.equal(q('[data-testid="composer-controls"]') === null, true);
+		await type("because");
+		await submit();
+		await until(() => calls.some((c) => c.url.endsWith("/cards/p1/questions/q2/text")), "the bind POST");
+		assert.deepEqual(calls.find((c) => c.url.endsWith("/text"))!.body, { text: "because" });
+		assert.equal(calls.some((c) => c.url.endsWith("/submit")), false);
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
+		assert.equal(bottomComposers().length, 1); // bound: the bar's composer is back
+	});
+
+	it("a plain message after collapsing supersedes only the thread's own questionnaires: a subagent's stays queued", async () => {
+		const page = { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] };
+		const kid = { ...card("k1", page, "w/kid"), source: { kind: "subagent", label: "worker: sheet" } };
+		const mine = { ...card("m1", page), source: { kind: "self", label: "you" } };
+		raise("a", kid, mine);
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "1 of 2 \u00b7 worker: sheet");
+		await click(q('[data-testid="ask-collapse"]'));
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent!.includes("Questions waiting (2)"), true);
+		await type("never mind");
+		await submit();
+		await until(() => calls.some((c) => c.url.endsWith("/threads/a/submit")), "the plain message");
+		await flush();
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent!.includes("Questions waiting"), true);
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent!.includes("("), false); // only the child's is left: no count
+		await click(q('[data-testid="ask-sheet-reopen"]'));
+		assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "k1");
+	});
+
+	it("the answering chip clears when its question leaves the page; a text-only send cannot go out empty; other cards still show beside the sheet", async () => {
+		const fields = [{ id: "q1", kind: "free-text", label: "Why", optional: true }, { id: "q2", kind: "free-text", label: "How", optional: true }];
+		const paged = (steps: object[], pageIndex = 0) => ({ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", pageIndex, card: { tool: "ask", paged: true, fields, steps } });
+		raise("a", paged([{ fields: ["q1", "q2"] }, { fields: [] }]), q1("c1"));
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.match(slot().textContent!, /Which color\?/); // the classic card shows beside the sheet
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[1]!);
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: How/);
+		assert.equal(sendBtn().hasAttribute("disabled") || sendBtn().getAttribute("aria-disabled") === "true", true); // nothing typed: no send
+		raise("a", paged([{ fields: ["q1"] }, { fields: ["q2"] }]), q1("c1"));
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", status: "idle" } });
+		await until(() => q('[data-testid="answering-chip"]') === null, "the chip to clear");
+		assert.equal(bottomComposers().length, 1);
+	});
+
+	it("reply mode: an attached image binds with the text, alone it still sends, and a refused bind keeps text and image", async () => {
+		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		const pick = async () => {
+			const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+			await act(async () => void props(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+			await until(() => q(`[data-testid="attachment-chip"][data-status="ready"]`), "the upload");
+		};
+		const texts = () => calls.filter((c) => c.url.endsWith("/cards/p1/questions/q1/text"));
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
+		assert.equal(props(q('button[aria-label="Attach images"]')!, "disabled"), false);
+		failPost = /\/text$/; // refused, e.g. over the card's image cap
+		await pick();
+		await type("look");
+		await submit();
+		await until(() => q('[role="alert"]'), "the inline error");
+		assert.deepEqual(texts()[0]!.body, { text: "look", attachments: ["up-1"] });
+		assert.equal(q('[role="alert"]')!.textContent, "nope");
+		assert.equal(ta().value, "look");
+		assert.equal(qa('[data-testid="attachment-chip"]').length, 1);
+		failPost = null;
+		await submit();
+		await until(() => texts().length === 2, "the retry");
+		await until(() => qa('[data-testid="attachment-chip"]').length === 0, "the chips to clear");
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[0]!);
+		await pick();
+		await submit();
+		await until(() => texts().length === 3, "the image-only bind");
+		assert.deepEqual(texts()[2]!.body, { text: "", attachments: ["up-1"] });
+	});
+
+	it("reply mode: a double Send posts the answer once and the second Send cannot overwrite it with an empty one", async () => {
+		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
+		const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+		await act(async () => void props(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+		await until(() => q(`[data-testid="attachment-chip"][data-status="ready"]`), "the upload");
+		await type("look");
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		const inner = globalThis.fetch;
+		globalThis.fetch = (async (i: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === "POST" && String(i).endsWith("/text")) await held;
+			return inner(i, init);
+		}) as typeof fetch;
+		try {
+			await submit();
+			await submit(); // the round trip is still open
+			release();
+			await until(() => calls.some((c) => c.url.endsWith("/text")), "the bind");
+		} finally {
+			globalThis.fetch = inner;
+		}
+		assert.deepEqual(calls.filter((c) => c.url.endsWith("/cards/p1/questions/q1/text")).map((c) => c.body), [{ text: "look", attachments: ["up-1"] }]);
+	});
+
+	it("reply mode: Esc, × and a click outside leave it, keep the unsent text, and bring the bar's composer and the replace hint back", async () => {
+		raise("a", { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00+00:00", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } });
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
+		await type("half");
+		await act(async () => void props(ta(), "onKeyDown")({ key: "Escape", preventDefault() {}, stopPropagation() {} }));
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
+		assert.equal(bottomComposers().length, 1);
+		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: half/);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[0]!);
+		assert.equal(bottomComposers().length, 0);
+		await click(q('[data-testid="answering-chip-clear"]'));
+		assert.equal(bottomComposers().length, 1);
+		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[0]!);
+		await act(async () => void document.body.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
+		assert.equal(bottomComposers().length, 1);
+		await type("typed");
+		assert.equal(q('[data-testid="ask-replace-hint"]') === null, true); // while the sheet is open, typing is its note, not a replacing message
+		assert.match(sendBtn().textContent!, /Submit/); // the composer button is the sheet's (last page)
+	});
+
 	it("keeps the input usable with a card open; Reply instead supersedes the card and shows it superseded", async () => {
 		raise("a", q1("c1"));
 		await mount();
@@ -275,44 +426,90 @@ describe("ChatBar cards", () => {
 	});
 
 	describe("producers", () => {
-		it("task_done multi-select ship card answers with the ticked ids", async () => {
-			const ship = { tool: "task_done", fields: [{ id: "ships", kind: "multi", label: "Ship these 2 tasks?", options: [{ label: "One (t1)", value: "t1" }, { label: "Two (t2)", value: "t2" }], default: ["t1", "t2"], min: 1, allowOther: false }] };
-			raise("a", card("s1", ship));
+		// Tool confirmations are paged ask cards (source kind "tool"): they join the questionnaire sheet queue, not the classic card path.
+		const tool = (callId: string, name: string, c: object) => ({ ...card(callId, { tool: name, paged: true, ...c }), source: { kind: "tool", label: name } });
+
+		it("a task_done multi-ship card opens in the sheet with its boxes ticked, names its tool, and Submit posts the ships", async () => {
+			const ship = tool("s1", "task_done", { fields: [{ id: "ships", kind: "multi", label: "Ship these 2 tasks?", options: [{ label: "One (t1)", value: "t1" }, { label: "Two (t2)", value: "t2" }], default: ["t1", "t2"], min: 1, allowOther: false }], steps: [{ title: "Ship", fields: ["ships"] }] });
+			raise("a", ship);
 			await mount();
-			assert.match(slot().textContent!, /Ship these 2 tasks\?/);
-			await click(q('[data-testid="card-submit"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/s1/answer")), "the answer POST");
-			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s1/answer"))!.body, { answers: { ships: { value: ["t1", "t2"] } } });
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="bar-card"]'), null); // not the classic card path
+			assert.equal(q('[data-testid="ask-source"]')!.textContent, "task_done"); // a lone tool card: the label sits by the title (no counter)
+			assert.equal(q('[data-testid="ask-queue"]') === null, true);
+			assert.deepEqual(qa('[data-testid="ask-option"]').map((o) => o.getAttribute("aria-checked")), ["true", "true"]);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/s1/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s1/submit"))!.body.answers, { ships: { value: ["t1", "t2"] } });
 		});
 
-		it("task_done single ship card (confirm) answers yes", async () => {
-			const ship = { tool: "task_done", brief: { headline: 'Ship "Fix it"?' }, fields: [{ id: "ok", kind: "confirm", label: 'Ship "Fix it" (t1)?', confirmLabel: "Ship", rejectLabel: "Not yet" }] };
-			raise("a", card("s2", ship));
+		it("a tool confirmation queues beside a subagent's questionnaire as 1 of 2 with its tool name", async () => {
+			const conf = tool("s2", "task_graduate", { fields: [{ id: "ok", kind: "confirm", label: "Graduate it?" }], steps: [{ fields: ["ok"] }] });
+			const kid = { ...card("k1", { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] }, "w/kid"), source: { kind: "subagent", label: "worker: sheet" } };
+			raise("a", conf, kid);
 			await mount();
-			assert.equal(q('[data-testid="brief-headline"]')!.textContent, 'Ship "Fix it"?');
-			await click(q('[data-testid="card-confirm"]'));
-			await click(q('[data-testid="card-submit"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/s2/answer")), "the answer POST");
-			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s2/answer"))!.body, { answers: { ok: { value: true } } });
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "1 of 2 \u00b7 task_graduate");
 		});
 
-		it("a subagent abandon card (confirm) is skippable", async () => {
-			const stop = { tool: "subagent_stop", brief: { headline: "Abandon the worker?" }, fields: [{ id: "ok", kind: "confirm", label: "Abandon worker w1?", confirmLabel: "Abandon", rejectLabel: "Keep" }] };
-			raise("a", card("p1", stop));
+		it("a single-confirm tool card (task_done 'Ship X?') is required: no Skip, a typed note never arms 'Send anyway?', and Submit posts the confirm", async () => {
+			const ship = tool("s3", "task_done", { title: "Ship?", fields: [{ id: "confirm", kind: "confirm", label: "Ship X?" }], steps: [{ title: "Ship?", fields: ["confirm"] }] });
+			raise("a", ship);
 			await mount();
-			assert.match(slot().textContent!, /Abandon worker w1\?/);
-			await click(q('[data-testid="card-skip"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/p1/skip")), "the skip POST");
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="ask-skip"]'), null);
+			assert.equal(sendBtn().hasAttribute("disabled") || sendBtn().getAttribute("aria-disabled") === "true", true);
+			await type("just a note");
+			await submit();
+			await submit();
+			await flush();
+			assert.equal(calls.some((c) => c.url.endsWith("/submit")), false, "nothing is sent while the confirm is unanswered");
+			assert.doesNotMatch(sendBtn().textContent ?? "", /Send anyway/);
+			await click(qa('[data-testid="ask-confirm"]').find((b) => b.getAttribute("data-value") === "true")!);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/s3/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/s3/submit"))!.body.answers, { confirm: { value: true } });
 		});
 
-		it("a crawl_release card (single choice) answers with the picked run", async () => {
-			const rel = { tool: "crawl_release", title: "Release which crawl?", brief: { headline: "Release which crawl?" }, fields: [{ id: "run", kind: "single", label: "Pick a crawl — newest first.", options: [{ label: "Crawl A", value: "/runs/a" }, { label: "Crawl B", value: "/runs/b" }], allowOther: false }] };
-			raise("a", card("r1", rel));
+		it("the subagent_stop abandon card (confirmCard with Abandon / Keep) renders in the sheet and Submit posts the choice", async () => {
+			const gone = tool("ab1", "subagent_stop", { title: "Abandon branch?", fields: [{ id: "confirm", kind: "confirm", label: "Abandon feat/x (2 unmerged commits)?", description: "Its worktree is deleted.", confirmLabel: "Abandon", rejectLabel: "Keep" }], steps: [{ title: "Abandon branch?", fields: ["confirm"] }] });
+			raise("a", gone);
 			await mount();
-			await click(byText("button", "Crawl B"));
-			await click(q('[data-testid="card-submit"]'));
-			await until(() => calls.some((c) => c.url.endsWith("/cards/r1/answer")), "the answer POST");
-			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/r1/answer"))!.body, { answers: { run: { value: "/runs/b" } } });
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.deepEqual(qa('[data-testid="ask-confirm"]').map((b) => b.textContent?.trim()), ["Abandon", "Keep"]);
+			assert.equal(q('[data-testid="ask-skip"]'), null);
+			await click(qa('[data-testid="ask-confirm"]').find((b) => b.textContent?.trim() === "Abandon")!);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/ab1/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/ab1/submit"))!.body.answers, { confirm: { value: true } });
+		});
+
+		it("a plain message after collapsing supersedes the thread's own tool confirmation; a subagent's card stays", async () => {
+			const conf = tool("s4", "task_graduate", { fields: [{ id: "ok", kind: "confirm", label: "Graduate it?" }], steps: [{ fields: ["ok"] }] });
+			const kid = { ...card("k1", { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] }, "w/kid"), source: { kind: "subagent", label: "worker: sheet" } };
+			raise("a", conf, kid);
+			await mount();
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			await click(q('[data-testid="ask-collapse"]'));
+			await type("never mind");
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/threads/a/submit")), "the plain message");
+			await flush();
+			// The tool card is gone; the child's stays and a new card opens expanded.
+			assert.equal(q('[data-testid="ask-sheet"]')!.getAttribute("data-call-id"), "k1");
+			assert.equal(q('[data-testid="ask-queue"]'), null);
+		});
+
+		it("a crawl_release single chooser (options without a tradeoff) renders in the sheet and submits the picked run", async () => {
+			const rel = tool("r1", "crawl_release", { title: "Release which crawl?", fields: [{ id: "run", kind: "single", label: "Pick a crawl — newest first.", options: [{ label: "Crawl A", value: "/runs/a" }, { label: "Crawl B", value: "/runs/b" }], allowOther: false }], steps: [{ fields: ["run"] }] });
+			raise("a", rel);
+			await mount();
+			await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+			assert.equal(q('[data-testid="ask-tradeoff"]') === null, true);
+			await click(qa('[data-testid="ask-option"]').find((o) => o.textContent!.includes("Crawl B"))!);
+			await submit();
+			await until(() => calls.some((c) => c.url.endsWith("/cards/r1/submit")), "the submit POST");
+			assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/r1/submit"))!.body.answers, { run: { value: "/runs/b" } });
 		});
 	});
 });

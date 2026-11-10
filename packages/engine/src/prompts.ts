@@ -128,6 +128,7 @@
 import { ENTRY_KINDS } from "./config/vocab.js";
 export {
   OBSERVER_SYSTEM,
+  OBSERVER_GENERAL_FLAG,
   CONSOLIDATE_SYSTEM,
   JOURNEY_SYSTEM,
   CRAWL_OBSERVER_SYSTEM,
@@ -414,6 +415,47 @@ Do not invent facts that neither the current record nor the observations state. 
 SOURCES: the CURRENT RECORD lines are numbered [r1], [r2]… and the NEW OBSERVATIONS [o1], [o2]…. For every item, list in "from" the observations it rests on and, when you keep or fold an existing line, that line: e.g. ["o2", "r3"]. An unchanged line keeps its own ref. Use only refs you were given; never put a ref in the text itself.
 
 Respond with valid JSON: {"decisions": [{"decision": string, "why": string, "from": [string]}], "changes": [{"text": string, "from": [string]}], "findings": [{"text": string, "from": [string]}], "problems": [{"text": string, "from": [string]}]}. An empty group is an empty array.`;
+
+/**
+ * stage: workLog · model: fast · in: a task's title + new observations ([o1]…) + the last ~8 log lines · out: up to 6 short log lines
+ *
+ * Replaces the whole-Record fold: each batch of observations adds a few durable lines to the task's log.
+ */
+export const WORK_LOG_SYSTEM = `You keep the LOG of ONE task: a short list of durable lines. You are given the task title, NEW OBSERVATIONS numbered [o1], [o2]… and the most recent log lines. Return the lines the new observations add.
+
+Keep ONLY:
+- decision: something decided, with the reason when the observations give one.
+- change: something that is now different (file, module, behaviour, interface, config).
+- finding: a fact learned that stays true.
+- problem: a problem hit, together with its fix or workaround (or say it is still open).
+
+DROP tool-step narration ("ran a browser check", "read the file", "started the build"), session narrative, test counts, build/deploy status, and anything not worth knowing later.
+NEVER repeat what the recent log lines already say, even in other words.
+At most 6 lines, each 240 characters or fewer. Do not invent facts. An empty array is fine when nothing is worth logging.
+In "from" list the observation refs the line rests on, e.g. ["o2"]. Use only refs you were given; never put a ref in the text.
+
+Respond with strict JSON only: {"lines":[{"kind":"decision|change|finding|problem","text":string,"from":[string]}]}`;
+
+/**
+ * stage: workCompact · model: fast · in: a full Record's lines ([l1]…, each with its kind) + a target size · out: fewer lines, each citing the inputs it merges
+ */
+export const WORK_COMPACT_SYSTEM = `You compact a work item's LOG that has hit its size cap. You are given its lines numbered [l1], [l2]… each with a kind, and a TARGET size in characters. Return a shorter list that keeps what is worth knowing later.
+
+Merge lines that say the same thing or one chain of events into one line. Drop routine detail. Keep decisions with their reasons, lasting changes, facts that stay true, and problems with their fixes. Keep each line's kind (decision|change|finding|problem); a merged line takes the kind that fits it best.
+The total text must stay within TARGET, each line 240 characters or fewer. Do not invent facts.
+In "from" list EVERY input ref the line merges or replaces, e.g. ["l3","l7"]. Use only refs you were given; never put a ref in the text.
+
+Respond with strict JSON only: {"lines":[{"kind":"decision|change|finding|problem","text":string,"from":[string]}]}`;
+
+/**
+ * stage: workDistill · model: smart · in: a shipped task's log + the feature's Outcomes and Record · out: up to 5 lines for the feature Record
+ */
+export const WORK_DISTILL_SYSTEM = `You distill a SHIPPED task's log into lines for its FEATURE's Record. You are given the task id and title, the task's LOG, the feature's Outcomes one-liners, and the feature Record's headings with its last few bullets.
+
+Return at most 5 lines. Each line must be useful to someone reading the feature later: a decision with its reason, a lasting change, a finding that stays true, or a problem with its fix. Skip what the Outcomes or the Record bullets already say, and anything routine.
+No commit hashes, task ids, test counts, or deploy/build status. Do not invent facts.
+
+Respond with strict JSON only: {"lines":[{"group":"Decisions|Changes|Findings|Problems & fixes","text":string}]}`;
 
 /**
  * stage: produce (KB sweep) · model: smart · in: contribution + existing (if merge) · out: entry

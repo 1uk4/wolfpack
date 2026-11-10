@@ -42,6 +42,7 @@ import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { createRebuildService, type RebuildService } from "./kb-rebuild.js";
+import { createHubHealth, createPackSummary, type HubHealth, type PackSummary } from "./health.js";
 import { createCurator, curatorEmbedderFactory, curatorEngineFactory, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
@@ -74,6 +75,7 @@ import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
 import { createRelay, type Relay } from "./relay.js";
 import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
+import { WorkIdempotency } from "./work-idempotency.js";
 import { buildHubSettings } from "./settings.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
@@ -198,6 +200,10 @@ const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const PAIR_FAILS_PER_MIN = 10;
 const DEVICE_MUTATIONS_PER_MIN = 10;
+/** True when the token `tokenId` in `all` carries the owner flag (shared by ownerCaller and hubRevokeDevice). */
+function callerIsOwner(all: readonly { id: string; isOwner?: boolean }[], tokenId: string): boolean {
+  return all.some((t) => t.id === tokenId && !!t.isOwner);
+}
 const PAIR_LIMITER_MAX_KEYS = 10_000;
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
@@ -310,6 +316,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
+  let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
@@ -358,6 +365,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
+  const workIdempotency = new WorkIdempotency(join(opts.dataDir, "link", "work-idempotency.jsonl"), { now: opts.now });
   let registry: ReturnType<typeof createRegistry>;
   try {
     registry = createRegistry({
@@ -393,6 +401,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
+    let packSummary: PackSummary | undefined; // built once the link exists (below)
+    health = createHubHealth(() => packSummary?.hosts() ?? []);
     kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
     // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
     await kbWriter.exclusive(() => revisions.init());
@@ -450,6 +460,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         const now = tokens.stamp();
         if (now === stamp) return;
         stamp = now;
+        packSummary?.labelsChanged();
         sweepRevoked();
       } catch (e) {
         console.error("hubd: token watch failed:", e);
@@ -505,6 +516,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     link = createLink({ authenticate, registry, timers: opts.linkTimers, onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     linkRef = link;
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
+    packSummary = createPackSummary({
+      hosts: () => registry.list("hosts") as { name: string }[],
+      wolves: () => registry.list("wolves") as { name: string; host?: string; status?: string }[],
+      presence: (h) => link.presence(h),
+      // A host's label is its newest worker token's label (operator `--label`, else the hostname workerd sent when pairing).
+      labels: () => new Map(tokens.list().filter((t) => t.kind === "worker" && t.hostId && t.label).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((t) => [t.hostId!, t.label] as const)),
+      now: opts.now,
+    });
+    link.onPresence((h) => packSummary?.presenceChanged(h));
+    registry.onChange(() => packSummary?.registryChanged());
     relay = createRelay({ link, registry, bodyTimeoutMs: opts.bodyTimeoutMs });
     revokeListeners.add((id) => link.closeByToken(id));
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
@@ -618,6 +639,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!identity.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a 500, never a silent fallback
       return { ...identity, tokenId: identity.tokenId };
     }
+    /** Owner-only calls: the caller must be a console/browser token flagged isOwner (set on the host CLI). Else 403. */
+    function ownerCaller(identity: AuthIdentity | undefined): AuthIdentity & { tokenId: string } {
+      const caller = deviceCaller(identity);
+      if (!callerIsOwner(tokens.list(), caller.tokenId)) throw new HubError("forbidden", "only an owner device can do this");
+      return caller;
+    }
     /** A label for a log line: bounded, JSON-escaped (no control characters or line breaks reach the log). */
     const auditLabel = (l: string) => JSON.stringify(l.slice(0, 40));
     /** Mints and revokes: at most DEVICE_MUTATIONS_PER_MIN a minute per calling token (409 busy, retryable). */
@@ -636,6 +663,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
+      if (url.pathname === "/healthz" && req.method === "GET") return send(res, 200, health!.body()); // no auth, no KB/disk (health.ts)
       // Hub-proxied Work API for VPS wolves (work-proxy.ts): the wolf's own hub token arrives as X-API-Key (what the Work clients send).
       // Mapped to a bearer for THIS prefix only; everything else still needs Authorization: Bearer.
       if (isWorkProxyPath(url.pathname)) {
@@ -644,7 +672,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         const id = authenticate(req);
         if (!id) throw new HubError("unauthorized", "missing or invalid token");
         return handleWorkProxy(
-          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n) },
+          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n), idempotency: workIdempotency, recordAppended: (itemId) => bus.workAppended([{ type: "work.record", id: itemId }]) },
           req, res, url, id, writeActor(req),
         );
       }
@@ -710,8 +738,25 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const caller = deviceCaller(identity);
           deviceMutationLimit(caller.tokenId, (opts.now ?? Date.now)());
           const cascade = url.searchParams.get("cascade") === "1";
-          const target = tokens.list().find((t) => t.id === params.id && t.kind !== "worker");
+          const all = tokens.list();
+          const target = all.find((t) => t.id === params.id && t.kind !== "worker");
           if (!target) throw new HubError("not_found", "no such device");
+          if (!callerIsOwner(all, caller.tokenId)) {
+            // not an owner: only itself and the devices descended from it through mintedBy
+            const mine = new Set([caller.tokenId]);
+            for (let grew = true; grew; ) {
+              grew = false;
+              for (const t of all) if (t.mintedBy && mine.has(t.mintedBy) && !mine.has(t.id)) (mine.add(t.id), (grew = true));
+            }
+            if (!mine.has(target.id)) throw new HubError("forbidden", "you can revoke only this device and the devices it added; only an owner device can revoke it");
+            // what the revoke would remove (the target, plus its descendants on a cascade) must hold no owner
+            const doomed = new Set([target.id]);
+            if (cascade) for (let grew = true; grew; ) {
+              grew = false;
+              for (const t of all) if (t.mintedBy && doomed.has(t.mintedBy) && !doomed.has(t.id) && t.kind !== "worker") (doomed.add(t.id), (grew = true));
+            }
+            if (all.some((t) => doomed.has(t.id) && t.isOwner)) throw new HubError("forbidden", "only an owner device can revoke an owner device");
+          }
           const gone = tokens.revokeDevice(target.id, cascade); // 409 conflict when it would remove the last console token
           const ids = gone.map((t) => t.id);
           console.log(`hubd: token ${caller.tokenId} revoked ${ids.length} device(s) ${ids.join(",")} label=${auditLabel(target.label)}${cascade ? " (cascade)" : ""}${ids.includes(caller.tokenId) ? " (incl. itself)" : ""}`);
@@ -978,6 +1023,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
+    health?.stop();
     if (opts.socketPath !== undefined) removeSocket(opts.socketPath, socketId);
     stopWatcher();
     revisions.stop();
@@ -1005,6 +1051,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
+        health?.stop();
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         revisions.stop(); // before the KB writer closes
         // The curator drains first (bounded): a tick in flight commits through the KB writer, which must still be open.

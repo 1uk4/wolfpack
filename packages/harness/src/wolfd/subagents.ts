@@ -4,7 +4,7 @@
  * A subagent is a task-owned pi-durable conversation owned by the thread that spawned it (engine `createOwned`), served
  * as a thread of kind `subagent`. It starts fresh with its profile's system prompt and the brief, has the profile's tools
  * but never the spawn tools (depth 1), and returns its final answer to the parent as a steer message. Its questions
- * (brief cards) go to the parent the same way; it then waits until the parent (or the operator) replies.
+ * (ask questionnaires) go to the parent the same way; it then waits until the parent (or the operator) replies.
  *
  * State lives in `<den>/wolfd/subagents.json` and the child ledgers (subagent-store.ts); the conversation and its
  * history are the store's. After a restart `recover()` re-attaches every child, so a turn that was running goes on and
@@ -36,7 +36,7 @@ import { discoverAgents, formatRosterLines, loadAgent, parseCommaList, type Agen
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
 import { WriterGuard, abandonChild, dependenciesLine, installDependencies, wantsInstall, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type InstallResult, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
-import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
+import type { Card, LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { fenceRoot, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
@@ -49,7 +49,7 @@ import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js"
 /** The tools every spawn tool set shares; a child never gets them. */
 export const SPAWN_TOOLS = ["subagent", "subagent_message", "subagents_list", "subagent_stop", "subagent_merge"] as const;
 /** What a child always gets: the way to ask its parent a question. */
-const CHILD_ALWAYS_TOOLS = ["brief"];
+const CHILD_ALWAYS_TOOLS = ["ask"];
 /** A profile without `tools:` gets the coding tools. */
 const DEFAULT_PROFILE_TOOLS = ["read", "write", "edit", "bash"];
 
@@ -188,6 +188,24 @@ function stepOf(name: string, args: unknown): string {
   const hint = [a.path, a.file_path, a.command, a.pattern, a.query].find((v) => typeof v === "string") as string | undefined;
   const text = hint ? `${name} ${hint.replace(/\s+/g, " ").trim()}` : name;
   return text.length > 80 ? `${text.slice(0, 79)}…` : text;
+}
+
+/** A pending card as readable text for the parent: page titles, then each question with its context, choices and trade-offs. */
+function cardQuestionText(card: Card): string {
+  const pages = card.steps ?? [{ title: card.title, fields: card.fields.map((f) => f.id) }];
+  const out: string[] = [];
+  for (const [i, page] of pages.entries()) {
+    if (page.title) out.push(pages.length > 1 ? `Page ${i + 1} of ${pages.length}: ${page.title}` : page.title);
+    for (const id of page.fields) {
+      const f = card.fields.find((x) => x.id === id);
+      if (!f) continue;
+      out.push(`- ${f.label} (${f.kind}, ${f.optional ? "optional" : "required"})`);
+      if (f.description) out.push(`  Context: ${f.description}`);
+      const options = (f as { options?: { label: string; tradeoff?: string }[] }).options ?? [];
+      for (const o of options) out.push(`  * ${o.label}${o.tradeoff ? ` — ${o.tradeoff}` : ""}`);
+    }
+  }
+  return out.join("\n");
 }
 
 export class SubagentManager {
@@ -329,7 +347,10 @@ export class SubagentManager {
     for (const r of this.records.filter((o) => o.parentThreadId === parentThreadId)) {
       if (seen.has(r.id)) continue;
       const thread = this.port.thread(r.id);
-      if (thread && !thread.summary.closed && this.closedOf(r).closed) this.announce(r);
+      if (thread && !thread.summary.closed && this.closedOf(r).closed) {
+        this.announce(r);
+        thread.supersedePending(); // Only close/discard supersedes a child's cards. A child that stops, fails or finishes keeps them: answering one starts a turn on it and resumes it.
+      }
       if (this.port.thread(r.id)?.summary.closed) out.push(r.id, ...this.closeChildrenOf(r.id, seen));
     }
     return out;
@@ -373,7 +394,7 @@ export class SubagentManager {
     const parent = this.port.threadOfConversation(callerConversationId);
     if (!parent) return fail("Cannot spawn: the calling conversation is not a thread of this wolf.");
     // Depth 1: only home and feature threads spawn. (A child is not even offered the tool.)
-    if (parent.summary.kind === "subagent") return fail("Sub-agents cannot spawn sub-agents. Do the work yourself, or ask your parent via brief.");
+    if (parent.summary.kind === "subagent") return fail("Sub-agents cannot spawn sub-agents. Do the work yourself, or ask your parent via ask.");
 
     const roster = discoverAgents(this.roster());
     const permitted = roster.map((a) => a.name).join(", ") || "(none)";
@@ -881,10 +902,7 @@ export class SubagentManager {
     }
     const pending = thread.cards.pending();
     if (pending.length > 0) {
-      const question = pending
-        .flatMap((p) => p.card.fields.map((f) => f.label))
-        .filter(Boolean)
-        .join("\n");
+      const question = pending.map((p) => cardQuestionText(p.card)).filter(Boolean).join("\n\n");
       this.ledger(rec, "child", "parent", "question", question);
       this.settle(
         rec,
@@ -1763,7 +1781,7 @@ ${text}`;
     return this.parentCwd(parent);
   }
 
-  /** The profile's tools that this runtime has, plus brief; never the spawn tools. */
+  /** The profile's tools that this runtime has, plus ask; never the spawn tools. */
   private childTools(def: AgentDefinition): { tools: string[]; missing: string[] } {
     const registered = new Set(this.opts.registeredTools());
     const wanted = parseCommaList(def.tools) ?? DEFAULT_PROFILE_TOOLS;
@@ -1866,7 +1884,7 @@ export function childInstructions(def: AgentDefinition, name: string, worktree?:
     worktree
       ? `Your working copy is ${worktree.ws.path} on branch ${worktree.ws.branch}. Do all reads, edits, tests and commits there. The repository's main checkout at ${worktree.ws.repo.mainDir}${featurePath ? ` and the feature worktree at ${featurePath}` : ""} are off-limits; never edit or commit there. If your brief names a path in them, use the same path under ${worktree.ws.path} instead.`
       : "",
-    `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call brief: your parent receives the question and replies, and you continue.`,
+    `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call ask: your parent receives the question and replies, and you continue.`,
   ]
     .filter(Boolean)
     .join("\n\n");

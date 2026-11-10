@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import type { WorkItem } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { WorkQueuedError } from "./work-client.js";
 import {
   confirmGraduation,
   drainScope,
@@ -39,6 +40,8 @@ export interface GraduationDeps {
   drain: DrainWork;
   /** Ships an item that is not complete yet. */
   ship: (id: string) => Promise<unknown>;
+  /** Final feature pass before the distill (memory.workLog: append). Not set by the durable runtime today. */
+  finalPass?: (featureId: string) => Promise<unknown>;
   /** Called with every item that graduated (cache invalidation). */
   forget?: (id: string) => void;
 }
@@ -63,8 +66,10 @@ export function createGraduation(deps: GraduationDeps) {
   }
 
   /** Refusals keep their code; anything else stops the graduation with nothing archived. */
-  const asFailure = (err: unknown): GraduationError => {
+  const asFailure = (err: unknown): Error => {
     if (err instanceof GraduationError || (err as { name?: string })?.name === "GraduationError") return err as GraduationError;
+    // A write saved in the outbox (hub unreachable) is not a failure: the caller reports it as queued.
+    if (err instanceof WorkQueuedError) return err;
     const message = err instanceof Error ? err.message : String(err);
     // previewGraduation / confirmGraduation throw plain Errors: the not-ready and blocked ones are the owner's to fix.
     return new GraduationError(/is (no longer|not) ready to graduate|^cannot send:/.test(message) ? "not_ready" : "failed", message);
@@ -75,7 +80,7 @@ export function createGraduation(deps: GraduationDeps) {
     try {
       const scope = await assertReady(id);
       const roots = needRoots();
-      const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain, scope });
+      const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain, finalPass: deps.finalPass, scope });
       await mkdir(previewDir(), { recursive: true });
       await writeFile(previewFile(p.token), JSON.stringify(p));
       return p;
@@ -104,7 +109,7 @@ export function createGraduation(deps: GraduationDeps) {
     try {
       const roots = needRoots();
       const p = await loadPreview(id, token);
-      const done = await confirmGraduation({ client, roots, wolf: deps.wolfName, preview: p, ship: deps.ship, drain: deps.drain, engine: deps.engine() });
+      const done = await confirmGraduation({ client, roots, wolf: deps.wolfName, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
       // The graduation has happened (archived, token used): an unbind that fails is a warning, never an error, or the retry would find no token.
       let unbound: number[] = [];

@@ -37,6 +37,7 @@ import {
 	reconcileUserSteers,
 	recoverStaleJobs,
 	registerLiveAgent,
+	resetWakePipelineForTests,
 	setJobRespawn,
 	setTurnRunner,
 	settleSteers,
@@ -113,6 +114,9 @@ function trackJob(id: string) {
  * in the full run. The fence makes every test's start state identical:
  * all tracked jobs settled, aborts unregistered, seams inert. */
 afterEach(() => {
+	// End every chat's turn and drop queued steers / parked pumps: a pump left in waitForIdle would loop forever.
+	for (const id of createdChats) endTurn(id);
+	resetWakePipelineForTests();
 	for (const id of createdJobs) {
 		try {
 			const job = jobStore.getJob(id);

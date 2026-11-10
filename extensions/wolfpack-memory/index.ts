@@ -16,7 +16,7 @@
  *   WOLFPACK_DOMAIN     — default domain for claims (default: wolfpack)
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createEngine, engineSteps, loadModelTable, type Engine, type ModelTable } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, loadWolfConfig, type Engine, type ModelTable } from "@wolfpack/engine";
 import {
   createOrchestrator,
   sortObservations,
@@ -25,6 +25,9 @@ import {
   foldLedger,
   poolTokens,
   HttpWorkRecordStore,
+  distillTaskToFeature,
+  sweepPendingDistills,
+  runFinalPass,
   serializeBranchEntries,
   type MemoryOrchestrator,
   type Observation,
@@ -44,6 +47,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig, type WorkSystemHandle } from "./work-system.js";
 import { WorkClient, GRADUATION_TIMEOUT_MS } from "./work-client.js";
+import { featureResolver, subagentTask, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS } from "./subagent-tag.js";
 export { WorkStoreReadOnlyError, WorkStorePermissionError } from "./work-client.js";
 import { writeParentBody } from "./parent-embed.js";
 import {
@@ -156,6 +160,13 @@ function renderBar(pct: number, width: number): string {
 
 // ── PiRuntime — implements AgentRuntime ─────────────────────────────────────
 
+/** `memory.subagentMemory: on` in wolf.yaml (default off): the observer skips subagent traffic. Set at load. */
+let excludeSubagentTraffic = false;
+/** `memory.generalToDen: true` in wolf.yaml (default off). Set at load. */
+let generalToDenOn = false;
+/** `memory.workLog: append` in wolf.yaml (default fold): work observations are appended to their item's log. Set at load. */
+let workLogMode: "fold" | "append" = "fold";
+
 class PiRuntime implements AgentRuntime {
   readonly name = "pi";
   private pi: ExtensionAPI;
@@ -223,7 +234,7 @@ class PiRuntime implements AgentRuntime {
     const newEntries = branch.slice(startIdx);
     if (newEntries.length === 0) return [];
 
-    const serialized = serializeBranchEntries(newEntries);
+    const serialized = serializeBranchEntries(newEntries, { excludeSubagentTraffic });
     if (serialized.length === 0) return [];
 
     const CHUNK_TOKEN_LIMIT = 5000;
@@ -262,6 +273,28 @@ class PiRuntime implements AgentRuntime {
     }
 
     return chunks;
+  }
+
+  /** Whether the unobserved part of the branch holds at least `tokens` tokens. */
+  pendingTokensAtLeast(tokens: number): boolean {
+    const branch = this.ctx.sessionManager?.getBranch?.() ?? [];
+    const idx = this.lastChunkId ? branch.findIndex((e: any) => e.id === this.lastChunkId) : -1;
+    const fresh = serializeBranchEntries(branch.slice(idx + 1), { excludeSubagentTraffic });
+    return fresh.reduce((n, e) => n + e.tokens, 0) >= tokens;
+  }
+
+  /** One chunk holding the last assistant message's text (a scout's final report). Advances the watermark. */
+  lastAssistantChunk(): ConversationChunk[] {
+    const branch = this.ctx.sessionManager?.getBranch?.() ?? [];
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const m = branch[i];
+      if (m.type !== "message" || m.message?.role !== "assistant") continue;
+      const c = m.message.content;
+      const text = (typeof c === "string" ? c : (c ?? []).map((b: any) => (b.type === "text" ? b.text : "")).join("\n")).trim();
+      this.lastChunkId = m.id;
+      return text ? [{ id: m.id, text: `[assistant]\n${text}`, tokenCount: Math.ceil(text.length / 4), timestamp: new Date().toISOString() }] : [];
+    }
+    return [];
   }
 
   appendLedger(entry: LedgerEntry): void {
@@ -1224,7 +1257,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   let orchestrator: MemoryOrchestrator | null = null;
   /** The work system's view of the bound task (set when it initialises, below). */
   let workHandle: WorkSystemHandle | null = null;
-  const workRecordStore = new HttpWorkRecordStore();
+  const workRecordStore = new HttpWorkRecordStore(undefined, undefined, undefined, wolfName);
   /** Graduation folds this session's pending tagged observations first (memory off: none were recorded). */
   const piDrain = async (ids: string[]) => (orchestrator ? orchestrator.drainWork(ids) : { folded: 0 });
   let engine: Engine | null = null;
@@ -1287,6 +1320,14 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     });
   }
 
+  /** Subagent memory (memory.subagentMemory on): an observing agent type with a task runs the observer only. */
+  const subagentObserving = (): boolean =>
+    !!process.env.PI_SUBAGENT_AGENT && excludeSubagentTraffic && subagentTask() !== null;
+  /** The tag its observations carry; the feature (the task's partOf) is looked up once, in the background. */
+  let subagentTag: { taskId: string; featureId?: string } | null = null;
+  const subagentFeature = featureResolver(() => new WorkClient(undefined, undefined, undefined, undefined, wolfName));
+  let subagentTurns = 0;
+
   function initOrchestrator(ctx: any): void {
     if (!runtime || !credsOk) return;
 
@@ -1294,7 +1335,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
     const orchConfig = {
       chunkTokens: 5000,
-      consolidateAtPoolTokens: CONSOLIDATE_AT,
+      // A subagent only observes: it never consolidates (the parent's pool trigger does).
+      consolidateAtPoolTokens: subagentObserving() ? Number.POSITIVE_INFINITY : CONSOLIDATE_AT,
       poolTargetTokens: POOL_TARGET,
       observerConcurrency: 4,
       kbRoots: kbEnabled ? kbRoots : undefined,
@@ -1302,8 +1344,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       domains: wolfDomains,
       kbBasePath: kbRoots.kbBase || undefined,
       // Observations made while a task is bound feed that item's Record, not the den.
-      getBoundWork: () => workHandle?.getBoundWork() ?? null,
+      // A subagent never binds: its observations carry the task it works on (PI_SUBAGENT_TASK) and its feature instead.
+      getBoundWork: () => (subagentObserving() ? subagentTag : workHandle?.getBoundWork()) ?? null,
+      generalToDen: generalToDenOn,
       workRecordStore: workRecordStore.configured ? workRecordStore : undefined,
+      workLog: workLogMode,
     };
     orchestrator = createOrchestrator(engine, runtime, orchConfig);
   }
@@ -1398,10 +1443,24 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   pi.on("session_start", (_event: unknown, ctx: any) => {
     // Subagent child: its result reaches memory via the main chat. Leave memory off
     // (no runtime/observer/status/reconcile); work tools stay.
-    if (process.env.PI_SUBAGENT_AGENT) return;
+    if (process.env.PI_SUBAGENT_AGENT) {
+      if (!subagentObserving() || !credsOk) return;
+      // Observer only: no reconcile, no status, no binding (the tag below is not a binding).
+      runtime = new PiRuntime(pi, ctx);
+      enabled = true;
+      const taskId = process.env.PI_SUBAGENT_TASK!;
+      subagentTag = { taskId };
+      void subagentFeature(taskId).then((featureId) => { if (featureId && subagentTag) subagentTag = { taskId, featureId }; });
+      initOrchestrator(ctx);
+      return;
+    }
     runtime = new PiRuntime(pi, ctx);
     enabled = readGate(ctx.sessionManager.getBranch());
     if (enabled) initOrchestrator(ctx);
+    // Catch-up for ship distills (memory.workLog: append): once per session start, at most 3 tasks, in the background; failures are swallowed.
+    if (enabled && workLogAppend && workRecordStore.configured && engine && !process.env.PI_SUBAGENT_AGENT) {
+      void sweepPendingDistills({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName), store: workRecordStore, engine, src: wolfName }).catch(() => {});
+    }
     // Archive den topics Dewey has absorbed since last time (receipt-driven, silent).
     if (kbEnabled) {
       try { reconcileDen(wolfDen, kbRoots, wolfName); } catch { /* never block startup */ }
@@ -1409,7 +1468,16 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     refreshStatus(ctx);
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
+    // Append mode: forced flush of the pending work logs before the orchestrator goes away (no-op in fold mode).
+    // Bounded: a hung Work API must not hold shutdown (10 s).
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        orchestrator?.flushWorkLog(),
+        new Promise<void>((r) => { timer = setTimeout(r, 10_000); }),
+      ]).finally(() => clearTimeout(timer));
+    } catch { /* never block shutdown */ }
     enabled = false;
     orchestrator = null;
     runtime = null;
@@ -1458,6 +1526,13 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     if (!enabled || !orchestrator || !runtime) return;
 
     runtime.updateCtx(ctx);
+    if (subagentObserving()) {
+      // Scouts observe their final report only (agent_end). The rest: every 3rd turn, or ~1,500 new tokens.
+      if (FINAL_ONLY_AGENTS.has(process.env.PI_SUBAGENT_AGENT!)) return;
+      subagentTurns++;
+      if (subagentTurns < SUBAGENT_OBSERVE_EVERY_TURNS && !runtime.pendingTokensAtLeast(SUBAGENT_OBSERVE_TOKENS)) return;
+      subagentTurns = 0;
+    }
     const chunks = runtime.getNewChunks();
     if (chunks.length === 0) return;
 
@@ -1482,6 +1557,23 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     })();
 
     observerTasks.add(task);
+  });
+
+  // Subagent end of run: flush what is left (a scout: just its last assistant message), then wait for the writes.
+  pi.on("agent_end", async (_event: unknown, ctx: any) => {
+    if (!subagentObserving() || !enabled || !orchestrator || !runtime) return;
+    runtime.updateCtx(ctx);
+    const chunks = FINAL_ONLY_AGENTS.has(process.env.PI_SUBAGENT_AGENT!) ? runtime.lastAssistantChunk() : runtime.getNewChunks();
+    try {
+      if (chunks.length > 0) await orchestrator.processChunks(chunks);
+      await Promise.allSettled([...observerTasks]);
+      // A subagent's pool is its own session ledger and its orchestrator never auto-consolidates (threshold Infinity):
+      // write the tail now. Append mode: flush the logs; fold mode: consolidate once.
+      if (workLogAppend) await orchestrator.flushWorkLog();
+      else await orchestrator.consolidateNow();
+    } catch (err) {
+      runtime?.notify(`observer error: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
   });
 
   // ── Compaction hook ─────────────────────────────────────────────────────
@@ -1514,6 +1606,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // ── Work System (Factory merged into Memory) ─────────────────────────────
 
   const workConfig: WorkSystemConfig = {
+    // Ship / unbind: forced flush of the pending work logs (append mode).
+    flushWorkLog: (targets) => (orchestrator ? orchestrator.flushWorkLog(targets) : Promise.resolve()),
     // Inject stage-specific prompts when bound to a task
     getStageContext: (item) => getStageContext(item),
 
@@ -1560,7 +1654,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
               summary,
               new Date().toISOString().split("T")[0]
             );
-            await writeParentBody(kbRoots, parent, updatedBody, { notify: (m, level) => runtime?.notify(m, level) });
+            await writeParentBody(kbRoots, parent, updatedBody, { wolf: wolfName, notify: (m, level) => runtime?.notify(m, level) });
 
             // Graduating the feature is manual: `g` in /task once all its
             // tasks are done (work-system.ts).
@@ -1578,11 +1672,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
+        return previewGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain, finalPass: finalPassHook });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-        const done = await confirmGraduation({ client: new WorkClient().withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
+        const done = await confirmGraduation({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName).withTimeout(GRADUATION_TIMEOUT_MS), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain, finalPass: finalPassHook, ...(engine || (modelTable && credsOk) ? { engine: engine ?? buildEngine() } : {}) });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
         unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;
@@ -1592,10 +1686,24 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   // Read wolf's subscribed domains from wolf.yaml
   let wolfDomains: string[] = [];
+  let workLogAppend = false;
   try {
     const wolfYamlPath = path.join(wolfDen, "..", "wolf.yaml");
     if (fs.existsSync(wolfYamlPath)) {
       const raw = fs.readFileSync(wolfYamlPath, "utf-8");
+      try {
+        // The real load: pi wolves share wolf.yaml with wolfd, so the same schema and defaults apply.
+        const mem = loadWolfConfig(wolfYamlPath).config.memory;
+        excludeSubagentTraffic = mem.subagentMemory === "on";
+        generalToDenOn = mem.generalToDen === true;
+        workLogMode = mem.workLog === "append" ? "append" : "fold";
+      } catch {
+        // A file the strict loader rejects must not silently turn these off: fall back to reading the three keys.
+        excludeSubagentTraffic = /^\s+subagentMemory:\s*["']?on\b/m.test(raw);
+        generalToDenOn = /^\s+generalToDen:\s*true\b/m.test(raw);
+        workLogMode = /^\s+workLog:\s*["']?append\b/m.test(raw) ? "append" : "fold";
+      }
+      workLogAppend = workLogMode === "append";
       const match = raw.match(/domains:\s*\n((?:\s+-\s+\S+\n?)*)/)
       if (match) {
         wolfDomains = match[1].match(/- (\S+)/g)?.map(m => m.slice(2)) ?? [];
@@ -1603,8 +1711,19 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     }
   } catch { /* best effort */ }
 
+  // Final feature pass (same gate as the ship distill): drains pending task distills, then tidies the feature Record once.
+  const finalPassHook = workLogAppend && workRecordStore.configured
+    ? async (featureId: string) => (engine ? runFinalPass({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName), store: workRecordStore, engine, featureId, src: wolfName }) : { ok: false, reason: "no engine" })
+    : undefined;
+
   workHandle = initWorkSystem(pi, {
     ...workConfig,
+    workLogAppend,
+    // `memory.workLog: append` in wolf.yaml gates the ship distill (read like subagentMemory above; needs the engine and the Work API).
+    ...(workLogAppend && workRecordStore.configured
+      ? { distillOnShip: async (taskId: string) => (engine ? distillTaskToFeature({ store: workRecordStore, engine, taskId, src: wolfName }) : { ok: false, reason: "no engine" }) }
+      : {}),
+    ...(finalPassHook ? { finalPassOnShip: finalPassHook } : {}),
     domains: wolfDomains,
     getCurrentDomain: () => currentDomain,
   }) ?? null;

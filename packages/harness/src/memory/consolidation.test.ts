@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
+import { replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
 import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
@@ -150,10 +150,11 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     } as unknown as Engine;
     const workStore = {
       get: async (id: string) => (id === "gone" ? null : { id, title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" }),
-      setBody: async (id: string, body: string) => {
+      setRecord: async (id: string, record: string) => {
         if (opts.failSet) throw new Error("HTTP 502");
-        writes.push({ id, body });
+        writes.push({ id, body: replaceRecordSection("## Plan\n\np", record) });
       },
+      appendRecord: async () => ({ ok: true as const }),
     };
     return { engine, workStore, prompts, writes };
   }
@@ -170,6 +171,41 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(m.writes[0].body).toContain("## Record\n\n### Changes\n\n- Added the thing");
     expect(m.writes[0].body.startsWith("## Plan\n\np")).toBe(true);
     expect(poolLines()).toEqual([]);
+  });
+
+  it("with the pool lock off (default) the pool rewrite takes no lock file", async () => {
+    poolWith([o(0), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    await withPoolLock(den, async () => {
+      // a held lock does not block the rewrite when the lock is not in use
+      await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    }, { timeoutMs: 100 });
+    expect(poolLines()).toEqual([]);
+  });
+
+  it("the pool rewrite waits for the pool lock (poolLock on), so a line appended meanwhile survives", async () => {
+    poolWith([o(0), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    const file = join(den, ".memory", "pool", "observations.jsonl");
+    let run!: Promise<unknown>;
+    await withPoolLock(den, async () => {
+      run = consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, poolLock: true });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(poolLines()).toHaveLength(6); // not rewritten while another writer holds the lock
+      appendFileSync(file, JSON.stringify(o(9, { content: "late arrival" })) + "\n");
+    });
+    await run;
+    expect(poolLines().map((l) => l.content)).toEqual(["late arrival"]);
+  });
+
+  it("an untagged observation with origin goes the den way and is never offered to the Record path", async () => {
+    poolWith([o(0), o(1, { origin: { work: "work-t1", feature: "work-f1" } }), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+
+    expect(r.recordsWritten).toBe(0);
+    expect(m.prompts.record).toEqual([]);
+    expect(m.prompts.consolidate[0]).toContain("observation 1");
   });
 
   it("the archive gets written, discarded and den observations, with the id the pool and the Record use", async () => {
@@ -236,8 +272,8 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     poolWith([o(0, { work: "work-t1" }), o(1), o(2), o(3), o(4), o(5)]);
     const m = mocks({ failSet: true });
     let sets = 0;
-    const setBody = m.workStore.setBody;
-    m.workStore.setBody = async (id: string, b: string) => { sets++; return setBody(id, b); };
+    const setRecord = m.workStore.setRecord;
+    m.workStore.setRecord = async (id: string, b: string) => { sets++; return setRecord(id, b); };
     const cfg = { wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, poolTarget: 1 };
     const r = await consolidatePool(cfg);
     expect(r.observationsPending).toBe(1);
@@ -300,6 +336,24 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(r2.observationsPending).toBe(1);
     expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
     expect(archived().filter((e) => e.outcome === "discarded")).toEqual([]);
+  });
+
+  it("a group backing off is skipped (with its retry time) unless the run ignores backoff", async () => {
+    poolWith([o(0, { work: "work-t1" })]);
+    const down = mocks();
+    down.workStore.get = async () => { throw new Error("ECONNREFUSED"); };
+    const r1 = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: down.engine, workStore: down.workStore, minObservations: 1 });
+    expect(r1.recordsWritten).toBe(0);
+    expect(r1.retryAt).toBeGreaterThan(Date.now()); // a fresh failure backs off too
+    const m = mocks();
+    const auto = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, minObservations: 1 });
+    expect(auto.observationsPending).toBe(1);
+    expect(auto.retryAt).toBeGreaterThan(Date.now());
+    expect(m.writes).toEqual([]);
+    const manual = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, minObservations: 1, ignoreBackoff: true });
+    expect(manual.recordsWritten).toBe(1);
+    expect(manual.observationsPending).toBe(0);
+    expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
   });
 
   it("tasks of one feature share one Record on the feature; a legacy line with only `work` keeps its item", async () => {
@@ -368,7 +422,8 @@ describe("drainWorkObservations (graduation)", () => {
     const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => { prompts.push(p.prompt); return schema.parse({ decisions: [], changes: ["Did it"], findings: [], problems: [] }); } } as unknown as Engine;
     const workStore = {
       get: async (id: string) => ({ id, title: "T", kind: "feature", stage: "in_build", body: "## Plan\n\np" }),
-      setBody: async (id: string) => { if (failSet) throw new Error("HTTP 502"); writes.push(id); },
+      setRecord: async (id: string) => { if (failSet) throw new Error("HTTP 502"); writes.push(id); },
+      appendRecord: async () => ({ ok: true as const }),
     };
     return { engine, workStore, prompts, writes };
   }
@@ -435,7 +490,8 @@ describe("drainWorkObservations (graduation)", () => {
     const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ decisions: [], changes: ["x"], findings: [], problems: [] }) } as unknown as Engine;
     const workStore = {
       get: async (id: string) => ({ id, title: "T", kind: "task", stage: "in_build", body: "" }),
-      setBody: async (id: string) => { if (id === "fb" && failB) throw new Error("HTTP 502"); writes.push(id); },
+      setRecord: async (id: string) => { if (id === "fb" && failB) throw new Error("HTTP 502"); writes.push(id); },
+      appendRecord: async () => ({ ok: true as const }),
     };
     await expect(drainWorkObservations({ wolfDen: den, engine, workStore, workIds: ["fa", "fb"] })).rejects.toThrow(/HTTP 502/);
     expect(writes).toEqual(["fa"]);
@@ -492,5 +548,100 @@ describe("promoteSessionTopics domain hint (work-wolfpack-0BdguCL)", () => {
       const inbox = join(roots.opsRoot, "inbox", wolf);
       expect(readFileSync(join(inbox, readdirSync(inbox)[0]), "utf8")).toContain(`domain_hint: ${want}`);
     }
+  });
+});
+
+describe("work log append mode (pi-durable)", () => {
+  const NOW = new Date("2026-10-20T12:00:00Z");
+  const poolFile = () => join(den, ".memory", "pool", "observations.jsonl");
+  const o = (n: number, extra: object = {}, minutesAgo = 1) => ({
+    timestamp: `2026-10-20T10:0${n}:00Z`,
+    recordedAt: new Date(NOW.getTime() - minutesAgo * 60_000).toISOString(),
+    content: `observation ${n}`,
+    ...extra,
+  });
+  function poolWith(lines: object[]): void {
+    mkdirSync(join(den, ".memory", "pool"), { recursive: true });
+    writeFileSync(poolFile(), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  }
+  const poolContents = () => readFileSync(poolFile(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).content);
+  function mocks(appendResult: { ok: true } | { ok: false; code: "log_full" } = { ok: true }) {
+    const appends: Array<{ id: string; lines: Array<{ ids: string[] }> }> = [];
+    const steps: string[] = [];
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+        steps.push(step);
+        if (step === "workLog") return schema.parse({ lines: [{ kind: "change", text: "Did the thing", from: ["o1"] }] });
+        if (step === "workRecord") return schema.parse({ decisions: [], changes: ["Added"], findings: [], problems: [] });
+        return schema.parse({ actions: [] });
+      },
+    } as unknown as Engine;
+    const workStore = {
+      get: async (id: string) => ({ id, title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" }),
+      setRecord: async () => {},
+      appendRecord: async (id: string, lines: Array<{ ids: string[] }>) => { appends.push({ id, lines }); return appendResult; },
+    };
+    return { engine, workStore, appends, steps };
+  }
+  const cfg = (m: ReturnType<typeof mocks>, extra: object = {}) => ({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, now: () => NOW, ...extra });
+
+  it("fold mode never appends", async () => {
+    poolWith([o(0, { work: "t1" })]);
+    const m = mocks();
+    await consolidatePool(cfg(m, { workLog: "fold" }));
+    expect(m.appends).toEqual([]);
+    expect(m.steps).toEqual(["workRecord"]);
+  });
+
+  it("append mode sends nothing below 6 fresh observations", async () => {
+    poolWith([0, 1, 2, 3, 4].map((n) => o(n, { work: "t1", feature: "f1" })));
+    const m = mocks();
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends).toEqual([]);
+    expect(r.observationsPending).toBe(5);
+    expect(poolContents()).toHaveLength(5);
+  });
+
+  it("append mode at 6 appends once to the task, not the feature, and archives with the target", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { work: "t1", feature: "f1" })));
+    const m = mocks();
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends.map((a) => a.id)).toEqual(["t1"]);
+    expect(r.recordsWritten).toBe(1);
+    expect(poolContents()).toEqual([]);
+    expect(readArchive(den).map((e) => [e.outcome, e.target])).toEqual(Array(6).fill(["written", "t1"]));
+  });
+
+  it("append mode flushes a single observation older than 10 minutes", async () => {
+    poolWith([o(0, { work: "t1" }, 11)]);
+    const m = mocks();
+    await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends.map((a) => a.id)).toEqual(["t1"]);
+  });
+
+  it("a forced drain flushes below the threshold", async () => {
+    poolWith([o(0), o(1, { work: "t1", feature: "f1" }), o(2, { feature: "f1" })]);
+    const m = mocks();
+    const r = await drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1"], workLog: "append" });
+    expect(m.appends.map((a) => a.id).sort()).toEqual(["f1", "t1"]);
+    expect(r.folded).toBe(2);
+    expect(poolContents()).toEqual(["observation 0"]);
+  });
+
+  it("origin-only observations still go to the den in append mode", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, n === 1 ? { origin: { work: "t1" } } : {})));
+    const m = mocks();
+    await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends).toEqual([]);
+    expect(m.steps).toEqual(["consolidate"]);
+  });
+
+  it("a log_full outcome stays pending in the pool", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { work: "t1" })));
+    const m = mocks({ ok: false, code: "log_full" });
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(r.observationsPending).toBe(6);
+    expect(poolContents()).toHaveLength(6);
+    expect(readArchive(den)).toEqual([]);
   });
 });

@@ -16,7 +16,7 @@ RUN npx tsc --build
 COPY infra/tracer/kb-ext-entry.ts ./kb-ext-entry.ts
 # --kb mode: the real memory/tasks extension sources as one ESM file (packages stay external, resolved from /opt/wolfpack/node_modules)
 RUN npx esbuild kb-ext-entry.ts --bundle --platform=node --format=esm --packages=external --outfile=kb-ext.mjs --log-level=warning
-COPY scripts/build-server.mjs ./scripts/build-server.mjs
+COPY scripts/build-server.mjs scripts/release-version.mjs ./scripts/
 # --console payload (standalone server built IN the Linux image).
 RUN --mount=type=cache,target=/root/.npm node scripts/build-server.mjs --out /opt/console && du -sh /opt/console
 # no recursive chmod over /opt (it copied the whole tree into a new 140s layer): root writes with umask 022, so everything is already world-readable

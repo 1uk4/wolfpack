@@ -206,6 +206,20 @@ describe("ChatBar on a phone", () => {
 		assert.deepEqual(order, ["bar-card", "composer"]);
 	});
 
+	it("a paged ask opens the sheet full screen by itself, with the composer below it", async () => {
+		bodies.a = { messages: [], pendingCards: [{ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why" }], steps: [{ fields: ["q1"] }] } }] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.equal(bar().getAttribute("data-state"), "sheet");
+		assert.ok(ta(), "the composer textarea is still mounted");
+		for (let el: Element | null = ta(); el; el = el.parentElement) {
+			assert.equal(el.hasAttribute("inert"), false);
+			assert.notEqual(el.getAttribute("aria-hidden"), "true");
+		}
+		const order = qa('[data-testid="ask-sheet"], [data-testid="composer"]').map((e) => e.getAttribute("data-testid"));
+		assert.deepEqual(order, ["ask-sheet", "composer"]);
+	});
+
 	it("the chevron closes the sheet and the draft survives", async () => {
 		await mount();
 		await type("half a thought");

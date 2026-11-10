@@ -5,6 +5,8 @@
  * saved (sent with the etag the page loaded, so a concurrent edit is a visible 409 conflict) or reset to the repo default.
  * Overrides live in the wolf's home; other wolves keep the default.
  */
+import { loadPromptList } from "@/lib/prompts-load";
+import { PromptsLoadNotice } from "./prompts-load-notice";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { XIcon } from "lucide-react";
@@ -71,6 +73,7 @@ export function PromptsView() {
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [errors, setErrors] = useState<Record<string, string>>({});
 	const [loadError, setLoadError] = useState("");
+	const [loading, setLoading] = useState(false);
 	const [settings, setSettings] = useState<SettingsInfo | null>(null);
 	const [soDraft, setSoDraft] = useState<string | null>(null);
 	// The selected graph and node live in the URL, so a link or reload lands on the same view.
@@ -98,9 +101,10 @@ export function PromptsView() {
 	const load = useCallback(async () => {
 		if (!wolf) return;
 		setLoadError("");
-		const r = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/prompts`);
-		if (!r.ok) return setLoadError(await readError(r));
-		const j = (await r.json()) as { prompts: PromptRow[] };
+		setLoading(true);
+		const j = await loadPromptList<PromptRow>(fetch, wolf);
+		setLoading(false);
+		if ("error" in j) return setLoadError(j.error);
 		setRows(j.prompts);
 		setDrafts({});
 		setErrors({});
@@ -285,7 +289,7 @@ export function PromptsView() {
 					<button key={t.key} role="tab" aria-selected={urlState.graph === t.key} className={`rounded border px-3 py-1 text-sm ${urlState.graph === t.key ? "bg-accent" : ""}`} onClick={() => setUrl({ graph: t.key })} data-testid={`prompts-tab-${t.key}`}>{t.title}</button>
 				))}
 			</div>
-			{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
+			<PromptsLoadNotice loading={loading} error={loadError} onRetry={() => void load()} />
 			{activeGraph.key === "sweep" && hubRows === null && <p className="text-xs text-muted-foreground" data-testid="flow-hub-missing-line">Hub not connected{hubNote ? ` (${hubNote})` : ""}.</p>}
 			<div className="flex min-w-0 flex-col gap-3 md:flex-row" data-testid={`prompt-graph-${activeGraph.key}`}>
 				<div className="h-[60vh] min-h-[320px] min-w-0 flex-1 rounded-md border">

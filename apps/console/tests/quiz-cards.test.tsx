@@ -42,7 +42,7 @@ describe("a pending quiz-shaped question in a wolf thread", () => {
 		assert.ok(!html.includes("Why:"), "nothing is revealed before the answer");
 	});
 
-	it("brief cards use the same renderer", () => {
+	it("legacy brief cards (old transcripts) still use the same renderer", () => {
 		assert.equal(lookupInteractionCard("brief")?.Renderer, AskCard);
 	});
 });

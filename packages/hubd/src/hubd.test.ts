@@ -1,7 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { probeHealth } from "@wolfpack/protocol";
+import { healthShapeProblems } from "@wolfpack/protocol/stub";
 import { assertedActor, createHubServer, HubError, readActor, writeActor, type HubServer } from "./server.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 import { bearer, mintOperatorToken } from "./testing/tokens.js";
@@ -73,6 +75,28 @@ describe("hubd actor (the token's identity; nothing a client sends can assert on
   it("writeActor needs an authenticated token (the actor header never counts)", () => {
     expect(code(() => writeActor(req()))).toBe("invalid_request");
     expect(code(() => writeActor(req(), { ownerOnly: true }))).toBe("invalid_request");
+  });
+});
+
+describe("hubd /healthz", () => {
+  it("answers without a token with service, version, uptime and event-loop lag", async () => {
+    const res = await fetch(hub.url + "/healthz");
+    expect(res.status).toBe(200);
+    expect(healthShapeProblems(await res.json(), "hubd", `${(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version}-dev`)).toEqual([]); // unstamped checkout: <package.json>-dev
+  });
+
+  it("a frozen event loop shows as lag on every probe in the window, graded degraded", async () => {
+    await new Promise((r) => setTimeout(r, 50)); // let the monitor tick normally first
+    const t = Date.now();
+    while (Date.now() - t < 300) {
+      /* freeze the loop hubd serves on (same process) */
+    }
+    const first = await probeHealth(hub.url + "/healthz", { expectService: "hubd" });
+    const second = await probeHealth(hub.url + "/healthz", { expectService: "hubd" });
+    for (const r of [first, second]) {
+      expect((r.body?.lag as { maxMs: number }).maxMs).toBeGreaterThanOrEqual(200); // the second probe still sees the spike: reading never resets the window
+      expect(r.status).toBe("degraded");
+    }
   });
 });
 

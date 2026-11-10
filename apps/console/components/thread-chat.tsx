@@ -1,5 +1,7 @@
 "use client";
 
+import { FEATURE_GRADUATED } from "@/components/thread-closed";
+import { isSupersedable } from "@/components/ask-session";
 import { createEarlierScroll } from "@/components/earlier-scroll";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
@@ -9,13 +11,17 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
-import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
+import { PINNED_OBJECT_ROW_REM, PinnedObjects, pinnedObjectDismissKey } from "@/components/pinned-objects";
+import { dismissKey, useDismissed } from "@/components/pin-store";
+import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/pinned-checklist";
 import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/feature-progress";
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { TurnTimer, useTurnStart } from "@/components/turn-timer";
+import { useOwnAsk } from "@/components/thread-ask";
+import { submitToThread } from "@/components/chat-bar-io";
 import { useAttachedStripRow } from "@/components/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
@@ -25,12 +31,13 @@ import { useAttachedThread } from "@/components/attached-thread";
 import { DictationBar, joinDictation, useBarShown } from "@/components/dictation";
 import { useThreadDictation } from "@/components/use-thread-dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
-import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
-import { canSendWith, chipFor, dragHasFiles, droppedFiles, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, type AttachmentLimit, uploadFile, UploadError, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
+import { newUploadState, startUploads } from "@/components/attachment-upload";
+import { canSendWith, dragHasFiles, droppedFiles, readyInfos, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { appendToDraft, draftKey, useComposerDraft, useRereadDraftWhenShown, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
-import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
+import { AskRecordCard } from "@/components/ask-record";
+import { cardAnswerUrl, cardSkipUrl, attachmentUrl, diagramUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import { ThreadGitRow } from "@/components/thread-git-tree";
@@ -40,6 +47,7 @@ import {
 	ASSISTANT_CONTENT_CLASS,
 	NO_CARDS,
 	activeChecklist,
+	activeObject,
 	PROSE_BLOCK_CLASS,
 	foldCardEvent,
 	withHeldSkip,
@@ -108,6 +116,8 @@ function ThreadReasoning({
 
 /** What the rows need to render tool-raised cards inline (cards.calls keys the card-raising calls). */
 interface CardContext {
+	wolf: string;
+	slug: string;
 	cards: ThreadCards;
 	answering: string | null;
 	onAnswer: (callId: string, answers: CardAnswers) => void;
@@ -120,6 +130,25 @@ function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
 	const entry = call && lookupInteractionCard(call.card.tool);
 	if (!call || !entry) return null;
 	const { Renderer } = entry;
+	// A paged `ask` is a compact Q→A record in the transcript (the chat bar's sheet owns answering it).
+	if (call.card.paged) {
+		return (
+			<AskRecordCard
+				callId={callId}
+				card={call.card}
+				closed={call.closed}
+				dismissed={call.dismissed}
+				answer={call.answer}
+				pageAnswers={call.pageAnswers}
+				pagesDone={call.pagesDone}
+				note={call.note}
+				attachmentUrl={(id) => attachmentUrl(ctx.wolf, ctx.slug, id)}
+				draft={call.draft}
+				pending={ctx.cards.pending.some((p) => p.callId === callId)}
+				diagramUrl={(id) => diagramUrl(ctx.wolf, ctx.slug, id)}
+			/>
+		);
+	}
 	return (
 		<Renderer
 			callId={callId}
@@ -179,7 +208,7 @@ function ThreadChatInner({
 	initialHasMore,
 	initiallyInFlight,
 	initialCards = NO_CARDS,
-	closedReason,
+	closedReason: closedReasonProp,
 	initialBound,
 	parentThreadId,
 	colorThreads = NO_COLOR_THREADS,
@@ -211,6 +240,12 @@ function ThreadChatInner({
 	/** The wolf's chosen color at page load; the live roster (attached-thread provider) overrides it after a Settings change. */
 	wolfColor?: string;
 }) {
+	// A graduation closes the thread: the wolf pushes thread-updated {closed}, so the notice shows with no message sent.
+	const [closedLive, setClosedLive] = useState<string | undefined>(undefined);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf === wolf && p.thread.id === threadId && p.thread.closed) setClosedLive(p.thread.closedReason ?? FEATURE_GRADUATED);
+	});
+	const closedReason = closedReasonProp ?? closedLive;
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
 	const pageRef = useRef<(json: unknown) => void>(() => {});
@@ -396,7 +431,7 @@ function ThreadChatInner({
 		},
 		[wolf, slug, resumeStream, refreshCards, setSendPending],
 	);
-	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
+	const cardCtx: CardContext = { wolf, slug, cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after
@@ -464,15 +499,22 @@ function ThreadChatInner({
 	const progressShown = featureProgress.state.phase === "ready";
 	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && initialBound !== undefined);
 	const active = useMemo(() => activeChecklist(messages), [messages]);
-	const dismissedChecklist = useChecklistDismissed(threadId, active?.objectId);
+	const dismissedChecklist = useDismissed(active ? dismissKey(threadId, active.objectId) : undefined);
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
+	// Decisions and graphs pin in any thread (stacked under the checklist / feature progress), updating in place per objectId.
+	const activeDecision = useMemo(() => activeObject(messages, "decision"), [messages]);
+	const activeGraph = useMemo(() => activeObject(messages, "graph"), [messages]);
+	const decisionDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeDecision));
+	const graphDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeGraph));
+	const pinnedObjects = [decisionDismissed ? undefined : activeDecision, graphDismissed ? undefined : activeGraph].filter((a): a is NonNullable<typeof a> => a !== undefined);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	// The composer dock overlays the list (absolute, bottom-0) and its height varies (controls wrap on a phone, chips, dictation bar,
 	// subagent strip, safe-area inset). Measure it so the tail spacer clears the dock and its gradient glow exactly.
 	const [dockEl, setDockEl] = useState<HTMLDivElement | null>(null);
 	const [dockHeight, setDockHeight] = useState<number | null>(null);
 	useEffect(() => {
-		if (!dockEl || typeof ResizeObserver !== "function") return;
+		if (!dockEl) return void setDockHeight(null); // the dock is gone (closed-thread notice): back to the pre-measure default
+		if (typeof ResizeObserver !== "function") return;
 		const read = () => setDockHeight(Math.ceil(dockEl.getBoundingClientRect().height));
 		read();
 		const ro = new ResizeObserver(read);
@@ -496,44 +538,8 @@ function ThreadChatInner({
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
-	// The per-file budget for this console's mode, fetched on demand: only a successful answer is kept, a failure is retried on the
-	// next batch and meanwhile the conservative relay budget applies.
-	const limitRef = useRef<AttachmentLimit | undefined>(undefined);
-	// Decoding and re-encoding a photo is memory-heavy (iOS): files of one batch (and of overlapping batches) are fitted one at a time.
-	const fitChain = useRef<Promise<unknown>>(Promise.resolve());
-	const onFiles = useCallback(
-		(files: File[]) => {
-			for (const file of files) {
-				const key = `att-${Math.random().toString(36).slice(2)}`;
-				// Infinity: the size is NOT prechecked here (type and emptiness only); an over-budget image is fitted below, and only a failed fit reports "too large".
-				const { chip, upload } = chipFor(file, key, Infinity);
-				setAttachments((prev) => [...prev, chip]);
-				if (!upload) continue;
-				const fit = fitChain.current.then(async () => {
-					limitRef.current ??= await fetchAttachmentLimit();
-					const limit = limitRef.current ?? FALLBACK_LIMIT;
-					return { limit, result: await fitImageWithTimeout(file, limit.maxBytes, browserFitDeps()) };
-				});
-				fitChain.current = fit.catch(() => {});
-				// Uploads of the fitted files run in parallel.
-				void (async () => {
-					let limit = FALLBACK_LIMIT;
-					try {
-						const fitted = await fit;
-						limit = fitted.limit;
-						const relay = limit.mode === "relay";
-						if (!fitted.result.ok) return patchAttachment(key, { status: "error", error: fitFailureMessage(fitted.result.reason, limit.maxBytes, relay, file.size) });
-						const { id, name, mimeType, size } = await uploadFile(transport.uploadUrl!, fitted.result.file);
-						patchAttachment(key, { status: "ready", id, name, mimeType, size });
-					} catch (err) {
-						const e = err as Error;
-						patchAttachment(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, limit.mode === "relay") });
-					}
-				})();
-			}
-		},
-		[transport, patchAttachment],
-	);
+	const uploadState = useRef(newUploadState());
+	const onFiles = useCallback((files: File[]) => startUploads(files, transport.uploadUrl!, uploadState.current, (chip) => setAttachments((prev) => [...prev, chip]), patchAttachment), [transport, patchAttachment]);
 	const [dragging, setDragging] = useState(false);
 	const publishAttachments = attachedApi?.setPageAttachments;
 	const waitingAttachments = attachments.filter((a) => a.status !== "error").length;
@@ -542,6 +548,14 @@ function ThreadChatInner({
 		return () => publishAttachments?.(threadId, 0);
 	}, [publishAttachments, threadId, waitingAttachments]);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
+	// A paged `ask` pending on this thread: its questionnaire sheet lives here (the floating bar never mounts on this page). Collapsing it moves the note into this composer's own draft.
+	const ask = useOwnAsk({ wolf, slug, threadId }, busy, dockHeight, dictation, (n) => {
+		if (n.text.trim() !== "") applyText(joinDictation(textRef.current, n.text));
+		if (n.atts.length > 0) setAttachments((prev) => [...prev, ...n.atts]);
+	});
+	const session = ask.session;
+	/** The composer is the questionnaire note's (Next / Submit), not the chat's. */
+	const noteMode = ask.pending && ask.sheetShown && session.expanded && !ask.composing;
 
 	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
 	const dictationWasActive = useRef(false);
@@ -553,6 +567,7 @@ function ThreadChatInner({
 		}
 	}, [dictation.active]);
 
+	const replyInFlight = useRef(false);
 	const beginSend = useRestoreOnSendFailure(error, status, textRef, applyText);
 	const doSend = useCallback(() => {
 		const t = textRef.current.trim();
@@ -625,6 +640,7 @@ function ThreadChatInner({
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
 							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>
+								{pinnedObjects.length > 0 && <div aria-hidden style={{ height: `${pinnedObjects.length * PINNED_OBJECT_ROW_REM}rem` }} className="-mb-4 shrink-0" />}
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -767,41 +783,55 @@ function ThreadChatInner({
 							/>
 						</ConversationContent>
 						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0">
-							<div className="h-16" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
+							<div className={ask.covers ? "h-0" : "h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="pb-4" style={{ backgroundColor: tintSolid }}>
 								<div className={DOCK}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} attached={attachedRow} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
-											<div className="font-medium">Feature graduated</div>
+											<div className="font-medium">{FEATURE_GRADUATED}</div>
 											<div className="text-muted-foreground">{closedReason}</div>
+											{busy ? (
+												<button type="button" data-testid="thread-closed-stop" onClick={onStop} className="mt-2 rounded-md border px-3 py-1 text-sm">
+													Stop the running turn
+												</button>
+											) : null}
 										</div>
 									) : barOwnsInput ? null : (
+									<>
+									{ask.sheet}
+									{ask.pending && isSupersedable(session.pc) && !noteMode && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">{session.pc.source?.kind === "tool" ? "Sending a message cancels this confirmation." : "Sending a message replaces the open questions."}</p>}
+									{!ask.composing && (
 									<div
 										data-testid="thread-composer-card"
+										data-note-mode={noteMode ? "true" : undefined}
 										{...(dictation.active ? { "data-listening": "true" } : {})}
-										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dictation.active ? " border-transparent ring-2" : dragging ? " ring-2 ring-(color:--thread-accent)" : " focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)"}`}
+										className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${noteMode ? " rounded-t-none border-t-0 border-(color:--thread-accent)" : ""}${dictation.active ? " border-transparent ring-2" : dragging ? " ring-2 ring-(color:--thread-accent)" : noteMode ? "" : " focus-within:border-(color:--thread-accent) focus-within:ring-1 focus-within:ring-(color:--thread-accent)"}`}
 										style={dictation.active ? ({ "--tw-ring-color": tintHex, boxShadow: `0 0 24px ${tintHex}66` } as CSSProperties) : undefined}
 									>
+										{noteMode && <p data-testid="ask-armed-live" aria-live="polite" className="sr-only">{session.action.armed ? session.action.ariaLabel : ""}</p>}
+										{noteMode && session.action.hint && <p data-testid="ask-missing" role="status" aria-live="polite" className="px-3 pt-2 font-ui text-xs text-muted-foreground">{session.action.hint}</p>}
+										{noteMode && session.error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{session.error}</p>}
 										<Composer
-											busy={busy}
-											value={text}
-											onChange={applyText}
-											onSend={onSend}
+											busy={noteMode ? false : busy}
+											value={noteMode ? session.note.text : text}
+											onChange={noteMode ? session.setNoteText : applyText}
+											onSend={noteMode ? () => session.press((t, refs) => submitToThread({ wolf, slug }, t, busy, refs).then((ok) => { if (ok) ask.settle(); return ok; })) : onSend}
+											{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : {})}
 											onStop={onStop}
 											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
-											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
+											canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !busy)}
 											onEscape={dictation.active ? dictation.cancel : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
 											enterSends={dictation.active}
-											onFiles={onFiles}
-											onPickFiles={onFiles}
-											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
+											onFiles={noteMode ? session.addNoteFiles : onFiles}
+											onPickFiles={noteMode ? session.addNoteFiles : onFiles}
+											chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : removeAttachment} />}
 											inputRef={inputRef}
-											controls={threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
+											controls={noteMode ? null : threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
 											autoFocus
-											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
+											placeholder={noteMode ? "Add a note for the agent…" : busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>
 										{/* Dictation sits under the message field (owner, 2026-10-27). */}
 										<div className="px-3 pb-2" data-testid="dictation-slot">
@@ -809,14 +839,20 @@ function ThreadChatInner({
 										</div>
 									</div>
 									)}
+									</>
+									)}
 								</div>
 							</div>
 						</div>
 					</Conversation>
-					{featureProgress.state.phase === "ready" && (
-						<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
-					)}
-					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. */}
+					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column">
+						{featureProgress.state.phase === "ready" && (
+							<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
+						)}
+						<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+						<PinnedObjects items={pinnedObjects} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+					</div>
 				</div>
 			</div>
 			<RightPanelHost />

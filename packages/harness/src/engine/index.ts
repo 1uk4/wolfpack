@@ -32,4 +32,4 @@ export { createConversationReader, conversationReaderFor, type ConversationReade
 /** @internal the background Context the engine calls pi-durable with; for tests driving `WolfEngine.harness`. */
 export { BACKGROUND_CONTEXT as ENGINE_CONTEXT } from "@earendil-works/chord/context";
 export { objectsExtension, objectFromCall, type ObjectCall } from "./objects.js";
-export { CARD_ANSWER_KIND, USER_ENTRY_KIND, CARD_DETAILS_KEY, cardAnswerEntry, cardOfToolMessage, briefHeader, cardResult, clipText, confirmCard, createCardGuardExtension, type CardGuard, type CardAnswerData } from "./cards.js";
+export { CARD_ANSWER_KIND, USER_ENTRY_KIND, CARD_DETAILS_KEY, cardAnswerEntry, cardOfToolMessage, cardResult, clipText, confirmCard, pagedCard, createCardGuardExtension, type CardGuard, type CardAnswerData } from "./cards.js";

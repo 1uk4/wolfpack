@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_WORK_SORT, NO_INITIATIVE_KEY, buildWorkTable, nextWorkSort, stageRank, type WorkSort } from "../src/core/work-table.ts";
+import { DEFAULT_WORK_SORT, NO_INITIATIVE_KEY, buildWorkTable, moveOptions, nextWorkSort, stageRank, type WorkSort } from "../src/core/work-table.ts";
 import type { WorkListItem } from "../src/core/kb.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "d", dependsOn: [], ...over });
@@ -63,6 +63,26 @@ describe("buildWorkTable: progress, stage label, columns", () => {
 	it("carries assignee and created", () => {
 		const f1 = buildWorkTable(items).groups[0]!.children.find((r) => r.id === "f1")!;
 		assert.deepEqual([f1.assignee, f1.created], ["luka", "2026-10-05"]);
+	});
+});
+
+describe("buildWorkTable: assignee control", () => {
+	it("offers it on features and loose tasks, never on a feature's child tasks or groups", () => {
+		const withLoose = [...items, item("lt", "task", { created: "2026-10-10" })];
+		const [init, inbox] = buildWorkTable(withLoose).groups;
+		const f1 = init!.children.find((r) => r.id === "f1")!;
+		assert.deepEqual([init!.assignable, f1.assignable, inbox!.assignable], [false, true, false]);
+		assert.deepEqual(f1.children.map((t) => t.assignable), [false, false, false]);
+		assert.equal(inbox!.children.find((r) => r.id === "lt")!.assignable, true);
+		assert.equal(inbox!.children.find((r) => r.id === "f3")!.assignable, true);
+	});
+	it("keeps it off Inbox issues, spikes and ideas, a task directly under an initiative, and graduated features", () => {
+		const t = buildWorkTable(
+			[item("i1", "initiative"), item("ti", "task", { partOf: "i1" }), item("fg", "feature", { partOf: "i1", graduated: "2026-10-03" }), item("is", "issue"), item("sp", "spike"), item("id", "idea")],
+			{ showGraduated: true },
+		);
+		const flat = t.groups.flatMap((g) => g.children);
+		assert.deepEqual(flat.map((r) => [r.id, r.assignable]).sort(), [["fg", false], ["id", false], ["is", false], ["sp", false], ["ti", false]]);
 	});
 });
 
@@ -302,5 +322,36 @@ describe("buildWorkTable: search", () => {
 	});
 	it("the Inbox group never matches by its own name", () => {
 		assert.deepEqual(buildWorkTable(items, { query: "initiative" }).groups, []);
+	});
+});
+
+describe("moveOptions", () => {
+	const all = [...items, item("is1", "issue", { partOf: "f1" }), item("tu", "task", { partOf: "i1" }), item("tl", "task", { partOf: "inbox" })];
+	const to = (id: string) => moveOptions(all, id).map((o) => o.to);
+	it("a task may go to any other live feature or the Inbox, never its own parent, a graduated feature or the Inbox container as a feature", () => {
+		assert.deepEqual(to("t1"), ["f2", "f3", "f4", "inbox"]);
+		assert.deepEqual(to("tu"), ["f1", "f2", "f3", "f4", "inbox"]);
+		assert.deepEqual(to("tl"), ["f1", "f2", "f3", "f4"], "already in the Inbox");
+	});
+	it("a feature may go under another initiative, or to none when it has one", () => {
+		assert.deepEqual(to("f3"), ["i1"]);
+		assert.deepEqual(to("f1"), [null]);
+	});
+	it("nothing else moves: initiatives, issues, graduated items, unknown ids", () => {
+		for (const id of ["i1", "is1", "old", "oldt", "nope"]) assert.deepEqual(to(id), [], id);
+	});
+	it("a domain without an Inbox container gives tasks no Inbox option (the hub would refuse it), but a feature keeps No initiative", () => {
+		const bare = items.filter((x) => x.id !== "inbox");
+		assert.deepEqual(moveOptions(bare, "t1").map((o) => o.to), ["f2", "f3", "f4"]);
+		assert.deepEqual(moveOptions(bare, "f1"), [{ to: null, label: "No initiative", inbox: true }]);
+	});
+	it("a real feature titled Inbox, without the container flag, is an ordinary target", () => {
+		const real = [...items.filter((x) => x.id !== "inbox"), item("fi", "feature", { title: "Inbox" })];
+		assert.ok(moveOptions(real, "t1").some((o) => o.to === "fi" && !o.inbox));
+	});
+	it("labels name the target", () => {
+		assert.deepEqual(moveOptions(all, "f3"), [{ to: "i1", label: "Phase 1", inbox: false }]);
+		assert.deepEqual(moveOptions(all, "f1"), [{ to: null, label: "No initiative", inbox: true }]);
+		assert.equal(moveOptions(all, "t1").at(-1)!.label, "Inbox (no feature)");
 	});
 });

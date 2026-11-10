@@ -26,7 +26,9 @@
  * observations pending for the next run; an item that is archived, deleted or
  * unreachable-by-config falls back to den consolidation.
  */
+import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { RECORD_LINE_KINDS } from "@wolfpack/protocol";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
 import { formatSources, lineRef, noComments, numberRecordLines, parseRecordLines, stripSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
@@ -106,11 +108,29 @@ export const DOCUMENT_CAP = 4000;
 const PLAN_MIN = 600;
 
 /**
+ * Clip a Record section to `room` characters keeping its NEWEST lines: the heading stays, the oldest lines go,
+ * and a `… N earlier lines` marker says how many. Whole lines only.
+ */
+function clipRecordTail(record: string, room: number): string {
+  if (record.length <= room) return record;
+  const [heading, ...rest] = record.split("\n");
+  const lines = rest.filter((l) => l.trim() !== "");
+  const kept: string[] = [];
+  let used = heading.length + 40; // heading + marker
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (used + lines[i].length + 1 > room) break;
+    used += lines[i].length + 1;
+    kept.unshift(lines[i]);
+  }
+  return [heading, `… ${lines.length - kept.length} earlier lines`, ...kept].join("\n");
+}
+
+/**
  * The working document for context injection, capped. The Record has
  * priority: when the whole document does not fit, the plan is clipped first
  * (it keeps at least PLAN_MIN characters). Document order is kept: plan, then Record.
  */
-export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP): string {
+export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP, opts: { tail?: boolean } = {}): string {
   const doc = stripSources(body).trim();
   if (doc.length <= cap) return doc;
   const record = extractRecord(doc) ?? "";
@@ -118,7 +138,13 @@ export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP):
   const recordRoom = Math.max(0, Math.min(record.length, cap - Math.min(plan.length, PLAN_MIN) - 2));
   const planRoom = Math.max(0, cap - recordRoom - 2);
   const clip = (t: string, n: number) => (t.length <= n ? t : n <= 5 ? "" : t.slice(0, n - 5).trimEnd() + " […]");
-  return [plan ? clip(plan, planRoom) : "", record ? clip(record, recordRoom) : ""].filter(Boolean).join("\n\n");
+  // Append mode (`tail`): newest whole lines win, falling back to the head clip when no whole line fits. Default: the head, as before.
+  const clipRecord = (): string => {
+    if (!opts.tail) return clip(record, recordRoom);
+    const tailed = clipRecordTail(record, recordRoom);
+    return /^… \d+ earlier lines$/m.test(tailed) && tailed.split("\n").length <= 2 ? clip(record, recordRoom) : tailed;
+  };
+  return [plan ? clip(plan, planRoom) : "", record ? clipRecord() : ""].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -134,6 +160,74 @@ export function renderFeatureRecord(featureTitle: string, featureBody: string, c
   const room = Math.max(0, cap - head.length - 2);
   const body = text.length <= room ? text : text.slice(0, Math.max(0, room - 5)).trimEnd() + " […]";
   return `${head}\n\n${body}`;
+}
+
+// ── the feature view: feature Record + live tails of its open tasks ──────────
+
+/** The feature Record part of the view. */
+export const FEATURE_VIEW_RECORD_CAP = 2500;
+/** The open-tasks block of the view, header included. */
+export const FEATURE_VIEW_TASKS_CAP = 1500;
+/** Open sibling tasks shown; the rest is "+N more". */
+export const FEATURE_VIEW_TASKS_MAX = 5;
+/** Record characters kept per open task. */
+export const FEATURE_VIEW_TAIL = 300;
+
+const CLOSED_STAGES = ["shipped", "live", "archived"];
+
+export interface FeatureViewTask {
+  id: string;
+  title: string;
+  stage: string;
+  /** The task's working document; absent or "" when it has none. */
+  body?: string;
+}
+
+/** The newest whole Record lines of a document within `max` characters. */
+function recordTail(body: string, max: number): string[] {
+  const rec = extractRecord(stripSources(body));
+  if (!rec) return [];
+  const lines = rec.split("\n").slice(1).map((l) => l.trim()).filter((l) => l.startsWith("- "));
+  const out: string[] = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (used + lines[i].length > max) break;
+    used += lines[i].length;
+    out.unshift(lines[i]);
+  }
+  return out;
+}
+
+/**
+ * The feature as a bound task reads it, composed at read time (no model call): the feature Record (newest content,
+ * 2500 chars) then an "Open tasks" block (up to 5 open siblings, whole-line Record tails of ~300 chars, 1500 chars in all).
+ * The bound task is left out (its own document shows it). "" when there is neither.
+ */
+export function renderFeatureView(feature: { title: string; body: string }, tasks: FeatureViewTask[], boundId?: string): string {
+  const parts: string[] = [];
+  const record = extractRecord(feature.body);
+  const text = record ? stripSources(record).slice(RECORD_HEADING.length).trim() : "";
+  if (text) {
+    const head = `## Feature Record — ${feature.title} (shared by all its tasks; kept up to date by memory)`;
+    const clipped = clipRecordTail(`${RECORD_HEADING}\n${text}`, FEATURE_VIEW_RECORD_CAP - head.length - 2);
+    parts.push(`${head}\n\n${clipped.split("\n").slice(1).join("\n").trim()}`);
+  }
+  const open = tasks.filter((t) => !CLOSED_STAGES.includes(t.stage) && t.id !== boundId);
+  if (open.length > 0) {
+    const shown = open.slice(0, FEATURE_VIEW_TASKS_MAX);
+    const header = "## Open tasks in this feature";
+    const more = open.length > shown.length ? `\n+${open.length - shown.length} more` : "";
+    const heads = shown.map((t) => `- ${t.id} "${t.title}" (${t.stage})`);
+    // Lines are indented two spaces and joined by newlines: budget them out of what the headers leave.
+    let room = FEATURE_VIEW_TASKS_CAP - 2 - header.length - more.length - heads.reduce((n, h) => n + h.length + 1, 0);
+    const blocks = shown.map((t, i) => {
+      const tail = recordTail(t.body ?? "", Math.min(FEATURE_VIEW_TAIL, Math.floor(room / (shown.length - i)))).map((l) => `  ${l}`);
+      room -= tail.reduce((n, l) => n + l.length + 1, 0);
+      return [heads[i], ...tail].join("\n");
+    });
+    parts.push([header, ...blocks].join("\n") + more);
+  }
+  return parts.join("\n\n");
 }
 
 // ── the Record's shape ───────────────────────────────────────────────────────
@@ -286,15 +380,50 @@ export interface WorkRecordItem {
   /** Holding container (the domain Inbox): never a Record's home. */
   container?: boolean;
   successCriteria?: string;
+  /** The parent item (null: none). Undefined: the store does not say, so the observation's stored feature is used. */
+  partOf?: string | null;
+  /** The wolf the item is assigned to, when the API says. */
+  assignee?: string;
   /** The working document ("" when none written yet). */
   body: string;
+}
+
+/** A Work API refusal: the HTTP status and the hub's own message. */
+export class WorkApiError extends Error {
+  constructor(public status: number, message: string, public code?: string) {
+    super(message);
+    this.name = "WorkApiError";
+  }
+}
+
+/** The protocol's line kind: decision | change | finding | problem. */
+export type RecordLineKind = (typeof RECORD_LINE_KINDS)[number];
+
+/** A line for `appendRecord` (the hub's `recordAppend` line): `at` ISO time, `src` label, `kind` (the protocol's line kind), one-line `text` (<= 240), source `ids` (at least one). */
+export interface RecordAppendLine { at: string; src: string; kind: RecordLineKind; text: string; ids: string[] }
+
+export type AppendRecordResult =
+  | { ok: true }
+  | { ok: false; code: "log_full" }
+  | { ok: false; code: "archived" | "forbidden" | "error"; message: string };
+
+/** Hub Record caps (hubd RECORD_CAP_TASK / RECORD_CAP_FEATURE). */
+export const APPEND_CAP_TASK = 6000;
+export const APPEND_CAP_FEATURE = 4000;
+
+/** Deterministic key for a batch: the item plus its sorted line ids (line text when a line has none), so a retry of the same lines replays. */
+export function appendKey(id: string, lines: RecordAppendLine[]): string {
+  const parts = lines.map((l) => (l.ids.length ? [...l.ids].sort().join(",") : `t:${l.text}`)).sort();
+  return `ra:${createHash("sha256").update(`${id}\n${parts.join("\n")}`).digest("hex").slice(0, 40)}`;
 }
 
 export interface WorkRecordStore {
   /** The item and its document; null when it no longer exists. Throws on any other failure (the run stays pending). */
   get(id: string): Promise<WorkRecordItem | null>;
-  /** Replace the whole document. */
-  setBody(id: string, body: string): Promise<void>;
+  /** Replace ONLY the Record section; `record` is the full section starting at its heading. Throws WorkApiError on a refusal. */
+  setRecord(id: string, record: string): Promise<void>;
+  /** Atomically append lines to the item's Record (hub `recordAppend`). Never throws on a refusal; a resend with the same key (default: derived from item + line ids) adds nothing. */
+  appendRecord(id: string, lines: RecordAppendLine[], opts?: { idempotencyKey?: string; group?: string }): Promise<AppendRecordResult>;
   /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
   healthy?(): Promise<boolean>;
 }
@@ -304,7 +433,11 @@ export class HttpWorkRecordStore implements WorkRecordStore {
   private endpoint: string;
   private token: string;
 
-  constructor(endpoint?: string, token?: string, private fetchImpl: typeof fetch = fetch) {
+  private wolf: string | undefined;
+
+  /** `wolf`: the acting wolf sent as X-Wolf; defaults to WOLF_NAME (always set in a wolf's process, see wolf-manager writeEnv). */
+  constructor(endpoint?: string, token?: string, private fetchImpl: typeof fetch = fetch, wolf?: string) {
+    this.wolf = wolf ?? process.env.WOLF_NAME;
     this.endpoint = (endpoint ?? process.env.WORK_ENDPOINT ?? "").replace(/\/$/, "");
     this.token = token ?? process.env.WORK_TOKEN ?? "";
   }
@@ -313,11 +446,11 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     return !!(this.endpoint && this.token);
   }
 
-  private async call(method: string, id: string, body?: unknown): Promise<Response> {
+  private async call(method: string, id: string, body?: unknown, extra: Record<string, string> = {}): Promise<Response> {
     if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
     return this.fetchImpl(`${this.endpoint}/work/${encodeURIComponent(id)}`, {
       method,
-      headers: { "X-API-Key": this.token, ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...extra },
       body: body ? JSON.stringify(body) : undefined,
     });
   }
@@ -344,14 +477,99 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       kind: String(it.kind ?? ""),
       stage: String(it.stage ?? ""),
       container: it.container === true,
+      ...(typeof it.assignee === "string" && it.assignee ? { assignee: it.assignee } : {}),
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
+      partOf: typeof it.partOf === "string" ? it.partOf : it.partOf === null ? null : undefined,
       body: data.body ?? "",
     };
   }
 
-  async setBody(id: string, body: string): Promise<void> {
-    const res = await this.call("PATCH", id, { body });
-    if (!res.ok) throw new Error(`Work API PATCH ${id}: HTTP ${res.status}`);
+  async appendRecord(id: string, lines: RecordAppendLine[], opts: { idempotencyKey?: string; group?: string } = {}): Promise<AppendRecordResult> {
+    const key = opts.idempotencyKey ?? appendKey(id, lines);
+    let res: Response;
+    try {
+      res = await this.call("PATCH", id, { op: "recordAppend", lines, ...(opts.group ? { group: opts.group } : {}) }, { "Idempotency-Key": key });
+    } catch (err) {
+      return { ok: false, code: "error", message: err instanceof Error ? err.message : String(err) };
+    }
+    if (res.ok) return { ok: true };
+    let message = `Work API PATCH ${id}: HTTP ${res.status}`;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { error?: unknown; code?: unknown };
+      if (typeof j.error === "string" && j.error) message = j.error;
+      if (typeof j.code === "string") code = j.code;
+    } catch { /* keep the generic message */ }
+    if (res.status === 409 && code === "log_full") return { ok: false, code: "log_full" };
+    if (res.status === 409 && code === RECORD_CLOSED_CODE) return { ok: false, code: "archived", message };
+    if (res.status === 403) return { ok: false, code: "forbidden", message };
+    return { ok: false, code: "error", message };
+  }
+
+  async setRecord(id: string, record: string): Promise<void> {
+    // The hub adds the `## Record` heading itself; the text must not hold a level-2 heading.
+    const text = record.startsWith(RECORD_HEADING) ? record.slice(RECORD_HEADING.length).replace(/^\s+/, "") : record;
+    const res = await this.call("PATCH", id, { section: { name: "Record", text } });
+    if (res.ok) return;
+    let message = `Work API PATCH ${id}: HTTP ${res.status}`;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { error?: unknown; code?: unknown };
+      if (typeof j.error === "string" && j.error) message = j.error;
+      if (typeof j.code === "string") code = j.code;
+    } catch { /* keep the generic message */ }
+    throw new WorkApiError(res.status, message, code);
+  }
+}
+
+/** A Work API stand-in that keeps bodies in memory: real append with the hub's caps and id dedupe (tests, offline use). */
+export class InMemoryWorkRecordStore implements WorkRecordStore {
+  constructor(public items: Record<string, WorkRecordItem> = {}) {}
+
+  async get(id: string): Promise<WorkRecordItem | null> {
+    return this.items[id] ?? null;
+  }
+
+  async setRecord(id: string, record: string): Promise<void> {
+    const it = this.items[id];
+    if (!it) throw new WorkApiError(404, "not found");
+    it.body = replaceRecordSection(it.body, record);
+  }
+
+  async appendRecord(id: string, lines: RecordAppendLine[], opts: { group?: string } = {}): Promise<AppendRecordResult> {
+    const it = this.items[id];
+    if (!it) return { ok: false, code: "error", message: "not found" };
+    if (it.stage === "archived") return { ok: false, code: "archived", message: "item is archived; its Record is closed" };
+    // The hub answers 400 to a kind outside the protocol's set; the stand-in refuses it the same way.
+    const badKind = lines.find((l) => !["decision", "change", "finding", "problem"].includes(l.kind));
+    if (badKind) return { ok: false, code: "error", message: `invalid line kind: ${String(badKind.kind)}` };
+    const rec = extractRecord(it.body)?.slice(RECORD_HEADING.length).trim() ?? "";
+    const seen = new Set<string>();
+    for (const m of rec.matchAll(/<!-- src:([^>]*?) -->/g)) for (const i of m[1]!.split(",")) seen.add(i);
+    const fresh: string[] = [];
+    for (const l of lines) {
+      if (l.ids.length && l.ids.every((i) => seen.has(i))) continue;
+      l.ids.forEach((i) => seen.add(i));
+      fresh.push(`- ${/T(\d\d:\d\d)/.exec(l.at)?.[1] ?? "00:00"} [${l.src}\u00b7${l.kind}] ${l.text.trim()}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`);
+    }
+    if (!fresh.length) return { ok: true };
+    let next: string;
+    if (opts.group && it.kind === "feature") {
+      const rl = rec ? rec.split("\n") : [];
+      const h = rl.findIndex((x) => x.trim() === `### ${opts.group}`);
+      if (h < 0) rl.push(...(rl.length ? [""] : []), `### ${opts.group}`, "", ...fresh);
+      else {
+        let end = rl.length;
+        for (let i = h + 1; i < rl.length; i++) if (/^### /.test(rl[i]!)) { end = i; break; }
+        let at = end;
+        while (at > h + 1 && rl[at - 1]!.trim() === "") at--;
+        rl.splice(at, 0, ...fresh);
+      }
+      next = rl.join("\n");
+    } else next = rec ? `${rec}\n${fresh.join("\n")}` : fresh.join("\n");
+    if (next.length > (it.kind === "feature" ? APPEND_CAP_FEATURE : APPEND_CAP_TASK)) return { ok: false, code: "log_full" };
+    it.body = replaceRecordSection(it.body, `${RECORD_HEADING}\n\n${next}`);
+    return { ok: true };
   }
 }
 
@@ -379,7 +597,10 @@ export type WorkRecordOutcome =
   /** Item archived or deleted: the observations are discarded (logged by the caller), never sent to the den. */
   | { work: string; ids: string[]; status: "discarded"; reason: string }
   /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
-  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause };
+  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause; /** Next attempt (ms epoch) while the group backs off. */ retryAt?: number; assignee?: string };
+
+/** The hub's code for a Record write to an archived item (hubd RECORD_CLOSED). */
+export const RECORD_CLOSED_CODE = "record_closed";
 
 /** The reason a pending outcome carries when the Work API is missing or unreachable. */
 export const WORK_API_UNAVAILABLE = "work-api-unavailable";
@@ -391,6 +612,8 @@ export interface ConsolidateWorkOptions {
   observations: WorkObservation[];
   /** Retry backoff and the 404 grace period. Absent: every group is tried now and a 404 discards at once. */
   state?: WorkPendingState;
+  /** Try groups still inside their backoff (a manual Consolidate). A failure still updates the state. */
+  ignoreBackoff?: boolean;
   onProgress?: (msg: string) => void;
 }
 
@@ -434,14 +657,32 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
   const groups = new Map<string, WorkObservation[]>();
   // The key is the feature when it is a real, live feature; anything else
   // (no feature, the Inbox, deleted, archived, store unreachable) keeps the item's own.
-  const featureOk = new Map<string, boolean>();
+  // Each item is read at most once per run: every read (task, feature, group key) goes through this cache. A failed read is cached too;
+  // the grouping treats it as "unknown" (null: a task falls back to its stored `o.feature`, a feature is not live), but the group loop
+  // below rethrows it, so the group stays pending instead of being taken for deleted.
+  const reads = new Map<string, { item: WorkRecordItem | null } | { err: unknown }>();
+  const readItem = async (id: string) => {
+    if (!reads.has(id)) {
+      try { reads.set(id, { item: await store!.get(id) }); } catch (err) { reads.set(id, { err }); }
+    }
+    return reads.get(id)!;
+  };
+  const getOrNull = async (id: string): Promise<WorkRecordItem | null> => {
+    const r = await readItem(id);
+    return "item" in r ? r.item : null;
+  };
+  const liveFeature = async (id: string): Promise<boolean> => isRecordFeature(await getOrNull(id));
+  // The feature is resolved NOW from the task's current parent (a task moved since the observation was tagged follows it).
+  // Only a task that cannot be read (or a store that does not report parents) falls back to the stored feature, then to the task.
   for (const o of opts.observations) {
     let key = o.work;
-    if (o.feature && store) {
-      if (!featureOk.has(o.feature)) {
-        try { featureOk.set(o.feature, isRecordFeature(await store.get(o.feature))); } catch { featureOk.set(o.feature, false); }
-      }
-      if (featureOk.get(o.feature)) key = o.feature;
+    if (store) {
+      const task = await getOrNull(o.work);
+      if (task && task.partOf !== undefined) {
+        const parent = task.partOf;
+        if (isRecordFeature(task)) key = task.id; // bound to the feature itself
+        else if (parent && (await liveFeature(parent))) key = parent;
+      } else if (o.feature && (await liveFeature(o.feature))) key = o.feature;
     }
     groups.set(key, [...(groups.get(key) ?? []), o]);
   }
@@ -455,14 +696,18 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       outcomes.push({ work, ids, status: "pending", reason: WORK_API_UNAVAILABLE, cause: "work-api-unavailable" });
       continue;
     }
-    if (state && !state.due(work)) {
+    if (state && !opts.ignoreBackoff && !state.due(work)) {
       onProgress?.(`  work ${work}: backing off, ${obs.length} observation(s) stay pending`);
-      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable" });
+      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable", ...(state.entry(work)?.nextAttemptAt ? { retryAt: state.entry(work)!.nextAttemptAt } : {}), ...(state.entry(work)?.assignee ? { assignee: state.entry(work)!.assignee } : {}) });
       continue;
     }
     let phase: PendingCause = "work-api-unavailable";
+    let assignee: string | undefined;
     try {
-      const item = await store.get(work);
+      const read = await readItem(work);
+      if ("err" in read) throw read.err;
+      const item = read.item;
+      assignee = item?.assignee;
       if (!item && store.healthy && !(await store.healthy())) throw new Error("Work API unhealthy: a 404 proves nothing");
       if (!item && state && !state.missing(work)) {
         onProgress?.(`  work ${work}: not found, waiting to confirm before discarding ${obs.length} observation(s)`);
@@ -500,18 +745,34 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       // The cap counts what is read; the sources ride along as comments.
       rendered = renderLines(resolveSources(record, current ? parseRecordLines(current) : [], obs.map((o) => ({ id: o.id, ...(o.timestamp ? { timestamp: o.timestamp } : {}) }))), true);
 
-      // Re-read right before the write so a plan edit made while the model
-      // ran is not overwritten (only the Record section is ours).
-      const fresh = (await store.get(work)) ?? item;
-      await store.setBody(work, replaceRecordSection(fresh.body, rendered));
+      // Only the Record section is written (a section op), so a plan edit made while the model ran cannot be overwritten:
+      // no re-read before the write.
+      await store.setRecord(work, rendered);
       clearEntries(state, work, obs);
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
       outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: stripSources(rendered).length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      // The item was archived between the read and the write: same as the archived path, the observations are discarded.
+      if (err instanceof WorkApiError && err.status === 409 && err.code === RECORD_CLOSED_CODE) {
+        clearEntries(state, work, obs);
+        onProgress?.(`  work ${work}: item is archived, ${obs.length} observation(s) are discarded`);
+        outcomes.push({ work, ids, status: "discarded", reason: "archived" });
+        continue;
+      }
+      // A 403 is final, not an outage: kept pending with the hub's message, no backoff, retried on the next run only.
+      if (err instanceof WorkApiError && err.status === 403) {
+        onProgress?.(`  work ${work}: refused by the hub, ${obs.length} observation(s) stay pending — ${reason}`);
+        // Deliberate: nextAttemptAt stays 0 for "forbidden", so a refused item costs one model call per run. Refusals are rare now that
+        // the Record is open to every wolf, and that cost is accepted.
+        state?.pending(work, "forbidden", { message: reason, ...(assignee ? { assignee } : {}) });
+        outcomes.push({ work, ids, status: "pending", reason, cause: "forbidden", ...(assignee ? { assignee } : {}) });
+        continue;
+      }
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
       state?.pending(work, phase);
-      outcomes.push({ work, ids, status: "pending", reason, cause: phase });
+      const retryAt = state?.entry(work)?.nextAttemptAt;
+      outcomes.push({ work, ids, status: "pending", reason, cause: phase, ...(retryAt ? { retryAt } : {}) });
     }
   }
   state?.save();

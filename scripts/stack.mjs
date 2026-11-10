@@ -4,12 +4,22 @@
  * Runs the HEADLESS live stack (workerd, which supervises one wolfd per wolf in ~/wolves/local) as a per-user launchd
  * agent: starts at login, restarts after a crash, keeps the Mac awake (caffeinate), logs to a file.
  *
- *   start              write the plist if missing, bootstrap + start the service
- *   stop               bootout: stops it now; stays installed and starts again at next login (or `start`)
- *   restart            SIGTERM, then SIGKILL after 40s; launchd (KeepAlive) relaunches. Kills in-flight turns, including the caller's.
- *   status             loaded/running, PID, uptime, port, wolfd children, log tail on trouble
+ *   install            (re)write the plist only; loads nothing (a loaded service keeps the old one until stop + start)
+ *   start              write the plist if missing, bootstrap + start the service (kickstart if loaded but not running)
+ *   stop               bootout: stops it now; stays installed and starts again at next login (or `start`). Idempotent.
+ *   restart            fire-and-forget: a detached helper SIGTERMs, then SIGKILLs after 40s if the pid is still the service's;
+ *                      launchd (KeepAlive) relaunches. Kills in-flight turns, including the caller's. Not running: same as start.
+ *   status             loaded/running, PID, uptime, port, wolfd children, /healthz, a verdict, log tail on trouble
  *   logs [-f] [-n N]   tail the log
  *   uninstall          stop + remove the plist
+ *
+ * Status verdict (see `verdict`): healthy | degraded | unresponsive | unmanaged | down | unknown (launchctl print failed
+ * for a reason other than "not loaded"). Exit 0 only for healthy; exit 1 covers every other verdict, so callers read
+ * `status.verdict` from `main` rather than the exit code. Usage and launchctl errors throw (`stack: <msg>`, exit 1).
+ *
+ * The port check uses `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fpc`. Exit 1 with no output means "nothing listening". These are
+ * errors: lsof cannot be spawned (missing), it is killed by a signal, it exits > 1, or it exits 1 with output it cannot parse.
+ * `start` throws on them; `status` reports the port as unknown with the reason and keeps going.
  *
  * Secrets: node loads $WOLFPACK_HOME/.env (default ~/.wolfpack/.env) at process start via --env-file-if-exists; nothing
  * secret is written to the plist. Env overrides (tests): STACK_LABEL, STACK_PORT, STACK_WOLVES, STACK_RUNTIME, STACK_LOG, STACK_PLIST_DIR.
@@ -19,9 +29,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ageText, STALE_AFTER_MS } from "./auto-update.mjs";
 import { liveWolvesDir, packHome } from "./live-paths.mjs";
 
-export const COMMANDS = ["start", "stop", "restart", "status", "logs", "uninstall"];
+export const COMMANDS = ["install", "start", "stop", "restart", "status", "logs", "uninstall"];
 
 export function parseArgs(argv) {
 	const [cmd, ...rest] = argv;
@@ -136,6 +147,22 @@ export function descendants(rows, root) {
 	return out;
 }
 
+/**
+ * One line from the Mac auto-update status file (scripts/auto-update-mac.mjs); display only. A `lastCheck` older than
+ * STALE_AFTER_MS (two timer intervals) leads with `stale (last check <age>)`: the job is not running or every run finds the lock
+ * held (deploy/auto-update/RUNBOOK.md, troubleshooting). No file = never set up, not stale.
+ */
+export function autoUpdateLine(file, nowMs = Date.now()) {
+	let s;
+	try { s = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "auto-update not set up (node scripts/auto-update-mac.mjs install)"; }
+	const at = Date.parse(s?.lastCheck ?? "");
+	if (Number.isFinite(at) && nowMs - at > STALE_AFTER_MS) return `stale (last check ${ageText(s.lastCheck, nowMs)}); see deploy/auto-update/RUNBOOK.md`;
+	const u = s?.units?.stack ?? {};
+	const ver = u.current || u.target ? ` (running ${u.current ?? "?"}, stable ${u.target ?? "?"})` : "";
+	const why = u.state === "disabled" ? s.disabledReason : u.state === "failed" ? `${u.code}: ${u.message ?? ""}` : u.message;
+	return `${u.state ?? s.result ?? "unknown"}${ver}${why ? `; ${why}` : ""}; last check ${s.lastCheck ?? "never"}`;
+}
+
 /** Warning text about the env file (missing, or readable by others), or undefined. */
 export function envFileWarning(file) {
 	let st;
@@ -143,117 +170,215 @@ export function envFileWarning(file) {
 	return st.mode & 0o077 ? `warning: ${file} is mode ${(st.mode & 0o777).toString(8)}; run: chmod 600 ${file}` : undefined;
 }
 
-// ---- side-effecting layer ----
-const sh = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8" });
-const say = (m) => console.log(m);
-const psRows = () => parsePs(sh("ps", ["-axo", "pid=,ppid=,etime=,command="]).stdout ?? "");
-/** Listeners on the port. lsof exits 1 with no output when there are none; anything else is a failure. */
-const listeners = (port) => {
-	const r = sh("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"]);
-	const parsed = r.error || r.status === null ? [] : parseLsof(r.stdout);
-	if (r.error || r.status === null || r.status > 1 || (r.status === 1 && !parsed.length && r.stdout.trim())) {
-		throw new Error(`lsof failed: ${r.error?.message ?? (r.status === null ? `killed by ${r.signal}` : r.stderr.trim() || `exit ${r.status}`)}`);
+
+// ---- side-effecting layer: every OS call goes through `deps`, so tests run it against a fake launchctl/ps/lsof/fetch ----
+
+/** The real Mac. `run` is a spawnSync with utf8 output; `spawnDetached` starts a helper in its own session; `fetch` is the global one. */
+export function realDeps() {
+	return {
+		home: os.homedir(),
+		uid: process.getuid?.(),
+		platform: process.platform,
+		nodePath: process.execPath,
+		nodeVersion: process.versions.node,
+		say: (m) => console.log(m),
+		run: (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", ...opts }),
+		spawnDetached: (cmd, args) => spawn(cmd, args, { detached: true, stdio: "ignore" }).unref(),
+		fetch: (url, init) => fetch(url, init),
+	};
+}
+
+export const HEALTH_TIMEOUT_MS = 2000;
+
+/**
+ * GET http://127.0.0.1:<port>/healthz with a timeout. → {ok, wolves: [{name, state}], error?}. Never throws.
+ * (A plain fetch for now; the shared probeHealth helper in @wolfpack/protocol replaces it once it lands on this branch.)
+ */
+export async function probeHealthz(port, fetchFn = fetch, timeoutMs = HEALTH_TIMEOUT_MS) {
+	try {
+		const res = await fetchFn(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(timeoutMs) });
+		if (!res.ok) return { ok: false, wolves: [], error: `HTTP ${res.status}` };
+		const body = await res.json();
+		const wolves = Array.isArray(body?.wolves) ? body.wolves.map((w) => ({ name: String(w.name), state: String(w.state) })) : [];
+		return { ok: body?.ok === true, wolves };
+	} catch (e) {
+		return { ok: false, wolves: [], error: e?.name === "TimeoutError" ? `no answer in ${timeoutMs} ms` : String(e?.message ?? e) };
 	}
-	return parsed;
-};
-const printService = (cfg) => {
-	const r = sh("launchctl", ["print", cfg.target]);
-	return r.status === 0 ? parseLaunchctlPrint(r.stdout) : undefined;
-};
-const which = (bin) => { const r = sh("/usr/bin/which", [bin]); return r.status === 0 ? r.stdout.trim() : undefined; };
-
-function writePlist(cfg) {
-	const [maj, min] = process.versions.node.split(".").map(Number);
-	if (maj < 22 || (maj === 22 && min < 9)) throw new Error(`node ${process.versions.node}: the service needs node >= 22.9 (--env-file-if-exists)`);
-	if (!fs.existsSync(cfg.workerdJs)) throw new Error(`${cfg.workerdJs} not found; build the runtime checkout first (${cfg.runtime}: pnpm install --frozen-lockfile && node scripts/turbo.mjs run build)`);
-	const extra = ["git", "claude"].map(which).filter(Boolean).map((p) => path.dirname(p));
-	fs.mkdirSync(cfg.plistDir, { recursive: true });
-	fs.mkdirSync(path.dirname(cfg.log), { recursive: true });
-	fs.writeFileSync(cfg.plist, buildPlist(cfg, process.execPath, servicePath(process.execPath, extra, cfg.home)), { mode: 0o600 });
-	fs.chmodSync(cfg.plist, 0o600);
-	say(`wrote ${cfg.plist} (node ${process.execPath})`);
-}
-
-function start(cfg) {
-	const warn = envFileWarning(cfg.envFile);
-	if (warn) say(warn);
-	if (!fs.existsSync(cfg.plist)) writePlist(cfg);
-	const svc = printService(cfg);
-	if (svc?.state === "running") return say(`already running (pid ${svc.pid})`);
-	const foreign = listeners(cfg.port).filter((l) => l.pid !== svc?.pid);
-	if (foreign.length) throw new Error(`port ${cfg.port} is in use by ${foreign.map((l) => `${l.command} (pid ${l.pid})`).join(", ")}; stop it first (its wolfd children exit with it)`);
-	const r = svc ? sh("launchctl", ["kickstart", cfg.target]) : sh("launchctl", ["bootstrap", cfg.domain, cfg.plist]);
-	if (r.status !== 0) throw new Error(`launchctl ${svc ? "kickstart" : "bootstrap"} failed: ${(r.stderr || r.stdout).trim()}`);
-	say(`started ${cfg.label}`);
-}
-
-function stop(cfg) {
-	if (!printService(cfg)) return say("not loaded");
-	const r = sh("launchctl", ["bootout", cfg.target]);
-	if (r.status !== 0) throw new Error(`launchctl bootout failed: ${(r.stderr || r.stdout).trim()}`);
-	say(`stopped ${cfg.label} (plist stays; it starts again at next login or on \`start\`)`);
 }
 
 /**
- * Restart: SIGTERM, then SIGKILL after 40s. The caller may be a wolf turn inside the service's process tree, which dies with it, so the work is
- * handed to a helper in its own session (detached), logging to restart.log: SIGTERM the service, wait for the pid to exit
- * (SIGKILL after 40s), and launchd's KeepAlive relaunches it. This kills ALL in-flight turns, including the caller's.
+ * One verdict from the launchd state and the probe:
+ *   healthy       service running, /healthz ok, every wolf online
+ *   degraded      service running, /healthz answers, some wolf not online
+ *   unresponsive  service running, /healthz does not answer
+ *   unmanaged     /healthz answers but launchd does not run it (a hand-started workerd: no KeepAlive)
+ *   down          nothing answers
+ *   unknown       launchctl print failed (not "not loaded"): `serviceError` holds the reason
+ * `svc` is the parsed `launchctl print`, undefined when the service is not loaded.
  */
-function restart(cfg) {
-	const svc = printService(cfg);
-	if (!svc?.pid) return start(cfg);
+export function verdict(svc, health, serviceError) {
+	if (serviceError) return "unknown";
+	const running = svc?.state === "running";
+	if (!health.error && running) return health.ok && health.wolves.every((w) => w.state === "online") ? "healthy" : "degraded";
+	if (!health.error) return "unmanaged";
+	return running ? "unresponsive" : "down";
+}
+
+function makeOps(cfg, d) {
+	const sh = (cmd, args) => d.run(cmd, args);
+	const psRows = () => parsePs(sh("ps", ["-axo", "pid=,ppid=,etime=,command="]).stdout ?? "");
+	/** Listeners on the port. lsof exits 1 with no output when there are none; anything else is a failure. */
+	const listeners = () => {
+		const r = sh("lsof", ["-nP", `-iTCP:${cfg.port}`, "-sTCP:LISTEN", "-Fpc"]);
+		const parsed = r.error || r.status === null ? [] : parseLsof(r.stdout ?? "");
+		if (r.error || r.status === null || r.status > 1 || (r.status === 1 && !parsed.length && (r.stdout ?? "").trim())) {
+			throw new Error(`lsof failed: ${r.error?.message ?? (r.status === null ? `killed by ${r.signal}` : (r.stderr ?? "").trim() || `exit ${r.status}`)}`);
+		}
+		return parsed;
+	};
+	/** Parsed `launchctl print`, or undefined when not loaded (exit 113 / "not found"). Any other failure throws. */
+	const printService = () => {
+		const r = sh("launchctl", ["print", cfg.target]);
+		if (r.status === 0) return parseLaunchctlPrint(r.stdout ?? "");
+		const text = `${r.stderr ?? ""}${r.stdout ?? ""}`.trim();
+		if (!r.error && (r.status === 113 || /could not find|not found/i.test(text))) return undefined;
+		throw new Error(`launchctl print failed: ${r.error?.message ?? (r.status === null ? `killed by ${r.signal}` : text || `exit ${r.status}`)}`);
+	};
+	const launchctl = (args) => {
+		const r = sh("launchctl", args);
+		if (r.status !== 0) throw new Error(`launchctl ${args[0]} failed: ${((r.stderr || r.stdout) ?? "").trim()}`);
+	};
+	const which = (bin) => { const r = sh("/usr/bin/which", [bin]); return r.status === 0 ? (r.stdout ?? "").trim() : undefined; };
+	return { psRows, listeners, printService, launchctl, which };
+}
+
+/** Write (or rewrite) the plist from the current config. Loads nothing. */
+function writePlist(cfg, d, ops) {
+	const [maj, min] = d.nodeVersion.split(".").map(Number);
+	if (maj < 22 || (maj === 22 && min < 9)) throw new Error(`node ${d.nodeVersion}: the service needs node >= 22.9 (--env-file-if-exists)`);
+	if (!fs.existsSync(cfg.workerdJs)) throw new Error(`${cfg.workerdJs} not found; build the runtime checkout first (${cfg.runtime}: pnpm install --frozen-lockfile && node scripts/turbo.mjs run build)`);
+	const extra = ["git", "claude"].map(ops.which).filter(Boolean).map((p) => path.dirname(p));
+	fs.mkdirSync(cfg.plistDir, { recursive: true });
+	fs.mkdirSync(path.dirname(cfg.log), { recursive: true });
+	fs.writeFileSync(cfg.plist, buildPlist(cfg, d.nodePath, servicePath(d.nodePath, extra, cfg.home)), { mode: 0o600 });
+	fs.chmodSync(cfg.plist, 0o600);
+	d.say(`wrote ${cfg.plist} (node ${d.nodePath})`);
+}
+
+/** install: (re)write the plist and nothing else. A loaded service keeps running the old one until stop + start. */
+function install(cfg, d, ops) {
+	const warn = envFileWarning(cfg.envFile);
+	if (warn) d.say(warn);
+	writePlist(cfg, d, ops);
+	d.say(ops.printService() ? "the loaded service still runs the old plist: `pnpm stack stop && pnpm stack start` loads the new one" : "not loaded: `pnpm stack start` loads it");
+}
+
+function start(cfg, d, ops) {
+	const warn = envFileWarning(cfg.envFile);
+	if (warn) d.say(warn);
+	if (!fs.existsSync(cfg.plist)) writePlist(cfg, d, ops);
+	const svc = ops.printService();
+	if (svc?.state === "running") return d.say(`already running (pid ${svc.pid})`);
+	const foreign = ops.listeners().filter((l) => l.pid !== svc?.pid);
+	if (foreign.length) throw new Error(`port ${cfg.port} is in use by ${foreign.map((l) => `${l.command} (pid ${l.pid})`).join(", ")}; stop it first (its wolfd children exit with it)`);
+	ops.launchctl(svc ? ["kickstart", cfg.target] : ["bootstrap", cfg.domain, cfg.plist]);
+	d.say(`started ${cfg.label}`);
+}
+
+function stop(cfg, d, ops) {
+	if (!ops.printService()) return d.say("not loaded");
+	ops.launchctl(["bootout", cfg.target]);
+	d.say(`stopped ${cfg.label} (plist stays; it starts again at next login or on \`start\`)`);
+}
+
+/**
+ * Restart, fire-and-forget: it returns once the helper is spawned; callers poll `status` for the outcome.
+ * The caller may be a wolf turn inside the service's process tree, which dies with it, so the work is handed to a helper in
+ * its own session (detached), logging to restart.log: SIGTERM the service, wait up to 40s for the pid to exit, then SIGKILL
+ * only if `launchctl print` still shows that pid as the service's (not a reused pid, not an already relaunched service).
+ * launchd's KeepAlive relaunches it. This kills ALL in-flight turns, including the caller's.
+ * Not loaded, or loaded but not running (no pid): falls back to `start` (bootstrap, or kickstart).
+ */
+function restart(cfg, d, ops) {
+	const svc = ops.printService();
+	if (!svc?.pid) return start(cfg, d, ops);
 	const script = `exec >>"$1" 2>&1; t=$2; p=$3; echo "--- $(date) restart $t pid $p"; sleep 2; launchctl kill SIGTERM "$t"; i=0
 while kill -0 "$p" 2>/dev/null && [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done
 echo "old pid exited after ~$i s"
-kill -0 "$p" 2>/dev/null && { echo "pid $p still alive after 40s: SIGKILL"; launchctl kill SIGKILL "$t"; }
+if kill -0 "$p" 2>/dev/null; then
+  if launchctl print "$t" 2>/dev/null | grep -qE "^[[:space:]]*pid = $p\$"; then echo "pid $p still the service after 40s: SIGKILL"; launchctl kill SIGKILL "$t";
+  else echo "pid $p is alive but no longer the service's: no SIGKILL"; fi
+fi
 sleep 3; echo "after:"; launchctl print "$t" | grep -E "^[[:space:]]*(state|pid) ="`;
 	const helperLog = path.join(path.dirname(cfg.log), "restart.log");
 	fs.mkdirSync(path.dirname(helperLog), { recursive: true });
-	spawn("/bin/sh", ["-c", script, "sh", helperLog, cfg.target, String(svc.pid)], { detached: true, stdio: "ignore" }).unref();
-	say(`restart requested (SIGTERM; kills all in-flight turns, including this one). Helper output: ${helperLog}. Check: pnpm stack status`);
+	d.spawnDetached("/bin/sh", ["-c", script, "sh", helperLog, cfg.target, String(svc.pid)]);
+	d.say(`restart requested (SIGTERM; kills all in-flight turns, including this one). Helper output: ${helperLog}. Check: pnpm stack status`);
 }
 
-function status(cfg) {
-	const svc = printService(cfg);
-	say(`label:     ${cfg.label}${fs.existsSync(cfg.plist) ? "" : "  (plist not installed)"}`);
-	say(svc ? `service:   loaded, ${svc.state}${svc.pid ? `, pid ${svc.pid}` : ""}${svc.lastExit ? `, last exit ${svc.lastExit}` : ""}` : "service:   not loaded (pnpm stack start)");
-	const rows = psRows();
+/**
+ * → {code, status: {verdict, reason?, service, health, port}}. `service` is the parsed launchctl print, undefined when the
+ * service is not loaded (or when print failed: verdict "unknown", `reason` says why). `port` is {listeners} or {error}.
+ * `brief` skips the ps call (uptime, wolfd children) and the log tail, for cheap polling. All output goes through `d.say`.
+ */
+async function status(cfg, d, ops, { brief = false } = {}) {
+	let svc;
+	let svcErr;
+	try { svc = ops.printService(); } catch (e) { svcErr = e.message; }
+	const health = await probeHealthz(cfg.port, d.fetch);
+	const v = verdict(svc, health, svcErr);
+	d.say(`label:     ${cfg.label}${fs.existsSync(cfg.plist) ? "" : "  (plist not installed)"}`);
+	d.say(svcErr ? `service:   unknown (${svcErr})` : svc ? `service:   loaded, ${svc.state}${svc.pid ? `, pid ${svc.pid}` : ""}${svc.lastExit ? `, last exit ${svc.lastExit}` : ""}` : "service:   not loaded (pnpm stack start)");
+	const rows = brief ? [] : ops.psRows();
 	const me = svc?.pid && rows.find((r) => r.pid === svc.pid);
-	if (me) say(`uptime:    ${me.etime}`);
+	if (me) d.say(`uptime:    ${me.etime}`);
 	let ls = [];
 	let lsErr;
-	try { ls = listeners(cfg.port); } catch (e) { lsErr = e; }
-	say(`port ${cfg.port}:   ${lsErr ? `unknown (${lsErr.message})` : ls.length ? `listening (${ls.map((l) => `${l.command} ${l.pid}`).join(", ")})` : "NOT listening"}`);
+	try { ls = ops.listeners(); } catch (e) { lsErr = e; }
+	d.say(`port ${cfg.port}:   ${lsErr ? `unknown (${lsErr.message})` : ls.length ? `listening (${ls.map((l) => `${l.command} ${l.pid}`).join(", ")})` : "NOT listening"}`);
 	const mine = svc?.pid && descendants(rows, svc.pid).concat(me || []).some((r) => ls.some((l) => l.pid === r.pid));
-	if (ls.length && svc?.pid && !mine) say(`WARNING:   port ${cfg.port} is held by a process that is not the service`);
-	if (svc?.pid) {
+	if (!brief && ls.length && svc?.pid && !mine) d.say(`WARNING:   port ${cfg.port} is held by a process that is not the service`);
+	if (!brief && svc?.pid) {
 		const kids = descendants(rows, svc.pid).filter((r) => /wolfd/.test(r.command));
-		say(`wolfd:     ${kids.length ? kids.map((k) => `pid ${k.pid} (up ${k.etime})`).join(", ") : "none"}`);
+		d.say(`wolfd:     ${kids.length ? kids.map((k) => `pid ${k.pid} (up ${k.etime})`).join(", ") : "none"}`);
 	}
-	if (lsErr || !(svc?.state === "running" && ls.length)) {
-		say(`\nlast log lines (${cfg.log}):`);
-		const t = sh("tail", ["-n", "15", cfg.log]);
-		say(t.status === 0 ? t.stdout.trimEnd() : "(no log)");
-		process.exitCode = 1;
+	d.say(`healthz:   ${health.error ? `no answer (${health.error})` : `${health.ok ? "ok" : "not ok"}; ${health.wolves.map((w) => `${w.name} ${w.state}`).join(", ") || "no wolves"}`}`);
+	d.say(`verdict:   ${v}${v === "unmanaged" ? " (workerd answers but launchd does not run it: no restart on crash)" : ""}`);
+	d.say(`updates:   ${autoUpdateLine(path.join(packHome(process.env, cfg.home), "auto-update/status.json"))}`);
+	if (!brief && (v !== "healthy" || lsErr)) {
+		d.say(`\nlast log lines (${cfg.log}):`);
+		const t = d.run("tail", ["-n", "15", cfg.log]);
+		d.say(t.status === 0 ? (t.stdout ?? "").trimEnd() : "(no log)");
 	}
+	const port = lsErr ? { error: lsErr.message } : { listeners: ls };
+	return { code: v === "healthy" ? 0 : 1, status: { verdict: v, ...(svcErr ? { reason: svcErr } : {}), service: svc, health, port } };
 }
 
-export function main(argv, env = process.env) {
+/**
+ * → {code, status?} (status only for `status`; code 1 for every non-healthy verdict, so read `status.verdict`).
+ * Throws on a usage or launchctl error. A quiet caller passes `{...realDeps(), say: () => {}}`; `opts.brief` makes
+ * status cheap to poll (no ps, no log tail).
+ */
+export async function main(argv, env = process.env, deps = realDeps(), opts = {}) {
 	const { cmd, flags } = parseArgs(argv);
-	if (process.platform !== "darwin") throw new Error("launchd is macOS-only");
-	const cfg = resolveConfig(env);
+	if (deps.platform !== "darwin") throw new Error("launchd is macOS-only");
+	const cfg = resolveConfig(env, deps.home, deps.uid);
+	const ops = makeOps(cfg, deps);
 	switch (cmd) {
-		case "start": return start(cfg);
-		case "stop": return stop(cfg);
-		case "restart": return restart(cfg);
-		case "status": return status(cfg);
+		case "install": install(cfg, deps, ops); break;
+		case "start": start(cfg, deps, ops); break;
+		case "stop": stop(cfg, deps, ops); break;
+		case "restart": restart(cfg, deps, ops); break;
+		case "status": return status(cfg, deps, ops, opts);
 		case "logs":
 			if (!fs.existsSync(cfg.log)) throw new Error(`no log at ${cfg.log}`);
-			return void spawnSync("tail", [...(flags.follow ? ["-f"] : []), "-n", String(flags.lines), cfg.log], { stdio: "inherit" });
-		case "uninstall": stop(cfg); fs.rmSync(cfg.plist, { force: true }); return say(`removed ${cfg.plist}`);
+			deps.run("tail", [...(flags.follow ? ["-f"] : []), "-n", String(flags.lines), cfg.log], { stdio: "inherit" });
+			break;
+		case "uninstall": stop(cfg, deps, ops); fs.rmSync(cfg.plist, { force: true }); deps.say(`removed ${cfg.plist}`); break;
 	}
+	return { code: 0 };
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
-	try { main(process.argv.slice(2)); } catch (e) { console.error(`stack: ${e.message}`); process.exit(1); }
+	main(process.argv.slice(2)).then((r) => { process.exitCode = r.code; }, (e) => { console.error(`stack: ${e.message}`); process.exit(1); });
 }

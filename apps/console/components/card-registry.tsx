@@ -82,7 +82,7 @@ export interface InteractionCardProps {
 	onSkip?(): void;
 	/** The tight variant (the floating chat bar). */
 	compact?: boolean;
-	/** What a brief's "Open thread for more" does. */
+	/** What a legacy brief's "Open thread for more" does (old transcripts only). */
 	onOpenThread?(): void;
 }
 
@@ -167,6 +167,7 @@ for (const name of ["quiz", "ask_user_question", "explain"]) {
 }
 
 // Wolf-thread interaction cards (protocol cards): the ask card renders any free-text / single card.
+// Legacy alias: the `brief` tool is gone, but old transcripts still carry `brief` cards; they render read-only through AskCard.
 registerCard("card", "brief", { Renderer: AskCard });
 registerCard("card", "ask_user_question", { Renderer: AskCard });
 registerCard("card", "default", { Renderer: AskCard });

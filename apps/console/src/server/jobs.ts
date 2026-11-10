@@ -112,6 +112,8 @@ interface WakeState {
 	pumping: Set<string>;
 	/** Throttle bookkeeping for the stale-job sweep. */
 	lastSweepAt: number;
+	/** Bumped by resetWakePipelineForTests: parked waitForIdle loops see it change and stop. Never bumped in the product. */
+	epoch?: number;
 }
 
 interface LhWakeGlobal {
@@ -121,6 +123,16 @@ interface LhWakeGlobal {
 function state(): WakeState {
 	const g = globalThis as typeof globalThis & LhWakeGlobal;
 	return (g.__lhWakePipeline ??= { queues: new Map(), liveAgents: new Map(), userSteers: new Map(), pumping: new Set(), lastSweepAt: 0 });
+}
+
+/** TEST-ONLY: forget every queued steer and live agent (the suite's afterEach). */
+export function resetWakePipelineForTests(): void {
+	const s = state();
+	s.queues.clear();
+	s.liveAgents.clear();
+	s.userSteers.clear();
+	s.pumping.clear();
+	s.epoch = (s.epoch ?? 0) + 1;
 }
 
 /** chat-handler wires this at module init: its adapter around handleChatRequest. */
@@ -414,6 +426,7 @@ async function pump(chatId: string): Promise<void> {
 	const s = state();
 	if (s.pumping.has(chatId)) return;
 	s.pumping.add(chatId);
+	const pumpEpoch = s.epoch ?? 0;
 	try {
 		for (let attempt = 0; ; ) {
 			const queue = s.queues.get(chatId);
@@ -466,7 +479,7 @@ async function pump(chatId: string): Promise<void> {
 			// VEHICLE 2 — THE IDLE WAKE: one server-side turn carrying EVERY
 			// pending marker as its input appends (the handler write-ahead
 			// persists them under the wake's own turn claim).
-			await waitForIdle(chatId);
+			if (!(await waitForIdle(chatId))) return; // the test reset cancelled the wait
 
 			// Re-fetch AFTER the gates open — waitForIdle can wait out a quiz
 			// answer (minutes), and sending the pre-wait snapshot would clobber
@@ -559,7 +572,8 @@ async function pump(chatId: string): Promise<void> {
 			}
 		}
 	} finally {
-		s.pumping.delete(chatId);
+		// (a pump that outlived a test reset must not delete a newer pump's entry)
+		if ((s.epoch ?? 0) === pumpEpoch) s.pumping.delete(chatId);
 		// A steer may have arrived between the last check and the finally —
 		// restart the pump rather than strand it. Entries already handed to
 		// a live run are NOT stragglers (settleSteers owns their resurrection)
@@ -597,20 +611,23 @@ function failJob(jobId: string, err: Error): void {
  * the learner may take arbitrarily long to answer, and that is correct —
  * the steer fires right after their answer turn completes.
  */
-async function waitForIdle(chatId: string): Promise<void> {
+async function waitForIdle(chatId: string): Promise<boolean> {
+	const epoch = state().epoch ?? 0;
 	for (;;) {
+		if ((state().epoch ?? 0) !== epoch) return false;
 		const record = stores.chatStore.getChat(chatId);
-		if (!record) return;
+		if (!record) return true;
 		const blocked = isTurnRunning(chatId) || danglingQuestionOf(record.messages) !== null;
 		if (!blocked) {
 			await delay(GRACE_MS);
+			if ((state().epoch ?? 0) !== epoch) return false;
 			const recheck = stores.chatStore.getChat(chatId);
 			if (
 				!isTurnRunning(chatId) &&
 				recheck &&
 				danglingQuestionOf(recheck.messages) === null
 			) {
-				return;
+				return true;
 			}
 		}
 		await delay(POLL_MS);

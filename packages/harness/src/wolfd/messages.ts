@@ -201,14 +201,15 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         else (list[i].objects ??= []).push({ ...obj, rev: 1, seq, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
       }
       const card = cardOfToolMessage(entry.model?.[0]);
-      if (card) call.card = card;
+      // An ask_revise result carries a card only as its payload: the call is not itself a pending card.
+      if (card && !card.revises) call.card = card;
       return;
     }
     return;
   }
   if (entry.kind === CARD_ANSWER_KIND) {
     // A card answer is not a chat message: it resolves the call that raised the card (the answer is that call's result).
-    for (const { callId, answers, skipped } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
+    for (const { callId, answers, skipped, note } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
       for (let i = list.length - 1; i >= 0; i--) {
         const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
         if (!call) continue;
@@ -221,6 +222,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
           break;
         }
         call.answer = answers;
+        if (note) call.note = note;
         call.closed = "answered";
         call.result = call.card ? visibleFields(call.card, answers).map((f) => answerValue(f, answers[f.id])).join("; ") : Object.values(answers).map((a) => String(a.value)).join("; ");
         call.isError = false;
@@ -239,7 +241,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         for (const call of list[i].tools ?? []) {
           if (!call.card || call.answer || call.closed) continue;
           Object.assign(call, { dismissed: true, closed: "superseded" });
-          replaced.push({ tool: call.card.tool, callId: call.callId });
+          replaced.push({ tool: call.card.tool, callId: call.callId, ...(call.card.paged ? { paged: true as const } : {}) });
         }
       }
       // wolfd put a note for exactly these cards at the head of the message (server.ts submit): the operator sees what they typed.

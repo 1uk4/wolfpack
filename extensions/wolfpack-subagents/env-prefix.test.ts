@@ -20,6 +20,13 @@ describe("subagent launch env prefix", () => {
     expect(p).not.toContain("PI_SUBAGENT_ALLOWED");
   });
 
+  it("exports the task id as PI_SUBAGENT_TASK, and leaves it out when absent", () => {
+    expect(subagentEnvPrefix({ ...base, agent: "worker", task: "work-wolfpack-gkMXNlI" })).toContain(
+      " PI_SUBAGENT_TASK='work-wolfpack-gkMXNlI' ",
+    );
+    expect(subagentEnvPrefix({ ...base, agent: "worker" })).not.toContain("PI_SUBAGENT_TASK");
+  });
+
   it("marks an agentless child too", () => {
     expect(subagentEnvPrefix(base)).toContain("WOLFPACK_AGENT_RUN=1 ");
   });

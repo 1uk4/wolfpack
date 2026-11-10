@@ -32,7 +32,7 @@ import {
   type CreateWorkInput,
   type WorkQuery,
 } from "@wolfpack/kb/client";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { assertSectionText, replaceSection, SectionTextError, type KbRoots } from "@wolfpack/kb/shared";
 import path from "node:path";
 
 /** KbRoots the Work API runs on, from the agent's env (the default mount). */
@@ -148,6 +148,32 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
           return;
         }
         commitWorkItem(roots, item, String(body.body));
+        result = { item };
+      } else if (body.section !== undefined) {
+        // Local/sandbox Work API: only the Record section is replaceable (memory's fold). Plan/notes edits go through the hub.
+        const sec = body.section as { name?: unknown; text?: unknown };
+        if (sec.name !== "Record" || typeof sec.text !== "string") {
+          res.status(400).json({ error: 'section must be {name: "Record", text}' });
+          return;
+        }
+        const item = loadWorkState(roots).get(id as any);
+        if (!item) {
+          res.status(404).json({ error: `Work item not found: ${id}` });
+          return;
+        }
+        const cur = resolveWorkItem(roots, item.domain as string, id)?.body ?? "";
+        let next: string;
+        try {
+          assertSectionText(sec.text); // same checks as the hub: no headings, no unclosed fence in the text
+          next = replaceSection(cur, "record", sec.text);
+        } catch (e) {
+          if (e instanceof SectionTextError) {
+            res.status(400).json({ error: e.message });
+            return;
+          }
+          throw e;
+        }
+        commitWorkItem(roots, item, next);
         result = { item };
       } else if (typeof body.standing === "boolean") {
         result = { item: setStanding(roots, id, body.standing).item };

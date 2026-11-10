@@ -15,7 +15,7 @@ export const singleKind: CardKind = {
   kind: "single",
   fieldSchema: SingleFieldSchema,
   // A single answer has the same shape as a free-text one ({value, other?}); it is declared again here so each kind module stands alone.
-  answerSchema: z.object({ value: z.string(), other: z.boolean().optional() }),
+  answerSchema: z.object({ value: z.string(), other: z.boolean().optional(), attachments: z.array(z.string()).optional() }),
   checkField(f) {
     const s = f as unknown as Single;
     return s.default === undefined || s.options.some((o) => o.value === s.default) ? undefined : "a single field's default must be one of its option values";

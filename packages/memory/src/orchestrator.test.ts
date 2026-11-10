@@ -7,6 +7,7 @@ import { createOrchestrator } from "./orchestrator.js";
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
 import { readTopics } from "./session/memory.js";
 import { stripSources } from "./record-sources.js";
+import { replaceRecordSection } from "./work-record.js";
 import { readArchive } from "./work-pending.js";
 
 type RawObs = { timestamp: string; content: string; domain?: string };
@@ -210,10 +211,11 @@ describe("orchestrator work tagging and Records", () => {
     return {
       writes,
       store: {
+        appendRecord: async () => ({ ok: true as const }),
         get: async (id: string) => (items[id] ? { id, successCriteria: undefined, ...items[id] } : null),
-        setBody: async (id: string, body: string) => {
+        setRecord: async (id: string, record: string) => {
           if (failSet) throw new Error("HTTP 503");
-          writes.push({ id, body });
+          writes.push({ id, body: replaceRecordSection(items[id]?.body ?? "", record) });
         },
       },
     };
@@ -236,6 +238,27 @@ describe("orchestrator work tagging and Records", () => {
     expect(a).toMatchObject({ work: "work-t1", feature: "work-f1" });
     expect(b.work).toBeUndefined();
     expect(b.feature).toBeUndefined();
+  });
+
+  it("a general observation goes to the den untagged, with origin, only when generalToDen is on", async () => {
+    const bound = { taskId: "work-t1", featureId: "work-f1" };
+    const gen = { timestamp: "2026-10-19 10:00", content: "owner never wants gh pr merge run", general: true };
+    const run = async (generalToDen: boolean, obs: object) => {
+      const { engine } = engineWithRecord([[obs as RawObs]]);
+      const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => bound, generalToDen });
+      await orch.processChunks([chunk("c1")]);
+      return orch.getActiveObservations()[0];
+    };
+    const on = await run(true, gen);
+    expect(on.work).toBeUndefined();
+    expect(on.feature).toBeUndefined();
+    expect(on.origin).toEqual({ work: "work-t1", feature: "work-f1" });
+    // bound, not general: tagged as before
+    expect(await run(true, OBS[0])).toMatchObject({ work: "work-t1", feature: "work-f1" });
+    // flag off: tagged as before, no origin
+    const off = await run(false, gen);
+    expect(off).toMatchObject({ work: "work-t1", feature: "work-f1" });
+    expect(off.origin).toBeUndefined();
   });
 
   it("den consolidation skips tagged observations; the Record gets them", async () => {
@@ -273,7 +296,7 @@ describe("orchestrator work tagging and Records", () => {
     expect(orch.getActiveObservations().map((o) => o.content)).toEqual([OBS[0].content]);
     expect(prompts.consolidate).toEqual([]); // nothing leaked to the den
     // an immediate retry waits out the backoff
-    s.store.setBody = async (id: string, body: string) => { s.writes.push({ id, body }); };
+    s.store.setRecord = async (id: string, body: string) => { s.writes.push({ id, body }); };
     await orch.consolidateNow();
     expect(s.writes).toHaveLength(0);
     // later, the Work API is back

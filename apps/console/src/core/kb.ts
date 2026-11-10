@@ -23,6 +23,8 @@ export type {
 	MemoryTarget,
 	MemoryObservation,
 	MemoryObservations,
+	MemoryTree,
+	MemoryNodeObservations,
 	MemoryTopic,
 	MemoryTopicRef,
 	ConsolidateResponse,

@@ -6,7 +6,7 @@
  * Loading never throws: a bad config yields a tool-less extension, so it cannot stop a wolf from starting.
  */
 import { defineExtension, defineTool, Type, type ExtensionContext } from "@wolfpack/harness/extension";
-import { BrowserSession, type Tab, type BrowserConfig } from "./session.js";
+import { BrowserSession, parseViewport, type Tab, type BrowserConfig } from "./session.js";
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 const fail = (err: unknown) => ({ content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true });
@@ -50,8 +50,14 @@ export default function createBrowserExtension(config: BrowserConfig | undefined
           url: Type.String(),
           waitUntil: Type.Optional(Type.Union([Type.Literal("load"), Type.Literal("domcontentloaded"), Type.Literal("networkidle"), Type.Literal("commit")])),
           timeoutMs: Type.Optional(Type.Number()),
+          width: Type.Optional(Type.Integer({ minimum: 320, maximum: 3840, description: "Viewport width in px for this thread's tab, e.g. 390 for a phone. Stays until changed or browser_close." })),
+          height: Type.Optional(Type.Integer({ minimum: 320, maximum: 2160, description: "Viewport height in px (default 844 when width < 768, else 800)." })),
         }),
-        execute: guarded((tab, a) => tab.goto(String(a.url), a.waitUntil, a.timeoutMs)),
+        execute: guarded(async (tab, a) => {
+          const vp = parseViewport(a);
+          await tab.setViewport(vp);
+          return tab.goto(String(a.url), a.waitUntil, a.timeoutMs);
+        }),
       }),
       defineTool({
         name: "browser_click",
@@ -74,8 +80,15 @@ export default function createBrowserExtension(config: BrowserConfig | undefined
       defineTool({
         name: "browser_screenshot",
         description: "Take a PNG screenshot of the page. Returns the file path (deleted when the browser closes); read it with an image-capable tool.",
-        parameters: Type.Object({ fullPage: Type.Optional(Type.Boolean()) }),
-        execute: guarded(async (tab, a) => `Screenshot saved: ${await tab.screenshot(a.fullPage === true)}`),
+        parameters: Type.Object({
+          fullPage: Type.Optional(Type.Boolean()),
+          width: Type.Optional(Type.Integer({ minimum: 320, maximum: 3840, description: "Resize this thread's tab first (e.g. 390 for a phone); it stays resized." })),
+          height: Type.Optional(Type.Integer({ minimum: 320, maximum: 2160 })),
+        }),
+        execute: guarded(async (tab, a) => {
+          await tab.setViewport(parseViewport(a));
+          return `Screenshot saved: ${await tab.screenshot(a.fullPage === true)}${tab.viewportNote()}`;
+        }),
       }),
       defineTool({
         name: "browser_console",

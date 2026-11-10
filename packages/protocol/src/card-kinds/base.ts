@@ -5,6 +5,8 @@ export const CardOptionSchema = z.object({
   /** Machine-readable value returned when picked. Defaults to the label. */
   value: z.string(),
   description: z.string().optional(),
+  /** The `ask` tool: what picking this option costs or implies (required there). */
+  tradeoff: z.string().optional(),
 });
 export type CardOption = z.infer<typeof CardOptionSchema>;
 
@@ -23,6 +25,9 @@ export const FieldShowIfSchema = z
   .refine((s) => (s.equals === undefined) !== (s.oneOf === undefined), { message: "showIf needs exactly one of equals / oneOf" });
 export type FieldShowIf = z.infer<typeof FieldShowIfSchema>;
 
+/** `viz-<slug>-<ms>.png`, exactly as the visual tools' `publish()` names a render (slug: lowercase a-z0-9 and dashes). */
+export const DIAGRAM_ID_RE = /^viz-[a-z0-9]+(?:-[a-z0-9]+)*-\d+\.png$/;
+
 /** The properties every field kind shares; a kind's field schema extends this. */
 export const cardFieldBase = z.object({
   /** Unique within the card; keys the answer. */
@@ -30,6 +35,11 @@ export const cardFieldBase = z.object({
   label: z.string(),
   /** Extra context shown under the label. */
   description: z.string().optional(),
+  /**
+   * The `ask` tool: id of a diagram the wolf rendered and persisted (render_mermaid / render_svg with `save_as` and
+   * `persist: true`). Served by `GET /v1/threads/:id/diagrams/:diagramId`. An id only: never a path or URL, the console must not build one.
+   */
+  diagram: z.string().regex(DIAGRAM_ID_RE, "a diagram is the file name of a published render (viz-<slug>-<ms>.png), never a path or URL").optional(),
   /** Conditional visibility (stepped/dependent cards); absent = always shown. */
   showIf: FieldShowIfSchema.optional(),
   /**

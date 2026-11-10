@@ -9,7 +9,7 @@ import type { Engine } from "@wolfpack/engine";
 import type { WorkItem } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { confirmGraduation, previewGraduation, type GraduationClient } from "./graduate.js";
-import { consolidateWorkRecords, findRecordLine, type WorkRecordStore } from "../work-record.js";
+import { consolidateWorkRecords, findRecordLine, replaceRecordSection, type WorkRecordStore } from "../work-record.js";
 import { appendArchive, findArchived } from "../work-pending.js";
 import { observationIds } from "../observation-id.js";
 
@@ -54,8 +54,9 @@ describe("graduated entries point back to the Record lines and the archived obse
     const pool = [0, 1, 2].map((n) => ({ timestamp: `2026-10-20T10:0${n}:00Z`, recordedAt: `2026-10-20T11:0${n}:00Z`, content: `observation ${n}`, work: n === 2 ? t2.id as string : t1.id as string, feature: feat.id as string }));
     const ids = observationIds(pool);
     const store: WorkRecordStore = {
+      appendRecord: async () => ({ ok: true }),
       get: async (id) => ({ id, title: id, kind: "feature", stage: "in_build", body: bodies[id] ?? PLAN }),
-      setBody: async (id, body) => { bodies[id] = body; },
+      setRecord: async (id, record) => { bodies[id] = replaceRecordSection(bodies[id] ?? PLAN, record); },
     };
     const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({
       decisions: [{ decision: "Chose X", why: "simple", from: ["o1", "o2"] }],

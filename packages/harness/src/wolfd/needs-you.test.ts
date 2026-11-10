@@ -1,7 +1,7 @@
 /** Needs-you events over /v1: card events on the thread stream, status + card changes on the wolf activity stream. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WolfEvent } from "@wolfpack/protocol";
-import { askCall } from "./test-ask-call.js";
+import { answerPaged, plainCall, plainCardExtension } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -14,7 +14,7 @@ afterEach(async () => {
   tw = undefined;
 });
 
-const ask = (...questions: string[]) => fauxAssistantMessage(questions.map((q) => askCall({ question: q })), { stopReason: "toolUse" });
+const ask = (...questions: string[]) => fauxAssistantMessage(questions.map((q) => plainCall({ question: q })), { stopReason: "toolUse" });
 const drain = async (w: TestWolf) => {
   for await (const _ of w.client.watch(w.home));
 };
@@ -33,7 +33,7 @@ const summary = (events: readonly WolfEvent[]) =>
 
 describe("card events on the thread stream", () => {
   it("card-pending arrives before turn-end", async () => {
-    tw = await startTestWolf({ script: [ask("Which branch?"), fauxAssistantMessage("done")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Which branch?"), fauxAssistantMessage("done")] });
     const events = await tw.submit("release it");
     const types = events.map((e) => e.type);
     const pendingAt = types.indexOf("card-pending");
@@ -41,13 +41,13 @@ describe("card events on the thread stream", () => {
     expect(pendingAt).toBeLessThan(types.indexOf("turn-end"));
     const raised = events[pendingAt];
     if (raised.type !== "card-pending") throw new Error("unreachable");
-    expect(raised.card).toMatchObject({ threadId: tw.home, card: { tool: "brief" } });
+    expect(raised.card).toMatchObject({ threadId: tw.home, card: { tool: "plain_card" } });
   });
 });
 
 describe("wolf activity stream", () => {
   it("baseline, then status and card transitions through raise -> answer", async () => {
-    tw = await startTestWolf({ script: [ask("Which branch?"), fauxAssistantMessage("done")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Which branch?"), fauxAssistantMessage("done")] });
     const seen = follow(tw);
     await vi.waitFor(() => expect(summary(seen)).toEqual(["status:idle"]));
 
@@ -56,7 +56,7 @@ describe("wolf activity stream", () => {
     const pending = seen.find((e) => e.type === "card-pending");
     if (pending?.type !== "card-pending") throw new Error("no card");
 
-    await tw.client.answerCard!(tw.home, pending.card.callId, { answer: { value: "main" } });
+    await answerPaged(tw.client, tw.home, pending.card.callId, { answer: { value: "main" } });
     await drain(tw);
     await vi.waitFor(() => expect(summary(seen).at(-1)).toBe("status:idle"));
     // needs-you goes straight to busy: never an idle blip between the answer and the next turn.
@@ -66,20 +66,20 @@ describe("wolf activity stream", () => {
   });
 
   it("a fresh connection starts with the pending cards as its baseline", async () => {
-    tw = await startTestWolf({ script: [ask("Q1", "Q2")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Q1", "Q2")] });
     await tw.submit("go");
     const seen = follow(tw);
     await vi.waitFor(() => expect(summary(seen)).toEqual(["status:needs-you", "card-pending", "card-pending"]));
   });
 
   it("a held answer re-announces the card with it; a plain submit dismisses the cards", async () => {
-    tw = await startTestWolf({ script: [ask("Q1", "Q2")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Q1", "Q2")] });
     await tw.submit("go");
     const cards = (await tw.client.getThread(tw.home)).pendingCards!;
     const seen = follow(tw);
     await vi.waitFor(() => expect(seen).toHaveLength(3));
 
-    await tw.client.answerCard!(tw.home, cards[0].callId, { answer: { value: "one" } });
+    await answerPaged(tw.client, tw.home, cards[0].callId, { answer: { value: "one" } });
     await vi.waitFor(() => expect(seen).toHaveLength(4));
     expect(seen[3]).toMatchObject({ type: "card-pending", card: { callId: cards[0].callId, heldAnswer: { answer: { value: "one" } } } });
 
@@ -118,7 +118,7 @@ describe("wolf activity stream", () => {
   };
 
   it("resumes from Last-Event-ID without a gap; a stale cursor gets resync + baseline", async () => {
-    tw = await startTestWolf({ script: [ask("Q"), fauxAssistantMessage("x")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Q"), fauxAssistantMessage("x")] });
     const first = await readActivity(tw, 1);
     expect(first.events).toMatchObject([{ type: "thread-status", status: "idle" }]);
     expect(first.ids[0]).toMatch(/^[0-9a-f]+:\d+$/);
@@ -132,11 +132,11 @@ describe("wolf activity stream", () => {
   });
 
   it("a restarted wolf (new process epoch) answers an old cursor with resync + baseline", async () => {
-    tw = await startTestWolf({ script: [ask("Q")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Q")] });
     await tw.submit("go");
     const old = (await readActivity(tw, 1)).ids[0]!;
     await tw.stop();
-    tw = await startTestWolf({ script: [ask("Q")] });
+    tw = await startTestWolf({ hooks: { extensions: (rt) => [plainCardExtension(rt)] }, script: [ask("Q")] });
     // Same sequence number, other epoch: must not be trusted as a position.
     expect(summary((await readActivity(tw, 2, old)).events)).toEqual(["resync", "status:idle"]);
   });

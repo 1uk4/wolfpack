@@ -67,6 +67,7 @@ describe("device management routes", () => {
 
   it("revokes another device: its next request is 401, the caller keeps working", async () => {
     const a = await device("browser", "A");
+    store.setOwner(a.tokenId, true);
     const b = await device("browser", "B");
     expect((await list(b.token)).status).toBe(200);
     const r = await fetch(`${hub.url}/v1/tokens/${b.tokenId}`, { method: "DELETE", headers: auth(a.token) });
@@ -89,6 +90,7 @@ describe("device management routes", () => {
 
   it("revoking closes that device's event stream", async () => {
     const a = await device("browser", "A");
+    store.setOwner(a.tokenId, true);
     const b = await device("browser", "B");
     const ac = new AbortController();
     const ev = await fetch(`${hub.url}/v1/events`, { headers: auth(b.token), signal: ac.signal });
@@ -146,8 +148,20 @@ describe("device management routes", () => {
     expect(rows.find((d) => d.id === a.tokenId)).toMatchObject({ addedBy: null, addedById: null });
     expect(rows.find((d) => d.id === b.tokenId)).toMatchObject({ label: "Tablet", addedBy: "Phone", addedById: a.tokenId });
     expect((await list(b.token)).status).toBe(200);
-    await del(b.token, a.tokenId); // the minter is gone: the child keeps its id, loses the label
+    const boss = await device("browser", "Boss");
+    store.setOwner(boss.tokenId, true);
+    await del(boss.token, a.tokenId); // the minter is gone: the child keeps its id, loses the label
     expect((await devs(b.token)).find((d) => d.id === b.tokenId)).toMatchObject({ addedBy: null, addedById: a.tokenId });
+  });
+
+  it("the token that minted a device can revoke it by id (what `slot pair` relies on); the minter keeps working", async () => {
+    const minter = await device("browser", "Mac");
+    const child = await redeem(((await (await mint(minter.token, { label: "preview slot 3231" })).json()) as { code: string }).code, "x");
+    expect((await list(child.token)).status).toBe(200);
+    const r = await del(minter.token, child.tokenId);
+    expect(r.status).toBe(200);
+    expect((await list(child.token)).status).toBe(401);
+    expect((await list(minter.token)).status).toBe(200);
   });
 
   it("cascade revokes the devices it added, transitively, only when asked", async () => {
@@ -155,6 +169,7 @@ describe("device management routes", () => {
     const child = await redeem(((await (await mint(root.token, { label: "Child" })).json()) as { code: string }).code, "x");
     const grand = await redeem(((await (await mint(child.token, { label: "Grand" })).json()) as { code: string }).code, "x");
     const other = await device("browser", "Other");
+    store.setOwner(other.tokenId, true);
     const plain = await del(other.token, child.tokenId); // no cascade: only the child
     expect(await plain.json()).toEqual({ revoked: child.tokenId, self: false, cascaded: [] });
     expect((await list(grand.token)).status).toBe(200);
@@ -171,6 +186,7 @@ describe("device management routes", () => {
   it("refuses to revoke the last console-kind token (409, nothing revoked), also through a cascade; allowed while another remains", async () => {
     const c1 = await device("console", "Console 1");
     const b = await device("browser", "B");
+    store.setOwner(b.tokenId, true);
     const r = await del(b.token, c1.tokenId);
     expect(r.status).toBe(409);
     expect((await r.json()).message).toMatch(/last console token/);
@@ -183,8 +199,79 @@ describe("device management routes", () => {
     expect((await list(c2.token)).status).toBe(200);
   });
 
+  const owner = async (label: string) => { const d = await device("browser", label); store.setOwner(d.tokenId, true); return d; };
+  const child = async (parent: { token: string }, label: string) => redeem(((await (await mint(parent.token, { label })).json()) as { code: string }).code, "x");
+
+  it("a minter revokes its child and grandchild; a token that is neither is refused 403 and nothing is revoked", async () => {
+    const root = await device("browser", "Root");
+    const kid = await child(root, "Kid");
+    const grand = await child(kid, "Grand");
+    const stranger = await device("browser", "Stranger");
+    const refused = await del(stranger.token, kid.tokenId);
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).message).toMatch(/owner device/);
+    expect((await list(kid.token)).status).toBe(200);
+    expect((await del(root.token, grand.tokenId)).status).toBe(200); // grandchild: reached through the mintedBy chain
+    expect((await del(root.token, kid.tokenId)).status).toBe(200);
+    expect((await list(grand.token)).status).toBe(401);
+    expect((await list(kid.token)).status).toBe(401);
+  });
+
+  it("an owner token revokes any unrelated browser token, and tokens it mints through a pairing code are not owners", async () => {
+    const boss = await owner("Boss");
+    const other = await device("browser", "Other");
+    const mine = await child(boss, "Mine");
+    expect(store.list().find((t) => t.id === mine.tokenId)!.isOwner).toBeUndefined();
+    expect((await del(mine.token, other.tokenId)).status).toBe(403); // not inherited
+    expect((await del(boss.token, other.tokenId)).status).toBe(200);
+    expect((await list(other.token)).status).toBe(401);
+  });
+
+  it("the last live owner token cannot be revoked (409); another owner makes it allowed", async () => {
+    const o1 = await owner("O1");
+    const r = await del(o1.token, o1.tokenId);
+    expect(r.status).toBe(409);
+    expect((await r.json()).message).toMatch(/last owner/);
+    expect((await list(o1.token)).status).toBe(200);
+    const o2 = await owner("O2");
+    expect((await del(o2.token, o1.tokenId)).status).toBe(200);
+  });
+
+  it("a non-owner ancestor cannot revoke an owner descendant, directly or through a cascade; nothing is revoked", async () => {
+    await owner("Boss"); // a second owner, so the last-owner guard cannot be what refuses
+    const root = await device("browser", "Root");
+    const kid = await child(root, "Kid");
+    const grand = await child(kid, "Grand");
+    store.setOwner(kid.tokenId, true);
+    const direct = await del(root.token, kid.tokenId);
+    expect(direct.status).toBe(403);
+    expect((await direct.json()).message).toMatch(/only an owner device can revoke an owner device/);
+    store.setOwner(kid.tokenId, false);
+    store.setOwner(grand.tokenId, true);
+    expect((await del(root.token, kid.tokenId, "?cascade=1")).status).toBe(403); // the cascade would reach the owner grandchild
+    for (const t of [root, kid, grand]) expect((await list(t.token)).status).toBe(200);
+  });
+
+  it("a legacy token without mintedBy cannot be revoked by a non-owner", async () => {
+    const legacy = await device("browser", "Legacy");
+    const other = await device("browser", "Other");
+    expect((await del(other.token, legacy.tokenId)).status).toBe(403);
+    expect((await list(legacy.token)).status).toBe(200);
+  });
+
+  it("the last-owner guard fires through a cascade (409)", async () => {
+    const anc = await device("browser", "Ancestor");
+    const o = await child(anc, "Owner");
+    store.setOwner(o.tokenId, true);
+    const r = await del(o.token, anc.tokenId, "?cascade=1"); // the cascade removes the caller, the only owner
+    expect(r.status).toBe(409);
+    expect((await r.json()).message).toMatch(/last owner/);
+    expect((await list(o.token)).status).toBe(200);
+  });
+
   it("mints and revokes share ONE per-token budget of 10 a minute", async () => {
     const a = await device("browser", "A");
+    store.setOwner(a.tokenId, true);
     const victims = await Promise.all(Array.from({ length: 5 }, (_, i) => device("browser", `v${i}`)));
     for (const v of victims) expect((await del(a.token, v.tokenId)).status).toBe(200); // 5 revokes
     for (let i = 0; i < 5; i++) expect((await mint(a.token)).status).toBe(200); // 5 mints = 10

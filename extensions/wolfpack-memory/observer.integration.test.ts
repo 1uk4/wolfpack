@@ -36,7 +36,7 @@ const toolTurn = (callMarker: string): FauxResponseStep =>
   fauxAssistantMessage([fauxText(say(callMarker)), fauxToolCall("write", { path: "out.txt", content: "TOOLFILE" })], { stopReason: "toolUse" });
 
 /** Engine stub: every classify call is recorded (its prompt) and yields one distinct observation. */
-function stubEngine(opts: { failClassifyCall?: number } = {}) {
+function stubEngine(opts: { failClassifyCall?: number; general?: boolean } = {}) {
   const prompts: string[] = [];
   const steps: string[] = [];
   let classifyCalls = 0;
@@ -46,7 +46,7 @@ function stubEngine(opts: { failClassifyCall?: number } = {}) {
       if (step === "classify") {
         if (opts.failClassifyCall === ++classifyCalls) throw new Error("boom");
         prompts.push(args.prompt);
-        return schema.parse({ observations: [{ timestamp: `2026-10-25 10:${String(prompts.length).padStart(2, "0")}`, content: `Observation number ${prompts.length} about caching` }] });
+        return schema.parse({ observations: [{ timestamp: `2026-10-25 10:${String(prompts.length).padStart(2, "0")}`, content: `Observation number ${prompts.length} about caching`, ...(opts.general ? { general: true } : {}) }] });
       }
       if (step === "consolidate") {
         return schema.parse({
@@ -146,6 +146,28 @@ describe("full-transcript observer", () => {
     // the unbound observations went to the pool
     const pool = readFileSync(join(dev, "den/.memory/pool/observations.jsonl"), "utf8");
     expect(pool.trim().split("\n")).toHaveLength(stub.prompts.length);
+  });
+
+  it("a general observation in a bound main session keeps the work tag only as origin when generalToDen is on, and is fully tagged when off", async () => {
+    const run = async (memoryYaml: string) => {
+      const dev = await devRoot();
+      tw = await startObserverWolf({ dev, engine: stubEngine({ general: true }).engine, script: [reply("A_ONE")], memoryYaml });
+      const dir = join(tw.wolf.config.den, "factory", "conversations", "1");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "active-task.json"), JSON.stringify({ workId: "work-w-T", domain: "wolfpack", boundAt: "now", featureId: "work-w-F" }));
+      await tw.submit(say("USER_ONE"));
+      await observed(tw);
+      const lines = readFileSync(join(dev, "den/.memory/pool/observations.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      await tw.stop();
+      tw = undefined;
+      return lines[0];
+    };
+    const on = await run("memory:\n  generalToDen: true\n");
+    expect(on.work).toBeUndefined();
+    expect(on.origin).toEqual({ work: "work-w-T", feature: "work-w-F" });
+    const off = await run("memory:\n  live: false\n");
+    expect(off).toMatchObject({ work: "work-w-T", feature: "work-w-F" });
+    expect(off.origin).toBeUndefined();
   });
 
   it("(b) a second turn captures only the new messages", async () => {

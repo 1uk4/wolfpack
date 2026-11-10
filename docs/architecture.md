@@ -44,7 +44,7 @@ Errors cross the Next bundle boundary by name (`NotFoundError` → 404, `BusyErr
 
 `src/core/thread-adapter.ts` is pure (no React, no IO). It maps `ThreadEvent`s onto the wire events that `session-core`'s `SessionModel.applyWireEvent` folds into the chat view: one assistant message per model step, a tool call's end closes the step. It tolerates resuming mid-turn, and replaying a whole turn reproduces the uninterrupted result. The adapter is the only module that knows both dialects.
 
-Note: the inherited `/api/chat` routes still run a plain assistant on `pi-ai` (BYOK). They are separate from the thread API and will be replaced when chat moves to real wolves.
+Note: threads use the wolf thread transport (`/api/wolves/<wolf>/threads/<slug>/...`). The console no longer has `POST /api/chat` or its own compaction; wolfd compacts wolf threads.
 
 ### Import boundaries
 

@@ -175,6 +175,17 @@ run D hubd 0.2.7 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" |
 run D hubd 0.2.8 $T; rc=$?; [ $rc = 3 ] && [ "$(cur)" = 0.2.5 ] && echo "$out" | grep -q "InvocationID did not change" && systemctl is-active --quiet hubd.service && ok "active service whose install did not restart it (InvocationID unchanged) -> rolled back and restarted (rc 3)" || bad "norestart rc=$rc"
 touch $S/workerd.service.active; echo 1 > $S/workerd.service.iid
 run D workerd 0.2.0 $T || bad "workerd"; [ "$(basename "$(readlink -f /opt/wolfpack-workerd/current)" | cut -d+ -f1)" = 0.2.0 ] && ok "workerd 0.2.0 installed through the same path"
+echo "--- --rollback (owner-initiated, work-wolfpack-yM3uTlj): swap back to the kept previous release, nothing downloaded"
+wcur() { basename "$(readlink -f /opt/wolfpack-workerd/current)" | cut -d+ -f1; }
+run D wolfd --rollback --wolf hal2; [ $? = 2 ] && ok "--rollback refuses wolfd (rc 2)" || bad "rollback wolfd"
+run D workerd 0.2.0 --rollback; [ $? = 2 ] && ok "--rollback with a version is a usage error (rc 2)" || bad "rollback + version"
+run D workerd --rollback $T; rc=$?; [ $rc = 0 ] && [ "$(wcur)" = seed ] && systemctl is-active --quiet workerd.service && echo "$out" | grep -q "0.2.0 -> 0.0.1" && ok "workerd rolled back 0.2.0 -> 0.0.1 via its installed setup.sh, unit active (rc 0)" || bad "rollback workerd rc=$rc cur=$(wcur)"
+install -d /opt/wolfpack-workerd/releases/broken; echo 0.1.9 > /opt/wolfpack-workerd/releases/broken/VERSION   # no workerd.mjs: the installed setup.sh refuses it
+keep=$(readlink /opt/wolfpack-workerd/previous); ln -sfn /opt/wolfpack-workerd/releases/broken /opt/wolfpack-workerd/previous
+run D workerd --rollback $T; rc=$?; [ $rc = 1 ] && [ "$(wcur)" = seed ] && [ "$(readlink -f /opt/wolfpack-workerd/previous)" = /opt/wolfpack-workerd/releases/broken ] && ! echo "$out" | grep -q "swapping the links myself" && ok "installed setup.sh refuses (no workerd.mjs) -> refusal stands, links not swapped by hand (rc 1)" || bad "rollback refused by setup.sh rc=$rc cur=$(wcur)"
+ln -sfn "$keep" /opt/wolfpack-workerd/previous; rm -rf /opt/wolfpack-workerd/releases/broken
+rm -f /opt/wolfpack-workerd/previous
+run D workerd --rollback $T; rc=$?; [ $rc = 1 ] && [ "$(wcur)" = seed ] && ok "no previous kept -> refused, nothing changed (rc 1)" || bad "rollback no previous rc=$rc"
 echo "--- console via setup.sh (HTTP 200 on / from the fake server; /api/health is 404 there, so the fallback to / is what passes)"
 install -d /opt/wolfpack-console/releases/seed; echo 0.0.1 > /opt/wolfpack-console/releases/seed/VERSION; ln -sfn /opt/wolfpack-console/releases/seed /opt/wolfpack-console/current
 printf 'CONSOLE_HOST=127.0.0.1\nCONSOLE_PORT=8099\n' > /etc/wolfpack/console.env

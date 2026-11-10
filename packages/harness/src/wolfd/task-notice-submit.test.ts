@@ -7,8 +7,8 @@ import { messagesFromEntries } from "./messages.js";
 import { ThreadRuntime } from "./thread.js";
 
 const NOTICE = "Task update: stage in_build → shipped; Record updated";
-const card: Card = { tool: "brief", fields: [{ id: "answer", kind: "free-text", label: "Q" }] };
-const toolEntry = { id: 1, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: "c1", toolName: "brief", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: card } }] } as never;
+const card: Card = { tool: "ask", fields: [{ id: "answer", kind: "free-text", label: "Q" }] };
+const toolEntry = { id: 1, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: "c1", toolName: "ask", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: card } }] } as never;
 
 function rig(opts: { kind?: string; notice?: () => Promise<{ text: string; commit(): void }>; submit?: () => Promise<unknown>; deadline?: number } = {}) {
   const inputs: string[] = [];
@@ -84,8 +84,8 @@ describe("ThreadRuntime.submit task notice", () => {
     rt.cards.reset([toolEntry]);
     await rt.submit("hello", "steer");
     const sent = inputs[0];
-    expect(sent).toBe(`(Your pending brief question (call c1) was superseded by this message.)\n\n${NOTICE}\n\nhello`);
-    const call = { id: 0, kind: "pi.assistant", model: [{ role: "assistant", timestamp: 1, content: [{ type: "toolCall", id: "c1", name: "brief", arguments: { question: "Q" } }] }] } as never;
+    expect(sent).toBe(`(Your pending ask question (call c1) was superseded by this message.)\n\n${NOTICE}\n\nhello`);
+    const call = { id: 0, kind: "pi.assistant", model: [{ role: "assistant", timestamp: 1, content: [{ type: "toolCall", id: "c1", name: "ask", arguments: { question: "Q" } }] }] } as never;
     const history = messagesFromEntries([call, toolEntry, { id: 2, kind: "pi.user", model: [{ role: "user", content: sent }] } as never]);
     expect(history.find((m) => m.role === "user")!.text).toBe("hello");
     expect(stripSupersededNotes(sent)).toBe("hello");

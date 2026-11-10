@@ -71,6 +71,22 @@ describe("local work server", () => {
     expect(got.item.stage).toBe("approved");
   });
 
+  it("replaces only the Record section, and refuses Record text with a heading", async () => {
+    const created = await call("POST", "", { kind: "task", domain: "snapjack", title: "record task", assignee: "owner", successCriteria: "works" });
+    const { id } = (await created.json()) as { id: string };
+    const bodyOf = async () => ((await (await call("GET", `/${id}`)).json()) as { body: string }).body;
+    expect((await call("PATCH", `/${id}`, { body: "## Plan\n\nDo the thing.\n\n## Record\n\nold\n\n## Notes\n\nkeep\n" })).status).toBe(200);
+
+    const ok = await call("PATCH", `/${id}`, { section: { name: "Record", text: "new record" } });
+    expect(ok.status).toBe(200);
+    expect((await bodyOf()).trim()).toBe("# record task\n\n## Plan\n\nDo the thing.\n\n## Record\n\nnew record\n\n## Notes\n\nkeep");
+
+    const before = await bodyOf();
+    const bad = await call("PATCH", `/${id}`, { section: { name: "Record", text: "fine\n\n## Plan\n\nforged" } });
+    expect(bad.status).toBe(400);
+    expect(await bodyOf()).toBe(before);
+  });
+
   it("rejects an invalid event without writing it", async () => {
     const file = join(dir, "ledger", "work-events.jsonl");
     const before = readFileSync(file, "utf-8");

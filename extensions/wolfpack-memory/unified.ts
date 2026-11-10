@@ -28,6 +28,7 @@ import {
   serializeBranchEntries,
   chunkSerialized,
   buildDomainContext,
+  withPoolLock,
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool, durableSessionTopics, promoteSessionTopics, stripSupersededNotes, type ConsolidationResult } from "@wolfpack/harness/memory";
@@ -36,6 +37,8 @@ import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
+import { durableSubagent, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
+import { WorkClient } from "./work-client.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
 import { DEFAULT_CONSOLIDATION_INTERVAL_MS, parseConsolidationInterval, effectiveConsolidationInterval, assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
@@ -66,6 +69,12 @@ export interface MemoryConfig {
   };
   /** `memory.defaultDomain` in wolf.yaml: domain for observations the observer leaves untagged (default: first of `domains`). */
   defaultDomain?: string;
+  /** `memory.subagentMemory: "on"` in wolf.yaml: subagents record their own observations, so the orchestrator's observer skips subagent traffic (default "off"). */
+  subagentMemory?: "on" | "off";
+  /** `memory.generalToDen` in wolf.yaml: observations flagged `general` skip the work tag (origin only) and go to the den. Default off. */
+  generalToDen?: boolean;
+  /** `memory.workLog` in wolf.yaml: `fold` (default) or `append` (work observations are appended to the task's or feature's own log, batched). */
+  workLog?: "fold" | "append";
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;
 }
@@ -231,6 +240,7 @@ export function newObserverChunks(
   current: AssistantMessage,
   watermark: Watermark,
   settled: boolean,
+  excludeSubagentTraffic = false,
 ): { chunks: Array<{ id: string; text: string; tokenCount: number }>; next: Watermark } | undefined {
   let rest = committed;
   if (watermark.tail && watermark.tailAfter !== undefined) {
@@ -244,7 +254,7 @@ export function newObserverChunks(
     const message = withoutCrawlChatter(m.message);
     return message ? [{ type: "message", id: String(m.entryId), message }] : [];
   });
-  const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true }));
+  const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true, excludeSubagentTraffic }));
 
   const fp = fingerprint(current.content);
   // Any unobserved assistant entry may be the reported response: when the observer lags (a tool round runs on while
@@ -267,6 +277,8 @@ async function writeToPool(
   observations: RawObservation[],
   bound: { taskId: string; featureId?: string } | null = null,
   defaultDomain?: string,
+  generalToDen = false,
+  poolLock = false,
 ): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
@@ -276,13 +288,19 @@ async function writeToPool(
   const lines = observations.map(obs =>
     JSON.stringify({
       ...obs,
+      general: undefined, // routing flag only; the pool line carries origin instead
       // Stamped at observe time (as pi's orchestrator does), so consolidation never has to guess a domain.
       ...(defaultDomain ? { domain: obs.domain || defaultDomain } : {}),
       recordedAt: timestamp,
-      ...(bound ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
+      ...(bound ? (() => {
+        const ids = { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) };
+        return generalToDen && obs.general === true ? { origin: ids } : ids;
+      })() : {}),
     }) + "\n"
   );
-  await appendFile(poolFile, lines.join(""));
+  // The lock exists for subagents writing the parent's pool (memory.subagentMemory: on); off, a plain append as at the base.
+  if (poolLock) await withPoolLock(wolfDen, () => appendFile(poolFile, lines.join("")));
+  else await appendFile(poolFile, lines.join(""));
 }
 
 function renderSplitResult(
@@ -406,7 +424,7 @@ export default function createMemoryExtension(
   // Record store from context.env when given (sandbox): never falls back to process.env.WORK_ENDPOINT.
   function recordStore(): HttpWorkRecordStore | undefined {
     if (!context.env) return undefined; // consolidatePool then reads the process env, as before
-    return new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "");
+    return new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, context.wolfName);
   }
 
   // KB roots from env
@@ -433,13 +451,22 @@ export default function createMemoryExtension(
   let warnedNoReads = false;
   let consolidating: Promise<void> | null = null;
   const mem = memoryEmitter(wolfDen, wolfName, defaultDomain);
+  // Subagent memory: responses seen since a subagent conversation last observed, and the cached task → feature lookup.
+  const subTurns = new Map<number, number>();
+  const featureOf = featureResolver(() => (context.env
+    ? new WorkClient(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, undefined, wolfName)
+    : new WorkClient(undefined, undefined, undefined, undefined, wolfName)));
+  const subTag = async (sub: SubagentTag) => {
+    const featureId = await featureOf(sub.taskId);
+    return { taskId: sub.taskId, ...(featureId ? { featureId } : {}) };
+  };
 
   /**
    * Observe what a conversation said since its watermark. Any conversation that is not task-owned captures (root or
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean } = {}): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean; final?: boolean } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -449,7 +476,28 @@ export default function createMemoryExtension(
       return;
     }
     const cls = await reads.classify();
-    if (!cls || cls.kind === "task") return;
+    if (!cls) return;
+    // Task-owned conversations (subagents) capture nothing, unless memory.subagentMemory is on and the child is an
+    // observing agent with a task: then it runs the observer only, tagged with that task (never binds, never consolidates).
+    let sub: SubagentTag | null = null;
+    if (cls.kind === "task") {
+      if (config.subagentMemory !== "on") return;
+      sub = durableSubagent(ctx.wolfDen, ctx.conversationId);
+      if (!sub) return;
+    }
+    if (sub && FINAL_ONLY_AGENTS.has(sub.agent)) {
+      // Final-report-only: one observe call on the last assistant message, when the run ends.
+      if (!opts.final) return;
+      const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+      if (!text) return;
+      const result = await observe({ engine: getEngine(), chunkText: `[assistant]\n${text}`, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
+      if (result.observations.length > 0) {
+        const bound = await subTag(sub);
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
+        mem.observed(result.observations, bound, ctx.conversationId);
+      }
+      return;
+    }
     // A crawl interview/plan is in progress here: reading source files must not reach the den (pi's crawlPlanMode).
     // `opts.planning` is the state when the hook fired: runs are queued and may execute after planning has ended.
     const mode = crawlMode.status(ctx.wolfDen, ctx.conversationId); // one stat per response when nothing is planning
@@ -471,23 +519,33 @@ export default function createMemoryExtension(
     for (let attempt = 0; !planned; attempt++) {
       if (attempt === 0) await new Promise((r) => setImmediate(r));
       const committed = await reads.messagesSince(watermark.lastEntryId);
-      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length);
+      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length, !sub && config.subagentMemory === "on");
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
     // Planning may have begun (or begun and ended) while we waited for the response to commit. Whatever is pending
     // (planning, or its re-seed) means the chunks may hold planning turns; the re-seed happens on the next run.
     if (mode !== undefined || crawlMode.pending(ctx.wolfDen, ctx.conversationId)) return;
     const { chunks, next } = planned;
-    if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
+    const newChars = chunks.reduce((n, c) => n + c.text.length, 0);
+    if (!opts.flush && newChars < minTextLength) return; // keep accumulating
+    if (sub && !opts.flush) {
+      // A subagent observes about every 3 responses or ~1,500 new tokens, and once more when its run ends.
+      const turns = (subTurns.get(ctx.conversationId) ?? 0) + 1;
+      if (!opts.final && turns < SUBAGENT_OBSERVE_EVERY_TURNS && newChars < SUBAGENT_OBSERVE_TOKENS * 4) {
+        subTurns.set(ctx.conversationId, turns);
+        return;
+      }
+    }
+    if (sub) subTurns.delete(ctx.conversationId);
 
     const eng = getEngine();
     let at = watermark.lastEntryId;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined });
+      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
-        const bound = await readBoundTask(ctx); // re-read every chunk, never cached
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain);
+        const bound = sub ? await subTag(sub) : await readBoundTask(ctx); // re-read every chunk, never cached
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
         mem.observed(result.observations, bound, ctx.conversationId);
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
@@ -496,6 +554,7 @@ export default function createMemoryExtension(
       await writeWatermark(ctx.wolfDen, ctx.conversationId, last ? next : { lastEntryId: at });
     }
 
+    if (sub) return; // a subagent never consolidates or promotes
     startTimer(ctx.conversation as Parameters<typeof startTimer>[0]);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
   }
@@ -602,7 +661,7 @@ export default function createMemoryExtension(
   }
 
   /** Pool → session topics (pi's consolidation), unserialized: callers hold the queue. poolTarget undefined: the whole pool. */
-  async function consolidateInner(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+  async function consolidateInner(opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }): Promise<ConsolidationResult> {
     const before = new Set(await readPoolLines(wolfDen));
     const result = await consolidatePoolRaw(opts);
     // Marker rule: remember the post-run pool (what the run left behind) as "already saved", unless a line appeared
@@ -617,7 +676,7 @@ export default function createMemoryExtension(
     }
     return result; // a failed run threw above, leaving the old marker
   }
-  function consolidatePoolRaw(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+  function consolidatePoolRaw(opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }): Promise<ConsolidationResult> {
     return consolidatePool({
       wolfDen,
       wolfName,
@@ -625,19 +684,22 @@ export default function createMemoryExtension(
       apiKey: apiKeyFor(getTable()),
       kbRoots: kbRoots ?? undefined,
       workStore: recordStore(),
+      ...(config.workLog ? { workLog: config.workLog } : {}),
+      ...(config.subagentMemory === "on" ? { poolLock: true } : {}),
       ...(config.engine ? { engine: config.engine } : {}),
       defaultDomain,
       domains,
       sessionTopics: durableSessionTopics(wolfDen),
       ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
       minObservations: opts.minObservations,
+      ...(opts.ignoreBackoff ? { ignoreBackoff: true } : {}),
       onProgress: (msg) => console.log(`[memory] ${msg}`),
       onTopic: mem.topic,
       onRecord: (r) => mem.recordWritten(r),
       onArchive: mem.topicArchived,
     });
   }
-  const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number }) => serialized(() => consolidateInner(opts));
+  const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }) => serialized(() => consolidateInner(opts));
 
   /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
   function runConsolidation(opts: { drain?: boolean } = {}): Promise<void> {
@@ -663,7 +725,9 @@ export default function createMemoryExtension(
   const actions: MemoryActions = {
     promoteEnabled: kbRoots !== null,
     isBusy: () => promoting !== null,
-    consolidate: () => consolidateToSessions({ minObservations: 1 }),
+    promotingJob: () => promoting,
+    // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
+    consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
     promote() {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;
@@ -1208,7 +1272,7 @@ export default function createMemoryExtension(
           console.error("[memory] crawl planning check failed:", e instanceof Error ? e.message : e);
         }
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
-        const run = prev.then(() => observeConversation(message, ctx, { planning })).catch((err) => {
+        const run = prev.then(() => observeConversation(message, ctx, { planning, final: !message.content.some((b) => b.type === "toolCall") })).catch((err) => {
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

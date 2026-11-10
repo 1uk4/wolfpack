@@ -18,7 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
-import { briefHeader, confirmCard } from "@wolfpack/harness/engine";
+import { confirmCard, pagedCard } from "@wolfpack/harness/engine";
 import type { Card } from "@wolfpack/protocol";
 import { drainWorkObservations } from "@wolfpack/harness/memory";
 import {
@@ -42,6 +42,7 @@ import {
   resolveShipPolicy,
   rollupToParent,
   recordFeatureId,
+  renderFeatureView,
   renderFeatureRecord,
   shouldBindOnCreate,
   createSerial,
@@ -56,6 +57,9 @@ import {
   clearUnboundNotice,
   writeUnboundNotice,
   HttpWorkRecordStore,
+  distillTaskToFeature,
+  sweepPendingDistills,
+  runFinalPass,
   type WorkRecordStore,
   readThreadAutoShip,
 } from "@wolfpack/memory";
@@ -73,7 +77,7 @@ import {
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
-import { WorkClient, GRADUATION_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
+import { WorkClient, WorkQueuedError, handoffText, overrideNote, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
@@ -95,6 +99,10 @@ export interface TasksConfig {
   kbRoots?: KbRoots;
   /** Work API store for graduation's pool drain (default: from context.env, else the process env). Test seam. */
   workStore?: WorkRecordStore;
+  /** `memory.workLog` (durable.ts copies it from the memory block): `append` flushes a task's log before ship/unbind and distills it into its feature on ship/archive. Default fold: nothing changes. */
+  workLog?: "fold" | "append";
+  /** `memory.subagentMemory` (durable.ts copies it): `on` takes the pool lock for the graduation drain. Default off: no lock. */
+  subagentMemory?: "on" | "off";
 }
 
 interface ActiveBinding {
@@ -235,9 +243,22 @@ function formatHierarchy(
   return lines.join("\n");
 }
 
-/** With an explicit context.env (sandbox) the client never falls back to process.env. */
-function makeClient(env?: NodeJS.ProcessEnv): WorkClient {
-  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "") : new WorkClient();
+/**
+ * With an explicit context.env (sandbox) the client never falls back to process.env. Writes that cannot reach the hub wait in
+ * <den>/factory/work-outbox and are sent in order once it is back (see WorkClient.flush).
+ */
+function makeClient(wolfDen: string, wolfName: string, env?: NodeJS.ProcessEnv): WorkClient {
+  const outbox = join(wolfDen, "factory", "work-outbox");
+  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "", WORK_TIMEOUT_MS, outbox, wolfName) : new WorkClient(undefined, undefined, WORK_TIMEOUT_MS, outbox, wolfName);
+}
+
+/** How often saved writes are retried when no new write comes along to push them. */
+const OUTBOX_FLUSH_MS = 30_000;
+
+/** A tool's error reply; a write saved in the outbox is not an error: the model is told it is queued and must not retry. */
+function failed(err: unknown, prefix = "Failed"): ToolResult {
+  if (err instanceof WorkQueuedError) return { content: [{ type: "text", text: err.message }] };
+  return { content: [{ type: "text", text: `${prefix}: ${err instanceof Error ? err.message : err}` }], isError: true };
 }
 
 /** The hub (WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN, as the console and crawl release read them), or null when none is configured. */
@@ -272,7 +293,9 @@ export default function createTasksExtension(
   // <den>/factory/conversations/<cid>/thread-settings.json, so a flip applies to the very next task_done).
   const envAuto = resolveShipPolicy(env) === "auto";
   const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
-  const client = makeClient(context.env);
+  const client = makeClient(wolfDen, wolfName, context.env);
+  // Drain the outbox while the wolf is idle too; unref'd so it never keeps a process alive.
+  setInterval(() => { if (client.queued) client.flush().catch(() => {}); }, OUTBOX_FLUSH_MS).unref();
 
   /** Hub client acting as this wolf (bearer token), or an error text. Read per call so a config change applies at once. */
   function hubFor(): { hub: HttpConsoleClient; url: string; key?: string } | { error: string } {
@@ -310,34 +333,33 @@ export default function createTasksExtension(
   /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
   const shipCard = (title: string, id: string) =>
-    confirmCard({
-      tool: "task_done",
-      question: shipLabel(title, id),
-      confirmLabel: "Ship",
-      rejectLabel: "Not yet",
-      brief: briefHeader(`Ship "${title}"?`, [`Work item ${id}: ${title}`, "Marks it done; this can't be undone from the card."]),
-    });
+    pagedCard(
+      confirmCard({
+        tool: "task_done",
+        question: shipLabel(title, id),
+        description: `Work item ${id}: ${title}. Marks it done; this can't be undone from the card.`,
+        confirmLabel: "Ship",
+        rejectLabel: "Not yet",
+      }),
+    );
   /** Several ids: ONE card with a multi field, one option per task (value = id), all ticked, at least one. */
   const SHIPS_FIELD = "ships";
   const optionLabel = (title: string, id: string) => `${title} (${id})`;
-  const shipsCard = (entries: { id: string; title: string }[]): Card => ({
-    tool: "task_done",
-    brief: briefHeader(
-      `Ship ${entries.length} tasks?`,
-      [...entries.slice(0, 4).map((e) => `${e.id}: ${e.title}`), ...(entries.length > 4 ? [`…and ${entries.length - 4} more`] : [])],
-      entries.length > 4 ? "Every task is listed with a checkbox in the question below; untick any you want to hold back." : undefined,
-    ),
-    fields: [
-      {
-        id: SHIPS_FIELD,
-        kind: "multi",
-        label: `Ship these ${entries.length} tasks?`,
-        options: entries.map((e) => ({ value: e.id, label: optionLabel(e.title, e.id) })),
-        default: entries.map((e) => e.id),
-        min: 1,
-      },
-    ],
-  });
+  const shipsCard = (entries: { id: string; title: string }[]): Card =>
+    pagedCard({
+      tool: "task_done",
+      title: `Ship ${entries.length} tasks?`,
+      fields: [
+        {
+          id: SHIPS_FIELD,
+          kind: "multi",
+          label: `Ship these ${entries.length} tasks?`,
+          options: entries.map((e) => ({ value: e.id, label: optionLabel(e.title, e.id) })),
+          default: entries.map((e) => e.id),
+          min: 1,
+        },
+      ],
+    });
   const textLines = (m: { message: { content?: unknown } }): string[] => {
     const c = m.message.content;
     const blocks = Array.isArray(c) ? (c as { type?: string; text?: string }[]).filter((x) => x?.type === "text" && typeof x.text === "string").map((x) => x.text as string) : [typeof c === "string" ? c : ""];
@@ -533,6 +555,12 @@ export default function createTasksExtension(
         if (parent.kind === "feature" && !parent.container) {
           const f = await client.getWithBody(parent.id as string);
           featureRecord = renderFeatureRecord(parent.title, f.body ?? "") || undefined;
+          if (appendMode) try {
+          const open = (siblings ?? []).filter((k) => k.id !== task.id && !["shipped", "live", "archived"].includes(k.stage)).slice(0, 5);
+          const tasks = await Promise.all(open.map(async (k) => ({ id: k.id as string, title: k.title, stage: k.stage as string, body: (await client.getWithBody(k.id as string).catch(() => null))?.body ?? "" })));
+          const rest = (siblings ?? []).filter((k) => k.id !== task.id && !open.includes(k)).map((k) => ({ id: k.id as string, title: k.title, stage: k.stage as string }));
+          featureRecord = renderFeatureView({ title: parent.title, body: f.body ?? "" }, [...tasks, ...rest], task.id as string) || undefined;
+          } catch { /* the feature Record alone */ }
         }
       } catch { /* best effort */ }
     }
@@ -626,19 +654,66 @@ export default function createTasksExtension(
   }
 
   /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
-  const drain = (workIds: string[]) => {
+  const appendMode = config.workLog === "append";
+  const workStoreNow = (): WorkRecordStore | undefined => {
     // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
-    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN) : undefined;
-    return drainWorkObservations({
+    // Flags off (fold): as at the base, no context.env means no explicit store. The process-env fallback is append-mode only.
+    const explicit = context.env || appendMode ? new HttpWorkRecordStore(context.env?.WORK_ENDPOINT, context.env?.WORK_TOKEN, undefined, context.wolfName) : undefined;
+    return config.workStore ?? (explicit?.configured ? explicit : undefined);
+  };
+  const drain = (workIds: string[]) =>
+    drainWorkObservations({
       wolfDen,
       engine: graduationEngine(),
-      workStore: config.workStore ?? (explicit?.configured ? explicit : undefined),
+      workStore: workStoreNow(),
       workIds,
+      workLog: config.workLog,
+      wolfName,
+      ...(config.subagentMemory === "on" ? { poolLock: true } : {}),
     });
-  };
 
-  /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). */
-  const ship = (id: string) => shipAndRollup(client, id, rollupToParent);
+  // ── memory.workLog: append — the task's log is flushed, then distilled into its feature (never fails the caller) ──
+  /** Force-drain one item's pending log observations. */
+  async function flushLog(id: string): Promise<void> {
+    if (!appendMode) return;
+    try { await drain([id]); } catch (err) { console.warn("[tasks] work log flush failed:", err instanceof Error ? err.message : String(err)); }
+  }
+  async function distillTask(id: string, kind: unknown): Promise<void> {
+    if (!appendMode || kind !== "task") return;
+    const store = workStoreNow();
+    if (!store) return;
+    try {
+      const r = await distillTaskToFeature({ store, engine: graduationEngine(), taskId: id, src: wolfName });
+      if (!r.ok) console.warn("[tasks] ship distill failed:", r.reason);
+    } catch (err) { console.warn("[tasks] ship distill failed:", err instanceof Error ? err.message : String(err)); }
+  }
+
+  /** Final feature pass: catch-up distills, then one tidy of the feature's Record. Append mode only; never fails the caller. */
+  async function finalPass(featureId: string): Promise<void> {
+    if (!appendMode) return;
+    const store = workStoreNow();
+    if (!store) return;
+    try {
+      const r = await runFinalPass({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), store, engine: graduationEngine(), featureId, src: wolfName });
+      if (!r.ok) console.warn("[tasks] final pass failed:", r.reason);
+    } catch (err) { console.warn("[tasks] final pass failed:", err instanceof Error ? err.message : String(err)); }
+  }
+
+  /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). Append mode: flush first, distill after; a feature gets its final pass. */
+  const ship = async (id: string) => {
+    await flushLog(id);
+    const item = await shipAndRollup(client, id, rollupToParent);
+    await distillTask(id, item.kind);
+    if (item.kind === "feature") await finalPass(id);
+    return item;
+  };
+  /** Move an item to a stage; archiving a task distills it like a ship (flush first). */
+  const stageItem = async (id: string, to: string) => {
+    if (to === "archived") await flushLog(id);
+    const item = await client.stage(id, to);
+    if (to === "archived") await distillTask(id, item.kind);
+    return item;
+  };
 
   const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
 
@@ -664,7 +739,7 @@ export default function createTasksExtension(
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
   // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
-  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion });
+  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, ...(appendMode ? { finalPass } : {}) });
   registerGraduationActions(wolfDen, graduation.actions);
 
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */
@@ -689,7 +764,7 @@ export default function createTasksExtension(
                 content: [{ type: "text", text: heads(shippedLine(id), { id: id, title: shippedOther.title }, boundRef(binding)) + unbindNote }],
               };
             } catch (err) {
-              return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
+              return failed(err);
             }
           }
     if (!binding) return { content: [{ type: "text", text: "No task bound. Use task_bind first." }], isError: true };
@@ -759,10 +834,7 @@ export default function createTasksExtension(
               content: [{ type: "text", text: result.join("\n") }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
   }
 
@@ -793,7 +865,7 @@ export default function createTasksExtension(
     }
     lines.push(`Kind: ${task.kind}`, `Domain: ${task.domain}`);
     if (task.successCriteria) lines.push("", `**Success Criteria:** ${task.successCriteria}`);
-    const doc = cached.body ? renderWorkingDocument(cached.body) : "";
+    const doc = cached.body ? renderWorkingDocument(cached.body, undefined, { tail: appendMode }) : "";
     if (doc) {
       lines.push("", "## Working Document (plan + Record)", doc);
       lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
@@ -807,6 +879,14 @@ export default function createTasksExtension(
     runtimes: ["pi-durable"],
 
     lifecycle: { stop: () => unregisterGraduationActions(wolfDen, graduation.actions) },
+
+    // Boot-time catch-up for ship distills (append mode, main wolf only): once, in the background, failures swallowed.
+    onEngineReady: () => {
+      if (!appendMode || isSubagent()) return;
+      const store = workStoreNow();
+      if (!store) return;
+      void sweepPendingDistills({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), store, engine: graduationEngine(), src: wolfName }).catch(() => {});
+    },
 
     sections: [
       // Task tools instructions
@@ -989,6 +1069,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             };
           }
 
+          void flushLog(binding.taskId); // append mode: the log is complete when the binding ends (fire-and-forget)
           await clearBinding(ctx);
           clearCache(binding.taskId);
           return {
@@ -1148,9 +1229,11 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
           "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. " +
           "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
-          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else.",
+          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. " +
+          "Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.",
         parameters: Type.Object({
           kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
+          assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone." })),
           domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
           title: Type.String({ description: "Short title" }),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
@@ -1166,6 +1249,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           successCriteria?: string;
           standing?: boolean;
           bind?: boolean;
+          assignee?: string;
         }, ctx: ToolContext): Promise<ToolResult> {
           if (!domains.includes(args.domain)) {
             return {
@@ -1214,12 +1298,14 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               partOf: partOf || undefined,
               successCriteria: args.successCriteria,
               standing: args.standing,
-              assignee: ctx.wolfName,
+              assignee: args.assignee || ctx.wolfName,
             };
             
             const result = await client.create(input);
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
+            if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
+            reply += overrideNote(args.assignee, result.item.assignee as string | undefined, ctx.wolfName, result.assignedTo);
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
@@ -1234,10 +1320,9 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             });
             return { content: [{ type: "text", text: reply }] };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed to create: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            // Queued: the hub mints the id when the create lands, so there is none to report or bind yet.
+            if (err instanceof WorkQueuedError) return { content: [{ type: "text", text: `${err.message} The new item has no ID until then and is not bound; find it with task_query once the hub is back.` }] };
+            return failed(err, "Failed to create");
           }
         },
       }),
@@ -1267,10 +1352,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: heads(`Note added to ${target}.`, { id: target, title: noted.title }, boundRef(binding)) }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1312,10 +1394,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: heads(`Updated working document for: ${found.item.title}`, { id: found.item.id, title: found.item.title }, boundRef(binding)) }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1340,7 +1419,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           }
 
           try {
-            const moved = args.to === "shipped" ? await ship(target) : await client.stage(target, args.to);
+            const moved = args.to === "shipped" ? await ship(target) : await stageItem(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
             if (moved.stage === "in_build" && !binding && !isSubagent() && !(await resolveBindingRoot(ctx)).readOnly && ["task", "issue", "spike"].includes(moved.kind)) {
@@ -1357,10 +1436,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: heads(reply, { id: target, title: moved.title }, boundRef(binding)) }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1449,10 +1525,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1498,10 +1571,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: `${sourceId} ${args.rel} ${args.target}` }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1547,10 +1617,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1558,12 +1625,13 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_move ───────────────────────────────────────────────────────
       defineTool({
         name: "task_move",
-        description: "Move the active task under a different parent.",
+        description: "Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it. Moving the bound task itself does not refresh its cached feature (the memory fold resolves the feature at fold time anyway).",
         parameters: Type.Object({
           to: Type.String({ description: "New parent ID, 'inbox', or 'none'" }),
+          id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
         }),
-        async execute(args: { to: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx);
+        async execute(args: { to: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
+          const binding = args.id ? { taskId: args.id } : await readBinding(ctx);
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
@@ -1575,15 +1643,12 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           
           try {
             const newParent = args.to === "none" ? null : args.to;
-            await client.move(binding.taskId, newParent);
+            const moved = await client.moveReport(binding.taskId, newParent);
             return {
-              content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}` }],
+              content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}${handoffText(moved.reassigned)}` }],
             };
           } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
+            return failed(err);
           }
         },
       }),
@@ -1644,14 +1709,15 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               const summary = preview.contributions.slice(0, 4).map((c, i) => `${i + 1}. ${c.title}`);
               return {
                 content: [{ type: "text", text: `${staleNote}${text}\n\nNOTHING HAS BEEN SENT. Asked the owner whether to graduate ${args.id}. Your turn ends here. When they answer, call task_graduate(id ${args.id}) again: it sends only on their yes.` }],
-                card: confirmCard({
-                  tool: "task_graduate",
-                  question: `Graduate "${preview.title}" (${args.id})?`,
-                  description: `Preview ${preview.token}`,
-                  confirmLabel: "Graduate",
-                  rejectLabel: "Not yet",
-                  brief: briefHeader(`Graduate "${preview.title}"?`, [`${preview.kind} ${args.id}: ${preview.contributions.length} contribution(s) to the KB`, ...summary, "Sends to the KB and archives the item; this can't be undone from the card."]),
-                }),
+                card: pagedCard(
+                  confirmCard({
+                    tool: "task_graduate",
+                    question: `Graduate "${preview.title}" (${args.id})?`,
+                    description: `Preview ${preview.token}. ${preview.kind} ${args.id}: ${preview.contributions.length} contribution(s) to the KB${summary.length ? ` (${summary.join("; ")})` : ""}. Sends to the KB and archives the item; this can't be undone from the card.`,
+                    confirmLabel: "Graduate",
+                    rejectLabel: "Not yet",
+                  }),
+                ),
               };
             }
 
@@ -1677,6 +1743,8 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             } catch { /* advisory */ }
             return { content: [{ type: "text", text: result.join("\n") }] };
           } catch (err) {
+            // Queued mid-graduation (the hub went away after the KB send): the rest replays in order once it is back.
+            if (err instanceof WorkQueuedError) return failed(err);
             return fail(`Graduation failed: ${err instanceof Error ? err.message : err}`);
           }
         },

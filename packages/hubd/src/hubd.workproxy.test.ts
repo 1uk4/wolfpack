@@ -285,6 +285,89 @@ describe("hub work proxy", () => {
     expect((await g.as("wa2", "PATCH", `/${id}`, { note: "fyi" })).status).toBe(200);
   });
 
+  describe("recordAppend", () => {
+    const line = (text: string, ids: string[], extra: object = {}) => ({ at: "2026-11-09T14:05:00.000Z", src: "w1", kind: "decision", text, ids, ...extra });
+    async function recRig() {
+      const g = await gateRig();
+      const id = await g.mk({ kind: "task", title: "T", body: "the plan", successCriteria: "ok" });
+      const append = (who: string, lines: object[], hdr: Record<string, string> = {}, extra: object = {}) =>
+        fetch(`${g.hub.url}/v1/workapi/work/${id}`, { method: "PATCH", headers: { "X-API-Key": g.A, "X-Wolf": who, "Content-Type": "application/json", ...hdr }, body: JSON.stringify({ op: "recordAppend", lines, ...extra }) });
+      const bodyOf = async () => ((await (await g.owner("GET", `/${id}`)).json()) as { body: string }).body;
+      return { ...g, id, append, bodyOf };
+    }
+
+    it("two concurrent appends both survive in the stored line shape, a non-assignee may append, Plan and Notes stay", async () => {
+      const r = await recRig();
+      await r.owner("PATCH", `/${r.id}`, { section: { name: "Plan", text: "the plan" } });
+      await r.owner("PATCH", `/${r.id}`, { section: { name: "Notes", text: "keep notes" } });
+      const [a, b] = await Promise.all([r.append("wa2", [line("first", ["o1"])]), r.append("wa", [line("second", ["o2"], { kind: "finding" })])]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const body = await r.bodyOf();
+      expect(body).toContain("- 14:05 [w1·decision] first <!-- src:o1 -->");
+      expect(body).toContain("- 14:05 [w1·finding] second <!-- src:o2 -->");
+      expect(body).toContain("## Record\n\n- 14:05");
+      expect(body).toContain("keep notes");
+      expect(body).toContain("the plan");
+    });
+
+    it("a same-key replay and a new key with the same ids both add nothing", async () => {
+      const r = await recRig();
+      const k = { "Idempotency-Key": "k-record-1" };
+      expect((await r.append("wa", [line("once", ["o1"])], k)).status).toBe(200);
+      expect((await r.append("wa", [line("once", ["o1"])], k)).status).toBe(200);
+      expect((await r.append("wa", [line("again", ["o1"])], { "Idempotency-Key": "k-record-2" })).status).toBe(200);
+      const body = await r.bodyOf();
+      expect(body.match(/<!-- src:o1 -->/g)).toHaveLength(1);
+      expect(body).not.toContain("again");
+    });
+
+    it("over the cap answers 409 log_full and leaves the body unchanged", async () => {
+      const r = await recRig();
+      for (let i = 0; i < 20; i++) expect((await r.append("wa", [line("x".repeat(230), [`a${i}`])])).status).toBe(200);
+      const before = await r.bodyOf();
+      const over = await r.append("wa", Array.from({ length: 20 }, (_, i) => line("y".repeat(230), [`b${i}`])));
+      expect(over.status).toBe(409);
+      expect(((await over.json()) as { code: string }).code).toBe("log_full");
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("rejects a heading, a long text and an archived item, the body unchanged", async () => {
+      const r = await recRig();
+      expect((await r.append("wa", [line("## Plan\n\n## Plan", ["h1"])])).status).toBe(400);
+      expect((await r.append("wa", [line("x".repeat(241), ["h2"])])).status).toBe(400);
+      await r.owner("PATCH", `/${r.id}`, { stage: "archived" });
+      const before = await r.bodyOf();
+      const res = await r.append("wa2", [line("late", ["l1"])]);
+      expect(res.status).toBe(409);
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("groups under a feature heading, creating it when absent", async () => {
+      const g = await gateRig();
+      const fid = await g.mk({ kind: "feature", title: "F", body: "x" });
+      const send = (text: string, ids: string[], group: string) => g.as("wa2", "PATCH", `/${fid}`, { op: "recordAppend", group, lines: [line(text, ids)] });
+      expect((await send("d1", ["g1"], "Decisions")).status).toBe(200);
+      expect((await send("c1", ["g2"], "Changes")).status).toBe(200);
+      expect((await send("d2", ["g3"], "Decisions")).status).toBe(200);
+      const body = ((await (await g.owner("GET", `/${fid}`)).json()) as { body: string }).body;
+      expect(body).toContain("### Decisions\n\n- 14:05 [w1·decision] d1 <!-- src:g1 -->\n- 14:05 [w1·decision] d2 <!-- src:g3 -->\n\n### Changes\n\n- 14:05 [w1·decision] c1");
+    });
+
+    it("fires work.changed", async () => {
+      const r = await recRig();
+      const ev = await fetch(`${r.hub.url}/v1/events`, { headers: OP });
+      const reader = ev.body!.getReader();
+      await r.append("wa", [line("live", ["e1"])]);
+      let seen = "";
+      const dec = new TextDecoder();
+      const deadline = Date.now() + 3000;
+      while (!seen.includes(r.id) && Date.now() < deadline) seen += dec.decode((await reader.read()).value);
+      await reader.cancel();
+      expect(seen).toContain('"type":"work.changed"');
+      expect(seen).toContain(r.id);
+    });
+  });
+
   it("an unknown assign target is a 400 that names it, for the owner too", async () => {
     const g = await gateRig();
     const id = await g.mk({ kind: "feature", title: "F", body: "x" });

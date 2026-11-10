@@ -672,7 +672,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         const id = authenticate(req);
         if (!id) throw new HubError("unauthorized", "missing or invalid token");
         return handleWorkProxy(
-          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n), idempotency: workIdempotency },
+          { roots, wolves: () => registry.list("wolves") as never, readBody, writeWork, wolfActor: (a, n) => wolfActorFor(a, n), idempotency: workIdempotency, recordAppended: (itemId) => bus.workAppended([{ type: "work.record", id: itemId }]) },
           req, res, url, id, writeActor(req),
         );
       }

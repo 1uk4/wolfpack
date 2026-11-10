@@ -25,6 +25,14 @@ import { finishDictation, useBarDictation, useDictation, type Dictation } from "
  */
 const HANDOFF_MS = 4000;
 
+/** The thread page's questionnaire-note sink. When the page drives the floating chat's run (popped out), that run's `append`
+ *  has no view of the page's note, so the page publishes its sink here while the note is the composer. */
+let pageNoteAppend: ((t: string) => void) | null = null;
+export function setPageNoteAppend(fn: ((t: string) => void) | null) {
+	pageNoteAppend = fn;
+}
+export const getPageNoteAppend = () => pageNoteAppend;
+
 export function useThreadDictation(
 	wolf: string,
 	slug: string,

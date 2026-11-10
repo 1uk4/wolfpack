@@ -782,7 +782,7 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		await pick();
 		await enter();
 		await settle();
-		assert.deepEqual(textPosts.at(-1)!.body, { text: "", attachments: ["up-1"] });
+		assert.deepEqual(textPosts.at(-1)!.body, { text: "look", attachments: ["up-1"] });
 		assert.equal(textPosts.length, 3);
 	});
 

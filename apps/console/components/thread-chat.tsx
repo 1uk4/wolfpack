@@ -29,10 +29,11 @@ import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { useAttachedThread } from "@/components/attached-thread";
 import { DictationBar, joinDictation, useBarShown } from "@/components/dictation";
-import { useThreadDictation } from "@/components/use-thread-dictation";
+import { getInlineDropSink } from "@/components/ask-inline-composer";
+import { setPageNoteAppend, useThreadDictation } from "@/components/use-thread-dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { newUploadState, startUploads } from "@/components/attachment-upload";
-import { canSendWith, dragHasFiles, droppedFiles, readyInfos, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
+import { canSendWith, dragHasFiles, droppedFiles, pastedImages, readyInfos, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { appendToDraft, draftKey, useComposerDraft, useRereadDraftWhenShown, useRestoreOnSendFailure } from "@/lib/composer-draft";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
@@ -471,11 +472,13 @@ function ThreadChatInner({
 	// Leaving the page mid-run saves what was heard into this thread's draft. This hook MUST stay declared after
 	// useComposerDraft: cleanups run in declaration order, so the composer's unmount flush runs first and the orphan
 	// append lands on top of it (the reverse order would lose the words).
+	// While the questionnaire's note is the composer (noteMode, below), finals join the note instead of the hidden draft.
+	const noteAppendRef = useRef<((t: string) => void) | null>(null);
 	const dictation = useThreadDictation(
 		wolf,
 		slug,
 		threadId,
-		(t) => applyText(joinDictation(textRef.current, t)),
+		(t) => (noteAppendRef.current ? noteAppendRef.current(t) : applyText(joinDictation(textRef.current, t))),
 		(t) => appendToDraft(draftKey(wolf, threadId), t),
 		draftSchedule.flush, // the chat's input reads the draft: write it now and drop the pending debounce
 	);
@@ -568,6 +571,42 @@ function ThreadChatInner({
 	const session = ask.session;
 	/** The composer is the questionnaire note's (Next / Submit), not the chat's. */
 	const noteMode = ask.pending && ask.sheetShown && session.expanded && !ask.composing;
+	noteAppendRef.current = noteMode ? session.appendNoteText : null;
+	// Drop and paste work anywhere on the page, not only inside the chat column (the floating bar, sheet and overlays sit outside that div):
+	// a file drag is always taken so the browser never opens the file, and a drop or an image paste that nothing handled goes to the open
+	// answer, else the note, else the composer. Handlers that already took the event (the column, a composer's own paste) win.
+	const fileSinkRef = useRef<(files: File[]) => void>(() => {});
+	fileSinkRef.current = (files) => (getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(files);
+	useEffect(() => {
+		const over = (e: DragEvent) => {
+			if (dragHasFiles(e.dataTransfer)) e.preventDefault();
+		};
+		const drop = (e: DragEvent) => {
+			if (e.defaultPrevented || !dragHasFiles(e.dataTransfer)) return;
+			e.preventDefault();
+			fileSinkRef.current(droppedFiles(e.dataTransfer));
+		};
+		const paste = (e: ClipboardEvent) => {
+			if (e.defaultPrevented) return;
+			const files = pastedImages(e.clipboardData);
+			if (files.length === 0) return;
+			e.preventDefault();
+			fileSinkRef.current(files);
+		};
+		document.addEventListener("dragover", over);
+		document.addEventListener("drop", drop);
+		document.addEventListener("paste", paste);
+		return () => {
+			document.removeEventListener("dragover", over);
+			document.removeEventListener("drop", drop);
+			document.removeEventListener("paste", paste);
+		};
+	}, []);
+	// Popped out, the page drives the floating chat's run, whose append can't see the note: publish the sink.
+	useEffect(() => {
+		setPageNoteAppend(noteMode ? session.appendNoteText : null);
+		return () => setPageNoteAppend(null);
+	}, [noteMode, session.appendNoteText]);
 
 	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
 	const dictationWasActive = useRef(false);
@@ -604,6 +643,16 @@ function ThreadChatInner({
 		// Stop only: the first press puts the final transcript in the field; the next press sends it.
 		void dictation.finish().finally(() => void (sendInFlight.current = false));
 	}, [dictation, doSend]);
+	// Submit/Next in note mode while dictating: finish the run first so the last words are in the note, then press (a ref sees the settled session).
+	const pressNoteRef = useRef<() => void>(() => {});
+	pressNoteRef.current = () => session.press((t, refs) => submitToThread({ wolf, slug }, t, busy, refs).then((ok) => { if (ok) ask.settle(); return ok; }));
+	const noteInFlight = useRef(false);
+	const onNoteSend = useCallback(() => {
+		if (noteInFlight.current) return;
+		if (!dictation.active) return pressNoteRef.current();
+		noteInFlight.current = true;
+		void dictation.finish().then(() => pressNoteRef.current()).finally(() => void (noteInFlight.current = false));
+	}, [dictation]);
 
 	const onStop = useCallback(() => {
 		setSendPending(false);
@@ -631,7 +680,8 @@ function ThreadChatInner({
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault();
 				setDragging(false);
-				onFiles(droppedFiles(e.dataTransfer));
+				// Follows focus: an open answer composer takes it, else the note's chips while the questionnaire note is the composer, else the chat's.
+				(getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
 			}}
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
@@ -823,7 +873,7 @@ function ThreadChatInner({
 											busy={noteMode ? false : busy}
 											value={noteMode ? session.note.text : text}
 											onChange={noteMode ? session.setNoteText : applyText}
-											onSend={noteMode ? () => session.press((t, refs) => submitToThread({ wolf, slug }, t, busy, refs).then((ok) => { if (ok) ask.settle(); return ok; })) : onSend}
+											onSend={noteMode ? onNoteSend : onSend}
 											{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : {})}
 											onStop={onStop}
 											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into

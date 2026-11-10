@@ -18,6 +18,7 @@ import { newUploadState, startUploads } from "@/components/attachment-upload";
 import { readyRefs, type PendingAttachment } from "@/components/attachments";
 import { imagesOf, withImages } from "@/components/ask-images";
 import { pageBody, pageFieldIds, reconcile, seedAll, unanswered } from "@/components/ask-answers";
+import { joinDictation } from "@/lib/composer-draft";
 import { threadSlug, visibleFields, type AttachedRef } from "@/src/core";
 
 export const NOTE_DEBOUNCE_MS = 400;
@@ -150,6 +151,8 @@ export interface AskSession {
 	note: NoteState;
 	noteEmpty: boolean;
 	setNoteText: (v: string) => void;
+	/** Dictated words join the note (reads the latest note, so a flush right after a keystroke or another final loses nothing). */
+	appendNoteText: (t: string) => void;
 	addNoteFiles: (files: File[]) => void;
 	removeNoteAtt: (key: string) => void;
 	/** Required questions unanswered: this page for Next, the whole card for Submit. */
@@ -279,6 +282,12 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		});
 	}, [noteKey]); // eslint-disable-line react-hooks/exhaustive-deps
 	const setNoteText = useCallback((v: string) => touchNote((n) => ({ ...n, text: v })), [touchNote]);
+	// noteRef is updated here, not inside the setState updater (which runs at the next render): a Submit resuming right after the final flush must see the words.
+	const appendNoteText = useCallback((t: string) => {
+		const next = { ...noteRef.current, text: joinDictation(noteRef.current.text, t) };
+		noteRef.current = next;
+		touchNote(() => next);
+	}, [touchNote]);
 	const uploadUrl = `${threadBase(wolf, slug)}/attachments`;
 	const addNoteFiles = useCallback((files: File[]) => {
 		startUploads(
@@ -472,7 +481,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	}, [callId]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	return {
-		pc, active: card !== undefined, collapse, page, pages, fields, draft, set, clear, expanded, setExpanded, note, noteEmpty, setNoteText, addNoteFiles, removeNoteAtt,
+		pc, active: card !== undefined, collapse, page, pages, fields, draft, set, clear, expanded, setExpanded, note, noteEmpty, setNoteText, appendNoteText, addNoteFiles, removeNoteAtt,
 		missing, action, busy, error, setError, next, back, press, disarm, takeNote, refetch,
 	};
 }

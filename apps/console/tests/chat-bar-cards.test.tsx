@@ -316,7 +316,7 @@ describe("ChatBar cards", () => {
 		await pick();
 		await submit();
 		await until(() => texts().length === 3, "the image-only bind");
-		assert.deepEqual(texts()[2]!.body, { text: "", attachments: ["up-1"] });
+		assert.deepEqual(texts()[2]!.body, { text: "look", attachments: ["up-1"] }); // reopening the answered field seeds the composer with its answer (one text), so the image binds with it
 	});
 
 	it("reply mode: a double Send posts the answer once and the second Send cannot overwrite it with an empty one", async () => {

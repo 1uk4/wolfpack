@@ -11,6 +11,7 @@
  * owns the input). Stopping on that page docks it and the composer returns with the text; stopping anywhere else leaves it showing the words. Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { getPageNoteAppend } from "@/components/use-thread-dictation";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPicture2Icon } from "lucide-react";
@@ -135,6 +136,8 @@ export function ChatBar() {
 		},
 		append: (t) => {
 			if (composerAppend.current) return composerAppend.current(t);
+			const note = getPageNoteAppend(); // the thread page's own open questionnaire note (the bar has no composer there)
+			if (note && live.current.onOwn) return note(t);
 			const a = live.current.attached;
 			if (!a) return;
 			appendToDraft(draftKey(a.wolf, a.threadId), t);

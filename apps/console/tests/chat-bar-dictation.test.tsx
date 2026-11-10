@@ -106,6 +106,7 @@ const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
 
 let posts: string[] = [];
 let pagedAsk = false;
+let requiredAsk = false;
 let stops = 0;
 let tokenFetches = 0;
 const realFetch = globalThis.fetch;
@@ -119,7 +120,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	if (url.includes("/api/stt/token")) tokenFetches++;
 	if (url.includes("/api/stt/token")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (pagedAsk && /^\/api\/wolves\/w\/threads\/a\?/.test(url)) return Response.json({ messages: [], pendingCards: [{ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", optional: true }], steps: [{ fields: ["q1"] }] } }] });
+	if (pagedAsk && /^\/api\/wolves\/w\/threads\/a\?/.test(url)) return Response.json({ messages: [], pendingCards: [{ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", ...(requiredAsk ? {} : { optional: true }) }], steps: [{ fields: ["q1"] }] } }] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [{ id: "w/a", title: "w/a", kind: "feature", status: "idle" }, { id: "w/b", title: "w/b", kind: "feature", status: "idle" }] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
@@ -196,6 +197,7 @@ afterEach(async () => {
 	mem.clear();
 	posts = [];
 	pagedAsk = false;
+	requiredAsk = false;
 	FakeWS.last = null;
 	FakeWS.count = 0;
 	stops = 0;
@@ -240,6 +242,46 @@ describe("floating chat dictation", () => {
 		await fire(q('[data-testid="chat-bar"] form')!, "submit");
 		await wait();
 		assert.deepEqual(posts.filter((u) => /\/(submit|questions\/q1\/text)$/.test(u)), ["/api/wolves/w/threads/a/cards/p1/questions/q1/text"]);
+	});
+
+	it("dictating while the ask card's note composer is open fills the note, not the hidden draft, and Submit sends it with the answers", async () => {
+		pagedAsk = true;
+		await mount("/kb", A);
+		await wait();
+		const noteTa = () => { const all = document.querySelectorAll('[data-testid="chat-bar"] textarea'); return all[all.length - 1] as HTMLTextAreaElement; }; // the composer sits below the sheet
+		assert.equal(q('[data-testid="ask-armed-live"]') !== null, true, "note mode");
+		await fire(barToggle(), "click", { detail: 1 });
+		await wait();
+		const ws = await say("note by voice");
+		await endRun(ws);
+		await wait();
+		const val = () => (noteTa() as any)[Object.keys(noteTa()).find((k) => k.startsWith("__reactProps$"))!].value;
+		assert.equal(val(), "note by voice");
+		await wait(400);
+		assert.equal(mem.get("wolfpack:draft:w:w/a") ?? "", "", "the normal draft stays empty");
+		await fire(q('[data-testid="chat-bar"] form')!, "submit");
+		await wait();
+		assert.ok(posts.find((u) => u.endsWith("/cards/p1/submit")), "the card was submitted");
+		assert.equal(posts.some((u) => u.endsWith("/threads/a/submit")), false, "no separate chat message");
+		assert.equal(mem.get("wolfpack:draft:w:w/a") ?? "", "");
+	});
+
+	it("the bottom note box sends its note once with required questions unanswered (Send anyway), leaving no draft behind", async () => {
+		pagedAsk = true;
+		requiredAsk = true;
+		await mount("/kb", A);
+		await wait();
+		const note = () => { const all = document.querySelectorAll('[data-testid="chat-bar"] textarea'); return all[all.length - 1] as HTMLTextAreaElement; };
+		const props = (el: Element) => (el as any)[Object.keys(el).find((k) => k.startsWith("__reactProps$"))!];
+		const submit = () => fire(q('[data-testid="chat-bar"] form[data-testid="composer"]')!, "submit");
+		await act(async () => void props(note()).onChange({ target: { value: "context only" } }));
+		await submit(); // arms
+		assert.equal(posts.filter((u) => u.endsWith("/threads/a/submit")).length, 0);
+		await submit();
+		await wait(400);
+		assert.equal(posts.filter((u) => u.endsWith("/threads/a/submit")).length, 1, "the note posts once");
+		assert.equal(posts.some((u) => u.endsWith("/cards/p1/submit")), false);
+		assert.equal(mem.get("wolfpack:draft:w:w/a") ?? "", "");
 	});
 
 	it("Submit while dictating only stops the run and fills the field; the next press sends it", async () => {

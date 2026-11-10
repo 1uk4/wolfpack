@@ -54,9 +54,15 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		schedule(v);
 	}, [applyText, schedule]);
 
-	// The transcript lands in this input (and its draft) while the composer is mounted.
+	// The transcript lands in this input (and its draft) while the composer is mounted; while the questionnaire is expanded the input is the NOTE, so it lands there.
+	const sessionRef = useRef(session);
+	sessionRef.current = session;
 	useEffect(() => {
-		const fn = (t: string) => onChange(joinDictation(textRef.current, t));
+		const fn = (t: string) => {
+			const s = sessionRef.current;
+			if (s && s.active && s.expanded) s.appendNoteText(t);
+			else onChange(joinDictation(textRef.current, t));
+		};
 		registerAppend(fn);
 		return () => registerAppend(null);
 	}, [onChange, registerAppend]);
@@ -119,6 +125,16 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		else api.clearSent();
 		return ok;
 	}, [api, target, working, onReplied]);
+	// Submit while dictating: finish the run first so the last words are in the note (appendNoteText), then press with the settled session.
+	const sendNoteRef = useRef(sendNote);
+	sendNoteRef.current = sendNote;
+	const noteInFlight = useRef(false);
+	const pressNote = useCallback(() => {
+		if (noteInFlight.current) return;
+		if (!dictation.active) return session?.press(sendNote);
+		noteInFlight.current = true;
+		void dictation.finish().then(() => sessionRef.current?.press(sendNoteRef.current)).finally(() => void (noteInFlight.current = false));
+	}, [dictation, session, sendNote]);
 
 	return (
 		<>
@@ -137,7 +153,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 				{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
 				value={noteMode ? session.note.text : text}
 				onChange={noteMode ? session.setNoteText : onChange}
-				onSend={noteMode ? () => session.press(sendNote) : onSend}
+				onSend={noteMode ? pressNote : onSend}
 				onStop={stop}
 				canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !working)}
 				finishing={dictation.phase === "stopping"}

@@ -23,6 +23,11 @@ export interface InlineDraft {
 }
 const EMPTY: InlineDraft = { text: "", atts: [] };
 
+/** The open answer composer's file sink. While a question's answer is open (it holds focus) a dropped image belongs to it, so
+ *  hosts with a page-wide drop target (thread page) ask here first. Null when no answer composer is open. */
+let dropSink: ((files: File[]) => void) | null = null;
+export const getInlineDropSink = () => dropSink;
+
 /** Does a draft hold anything the owner has not sent? */
 export const hasUnsent = (d: InlineDraft | undefined): boolean => !!d && (d.text.trim() !== "" || d.atts.length > 0);
 
@@ -37,6 +42,8 @@ export function useInlineAnswers(target: Pick<AttachedRef, "wolf" | "slug">, onB
 	const update = useCallback((qid: string, fn: (d: InlineDraft) => InlineDraft) => setDrafts((all) => ({ ...all, [qid]: fn(all[qid] ?? EMPTY) })), []);
 	const uploadUrl = `${threadBase(target.wolf, target.slug)}/attachments`;
 
+	/** Start a question's draft from its bound answer, unless the owner already has unsent text for it. */
+	const seed = useCallback((qid: string, text: string) => setDrafts((all) => (all[qid] && hasUnsent(all[qid]) ? all : { ...all, [qid]: { ...(all[qid] ?? EMPTY), text } })), []);
 	const setText = useCallback((qid: string, text: string) => update(qid, (d) => ({ ...d, text })), [update]);
 	const addFiles = useCallback((qid: string, files: File[]) => {
 		startUploads(files, uploadUrl, uploads.current, (chip) => update(qid, (d) => ({ ...d, atts: [...d.atts, chip] })), (key, p) => update(qid, (d) => ({ ...d, atts: d.atts.map((a) => (a.key === key ? { ...a, ...p } : a)) })));
@@ -63,7 +70,7 @@ export function useInlineAnswers(target: Pick<AttachedRef, "wolf" | "slug">, onB
 		update(qid, (d) => ({ text: mergeRestored(t, d.text), atts: [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...d.atts] }));
 		return null;
 	}, [target.wolf, target.slug, update, onBound]);
-	return { drafts, errors, setText, addFiles, removeAtt, send };
+	return { drafts, errors, setText, seed, addFiles, removeAtt, send };
 }
 
 /** The in-place composer: the "Replying to" header with ×, the shared Composer body without its controls, and the Dictate row. */
@@ -84,6 +91,15 @@ export function InlineAnswerComposer({ label, draft, error, dictation, onText, o
 	// The transcript lands here while the composer is open (a persistent claim outranks the host's own composer).
 	const append = useCallback((t: string) => onText(joinDictation(textRef.current, t)), [onText]);
 	useDictationTarget(append, dictation !== undefined);
+	const filesRef = useRef(onFiles);
+	filesRef.current = onFiles;
+	useEffect(() => {
+		const sink = (files: File[]) => filesRef.current(files);
+		dropSink = sink;
+		return () => {
+			if (dropSink === sink) dropSink = null;
+		};
+	}, []);
 	useEffect(() => {
 		const id = requestAnimationFrame(() => inputRef.current?.focus());
 		return () => cancelAnimationFrame(id);

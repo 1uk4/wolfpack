@@ -451,6 +451,23 @@ describe("ask sheet inline composer", () => {
 		assert.equal(q('[data-testid="tier-trigger"]') === null, true);
 	});
 
+	it("opening the composer on an answered field shows the existing answer, so new words append to it and Send replaces the answer with the combined text", async () => {
+		await render({ ...FREE(), draft: { q1: { value: "first part" } } });
+		await open();
+		assert.equal(props(area(), "value"), "first part", "the composer holds the field's text");
+		await type("first part and more");
+		await sendNow();
+		await settle();
+		assert.equal(texts()[0]!.body.text, "first part and more");
+	});
+
+	it("closing the composer without editing the answer leaves no 'Unsent' note", async () => {
+		await render({ ...FREE(), draft: { q1: { value: "first part" } } });
+		await open();
+		await click(q('[data-testid="answering-chip-clear"]'));
+		assert.equal(q('[data-testid="ask-unsent"]'), null);
+	});
+
 	it("Other on a single question opens the same composer under the options", async () => {
 		await render(one([{ id: "q1", kind: "single", label: "Pick", options: OPTS }]));
 		await click(q('[data-testid="ask-other"]'));

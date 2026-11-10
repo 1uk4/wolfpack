@@ -148,6 +148,8 @@ let root: Root | null = null;
 /** POSTs the page made (card answers, submits), bodies parsed. */
 let posts: { url: string; body: any }[] = [];
 
+/** When set, the thread GET (what useBarCards polls) returns these pending cards: a paged ask only reaches the note composer that way. */
+let pagedPending: unknown[] | null = null;
 async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?: boolean } = {}) {
 	posts = [];
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -156,6 +158,7 @@ async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?:
 			posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
 			return new Response(JSON.stringify({ disposition: "queued" }), { status: 200 });
 		}
+		if (/\/threads\/home\?limit=/.test(url) && pagedPending) return Response.json({ messages: [], pendingCards: pagedPending });
 		if (opts.inFlight && url.includes("/stream")) return new Promise<Response>(() => {}); // a turn that never ends
 		if (url.includes("/api/stt/token")) {
 			return tokenStatus === 200
@@ -274,6 +277,7 @@ afterEach(async () => {
 	root = null;
 	tokenStatus = 200;
 	FakeWS.last = null;
+	pagedPending = null;
 	store.clear();
 	document.body.innerHTML = "";
 });
@@ -533,6 +537,97 @@ describe("ThreadChat dictation", () => {
 		const answers = posts.filter((p) => p.url.includes("/cards/"));
 		assert.equal(answers.length, 1);
 		assert.equal(answers[0]!.body.answers.why.value, "because and more");
+	});
+
+	it("dictating while the ask card's note composer is open fills the note, not the hidden draft, and Submit while recording sends the tail with the answers", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		assert.equal(q('[data-note-mode="true"]') !== null, true, "note mode");
+		await dictate("first words");
+		assert.equal(composer().value, "first words", "the note field shows the words");
+		await settle(500);
+		assert.equal(DRAFT() ?? "", "", "the normal draft stays empty");
+		const ws = await recording("and the tail");
+		await act(async () => void q('[data-note-mode="true"] form')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+		await closeSocket(ws);
+		await settle();
+		const submit = posts.find((p) => p.url.endsWith("/cards/" + CALL + "/submit"));
+		assert.equal(submit?.body.note.text, "first words and the tail");
+		assert.equal(posts.some((p) => p.url.endsWith("/threads/home/submit")), false, "no separate chat message");
+		assert.equal(DRAFT() ?? "", "");
+	});
+
+	it("with the floating-chat provider mounted (the real app), the note box's Dictate still fills the note, not the hidden draft", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED), { poppedOut: true });
+		await settle(80);
+		assert.equal(q('[data-note-mode="true"]') !== null, true, "note mode");
+		await dictate("by voice");
+		await settle(400);
+		assert.equal(composer().value, "by voice", "the note field shows the words");
+		assert.equal(DRAFT() ?? "", "", "the normal draft stays empty");
+	});
+
+	it("a drag over anywhere on the page is taken (so the browser never opens the file), and a drop outside the chat column (e.g. on the floating bar's area) still goes to the open answer", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		await click(q('[data-testid="ask-free"]')!);
+		await settle(30);
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-8", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		const dt = { types: ["Files"], files: [png] };
+		const over = Object.assign(new dom.window.Event("dragover", { bubbles: true, cancelable: true }), { dataTransfer: dt });
+		await act(async () => void document.body.dispatchEvent(over));
+		assert.equal(over.defaultPrevented, true, "dragover is taken anywhere");
+		await act(async () => void document.body.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: dt })));
+		await settle(100);
+		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1, "the chip sits in the open answer");
+		globalThis.fetch = prev;
+	});
+
+	it("an image pasted outside any composer (a card answer field) goes to the open answer", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		await click(q('[data-testid="ask-free"]')!);
+		await settle(30);
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-7", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		const paste = Object.assign(new dom.window.Event("paste", { bubbles: true, cancelable: true }), { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => png }] } });
+		await act(async () => void document.body.dispatchEvent(paste));
+		await settle(100);
+		assert.equal(paste.defaultPrevented, true);
+		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1);
+		globalThis.fetch = prev;
+	});
+
+	it("an image dropped while an answer field is open attaches to that question's answer, not the page composer or the note", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		await click(q('[data-testid="ask-free"]')!);
+		await settle(30);
+		assert.ok(q('[data-testid="ask-inline-composer"]'), "the answer field is open");
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-9", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		await act(async () => void q('[data-testid="thread-chat"]')!.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: { types: ["Files"], files: [png] } })));
+		await settle(100);
+		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1, "the chip sits in the open answer");
+		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1, "and nowhere else");
+		globalThis.fetch = prev;
 	});
 
 	it("the wolfpack:kbd-toggle-dictation event starts and stops a run (⌘D)", async () => {

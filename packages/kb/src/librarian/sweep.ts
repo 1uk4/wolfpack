@@ -343,7 +343,8 @@ export function emptyResult(): SweepResult {
  * stay-in-parent rule keeps leftovers there and the sweep never reorganises, so this is the signal a rebuild is due.
  * Called once per sweep. Grouped entries follow their holder and are not counted.
  */
-export function oversizedParents(roots: KbRoots, sections: Section[]): string[] {
+export async function oversizedParents(roots: KbRoots, sections: Section[], timings?: Timings): Promise<string[]> {
+  let seen = 0;
   const out: string[] = [];
   for (const domain of new Set(sections.map((s) => String(s.domain)))) {
     const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
@@ -353,8 +354,10 @@ export function oversizedParents(roots: KbRoots, sections: Section[]): string[] 
     if (!existsSync(dir)) continue;
     for (const f of listEntryFiles(dir)) {
       if (f.startsWith(".")) continue;
+      if (seen++ % 25 === 24) await new Promise<void>((r) => setImmediate(r)); // read-only: let the hub's loop run
       let e;
-      try { e = readEntryCached(join(dir, f)); } catch { continue; }
+      const t0 = performance.now();
+      try { e = readEntryCached(join(dir, f)); } catch { continue; } finally { timings?.add("oversized", performance.now() - t0); }
       if (!e || e.group()) continue;
       const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
@@ -426,7 +429,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // Section tree, folded from the ledger / _sections.json.
   let sections: Section[] = timed("sections", () => readSections(roots));
   {
-    const big = timed("oversized", () => oversizedParents(roots, sections));
+    const big = await oversizedParents(roots, sections, T);
     if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
   }
 

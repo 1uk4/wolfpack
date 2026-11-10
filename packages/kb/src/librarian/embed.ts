@@ -300,6 +300,9 @@ interface ScannedEntry {
   grouped: boolean;
 }
 
+const YIELD_EVERY = 25;
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+
 /** Every curated entry in kb-base with the text its vector is cached under. */
 function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
   const domainsRoot = join(roots.kbBase, "domains");
@@ -357,7 +360,10 @@ export async function buildEntryVectors(
 
   const out: EntryVector[] = [];
   const it = scanEntries(roots, model);
+  let scanned = 0;
   for (;;) {
+    // Let timers, /healthz and the watchdog ping run every 25 entries (the scan is read-only; no lock is held here).
+    if (scanned++ % YIELD_EVERY === YIELD_EVERY - 1) await yieldToLoop();
     const t0 = performance.now();
     const n = it.next();
     timings?.add("scan", performance.now() - t0);

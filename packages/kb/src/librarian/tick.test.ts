@@ -165,6 +165,20 @@ describe("runSweepTick", () => {
     }
   });
 
+  it("lets the event loop run during the entry scan: other timers and I/O get turns while 400 entries are read", async () => {
+    const dir = join(roots.kbBase, "domains", "wp", "entries");
+    for (let i = 0; i < 400; i++) writeFileSync(join(dir, `kb-wp-${i}.md`), `---\nid: kb-wp-${i}\ntitle: Entry ${i}\ndomain: wp\n---\n# Entry ${i}\n\nLede ${i}.\n`);
+    drop("a");
+    let turns = 0;
+    let running = true;
+    const spin = () => { if (running) { turns++; setImmediate(spin); } };
+    setImmediate(spin);
+    await tick();
+    running = false;
+    // The scan yields every 25 files (400 entries ≈ 16 turns); a synchronous scan gives the spinner only the few turns the awaits in between allow.
+    expect(turns).toBeGreaterThanOrEqual(16);
+  });
+
   it("does not reorg when the item was not committed", async () => {
     drop("a");
     mode = "junk";

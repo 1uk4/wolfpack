@@ -363,6 +363,8 @@ export async function buildEntryVectors(
   let scanned = 0;
   for (;;) {
     // Let timers, /healthz and the watchdog ping run every 25 entries (the scan is read-only; no lock is held here).
+    // A hub commit can land during this yield, so one scan may see a mix of old and new entries. That only affects placement
+    // quality (the vectors are advisory), not correctness; a rebuild uses pause(), which waits for the tick to finish.
     if (scanned++ % YIELD_EVERY === YIELD_EVERY - 1) await yieldToLoop();
     const t0 = performance.now();
     const n = it.next();

@@ -48,7 +48,7 @@ export const once = <T>(fn: () => T): (() => T) => {
 function load(raw: string, st: Stats): Slot {
   return {
     raw,
-    fields: parseFrontmatter(raw).fields as Record<string, unknown>,
+    fields: Object.freeze(parseFrontmatter(raw).fields) as Record<string, unknown>,
     mtimeMs: st.mtimeMs,
     size: st.size,
     ino: st.ino,
@@ -87,7 +87,7 @@ export function listEntryFiles(dir: string): string[] {
   return files;
 }
 
-/** Test seam: forget everything (a cold read). */
+/** Drop every cached entry (a cold read): for tests and for tearing down a KB root in a long-lived process. */
 export function clearEntryCache(): void {
   cache.clear();
 }

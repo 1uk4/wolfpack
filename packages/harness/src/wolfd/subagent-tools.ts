@@ -6,7 +6,7 @@
 import { GenerationTask, defineExtension as defineDurable, hook, type Extension } from "@earendil-works/pi-durable";
 import { adaptToDurable } from "../adapters/durable.js";
 import type { Card } from "@wolfpack/protocol";
-import { briefHeader, confirmCard } from "../engine/cards.js";
+import { confirmCard, pagedCard } from "../engine/cards.js";
 import { Type, defineExtension, defineTool, type Tool, type ToolContext, type ToolResult } from "../extension-api.js";
 import type { SubagentManager, ToolOutcome } from "./subagents.js";
 import { SPAWN_TOOLS } from "./subagents.js";
@@ -94,15 +94,18 @@ export async function abandonGate(bridge: SubagentBridge, tool: string, ctx: Too
     const f = c.fields[0];
     return c.fields.length === 1 && f.kind === "single" && f.label.startsWith(`Merge conflict merging ${info.branch} into `) && f.options.some((o) => o.value === "abandon" && o.label === "Abandon branch");
   };
-  // Raised with `brief` now; older transcripts hold it under the retired `ask_user_question`.
-  const conflict = (await ctx.conversation.latestCard("brief", isConflictCard)) ?? (await ctx.conversation.latestCard("ask_user_question", isConflictCard));
+  // Raised with `ask` now; older transcripts hold it under the retired `brief` or `ask_user_question` (legacy names).
+  const conflict =
+    (await ctx.conversation.latestCard("ask", isConflictCard)) ??
+    (await ctx.conversation.latestCard("brief", isConflictCard)) ??
+    (await ctx.conversation.latestCard("ask_user_question", isConflictCard));
   if (conflict?.status === "answered") {
     const f = conflict.card.fields[0];
     if ((conflict.answers?.[f.id] as { value?: unknown } | undefined)?.value === "abandon") return undefined;
   }
   if (found?.status === "skipped" || found?.status === "answered") return text(`Not abandoned: the user said no. ${info.branch} stays. Do not ask again unless they bring it up.`);
   return text(`Asked the user to confirm abandoning ${info.branch}, which has ${n}. Your turn ends here. If they answer yes, call the same tool again to abandon it; if no, do not.`, {
-    card: confirmCard({ tool, question: label, title: "Abandon branch?", description: `Its worktree and branch are deleted and the unmerged work is lost.`, confirmLabel: "Abandon", rejectLabel: "Keep", brief: briefHeader(`Abandon ${info.branch}?`, [`${info.branch} has ${n}.`, "Its worktree and branch are deleted and the unmerged work is lost."]) }),
+    card: pagedCard(confirmCard({ tool, question: label, title: "Abandon branch?", description: `${info.branch} has ${n}. Its worktree and branch are deleted and the unmerged work is lost.`, confirmLabel: "Abandon", rejectLabel: "Keep" })),
   });
 }
 

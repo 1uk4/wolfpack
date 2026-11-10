@@ -67,9 +67,9 @@ const imageCount = (answers: CardAnswers, except?: string): number =>
 /** Images held on the card besides those of question `except`: saved answers, drafts and the note share one cap. */
 const imagesHeld = (st: PagedState, except?: string): number => imageCount(st.answers, except) + imageCount(st.draft, except) + (st.note?.attachments?.length ?? 0);
 
-/** Who asked: a card from a tool other than ask/brief is a tool confirmation; a card on a subagent thread is the child's; else the thread's own. */
+/** Who asked: a card from a tool other than ask is a tool confirmation; a card on a subagent thread is the child's; else the thread's own. */
 export function sourceOf(card: Card, thread: { kind: string; agent?: string; title: string }): NonNullable<PendingCard["source"]> {
-  if (card.tool !== "ask" && card.tool !== "brief") return { kind: "tool", label: card.tool };
+  if (card.tool !== "ask") return { kind: "tool", label: card.tool };
   if (thread.kind === "subagent") return { kind: "subagent", label: thread.agent ? `${thread.agent}: ${thread.title}` : thread.title };
   return { kind: "self", label: "you" };
 }
@@ -476,12 +476,14 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
       if (reviseNote) lines.push(`Note: your earlier ask_revise was NOT applied: ${reviseNote}`);
       const steps = card.steps ?? [{ fields: card.fields.map((f) => f.id) }];
       const nums = questionNumbers(card);
-      lines.push(`The user submitted your ask questionnaire (call ${callId}), ${steps.length} page${steps.length === 1 ? "" : "s"}:`);
+      const what = card.tool === "ask" ? "ask questionnaire" : `${card.tool} confirmation`;
+      lines.push(`The user submitted your ${what} (call ${callId}), ${steps.length} page${steps.length === 1 ? "" : "s"}:`);
       steps.forEach((step, i) => {
         const title = (step as { title?: string }).title;
         lines.push(`Page ${i + 1} of ${steps.length}${title ? ` ("${title}")` : ""}:`);
         const ids = new Set(step.fields);
-        for (const f of card.fields.filter((x) => ids.has(x.id))) lines.push(`- Q${nums.get(f.id)} ${f.label}: ${answerValue(f, answers[f.id])}`);
+        const shown = new Set(visibleFields(card, answers).map((x) => x.id)); // a question hidden by its showIf was never asked
+        for (const f of card.fields.filter((x) => ids.has(x.id) && shown.has(x.id))) lines.push(`- Q${nums.get(f.id)} ${f.label}: ${answerValue(f, answers[f.id])}`);
       });
       const n = note?.attachments?.length ?? 0;
       if ((note?.text ?? "").trim() !== "" || n > 0) lines.push(`Note from the user: ${(note?.text ?? "").trim() || "(no text)"}${n ? ` [${n} image${n === 1 ? "" : "s"} attached below]` : ""}`);
@@ -490,10 +492,6 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
     }
     if (skipped) {
       lines.push(`The user skipped your ${card.tool} question (call ${callId}).`);
-      continue;
-    }
-    if (card.fields.length === 0) {
-      lines.push(`The user acknowledged your ${card.tool} brief (call ${callId}).`);
       continue;
     }
     lines.push(`The user answered your ${card.tool} question (call ${callId}):`);

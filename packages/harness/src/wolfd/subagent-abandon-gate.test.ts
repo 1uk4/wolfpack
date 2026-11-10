@@ -36,13 +36,13 @@ async function gate(tool: string, value: string) {
 }
 
 describe("abandon gate and the conflict card", () => {
-  it.each(["brief", "ask_user_question"])("a conflict card raised by %s with the owner's abandon lets the abandon through", async (tool) => {
+  it.each(["ask", "brief", "ask_user_question"])("a conflict card raised by %s with the owner's abandon lets the abandon through", async (tool) => {
     const { result, asked } = await gate(tool, "abandon");
     expect(result).toBeUndefined();
     expect(asked).toContain(tool);
   });
 
-  it.each(["brief", "ask_user_question"])("a conflict card raised by %s answered with another choice does not", async (tool) => {
+  it.each(["ask", "brief", "ask_user_question"])("a conflict card raised by %s answered with another choice does not", async (tool) => {
     const { result } = await gate(tool, "manual");
     expect(result).toBeDefined();
   });

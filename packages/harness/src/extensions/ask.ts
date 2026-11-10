@@ -1,5 +1,5 @@
 /**
- * `ask`: the questionnaire a wolf raises when it needs the owner's input. Lives beside `brief` (which it will replace).
+ * `ask`: the questionnaire a wolf raises when it needs the owner's input.
  *
  * The wolf's normal chat message gives the big picture; `ask` carries structured questions, each with its own context.
  * It raises ONE paged card (engine/cards.ts path): `steps` are the pages, `paged: true`. Answers reach the agent after

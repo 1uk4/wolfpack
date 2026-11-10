@@ -9,7 +9,7 @@ afterEach(() => {
   unregisterFieldKind("gauge");
 });
 
-const gaugeCard = { tool: "brief", fields: [{ id: "n", kind: "gauge", label: "How many?", lo: 1, hi: 10 }] };
+const gaugeCard = { tool: "ask", fields: [{ id: "n", kind: "gauge", label: "How many?", lo: 1, hi: 10 }] };
 
 describe("field-kind registry", () => {
   it("a dummy kind works end to end: schema → validate → answerText", () => {
@@ -41,11 +41,5 @@ describe("field-kind registry", () => {
     expect(fieldKind("gauge").kind).toBe("free-text");
     expect(validateAnswers(card, { n: { value: "7" } })).toBeUndefined();
     expect(answerText([{ callId: "c1", card, answers: { n: { value: "7" } } }])).toContain("- How many?: 7");
-  });
-
-  it("a zero-question brief card is acknowledged", () => {
-    const card = CardSchema.parse({ tool: "brief", fields: [], brief: { headline: "h" } }) as Card;
-    expect(validateAnswers(card, {})).toBeUndefined();
-    expect(answerText([{ callId: "c1", card, answers: {} }])).toContain("acknowledged");
   });
 });

@@ -148,6 +148,21 @@ describe("ask_revise against the draft", () => {
 });
 
 describe("the result text and the supersede note", () => {
+  it("a paged card's text omits a question its showIf hides", () => {
+    const gated = {
+      tool: "ask",
+      paged: true,
+      fields: [
+        { id: "mode", kind: "single", label: "Mode?", options: [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }], allowOther: false },
+        { id: "why", kind: "free-text", label: "Why?", showIf: { field: "mode", equals: "yes" } },
+      ],
+      steps: [{ title: "P1", fields: ["mode", "why"] }],
+    } as never;
+    const text = answerText([{ callId: "c", card: gated, answers: { mode: { value: "no" } } }]);
+    expect(text).toContain("- Q1 Mode?: No (no)");
+    expect(text).not.toContain("Why?");
+  });
+
   it("lists every page with its numbered questions, then the note and the go-ahead", () => {
     const text = answerText([{ callId: "c", card: twoPages(), answers: { q1: { value: "x" }, pick: { value: "a" }, q2: { value: "y" } }, note: { text: "mind it", attachments: ["i1", "i2"] } }]);
     expect(text).toContain('Page 1 of 2 ("P1"):');

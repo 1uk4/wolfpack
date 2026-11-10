@@ -40,7 +40,7 @@ describe("crawl_start by capability", () => {
   it("with askCards it returns the cards questionnaire", async () => {
     const r = await start(ctx({ askCards: true }), {});
     expect(r.isError).toBeFalsy();
-    expect(r.content[0].text).toContain("TWO brief calls");
+    expect(r.content[0].text).toContain("ONE ask call");
     expect(r.content[0].text).toContain('id "source"'); // no path given: the card asks for it
   });
 
@@ -60,9 +60,9 @@ describe("crawl_start by capability", () => {
 describe("crawl directive", () => {
   const base = { cwd: "/cwd", domains: ["wolfpack", "snapjack"], defaultDomain: "wolfpack", hints: [] as string[] };
 
-  it("the directive raises two brief cards and a confirm", () => {
+  it("the directive raises one two-page ask and a confirm", () => {
     const d = buildCrawlDirective({ ...base, src: "/src", hints: ["domain=snapjack"] });
-    expect(d).toContain("TWO brief calls");
+    expect(d).toContain("ONE ask call");
     expect(d).not.toContain("ask_user_question");
     expect(d).toContain('kind "confirm"');
     expect(d).toContain("include / exclude");
@@ -70,7 +70,7 @@ describe("crawl directive", () => {
     expect(d).not.toContain('id "source"');
     expect(d).not.toContain("/wolf:crawl-run"); // no dead end: the durable host has no run command
     expect(d).toContain("crawl_run"); // points at the durable run tool
-    expect(d).toContain("showIf");
+    expect(d).not.toContain("brief");
   });
 
   it("cards wording uses the wolf workspace for the source hint, and omits it when unknown", () => {
@@ -80,20 +80,18 @@ describe("crawl directive", () => {
     expect(none).not.toContain("undefined");
   });
 
-  it("every field name the directive tells the model to use exists in the real brief schema", async () => {
-    const { createBriefExtension } = await import("../../packages/harness/src/extensions/brief.js");
-    const params = createBriefExtension().tools![0].parameters as { properties: Record<string, { items?: { properties: Record<string, unknown> } }> };
-    const question = params.properties.questions.items!.properties;
+  it("every field name the directive tells the model to use exists in the real ask schema", async () => {
+    const { createAskExtension } = await import("../../packages/harness/src/extensions/ask.js");
+    const params = createAskExtension().tools![0].parameters as { properties: { pages: { items: { properties: { questions: { items: { properties: Record<string, unknown> } } } } } } };
+    const question = params.properties.pages.items.properties.questions.items.properties;
     const d = buildCrawlDirective({ ...base, src: "/src" });
-    // the names as the directive spells them: `ask`, choices, kind "confirm" with yesLabel / noLabel, showIf, headline
-    for (const name of ["ask", "choices", "kind", "yesLabel", "noLabel", "showIf", "id"]) {
-      expect(Object.keys(question), `brief question has ${name}`).toContain(name);
+    for (const name of ["ask", "choices", "kind", "id"]) {
+      expect(Object.keys(question), `ask question has ${name}`).toContain(name);
     }
-    expect(Object.keys(params.properties)).toContain("headline");
-    for (const spelled of ["`ask`", "`headline`", 'kind "confirm"', "yesLabel", "noLabel", "showIf: { field: \"strategy\", equals: \"by-folder\" }"]) {
+    for (const spelled of ["`ask`", "`tradeoff`", 'kind "confirm"']) {
       expect(d, spelled).toContain(spelled);
     }
     // names of the retired ask_user_question shape must be gone
-    for (const old of ["confirmLabel", "rejectLabel", "multiSelect", "`questions` list", "details"]) expect(d).not.toContain(old);
+    for (const old of ["yesLabel", "noLabel", "headline", "confirmLabel", "rejectLabel", "multiSelect", "`questions` list", "details"]) expect(d).not.toContain(old);
   });
 });

@@ -83,7 +83,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
       defineTool({
         name: "crawl_start",
         description:
-          "Start planning a crawl (ingesting a directory into the KB). Returns the questionnaire to run (the user answers through brief cards) " +
+          "Start planning a crawl (ingesting a directory into the KB). Returns the questionnaire to run (a questionnaire the owner submits once, raised with ask) " +
           "and then which crawl_* tools to call; with draft=true (or when no interview is possible) it drafts the plan directly from the arguments.",
         parameters: Type.Object({
           path: Type.Optional(Type.String({ description: "Absolute source directory; omit to have the user choose" })),

@@ -195,7 +195,13 @@ describe("system prompt blocks", () => {
     put("ws/CLAUDE.md", "claude rules");
     put("den/skills/a/SKILL.md", "---\nname: a\ndescription: d\n---\n");
     const ctx = composeProjectContext({ name: "w", cwd: join(home, "ws"), den: join(home, "den"), home, wolfHome: join(home, "wolf") });
-    expect(ctx.blocks.map((b) => b.id)).toEqual(["header", "identity", "orchestrator", "agents-md", "claude-md", "skills", "structured-output", "brief"]);
+    expect(ctx.blocks.map((b) => b.id)).toEqual(["header", "identity", "orchestrator", "agents-md", "claude-md", "skills", "structured-output", "ending-turn"]);
+    const ending = ctx.blocks.find((b) => b.id === "ending-turn")!.text;
+    expect(ending).toContain("Write a normal message first");
+    expect(ending).toMatch(/Lay out the trade-off first, then the choice/);
+    expect(ending).toContain("call ask");
+    // the blocks this file owns never name the retired brief tool (the orchestrator rules live in packages/agents)
+    expect(ctx.blocks.filter((b) => b.id !== "orchestrator").map((b) => b.text).join("\n")).not.toMatch(/\bbrief\b/i);
     expect(ctx.blocks.map((b) => b.text).join("\n\n")).toBe(ctx.instructions);
     const src = Object.fromEntries(ctx.blocks.map((b) => [b.id, b.source]));
     expect(src.identity).toBe(join(home, "wolf/agent/AGENTS.md"));

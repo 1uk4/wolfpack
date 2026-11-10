@@ -23,7 +23,7 @@ import { basename, dirname, join } from "node:path";
 import { defineTool, Type, type ExtensionContext, type ToolContext, type ToolResult } from "@wolfpack/harness/extension";
 import type { Card } from "@wolfpack/protocol";
 import { engineSteps, createEngine, loadModelTable } from "@wolfpack/engine";
-import { briefHeader, confirmCard } from "@wolfpack/harness/engine";
+import { confirmCard, pagedCard } from "@wolfpack/harness/engine";
 import { CONCURRENCY_CHOICES, CRAWL_CONCURRENCY_MAX, CrawlServiceError, defaultEmit, envConcurrency as envConcurrencyOf, describeTarget, parseConcurrency, readPlan, runCrawl, type CrawlRunner, type CrawlService, type RunView } from "@wolfpack/memory";
 import type { CrawlCore } from "./crawl-core.js";
 import {
@@ -96,7 +96,6 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
   /** pi's wizard steps as one stepped card. */
   function wizardCard(planName: string, outstanding: IncompleteRun[], askResume: boolean, askConcurrency: boolean): Card {
     const fields: Card["fields"] = [];
-    const steps: NonNullable<Card["steps"]> = [];
     const resumeValues: string[] = [];
     if (askResume) {
       const one = outstanding.length === 1;
@@ -122,7 +121,6 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         allowOther: false,
         default: options[0].value,
       });
-      steps.push({ title: "Resume", fields: ["resume"] });
     }
     if (askConcurrency) {
       const def = envConcurrency();
@@ -137,11 +135,9 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         // Cancelling skips this question: it is neither shown nor required.
         ...(askResume ? { showIf: { field: "resume", oneOf: resumeValues } } : {}),
       });
-      steps.push({ title: "Concurrency", fields: ["concurrency"] });
     }
-    const asked = [askResume ? "resume or start fresh" : "", askConcurrency ? "how many batches at once" : ""].filter(Boolean).join(" and ");
-    const brief = briefHeader(`Run crawl "${planName}"?`, [`Choose ${asked}.`, ...(askResume ? [`${outstanding.length} unfinished run(s) of this plan exist.`] : [])]);
-    return { tool: "crawl_run", title: `Run crawl — ${planName}`, brief, fields, ...(steps.length > 1 ? { steps } : {}) };
+    // ONE page: the concurrency question hides on the resume answer, and a hidden-answer rule only sees answers from its own page
+    return pagedCard({ tool: "crawl_run", title: `Run crawl — ${planName}`, fields }, "Run settings");
   }
 
   const runTool = defineTool({
@@ -183,11 +179,6 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const askConcurrency = !concurrencyGiven;
       if ((askResume || askConcurrency) && (await canAsk(ctx))) {
         const card = wizardCard(basename(dirname(planPath)), outstanding, askResume, askConcurrency);
-        const fileGlobs = plan.batches.reduce((n, b) => n + b.files.length, 0);
-        card.brief = briefHeader(`Run crawl "${basename(dirname(planPath))}"?`, [
-          `Domain ${plan.domain}: ${plan.batches.length} batch(es), ${fileGlobs} file pattern(s).`,
-          ...(card.brief?.context ?? []),
-        ]);
         if (await pendingCard(ctx, "crawl_run", card.title!)) return waiting("run options");
         return text("Run options sent to the user as a card. Your turn ends here; their answer arrives with your next message — then call crawl_run again with it.", { card });
       }
@@ -318,20 +309,20 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
         if (all.length === 1) runDir = all[0].dir;
         else {
           if (!asks) return text(`Several crawls can be released; ask the user which and call crawl_release with runDir:\n${all.map((e) => `  ${e.dir} — ${crawlEntityLabel(e)}`).join("\n")}`);
-          const card: Card = {
+          const card: Card = pagedCard({
             tool: "crawl_release",
             title: "Release which crawl?",
-            brief: briefHeader("Release which crawl?", [`${all.length} completed crawls can be released.`, "Nothing is released yet; the next step shows a preview to confirm."]),
             fields: [
               {
                 id: "run",
                 kind: "single",
                 label: "Pick a crawl — newest first.",
+                description: `${all.length} completed crawls can be released. Nothing is released yet; the next step shows a preview to confirm.`,
                 options: all.map((e) => ({ label: crawlEntityLabel(e), value: e.dir })),
                 allowOther: false,
               },
             ],
-          };
+          });
           if (await pendingCard(ctx, "crawl_release", card.title!)) return waiting("crawl choice");
           return text("Crawl choice sent to the user as a card. Your turn ends here; call crawl_release again with the run they pick.", { card });
         }
@@ -390,7 +381,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const yes = found?.status === "answered" && (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
       const spent = found?.laterResults.some((m) => firstLine(m).startsWith(releasedLine(dir))) ?? false;
       if (!(yes && !spent)) {
-        const card = confirmCard({
+        const card = pagedCard(confirmCard({
           tool: "crawl_release",
           title: "Release to the librarian?",
           question: label,
@@ -400,17 +391,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
             `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
           confirmLabel: "Release",
           rejectLabel: "Not now",
-          brief: briefHeader(
-            `Release ${toEmit} contribution(s) to "${plan.domain}"?`,
-            [
-              `${items.length} contribution(s) in the run, ${toEmit} new or changed, ${unchanged} unchanged (skipped).`,
-              `Goes to ${describeTarget(target, ctx.wolfName)}, the hub curator files it into the KB.`,
-              "A shared, one-way handoff: it cannot be recalled.",
-              ...(already ? [already] : []),
-            ],
-            "The full list and hub check are in the card body below and in the thread.",
-          ),
-        });
+        }));
         return text(`${review}\n\nConfirmation sent to the user as a card. Your turn ends here; if they say yes, call crawl_release again with the same runDir.`, { card });
       }
 

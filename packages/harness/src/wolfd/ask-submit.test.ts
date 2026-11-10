@@ -51,8 +51,8 @@ const card: Card = askCard({ pages: [{ title: "P1", questions: [q("a", { require
 const toolEntry = (callId: string, c: Card) =>
   ({ id: 10, kind: "pi.tool_result", model: [{ role: "toolResult", toolCallId: callId, toolName: "ask", content: [], timestamp: 1, details: { [CARD_DETAILS_KEY]: c } }] }) as never;
 
-async function rig() {
-  const eng = fakeEngine([toolEntry("k", card)]);
+async function rig(c: Card = card) {
+  const eng = fakeEngine([toolEntry("k", c)]);
   const events: ThreadEvent[] = [];
   const host = { name: "w", settleMs: 200, closing: () => false, emitWolf() {}, onError() {}, stallTimeoutMs: 0, den: undefined } as never;
   const rt = new ThreadRuntime({ id: "w/home" } as never, eng.conv as never, host);
@@ -100,6 +100,26 @@ describe("questionnaire save, note and submit", () => {
     expect(await code(rt.submitCard("k", { answers: { a: { value: "x" }, c: { value: "y" } } }))).toBe("not_found");
     expect(await code(() => rt.putCardNote("k", { text: "n" }))).toBe("not_found");
     expect(await code(() => rt.saveCardPage("k", 0, { answers: {} }))).toBe("not_found");
+  });
+
+  it("a paged submit drops the answer of a showIf-hidden question: it is neither delivered nor shown to the agent", async () => {
+    const opts = [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }];
+    const gated: Card = {
+      tool: "ask",
+      paged: true,
+      fields: [
+        { id: "mode", kind: "single", label: "Mode?", options: opts, allowOther: false },
+        { id: "why", kind: "free-text", label: "Why?", showIf: { field: "mode", equals: "yes" } },
+      ],
+      steps: [{ title: "P1", fields: ["mode", "why"] }],
+    };
+    const { rt, eng } = await rig(gated);
+    await rt.submitCard("k", { answers: { mode: { value: "no" }, why: { value: "stale" } } });
+    expect(eng.submitted).toHaveLength(1);
+    expect(eng.submitted[0].cardAnswers).toMatchObject({ cards: [{ callId: "k", answers: { mode: { value: "no" } } }] });
+    const delivered = JSON.stringify(eng.submitted[0]);
+    expect(delivered).not.toContain("stale");
+    expect(delivered).not.toContain("Why?");
   });
 
   it("a second submit while the first is in flight is a 409 and delivers once", async () => {

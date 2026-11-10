@@ -2,6 +2,7 @@
  * task_done's ship gate over /v1: a real wolfd turn (pi-durable, scripted model) with the durable task tools against a
  * sandboxed in-memory Work server (a local http server: nothing touches the live ledger).
  */
+import { answerPaged } from "../../packages/harness/src/wolfd/test-ask-call.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -90,8 +91,8 @@ const wolf = (script: Parameters<typeof startTestWolf>[0]["script"], tasks: Task
     },
   });
 
-const answerShips = (w: TestWolf, callId: string, picked: string[]) => w.client.answerCard!(w.home, callId, { ships: { value: picked } } as CardAnswers);
-const answer = (w: TestWolf, callId: string, confirm: boolean) => w.client.answerCard!(w.home, callId, { confirm: { value: confirm } } as CardAnswers);
+const answerShips = (w: TestWolf, callId: string, picked: string[]) => answerPaged(w.client, w.home, callId, { ships: { value: picked } } as CardAnswers);
+const answer = (w: TestWolf, callId: string, confirm: boolean) => answerPaged(w.client, w.home, callId, { confirm: { value: confirm } } as CardAnswers);
 
 describe("durable task_done ship gate (confirm card)", () => {
   it("raises a confirm card without shipping; yes → the model calls task_done again → shipped → idle", async () => {
@@ -113,29 +114,27 @@ describe("durable task_done ship gate (confirm card)", () => {
     expect(card.tool).toBe("task_done");
     expect(card.fields[0]).toMatchObject({ id: "confirm", kind: "confirm", label: `Ship "Ship me" (${t.id})?`, confirmLabel: "Ship", rejectLabel: "Not yet" });
     expect((card.fields[0] as { default?: boolean }).default).toBeUndefined();
-    expect(card.brief?.headline).toBe('Ship "Ship me"?');
-    expect(card.brief!.headline.length).toBeLessThanOrEqual(80);
-    expect(card.brief!.context!.length).toBeLessThanOrEqual(5);
-    expect(card.brief!.context![0]).toContain(t.id);
+    // a paged ask card: one page holding the confirm field the second call reads, no legacy brief header
+    expect(card).toMatchObject({ paged: true, steps: [{ fields: ["confirm"] }] });
+    expect(card.brief).toBeUndefined();
+    expect(card.fields[0].description).toContain(t.id);
     expect(items.get(t.id)!.stage).toBe("approved");
     expect(tw.scripted.faux.state.callCount).toBe(1);
 
     expect((await answer(tw, d0.pendingCards![0].callId, true)).disposition).toBe("started");
     await drain(tw);
-    expect(seen).toContain(`answered your task_done question`);
+    expect(seen).toContain(`your task_done confirmation`);
     expect(seen).toContain(`Ship "Ship me" (${t.id})?: yes (Ship)`);
     expect(items.get(t.id)!.stage).toBe("shipped");
     expect((await tw.client.getThread(tw.home)).status).toBe("idle");
   });
 
-  it("a long title is clipped in the headline, the field label keeps the exact title", async () => {
+  it("a long title is kept whole in the field label", async () => {
     const long = "T".repeat(200);
     const t = add({ kind: "task", title: long });
     tw = await wolf([toolUse(fauxToolCall("task_done", { id: t.id })), fauxAssistantMessage("unreachable")]);
     await tw.submit("go");
     const card = (await tw.client.getThread(tw.home)).pendingCards![0].card;
-    expect(card.brief!.headline.length).toBeLessThanOrEqual(80);
-    expect(card.brief!.headline.endsWith("…")).toBe(true);
     expect(card.fields[0].label).toBe(`Ship "${long}" (${t.id})?`);
   });
 
@@ -205,9 +204,8 @@ describe("durable task_done ship gate (confirm card)", () => {
     const d = await tw.client.getThread(tw.home);
     expect(d.pendingCards).toHaveLength(1);
     expect(d.pendingCards![0].card.fields[0]).toMatchObject({ kind: "multi", options: [{ value: a.id }, { value: b.id }] });
-    const mb = d.pendingCards![0].card.brief!;
-    expect(mb.headline).toBe("Ship 2 tasks?");
-    expect(mb.context).toEqual([`${a.id}: A`, `${b.id}: B`]);
+    expect(d.pendingCards![0].card).toMatchObject({ paged: true, steps: [{ title: "Ship 2 tasks?", fields: ["ships"] }] });
+    expect(d.pendingCards![0].card.brief).toBeUndefined();
     expect(d.pendingCards![0].card.fields).toHaveLength(1);
     expect(tw.scripted.faux.state.callCount).toBe(1);
   });

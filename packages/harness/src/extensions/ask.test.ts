@@ -23,6 +23,11 @@ describe("ask tool schema", () => {
     expect(card.fields[0].optional).toBeUndefined();
   });
 
+  it("rejects a single or multi question with no choices", () => {
+    expect(askProblem(one({ ...single, choices: [] }))).toMatch(/kind "single" but has no choices/);
+    expect(askProblem(one({ id: "m", ask: "Some?", kind: "multi" }))).toMatch(/kind "multi" but has no choices/);
+  });
+
   it("rejects a choice without a tradeoff", () => {
     const q = { ...single, choices: [choice, { label: "B", value: "b", tradeoff: "  " }] };
     expect(askProblem(one(q))).toMatch(/choices\[1\].*non-empty `tradeoff`/);

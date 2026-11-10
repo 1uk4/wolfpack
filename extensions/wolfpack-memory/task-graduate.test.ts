@@ -112,7 +112,9 @@ describe("durable task_graduate: the owner's card, never an agent token", () => 
     expect(r.card.tool).toBe("task_graduate");
     expect(r.card.fields[0]).toMatchObject({ id: "confirm", kind: "confirm", label: `Graduate "F" (${f.id})?` });
     expect(r.card.fields[0].default).toBeUndefined();
-    expect(JSON.stringify(r.card.brief)).toContain("The change");
+    expect(r.card).toMatchObject({ paged: true, steps: [{ fields: ["confirm"] }] });
+    expect(r.card.brief).toBeUndefined();
+    expect(r.card.fields[0].description).toContain("The change");
     expect(r.content[0].text).not.toMatch(/confirm "/);
     expect(inboxFiles()).toEqual([]);
     expect(items.get(f.id)!.graduated).toBeNull();

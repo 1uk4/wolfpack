@@ -103,7 +103,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
 // ---------------------------------------------------------------- cards
 
 /**
- * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `brief` or a
+ * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `ask` or a
  * tool such as `task_done`). A card holds one or more fields (question / options / free text). Additive: no version bump.
  *
  * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
@@ -126,7 +126,7 @@ export const CardStepSchema = z.object({
 });
 export type CardStep = z.infer<typeof CardStepSchema>;
 
-/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the brief builder. */
+/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the ask builder. */
 export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: readonly CardField[]): string | undefined {
   const s = f.showIf;
   if (!s) return undefined;
@@ -137,28 +137,25 @@ export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: r
   return check(ctl as unknown as AnyField, s);
 }
 
-/** Limits of a brief header (owner decisions): the headline and the bullet count are hard, a bullet's length is soft (the console clamps it). */
-export const BRIEF_LIMITS = { headline: 80, contextBullets: 5, bulletSoftChars: 160, questions: 3 } as const;
-
 /**
- * The header of a card raised by the `brief` tool: what the owner needs to know before answering.
- * `context` bullets are short by convention (~160 chars) but never rejected for length; `more` points at detail in the thread.
+ * LEGACY, read-only: the header of a card raised by the retired `brief` tool. No tool writes it any more; the schema
+ * keeps it so old transcripts still parse and render. `context` bullets are short by convention but never rejected for length.
  */
 export const CardBriefSchema = z.object({
-  headline: z.string().min(1).max(BRIEF_LIMITS.headline),
-  context: z.array(z.string()).max(BRIEF_LIMITS.contextBullets).optional(),
+  headline: z.string().min(1).max(80),
+  context: z.array(z.string()).max(5).optional(),
   more: z.string().optional(),
 });
 export type CardBrief = z.infer<typeof CardBriefSchema>;
 
 export const CardSchema = z
   .object({
-    /** Tool that raised it, e.g. `brief`. Keys the console's card renderer. */
+    /** Tool that raised it, e.g. `ask` or `task_done`. Keys the console's card renderer. */
     tool: z.string(),
     title: z.string().optional(),
-    /** A card needs at least one field, except a brief card, which may have none (the owner then acknowledges with OK); a brief holds at most 3. */
+    /** A card needs at least one field. */
     fields: z.array(CardFieldSchema),
-    /** Brief header (the `brief` tool). Absent on cards from other tools. */
+    /** Legacy, read-only: the header of a card from the retired `brief` tool. Never written now; only old transcripts carry it. */
     brief: CardBriefSchema.optional(),
     /**
      * Optional stepped presentation: the fields grouped into ordered steps (every field in exactly one step; a step
@@ -178,8 +175,7 @@ export const CardSchema = z
     revises: z.string().optional(),
   })
   .refine((c) => !c.paged || c.steps !== undefined, { message: "a paged card needs steps (its pages)", path: ["steps"] })
-  .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field (only a brief card may have none)", path: ["fields"] })
-  .refine((c) => c.brief === undefined || c.fields.length <= BRIEF_LIMITS.questions, { message: `a brief card holds at most ${BRIEF_LIMITS.questions} questions`, path: ["fields"] })
+  .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field", path: ["fields"] })
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
   .refine(
     (c) => {
@@ -200,6 +196,15 @@ export const CardSchema = z
       return ids.length === c.fields.length && ids.every((id, i) => id === c.fields[i].id);
     },
     { message: "steps must list every field exactly once, in the card's field order", path: ["steps"] },
+  )
+  .refine(
+    (c) => {
+      // Each page of a paged card is answered and validated alone, so a controller on another page would hide its field forever.
+      if (!c.paged || !c.steps) return true;
+      const page = new Map(c.steps.flatMap((s, i) => s.fields.map((id) => [id, i] as const)));
+      return c.fields.every((f) => f.showIf === undefined || page.get(f.showIf.field) === page.get(f.id));
+    },
+    { message: "a field's showIf controller must be on the same page as the field: put the question and the one it depends on on the same page", path: ["steps"] },
   )
   .refine(
     (c) => c.fields.every((f) => showIfProblem(f, c.fields) === undefined),
@@ -289,7 +294,7 @@ export const PendingCardSchema = z.object({
   raisedAt: z.iso.datetime({ offset: true }),
   /**
    * Who asked, for the parent's queued sheet (additive; absent from older servers = the thread itself):
-   * `self` (the thread's own ask/brief, label "you"), `subagent` (a child thread's card, label "<agent>: <name>"),
+   * `self` (the thread's own ask, label "you"), `subagent` (a child thread's card, label "<agent>: <name>"),
    * `tool` (a tool's confirmation such as crawl_run, label = tool name). `threadId` stays the asker's thread.
    */
   source: z.object({ kind: z.enum(["self", "subagent", "tool"]), label: z.string() }).optional(),

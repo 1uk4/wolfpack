@@ -7,7 +7,7 @@ import type { Card } from "@wolfpack/protocol";
 import { Type } from "../extension-api.js";
 import { adaptToDurable } from "../adapters/durable.js";
 import { cardResult, createCardGuardExtension } from "../engine/cards.js";
-import { askCall } from "./test-ask-call.js";
+import { askCall, answerPaged, plainCall, plainCardExtension } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import type { ExtensionRuntime } from "./run.js";
 import { WolfServer } from "./server.js";
@@ -24,8 +24,8 @@ const lastUserText = (context: { messages: { role: string; content: unknown }[] 
   return typeof u?.content === "string" ? u.content : JSON.stringify(u?.content);
 };
 
-// wolfd installs brief and the card guard itself (run.ts).
-const wolfWithAsk = (script: TestWolfOptions["script"], more: Extension[] = []) => startTestWolf({ script, hooks: { extensions: more } });
+// wolfd installs ask and the card guard itself (run.ts).
+const wolfWithAsk = (script: TestWolfOptions["script"], more: Extension[] = []) => startTestWolf({ script, hooks: { extensions: (rt) => [plainCardExtension(rt), ...more] } });
 const toolUse = (...calls: ReturnType<typeof fauxToolCall>[]) => fauxAssistantMessage(calls, { stopReason: "toolUse" });
 const drain = async (w: TestWolf) => {
   for await (const _ of w.client.watch(w.home));
@@ -53,18 +53,18 @@ describe("ask card (tool-raised, two-turn)", () => {
     expect(detail.status).toBe("needs-you");
     expect(detail.pendingCards).toHaveLength(1);
     const pending = detail.pendingCards![0];
-    expect(pending.card).toMatchObject({ tool: "brief", fields: [{ id: "answer", kind: "free-text", label: "Which branch?", description: "for the release" }] });
+    expect(pending.card).toMatchObject({ tool: "ask", fields: [{ id: "answer", kind: "free-text", label: "Which branch?", description: "for the release" }] });
     expect((await tw.client.listThreads("testwolf"))[0].status).toBe("needs-you");
     expect(await tw.client.listCards!("testwolf")).toEqual([pending]);
     const call = detail.messages.at(-1)!.tools![0];
-    expect(call).toMatchObject({ name: "brief", callId: pending.callId, card: pending.card });
+    expect(call).toMatchObject({ name: "ask", callId: pending.callId, card: pending.card });
     expect(call.answer).toBeUndefined();
 
-    const ack = await tw.client.answerCard!(home, pending.callId, { answer: { value: "main" } });
+    const ack = await answerPaged(tw.client, home, pending.callId, { answer: { value: "main" } });
     expect(ack.disposition).toBe("started");
     await drain(tw);
 
-    expect(seen).toContain("- Which branch?: main");
+    expect(seen).toContain("- Q1 Which branch?: main");
     expect(seen).toContain(pending.callId);
     const after = await tw.client.getThread(home);
     expect(after.status).toBe("idle");
@@ -75,12 +75,12 @@ describe("ask card (tool-raised, two-turn)", () => {
     expect(after.messages.at(-1)).toMatchObject({ role: "assistant", text: "Shipping from main." });
     expect(after.messages.filter((m) => m.role === "user").map((m) => m.text)).toEqual(["release it"]);
     expect(await tw.client.listCards!("testwolf")).toEqual([]);
-    await expect(tw.client.answerCard!(home, pending.callId, { answer: { value: "again" } })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(answerPaged(tw.client, home, pending.callId, { answer: { value: "again" } })).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("single: validates answers against the options; an Other answer is accepted", async () => {
     tw = await wolfWithAsk([
-      toolUse(askCall({ question: "Pick", options: [{ label: "A (Recommended)", value: "a" }, { label: "B" }] })),
+      toolUse(plainCall({ question: "Pick", options: [{ label: "A (Recommended)", value: "a" }, { label: "B" }] })),
       fauxAssistantMessage("ok"),
     ]);
     await tw.submit("go");
@@ -89,11 +89,11 @@ describe("ask card (tool-raised, two-turn)", () => {
 
     const invalid: Record<string, { value: string; other?: boolean }>[] = [{}, { answer: { value: "zzz" } }, { answer: { value: "  ", other: true } }, { answer: { value: "a" }, extra: { value: "x" } }];
     for (const bad of invalid) {
-      await expect(tw.client.answerCard!(tw.home, p.callId, bad)).rejects.toMatchObject({ code: "invalid_request" });
+      await expect(answerPaged(tw.client, tw.home, p.callId, bad)).rejects.toMatchObject({ code: "invalid_request" });
     }
     expect((await tw.client.getThread(tw.home)).status).toBe("needs-you"); // rejected answers change nothing
 
-    await tw.client.answerCard!(tw.home, p.callId, { answer: { value: "something else", other: true } });
+    await answerPaged(tw.client, tw.home, p.callId, { answer: { value: "something else", other: true } });
     await drain(tw);
     const done = await tw.client.getThread(tw.home);
     expect(done.status).toBe("idle");
@@ -108,16 +108,16 @@ describe("ask card (tool-raised, two-turn)", () => {
         defineTool({ name: "raise_strict", description: "raise", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return cardResult(strict); } }),
       ],
     });
-    tw = await wolfWithAsk([toolUse(fauxToolCall("raise_strict", {})), toolUse(askCall({ question: "free?" }))], [raiser]);
+    tw = await wolfWithAsk([toolUse(fauxToolCall("raise_strict", {})), toolUse(plainCall({ question: "free?" }))], [raiser]);
     await tw.submit("one");
     const [strictP] = (await tw.client.getThread(tw.home)).pendingCards!;
-    await expect(tw.client.answerCard!(tw.home, strictP.callId, { x: { value: "mine", other: true } })).rejects.toMatchObject({ code: "invalid_request" });
-    await expect(tw.client.answerCard!(tw.home, "no-such-call", { x: { value: "yes" } })).rejects.toBeInstanceOf(NotFoundError);
-    await tw.client.answerCard!(tw.home, strictP.callId, { x: { value: "yes" } });
+    await expect(answerPaged(tw.client, tw.home, strictP.callId, { x: { value: "mine", other: true } })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(answerPaged(tw.client, tw.home, "no-such-call", { x: { value: "yes" } })).rejects.toBeInstanceOf(NotFoundError);
+    await answerPaged(tw.client, tw.home, strictP.callId, { x: { value: "yes" } });
     await drain(tw);
     const [freeP] = (await tw.client.getThread(tw.home)).pendingCards!;
     expect(freeP.card.fields[0].kind).toBe("free-text");
-    await expect(tw.client.answerCard!(tw.home, freeP.callId, { answer: { value: "t", other: true } })).rejects.toBeInstanceOf(ProtocolError);
+    await expect(answerPaged(tw.client, tw.home, freeP.callId, { answer: { value: "t", other: true } })).rejects.toBeInstanceOf(ProtocolError);
     expect((await tw.client.getThread(tw.home)).status).toBe("needs-you");
   });
 
@@ -149,7 +149,7 @@ describe("ask card (tool-raised, two-turn)", () => {
       name: "echo",
       tools: [defineTool({ name: "echo", description: "echo", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { echoed++; return { output: [{ type: "text" as const, text: "echoed" }] }; } })],
     });
-    tw = await wolfWithAsk([toolUse(askCall({ question: "Q" }), fauxToolCall("echo", {})), fauxAssistantMessage("must not run")], [echo]);
+    tw = await wolfWithAsk([toolUse(plainCall({ question: "Q" }), fauxToolCall("echo", {})), fauxAssistantMessage("must not run")], [echo]);
     const events = await tw.submit("go");
     expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
     expect(echoed).toBe(1);
@@ -162,14 +162,14 @@ describe("ask card (tool-raised, two-turn)", () => {
   describe("sibling cards of one turn", () => {
     const twoCards = () =>
       wolfWithAsk([
-        toolUse(askCall({ question: "Q1" }), askCall({ question: "Q2" })),
+        toolUse(plainCall({ question: "Q1" }), plainCall({ question: "Q2" })),
         fauxAssistantMessage("ok"),
       ]);
 
     it("no turn until the last is answered; the held answer is visible and changeable; the turn lists both in raise order", async () => {
       let seen = "";
       tw = await wolfWithAsk([
-        toolUse(askCall({ question: "Q1" }), askCall({ question: "Q2" })),
+        toolUse(plainCall({ question: "Q1" }), plainCall({ question: "Q2" })),
         (context) => {
           seen = lastUserText(context as never);
           return fauxAssistantMessage("ok");
@@ -179,14 +179,14 @@ describe("ask card (tool-raised, two-turn)", () => {
       const cards = (await tw.client.getThread(tw.home)).pendingCards!;
       expect(cards).toHaveLength(2);
       // Answer the SECOND first: raise order still wins in the model's message.
-      expect((await tw.client.answerCard!(tw.home, cards[1].callId, { answer: { value: "two-draft" } })).disposition).toBe("queued");
+      expect((await answerPaged(tw.client, tw.home, cards[1].callId, { answer: { value: "two-draft" } })).disposition).toBe("queued");
       expect(tw.scripted.faux.state.callCount).toBe(1);
       let d = await tw.client.getThread(tw.home);
       expect(d.status).toBe("needs-you");
       expect(d.pendingCards!.map((p) => p.heldAnswer)).toEqual([undefined, { answer: { value: "two-draft" } }]);
-      expect((await tw.client.answerCard!(tw.home, cards[1].callId, { answer: { value: "two" } })).disposition).toBe("queued"); // changed
+      expect((await answerPaged(tw.client, tw.home, cards[1].callId, { answer: { value: "two" } })).disposition).toBe("queued"); // changed
       expect((await tw.client.getThread(tw.home)).pendingCards![1].heldAnswer).toEqual({ answer: { value: "two" } });
-      expect((await tw.client.answerCard!(tw.home, cards[0].callId, { answer: { value: "one" } })).disposition).toBe("started");
+      expect((await answerPaged(tw.client, tw.home, cards[0].callId, { answer: { value: "one" } })).disposition).toBe("started");
       await drain(tw);
       expect(seen.indexOf("- Q1: one")).toBeGreaterThan(-1);
       expect(seen.indexOf("- Q2: two")).toBeGreaterThan(seen.indexOf("- Q1: one"));
@@ -199,7 +199,7 @@ describe("ask card (tool-raised, two-turn)", () => {
       tw = await twoCards();
       await tw.submit("go");
       const cards = (await tw.client.getThread(tw.home)).pendingCards!;
-      await tw.client.answerCard!(tw.home, cards[0].callId, { answer: { value: "one" } }); // held
+      await answerPaged(tw.client, tw.home, cards[0].callId, { answer: { value: "one" } }); // held
       tw.scripted.faux.appendResponses([fauxAssistantMessage("never mind then")]);
       await tw.submit("skip those, do X instead");
       const d = await tw.client.getThread(tw.home);
@@ -208,7 +208,7 @@ describe("ask card (tool-raised, two-turn)", () => {
       expect(await tw.client.listCards!("testwolf")).toEqual([]);
       const calls = d.messages.flatMap((m) => m.tools ?? []);
       expect(calls.map((c) => [c.dismissed, c.answer])).toEqual([[true, undefined], [true, undefined]]);
-      for (const c of cards) await expect(tw.client.answerCard!(tw.home, c.callId, { answer: { value: "late" } })).rejects.toBeInstanceOf(NotFoundError);
+      for (const c of cards) await expect(answerPaged(tw.client, tw.home, c.callId, { answer: { value: "late" } })).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 
@@ -220,7 +220,7 @@ describe("ask card (tool-raised, two-turn)", () => {
       name: "gate",
       tools: [defineTool({ name: "gate", description: "wait", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { await gate; return { output: [{ type: "text" as const, text: "open" }] }; } })],
     });
-    const asks = Array.from({ length: questions }, (_, i) => askCall({ question: `Q${i}` }));
+    const asks = Array.from({ length: questions }, (_, i) => plainCall({ question: `Q${i}` }));
     tw = await wolfWithAsk([toolUse(...asks, fauxToolCall("gate", {})), ...rest], [slow]);
     await tw.client.submit(tw.home, "go", { whenBusy: "reject" });
     const w = tw;
@@ -235,7 +235,7 @@ describe("ask card (tool-raised, two-turn)", () => {
     let seen = "";
     const g = await gatedAsk([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("done"); }]);
     expect(g.cards).toHaveLength(1);
-    const ack = await tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "blue" } });
+    const ack = await answerPaged(tw!.client, tw!.home, g.cards[0].callId, { answer: { value: "blue" } });
     expect(["steered", "queued"]).toContain(ack.disposition);
     expect((await tw!.client.getThread(tw!.home)).pendingCards).toBeUndefined();
     g.release();
@@ -244,7 +244,7 @@ describe("ask card (tool-raised, two-turn)", () => {
     expect(d.status).toBe("idle");
     expect(seen).toContain("blue");
     expect(d.messages.flatMap((m) => m.tools ?? []).find((t) => t.callId === g.cards[0].callId)).toMatchObject({ answer: { answer: { value: "blue" } } });
-    await expect(tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(answerPaged(tw!.client, tw!.home, g.cards[0].callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("skipping while a turn runs is accepted and the model is told", async () => {
@@ -262,10 +262,10 @@ describe("ask card (tool-raised, two-turn)", () => {
     let seen = "";
     const g = await gatedAsk([(context) => { seen = lastUserText(context as never); return fauxAssistantMessage("done"); }], 2);
     expect(g.cards).toHaveLength(2);
-    const first = await tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "one" } });
+    const first = await answerPaged(tw!.client, tw!.home, g.cards[0].callId, { answer: { value: "one" } });
     expect(first.disposition).toBe("queued");
     expect((await tw!.client.getThread(tw!.home)).pendingCards!.find((c) => c.callId === g.cards[0].callId)).toMatchObject({ heldAnswer: { answer: { value: "one" } } });
-    await tw!.client.answerCard!(tw!.home, g.cards[1].callId, { answer: { value: "two" } });
+    await answerPaged(tw!.client, tw!.home, g.cards[1].callId, { answer: { value: "two" } });
     g.release();
     await drain(tw!);
     expect((await tw!.client.getThread(tw!.home)).status).toBe("idle");
@@ -282,7 +282,7 @@ describe("ask card (tool-raised, two-turn)", () => {
     expect(d.busy).toBe(true);
     expect(d.pendingCards).toBeUndefined();
     expect(await tw!.client.listCards!("testwolf")).toEqual([]);
-    await expect(tw!.client.answerCard!(tw!.home, g.cards[0].callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(answerPaged(tw!.client, tw!.home, g.cards[0].callId, { answer: { value: "x" } })).rejects.toBeInstanceOf(NotFoundError);
     await expect(tw!.client.skipCard!(tw!.home, g.cards[0].callId)).rejects.toBeInstanceOf(NotFoundError);
     void settled;
     g.release();
@@ -293,12 +293,12 @@ describe("ask card (tool-raised, two-turn)", () => {
   });
 
   it("a concurrent double answer for the same card starts exactly one turn", async () => {
-    tw = await wolfWithAsk([toolUse(askCall({ question: "Q" })), fauxAssistantMessage("ok")]);
+    tw = await wolfWithAsk([toolUse(plainCall({ question: "Q" })), fauxAssistantMessage("ok")]);
     await tw.submit("go");
     const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
     const results = await Promise.allSettled([
-      tw.client.answerCard!(tw.home, p.callId, { answer: { value: "a" } }),
-      tw.client.answerCard!(tw.home, p.callId, { answer: { value: "b" } }),
+      answerPaged(tw.client, tw.home, p.callId, { answer: { value: "a" } }),
+      answerPaged(tw.client, tw.home, p.callId, { answer: { value: "b" } }),
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const failed = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
@@ -308,7 +308,7 @@ describe("ask card (tool-raised, two-turn)", () => {
   });
 
   it("a reconnecting wolfd re-derives pending cards from the durable transcript (CardTracker.reset)", async () => {
-    tw = await wolfWithAsk([toolUse(askCall({ question: "Q1", options: [{ label: "x" }] })), fauxAssistantMessage("ok")]);
+    tw = await wolfWithAsk([toolUse(plainCall({ question: "Q1", options: [{ label: "x" }] })), fauxAssistantMessage("ok")]);
     await tw.submit("go");
     const before = await tw.client.getThread(tw.home);
     expect(before.pendingCards).toHaveLength(1);

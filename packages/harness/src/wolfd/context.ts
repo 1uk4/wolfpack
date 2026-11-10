@@ -46,15 +46,18 @@ export interface ProjectContextInput {
 export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show the user live structured objects; prose stays the primary channel.
 - show_graph: a plan with dependencies or branching (3+ steps with ordering); revise statuses as work progresses.
 - show_checklist: a linear to-do you tick off in place. Don't emit both a graph and a checklist for the same plan.
-- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the user an open question, use the brief tool instead.
+- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the owner an open question or get a decision, use the ask tool instead.
 - Revise an object by reusing its objectId and resending it in full.
 - No objects for trivial answers or one-step tasks.`;
 
-/** The "Ending a turn" section: when to end with `brief` instead of plain chat. */
-export const BRIEF_GUIDANCE = `Whenever the owner has to make a decision, supply an answer or look over a finished result, close your turn with the brief tool rather than a plain message. The owner gets a card with a headline (up to 80 characters), at most 5 brief context bullets and 0 to 3 questions (single, multi, confirm or free). A brief with no questions is simply acknowledged with OK.
-- Keep the card terse. The full explanation goes in your thread message; reference it with \`more\`.
-- Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications that need no decision.
-- A brief closes the turn, so make no further tool calls after it; the owner's response opens your next turn.`;
+/** The "Ending a turn" section: a normal message for the big picture, then `ask` for the decision. */
+export const ENDING_TURN_GUIDANCE = `When the owner has to make a decision, supply an answer or confirm something, do two things in order.
+1. Write a normal message first. It carries the big picture: where things stand, what you found or did, and why a decision is needed.
+2. Then call ask. Lay out the trade-off first, then the choice: each question's context states what is at stake, and every option states what picking it costs or implies. Keep each question small, with its own context, and put related questions on one page.
+- ask ends your turn. Make no further tool calls after it. The owner fills in the pages at their own pace and submits once; their answers open your next turn.
+- Ask only when you cannot proceed without the owner. Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications, and anything you can decide yourself and say so.
+- Don't ask what you can find out by looking, and don't repeat a question the owner already answered.
+- A finished result with nothing to decide is a normal message, not an ask.`;
 
 export interface FoundFile {
   path: string;
@@ -190,6 +193,6 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
   }
   const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
   if (so !== false && so.trim()) add("structured-output", "Structured output guidance", "wolf.yaml prompts.structuredOutput (default: DEFAULT_STRUCTURED_OUTPUT_GUIDANCE in packages/harness/src/wolfd/context.ts)", `# Structured output\n\n${so.trim()}`);
-  add("brief", "Ending a turn (brief guidance)", "packages/harness/src/wolfd/context.ts BRIEF_GUIDANCE", `# Ending a turn\n\n${BRIEF_GUIDANCE}`);
+  add("ending-turn", "Ending a turn", "packages/harness/src/wolfd/context.ts ENDING_TURN_GUIDANCE", `# Ending a turn\n\n${ENDING_TURN_GUIDANCE}`);
   return { identity, agents, claude, skills, instructions: blocks.map((b) => b.text).join("\n\n"), blocks };
 }

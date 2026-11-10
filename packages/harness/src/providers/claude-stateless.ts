@@ -154,6 +154,10 @@ export const claudeStatelessFactory: ProviderFactory = (ctx) => {
   guardProviderStreams(handle.provider as never, { provider: CLAUDE_STATELESS_ID });
   // Logs the SDK's final message for a round the bridge dropped a tool call in (work-wolfpack-7g4ZFMJ).
   const p = handle.provider as any;
-  p.streamSimple = p.stream = withDroppedCallNet(p.streamSimple.bind(p));
+  // pi's agent loop calls streamSimple (compat.js streamSimple -> provider.streamSimple); stream() is the non-simple entry.
+  // The bridge aliases both to one function today, but each is wrapped on its own so neither bypasses the net nor changes
+  // the other's signature if the bridge ever splits them.
+  p.stream = withDroppedCallNet(p.stream.bind(p));
+  p.streamSimple = withDroppedCallNet(p.streamSimple.bind(p));
   return { provider: handle.provider as never, forget: (id) => void handle.forget(id), dispose: () => void handle.dispose() };
 };

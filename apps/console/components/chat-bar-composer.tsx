@@ -10,15 +10,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { useAttachedThread } from "@/components/attached-thread";
 import { threadBase } from "@/components/thread-transport";
-import { postReply } from "@/components/ask-reply-send";
-import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
-import { canSendWith, chipFor, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, uploadFile, UploadError, type AttachmentLimit, type PendingAttachment } from "@/components/attachments";
+import { newUploadState, startUploads } from "@/components/attachment-upload";
+import { canSendWith, readyInfos, type PendingAttachment } from "@/components/attachments";
 import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
 import { useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
 
-import { ReplyingChip } from "@/components/replying-chip";
 import { mergeRestored } from "@/components/composer-restore";
 
 /**
@@ -26,7 +24,7 @@ import { mergeRestored } from "@/components/composer-restore";
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, answering, onClearAnswering, onBound, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; answering?: { callId: string; qid: string; label: string } | null; onClearAnswering?: () => void; onBound?: () => void; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -55,66 +53,13 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 	// Pasted / picked images upload exactly as on the thread page.
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const patch = useCallback((key: string, p: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...p } : a))), []);
-	const limitRef = useRef<AttachmentLimit | undefined>(undefined);
-	const fitChain = useRef<Promise<unknown>>(Promise.resolve());
+	const uploads = useRef(newUploadState());
 	const uploadUrl = `${threadBase(target.wolf, target.slug)}/attachments`;
-	const onFiles = useCallback((files: File[]) => {
-		for (const file of files) {
-			const key = `att-${Math.random().toString(36).slice(2)}`;
-			const { chip, upload } = chipFor(file, key, Infinity);
-			setAttachments((prev) => [...prev, chip]);
-			if (!upload) continue;
-			const fit = fitChain.current.then(async () => {
-				limitRef.current ??= await fetchAttachmentLimit();
-				const limit = limitRef.current ?? FALLBACK_LIMIT;
-				return { limit, result: await fitImageWithTimeout(file, limit.maxBytes, browserFitDeps()) };
-			});
-			fitChain.current = fit.catch(() => {});
-			void (async () => {
-				let limit = FALLBACK_LIMIT;
-				try {
-					const fitted = await fit;
-					limit = fitted.limit;
-					if (!fitted.result.ok) return patch(key, { status: "error", error: fitFailureMessage(fitted.result.reason, limit.maxBytes, limit.mode === "relay", file.size) });
-					const { id, name, mimeType, size } = await uploadFile(uploadUrl, fitted.result.file);
-					patch(key, { status: "ready", id, name, mimeType, size });
-				} catch (err) {
-					const e = err as Error;
-					patch(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, limit.mode === "relay") });
-				}
-			})();
-		}
-	}, [uploadUrl, patch]);
+	const onFiles = useCallback((files: File[]) => startUploads(files, uploadUrl, uploads.current, (chip) => setAttachments((prev) => [...prev, chip]), patch), [uploadUrl, patch]);
 
-	const replyInFlight = useRef(false);
 	const send = useCallback(async () => {
 		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
-		if (answering) {
-			// "Answering Qn": the text and ready images are that question's answer (a draft), not a chat message; nothing is superseded.
-			const refs = readyInfos(attachments);
-			if (t === "" && refs.length === 0) return;
-			if (replyInFlight.current) return;
-			replyInFlight.current = true;
-			// Text and ready images leave the composer before the POST, so a second Send finds nothing to send.
-			applyText("");
-			schedule("");
-			setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
-			setError(null);
-			const err = await postReply(target.wolf, target.slug, answering.callId, answering.qid, t, refs.map((r) => r.id));
-			replyInFlight.current = false;
-			if (!err) {
-				onClearAnswering?.();
-				onBound?.();
-				return;
-			}
-			setError(err);
-			const merged = mergeRestored(t, textRef.current);
-			applyText(merged);
-			schedule(merged);
-			setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
-			return;
-		}
 		const refs = readyInfos(attachments);
 		applyText("");
 		schedule("");
@@ -132,7 +77,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 			schedule(merged);
 			setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
 		}
-	}, [attachments, applyText, schedule, api, target, working, onReplied, answering, onClearAnswering, onBound]);
+	}, [attachments, applyText, schedule, api, target, working, onReplied]);
 	const stop = useCallback(() => void abortThread(target), [target]);
 	// Enter while dictating finishes the run, then sends the spoken text (as on the thread page); one send in flight.
 	const sendRef = useRef(send);
@@ -153,8 +98,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 					{waiting} attachment{waiting === 1 ? "" : "s"} waiting in the thread
 				</p>
 			)}
-			{answering && <ReplyingChip label={answering.label} onClear={onClearAnswering} className="px-3 pt-1" />}
-			{askOpen && !answering && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
+			{askOpen && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 			<Composer
 				busy={working}
 				{...(cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
@@ -163,7 +107,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 				onSend={onSend}
 				onStop={stop}
 				canSend={canSendWith(text, attachments) || (dictation.active && !working)}
-				onEscape={dictation.active ? dictation.cancel : answering ? onClearAnswering : undefined}
+				onEscape={dictation.active ? dictation.cancel : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}
 				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}

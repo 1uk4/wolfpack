@@ -687,7 +687,7 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		});
 	const enter = () => act(async () => void propsOf(ta(), "onKeyDown")({ key: "Enter", shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, stopPropagation() {}, nativeEvent: {} }));
 
-	it("reply mode: Send binds the text to the question without a chat message; x leaves it and a plain send goes out as a message", async () => {
+	it("reply mode: the page composer gives way to the sheet's inline one; Send binds without a chat message and brings it back; x keeps the draft and brings it back; a plain send goes out as a message", async () => {
 		textPosts.length = 0;
 		submitPosts.length = 0;
 		const client = new CardClient(FREEQ);
@@ -696,17 +696,23 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		await settle();
 		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
 		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why it/);
+		assert.equal(q('[data-testid="thread-composer-card"]') === null, true);
+		assert.equal(q('[data-testid="composer-controls"]') === null, true);
 		await typeText("because");
 		await enter();
 		await settle();
+		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
 		assert.equal(textPosts.length, 1);
 		assert.match(textPosts[0]!.url, /\/cards\/call-1\/questions\/q1\/text$/);
 		assert.equal(textPosts[0]!.body.text, "because");
 		assert.deepEqual(submitPosts, []);
-		assert.equal(q('[data-testid="answering-chip"]'), null);
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
 		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		await typeText("draft");
 		await click(q('[data-testid="answering-chip-clear"]')!);
-		assert.equal(q('[data-testid="answering-chip"]'), null);
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
+		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
+		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: draft/);
 		await typeText("plain message");
 		await enter();
 		await settle(400);
@@ -714,7 +720,7 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		assert.equal(textPosts.length, 1);
 	});
 
-	it("reply mode: a failed bind puts the text back in the page composer", async () => {
+	it("reply mode: a failed bind puts the text back in the inline composer", async () => {
 		textPosts.length = 0;
 		textStatus = 400;
 		try {

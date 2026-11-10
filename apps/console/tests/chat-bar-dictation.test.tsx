@@ -223,17 +223,21 @@ describe("floating chat dictation", () => {
 		assert.deepEqual(posts, []);
 	});
 
-	it("dictating in reply mode binds the spoken text to the question instead of sending a chat message", async () => {
+	it("dictating while a question is open fills the inline composer, not the hidden bar composer, and Send binds it to the question", async () => {
 		pagedAsk = true;
 		await mount("/kb", A);
 		await wait();
 		await fire(q('[data-testid="ask-free"], [data-testid="ask-other"]')!, "click");
 		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why/);
-		await fire(barToggle(), "click", { detail: 1 });
+		assert.equal(q('[data-testid="ask-inline-composer"] [data-testid="dictation-toggle"]') !== null, true); // the Dictate row is in the sheet
+		await fire(q('[data-testid="ask-inline-composer"] [data-testid="dictation-toggle"]')!, "click", { detail: 1 });
 		await wait();
 		const ws = await say("because of dictation");
-		await fire(q('[data-testid="chat-bar"] form')!, "submit");
 		await endRun(ws);
+		await wait();
+		assert.equal(barTa()!.getAttribute("value") ?? (barTa() as any)[Object.keys(barTa()!).find((k) => k.startsWith("__reactProps$"))!].value, "because of dictation");
+		assert.equal(q('[data-testid="ask-inline-composer"] textarea') === barTa(), true); // the only textarea in the bar is the inline one
+		await fire(q('[data-testid="chat-bar"] form')!, "submit");
 		await wait();
 		assert.deepEqual(posts.filter((u) => /\/(submit|questions\/q1\/text)$/.test(u)), ["/api/wolves/w/threads/a/cards/p1/questions/q1/text"]);
 	});

@@ -353,12 +353,13 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 		// The targeted question left the page (or the card is gone): the chip goes.
 		if (answering && !answeringNow) setAnswering(null);
 	}, [answering, answeringNow]);
+	// While a question is answered in its sheet the bottom composer is hidden and the sheet fills the space it used.
+	const composing = answering !== null && answeringNow !== null;
 	const sheetCard = askCard ? (
-		<div data-testid="ask-sheet-host" className={cn("flex min-h-0 flex-col", phone ? "flex-1" : "max-h-[70vh]")}>
-			<AskSheet key={askCard.callId} target={target} pc={askCard} answering={answering} setAnswering={setAnswering} onSubmitted={(last) => (last ? rawCards.settle(askCard.callId) : rawCards.refetch())} onRefetch={rawCards.refetch} />
+		<div data-testid="ask-sheet-host" className={cn("flex min-h-0 flex-col", phone ? "flex-1" : composing ? "max-h-[85vh]" : "max-h-[70vh]")}>
+			<AskSheet key={askCard.callId} target={target} pc={askCard} answering={answering} setAnswering={setAnswering} onSubmitted={(last) => (last ? rawCards.settle(askCard.callId) : rawCards.refetch())} onRefetch={rawCards.refetch} dictation={dictation} />
 		</div>
 	) : null;
-	const answeringProp = answering && answeringNow ? { ...answering, label: answeringNow } : null;
 	const raised = useRaisedAt(BAR_EXTRAS.badge && api.attached !== null);
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
@@ -546,7 +547,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} answering={answeringProp} onClearAnswering={() => setAnswering(null)} onBound={rawCards.refetch} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />)}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
@@ -589,7 +590,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						<ChevronDownIcon className="size-4" />
 					</button>
 				</div>
-				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} answering={answeringProp} onClearAnswering={() => setAnswering(null)} onBound={rawCards.refetch} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>

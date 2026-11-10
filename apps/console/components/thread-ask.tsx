@@ -11,9 +11,8 @@ import dynamic from "next/dynamic";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useBarCards } from "@/components/chat-bar-cards";
 import { useWide } from "@/components/chat-bar";
-import { postReply } from "@/components/ask-reply-send";
 import type { Answering } from "@/components/ask-sheet";
-import { replyLabel } from "@/components/ask-reply";
+import type { Dictation } from "@/components/dictation";
 import { BAR_EXTRAS, type AttachedRef } from "@/src/core";
 
 const AskSheet = dynamic(() => import("@/components/ask-sheet").then((m) => m.AskSheet), { ssr: false });
@@ -23,14 +22,11 @@ export interface OwnAsk {
 	sheet: React.ReactNode;
 	/** A paged ask is pending. */
 	pending: boolean;
-	/** The short label of the question the composer is aimed at (reply mode), else null. */
-	answeringLabel: string | null;
-	clearAnswering: () => void;
-	/** Send the composer text to the aimed question. Resolves to an error message, or null when it was saved. */
-	bindText: (text: string, attachments?: string[]) => Promise<string | null>;
+	/** A question is being answered in the sheet's inline composer: the page composer is hidden meanwhile. */
+	composing: boolean;
 }
 
-export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: number | null): OwnAsk {
+export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: number | null, dictation: Dictation): OwnAsk {
 	const wide = useWide();
 	const cards = useBarCards(target, working, BAR_EXTRAS.ask);
 	const pc = BAR_EXTRAS.ask ? cards.pending.find((p) => p.card.paged === true) : undefined;
@@ -38,33 +34,16 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 	const [open, setOpen] = useState(true);
 	const callId = pc?.callId;
 	useEffect(() => setOpen(true), [callId]);
-	const label = (() => {
-		if (!answering || !pc || pc.callId !== answering.callId) return null;
-		const i = pc.card.fields.findIndex((f) => f.id === answering.qid);
-		return i < 0 || !(pc.card.steps?.[pc.pageIndex ?? 0]?.fields ?? []).includes(answering.qid) ? null : replyLabel(pc.card.fields[i]!);
-	})();
+	const composing = !!answering && !!pc && pc.callId === answering.callId && (pc.card.steps?.[pc.pageIndex ?? 0]?.fields ?? []).includes(answering.qid);
 	useEffect(() => {
-		if (answering && !label) setAnswering(null); // its question left the page
-	}, [answering, label]);
-	const clearAnswering = useCallback(() => setAnswering(null), []);
-	const bindText = useCallback(
-		async (text: string, attachments?: string[]): Promise<string | null> => {
-			if (!answering) return "Pick a question first.";
-			const err = await postReply(target.wolf, target.slug, answering.callId, answering.qid, text, attachments ?? []);
-			if (!err) {
-				setAnswering(null);
-				cards.refetch();
-			}
-			return err;
-		},
-		[answering, target.wolf, target.slug, cards.refetch], // eslint-disable-line react-hooks/exhaustive-deps
-	);
-	if (!pc) return { pending: false, sheet: null, answeringLabel: null, clearAnswering, bindText };
+		if (answering && !composing) setAnswering(null); // its question left the page
+	}, [answering, composing]);
+	if (!pc) return { pending: false, sheet: null, composing: false };
 	const sheet = (
-		<AskSheet key={pc.callId} target={target} pc={pc} answering={answering} setAnswering={setAnswering} onSubmitted={(last) => (last ? cards.settle(pc.callId) : cards.refetch())} onRefetch={cards.refetch} />
+		<AskSheet key={pc.callId} target={target} pc={pc} answering={answering} setAnswering={setAnswering} onSubmitted={(last) => (last ? cards.settle(pc.callId) : cards.refetch())} onRefetch={cards.refetch} dictation={dictation} />
 	);
 	if (wide) {
-		return { pending: true, sheet: <div data-testid="ask-sheet-host" data-layout="inline" className="pointer-events-auto flex max-h-[60vh] min-h-0 flex-col">{sheet}</div>, answeringLabel: label, clearAnswering, bindText };
+		return { pending: true, sheet: <div data-testid="ask-sheet-host" data-layout="inline" className={`pointer-events-auto flex min-h-0 flex-col ${composing ? "max-h-[80vh]" : "max-h-[60vh]"}`}>{sheet}</div>, composing };
 	}
 	if (!open) {
 		return {
@@ -75,9 +54,7 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 					<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
 				</button>
 			),
-			answeringLabel: label,
-			clearAnswering,
-			bindText,
+			composing,
 		};
 	}
 	// A phone: the sheet covers the screen down to the composer's dock. Its bottom follows the dock's live (ResizeObserver) height, so the composer stays reachable.
@@ -85,15 +62,13 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 	return {
 		pending: true,
 		sheet: (
-			<div data-testid="ask-sheet-host" data-layout="fullscreen" role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto fixed inset-x-0 top-0 z-40 flex flex-col bg-background px-1.5 pb-1.5 pt-1" style={{ bottom: dockHeight ?? 160 }}>
+			<div data-testid="ask-sheet-host" data-layout="fullscreen" role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto fixed inset-x-0 top-0 z-40 flex flex-col bg-background px-1.5 pb-1.5 pt-1" style={{ bottom: composing ? 0 : (dockHeight ?? 160) }}>
 				<button type="button" aria-label="Put the questions away" data-testid="ask-sheet-close" onClick={() => setOpen(false)} className="flex min-h-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
 					<ChevronDownIcon aria-hidden className="size-5" />
 				</button>
 				{sheet}
 			</div>
 		),
-		answeringLabel: label,
-		clearAnswering,
-		bindText,
+		composing,
 	};
 }

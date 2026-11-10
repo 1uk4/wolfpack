@@ -4,8 +4,8 @@
  * The questionnaire sheet of a paged `ask` card (work-wolfpack-ssPFrEw): one page at a time, each question with its
  * markdown context, optional diagram, kind-specific control, tradeoff lines, skip (unless required) and Other. A page is
  * submitted on its own (`pages/:n/answer`); the card stays pending and comes back with a higher `pageIndex`.
- * Typed text can be aimed at one question ("answering Qn", see `Answering`): the composer then POSTs it to
- * `questions/:qid/text` and the server's `draft` prefills the answer here.
+ * A free-text or Other field turns into a composer in place when tapped ("answering Qn", see `Answering`): Send POSTs the
+ * text and images to `questions/:qid/text` and the server's `draft` prefills the answer here. The host hides its bottom composer meanwhile.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, PencilIcon } from "lucide-react";
@@ -15,11 +15,14 @@ import { InertImage, mdComponents } from "@/components/md-blocks";
 import { CardTextInput, isOther, otherText } from "@/components/card-fields/shared";
 import { attachmentUrl, cardPageAnswerUrl, diagramUrl } from "@/components/thread-transport";
 import { imagesOf, withImages } from "@/components/ask-images";
+import { hasUnsent, InlineAnswerComposer, useInlineAnswers, type InlineDraft } from "@/components/ask-inline-composer";
+import { replyLabel } from "@/components/ask-reply";
+import type { Dictation } from "@/components/dictation";
 import { cn } from "@/lib/utils";
 import { escapeRawHtml, type AttachedRef } from "@/src/core";
 import type { CardAnswers, CardField, CardFieldAnswer, PendingCard } from "@wolfpack/client";
 
-/** The question the composer's next text is bound to. */
+/** The question whose inline composer is open. */
 export interface Answering {
 	callId: string;
 	qid: string;
@@ -96,7 +99,7 @@ export function pageBody(fields: CardField[], draft: Record<string, CardFieldAns
 	return out;
 }
 
-export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onRefetch }: {
+export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onRefetch, dictation }: {
 	target: Pick<AttachedRef, "wolf" | "slug">;
 	pc: PendingCard;
 	answering: Answering | null;
@@ -104,6 +107,8 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 	/** The page was accepted; `last` = it was the final page (the card is done). */
 	onSubmitted: (last: boolean) => void;
 	onRefetch: () => void;
+	/** The host's dictation run: the inline composer shows its Dictate row and takes the transcript. */
+	dictation?: Dictation;
 }) {
 	const pageIndex = pc.pageIndex ?? 0;
 	const steps = pc.card.steps ?? [];
@@ -151,11 +156,46 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 	useEffect(() => setSkippedIds(new Set()), [pageIndex, pc.callId]);
 	const skip = (id: string) => { clear(id); setSkippedIds((s) => new Set(s).add(id)); };
 	const unskip = (id: string) => setSkippedIds((s) => { const n = new Set(s); n.delete(id); return n; });
-	/** Reply mode: aim the bottom composer at this question and put the cursor there. */
-	const reply = (id: string) => {
-		setAnswering({ callId: pc.callId, qid: id });
-		requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-testid="composer"] textarea')?.focus());
+	/** Open this question's composer in place. */
+	const reply = (id: string) => setAnswering({ callId: pc.callId, qid: id });
+	const inline = useInlineAnswers(target, onRefetch);
+	const composingId = answering !== null && answering.callId === pc.callId ? answering.qid : null;
+	// A click anywhere outside the open composer closes it (capture phase, so an option picked in the same click still gets it); the draft stays.
+	useEffect(() => {
+		if (composingId === null) return;
+		const onClick = (e: Event) => {
+			const el = e.target as Element | null;
+			if (el?.closest?.('[data-testid="ask-inline-composer"]')) return;
+			setAnswering(null);
+		};
+		document.addEventListener("click", onClick, true);
+		return () => document.removeEventListener("click", onClick, true);
+	}, [composingId, setAnswering]);
+	/** The sent text shows in its field at once (the server's draft, read back right after, says the same). */
+	const bindLocal = (f: CardField, text: string) => {
+		if (text === "") return;
+		if (f.kind === "free-text") return set(f.id, make({ value: text }));
+		if (f.kind === "single") return set(f.id, make({ value: text, other: true }));
+		if (f.kind !== "multi") return;
+		const cur = read<AnyA>(draft[f.id]);
+		const custom = Array.isArray(cur?.other) ? (cur.other as string[]) : [];
+		const picked = Array.isArray(cur?.value) ? (cur.value as string[]).filter((v) => !custom.includes(v)) : [];
+		set(f.id, make({ value: [...picked, text], other: [text] } satisfies MultiA));
 	};
+	const composer = (f: CardField): React.ReactNode =>
+		composingId === f.id ? (
+			<InlineAnswerComposer
+				label={replyLabel(f)}
+				draft={inline.drafts[f.id] ?? { text: "", atts: [] }}
+				error={inline.errors[f.id]}
+				dictation={dictation}
+				onText={(v) => inline.setText(f.id, v)}
+				onFiles={(files) => inline.addFiles(f.id, files)}
+				onRemove={(k) => inline.removeAtt(f.id, k)}
+				onSend={() => inline.send(pc.callId, f.id).then((sent) => { if (sent !== null) { setAnswering(null); bindLocal(f, sent); } })}
+				onClose={() => setAnswering(null)}
+			/>
+		) : null;
 	const missing = fields.filter((f) => f.optional !== true && Object.keys(pageBody([f], draft)).length === 0 && imagesOf(draft[f.id]).length === 0);
 
 	const submit = async () => {
@@ -224,39 +264,33 @@ export function AskSheet({ target, pc, answering, setAnswering, onSubmitted, onR
 							tabIndex={skipped ? 0 : undefined}
 							onClick={skipped ? () => unskip(f.id) : undefined}
 							onKeyDown={skipped ? (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); unskip(f.id); } } : undefined}
-							className={cn("rounded-lg", skipped && "cursor-pointer focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", on && "ring-1 ring-(color:--thread-accent) ring-offset-4 ring-offset-card")}
+							className={cn("relative rounded-lg", skipped && "cursor-pointer focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", on && "ring-1 ring-(color:--thread-accent) ring-offset-4 ring-offset-card")}
 						>
 							<div className={cn(skipped && "opacity-50")}>
 							{f.description && (
-								<div data-testid="ask-context" className="mb-2 text-[13px] leading-relaxed text-muted-foreground">
+								<div data-testid="ask-context" className={cn("mb-2 text-[13px] leading-relaxed text-muted-foreground")}>
 									<MessageResponse components={SAFE_MD}>{escapeRawHtml(f.description)}</MessageResponse>
 								</div>
 							)}
 							{f.diagram && <Diagram target={target} id={f.diagram} />}
-							<div id={labelId} className="mb-2 flex flex-wrap items-baseline gap-x-2 text-sm font-medium [overflow-wrap:anywhere]">
+							<div id={labelId} className={cn("mb-2 flex flex-wrap items-baseline gap-x-2 text-sm font-medium [overflow-wrap:anywhere]")}>
 								<MessageResponse components={SAFE_MD}>{escapeRawHtml(f.label)}</MessageResponse>
 								{f.optional && <span className="rounded-full bg-accent px-1.5 py-px font-ui text-[10px] font-normal uppercase tracking-wider text-muted-foreground">optional</span>}
 							</div>
 							{skipped && <span data-testid="ask-skipped" className="mb-1 block font-ui text-[11px] text-muted-foreground">Skipped</span>}
 							<div data-testid="ask-choices" role={skipped ? "group" : undefined} aria-labelledby={skipped ? labelId : undefined} aria-disabled={skipped ? true : undefined}>
 								{/* A click on a greyed choice only brings the question back; it never selects. */}
-								<Control field={f} labelId={labelId} qn={`Q${n}`} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => (skipped ? unskip(f.id) : set(f.id, a))} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
+								<Control field={f} labelId={labelId} qn={`Q${n}`} composer={composer(f)} unsent={inline.drafts[f.id]} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => (skipped ? unskip(f.id) : set(f.id, a))} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
 							</div>
 							{imagesOf(draft[f.id]).length > 0 && <Images target={target} ids={imagesOf(draft[f.id])} />}
 							</div>
-							<div className="mt-1.5 flex items-center gap-1 font-ui text-xs">
-								{skipped ? (
-									<button type="button" data-testid="ask-unskip" className={cn("ml-auto rounded-md px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); unskip(f.id); }}>
-										Answer
+							{(skipped || f.optional) && (
+								<div className="mt-1 flex justify-end">
+									<button type="button" data-testid={skipped ? "ask-unskip" : "ask-skip"} className={cn("rounded-md px-1.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skipped ? unskip(f.id) : skip(f.id); }}>
+										{skipped ? "Answer" : "Skip question"}
 									</button>
-								) : (
-									f.optional && draft[f.id] && (
-										<button type="button" data-testid="ask-skip" className={cn("ml-auto rounded-md px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skip(f.id); }}>
-											Skip question
-										</button>
-									)
-								)}
-							</div>
+								</div>
+							)}
 						</section>
 					);
 				})}
@@ -301,14 +335,16 @@ function Diagram({ target, id }: { target: Pick<AttachedRef, "wolf" | "slug">; i
 	return <img data-testid="ask-diagram" src={diagramUrl(target.wolf, target.slug, id)} alt="Diagram" onError={() => setFailed(true)} className="mb-2 max-h-72 w-full rounded-xl border bg-background object-contain" />;
 }
 
-function Control({ field, labelId, qn, onReply, value, onChange, onClear }: { field: CardField; labelId: string; qn: string; onReply: () => void; value: CardFieldAnswer | undefined; onChange: (a: CardFieldAnswer) => void; onClear: () => void }) {
+function Control({ field, labelId, qn, composer, unsent, onReply, value, onChange, onClear }: { field: CardField; labelId: string; qn: string; /** The open inline composer, drawn in place of the field. */ composer: React.ReactNode; /** Text and images typed but not sent. */ unsent: InlineDraft | undefined; onReply: () => void; value: CardFieldAnswer | undefined; onChange: (a: CardFieldAnswer) => void; onClear: () => void }) {
 	const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 	// Reply mode starts on click, Enter or Space, never on focus: reply() moves focus to the composer, which would trap a keyboard user tabbing through.
 	const replyKeys = { onClick: onReply, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onReply(); } } };
-	const hint = (bound: boolean) => bound && <span data-testid="ask-replace-answer-hint" className="mt-0.5 block font-ui text-xs text-muted-foreground">Tap to replace this answer in the chat below</span>;
+	const hint = (bound: boolean) => bound && <span data-testid="ask-replace-answer-hint" className="mt-0.5 block font-ui text-xs text-muted-foreground">Tap to replace this answer</span>;
+	const unsentNote = hasUnsent(unsent) && <span data-testid="ask-unsent" className="mt-0.5 block font-ui text-xs text-muted-foreground">Unsent{unsent!.text.trim() !== "" ? `: ${unsent!.text.trim()}` : ""}{unsent!.atts.length > 0 ? ` (${unsent!.atts.length} image${unsent!.atts.length === 1 ? "" : "s"})` : ""}. Tap to continue</span>;
 	if (field.kind === "free-text") {
 		const v = typeof value?.value === "string" ? value.value : "";
-		return <div onClick={stop} className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-3 size-3.5 text-muted-foreground" /><CardTextInput testId="ask-free" multiline aria-labelledby={labelId} className={cn(PREVIEW, "min-h-20", v !== "" && "border-solid text-foreground", FOCUS)} value={v} onChange={() => {}} readOnly {...replyKeys} placeholder="Tap to answer in the chat below" />{hint(v !== "")}</div>;
+		if (composer) return <div onClick={stop}>{composer}</div>;
+		return <div onClick={stop} className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-3 size-3.5 text-muted-foreground" /><CardTextInput testId="ask-free" multiline aria-labelledby={labelId} className={cn(PREVIEW, "min-h-20", v !== "" && "border-solid text-foreground", FOCUS)} value={v} onChange={() => {}} readOnly {...replyKeys} placeholder="Tap to answer" />{hint(v !== "")}{unsentNote}</div>;
 	}
 	if (field.kind === "confirm") {
 		const v = (value as { value?: boolean } | undefined)?.value;
@@ -372,10 +408,10 @@ function Control({ field, labelId, qn, onReply, value, onChange, onClear }: { fi
 				);
 			})}
 			{otherAllowed && !multi && (
-				<div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, isOther(value) && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer in the chat below" value={otherText(value) ?? ""} onChange={() => {}} readOnly {...replyKeys} /></div>
+				composer ? composer : <div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, isOther(value) && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer" value={otherText(value) ?? ""} onChange={() => {}} readOnly {...replyKeys} />{unsentNote}</div>
 			)}
 			{otherAllowed && multi && (
-				<div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, custom[0] && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer in the chat below" value={custom[0] ?? ""} onChange={() => {}} readOnly {...replyKeys} /></div>
+				composer ? composer : <div className="relative"><PencilIcon aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><CardTextInput testId="ask-other" aria-label={`${qn} Other`} className={cn(PREVIEW, FOCUS, custom[0] && cn(ACCENT_TINT, "border-solid"))} placeholder="Other: tap to answer" value={custom[0] ?? ""} onChange={() => {}} readOnly {...replyKeys} />{unsentNote}</div>
 			)}
 		</div>
 	);

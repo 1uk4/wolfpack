@@ -51,7 +51,16 @@ const refetched: string[] = [];
 const aimed: string[] = [];
 const submitted: boolean[] = [];
 const realFetch = globalThis.fetch;
+let textStatus = 200;
+let hold: Promise<void> | null = null;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+	if (init?.method === "POST" && String(input).endsWith("/attachments")) return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
+	if (init?.method !== "POST") return new Response("{}", { status: 404 });
+	if (String(input).endsWith("/text")) {
+		posts.push({ url: String(input), body: JSON.parse(String(init.body)) });
+		await hold;
+		return textStatus === 200 ? Response.json({ ok: true }) : Response.json({ error: "nope" }, { status: textStatus });
+	}
 	posts.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
 	return status === 200 ? Response.json({ disposition: "started" }) : Response.json({ error: "bad page" }, { status });
 }) as typeof fetch;
@@ -64,10 +73,19 @@ const click = (el: HTMLElement | null) => act(async () => void props(el!, "onCli
 const settle = () => act(async () => void (await new Promise((r) => setImmediate(r))));
 const host = document.createElement("div");
 document.body.appendChild(host);
+/** Holds the open question the way the hosts (bar, thread page) do. */
+function Host({ pc }: { pc: PendingCard }) {
+	const [answering, setAnswering] = React.useState<{ callId: string; qid: string } | null>(null);
+	const set = (a: { callId: string; qid: string } | null) => {
+		if (a) aimed.push(a.qid);
+		setAnswering(a);
+	};
+	return <AskSheet target={target} pc={pc} answering={answering} setAnswering={set} onSubmitted={(l) => void submitted.push(l)} onRefetch={() => void refetched.push("r")} />;
+}
 const render = (pc: PendingCard) =>
 	act(async () => {
 		root ??= createRoot(host);
-		root.render(<AskSheet target={target} pc={pc} answering={null} setAnswering={(a) => void (a && aimed.push(a.qid))} onSubmitted={(l) => void submitted.push(l)} onRefetch={() => void refetched.push("r")} />);
+		root.render(<Host pc={pc} />);
 	});
 
 afterEach(async () => {
@@ -75,6 +93,8 @@ afterEach(async () => {
 	root = null;
 	posts = [];
 	status = 200;
+	textStatus = 200;
+	hold = null;
 	refetched.length = 0;
 	submitted.length = 0;
 	aimed.length = 0;
@@ -215,6 +235,13 @@ describe("ask sheet answers and guards", () => {
 		assert.deepEqual(posts[1]!.body, { answers: { q1: { value: ["a", "extra"], other: ["extra"] } } });
 	});
 
+	it("Skip question shows on every optional question from the start, not once it has an answer", async () => {
+		await render(pending());
+		assert.equal(qa('[data-testid="ask-skip"]').length, 2); // q1 and q2 are optional, nothing answered yet
+		await render(one([{ id: "q3", kind: "free-text", label: "Req" }]));
+		assert.equal(qa('[data-testid="ask-skip"]').length, 0); // a required question has none
+	});
+
 	it("skip drops the question from the body", async () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[0]!);
@@ -234,7 +261,8 @@ describe("ask sheet answers and guards", () => {
 		assert.equal(sec().getAttribute("data-skipped"), "true");
 		assert.equal(q('[data-testid="ask-choices"]')!.getAttribute("aria-disabled"), "true");
 		assert.equal(q('[data-testid="ask-unskip"]')!.textContent, "Answer");
-		assert.equal(q('[data-testid="ask-skip"]'), null);
+		// (compare booleans: a failed assert.equal on a DOM node makes node diff the whole linkedom tree and the run hangs)
+		assert.equal(sec().querySelector('[data-testid="ask-skip"]') === null, true);
 		await click(q('[data-testid="ask-unskip"]'));
 		assert.equal(q('[data-testid="ask-skipped"]'), null);
 		assert.equal(q('[data-testid="ask-choices"]')!.getAttribute("aria-disabled"), null);
@@ -293,8 +321,8 @@ describe("ask sheet answers and guards", () => {
 		await act(async () => void props(free, "onKeyDown")({ key: "Enter", preventDefault() {} }));
 		await click(q('[data-testid="ask-other"]'));
 		assert.deepEqual(aimed, ["q1", "q2"]);
-		assert.equal(qa('[data-testid="ask-question"]').map((s) => !!s.querySelector('[data-testid="ask-free"], [data-testid="ask-other"]')).join(), "true,true,false,false,false");
-		assert.equal(qa('[data-testid="ask-other"]').length, 1);
+		assert.equal(qa('[data-testid="ask-question"]').map((s) => !!s.querySelector('[data-testid="ask-free"], [data-testid="ask-other"]')).join(), "true,false,false,false,false"); // the second tap moved the one open composer from q1 to q2
+		assert.equal(qa('[data-testid="ask-other"]').length, 0);
 	});
 
 	it("typing is offered only where the server takes text", async () => {
@@ -371,6 +399,110 @@ describe("ask sheet image answers", () => {
 		assert.equal(qa('[data-testid="ask-images"]').length, 3);
 		await render(pending({ card: c, draft: {} as never }));
 		assert.equal(qa('[data-testid="ask-images"]').length, 3);
+	});
+});
+
+describe("ask sheet inline composer", () => {
+	const FREE = () => one([{ id: "q1", kind: "free-text", label: "Why", optional: true }]);
+	const composer = () => q('[data-testid="ask-inline-composer"]');
+	const area = () => q('[data-testid="ask-inline-composer"] textarea') as HTMLTextAreaElement;
+	const open = () => click(q('[data-testid="ask-free"]'));
+	const type = (v: string) => act(async () => void props(area(), "onChange")({ target: Object.assign(area(), { value: v }) }));
+	const sendNow = () => act(async () => void props(q('[data-testid="ask-inline-composer"] form')!, "onSubmit")({ preventDefault() {} }));
+	const texts = () => posts.filter((p) => p.url.endsWith("/questions/q1/text"));
+	const attach = async () => {
+		const input = q('[data-testid="ask-inline-composer"] [data-testid="attachment-picker"]') as HTMLInputElement;
+		await act(async () => void props(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+		for (let i = 0; i < 20 && !q('[data-testid="attachment-chip"][data-status="ready"]'); i++) await settle();
+	};
+
+	it("tapping a free field turns it into a composer in place, with attach, send and the dictate row but no model or Auto-ship controls", async () => {
+		await render(FREE());
+		assert.equal(composer() === null, true);
+		await open();
+		assert.equal(composer() !== null, true);
+		assert.equal(q('[data-testid="ask-free"]') === null, true); // the field became the composer
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why/);
+		assert.equal(q('[data-testid="ask-inline-composer"] button[aria-label="Attach images"]') !== null, true);
+		assert.equal(q('[data-testid="ask-inline-composer"] button[type="submit"]') !== null, true);
+		assert.equal(q('[data-testid="composer-controls"]') === null, true);
+		assert.equal(q('[data-testid="tier-trigger"]') === null, true);
+	});
+
+	it("Other on a single question opens the same composer under the options", async () => {
+		await render(one([{ id: "q1", kind: "single", label: "Pick", options: OPTS }]));
+		await click(q('[data-testid="ask-other"]'));
+		assert.equal(qa('[data-testid="ask-option"]').length, 2);
+		assert.equal(composer() !== null, true);
+		assert.equal(q('[data-testid="ask-other"]') === null, true);
+	});
+
+	it("Send binds the text and closes the composer; a double Send posts once", async () => {
+		await render(FREE());
+		await open();
+		await type("because");
+		let release!: () => void;
+		hold = new Promise<void>((r) => (release = r));
+		await sendNow();
+		await sendNow(); // the round trip is still open
+		release();
+		await settle();
+		assert.deepEqual(texts().map((p) => p.body), [{ text: "because" }]);
+		assert.equal(composer() === null, true);
+		assert.equal(refetched.length, 1); // the server's draft is read back for the preview
+		assert.equal(q('[data-testid="ask-free"]') !== null, true);
+		assert.equal(props(q('[data-testid="ask-free"]')!, "value"), "because"); // the field now holds the sent text
+	});
+
+	it("× closes it and keeps the draft: the field says Unsent and reopening restores the text", async () => {
+		await render(FREE());
+		await open();
+		await type("half a thought");
+		await click(q('[data-testid="answering-chip-clear"]'));
+		assert.equal(composer() === null, true);
+		assert.equal(texts().length, 0);
+		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: half a thought/);
+		await open();
+		assert.equal(props(area(), "value"), "half a thought");
+	});
+
+	it("a click outside closes it and keeps the draft; a click inside does not", async () => {
+		await render(FREE());
+		await open();
+		await type("keep");
+		await act(async () => void area().dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		assert.equal(composer() !== null, true);
+		await act(async () => void document.body.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		assert.equal(composer() === null, true);
+		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /keep/);
+	});
+
+	it("a failed send puts the text and the image back and says why", async () => {
+		textStatus = 400;
+		await render(FREE());
+		await open();
+		await attach();
+		await type("look");
+		await sendNow();
+		await settle();
+		assert.deepEqual(texts()[0]!.body, { text: "look", attachments: ["up-1"] });
+		assert.equal(composer() !== null, true);
+		assert.equal(props(area(), "value"), "look");
+		assert.equal(qa('[data-testid="attachment-chip"]').length, 1);
+		assert.equal(q('[data-testid="ask-inline-composer"] [role="alert"]')!.textContent, "nope");
+	});
+
+	it("attaching inside the composer uploads the image and Send binds it with the text; unsent images show on the field after ×", async () => {
+		await render(FREE());
+		await open();
+		await attach();
+		await click(q('[data-testid="answering-chip-clear"]'));
+		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /\(1 image\)/);
+		await open();
+		assert.equal(qa('[data-testid="attachment-chip"]').length, 1);
+		await sendNow(); // an image alone is an answer
+		await settle();
+		assert.deepEqual(texts().map((p) => p.body), [{ text: "", attachments: ["up-1"] }]);
 	});
 });
 

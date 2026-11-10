@@ -179,6 +179,7 @@ export {
   type WorkRecordOutcome,
   type ConsolidateWorkOptions,
 } from "./work-record.js";
+export { appendWorkLog, LOG_FULL, type AppendWorkLogOptions, type WorkLogObservation, type WorkLogOutcome } from "./work-log.js";
 export { scanSecrets, scanSecretsForCrawl, looksSecretForCrawl, type SecretScan } from "./work/secrets.js";
 
 // Resend (Dewey rebuild from scratch)

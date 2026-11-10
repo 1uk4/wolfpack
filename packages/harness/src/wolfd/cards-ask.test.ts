@@ -4,6 +4,7 @@ import { CARD_ANSWER_KIND, CARD_DETAILS_KEY } from "../engine/index.js";
 import { askCard, type AskQuestion } from "../extensions/ask.js";
 import { supersededNotes } from "../superseded-note.js";
 import { CardTracker, answerText } from "./cards.js";
+import { messagesFromEntries } from "./messages.js";
 
 const free = (id: string, ask = id): AskQuestion => ({ id, ask, kind: "free", context: `ctx ${id}` });
 const choice: AskQuestion = { id: "pick", ask: "Pick", kind: "single", choices: [{ label: "A", value: "a", tradeoff: "t" }] };
@@ -21,6 +22,15 @@ const open = (card = twoPages()) => {
   return t;
 };
 const revision = (ids: string[]) => askCard({ pages: [{ title: "New", questions: ids.map((i) => free(i)) }] }, "c");
+
+describe("transcript record of a submitted ask", () => {
+	it("the call carries every page's answers and the owner's note", () => {
+		const assistant = { id: 1, kind: "pi.assistant", model: [{ role: "assistant", timestamp: 1, content: [{ type: "toolCall", id: "c", name: "ask", arguments: {} }] }] } as never;
+		const entry = { id: 3, kind: CARD_ANSWER_KIND, data: { cards: [{ callId: "c", answers: { q1: { value: "x" }, q2: { value: "y" } }, note: { text: "mind the budget", attachments: ["a1"] } }] } } as never;
+		const [m] = messagesFromEntries([assistant, toolEntry(2, "c", twoPages()), entry]);
+		expect(m!.tools![0]).toMatchObject({ closed: "answered", answer: { q1: { value: "x" }, q2: { value: "y" } }, note: { text: "mind the budget", attachments: ["a1"] } });
+	});
+});
 
 describe("paged ask card draft in the tracker", () => {
   it("Back returns the saved answers, and reached never goes down", () => {

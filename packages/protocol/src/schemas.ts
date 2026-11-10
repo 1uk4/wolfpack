@@ -478,6 +478,8 @@ export const ThreadToolCallSchema = z.object({
   pageAnswers: CardAnswersSchema.optional(),
   /** Additive, paged cards: how many pages were submitted so far. */
   pagesDone: z.number().int().min(0).optional(),
+  /** Additive, paged cards: the owner's note that went with the submit (text, image ids). */
+  note: z.object({ text: z.string().optional(), attachments: z.array(z.string()).optional() }).optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });

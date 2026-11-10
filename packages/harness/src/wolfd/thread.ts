@@ -96,7 +96,7 @@ interface QueuedOwner {
 }
 
 const cardAnswersOf = (ready: readonly ReadyAnswer[]) => ({
-  cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })),
+  cards: ready.map(({ callId: id, answers: a, skipped, note }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}), ...(note && (note.text || note.attachments?.length) ? { note } : {}) })),
 });
 
 export class ThreadRuntime {

@@ -35,6 +35,8 @@ export interface CardAnswerData {
     callId: string;
     answers: CardAnswers;
     skipped?: true;
+    /** Paged card: the owner's note that went with the submit. Additive. */
+    note?: { text?: string; attachments?: string[] };
   }[];
 }
 

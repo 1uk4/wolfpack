@@ -10,22 +10,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { useAttachedThread } from "@/components/attached-thread";
 import { threadBase } from "@/components/thread-transport";
-import { fitImageWithTimeout, browserFitDeps } from "@/components/image-fit";
-import { canSendWith, chipFor, FALLBACK_LIMIT, fetchAttachmentLimit, fitFailureMessage, friendlyUploadError, readyInfos, uploadFile, UploadError, type AttachmentLimit, type PendingAttachment } from "@/components/attachments";
+import { newUploadState, startUploads } from "@/components/attachment-upload";
+import { canSendWith, readyInfos, type PendingAttachment } from "@/components/attachments";
 import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
-import { useComposerDraft } from "@/lib/composer-draft";
+import { draftKey, readDraft, useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
 
-/** The text to put back after a failed send: the sent text, then whatever was typed meanwhile (never dropped). */
-export const mergeRestored = (sent: string, current: string): string => (current.trim() === "" ? sent : sent.trim() === "" ? current : `${sent}\n${current}`);
+import { mergeRestored } from "@/components/composer-restore";
+import { type AskSession, type NoteState } from "@/components/ask-session";
 
 /**
  * `dictation` is owned by ChatBar (it must outlive this component: the composer unmounts when the bar is minimized or the
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ target, title, cardOpen = false, onReplied, dictation, registerAppend }: { target: AttachedRef; title: string; cardOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, dictation, registerAppend, session, registerNoteSink }: { session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -54,36 +54,9 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 	// Pasted / picked images upload exactly as on the thread page.
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const patch = useCallback((key: string, p: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...p } : a))), []);
-	const limitRef = useRef<AttachmentLimit | undefined>(undefined);
-	const fitChain = useRef<Promise<unknown>>(Promise.resolve());
+	const uploads = useRef(newUploadState());
 	const uploadUrl = `${threadBase(target.wolf, target.slug)}/attachments`;
-	const onFiles = useCallback((files: File[]) => {
-		for (const file of files) {
-			const key = `att-${Math.random().toString(36).slice(2)}`;
-			const { chip, upload } = chipFor(file, key, Infinity);
-			setAttachments((prev) => [...prev, chip]);
-			if (!upload) continue;
-			const fit = fitChain.current.then(async () => {
-				limitRef.current ??= await fetchAttachmentLimit();
-				const limit = limitRef.current ?? FALLBACK_LIMIT;
-				return { limit, result: await fitImageWithTimeout(file, limit.maxBytes, browserFitDeps()) };
-			});
-			fitChain.current = fit.catch(() => {});
-			void (async () => {
-				let limit = FALLBACK_LIMIT;
-				try {
-					const fitted = await fit;
-					limit = fitted.limit;
-					if (!fitted.result.ok) return patch(key, { status: "error", error: fitFailureMessage(fitted.result.reason, limit.maxBytes, limit.mode === "relay", file.size) });
-					const { id, name, mimeType, size } = await uploadFile(uploadUrl, fitted.result.file);
-					patch(key, { status: "ready", id, name, mimeType, size });
-				} catch (err) {
-					const e = err as Error;
-					patch(key, { status: "error", error: friendlyUploadError(e.message, e instanceof UploadError ? e.status : undefined, limit.maxBytes, limit.mode === "relay") });
-				}
-			})();
-		}
-	}, [uploadUrl, patch]);
+	const onFiles = useCallback((files: File[]) => startUploads(files, uploadUrl, uploads.current, (chip) => setAttachments((prev) => [...prev, chip]), patch), [uploadUrl, patch]);
 
 	const send = useCallback(async () => {
 		const t = textRef.current.trim();
@@ -118,29 +91,53 @@ export default function ChatBarComposer({ target, title, cardOpen = false, onRep
 		void dictation.finish().then(() => sendRef.current()).finally(() => void (sendInFlight.current = false));
 	}, [dictation, send]);
 
+	// While the questionnaire is expanded this composer is the NOTE's (Next / Submit); collapsing hands the note's images to the normal attachments (the text goes through the draft store).
+	const noteMode = !!session && session.active && session.expanded;
+	useEffect(() => {
+		registerNoteSink?.((n) => setAttachments((prev) => [...prev, ...n.atts]));
+		return () => registerNoteSink?.(null);
+	}, [registerNoteSink]);
+	// The text went to the draft store on collapse: re-read it into this composer.
+	const wasNote = useRef(noteMode);
+	useEffect(() => {
+		if (wasNote.current && !noteMode) applyText(readDraft(draftKey(target.wolf, target.threadId)));
+		wasNote.current = noteMode;
+	}, [noteMode, applyText, target.wolf, target.threadId]);
+	const sendNote = useCallback(async (t: string, refs: { id: string }[]) => {
+		api.markSent();
+		const ok = await submitToThread(target, t, working, refs);
+		if (ok) onReplied?.();
+		else api.clearSent();
+		return ok;
+	}, [api, target, working, onReplied]);
+
 	return (
 		<>
-			{error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
+			{noteMode && <p data-testid="ask-armed-live" aria-live="polite" className="sr-only">{session.action.armed ? session.action.ariaLabel : ""}</p>}
+			{noteMode && session.action.hint && <p data-testid="ask-missing" role="status" aria-live="polite" className="px-3 pt-2 font-ui text-xs text-muted-foreground">{session.action.hint}</p>}
+			{noteMode && session.error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{session.error}</p>}
+			{error && !noteMode && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{error}</p>}
 			{waiting > 0 && (
 				<p data-testid="chat-bar-attachments-waiting" className="px-3 pt-1 font-ui text-xs text-muted-foreground">
 					{waiting} attachment{waiting === 1 ? "" : "s"} waiting in the thread
 				</p>
 			)}
+			{askOpen && !noteMode && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 			<Composer
-				busy={working}
-				{...(cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
-				value={text}
-				onChange={onChange}
-				onSend={onSend}
+				busy={noteMode ? false : working}
+				{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
+				value={noteMode ? session.note.text : text}
+				onChange={noteMode ? session.setNoteText : onChange}
+				onSend={noteMode ? () => session.press(sendNote) : onSend}
 				onStop={stop}
-				canSend={canSendWith(text, attachments) || (dictation.active && !working)}
+				canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !working)}
 				onEscape={dictation.active ? dictation.cancel : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}
 				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
-				onFiles={onFiles}
-				onPickFiles={onFiles}
-				chips={<AttachmentChips items={attachments} onRemove={(k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
+				onFiles={noteMode ? session.addNoteFiles : onFiles}
+				onPickFiles={noteMode ? session.addNoteFiles : onFiles}
+				chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : (k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>
 			<div className="px-3 pb-2" data-testid="dictation-slot">
 				<DictationBar dictation={dictation} />

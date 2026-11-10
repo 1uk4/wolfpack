@@ -1,9 +1,9 @@
 /** Stepped / dependent cards (card.steps + field.showIf) over /v1: a hidden field is not required, and not accepted. */
+import { answerPaged } from "./test-ask-call.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { cardResult } from "../engine/cards.js";
-import { briefCard } from "../extensions/brief.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 import { answerText, dropHiddenAnswers, validateAnswers } from "./cards.js";
@@ -24,15 +24,15 @@ const lastUserText = (context: { messages: { role: string; content: unknown }[] 
 };
 
 /** The crawl interview shape: depth only matters for by-folder. */
-const CRAWL: Card = briefCard({
-  headline: "Crawl",
-  questions: [
-    { id: "source", ask: "Source dir?" },
-    { id: "strategy", ask: "Strategy?", choices: [{ label: "By folder", value: "by-folder" }, { label: "By pattern", value: "by-pattern" }] },
-    { id: "depth", ask: "Depth?", choices: [{ label: "1" }, { label: "2" }], showIf: { field: "strategy", equals: "by-folder" } },
+const CRAWL: Card = {
+  tool: "ask",
+  fields: [
+    { id: "source", kind: "free-text", label: "Source dir?" },
+    { id: "strategy", kind: "single", label: "Strategy?", options: [{ label: "By folder", value: "by-folder" }, { label: "By pattern", value: "by-pattern" }], allowOther: false },
+    { id: "depth", kind: "single", label: "Depth?", options: [{ label: "1", value: "1" }, { label: "2", value: "2" }], allowOther: false, showIf: { field: "strategy", equals: "by-folder" } },
   ],
-  steps: [{ title: "Source", questions: ["source"] }, { title: "Shape", questions: ["strategy", "depth"] }],
-});
+  steps: [{ title: "Source", fields: ["source"] }, { title: "Shape", fields: ["strategy", "depth"] }],
+};
 
 describe("validateAnswers with showIf (pure)", () => {
   const ok = (a: CardAnswers) => expect(validateAnswers(CRAWL, a)).toBeUndefined();
@@ -81,11 +81,11 @@ describe("stepped crawl card over /v1", () => {
     expect(p.card.fields[2].showIf).toEqual({ field: "strategy", equals: "by-folder" });
     const calls = tw.scripted.faux.state.callCount;
 
-    await expect(tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-folder" } })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(answerPaged(tw.client, tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-folder" } })).rejects.toMatchObject({ code: "invalid_request" });
     expect(tw.scripted.faux.state.callCount).toBe(calls);
 
     // an older console that renders every field also sends depth: wolfd drops it
-    expect((await tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } })).disposition).toBe("started");
+    expect((await answerPaged(tw.client, tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } })).disposition).toBe("started");
     await drain(tw);
     expect(seen).toContain("- Source dir?: /d");
     expect(seen).toContain("- Strategy?: By pattern (by-pattern)");

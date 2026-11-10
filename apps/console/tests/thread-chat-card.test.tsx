@@ -91,6 +91,8 @@ class CardClient extends MockConsoleClient {
 	/** The next answer/skip is steered into a running turn (the ack says steered; no turn starts). */
 	steerNext = false;
 	submitTexts: string[] = [];
+	/** Further pending cards after the thread's own (a subagent's questionnaire queued here). */
+	extraPending: Record<string, unknown>[] = [];
 	override async submit(threadId: string, text: string, opts?: import("@wolfpack/client").SubmitOptions) {
 		this.submitTexts.push(text);
 		return super.submit(threadId, text, opts);
@@ -109,7 +111,7 @@ class CardClient extends MockConsoleClient {
 			tools: [{ callId: CALL, name: "ask_user_question", args: { question: "q" }, result, card: this.card, ...(this.answered ? { answer: this.answered } : {}), ...(this.superseded ? { dismissed: true, closed: "superseded" as const } : {}), ...(this.skippedState ? { dismissed: true, closed: "skipped" as const, result: "(skipped by the user)" } : {}) }],
 		};
 		const pending = !this.answered && !this.superseded && !this.skippedState;
-		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}), ...(this.heldSkip ? { heldSkip: true } : {}) }];
+		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}), ...(this.heldSkip ? { heldSkip: true } : {}) }, ...this.extraPending] as never[];
 		return { ...base, messages: [asked, ...base.messages], ...(pending ? { pendingCards } : {}) };
 	}
 	async skipCard(threadId: string, callId: string) {
@@ -641,5 +643,214 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /Superseded/);
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		assert.equal(q('[data-testid="card-confirm"]')!.hasAttribute("disabled"), true);
+	});
+});
+
+const PAGED: Card = {
+	tool: "ask",
+	paged: true,
+	fields: [{ id: "q1", kind: "single", label: "Pick one", options: [{ label: "Alpha", value: "a" }, { label: "Beta", value: "b" }] }],
+	steps: [{ title: "First", fields: ["q1"] }],
+} as Card;
+
+describe("ThreadChat on the thread's own page shows a pending paged ask as a sheet", () => {
+	it("renders the questionnaire sheet above the composer, which stays", async () => {
+		await mount(new CardClient(PAGED));
+		await settle();
+		assert.equal(q('[data-testid="ask-sheet"]')?.getAttribute("data-page"), "0");
+		assert.equal(document.querySelectorAll('[data-testid="ask-option"]').length, 2);
+		assert.equal(q('[data-testid="thread-composer-card"]')?.tagName, "DIV");
+	});
+
+	const FREEQ = { ...PAGED, fields: [{ id: "q1", kind: "free-text", label: "Why [it](https://x.example)" }] } as Card;
+	const textPosts: { url: string; body: { text: string } }[] = [];
+	let textStatus = 200;
+	const submitPosts: string[] = [];
+	const withTextRoute = (client: CardClient) => {
+		const base = routeFetch(client);
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (/\/questions\/[^/]+\/text$/.test(String(input))) {
+				textPosts.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+				return textStatus === 200 ? Response.json({ ok: true }) : Response.json({ error: "nope" }, { status: textStatus });
+			}
+			if (/\/submit$/.test(String(input)) && init?.method === "POST") {
+				submitPosts.push((JSON.parse(String(init.body)) as { input: string }).input);
+				return Response.json({ messageId: "1", disposition: "started" });
+			}
+			return base(input, init);
+		}) as typeof fetch;
+	};
+	const propsOf = (el: Element, n: string) => (el as any)[Object.keys(el).find((k) => k.startsWith("__reactProps$"))!][n];
+	const ta = () => document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement;
+	const typeText = (v: string) =>
+		act(async () => {
+			ta().value = v;
+			propsOf(ta(), "onChange")({ target: ta(), currentTarget: ta() });
+		});
+	const enter = () => act(async () => void propsOf(ta(), "onKeyDown")({ key: "Enter", shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, stopPropagation() {}, nativeEvent: {} }));
+
+	it("reply mode: the page composer gives way to the sheet's inline one; Send binds without a chat message and brings it back; x keeps the draft and brings it back; a plain send goes out as a message", async () => {
+		textPosts.length = 0;
+		submitPosts.length = 0;
+		const client = new CardClient(FREEQ);
+		await mount(client);
+		withTextRoute(client);
+		await settle();
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		assert.match(q('[data-testid="answering-chip"]')!.textContent!, /Replying to: Why it/);
+		assert.equal(q('[data-testid="ask-sheet-host"]')!.getAttribute("data-composing") === "true", true); // the question, not the card, carries the accent
+		assert.equal(q('[data-testid="thread-composer-card"]') === null, true);
+		assert.equal(q('[data-testid="composer-controls"]') === null, true);
+		await typeText("because");
+		await enter();
+		await settle();
+		assert.equal(q('[data-testid="ask-sheet-host"]')!.getAttribute("data-composing") === null, true);
+		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
+		assert.equal(textPosts.length, 1);
+		assert.match(textPosts[0]!.url, /\/cards\/call-1\/questions\/q1\/text$/);
+		assert.equal(textPosts[0]!.body.text, "because");
+		assert.deepEqual(submitPosts, []);
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		await typeText("draft");
+		await click(q('[data-testid="answering-chip-clear"]')!);
+		assert.equal(q('[data-testid="answering-chip"]') === null, true);
+		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
+		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: draft/);
+		await act(async () => void propsOf(q('[data-testid="ask-collapse"]')!, "onClick")({})); // collapsed: a normal composer again
+		await typeText("plain message");
+		await enter();
+		await settle(400);
+		assert.deepEqual(submitPosts, ["plain message"]);
+		assert.equal(textPosts.length, 1);
+	});
+
+	it("reply mode: a failed bind puts the text back in the inline composer", async () => {
+		textPosts.length = 0;
+		textStatus = 400;
+		try {
+			const client = new CardClient(FREEQ);
+			await mount(client);
+			withTextRoute(client);
+			await settle();
+			await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+			await typeText("keep me");
+			await enter();
+			await settle();
+			assert.equal(textPosts.length, 1);
+			assert.equal(ta().value, "keep me");
+		} finally {
+			textStatus = 200;
+		}
+	});
+
+	it("reply mode: an attached image binds with the text, alone it still sends, and a refused bind keeps text and image", async () => {
+		textPosts.length = 0;
+		const client = new CardClient(FREEQ);
+		await mount(client);
+		withTextRoute(client);
+		const inner = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).endsWith("/attachments") && init?.method === "POST" ? Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 }) : inner(input, init)) as typeof fetch;
+		const pick = async () => {
+			const input = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+			await act(async () => void propsOf(input, "onChange")({ target: Object.assign(input, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+			await settle();
+		};
+		await settle();
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		assert.equal(q('button[aria-label="Attach images"]')!.hasAttribute("disabled"), false);
+		// refused (e.g. over the card's image cap): text and image stay
+		textStatus = 400;
+		try {
+			await pick();
+			await typeText("look");
+			await enter();
+			await settle();
+			assert.deepEqual(textPosts.at(-1)!.body, { text: "look", attachments: ["up-1"] });
+			assert.equal(ta().value, "look");
+			assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1);
+			assert.match(document.body.textContent!, /nope/);
+		} finally {
+			textStatus = 200;
+		}
+		// accepted; then an image with no text
+		await enter();
+		await settle();
+		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 0);
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		await pick();
+		await enter();
+		await settle();
+		assert.deepEqual(textPosts.at(-1)!.body, { text: "", attachments: ["up-1"] });
+		assert.equal(textPosts.length, 3);
+	});
+
+	it("reply mode: a double Send posts the answer once and the second Send cannot overwrite it with an empty one", async () => {
+		textPosts.length = 0;
+		const client = new CardClient(FREEQ);
+		await mount(client);
+		withTextRoute(client);
+		const inner = globalThis.fetch;
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (String(input).endsWith("/attachments") && init?.method === "POST") return Response.json({ id: "up-1", name: "a.png", mimeType: "image/png", size: 3 }, { status: 201 });
+			if (/\/questions\/[^/]+\/text$/.test(String(input))) await held;
+			return inner(input, init);
+		}) as typeof fetch;
+		await settle();
+		await act(async () => void propsOf(q('[data-testid="ask-free"]')!, "onClick")({}));
+		const picker = q('[data-testid="attachment-picker"]') as HTMLInputElement;
+		await act(async () => void propsOf(picker, "onChange")({ target: Object.assign(picker, { files: [new File(["abc"], "a.png", { type: "image/png" })], value: "" }) }));
+		await settle();
+		await typeText("look");
+		await enter();
+		await enter(); // the round trip is still open
+		release();
+		await settle();
+		assert.deepEqual(textPosts.map((p) => p.body), [{ text: "look", attachments: ["up-1"] }]);
+	});
+
+	it("a subagent's queued questionnaire: the strip counts both, and the replace-hint shows for the thread's own card but not the child's", async () => {
+		const client = new CardClient(PAGED);
+		client.extraPending = [{ callId: "kid-1", threadId: "1uk4/kid", card: { ...PAGED, fields: [{ id: "q1", kind: "free-text", label: "Theirs", optional: true }] }, raisedAt: new Date().toISOString(), source: { kind: "subagent", label: "worker: sheet" } }];
+		await mount(client);
+		await settle();
+		await click(q('[data-testid="ask-collapse"]')!);
+		assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent, "Questions waiting (2)");
+		await typeText("never mind");
+		assert.equal(q('[data-testid="ask-replace-hint"]') !== null, true); // the thread's own card: a message replaces it
+		await click(q('[data-testid="ask-sheet-reopen"]')!);
+		await click(q('[data-testid="ask-queue-next"]')!);
+		assert.equal(q('[data-testid="ask-queue-label"]')!.textContent, "2 of 2 \u00b7 worker: sheet");
+		await click(q('[data-testid="ask-collapse"]')!);
+		assert.equal(q('[data-testid="ask-replace-hint"]') === null, true); // a subagent's card is never replaced by a message
+	});
+
+	it("phone: Esc and the close button put the questions away to a strip that reopens them; the composer stays", async () => {
+		const mm = (window as any).matchMedia;
+		(window as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		try {
+			await mount(new CardClient(PAGED));
+			await settle();
+			const layer = q('[data-testid="ask-sheet-host"]')!;
+			assert.equal(layer.getAttribute("data-layout"), "fullscreen");
+			assert.equal(layer.getAttribute("role"), "dialog");
+			assert.equal(layer.getAttribute("aria-modal"), "false");
+			assert.equal(layer.getAttribute("aria-label"), "Questions");
+			assert.equal(ta().tagName, "TEXTAREA");
+			await act(async () => void propsOf(layer, "onKeyDown")({ key: "Escape", defaultPrevented: false, stopPropagation() {} }));
+			assert.equal(q('[data-testid="ask-sheet-host"]'), null);
+			assert.equal(q('[data-testid="ask-sheet-reopen"]')!.textContent, "Questions waiting");
+			await click(q('[data-testid="ask-sheet-reopen"]')!);
+			assert.equal(q('[data-testid="ask-sheet-host"]')?.getAttribute("data-layout"), "fullscreen");
+			await click(q('[data-testid="ask-sheet-close"]')!);
+			assert.equal(q('[data-testid="ask-sheet-host"]'), null);
+			assert.equal(q('[data-testid="ask-sheet-reopen"]')?.textContent, "Questions waiting");
+			assert.equal(ta().tagName, "TEXTAREA");
+		} finally {
+			(window as any).matchMedia = mm;
+		}
 	});
 });

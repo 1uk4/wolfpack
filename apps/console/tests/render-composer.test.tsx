@@ -77,7 +77,9 @@ describe("Composer send button", () => {
 
 	it("a sendLabel replaces Send only when there is something to send; an empty busy composer keeps Stop", () => {
 		const withText = render({ sendLabel: "Reply instead", canSend: true, busy: true });
-		assert.match(withText, /aria-label="Reply instead"[^>]*>Reply instead</);
+		const button = withText.match(/<button[^>]*aria-label="Reply instead"[^>]*>(.*?)<\/button>/s);
+		assert.ok(button, "button named Reply instead");
+		assert.equal((button[1] ?? "").replace(/<[^>]*>/g, ""), "Reply instead");
 		const empty = render({ sendLabel: "Reply instead", canSend: false, busy: true });
 		assert.ok(empty.includes('aria-label="Stop"'));
 		assert.doesNotMatch(empty, /Reply instead/);

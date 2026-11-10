@@ -3,6 +3,7 @@
  * branch and cleans up; a conflict raises the card and each choice works; home children, dirty trees, explicit abandon;
  * main is never touched. Ship goes through the real task_done tool against a local Work server.
  */
+import { answerPaged } from "../../packages/harness/src/wolfd/test-ask-call.js";
 import { stripSupersededNotes } from "@wolfpack/harness/memory";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -129,17 +130,17 @@ function scripted(): FauxResponseStep {
     if (stop) return tool("subagent_stop", { name: (lastName = stop[1]), abandon: true });
     const plainStop = /^stop (\S+)$/.exec(lastText);
     if (plainStop) return tool("subagent_stop", { name: plainStop[1] });
-    const confirm = /answered your (subagent_merge|subagent_stop) question/.exec(lastText);
+    const confirm = /your (subagent_merge|subagent_stop) confirmation/.exec(lastText);
     if (confirm) return lastText.includes(": yes") ? tool(confirm[1], confirm[1] === "subagent_merge" ? { name: lastName, action: "abandon" } : { name: lastName, abandon: true }) : fauxAssistantMessage("kept");
-    if (lastText.includes("answered your brief question")) {
+    if (lastText.includes("submitted your ask questionnaire")) {
       const action = lastText.includes("Resolve with a worker") ? "resolve" : lastText.includes("I'll do it") ? "manual" : "abandon";
       return tool("subagent_merge", { name: conflictName, action });
     }
     if (lastText.includes("Merge conflict merging")) {
       conflictName = /subagent_merge\(\{ name: "([^"]+)"/.exec(lastText)![1];
       const question = /(Merge conflict merging [^\n]*?)\. The merge stopped/m.exec(lastText)![1];
-      const options = JSON.parse(/choices` are (\[.*\])\. Then/.exec(lastText)![1]);
-      return tool("brief", { headline: "Merge conflict", questions: [{ ask: question, kind: "single", choices: options }] });
+      const options = JSON.parse(/choices` are (\[.*\]) \(each choice/.exec(lastText)![1]);
+      return tool("ask", { pages: [{ title: "Merge conflict", questions: [{ id: "action", ask: question, kind: "single", required: true, choices: options }] }] });
     }
     return fauxAssistantMessage(`parent: ${lastText.slice(0, 40)}`);
   };
@@ -274,7 +275,7 @@ describe("merge on ship", () => {
       expect(pending).toHaveLength(1);
     }, { timeout: 8000 });
     const p = pending![0];
-    return { p, answer: async (yes: boolean) => { await w.client.answerCard!(feature, p.callId, { confirm: { value: yes } }); for await (const _ of w.client.watch(feature)); } };
+    return { p, answer: async (yes: boolean) => { await answerPaged(w.client, feature, p.callId, { confirm: { value: yes } }); for await (const _ of w.client.watch(feature)); } };
   };
 
   it("abandon with unmerged commits raises a card and does nothing without a yes; no keeps the branch", async () => {
@@ -284,9 +285,9 @@ describe("merge on ship", () => {
     const { p, answer } = await pendingConfirm(w, feature);
     expect(p.card.tool).toBe("subagent_stop");
     expect(p.card.fields[0]).toMatchObject({ kind: "confirm", label: `Abandon ${rec.workspace.branch} (1 unmerged commit)?` });
-    expect(p.card.brief!.headline).toBe(`Abandon ${rec.workspace.branch}?`);
-    expect(p.card.brief!.headline.length).toBeLessThanOrEqual(80);
-    expect(p.card.brief!.context![0]).toContain("1 unmerged commit");
+    expect(p.card).toMatchObject({ paged: true, steps: [{ fields: ["confirm"] }] });
+    expect(p.card.brief).toBeUndefined();
+    expect(p.card.fields[0].description).toContain("1 unmerged commit");
     expect(p.card.fields).toHaveLength(1);
     expect(existsSync(rec.workspace.path)).toBe(true);
     expect(regOf(w).children[0].state).toBe("done");
@@ -424,14 +425,14 @@ describe("conflict card", () => {
       expect(pending).toHaveLength(1);
     }, { timeout: 8000 });
     const p = pending![0];
-    expect(p.card.tool).toBe("brief");
+    expect(p.card.tool).toBe("ask");
     expect(p.card.fields[0]).toMatchObject({ kind: "single", label: title });
     expect((p.card.fields[0] as { options: Array<{ label: string }> }).options.map((o) => o.label)).toEqual(["Resolve with a worker", "I'll do it", "Abandon branch"]);
     // the merge stopped with both trees clean
     expect(repo!.git(["status", "--porcelain"], t.rec.workspace.path)).toBe("");
     expect(repo!.git(["status", "--porcelain"], t.featureWs.path)).toBe("");
     const answer = async (value: string) => {
-      await t.w.client.answerCard!(t.feature, p.callId, { [p.card.fields[0].id]: { value } });
+      await answerPaged(t.w.client, t.feature, p.callId, { [p.card.fields[0].id]: { value } });
       for await (const _ of t.w.client.watch(t.feature));
     };
     return { ...t, answer };

@@ -20,7 +20,7 @@ import {
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
-import { BRIEF_LIMITS, CardSchema, type CardBrief } from "@wolfpack/protocol";
+import { CardSchema } from "@wolfpack/protocol";
 
 /** Key of the card inside a tool result's `details`. */
 export const CARD_DETAILS_KEY = "wolfpackCard";
@@ -31,7 +31,13 @@ export const USER_ENTRY_KIND = "pi.user";
 
 export interface CardAnswerData {
   /** `skipped`: the operator skipped the card instead of answering (`answers` is then empty). Additive: absent on older entries. */
-  cards: { callId: string; answers: CardAnswers; skipped?: true }[];
+  cards: {
+    callId: string;
+    answers: CardAnswers;
+    skipped?: true;
+    /** Paged card: the owner's note that went with the submit. Additive. */
+    note?: { text?: string; attachments?: string[] };
+  }[];
 }
 
 /** What a tool returns to raise a card: model-facing placeholder text, the card in details, and terminate. */
@@ -49,12 +55,18 @@ export function clipText(s: string, max: number): string {
 }
 
 /**
- * Build a brief header that always satisfies the protocol limits: the headline is clipped to BRIEF_LIMITS.headline,
- * empty bullets are dropped, at most BRIEF_LIMITS.contextBullets are kept, and each bullet is clipped to the soft length.
+ * Present a tool's card as a paged `ask` card, so it joins the owner's questionnaire queue. `paged` is set and `steps`
+ * defaults to one page holding every field (titled `pageTitle`, else the card's title, else the tool name); a card that
+ * already has steps (a wizard) keeps them. Field ids and answers are unchanged, so a tool's second call reads the same
+ * `answers.<id>` as before. The legacy `brief` header is dropped.
  */
-export function briefHeader(headline: string, context: string[] = [], more?: string): CardBrief {
-  const bullets = context.map((c) => clipText(c, BRIEF_LIMITS.bulletSoftChars)).filter(Boolean).slice(0, BRIEF_LIMITS.contextBullets);
-  return { headline: clipText(headline, BRIEF_LIMITS.headline) || "Confirm", ...(bullets.length ? { context: bullets } : {}), ...(more ? { more } : {}) };
+export function pagedCard(card: Card, pageTitle?: string): Card {
+  const { brief: _legacy, ...rest } = card;
+  return {
+    ...rest,
+    paged: true,
+    steps: card.steps ?? [{ title: pageTitle ?? card.title ?? card.tool, fields: card.fields.map((f) => f.id) }],
+  };
 }
 
 /**
@@ -71,13 +83,10 @@ export function confirmCard(opts: {
   confirmLabel?: string;
   rejectLabel?: string;
   default?: boolean;
-  /** Brief header: what is being confirmed. Display only; fields and answers are unchanged. */
-  brief?: CardBrief;
 }): Card {
   return {
     tool: opts.tool,
     ...(opts.title ? { title: opts.title } : {}),
-    ...(opts.brief ? { brief: opts.brief } : {}),
     fields: [
       {
         id: "confirm",

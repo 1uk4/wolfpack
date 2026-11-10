@@ -30,6 +30,14 @@ describe("card steps / showIf schema", () => {
     expect(CardSchema.safeParse(base(extra)).success).toBe(false);
   });
 
+  it("rejects a paged card whose showIf controller is on another page (it could never show)", () => {
+    const r = CardSchema.safeParse(base({ paged: true, steps: [{ title: "One", fields: ["k"] }, { title: "Two", fields: ["d", "z"] }] }));
+    expect(r.success).toBe(false);
+    expect(!r.success && r.error.issues[0].message).toMatch(/same page/);
+    expect(CardSchema.safeParse(base({ paged: true, steps: [{ title: "One", fields: ["k", "d"] }, { title: "Two", fields: ["z"] }] })).success).toBe(true);
+    expect(CardSchema.safeParse(base({ steps: [{ fields: ["k"] }, { fields: ["d", "z"] }] })).success).toBe(true); // a non-paged wizard still spans steps
+  });
+
   it("showIf must name an earlier field and exactly one of equals / oneOf", () => {
     const withShow = (showIf: object): Card => ({ tool: "t", fields: [{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "d", kind: "free-text", label: "d", showIf } as never] });
     expect(CardSchema.safeParse(withShow({ field: "k", equals: "a" })).success).toBe(true);

@@ -18,7 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
-import { briefHeader, confirmCard } from "@wolfpack/harness/engine";
+import { confirmCard, pagedCard } from "@wolfpack/harness/engine";
 import type { Card } from "@wolfpack/protocol";
 import { drainWorkObservations } from "@wolfpack/harness/memory";
 import {
@@ -325,34 +325,33 @@ export default function createTasksExtension(
   /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
   const shipCard = (title: string, id: string) =>
-    confirmCard({
-      tool: "task_done",
-      question: shipLabel(title, id),
-      confirmLabel: "Ship",
-      rejectLabel: "Not yet",
-      brief: briefHeader(`Ship "${title}"?`, [`Work item ${id}: ${title}`, "Marks it done; this can't be undone from the card."]),
-    });
+    pagedCard(
+      confirmCard({
+        tool: "task_done",
+        question: shipLabel(title, id),
+        description: `Work item ${id}: ${title}. Marks it done; this can't be undone from the card.`,
+        confirmLabel: "Ship",
+        rejectLabel: "Not yet",
+      }),
+    );
   /** Several ids: ONE card with a multi field, one option per task (value = id), all ticked, at least one. */
   const SHIPS_FIELD = "ships";
   const optionLabel = (title: string, id: string) => `${title} (${id})`;
-  const shipsCard = (entries: { id: string; title: string }[]): Card => ({
-    tool: "task_done",
-    brief: briefHeader(
-      `Ship ${entries.length} tasks?`,
-      [...entries.slice(0, 4).map((e) => `${e.id}: ${e.title}`), ...(entries.length > 4 ? [`…and ${entries.length - 4} more`] : [])],
-      entries.length > 4 ? "Every task is listed with a checkbox in the question below; untick any you want to hold back." : undefined,
-    ),
-    fields: [
-      {
-        id: SHIPS_FIELD,
-        kind: "multi",
-        label: `Ship these ${entries.length} tasks?`,
-        options: entries.map((e) => ({ value: e.id, label: optionLabel(e.title, e.id) })),
-        default: entries.map((e) => e.id),
-        min: 1,
-      },
-    ],
-  });
+  const shipsCard = (entries: { id: string; title: string }[]): Card =>
+    pagedCard({
+      tool: "task_done",
+      title: `Ship ${entries.length} tasks?`,
+      fields: [
+        {
+          id: SHIPS_FIELD,
+          kind: "multi",
+          label: `Ship these ${entries.length} tasks?`,
+          options: entries.map((e) => ({ value: e.id, label: optionLabel(e.title, e.id) })),
+          default: entries.map((e) => e.id),
+          min: 1,
+        },
+      ],
+    });
   const textLines = (m: { message: { content?: unknown } }): string[] => {
     const c = m.message.content;
     const blocks = Array.isArray(c) ? (c as { type?: string; text?: string }[]).filter((x) => x?.type === "text" && typeof x.text === "string").map((x) => x.text as string) : [typeof c === "string" ? c : ""];
@@ -1640,14 +1639,15 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
               const summary = preview.contributions.slice(0, 4).map((c, i) => `${i + 1}. ${c.title}`);
               return {
                 content: [{ type: "text", text: `${staleNote}${text}\n\nNOTHING HAS BEEN SENT. Asked the owner whether to graduate ${args.id}. Your turn ends here. When they answer, call task_graduate(id ${args.id}) again: it sends only on their yes.` }],
-                card: confirmCard({
-                  tool: "task_graduate",
-                  question: `Graduate "${preview.title}" (${args.id})?`,
-                  description: `Preview ${preview.token}`,
-                  confirmLabel: "Graduate",
-                  rejectLabel: "Not yet",
-                  brief: briefHeader(`Graduate "${preview.title}"?`, [`${preview.kind} ${args.id}: ${preview.contributions.length} contribution(s) to the KB`, ...summary, "Sends to the KB and archives the item; this can't be undone from the card."]),
-                }),
+                card: pagedCard(
+                  confirmCard({
+                    tool: "task_graduate",
+                    question: `Graduate "${preview.title}" (${args.id})?`,
+                    description: `Preview ${preview.token}. ${preview.kind} ${args.id}: ${preview.contributions.length} contribution(s) to the KB${summary.length ? ` (${summary.join("; ")})` : ""}. Sends to the KB and archives the item; this can't be undone from the card.`,
+                    confirmLabel: "Graduate",
+                    rejectLabel: "Not yet",
+                  }),
+                ),
               };
             }
 

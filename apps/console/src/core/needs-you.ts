@@ -15,6 +15,8 @@ export interface NeedsYouItem {
 	/** The client's thread id. */
 	threadId: string;
 	threadTitle: string;
+	/** The title of the thread whose sheet answers it, when that is not the asker (a subagent's card). */
+	hostTitle?: string;
 	/** URL slug of the thread: the answer route is /api/wolves/:wolf/threads/:slug/cards/:callId/answer. */
 	slug: string;
 	/** The page that opens the thread. */
@@ -29,7 +31,7 @@ export interface NeedsYouItem {
 export interface WolfNeedsYou {
 	wolf: string;
 	cards: readonly PendingCard[];
-	threads: readonly { id: string; title: string }[];
+	threads: readonly { id: string; title: string; parentThreadId?: string }[];
 }
 
 /** Flatten per-wolf reports into the list: oldest first (the one waiting longest on top), stable on ties. */
@@ -37,13 +39,24 @@ export function buildNeedsYou(wolves: readonly WolfNeedsYou[]): NeedsYouItem[] {
 	const items: NeedsYouItem[] = [];
 	for (const w of wolves) {
 		for (const p of w.cards) {
+			// A subagent's questionnaire is answered from the top thread's sheet (any depth): walk up, guarding against a cycle.
+			let host = p.threadId;
+			if (p.source?.kind === "subagent") {
+				const seenIds = new Set([host]);
+				for (let up = w.threads.find((t) => t.id === host)?.parentThreadId; up && !seenIds.has(up) && w.threads.some((t) => t.id === up); up = w.threads.find((t) => t.id === host)?.parentThreadId) {
+					host = up;
+					seenIds.add(up);
+				}
+			}
 			const title = w.threads.find((t) => t.id === p.threadId)?.title ?? threadSlug(w.wolf, p.threadId);
 			items.push({
 				wolf: w.wolf,
 				threadId: p.threadId,
 				threadTitle: title,
+				...(host !== p.threadId ? { hostTitle: w.threads.find((t) => t.id === host)?.title ?? title } : {}),
 				slug: threadSlug(w.wolf, p.threadId),
-				href: threadHref(w.wolf, p.threadId),
+				// A subagent's questionnaire is answered from its parent's sheet: the notification opens the parent thread.
+				href: threadHref(w.wolf, host),
 				callId: p.callId,
 				card: p.card,
 				raisedAt: p.raisedAt,
@@ -123,7 +136,7 @@ export function planNotifications(
 		const key = itemKey(item);
 		if (seen.has(key)) continue;
 		seen.add(key);
-		const thread = `${item.wolf}\n${item.threadId}`;
+		const thread = `${item.wolf}\n${item.href}`; // by where it opens: a subagent's card and its parent's own share one notification
 		if (!byThread.has(thread)) byThread.set(thread, item);
 	}
 	// Forget cards that left the list so the set stays bounded (a card never comes back once settled), but only for
@@ -137,7 +150,7 @@ export function planNotifications(
 			if (!state.primedAll && !state.primedWolves.has(item.wolf)) continue; // that wolf's first report only primes
 			notifications.push({
 				key: itemKey(item),
-				title: `${item.wolf} · ${item.threadTitle}`,
+				title: `${item.wolf} · ${item.hostTitle ?? item.threadTitle}`,
 				body: item.card.fields[0]?.label ?? cardHeadline(item.card),
 				href: item.href,
 			});

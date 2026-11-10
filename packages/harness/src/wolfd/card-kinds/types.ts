@@ -28,5 +28,18 @@ export function optionEntry(options: readonly { label: string; value: string }[]
   return listSafe(`${o.label} (${value})`);
 }
 
+/** The image ids bound to an answer (`bindCardText` with attachments). */
+export function attachmentIds(a: AnyAnswer | undefined): string[] {
+  const v = (a as { attachments?: unknown } | undefined)?.attachments;
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+/** An answer with images and no text/pick: the images are the answer (shape `{value: "" | [], attachments}`). */
+export function isImageOnly(a: AnyAnswer): boolean {
+  const v = (a as { value: unknown }).value;
+  return attachmentIds(a).length > 0 && (v === "" || (Array.isArray(v) && v.length === 0));
+}
+
+export const IMAGE_ONLY_TEXT = "(image only)";
 export const NO_ANSWER = "(no answer)";
 export const EMPTY_RESPONSE = "(empty response)";

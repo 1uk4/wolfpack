@@ -50,13 +50,13 @@ export function dirtyText(rec: ChildRecord, ws: Workspace, reason: string): stri
 export function conflictText(rec: ChildRecord, ws: Workspace, feature: Workspace, files: string[], notes?: string[]): string {
   const title = `Merge conflict merging ${ws.branch} into ${feature.branch}: ${files.join(", ")}`;
   const options = [
-    { label: "Resolve with a worker", value: "resolve", note: "A worker subagent rebases the branch onto the feature branch, resolves and commits; then it is merged again." },
-    { label: "I'll do it", value: "manual", note: "Leave the worktree and branch; you get the path and commands." },
-    { label: "Abandon branch", value: "abandon", note: "Discard the worktree and branch." },
+    { label: "Resolve with a worker", value: "resolve", tradeoff: "A worker subagent rebases the branch onto the feature branch, resolves and commits; then it is merged again." },
+    { label: "I'll do it", value: "manual", tradeoff: "Leave the worktree and branch; you get the path and commands." },
+    { label: "Abandon branch", value: "abandon", tradeoff: "Discard the worktree and branch." },
   ];
   return (
     `${title}. The merge stopped and both trees are clean.\n\n` +
-    `Ask the user what to do with ONE brief call: headline "Merge conflict", with a single question (kind "single") whose \`ask\` is ${JSON.stringify(title)} and whose \`choices\` are ${JSON.stringify(options)}. Then act on the answer:\n` +
+    `Ask the user what to do with ONE ask call: a page titled "Merge conflict" with a single question (kind "single") whose \`ask\` is ${JSON.stringify(title)} and whose \`choices\` are ${JSON.stringify(options)} (each choice already carries its \`tradeoff\`). Then act on the answer:\n` +
     `- resolve: subagent_merge({ name: "${rec.name}", action: "resolve" })\n` +
     `- manual: subagent_merge({ name: "${rec.name}", action: "manual" }) and pass its steps on to the user\n` +
     `- abandon: subagent_merge({ name: "${rec.name}", action: "abandon" })` +

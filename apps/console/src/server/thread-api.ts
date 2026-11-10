@@ -14,6 +14,7 @@
  */
 
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { DIAGRAM_ID_RE } from "@wolfpack/protocol";
 import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
 import { resolveThreadId } from "../core/thread-adapter.ts";
@@ -61,6 +62,16 @@ function json(body: unknown, status = 200): Response {
 	return Response.json(body, { status });
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A card note off the wire: `{text?, attachments?}`; null when malformed. */
+function parseNote(v: unknown): { text?: string; attachments?: string[] } | null {
+	if (!isRecord(v)) return null;
+	if (v.text !== undefined && typeof v.text !== "string") return null;
+	if (v.attachments !== undefined && (!Array.isArray(v.attachments) || v.attachments.some((a) => typeof a !== "string"))) return null;
+	return { ...(v.text !== undefined ? { text: v.text as string } : {}), ...(v.attachments !== undefined ? { attachments: v.attachments as string[] } : {}) };
+}
+
 // Errors are matched by NAME, not instanceof: Next bundles @wolfpack/client
 // per route/page, so the class the client threw and the class imported here
 // can be different copies of the same module.
@@ -76,6 +87,7 @@ function failure(err: unknown): Response {
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
 	// A refusal the user can act on (unsupported type, too large, unknown attachment).
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "conflict") return json({ error: err.message, code: "conflict" }, 409);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "thread_closed") return json({ error: err.message, code: "thread_closed" }, 409);
 	return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
 }
@@ -232,6 +244,32 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/**
+		 * The bytes of one question diagram (an `ask` field's `diagram` id), relayed from the thread's wolf: opaque ids only,
+		 * images only, served sandboxed like attachments. 404 when the wolf has none (or cannot serve diagrams).
+		 */
+		async diagram(ref: ThreadRef, diagramId: string): Promise<Response> {
+			try {
+				if (!DIAGRAM_ID_RE.test(diagramId)) return json({ error: "unknown diagram" }, 404);
+				const client = source();
+				if (!client.getDiagram) return json({ error: "unknown diagram" }, 404);
+				const { bytes, mimeType } = await client.getDiagram(await resolve(client, ref), diagramId);
+				const mime = mimeType.split(";")[0]!.trim().toLowerCase();
+				if (mime !== "image/png") return json({ error: "unknown diagram" }, 404);
+				return new Response(bytes as BodyInit, {
+					headers: {
+						"Content-Type": mime,
+						"Content-Length": String(bytes.byteLength),
+						"X-Content-Type-Options": "nosniff",
+						"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+						"Cache-Control": "private, max-age=31536000, immutable",
+					},
+				});
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		/** Answer a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/answer`. */
 		async answerCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
 			try {
@@ -242,6 +280,89 @@ export function createThreadApi(source: ClientSource) {
 				const client = source();
 				if (!client.answerCard) return json({ error: "this client has no cards" }, 501);
 				return json(await client.answerCard(await resolve(client, ref), callId, body.answers as CardAnswers));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Save one page of a paged `ask` as a draft and move the cursor: `PUT /v1/threads/:id/cards/:callId/pages/:page/draft`. 409 `conflict` = the questions changed. */
+		async saveCardPage(ref: ThreadRef, callId: string, page: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { answers?: unknown; goto?: unknown; stepsKey?: unknown } | null;
+				const n = Number(page);
+				if (!Number.isInteger(n) || n < 0) return json({ error: "page must be a non-negative integer" }, 400);
+				if (!body || !isRecord(body.answers)) return json({ error: "answers is required" }, 400);
+				if (body.goto !== undefined && (typeof body.goto !== "number" || !Number.isInteger(body.goto) || body.goto < 0)) return json({ error: "goto must be a non-negative integer" }, 400);
+				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
+				const client = source();
+				if (!client.saveCardPage) return json({ error: "this client has no paged cards" }, 501);
+				await client.saveCardPage(await resolve(client, ref), callId, n, body.answers as CardAnswers, { ...(body.goto !== undefined ? { goto: body.goto as number } : {}), ...(body.stepsKey !== undefined ? { stepsKey: body.stepsKey as string } : {}) });
+				return json({ accepted: true });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Submit a paged `ask` once (current page's answers + the note): `POST /v1/threads/:id/cards/:callId/submit`. */
+		async submitCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { answers?: unknown; note?: unknown; stepsKey?: unknown } | null;
+				if (!body) return json({ error: "a JSON body is required" }, 400);
+				if (body.answers !== undefined && !isRecord(body.answers)) return json({ error: "answers must be an object" }, 400);
+				const note = body.note === undefined ? undefined : parseNote(body.note);
+				if (note === null) return json({ error: "note must be {text?, attachments?}" }, 400);
+				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
+				const client = source();
+				if (!client.submitCard) return json({ error: "this client has no paged cards" }, 501);
+				return json(await client.submitCard(await resolve(client, ref), callId, { ...(body.answers !== undefined ? { answers: body.answers as CardAnswers } : {}), ...(note ? { note } : {}), ...(body.stepsKey !== undefined ? { stepsKey: body.stepsKey as string } : {}) }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Store the note typed beside an open questionnaire (an empty note clears it): `PUT /v1/threads/:id/cards/:callId/note`. */
+		async putCardNote(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as unknown;
+				const note = parseNote(body);
+				if (note === null) return json({ error: "note must be {text?, attachments?}" }, 400);
+				if ((note.text ?? "").length > 4000) return json({ error: "note text is limited to 4000 characters" }, 400);
+				const client = source();
+				if (!client.putCardNote) return json({ error: "this client has no paged cards" }, 501);
+				await client.putCardNote(await resolve(client, ref), callId, note);
+				return json({ accepted: true });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** "Answering Qn": hold typed text as question `qid`'s answer (not a chat message): `POST .../questions/:qid/text`. */
+		async bindCardText(ref: ThreadRef, callId: string, qid: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { text?: unknown; attachments?: unknown; picked?: unknown; others?: unknown; stepsKey?: unknown } | null;
+				if (!body) return json({ error: "text or attachments is required" }, 400);
+				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
+				const key = body.stepsKey as string | undefined;
+				const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+				// A multi question's whole picked/custom list (replaces its draft); `text` is not used then.
+				if (body.others !== undefined) {
+					if (!strings(body.others) || (body.picked !== undefined && !strings(body.picked))) return json({ error: "picked and others must be lists of strings" }, 400);
+					const multi = { picked: (body.picked as string[] | undefined) ?? [], others: body.others };
+					const atts = Array.isArray(body.attachments) && body.attachments.every((a) => typeof a === "string") ? (body.attachments as string[]) : [];
+					const c = source();
+					if (!c.bindCardText) return json({ error: "this client has no paged cards" }, 501);
+					await c.bindCardText(await resolve(c, ref), callId, qid, "", atts.length ? atts : undefined, multi, key);
+					return json({ accepted: true });
+				}
+				if (body.text !== undefined && typeof body.text !== "string") return json({ error: "text must be a string" }, 400);
+				if (body.attachments !== undefined && (!Array.isArray(body.attachments) || body.attachments.some((a) => typeof a !== "string"))) return json({ error: "attachments must be a list of ids" }, 400);
+				const text = (body.text as string | undefined) ?? "";
+				const attachments = (body.attachments as string[] | undefined) ?? [];
+				if (text.trim() === "" && attachments.length === 0) return json({ error: "text or attachments is required" }, 400);
+				const client = source();
+				if (!client.bindCardText) return json({ error: "this client has no paged cards" }, 501);
+				await client.bindCardText(await resolve(client, ref), callId, qid, text, attachments.length ? attachments : undefined, undefined, key);
+				return json({ accepted: true });
 			} catch (err) {
 				return failure(err);
 			}

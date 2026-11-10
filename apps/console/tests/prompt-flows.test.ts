@@ -10,7 +10,7 @@ const IDS = [
 	"orchestrator-rules", "new-work", "grilling", "to-spec", "to-tickets", "identity",
 	"agent.investigator", "agent.planner", "agent.researcher", "agent.reviewer", "agent.scout", "agent.visualizer", "agent.worker",
 	"standard.git", "standard.testing", "standard.verify-ui",
-	"system.header", "system.identity", "system.orchestrator", "system.structured-output", "system.brief",
+	"system.header", "system.identity", "system.orchestrator", "system.structured-output", "system.ending-turn",
 	"tool.read", "tool.bash", "tool.subagent",
 	"pipeline.observer", "pipeline.observer-user", "pipeline.consolidate", "pipeline.consolidate-user", "pipeline.pack-digest",
 	"pipeline.crawl-observer", "pipeline.crawl-observer-user", "pipeline.crawl-consolidate", "pipeline.crawl-consolidate-user", "pipeline.crawl-journey", "pipeline.crawl-journey-user",
@@ -43,7 +43,7 @@ describe("prompt tree", () => {
 		writeFileSync(join(home, "CLAUDE.md"), "project claude");
 		writeFileSync(join(home, "den", "skills", "s", "SKILL.md"), "---\nname: s\ndescription: d\n---\nx");
 		const real = composeProjectContext({ name: "w", cwd: home, den: join(home, "den"), home, wolfHome: home }).blocks.map((b) => `system.${b.id}`);
-		assert.deepEqual(real, ["system.header", "system.identity", "system.orchestrator", "system.agents-md", "system.claude-md", "system.skills", "system.structured-output", "system.brief"]);
+		assert.deepEqual(real, ["system.header", "system.identity", "system.orchestrator", "system.agents-md", "system.claude-md", "system.skills", "system.structured-output", "system.ending-turn"]);
 		const tree = buildTree(rows([...IDS, "system.agents-md", "system.claude-md", "system.skills"]));
 		const system = tree.find((n) => n.key === "system")!;
 		assert.deepEqual(system.items.map((i) => i.id).filter((id) => id.startsWith("system.")), real);
@@ -108,7 +108,7 @@ describe("prompt graphs", () => {
 	it("draws the System prompt graph: blocks in composition order, sources feeding blocks, one collapsed Tools node", () => {
 		const sys = graphOf(graphs(), "system");
 		const e = edgeSet(sys);
-		for (const x of ["system.header>system.identity", "system.identity>system.orchestrator", "system.orchestrator>system.structured-output", "system.structured-output>system.brief", "identity>system.identity", "orchestrator-rules>system.orchestrator"]) assert.ok(e.includes(x), x);
+		for (const x of ["system.header>system.identity", "system.identity>system.orchestrator", "system.orchestrator>system.structured-output", "system.structured-output>system.ending-turn", "identity>system.identity", "orchestrator-rules>system.orchestrator"]) assert.ok(e.includes(x), x);
 		const tools = sys.nodes.find((n) => n.id === "tools")!;
 		assert.equal(tools.title, "Tools (3)");
 		assert.equal(tools.link, "tools", "the Tools node links to the Tools tab");

@@ -17,11 +17,15 @@ import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPi
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useAttachedThread } from "@/components/attached-thread";
-import { onOwnThreadPage } from "@/components/chat-bar-io";
+import { FEATURE_GRADUATED } from "@/components/thread-closed";
+import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { useThreadColor } from "@/components/use-thread-color";
-import { useBarCards } from "@/components/chat-bar-cards";
+import { useBarCards, type BarCards } from "@/components/chat-bar-cards";
+import type { Answering } from "@/components/ask-sheet";
+import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask-session";
+import { replyLabel } from "@/components/ask-reply";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { attachable, BAR_EXTRAS, kbdEventForAction, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
@@ -29,6 +33,19 @@ export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/com
 
 const loadComposer = () => import("@/components/chat-bar-composer");
 const BarComposer = dynamic(loadComposer, { ssr: false });
+
+/** The bar's stand-in for its composer once the attached thread has closed but a turn still runs: the same notice and Stop the thread page shows. The bar docks when the turn settles. */
+function BarClosedNotice({ target, reason }: { target: AttachedRef; reason: string }) {
+	return (
+		<div data-testid="chat-bar-closed" className="px-3 py-2 text-sm">
+			<div className="font-medium">{FEATURE_GRADUATED}</div>
+			<div className="text-muted-foreground">{reason}</div>
+			<button type="button" data-testid="chat-bar-closed-stop" onClick={() => void abortBarThread(target)} className="mt-2 rounded-md border px-3 py-1 text-sm">
+				Stop the running turn
+			</button>
+		</div>
+	);
+}
 /**
  * Finish the floating chat's own dictation run first (the words land in its draft), then run `then` (dock or navigate).
  * A page composer's run is not touched. A second call while one is pending is a no-op.
@@ -40,6 +57,7 @@ const afterBarDictation = (then?: () => void) => {
 	void finishDictation("bar").then(() => then?.()).finally(() => void (afterPending = false));
 };
 
+const AskSheet = dynamic(() => import("@/components/ask-sheet").then((m) => m.AskSheet), { ssr: false });
 const BarCardSurface = dynamic(() => import("@/components/bar-card-surface").then((m) => m.BarCardSurface), { ssr: false });
 
 /** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
@@ -316,7 +334,54 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const wolfColor = api.wolves.find((w) => w.name === target.wolf)?.color;
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.kind ? { kind: attachedThread.kind } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all, wolfColor).hex;
 	const router = useRouter();
-	const cards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek);
+	const rawCards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.ask);
+	// A paged `ask` questionnaire has its own sheet (never the classic card path: the whole-card route refuses it). The other cards and the peek follow their extras.
+	const queue = useAskQueue(BAR_EXTRAS.ask ? askQueue(rawCards.pending) : []);
+	const askCard = queue.current;
+	const cards: BarCards = {
+		...rawCards,
+		pending: BAR_EXTRAS.cards ? rawCards.pending.filter((p) => !p.card.paged) : [],
+		peek: BAR_EXTRAS.peek ? rawCards.peek : null,
+		superseded: BAR_EXTRAS.cards ? rawCards.superseded : [],
+		error: BAR_EXTRAS.cards ? rawCards.error : null,
+	};
+	const [answering, setAnswering] = useState<Answering | null>(null);
+	const answeringNow = (() => {
+		if (!answering || !askCard || askCard.callId !== answering.callId) return null;
+		const i = askCard.card.fields.findIndex((f) => f.id === answering.qid);
+		return i < 0 || !(askCard.card.steps?.[askCard.pageIndex ?? 0]?.fields ?? []).includes(answering.qid) ? null : replyLabel(askCard.card.fields[i]!);
+	})();
+	useEffect(() => {
+		// The targeted question left the page (or the card is gone): the chip goes.
+		if (answering && !answeringNow) setAnswering(null);
+	}, [answering, answeringNow]);
+	// While a question is answered in its sheet the bottom composer is hidden and the sheet fills the space it used.
+	const composing = answering !== null && answeringNow !== null;
+	// One questionnaire session for the bar: the answers, the page cursor and the note (the bar composer is the note's while the sheet is expanded).
+	// Collapsing moves the note into the bar's normal draft: the text through the draft store, the images through the composer's sink.
+	const noteSink = useRef<((n: NoteState) => void) | null>(null);
+	const registerNoteSink = useCallback((fn: ((n: NoteState) => void) | null) => void (noteSink.current = fn), []);
+	const session = useAskSession(target, askCard, {
+		onSubmitted: (id) => rawCards.settle(id),
+		queued: queue.ids,
+		onRefetch: rawCards.refetch,
+		onCollapse: (n) => {
+			if (n.text.trim() !== "") appendToDraft(draftKey(target.wolf, target.threadId), n.text);
+			noteSink.current?.(n);
+		},
+	});
+	const sheetCard = askCard ? (
+		session.expanded ? (
+			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone || composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? "flex-1" : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
+				<AskSheet key={askCard.callId} target={target} session={session} queue={queue} answering={answering} setAnswering={setAnswering} dictation={dictation} />
+			</div>
+		) : (
+			<button type="button" data-testid="ask-sheet-reopen" onClick={() => session.setExpanded(true)} className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+				<span className="font-medium text-foreground">{queue.count >= 2 ? `Questions waiting (${queue.count})` : "Questions waiting"}</span>
+				<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
+			</button>
+		)
+	) : null;
 	const raised = useRaisedAt(BAR_EXTRAS.badge && api.attached !== null);
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
@@ -330,7 +395,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const opener = useRef<"strip" | "chevron">("chevron");
 	const wasSheet = useRef(false);
 	const openedForCard = useRef(false);
-	const pendingCount = cards.pending.length;
+	const pendingCount = cards.pending.length + (askCard ? 1 : 0);
 	useEffect(() => {
 		// Answering the last card closes a sheet that was opened for it; a sheet opened to type stays.
 		if (sheet && openedForCard.current && pendingCount === 0) {
@@ -388,7 +453,13 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			first.focus();
 		}
 	};
-	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (pendingCount > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
+	// The questionnaire sheet opens by itself on a phone when an ask arrives.
+	const askId = askCard?.callId;
+	useEffect(() => {
+		if (askId && phone && !minimized) openSheet(true);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [askId, phone]);
+	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
 	const badge = BAR_EXTRAS.badge && waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
 	const chip = (
@@ -429,9 +500,9 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				data-layout="dock"
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
-				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? "z-[70] rounded-t-2xl" : "z-30")}
+				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[70]", askCard ? "" : "rounded-t-2xl") : "z-30")}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ bottom: inset, paddingBottom: bottomPad, borderColor: color, ...(sheet ? { maxHeight: "70dvh" } : {}) }}
+				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
 				{sheet && !minimized && (
@@ -460,10 +531,11 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				)}
 				{sheet && !minimized && (
 					<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : BAR_EXTRAS.cards || BAR_EXTRAS.peek ? <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p> : null}
+						{sheetCard}
+						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : sheetCard ? null : BAR_EXTRAS.cards || BAR_EXTRAS.peek ? <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p> : null}
 					</div>
 				)}
-				{!sheet && !minimized && hasSurface && (
+				{!sheet && !minimized && (hasSurface || askCard) && (
 					<button
 						type="button"
 						data-testid="bar-strip"
@@ -497,7 +569,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && <BarComposer target={target} title={title} cardOpen={pendingCount > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
@@ -525,11 +597,12 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
-			{/* Card surface slot (PtJkpk6): the thread's pending question/brief cards and the last-reply peek mount here, above the input. */}
-			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className="mb-2 empty:hidden">
+			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
+			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
+				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<div className="relative rounded-2xl border bg-card shadow-lg focus-within:ring-1 focus-within:ring-(color:--thread-accent)" style={{ borderColor: color }}>
+			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{badge}
@@ -539,7 +612,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						<ChevronDownIcon className="size-4" />
 					</button>
 				</div>
-				<BarComposer target={target} title={title} cardOpen={cards.pending.length > 0} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} />
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>

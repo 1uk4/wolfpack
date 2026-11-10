@@ -584,6 +584,54 @@ body {
 	}
 }
 
+/* The questionnaire's "Send anyway?" button (work-wolfpack-ssPFrEw): the label cross-fades, the button widens (and shrinks back
+   when it disarms) over 180ms; colour is a transition on the button. Reduced motion: just the swap. */
+@keyframes wp-swap-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes wp-send-widen {
+	from {
+		max-width: 5rem;
+	}
+	to {
+		max-width: 12rem;
+	}
+}
+@keyframes wp-send-narrow {
+	from {
+		max-width: 12rem;
+	}
+	to {
+		max-width: 5rem;
+	}
+}
+.wp-swap-in {
+	animation: wp-swap-in 180ms ease-out;
+}
+.wp-send-label {
+	overflow: hidden;
+	animation: wp-send-narrow 180ms ease-out;
+}
+.wp-send-label.wp-send-armed {
+	animation: wp-send-widen 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.wp-swap-in,
+	.wp-send-label,
+	.wp-send-label.wp-send-armed {
+		animation: none;
+	}
+	.wp-send-label {
+		transition: none;
+	}
+}
+
 /* Source-message arrival: a brief, static theme-colored spotlight. */
 .wp-source-passage {
 	scroll-margin-top: 1rem;

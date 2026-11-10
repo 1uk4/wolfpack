@@ -9,7 +9,7 @@
  *   reseed    planning is over; the first observation afterwards moves the watermark past everything committed so far
  *             (the planning turns) and observes from the next response on.
  * Ways out of planning: crawl_finalize (approved), crawl_cancel, a failed draft (crawl_start / crawl_plan throwing),
- * and an idle timeout: planning ends by itself when no crawl_* / brief call touched it for IDLE_MS.
+ * and an idle timeout: planning ends by itself when no crawl_* / ask call touched it for IDLE_MS.
  * (A failed finalize gate keeps planning: the user is expected to fix the plan and finalize again, or cancel.)
  * A user message that is not a card answer does NOT end planning; the idle timeout is the backstop.
  */
@@ -108,7 +108,7 @@ export const crawlMode = {
   },
   /** Current state; one stat when nothing is planning. Never throws. */
   status,
-  /** Reset the idle clock of a planning conversation (a crawl_* / brief call happened). */
+  /** Reset the idle clock of a planning conversation (a crawl_* / ask call happened). */
   touch(den: string, conv: number): void {
     if (status(den, conv) === "planning") write(den, conv, "planning");
   },
@@ -135,10 +135,10 @@ export const crawlMode = {
 
 /**
  * The model's tool calls of one response, noted at hook time (before the tools run, so before any observation of that
- * response can be classified): crawl_start / crawl_plan begin planning, any other crawl_* or brief call
+ * response can be classified): crawl_start / crawl_plan begin planning, any other crawl_* or ask call
  * refreshes the idle clock of a conversation already planning.
  */
 export function noteToolCalls(den: string, conv: number, names: readonly string[]): void {
   if (names.some((n) => n === "crawl_start" || n === "crawl_plan")) crawlMode.begin(den, conv);
-  else if (names.some((n) => n.startsWith("crawl_") || n === "brief")) crawlMode.touch(den, conv);
+  else if (names.some((n) => n.startsWith("crawl_") || n === "ask")) crawlMode.touch(den, conv);
 }

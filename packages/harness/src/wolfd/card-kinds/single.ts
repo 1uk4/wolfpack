@@ -1,11 +1,13 @@
 import type { AnyField, CardOption } from "@wolfpack/protocol";
-import { EMPTY_RESPONSE, NO_ANSWER, optionEntry, type FieldKind } from "./types.js";
+import { EMPTY_RESPONSE, NO_ANSWER, optionEntry, type FieldKind, IMAGE_ONLY_TEXT, isImageOnly } from "./types.js";
 
 const optionsOf = (f: AnyField): CardOption[] => (Array.isArray(f.options) ? (f.options as CardOption[]) : []);
 
 export const singleFieldKind: FieldKind = {
   kind: "single",
   validate(f, a) {
+    // Images alone count as one Other entry: allowed only where Other is.
+    if (isImageOnly(a)) return f.allowOther === false ? `field "${f.id}" does not accept a custom answer` : undefined;
     if (typeof a.value !== "string") return `field "${f.id}": the answer must be a string`;
     if ("other" in a && a.other) {
       if (f.allowOther === false) return `field "${f.id}" does not accept a custom answer`;
@@ -13,8 +15,9 @@ export const singleFieldKind: FieldKind = {
     } else if (!optionsOf(f).some((o) => o.value === a.value)) return `"${a.value}" is not an option of field "${f.id}"`;
     return undefined;
   },
-  isEmpty: (_f, a) => typeof a.value === "string" && a.value.trim() === "",
+  isEmpty: (_f, a) => !isImageOnly(a) && typeof a.value === "string" && a.value.trim() === "",
   answerText(f, a) {
+    if (isImageOnly(a)) return IMAGE_ONLY_TEXT;
     if (typeof a.value !== "string") return NO_ANSWER;
     if (a.value.trim() === "") return EMPTY_RESPONSE;
     if ("other" in a && a.other === true) return `other: ${JSON.stringify(a.value)}`;

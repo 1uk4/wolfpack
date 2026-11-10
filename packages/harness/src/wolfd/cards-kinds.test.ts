@@ -4,7 +4,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { CardSchema } from "@wolfpack/protocol";
 import { cardResult, confirmCard } from "../engine/cards.js";
-import { askCall } from "./test-ask-call.js";
+import { askCall, answerPaged } from "./test-ask-call.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { adaptToDurable } from "../adapters/durable.js";
 import { Type } from "../extension-api.js";
@@ -129,6 +129,23 @@ describe("card field kind validation (pure)", () => {
     expect(validateAnswers(card, { m: { value: ["a", "mine", "mine"], other: ["mine", "mine"] } })).toMatch(/duplicate entries/);
     expect(validateAnswers(card, { m: { value: ["a", "mine"], other: ["mine"] } })).toBeUndefined();
   });
+
+  it("an image-only answer counts as exactly one Other entry: it satisfies required, needs Other, and counts toward min and max", () => {
+    const img = ["00000000-0000-4000-8000-000000000001"];
+    const field = (over: object) => ({ tool: "t", fields: [{ label: "Q", options: OPTS, ...over }] }) as unknown as Card;
+    // free and single: required is satisfied by the images; a single without Other refuses them
+    expect(validateAnswers(field({ id: "f", kind: "free-text" }), { f: { value: "", attachments: img } })).toBeUndefined();
+    expect(validateAnswers(field({ id: "s", kind: "single" }), { s: { value: "", attachments: img } })).toBeUndefined();
+    expect(validateAnswers(field({ id: "s", kind: "single", allowOther: false }), { s: { value: "", attachments: img } })).toMatch(/custom answer/);
+    // multi: needs allowOther; counts 1 toward min, so min 2 fails alone and passes with one pick
+    const multi = (over: object) => field({ id: "m", kind: "multi", allowOther: true, ...over });
+    expect(validateAnswers(multi({ allowOther: false }), { m: { value: [], attachments: img } })).toMatch(/custom entries/);
+    expect(validateAnswers(multi({ min: 2 }), { m: { value: [], attachments: img } })).toMatch(/pick at least 2/);
+    expect(validateAnswers(multi({ min: 2 }), { m: { value: ["a"], attachments: img } })).toMatch(/pick at least 2/);
+    expect(validateAnswers(multi({}), { m: { value: [], attachments: img } })).toBeUndefined();
+    // images riding on a picked option add nothing: max 1 with one pick plus images passes
+    expect(validateAnswers(multi({ max: 1 }), { m: { value: ["a"], attachments: img } })).toBeUndefined();
+  });
 });
 
 describe("card schema", () => {
@@ -180,13 +197,13 @@ describe("multi / confirm cards over /v1", () => {
       { m: { value: ["x"], other: ["x"] } }, // allowOther unset
       { m: { value: "a" } }, // wrong type
     ];
-    for (const bad of invalid) await expect(tw.client.answerCard!(tw.home, p.callId, bad)).rejects.toMatchObject({ code: "invalid_request" });
+    for (const bad of invalid) await expect(answerPaged(tw.client, tw.home, p.callId, bad)).rejects.toMatchObject({ code: "invalid_request" });
     const still = await tw.client.getThread(tw.home);
     expect(still.status).toBe("needs-you");
     expect(still.pendingCards![0].heldAnswer).toBeUndefined();
     expect(tw.scripted.faux.state.callCount).toBe(1);
 
-    expect((await tw.client.answerCard!(tw.home, p.callId, { m: { value: ["b", "c"] } })).disposition).toBe("started");
+    expect((await answerPaged(tw.client, tw.home, p.callId, { m: { value: ["b", "c"] } })).disposition).toBe("started");
     await drain(tw);
     expect(seen).toContain("- Pick some: Beta (b), Gamma (c)");
     const done = await tw.client.getThread(tw.home);
@@ -207,7 +224,7 @@ describe("multi / confirm cards over /v1", () => {
     ]);
     await tw.submit("go");
     const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
-    await tw.client.answerCard!(tw.home, p.callId, { m: { value: ["a", "my own"], other: ["my own"] } });
+    await answerPaged(tw.client, tw.home, p.callId, { m: { value: ["a", "my own"], other: ["my own"] } });
     await drain(tw);
     expect(seen).toContain('- Pick some: Alpha (a), other: "my own"');
   });
@@ -228,9 +245,9 @@ describe("multi / confirm cards over /v1", () => {
       expect(p.heldAnswer).toBeUndefined();
       expect(tw.scripted.faux.state.callCount).toBe(1);
       for (const bad of [{ confirm: { value: "yes" } }, { confirm: { value: ["x"] } }, {}] as unknown as CardAnswers[]) {
-        await expect(tw.client.answerCard!(tw.home, p.callId, bad)).rejects.toMatchObject({ code: "invalid_request" });
+        await expect(answerPaged(tw.client, tw.home, p.callId, bad)).rejects.toMatchObject({ code: "invalid_request" });
       }
-      await tw.client.answerCard!(tw.home, p.callId, { confirm: { value: choice } });
+      await answerPaged(tw.client, tw.home, p.callId, { confirm: { value: choice } });
       await drain(tw);
       expect(seen).toContain(choice ? "- Ship it?: yes (Ship)" : "- Ship it?: no (Hold)");
       expect((await tw.client.getThread(tw.home)).messages.flatMap((m) => m.tools ?? [])[0].result).toBe(choice ? "yes (Ship)" : "no (Hold)");
@@ -239,20 +256,20 @@ describe("multi / confirm cards over /v1", () => {
     }
   });
 
-  it("brief raises multi (multiSelect) and confirm (kind) cards", async () => {
+  it("ask raises multi (multiSelect) and confirm (kind) cards", async () => {
     tw = await startTestWolf({
       script: [
         toolUse(
           askCall({ question: "Which?", options: [{ label: "X" }, { label: "Y" }], multiSelect: true }),
-          askCall({ question: "Sure?", kind: "confirm", confirmLabel: "Do it" }),
+          askCall({ question: "Sure?", kind: "confirm" }),
           askCall({ question: "One?", options: [{ label: "P" }] }),
         ),
       ],
     });
     await tw.submit("go");
     const fields = (await tw.client.getThread(tw.home)).pendingCards!.map((p) => p.card.fields[0]);
-    expect(fields[0]).toMatchObject({ kind: "multi", allowOther: false, options: [{ value: "X" }, { value: "Y" }] });
-    expect(fields[1]).toMatchObject({ kind: "confirm", label: "Sure?", confirmLabel: "Do it" });
+    expect(fields[0]).toMatchObject({ kind: "multi", allowOther: true, options: [{ value: "X" }, { value: "Y" }] });
+    expect(fields[1]).toMatchObject({ kind: "confirm", label: "Sure?" });
     expect(fields[2]).toMatchObject({ kind: "single" });
   });
 
@@ -270,17 +287,17 @@ describe("multi / confirm cards over /v1", () => {
     const cards = (await tw.client.getThread(tw.home)).pendingCards!;
     expect(cards.map((p) => p.card.fields[0].kind)).toEqual(["multi", "confirm", "free-text"]);
     // third, then first, then second
-    expect((await tw.client.answerCard!(tw.home, cards[2].callId, { f: { value: "because" } })).disposition).toBe("queued");
+    expect((await answerPaged(tw.client, tw.home, cards[2].callId, { f: { value: "because" } })).disposition).toBe("queued");
     expect(tw.scripted.faux.state.callCount).toBe(1);
-    expect((await tw.client.answerCard!(tw.home, cards[0].callId, { m: { value: ["a"] } })).disposition).toBe("queued");
+    expect((await answerPaged(tw.client, tw.home, cards[0].callId, { m: { value: ["a"] } })).disposition).toBe("queued");
     expect(tw.scripted.faux.state.callCount).toBe(1);
     const mid = await tw.client.getThread(tw.home);
     expect(mid.status).toBe("needs-you");
     expect(mid.pendingCards!.map((p) => p.heldAnswer)).toEqual([{ m: { value: ["a"] } }, undefined, { f: { value: "because" } }]);
     // an invalid answer for the last one neither completes nor disturbs the held ones
-    await expect(tw.client.answerCard!(tw.home, cards[1].callId, { confirm: { value: "maybe" } } as never)).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(answerPaged(tw.client, tw.home, cards[1].callId, { confirm: { value: "maybe" } } as never)).rejects.toMatchObject({ code: "invalid_request" });
     expect(tw.scripted.faux.state.callCount).toBe(1);
-    expect((await tw.client.answerCard!(tw.home, cards[1].callId, { confirm: { value: false } })).disposition).toBe("started");
+    expect((await answerPaged(tw.client, tw.home, cards[1].callId, { confirm: { value: false } })).disposition).toBe("started");
     await drain(tw);
 
     expect(tw.scripted.faux.state.callCount).toBe(2); // exactly one turn started
@@ -299,7 +316,7 @@ describe("confirmCard through different raising paths (ticket 5 shape)", () => {
     tools: [defineTool({ name: "plain", description: "p", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return { output: [{ type: "text" as const, text: "p" }] }; } })],
   });
 
-  it("a raisesCard adapted tool (not brief) returning confirmCard: the guard ends a round with a sibling tool; the answer resumes", async () => {
+  it("a raisesCard adapted tool (not ask) returning confirmCard: the guard ends a round with a sibling tool; the answer resumes", async () => {
     let seen = "";
     const mk = (rt: ExtensionRuntime) =>
       adaptToDurable(
@@ -335,8 +352,8 @@ describe("confirmCard through different raising paths (ticket 5 shape)", () => {
     expect(pending.map((p) => p.card.tool)).toEqual(["raise", "ship_gate"]);
     expect(pending[1].card.fields[0]).toMatchObject({ kind: "confirm", id: "confirm", confirmLabel: "Ship" });
     expect(pending[1].card.fields[0]).not.toHaveProperty("default"); // ship gates pre-select nothing
-    await tw.client.answerCard!(tw.home, pending[0].callId, { confirm: { value: false } });
-    expect((await tw.client.answerCard!(tw.home, pending[1].callId, { confirm: { value: true } })).disposition).toBe("started");
+    await answerPaged(tw.client, tw.home, pending[0].callId, { confirm: { value: false } });
+    expect((await answerPaged(tw.client, tw.home, pending[1].callId, { confirm: { value: true } })).disposition).toBe("started");
     await drain(tw);
     expect(seen).toContain("- Ship it?: yes (Ship)");
     expect(tw.scripted.faux.state.callCount).toBe(2);

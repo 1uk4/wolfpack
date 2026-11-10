@@ -131,17 +131,17 @@ afterEach(() => {
 });
 
 describe("crawl_run wizard card", () => {
-  it("no outstanding run: one concurrency question (a plain card, no steps), skipped when given", async () => {
+  it("no outstanding run: one concurrency question (a plain card, one page), skipped when given", async () => {
     const t = setup();
     const planPath = await t.plan();
     const r = await t.call("crawl_run", { planPath });
     expect(r.card).toMatchObject({ tool: "crawl_run" });
     expect(CardSchema.safeParse(r.card).success).toBe(true);
     expect(r.card!.fields.map((f) => f.id)).toEqual(["concurrency"]);
-    expect(r.card!.steps).toBeUndefined();
-    expect(r.card!.brief!.headline.length).toBeLessThanOrEqual(80);
-    expect(r.card!.brief!.context!.length).toBeLessThanOrEqual(5);
-    expect(r.card!.brief!.context![0]).toMatch(/\d+ batch\(es\), \d+ file pattern/);
+    // a tool confirmation is a paged ask card: one page holding the field, and no legacy brief header
+    expect(r.card!.paged).toBe(true);
+    expect(r.card!.steps).toEqual([{ title: expect.any(String), fields: ["concurrency"] }]);
+    expect(r.card!.brief).toBeUndefined();
     expect(r.card!.fields.length).toBeLessThanOrEqual(3);
     expect(r.card!.fields[0]).toMatchObject({ kind: "single", allowOther: true });
     expect((r.card!.fields[0] as { options: { value: string }[] }).options.map((o) => o.value)).toEqual(["5", "8", "12", "16", "24", "32"]);
@@ -163,7 +163,7 @@ describe("crawl_run wizard card", () => {
     const r = await t.call("crawl_run", { planPath });
     const card = r.card!;
     expect(CardSchema.safeParse(card).success).toBe(true);
-    expect(card.steps).toEqual([{ title: "Resume", fields: ["resume"] }, { title: "Concurrency", fields: ["concurrency"] }]);
+    expect(card.steps).toEqual([{ title: "Run settings", fields: ["resume", "concurrency"] }]);
     const resume = card.fields[0] as { options: { value: string; label: string }[] };
     expect(resume.options.map((o) => o.value)).toEqual([dir, "fresh", "cancel"]);
     expect(resume.options[0].label).toBe("Resume — finish the 1 remaining batch(es)");
@@ -302,7 +302,8 @@ describe("crawl_release", () => {
     const b = complete(t.crawlHome, planPath, "run-b");
     const r = await t.call("crawl_release");
     expect(r.card).toMatchObject({ tool: "crawl_release", title: "Release which crawl?" });
-    expect(r.card!.brief!.headline).toBe("Release which crawl?");
+    expect(r.card).toMatchObject({ paged: true, steps: [{ fields: ["run"] }] });
+    expect(r.card!.brief).toBeUndefined();
     expect((r.card!.fields[0] as { options: { value: string }[] }).options.map((o) => o.value).sort()).toEqual([a, b].sort());
     const outside = tmp("outside");
     copyFileSync(planPath, join(outside, "plan.yaml"));
@@ -329,10 +330,8 @@ describe("crawl_release", () => {
     const first = await t.call("crawl_release", { runDir: dir });
     expect(first.card?.fields[0]).toMatchObject({ kind: "confirm", label: expect.stringMatching(/^Release crawl run-a to the librarian\? \([0-9a-f]{8}\)$/), confirmLabel: "Release" });
     expect(first.card!.fields[0].description).toContain("**2** contribution(s)");
-    expect(first.card!.brief!.headline).toBe('Release 2 contribution(s) to "' + (first.card!.brief!.headline.match(/to "(.*)"\?/)?.[1] ?? "") + '"?');
-    expect(first.card!.brief!.headline.length).toBeLessThanOrEqual(80);
-    expect(first.card!.brief!.context!.length).toBeLessThanOrEqual(5);
-    expect(first.card!.brief!.context![0]).toContain("2 new or changed");
+    expect(first.card).toMatchObject({ paged: true, steps: [{ fields: ["confirm"] }] });
+    expect(first.card!.brief).toBeUndefined();
     expect(first.card!.fields).toHaveLength(1);
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
     // waiting for the answer: nothing happens, no second card

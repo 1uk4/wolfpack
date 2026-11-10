@@ -22,7 +22,8 @@ export const ATTACHED_KEY = "wolfpack:chatbar:popped-out";
 export const LEGACY_KEYS = ["wolfpack:chatbar:attached", "wolfpack:chatbar:home-wolf"] as const; // the second is the removed "Home wolf" setting
 
 /** The floating chat is just the thread chip, the composer and Dock. Each extra is off; flip one to bring it back (the code is kept). */
-export const BAR_EXTRAS: { cards: boolean; peek: boolean; badge: boolean; switcher: boolean } = { cards: false, peek: false, badge: false, switcher: false };
+/** `ask` (on): a paged `ask` questionnaire shows in the bar as a sheet even while `cards` is off (other cards stay hidden). */
+export const BAR_EXTRAS: { cards: boolean; peek: boolean; badge: boolean; switcher: boolean; ask: boolean } = { cards: false, peek: false, badge: false, switcher: false, ask: true };
 export const MINIMIZED_KEY = "wolfpack:chatbar:minimized";
 export interface KeyValueStore {
 	getItem(k: string): string | null;

@@ -186,7 +186,7 @@ export function relayClient(hub: { baseUrl: string; token?: string }, requestTok
 // Not here on purpose (direct-path.ts WHAT): putPrompt, resetPrompt, putWolfSettings, revealWolfSetting and putThreadSettings stay behind
 // the hub's live device check. restartWolf stays: restarting a local wolf is recovery, the point of the fallback.
 const DIRECT_BY_WOLF = new Set(["listThreads", "createThread", "listPrompts", "getWolfSettings", "restartWolf", "listCards", "watchMemory", "watchActivity", "consolidateMemory", "getMemoryStatus", "getMemoryObservations", "getMemoryTopic"]);
-const DIRECT_BY_THREAD = new Set(["getThread", "listChildren", "getLedger", "getWorkspaceStatus", "submit", "uploadAttachment", "getAttachment", "answerCard", "skipCard", "getThreadSettings", "getThreadContext", "compactThread", "abort", "watch"]);
+const DIRECT_BY_THREAD = new Set(["getThread", "listChildren", "getLedger", "getWorkspaceStatus", "submit", "uploadAttachment", "getAttachment", "answerCard", "saveCardPage", "submitCard", "putCardNote", "bindCardText", "getDiagram", "skipCard", "getThreadSettings", "getThreadContext", "compactThread", "abort", "watch"]);
 /** Streams whose last argument is `{signal}`: a direct stream is ended when the route goes back to the hub, so its consumer reconnects through the hub. */
 const DIRECT_STREAMS_WITH_SIGNAL: Record<string, number> = { watch: 1, watchMemory: 1, watchActivity: 1 };
 

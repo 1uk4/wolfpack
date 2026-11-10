@@ -163,6 +163,32 @@ export function removeThreadAttachments(den: string, threadId: string): void {
   rmSync(threadDir(den, threadId), { recursive: true, force: true });
 }
 
+/** Does this thread have an upload with this id? A stat in the thread's directory; the file is not read. */
+export function attachmentExists(den: string, threadId: string, id: string): boolean {
+  if (!ID_RE.test(id)) return false;
+  const dir = threadDir(den, threadId);
+  return Object.keys(MIME_BY_EXT).some((ext) => existsSync(join(dir, `${id}.${ext}`)));
+}
+
+/**
+ * Only the image parts for these uploads, behind one text part: `label`, then one `[Attached image: path]` line per file
+ * (the line history is rebuilt from, see `attachmentsInText`). Ids whose file is gone are skipped; none left gives [].
+ */
+export function imageParts(den: string, threadId: string, ids: readonly string[], label: string) {
+  const files = [...new Set(ids)].flatMap((id) => {
+    try {
+      return [loadAttachment(den, threadId, id)];
+    } catch {
+      return [];
+    }
+  });
+  if (files.length === 0) return [];
+  return [
+    { type: "text" as const, text: `${label}\n${files.map((f) => `[Attached image: ${f.path}]`).join("\n")}` },
+    ...files.map((f) => ({ type: "image" as const, data: f.bytes.toString("base64"), mimeType: f.mimeType })),
+  ];
+}
+
 /** Build the engine input: the text plus a path note per attachment, and one image part each. */
 export function inlineAttachments(den: string, threadId: string, text: string, refs: readonly AttachmentRef[]) {
   const files = [...new Set(refs.map((r) => r.id))].map((id) => loadAttachment(den, threadId, id));

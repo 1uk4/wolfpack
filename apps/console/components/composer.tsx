@@ -70,9 +70,21 @@ export function Composer({
 	enterSends,
 	controls,
 	sendLabel,
+	alwaysLabel,
+	attachDisabled,
+	armed,
+	sendAriaLabel,
 }: {
+	/** The questionnaire's "Send anyway?" state: the button widens and changes colour, a cancel × appears beside it and Esc cancels. */
+	armed?: { onCancel: () => void };
+	/** Accessible name of the send button when it differs from its visible label. */
+	sendAriaLabel?: string;
+	/** Keep the send label even with nothing to send (the questionnaire's Next / Submit, shown disabled). */
+	alwaysLabel?: boolean;
 	/** Replaces the send button's icon with this text while there is something to send (the bar's "Reply instead" with a card open). An empty composer keeps Send / Stop. */
 	sendLabel?: string;
+	/** Why attaching is off right now (the attach button is shown disabled with this as its title). */
+	attachDisabled?: string;
 	busy: boolean;
 	value: string;
 	onChange: (v: string) => void;
@@ -101,7 +113,7 @@ export function Composer({
 	/** Per-thread controls (model tier, auto-ship), shown beside the send button. */
 	controls?: React.ReactNode;
 }) {
-	const labelled = sendLabel !== undefined && canSend;
+	const labelled = sendLabel !== undefined && (canSend || alwaysLabel === true);
 	const act = (viaEnter = false) => {
 		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
 		if (action === "stop") onStop();
@@ -116,6 +128,14 @@ export function Composer({
 				onSubmit={(e) => {
 					e.preventDefault();
 					act();
+				}}
+				onKeyDown={(e) => {
+					// Esc while armed (focus on the button or the textarea) leaves the asking state.
+					if (e.key === "Escape" && armed) {
+						e.preventDefault();
+						e.stopPropagation();
+						armed.onCancel();
+					}
 				}}
 			>
 				{onPickFiles && (
@@ -136,8 +156,10 @@ export function Composer({
 						<button
 							type="button"
 							aria-label="Attach images"
+							disabled={attachDisabled !== undefined}
+							title={attachDisabled}
 							onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.click()}
-							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground"
+							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
 						>
 							<PaperclipIcon className="size-4" />
 						</button>
@@ -186,20 +208,28 @@ export function Composer({
 					 confirm-popup abort in every state, so stop is never
 					 unreachable. No tooltip — the ↵ glyph is the affordance
 					 (owner, subtlety round 2026-09-25). */}
+				{armed && (
+					<button type="button" data-testid="ask-keep-answering" aria-label="Keep answering" title="Keep answering" onClick={armed.onCancel} className="wp-swap-in flex size-8 shrink-0 items-center justify-center self-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground max-md:size-11">
+						<XIcon className="size-4" />
+					</button>
+				)}
 				<button
 					type="submit"
-					aria-label={labelled ? sendLabel : busy && !canSend ? "Stop" : "Send"}
+					data-armed={armed ? "true" : undefined}
+					aria-label={labelled ? (sendAriaLabel ?? sendLabel) : busy && !canSend ? "Stop" : "Send"}
 					disabled={!busy && !canSend}
 					className={cn(
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
-						labelled && "w-auto px-3 font-ui text-xs",
-						busy && !canSend
+						labelled && "wp-send-label w-auto px-3 font-ui text-xs",
+						armed
+							? "wp-send-armed bg-foreground text-background hover:opacity-90"
+							: busy && !canSend
 							? "bg-secondary text-foreground hover:bg-accent max-md:bg-(color:--thread-accent) max-md:text-(color:--thread-accent-foreground)"
 							: "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
 					)}
 				>
 					{labelled ? (
-						sendLabel
+						<span key={sendLabel} className="wp-swap-in whitespace-nowrap">{sendLabel}</span>
 					) : busy && !canSend ? (
 						<SquareIcon className="size-4 max-md:fill-current" />
 					) : (

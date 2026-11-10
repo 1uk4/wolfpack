@@ -12,7 +12,7 @@
  * Limits: a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -20,6 +20,10 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_NAME_HEADER,
   AnswerCardBodySchema,
+  SaveCardPageBodySchema,
+  SubmitCardBodySchema,
+  CardNoteBodySchema,
+  BindCardTextBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
   GraduationConfirmBodySchema,
@@ -55,6 +59,8 @@ import { readDenTopics } from "@wolfpack/memory";
 import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
+import type { AskBridge } from "../extensions/ask.js";
+import { diagramPath } from "../diagrams.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
@@ -82,6 +88,8 @@ export interface WolfServerOptions {
   conversations?: ThreadConversations;
   /** Subagents: where their roster lives and how their conversations are created. Unset: this wolf has no spawn tools' manager. */
   subagents?: SubagentOptions & { bridge?: { manager?: SubagentManager } };
+  /** The ask tools' view of thread state (ask_revise validation, hold-your-turn). Unset: the ask tools find none. */
+  askBridge?: AskBridge;
   /** How long submit/abort wait for the event pump to observe the effect. Default 5000. */
   settleTimeoutMs?: number;
   /** Stall watchdog: abort a running turn silent for this many ms (no model events, no tool running). Default 120000; 0 disables. */
@@ -206,6 +214,7 @@ export class WolfServer {
           },
           detachChild: async (id) => {
             const t = this.threads.get(id);
+            t?.supersedePending(); // Only discard/close supersedes a child's cards (a stopped or failed child keeps them; answering resumes it).
             this.threads.delete(id);
             await t?.close();
           },
@@ -221,6 +230,14 @@ export class WolfServer {
         },
       );
       if (bridge) bridge.manager = this.subagents;
+    }
+    if (opts.askBridge) {
+      // Ids compare as strings (a conversation id may be a number). Threads are registered before their conversation can run a turn,
+      // so the only fail-open window is attach() itself; no fail-closed branch, it would wedge a thread whose attach failed.
+      const threadOf = (cid: string) => [...this.threads.values()].find((t) => String(t.conv.id) === String(cid));
+      opts.askBridge.host = {
+        reviseTarget: (cid, callId) => threadOf(cid)?.reviseTarget(callId) ?? { problem: "ask_revise: this conversation has no questionnaire." },
+      };
     }
     this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home", ...(opts.den ? { settings: loadHomeSettings(opts.den) } : {}) }, opts.conversation);
     this.http = createServer((req, res) => {
@@ -263,7 +280,7 @@ export class WolfServer {
         const t = this.makeThread(summary, conv);
         this.mirrorAutoShip(t);
         const reason = saved.closedReason ?? (await this.closedReasonOf(saved.workItemId, Number(saved.conversationId)));
-        if (reason) this.markClosed(t, reason);
+        if (reason) this.markClosed(t, reason, false);
         try {
           await t.attach();
         } catch (e) {
@@ -330,6 +347,8 @@ export class WolfServer {
       ...(this.opts.stallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.stallTimeoutMs } : {}),
       closing: () => this.closing,
       emitWolf: (d) => this.emitWolf(d),
+      ancestorsOf: (id) => this.relatives(id, "up"),
+      descendantsOf: (id) => this.relatives(id, "down"),
       onError: (e) => this.opts.onError?.(e),
       applyTier: (c, tier) => (this.opts.conversations?.setTier ? this.opts.conversations.setTier(c, tier) : Promise.resolve()),
       ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
@@ -366,12 +385,21 @@ export class WolfServer {
     else if (!setThreadSettings(den, t.summary.id, s, (e) => this.opts.onError?.(e))) throw new HttpError("invalid_request", `thread ${t.summary.id} keeps no settings`);
   }
 
-  /** Read-only history: a graduated feature's thread keeps its messages, refuses new ones. */
-  private markClosed(t: ThreadRuntime, reason: string): void {
+  /**
+   * Read-only history: a closed feature thread keeps its messages, refuses new ones. The one place every close path
+   * uses: the first close pushes `thread-updated` (open views archive it at once) and closes its settled sub-agent
+   * threads (running ones close as they settle). `announce: false` (startup restore) stays silent. Returns the closed child ids.
+   */
+  private markClosed(t: ThreadRuntime, reason: string, announce = true): string[] {
+    const wasOpen = !t.summary.closed;
     t.summary = { ...t.summary, closed: true, closedReason: reason };
     const den = this.opts.den;
     const saved = den ? loadThreads(den).find((s) => s.id === t.summary.id) : undefined;
     if (den && saved && saved.closedReason !== reason) saveThread(den, { ...saved, closedReason: reason }, (e) => this.opts.onError?.(e));
+    if (!announce) return [];
+    // A thread already closed (wasOpen false) still re-closes its children, idempotently, and returns their ids.
+    if (wasOpen) this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
+    return this.subagents?.closeChildrenOf(t.summary.id) ?? [];
   }
 
   /** Why a feature thread is closed: the graduation marker the unbind leaves, or the feature's stage in the Work API. Undefined when open or unknown. */
@@ -391,9 +419,8 @@ export class WolfServer {
     const closed: string[] = [];
     for (const t of this.threads.values()) {
       if (t.summary.kind === "feature" && t.summary.boundWorkItem && workItemIds.includes(t.summary.boundWorkItem)) {
-        this.markClosed(t, GRADUATED_MESSAGE);
-        closed.push(t.summary.id);
-        closed.push(...(this.subagents?.closeChildrenOf(t.summary.id) ?? []));
+        const children = this.markClosed(t, GRADUATED_MESSAGE);
+        closed.push(t.summary.id, ...children);
       }
     }
     return closed;
@@ -666,14 +693,44 @@ export class WolfServer {
         return this.json(res, 200, { threads: await Promise.all([...this.threads.values()].map((t) => this.withWorkspace(t.threadSummary()))) });
       case "listCards":
         this.checkWolf(params.name);
-        // A subagent's questions go to its parent, not to the operator's needs-you list.
-        return this.json(res, 200, { cards: [...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()) });
+        return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });
       case "answerCard": {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);
         const body = AnswerCardBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
         return this.json(res, 200, await t.answerCard(params.callId, body.data.answers));
+      }
+      case "saveCardPage": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = SaveCardPageBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers, goto?, stepsKey?}");
+        t.saveCardPage(params.callId, Number(params.page), body.data);
+        return this.json(res, 200, { accepted: true });
+      }
+      case "putCardNote": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = CardNoteBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {text?, attachments?: string[]}");
+        t.putCardNote(params.callId, body.data);
+        return this.json(res, 200, { accepted: true });
+      }
+      case "submitCard": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = SubmitCardBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers?, note?: {text?, attachments?}, stepsKey?}");
+        return this.json(res, 200, await t.submitCard(params.callId, body.data));
+      }
+      case "bindCardText": {
+        const t = this.checkThread(params.id);
+        await this.assertOpen(t);
+        const body = BindCardTextBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {text?, attachments?: string[]} with at least one non-blank");
+        t.bindCardText(params.callId, params.qid, body.data.text ?? "", body.data.attachments, body.data.others ? { picked: body.data.picked ?? [], others: body.data.others } : undefined, body.data.stepsKey);
+        return this.json(res, 200, { accepted: true });
       }
       case "skipCard": {
         const t = this.checkThread(params.id);
@@ -840,6 +897,22 @@ export class WolfServer {
           "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
         });
         res.end(file.bytes);
+        return;
+      }
+      case "getDiagram": {
+        this.checkThread(params.id);
+        // By id only: diagramPath accepts exactly a published `viz-<slug>-<ms>.png` of this wolf's viz dir, never a path.
+        const file = this.opts.den ? diagramPath(this.opts.den, params.diagramId, this.opts.env) : undefined;
+        if (!file) throw new HttpError("not_found", `unknown diagram ${params.diagramId}`);
+        const bytes = readFileSync(file);
+        res.writeHead(200, {
+          "Content-Type": "image/png",
+          "Content-Length": bytes.length,
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+        });
+        res.end(bytes);
         return;
       }
       case "abort": {
@@ -1109,6 +1182,31 @@ export class WolfServer {
     if (name !== this.name) throw new HttpError("not_found", `wolf ${name}`);
   }
 
+  /** Threads above (parent first) or below (children, then theirs) `id`, walked by `parentThreadId`; a cycle ends the walk. */
+  private relatives(id: string, dir: "up" | "down"): ThreadRuntime[] {
+    const out: ThreadRuntime[] = [];
+    const seen = new Set<string>([id]);
+    if (dir === "up") {
+      for (let p = this.threads.get(id)?.summary.parentThreadId; p && !seen.has(p); p = this.threads.get(p)?.summary.parentThreadId) {
+        seen.add(p);
+        const t = this.threads.get(p);
+        if (t) out.push(t);
+      }
+      return out;
+    }
+    const queue = [id];
+    while (queue.length) {
+      const cur = queue.shift() as string;
+      for (const t of this.threads.values()) {
+        if (t.summary.parentThreadId !== cur || seen.has(t.summary.id)) continue;
+        seen.add(t.summary.id);
+        out.push(t);
+        queue.push(t.summary.id);
+      }
+    }
+    return out;
+  }
+
   private checkThread(id: string): ThreadRuntime {
     const t = this.threads.get(id);
     if (!t) throw new HttpError("not_found", `thread ${id}`);
@@ -1167,7 +1265,7 @@ export class WolfServer {
       const at = new Date().toISOString();
       return [
         ...[...this.threads.values()].map((t): WolfEvent => ({ type: "thread-status", id, wolf: this.name, at, threadId: t.summary.id, status: t.status() })),
-        ...[...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
+        ...[...this.threads.values()].flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
       ];
     };
     const firstId = this.wolfBuffer[0]?.id;

@@ -150,6 +150,7 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 			}}
 		>
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				{/* `card.brief` is legacy: the brief tool is gone, so only old transcripts carry it (rendered read-only). */}
 				{card.brief ? "Brief" : (card.title ?? "Question")}
 				{closedKind && (
 					<span data-testid="card-closed-badge" data-closed={closedKind} className={cn("ml-2 rounded px-1.5 py-0.5 font-semibold", CLOSED_STYLE[closedKind].badge)}>

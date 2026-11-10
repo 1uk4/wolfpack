@@ -248,7 +248,7 @@ export const quizInputObject = Type.Object({
 			"The lesson's position on the map derives from these tags (the node the latest tagged question is about is " +
 			"where the map stands; earlier ones count as visited). A node takes as many questions as it deserves: stay on " +
 			"one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward. " +
-			"For off-map checks use brief.",
+			"For off-map checks use ask.",
 	}),
 	...quizInputBase.properties,
 });
@@ -318,7 +318,7 @@ export const explainInputObject = Type.Object({
 			"The lesson's position on the map derives from these tags (the node the latest tagged question is about is " +
 			"where the map stands; earlier ones count as visited). A node takes as many questions as it deserves: stay on " +
 			"one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward. " +
-			"For off-map checks use brief.",
+			"For off-map checks use ask.",
 	}),
 	...explainInputBase.properties,
 });

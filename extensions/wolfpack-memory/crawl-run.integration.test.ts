@@ -3,6 +3,7 @@
  * scripted model, wolfd validating the answers (a hidden field is not required). The run engine is the real one, so a run
  * that gets past the card fails fast at engine creation (the scripted provider is not an engine provider): no LLM, no live KB.
  */
+import { answerPaged } from "../../packages/harness/src/wolfd/test-ask-call.js";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -119,16 +120,16 @@ describe("crawl run wizard as a stepped card (/v1, scripted model)", { timeout: 
     expect(d1.status).toBe("needs-you");
     const [p1] = d1.pendingCards!;
     expect(p1.card.tool).toBe("crawl_run");
-    expect(p1.card.steps).toEqual([{ title: "Resume", fields: ["resume"] }, { title: "Concurrency", fields: ["concurrency"] }]);
+    expect(p1.card.steps).toEqual([{ title: "Run settings", fields: ["resume", "concurrency"] }]);
     expect(p1.card.fields.map((f) => f.id)).toEqual(["resume", "concurrency"]);
     expect(p1.card.fields[1].showIf).toEqual({ field: "resume", oneOf: [state.seeded, "fresh"] });
     expect((p1.card.fields[0] as { options: { value: string }[] }).options.map((o) => o.value)).toEqual([state.seeded, "fresh", "cancel"]);
 
-    await expect(b.client.answerCard!(b.home, p1.callId, { resume: { value: "fresh" } })).rejects.toMatchObject({ code: "invalid_request" }); // concurrency required
+    await expect(answerPaged(b.client, b.home, p1.callId, { resume: { value: "fresh" } })).rejects.toMatchObject({ code: "invalid_request" }); // concurrency required
     // an older console sends the hidden concurrency answer too: it is dropped, not an error
-    await b.client.answerCard!(b.home, p1.callId, { resume: { value: "cancel" }, concurrency: { value: "8" } });
+    await answerPaged(b.client, b.home, p1.callId, { resume: { value: "cancel" }, concurrency: { value: "8" } });
     await b.drain();
-    expect(reply).toContain("- Resume the outstanding crawl?: Cancel (cancel)");
+    expect(reply).toContain("- Q1 Resume the outstanding crawl?: Cancel (cancel)");
     expect(reply).not.toContain("How many batches");
     expect((await b.client.getThread(b.home)).status).toBe("idle");
   });
@@ -174,9 +175,9 @@ describe("crawl run wizard as a stepped card (/v1, scripted model)", { timeout: 
     await b.client.submit(b.home, "run the crawl", { whenBusy: "reject" });
     await b.drain();
     const [p1] = (await b.client.getThread(b.home)).pendingCards!;
-    await b.client.answerCard!(b.home, p1.callId, { resume: { value: "fresh" }, concurrency: { value: "8" } });
+    await answerPaged(b.client, b.home, p1.callId, { resume: { value: "fresh" }, concurrency: { value: "8" } });
     await b.drain();
-    expect(reply).toContain("- How many batches to run at once?: 8");
+    expect(reply).toContain("How many batches to run at once?: 8");
     expect(startResult).toContain("crawl run failed to start");
     const call = (await b.client.getThread(b.home)).messages.flatMap((m) => m.tools ?? []).find((t) => t.name === "crawl_run" && t.answer);
     expect(call?.answer).toEqual({ resume: { value: "fresh" }, concurrency: { value: "8" } });

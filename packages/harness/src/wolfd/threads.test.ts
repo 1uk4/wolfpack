@@ -8,6 +8,7 @@ import { fauxAssistantMessage, type FauxResponseStep } from "./scripted-model.js
 import { ScriptedEngine } from "./scripted-engine.js";
 import { WolfServer } from "./server.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
+import { answerPaged } from "./test-ask-call.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { bindFeature } from "./threads.js";
 
@@ -82,7 +83,7 @@ describe("feature threads on a real wolf", () => {
     expect(cards[0].threadId).toBe(feature.id);
     expect((await tw.client.getThread(feature.id)).pendingCards).toHaveLength(1);
     expect((await tw.client.listThreads("testwolf")).map((t) => t.status)).toEqual(["idle", "needs-you"]);
-    await tw.client.answerCard!(feature.id, cards[0].callId, { answer: { value: "main" } });
+    await answerPaged(tw.client, feature.id, cards[0].callId, { answer: { value: "main" } });
     await drain(tw, feature.id);
     expect(await tw.client.listCards!("testwolf")).toEqual([]);
   });
@@ -113,7 +114,7 @@ describe("a graduated feature's thread is read-only history", () => {
     const detail = await tw.client.getThread(feature.id);
     expect(detail).toMatchObject({ closed: true });
     expect((await tw.client.listThreads("testwolf")).find((t) => t.id === feature.id)?.closed).toBe(true);
-    await expect(tw.client.answerCard!(feature.id, "call-1", { answer: { value: "x" } })).rejects.toMatchObject({ code: "thread_closed" });
+    await expect(answerPaged(tw.client, feature.id, "call-1", { answer: { value: "x" } })).rejects.toMatchObject({ code: "thread_closed" });
     await tw.client.submit(tw.home, "hi", { whenBusy: "reject" }); // home still takes turns
   });
 });

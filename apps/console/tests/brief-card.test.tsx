@@ -74,6 +74,18 @@ describe("brief card", () => {
 	});
 });
 
+describe("legacy brief in history", () => {
+	it("an answered brief card still renders read-only: headline, bullets and the recorded answer, no form", async () => {
+		await mount(
+			{ tool: "brief", fields: [{ id: "q1", kind: "confirm", label: "Ship?" }], brief: { headline: "Ready to ship", context: ["tests pass"] } },
+			{ q1: { value: true } } as CardAnswers,
+		);
+		assert.equal(q('[data-testid="answered-card"]') !== null, true);
+		assert.equal(q('[data-testid="brief-headline"]')?.textContent, "Ready to ship");
+		assert.equal(q('[data-testid="brief-bullet"]')?.textContent?.includes("tests pass"), true);
+	});
+});
+
 describe("field-kind registry", () => {
 	it("an unknown kind renders as a free-text answer with the question shown", async () => {
 		await mount({ tool: "brief", fields: [{ id: "n", kind: "slider", label: "How many?" } as never], brief: { headline: "h" } });

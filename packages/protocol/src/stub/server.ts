@@ -6,6 +6,7 @@ import {
   SSE_DONE,
   SubmitBodySchema,
   AnswerCardBodySchema,
+  BindCardTextBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
   matchRoute,
@@ -306,9 +307,22 @@ export class StubServer {
         return this.json(res, 200, { threadId: t.summary.id, workItemId: body.data.workItemId, ...(previous && previous !== body.data.workItemId ? { previousWorkItemId: previous } : {}) });
       }
       // --- end feature progress ---
-      case "skipCard":
+      case "getDiagram":
         this.thread(params.id);
+        throw new HttpError("not_found", `unknown diagram ${params.diagramId}`);
+      case "skipCard":
+      case "saveCardPage":
+      case "submitCard":
+      case "putCardNote":
+      case "bindCardText": {
+        const t = this.thread(params.id);
+        if (m.name === "bindCardText") {
+          const body = BindCardTextBodySchema.safeParse(await readJson(req));
+          if (!body.success) throw new HttpError("invalid_request", "body must be {text?, attachments?: string[]} with at least one non-blank");
+          for (const id of body.data.attachments ?? []) if (!this.uploads.has(`${t.summary.id}\n${id}`)) throw new HttpError("invalid_request", `unknown attachment ${id}`);
+        }
         throw new HttpError("not_found", `card ${params.callId}`);
+      }
       case "abort": {
         const t = this.thread(params.id);
         t.followUps = [];

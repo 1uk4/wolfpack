@@ -371,6 +371,20 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return item;
   }
 
+  /** Move an item to a stage. Archiving a task runs the same gated distill as a ship (a no-op when already distilled or the log is empty); never blocks the archive. */
+  async function stageWithDistill(id: string, to: string): Promise<WorkItem> {
+    const item = await client.stage(id, to);
+    if (to === "archived" && config.distillOnShip && (item as { kind?: string }).kind === "task") {
+      try {
+        const r = (await config.distillOnShip(id)) as { ok?: boolean; reason?: string } | undefined;
+        if (r && r.ok === false) debugLog("archive distill failed", { id, reason: r.reason });
+      } catch (err) {
+        debugLog("archive distill failed", { id, err: String(err) });
+      }
+    }
+    return item;
+  }
+
   // Session-specific task binding
   let sessionId: string | null = null;
   let activeTask: ActiveTaskState | null = null;
@@ -603,7 +617,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (signal.to === "shipped") {
               await shipWithRollup(activeTask.workId);
             } else {
-              const moved = await client.stage(activeTask.workId, signal.to);
+              const moved = await stageWithDistill(activeTask.workId, signal.to);
               if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             }
             await client.note(activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
@@ -1315,7 +1329,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           const item = params.to === "shipped" || params.to === "live"
             ? await shipWithRollup(target)
-            : await client.stage(target, params.to);
+            : await stageWithDistill(target, params.to);
           if (target === activeTask?.workId) activeItem = item;
           if (item.stage === "in_build") await syncFeatureStage(client, item).catch(() => {});
           let reply = `${item.title} → ${item.stage}`;

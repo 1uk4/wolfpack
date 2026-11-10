@@ -26,6 +26,7 @@ import {
   poolTokens,
   HttpWorkRecordStore,
   distillTaskToFeature,
+  sweepPendingDistills,
   serializeBranchEntries,
   type MemoryOrchestrator,
   type Observation,
@@ -1452,6 +1453,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     runtime = new PiRuntime(pi, ctx);
     enabled = readGate(ctx.sessionManager.getBranch());
     if (enabled) initOrchestrator(ctx);
+    // Catch-up for ship distills (memory.workLog: append): once per session start, at most 3 tasks, in the background; failures are swallowed.
+    if (enabled && workLogAppend && workRecordStore.configured && engine && !process.env.PI_SUBAGENT_AGENT) {
+      void sweepPendingDistills({ client: new WorkClient(undefined, undefined, undefined, undefined, wolfName), store: workRecordStore, engine, src: wolfName }).catch(() => {});
+    }
     // Archive den topics Dewey has absorbed since last time (receipt-driven, silent).
     if (kbEnabled) {
       try { reconcileDen(wolfDen, kbRoots, wolfName); } catch { /* never block startup */ }

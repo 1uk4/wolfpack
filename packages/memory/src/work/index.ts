@@ -59,7 +59,7 @@ export {
   type WorkPattern,
 } from "./file-observation.js";
 
-export { distillTaskToFeature, type ShipDistillResult } from "./ship-distill.js";
+export { distillTaskToFeature, sweepPendingDistills, type SweepClient, type ShipDistillResult } from "./ship-distill.js";
 
 // Rollup (child → parent feature body)
 export {

@@ -87,3 +87,64 @@ export async function distillTaskToFeature(opts: {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/** The part of the Work client the sweep reads: list calls only (bodies come from the store). */
+export interface SweepClient {
+  query(q: { kind?: string; partOf?: string }): Promise<Array<{ id: string; kind?: string; stage?: string; updated?: string }>>;
+}
+
+const SWEEP_STAGES = new Set(["shipped", "live", "archived"]);
+/** Task bodies read per sweep, skipped (empty Record) ones included: bounds hub reads when many old tasks have no log. */
+const MAX_SWEEP_READS = 20;
+
+/**
+ * Catch-up for tasks that shipped or were archived before the distill existed (or while the model was down):
+ * distil those whose feature Record lacks `distilled:<taskId>`, oldest first, at most `limit` (default 3) model
+ * attempts per run. Hub reads: one `query` for features (none when `featureId` is given), one per feature for its
+ * children, one `get` per feature that has candidates, and one `get` per candidate tried (at most 20).
+ * A task with no Record lines costs no model call and no limit. A failed task is left for the next run.
+ * Never throws.
+ */
+export async function sweepPendingDistills(opts: {
+  client: SweepClient;
+  store: WorkRecordStore;
+  engine: Pick<Engine, "call">;
+  featureId?: string;
+  src: string;
+  limit?: number;
+  now?: () => Date;
+}): Promise<{ distilled: string[]; failed: string[] }> {
+  const out = { distilled: [] as string[], failed: [] as string[] };
+  try {
+    const limit = opts.limit ?? 3;
+    const featureIds = opts.featureId ? [opts.featureId] : (await opts.client.query({ kind: "feature" })).map((f) => f.id);
+    const candidates: Array<{ id: string; updated: string }> = [];
+    for (const fid of featureIds) {
+      const kids = (await opts.client.query({ partOf: fid })).filter((k) => (k.kind ?? "task") === "task" && SWEEP_STAGES.has(k.stage ?? ""));
+      if (!kids.length) continue;
+      const rec = extractRecord((await opts.store.get(fid))?.body ?? "") ?? "";
+      for (const k of kids) {
+        const esc = distilledId(k.id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (!new RegExp(`src:[^>]*${esc}(?=[,:\\s])`).test(rec)) candidates.push({ id: k.id, updated: k.updated ?? "" });
+      }
+    }
+    candidates.sort((a, b) => a.updated.localeCompare(b.updated));
+    let attempts = 0;
+    let reads = 0;
+    for (const c of candidates) {
+      if (attempts >= limit || reads >= MAX_SWEEP_READS) break;
+      reads++;
+      const r = await distillTaskToFeature({ store: opts.store, engine: opts.engine, taskId: c.id, src: opts.src, now: opts.now });
+      if (!r.ok) {
+        attempts++;
+        out.failed.push(c.id);
+      } else if (r.status === "distilled" || r.status === "marker-only") {
+        attempts++;
+        out.distilled.push(c.id);
+      }
+    }
+  } catch (err) {
+    console.warn("[ship-distill] sweep failed:", err instanceof Error ? err.message : String(err));
+  }
+  return out;
+}

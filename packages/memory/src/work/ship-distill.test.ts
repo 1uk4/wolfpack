@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { distillTaskToFeature } from "./ship-distill.js";
+import { distillTaskToFeature, sweepPendingDistills } from "./ship-distill.js";
 import { InMemoryWorkRecordStore } from "../work-record.js";
 
 const TASK_LOG = "## Record\n\n- 10:00 [hal\u00b7Changes] switched the cache to a TTL map <!-- src:o1 -->\n- 10:02 [hal\u00b7Findings] eviction ran on every read <!-- src:o2 -->";
@@ -74,5 +74,79 @@ describe("distillTaskToFeature", () => {
     expect(prompts[0]).toContain("- Changes");
     expect(prompts[0]).toContain("switched the cache to a TTL map");
     expect(prompts[0]).not.toContain("src:");
+  });
+});
+
+describe("distilling on archive", () => {
+  it("an unshipped task archived with a log distills once; archiving again adds nothing", async () => {
+    const { store, prompts, run } = setup();
+    store.items.t!.stage = "archived";
+    expect(await run()).toMatchObject({ ok: true, status: "distilled" });
+    expect(await run()).toMatchObject({ ok: true, status: "already" });
+    expect(prompts).toHaveLength(1);
+  });
+});
+
+describe("sweepPendingDistills", () => {
+  const log = (n: string) => `## Record\n\n- 10:00 [hal\u00b7Changes] did ${n} <!-- src:o${n} -->`;
+  function sweepSetup(
+    tasks: Array<{ id: string; stage?: string; updated: string; body?: string }>,
+    featureBody = "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] earlier <!-- src:a -->",
+    reply: unknown = { lines: [{ group: "Changes", text: "folded" }] },
+  ) {
+    const items = {
+      f: { id: "f", title: "Feature", kind: "feature", stage: "in_build", body: featureBody },
+      ...Object.fromEntries(tasks.map((t) => [t.id, { id: t.id, title: t.id, kind: "task", stage: t.stage ?? "shipped", partOf: "f", body: t.body ?? log(t.id) }])),
+    };
+    const store = new InMemoryWorkRecordStore(items as never);
+    const calls: string[] = [];
+    const queries: unknown[] = [];
+    const engine = {
+      call: async (_s: string, _x: unknown, o: { prompt: string }) => {
+        calls.push(o.prompt);
+        if (reply instanceof Error) throw reply;
+        return reply;
+      },
+    } as never;
+    const client = {
+      query: async (q: { kind?: string; partOf?: string }) => {
+        queries.push(q);
+        if (q.partOf) return tasks.map((t) => ({ id: t.id, kind: "task", stage: t.stage ?? "shipped", partOf: "f", updated: t.updated }));
+        return [{ id: "f", kind: "feature", stage: "in_build", partOf: null, updated: "2026-01-01" }];
+      },
+    };
+    const run = (limit?: number) => sweepPendingDistills({ client, store, engine, src: "hal", limit, now: () => new Date("2026-11-09T10:30:00Z") });
+    return { store, calls, queries, run };
+  }
+
+  it("distills only the shipped task whose feature lacks its marker: one model call", async () => {
+    const s = sweepSetup(
+      [{ id: "t1", updated: "2026-02-01" }, { id: "t2", updated: "2026-02-02" }],
+      "## Record\n\n### Changes\n\n- 09:00 [hal\u00b7Changes] old <!-- src:distilled:t1,distilled:t1:1 -->",
+    );
+    const r = await s.run();
+    expect(s.calls).toHaveLength(1);
+    expect(r.distilled).toEqual(["t2"]);
+    expect(s.queries).toHaveLength(2); // the feature list, then one query for that feature's children
+  });
+
+  it("goes oldest first and stops at the limit", async () => {
+    const s = sweepSetup([{ id: "new", updated: "2026-03-01" }, { id: "old", updated: "2026-01-01" }, { id: "mid", updated: "2026-02-01" }]);
+    expect((await s.run(2)).distilled).toEqual(["old", "mid"]);
+    expect(s.calls).toHaveLength(2);
+    expect((await s.run(2)).distilled).toEqual(["new"]);
+  });
+
+  it("skips a task with an empty Record without a model call and does not spend the limit on it", async () => {
+    const s = sweepSetup([{ id: "empty", updated: "2026-01-01", body: "## Plan\n\nnothing" }, { id: "full", updated: "2026-02-01" }]);
+    const r = await s.run(1);
+    expect(r.distilled).toEqual(["full"]);
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it("a model failure does not throw and leaves the task for the next run", async () => {
+    const s = sweepSetup([{ id: "t1", updated: "2026-01-01" }], undefined, new Error("model down"));
+    expect(await s.run()).toEqual({ distilled: [], failed: ["t1"] });
+    expect(s.store.items.f!.body).not.toContain("distilled:t1");
   });
 });

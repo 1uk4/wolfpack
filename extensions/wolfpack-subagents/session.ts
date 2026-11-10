@@ -96,6 +96,8 @@ export function seedSubagentSessionFile(params: {
 export interface SubagentLoadout {
   /** Agent profile name (for PI_SUBAGENT_AGENT); null for agentless spawns. */
   agent: string | null;
+  /** Work item id (PI_SUBAGENT_TASK) resolved at spawn; kept so resume re-exports it. Absent on older sidecars. */
+  task?: string | null;
   /** The `--tools` allowlist string, or null when the spawn was unrestricted. */
   toolAllowlist: string | null;
   /** pi model (`<provider>/<id>`, no thinking suffix) resolved from the tier at spawn, or null to use the session default. */

@@ -1,4 +1,4 @@
-/** The Memory panel's observation pool: loaded on open, grouped into the den and work items, click-through, live updates. */
+/** The Memory panel's observation tree: feature → tasks with counts, tap-through to a node's pending and archived observations, blocked/backoff notes, live refetch. */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
@@ -13,11 +13,32 @@ interface Obs { id: string; timestamp: string; recordedAt: string; content: stri
 let pool: Obs[] = [];
 let poolStatus = 200;
 let poolPending: { count: number; oldestAgeMs?: number } | undefined;
-let poolFetches = 0;
-const titles: Record<string, { title: string; stage: string; kind: string }> = {
-	"work-a": { title: "Fix the login", stage: "in_build", kind: "task" },
-	"work-f": { title: "Auth feature", stage: "approved", kind: "feature" },
-	"work-old": { title: "Old shipped thing", stage: "archived", kind: "task" },
+let treeFetches = 0;
+// The tree answer: a live feature with an own note, a live task, an unknown-title task, a task whose stage is archived,
+// a feature with only archived counts, an archived-stage feature with nothing live, a fully archived loose item, and the den.
+const tree = () => ({
+	features: [
+		{
+			id: "work-d-f", title: "Auth feature", stage: "approved", own: { pending: 1, archived: 7 },
+			tasks: [
+				{ id: "work-d-a", title: "Fix the login", stage: "in_build", pending: 2, archived: 1 },
+				{ id: "work-d-u", title: "work-d-u", pending: 1, archived: 0 },
+				{ id: "work-d-old", title: "Old shipped thing", stage: "archived", pending: 3, archived: 0 },
+			],
+		},
+		{ id: "work-d-done", title: "Done feature", stage: "approved", own: { pending: 0, archived: 5 }, tasks: [{ id: "work-d-t", title: "Done task", pending: 0, archived: 5 }] },
+		{ id: "work-d-gone", title: "Gone feature", stage: "archived", own: { pending: 4, archived: 0 }, tasks: [] },
+	],
+	other: [{ id: "work-d-x", pending: 0, archived: 2 }],
+	den: { pending: 2 },
+});
+const nodes: Record<string, unknown> = {
+	"work-d-a": {
+		id: "work-d-a",
+		pending: [{ id: "p1", content: "task late", recordedAt: "2026-10-26T11:00:00Z" }, { id: "p2", content: "task early", recordedAt: "2026-10-26T10:00:00Z" }],
+		archived: [{ id: "a1", content: "task done", at: "2026-10-25T09:00:00Z", outcome: "written", target: "Record of work-d-a" }],
+		truncated: true,
+	},
 };
 Object.assign(globalThis, {
 	window: dom.window,
@@ -35,11 +56,15 @@ Object.assign(globalThis, {
 		const u = String(url);
 		const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
 		if (u.endsWith("/memory/observations")) {
-			poolFetches++;
-			return poolStatus === 200 ? json({ observations: [...pool].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt)), total: pool.length, ...(poolPending ? { pending: poolPending } : {}) }) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
+			return poolStatus === 200 ? json({ observations: pool, total: pool.length, ...(poolPending ? { pending: poolPending } : {}) }) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
 		}
-		const m = /\/work\/([^/]+)\/record$/.exec(u);
-		if (m) return titles[decodeURIComponent(m[1]!)] ? json({ id: m[1], plan: "", record: "", ...titles[decodeURIComponent(m[1]!)] }) : json({ error: "gone", code: "not_found" }, 404);
+		if (u.endsWith("/memory/tree")) {
+			treeFetches++;
+			return poolStatus === 200 ? json(tree()) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
+		}
+		const n = /\/memory\/tree\/([^/]+)$/.exec(u);
+		if (n) return nodes[decodeURIComponent(n[1]!)] ? json(nodes[decodeURIComponent(n[1]!)]) : json({ id: n[1], pending: [], archived: [], truncated: false });
+		if (/\/work\/[^/]+\/record$/.test(u)) return json({ error: "gone", code: "not_found" }, 404);
 		return json({ state: "live", bound: null, pool: { count: pool.length, tokens: 10, consolidateAtTokens: 100, poolTarget: 50, trigger: "hybrid" } });
 	},
 });
@@ -70,16 +95,10 @@ async function mount() {
 }
 beforeEach(() => {
 	store.clear();
-	pool = [
-		ob("1", "2026-10-26T09:00:00Z", "den one"),
-		ob("2", "2026-10-26T10:00:00Z", "task early", { work: "work-a", feature: "work-f" }),
-		ob("3", "2026-10-26T11:00:00Z", "task late", { work: "work-a", feature: "work-f" }),
-		ob("4", "2026-10-26T12:00:00Z", "feature only", { feature: "work-f" }),
-		ob("5", "2026-10-26T08:00:00Z", "den two"),
-	];
+	pool = [ob("1", "2026-10-26T09:00:00Z", "den one")];
 	poolStatus = 200;
 	poolPending = undefined;
-	poolFetches = 0;
+	treeFetches = 0;
 	emit = () => {};
 });
 afterEach(async () => {
@@ -88,130 +107,80 @@ afterEach(async () => {
 	document.body.innerHTML = "";
 });
 
-describe("observation pool in the Memory panel", () => {
-	it("loads the persisted pool on open (no live event needed) and groups it: the Den first, then work items with title, stage and count", async () => {
+describe("observation tree in the Memory panel", () => {
+	it("shows live observations only: Pool, then Observations with the Den first and divided, features with notes and indented tasks, no archived anything", async () => {
 		await mount();
-		assert.equal(poolFetches >= 1, true);
-		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.includes("No pending observations"), false);
-		const rows = qa('[data-testid="memory-obs-groups"] button');
-		assert.deepEqual(rows.map((r) => r.getAttribute("data-testid")), ["memory-obs-group-den", "memory-obs-group-work-f", "memory-obs-group-work-a"]);
-		assert.deepEqual(rows.map((r) => r.getAttribute("data-count")), ["2", "1", "2"]);
-		assert.match(rows[0]!.textContent!, /^Den/);
-		assert.match(rows[1]!.textContent!, /Auth feature/);
-		assert.match(rows[1]!.textContent!, /approved/);
-		assert.match(rows[2]!.textContent!, /Fix the login/);
-		assert.match(rows[2]!.textContent!, /in build/);
-	});
-
-	it("shows \"waiting for Work API\" on a group whose observations are blocked, and only on that group", async () => {
-		pool = [
-			ob("1", "2026-10-26T09:00:00Z", "den one"),
-			{ ...ob("2", "2026-10-26T10:00:00Z", "task early", { work: "work-a" }), blocked: "work-api-unavailable" },
-		];
-		await mount();
-		assert.match(q('[data-testid="memory-obs-group-work-a"]')!.textContent!, /waiting for Work API/);
-		assert.equal(q('[data-testid="memory-obs-group-den"]')!.querySelector('[data-testid="memory-obs-blocked"]'), null);
-	});
-
-	it("warns when pending observations are old or many, and says why a group is blocked", async () => {
-		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-a" }), blocked: "consolidation-failed" }];
-		poolPending = { count: 1, oldestAgeMs: 25 * 3_600_000 };
-		await mount();
-		assert.match(q('[data-testid="memory-obs-pending-warning"]')!.textContent!, /waited over 25 h/);
-		assert.match(q('[data-testid="memory-obs-blocked"]')!.textContent!, /consolidation failed/);
-	});
-
-	it("shows the hub's message on a group whose fold was refused", async () => {
-		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-a" }), blocked: "forbidden", blockedMessage: "assigned to hal; only hal or the owner can change it" }];
-		await mount();
-		assert.match(q('[data-testid="memory-obs-blocked"]')!.textContent!, /refused by the hub: assigned to hal; only hal or the owner can change it/);
-	});
-
-	it("shows no warning for a fresh, small backlog", async () => {
-		poolPending = { count: 3, oldestAgeMs: 60_000 };
-		await mount();
-		assert.equal(q('[data-testid="memory-obs-pending-warning"]'), null);
-	});
-
-	it("falls back to the id when the work lookup fails", async () => {
-		pool = [ob("1", "2026-10-26T09:00:00Z", "x", { work: "work-gone" })];
-		await mount();
-		const row = q('[data-testid="memory-obs-group-work-gone"]')!;
-		// title unknown: the chip stands alone, the id is not repeated as a title
-		assert.equal(row.parentElement!.querySelector('[data-work-id="work-gone"]') !== null, true);
-		assert.equal(row.querySelector('[data-testid="memory-obs-stage"]'), null);
-		assert.equal(row.textContent!.includes("work-gone"), false);
-	});
-
-	it("lists no archived work item's observations; a row is title and count, the id a chip that does not open the row", async () => {
-		pool = [
-			ob("1", "2026-10-26T09:00:00Z", "stale", { work: "work-old" }),
-			ob("2", "2026-10-26T10:00:00Z", "live", { work: "work-a" }),
-		];
-		await mount();
-		assert.equal(q('[data-testid="memory-obs-group-work-old"]'), null);
-		const row = q('[data-testid="memory-obs-group-work-a"]')!;
-		assert.equal(row.textContent!.includes("work-a"), false);
-		const chip = row.closest("li")!.querySelector('[data-work-id="work-a"]')!;
-		assert.equal(chip !== null, true);
-		await click(chip);
+		assert.deepEqual(qa('[data-testid="memory-pool"], [data-testid="memory-feed"]').map((e) => e.getAttribute("data-testid")), ["memory-pool", "memory-feed"]);
+		const list = q('[data-testid="memory-obs-groups"]')!;
+		const lis = [...list.children] as HTMLElement[];
+		// Den first with its divider; no separate Den section
+		assert.equal(lis[0]!.getAttribute("data-testid"), "memory-den");
+		assert.match(lis[0]!.className, /border-b/);
+		assert.match(lis[0]!.textContent!, /Den\s*2/);
+		assert.equal(qa('section[data-testid="memory-den"]').length, 0);
+		// feature header: title, chip, total pending (own 1 + live tasks 2 + 1; the archived-stage task's 3 are left out)
+		const header = q('[data-testid="memory-obs-feature"]')!;
+		assert.equal(qa('[data-testid="memory-obs-feature"]').length, 1);
+		assert.match(header.textContent!, /Auth feature/);
+		assert.equal(header.querySelector('[data-work-id="work-d-f"]') !== null, true);
+		assert.equal(header.getAttribute("data-count"), "4");
+		// beneath it: Feature notes, then the live tasks, indented; the raw id is not repeated as a subtitle
+		assert.deepEqual(lis.slice(2).map((l) => l.querySelector("button")!.getAttribute("data-testid")), ["memory-obs-group-work-d-f", "memory-obs-group-work-d-a", "memory-obs-group-work-d-u"]);
+		assert.match(lis[2]!.textContent!, /Feature notes\s*1/);
+		const task = q('[data-testid="memory-obs-group-work-d-a"]')!;
+		assert.match(task.closest("li")!.className, /ml-4/);
+		assert.match(task.textContent!, /Fix the login\s*2/);
+		assert.equal(task.closest("li")!.querySelector('[data-work-id="work-d-a"]') !== null, true);
+		assert.equal(task.textContent!.includes("work-d-a"), false);
+		assert.equal(task.textContent!.includes("in build"), false);
+		// unknown title: the chip alone
+		const unknown = q('[data-testid="memory-obs-group-work-d-u"]')!;
+		assert.equal(unknown.textContent!.includes("work-d-u"), false);
+		assert.equal(unknown.closest("li")!.querySelector('[data-work-id="work-d-u"]') !== null, true);
+		// nothing archived: no counts, no archived-stage items, no all-archived groups
+		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.toLowerCase().includes("archived"), false);
+		for (const id of ["work-d-old", "work-d-done", "work-d-t", "work-d-gone", "work-d-x"]) assert.equal(q(`[data-testid="memory-obs-group-${id}"]`), null);
+		// clicking a chip does not open the row
+		await click(task.closest("li")!.querySelector('[data-work-id="work-d-a"]')!);
 		assert.equal(q('[data-testid="memory-obs-items"]'), null);
 	});
 
-	it("puts the Den inside the Observations list as its first entry, set apart from the work groups, below the pool", async () => {
+	it("tapping a task lists only its pending observations; back returns", async () => {
 		await mount();
-		const order = qa('[data-testid="memory-pool"], [data-testid="memory-feed"]').map((e) => e.getAttribute("data-testid"));
-		assert.deepEqual(order, ["memory-pool", "memory-feed"]);
-		const first = q('[data-testid="memory-obs-groups"] > li')!;
-		assert.equal(first.getAttribute("data-testid"), "memory-den");
-		assert.match(first.className, /border-b/);
-		assert.equal(qa('section[data-testid="memory-den"]').length, 0);
+		await click(q('[data-testid="memory-obs-group-work-d-a"]')!);
+		assert.equal(q('[data-testid="memory-obs-groups"]'), null);
+		const items = qa('[data-testid="memory-obs-item"]');
+		assert.equal(items.length, 2);
+		assert.match(items[0]!.textContent!, /task late/);
+		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.includes("task done"), false);
+		assert.equal(q('[data-testid="memory-obs-truncated"]'), null);
+		assert.match(q('[data-testid="memory-obs-back"]')!.textContent!, /Fix the login/);
+		await click(q('[data-testid="memory-obs-back"]')!);
+		assert.notEqual(q('[data-testid="memory-obs-groups"]'), null);
 	});
 
-	it("an empty pool says nothing captured; a failed load says unavailable", async () => {
-		pool = [];
+	it("keeps the blocked label on its own line inside the blocked row's button and warns about an old backlog", async () => {
+		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-d-a" }), blocked: "consolidation-failed" }];
+		poolPending = { count: 1, oldestAgeMs: 25 * 3_600_000 };
 		await mount();
-		assert.match(q('[data-testid="memory-feed"]')!.textContent!, /No pending observations/);
-		await act(async () => root!.unmount());
-		document.body.innerHTML = "";
+		assert.match(q('[data-testid="memory-obs-pending-warning"]')!.textContent!, /waited over 25 h/);
+		const blocked = q('[data-testid="memory-obs-group-work-d-a"]')!.querySelector('[data-testid="memory-obs-blocked"]')!;
+		assert.match(blocked.textContent!, /consolidation failed/);
+		assert.equal(q('[data-testid="memory-obs-group-den"]')!.querySelector('[data-testid="memory-obs-blocked"]'), null);
+	});
+
+	it("says unavailable when the tree cannot be loaded", async () => {
 		poolStatus = 409;
 		await mount();
 		assert.match(q('[data-testid="memory-obs-state"]')!.textContent!, /unavailable/);
 	});
 
-	it("clicking a row lists that item's observations newest first with timestamp and text; back returns to the list", async () => {
+	it("refetches the tree on a live observation", async () => {
 		await mount();
-		await click(q('[data-testid="memory-obs-group-work-a"]')!);
-		const items = qa('[data-testid="memory-obs-item"]');
-		assert.equal(items.length, 2);
-		assert.match(items[0]!.textContent!, /2026-10-26 11:00.*task late/);
-		assert.match(items[1]!.textContent!, /2026-10-26 10:00.*task early/);
-		assert.match(q('[data-testid="memory-obs-back"]')!.textContent!, /Fix the login/);
-		await click(q('[data-testid="memory-obs-back"]')!);
-		assert.equal(qa('[data-testid="memory-obs-groups"] button').length, 3);
-		await click(q('[data-testid="memory-obs-group-den"]')!);
-		assert.deepEqual(qa('[data-testid="memory-obs-item"]').map((i) => i.textContent!.replace(/^[\d\- :]+/, "")), ["den one", "den two"]);
-	});
-
-	it("a live observation updates the counts and the open list, with no duplicate of what was loaded", async () => {
-		await mount();
-		const before = poolFetches;
-		await click(q('[data-testid="memory-obs-group-work-a"]')!);
-		pool.push(ob("6", "2026-10-26T13:00:00Z", "task live", { work: "work-a", feature: "work-f" }));
-		await act(async () => emit({ type: "observation_captured", wolf: "w", threadId: "t1", summary: "task live", count: 1, target: { kind: "work", workId: "work-a" } }));
+		const before = treeFetches;
+		await act(async () => emit({ type: "observation_captured", wolf: "w", threadId: "t1", summary: "x", count: 1, target: { kind: "den" } }));
 		await settle(400);
-		assert.equal(poolFetches > before, true);
-		const items = qa('[data-testid="memory-obs-item"]');
-		assert.equal(items.length, 3);
-		assert.match(items[0]!.textContent!, /task live/);
-		assert.equal(new Set(items.map((i) => i.textContent)).size, 3);
-		await click(q('[data-testid="memory-obs-back"]')!);
-		assert.equal(q('[data-testid="memory-obs-group-work-a"]')!.getAttribute("data-count"), "3");
-		// a general one lands in the Den; the same event twice leaves one copy
-		pool.push(ob("7", "2026-10-26T14:00:00Z", "den live"));
-		for (let i = 0; i < 2; i++) await act(async () => emit({ type: "observation_captured", wolf: "w", summary: "den live", count: 1, target: { kind: "den" } }));
-		await settle(400);
-		assert.equal(q('[data-testid="memory-obs-group-den"]')!.getAttribute("data-count"), "3");
-		assert.equal(q('[data-testid="memory-obs-group-work-a"]')!.getAttribute("data-count"), "3");
+		assert.equal(treeFetches > before, true);
 	});
 });
+

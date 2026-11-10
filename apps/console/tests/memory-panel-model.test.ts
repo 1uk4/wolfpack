@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary, triggerText,
-	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, groupObservations, blockedLabel, consolidateMessage, reconcilePromote, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
+	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, groupObservations, blockedLabel, buildMemoryTreeRows, consolidateMessage, reconcilePromote, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
 const base = { wolf: "w", timestamp: "2026-10-26T00:00:00Z", domain: "d" };
@@ -187,6 +187,33 @@ describe("memory panel model", () => {
 		const done = { ...st("live"), lastPromote: { jobId: "j1", at: "x", result: "finished" as const, consolidated: 3, contributions: 2 } };
 		assert.match(promoteLine(reconcilePromote(s, done)) ?? "", /3 consolidated, 2 contributed/);
 		assert.deepEqual(reconcilePromote(PROMOTE_IDLE, st("live")), PROMOTE_IDLE);
+	});
+	it("a tree response of the wrong shape gives no rows instead of throwing", () => {
+		for (const bad of [{}, { features: [] }, { features: [{ id: "x" }], other: [], den: { pending: 1 } }, null]) {
+			assert.deepEqual(buildMemoryTreeRows(bad as never), []);
+		}
+	});
+	it("the tree rows nest tasks under features, order by live work then size, and end with other and den", () => {
+		const rows = buildMemoryTreeRows({
+			features: [
+				{ id: "work-d-f1", title: "Quiet", own: { pending: 0, archived: 1 }, tasks: [] },
+				{ id: "work-d-f2", title: "Busy", stage: "in_build", own: { pending: 1, archived: 0 }, tasks: [
+					{ id: "work-d-t1", title: "Small", pending: 0, archived: 1 },
+					{ id: "work-d-t2", title: "Big", pending: 2, archived: 3 },
+				] },
+			],
+			other: [{ id: "work-d-x", pending: 1, archived: 0 }],
+			den: { pending: 4 },
+		});
+		assert.deepEqual(rows.map((r) => [r.kind, r.id, r.pending, r.archived]), [
+			["feature", "work-d-f2", 3, 4],
+			["feature", "work-d-f1", 0, 1],
+			["other", "work-d-x", 1, 0],
+			["den", "den", 4, 0],
+		]);
+		const busy = rows[0]!;
+		assert.equal(busy.kind === "feature" && busy.own.pending, 1);
+		assert.deepEqual(busy.kind === "feature" && busy.tasks.map((t) => t.id), ["work-d-t2", "work-d-t1"]);
 	});
 	it("record falls back to the parent's when empty", () => {
 		const own = rec({ partOf: "p" });

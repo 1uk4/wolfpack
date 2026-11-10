@@ -48,6 +48,11 @@ Preserve distinguishing details:
 
 Respond with valid JSON matching the schema.`;
 
+/** Inserted into OBSERVER_SYSTEM only when `memory.generalToDen` is on. */
+export const OBSERVER_GENERAL_FLAG = `General flag:
+- Set "general": true only for: an owner preference (e.g. "never run gh pr merge; the owner merges"), a standing rule, or an environment or tooling fact that holds beyond this task (e.g. "workers can't run turbo; use npx turbo").
+- Everything else is "general": false, which is the default. When unsure, false.`;
+
 export const CONSOLIDATE_SYSTEM = `You are a knowledge consolidator for a coding agent's persistent memory.
 
 Your job: fold timestamped observations from the current session into topic files. Topics are promoted unchanged into the wolf's permanent memory, which persists across all sessions — write them as long-term knowledge about projects, decisions, and context.

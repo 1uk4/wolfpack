@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { performance } from "node:perf_hooks";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -152,6 +153,39 @@ describe("runSweepTick", () => {
     expect(reorgCalls[0].domains).toEqual(["wp"]);
     expect(reorgCalls[0].embedder).toBeDefined();
     expect(t.reorg).toBeDefined();
+  });
+
+  it("logs exactly one timings line per working tick", async () => {
+    drop("a");
+    const msgs: string[] = [];
+    await runSweepTick({ roots, postSweepReorg: false, createEngine, notify: (m) => void msgs.push(m), alert: () => {}, budgetMs: 1000 });
+    const lines = msgs.filter((m) => m.startsWith("tick timings:"));
+    expect(lines).toHaveLength(1);
+  });
+
+  it("keeps the event loop responsive while a large KB is scanned: no long gap between loop turns", async () => {
+    const dir = join(roots.kbBase, "domains", "wp", "entries");
+    const body = "Lorem ipsum dolor sit amet. ".repeat(2000);
+    for (let i = 0; i < 400; i++) writeFileSync(join(dir, `kb-wp-${i}.md`), `---\nid: kb-wp-${i}\ntitle: Entry ${i}\ndomain: wp\n---\n# Entry ${i}\n\nLede ${i}.\n\n${body}\n`);
+    drop("a");
+    let last = performance.now();
+    let maxGap = 0;
+    let running = true;
+    const spin = () => {
+      if (!running) return;
+      const t = performance.now();
+      maxGap = Math.max(maxGap, t - last);
+      last = t;
+      setImmediate(spin);
+    };
+    setImmediate(spin);
+    const t0 = performance.now();
+    await tick();
+    const total = performance.now() - t0;
+    running = false;
+    // Reading 400 entries synchronously would be one gap as long as the whole scan; yielding keeps the longest gap well under the tick (about a third of it here).
+    maxGap = Math.max(maxGap, performance.now() - last); // the stretch after the last turn counts too
+    expect(maxGap).toBeLessThan(total / 2);
   });
 
   it("does not reorg when the item was not committed", async () => {

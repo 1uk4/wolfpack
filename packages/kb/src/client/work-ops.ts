@@ -528,17 +528,23 @@ export interface WorkQuery {
   partOf?: string;
 }
 
+/** The items matching every field the query sets, in input order. Pure: shared by queryWork and the hub's Work API proxy so the two cannot drift. */
+export function filterWork<T extends Readonly<WorkItem>>(items: Iterable<T>, query: WorkQuery = {}): T[] {
+  const out: T[] = [];
+  for (const item of items) {
+    if (query.domain && item.domain !== query.domain) continue;
+    if (query.assignee && item.assignee !== query.assignee) continue;
+    if (query.area && item.area !== query.area) continue;
+    if (query.stage && item.stage !== query.stage) continue;
+    if (query.kind && item.kind !== query.kind) continue;
+    if (query.partOf && item.partOf !== query.partOf) continue;
+    out.push(item);
+  }
+  return out;
+}
+
 export function queryWork(roots: KbRoots, query: WorkQuery = {}): WorkItem[] {
-  const items = Array.from(loadWorkState(roots).values());
-  return items.filter((item) => {
-    if (query.domain && item.domain !== query.domain) return false;
-    if (query.assignee && item.assignee !== query.assignee) return false;
-    if (query.area && item.area !== query.area) return false;
-    if (query.stage && item.stage !== query.stage) return false;
-    if (query.kind && item.kind !== query.kind) return false;
-    if (query.partOf && item.partOf !== query.partOf) return false;
-    return true;
-  });
+  return filterWork(loadWorkState(roots).values(), query);
 }
 
 export function getWorkTree(roots: KbRoots, rootId: string): WorkItem[] {

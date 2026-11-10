@@ -31,9 +31,25 @@ import {
 import { consolidateSession, type ConsolidateResult } from "./consolidate.js";
 import type { DenConfig } from "./den.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { consolidateWorkRecords, type WorkRecordStore } from "./work-record.js";
+import { consolidateWorkRecords, type WorkRecordOutcome, type WorkRecordStore } from "./work-record.js";
+import { appendWorkLog } from "./work-log.js";
 import { WorkPendingState, appendArchive, type ArchiveItem } from "./work-pending.js";
 import { observationIds } from "./observation-id.js";
+
+/** `memory.workLog: append`: flush a target's pending observations once this many wait for it... */
+export const WORK_LOG_FLUSH_COUNT = 6;
+/** ...or once the oldest of them is this old (ms). */
+export const WORK_LOG_FLUSH_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * The batching rule of append mode, per target: flush at `WORK_LOG_FLUSH_COUNT` pending observations or when the oldest
+ * is `WORK_LOG_FLUSH_AGE_MS` old. `oldestAt` and `nowMs` are epoch ms; an unknown age (undefined) never triggers by itself.
+ */
+export function shouldFlushWorkLog(pendingCount: number, oldestAt: number | undefined, nowMs: number): boolean {
+  if (pendingCount <= 0) return false;
+  if (pendingCount >= WORK_LOG_FLUSH_COUNT) return true;
+  return oldestAt !== undefined && nowMs - oldestAt >= WORK_LOG_FLUSH_AGE_MS;
+}
 
 /** The work item a session is bound to right now. */
 export interface BoundWork {
@@ -64,6 +80,12 @@ export interface OrchestratorConfig {
    * Record instead of den topics.
    */
   getBoundWork?: () => BoundWork | null | undefined;
+  /** `memory.generalToDen`: observations the observer flags `general` skip the work tag (origin only) and go to the den. Default off. */
+  generalToDen?: boolean;
+  /** `memory.workLog`: `fold` (default) rewrites the Record from work observations; `append` adds lines to the task's or feature's own log, batched. */
+  workLog?: "fold" | "append";
+  /** Clock in epoch ms (tests). */
+  now?: () => number;
   /** Where Records are written (the Work API). Absent: tagged observations fall back to the den. */
   workRecordStore?: WorkRecordStore;
   /** The wolf's den root: the discard log and retry state live in `<denRoot>/.memory/pool/` (default: WOLF_DEN; none: not persisted). */
@@ -120,6 +142,13 @@ export interface MemoryOrchestrator {
    * session's ledger is reachable.
    */
   drainWork(workIds: string[], opts?: { timeoutMs?: number }): Promise<{ folded: number; discarded: number }>;
+
+  /**
+   * Append mode: write the pending work observations to their logs now, ignoring the batching thresholds (and retry
+   * backoff stays in force). `targets` limits it to those task/feature ids. Serialized with consolidation. No-op in
+   * fold mode. Never rejects: what cannot be written stays in the pool.
+   */
+  flushWorkLog(targets?: string[]): Promise<{ written: number; pending: number }>;
 }
 
 /**
@@ -132,6 +161,10 @@ export function createOrchestrator(
 ): MemoryOrchestrator {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const memRoot = sessionMemoryRoot(runtime.cwd, runtime.sessionId);
+  const appendMode = cfg.workLog === "append";
+  const nowMs = () => (cfg.now ?? Date.now)();
+  /** When this process first saw a tagged observation (by timestamp). Observations restored from the ledger fall back to their own timestamp. */
+  const firstSeen = new Map<string, number>();
 
   // Build domain context once at startup for per-observation classification
   const domainContext = cfg.domains && cfg.domains.length > 1
@@ -201,7 +234,7 @@ export function createOrchestrator(
   async function processChunks(chunks: ConversationChunk[]): Promise<void> {
     // Observe each chunk (could parallelize later)
     for (const chunk of chunks) {
-      const result = await observe({ engine, chunkText: chunk.text, domainContext: domainContext || undefined });
+      const result = await observe({ engine, chunkText: chunk.text, domainContext: domainContext || undefined, generalFlag: cfg.generalToDen === true });
 
       if (result.observations.length > 0) {
         const uniqueObs = assignUniqueTimestamps(result.observations);
@@ -209,25 +242,38 @@ export function createOrchestrator(
         // time, so a later domain switch can't reroute them at promote.
         let bound: BoundWork | null | undefined;
         try { bound = cfg.getBoundWork?.(); } catch { bound = undefined; }
-        const observations: Observation[] = uniqueObs.map((o) => ({
-          timestamp: o.timestamp,
-          content: o.content,
-          tokenCount: estimateTokens(o.content),
-          domain: o.domain || cfg.defaultDomain,
-          ...(bound?.taskId ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
-        }));
+        const observations: Observation[] = uniqueObs.map((o) => {
+          const ids = bound?.taskId ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : null;
+          // General observations (preferences, rules, tooling facts) go to the den: keep the bound ids as origin only.
+          const toDen = !!ids && cfg.generalToDen === true && o.general === true;
+          return {
+            timestamp: o.timestamp,
+            content: o.content,
+            tokenCount: estimateTokens(o.content),
+            domain: o.domain || cfg.defaultDomain,
+            ...(ids ? (toDen ? { origin: ids } : ids) : {}),
+          };
+        });
 
         appendEvent({
           type: "observations_recorded",
           observations,
           coversUpToId: chunk.id,
         });
+        if (appendMode) for (const o of observations) if (o.work || o.feature) firstSeen.set(o.timestamp, nowMs());
 
         runtime.notify?.(
           `memory: +${observations.length} observations`,
           "info"
         );
       }
+    }
+
+    if (appendMode) {
+      // Like flushWorkLog: a failed flush leaves the observations pending and must not reject processChunks.
+      await serialized(() => flushAppendBody(false)).catch((err) => {
+        runtime.notify?.(`memory: work log flush failed: ${err instanceof Error ? err.message : err}`, "warning");
+      });
     }
 
     // Check if consolidation is needed
@@ -255,6 +301,75 @@ export function createOrchestrator(
 
   function runConsolidation(forceAll: boolean = false): Promise<void> {
     return serialized(() => consolidatePool(forceAll));
+  }
+
+  /**
+   * Apply Record/log outcomes to the pool, the one writer for both modes: written/discarded leave the pool (dropped
+   * event) and go to the archive with outcome and target; pending (or no outcome) stays.
+   */
+  function settleTagged(
+    tagged: Observation[],
+    idOf: Map<Observation, string>,
+    outcomes: Array<Pick<WorkRecordOutcome, "ids" | "status" | "work"> & { reason?: string }>,
+    coversUpToId: string | undefined,
+    poolRoot: string | undefined,
+  ): { consumed: string[]; held: string[] } {
+    const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
+    const consumed: string[] = [];
+    const held: string[] = [];
+    const archived: ArchiveItem[] = [];
+    for (const o of tagged) {
+      const out = status.get(idOf.get(o)!);
+      if (out?.status === "written") {
+        consumed.push(o.timestamp);
+        archived.push({ obs: o, id: idOf.get(o), outcome: "written", target: out.work });
+      } else if (out?.status === "discarded") {
+        consumed.push(o.timestamp);
+        archived.push({ obs: o, id: idOf.get(o), outcome: "discarded", target: out.reason ?? "" });
+      } else held.push(o.timestamp); // pending or no outcome: never the den
+    }
+    if (consumed.length > 0) {
+      appendEvent({ type: "observations_dropped", observationTimestamps: consumed, coversUpToId: coversUpToId ?? "" });
+      for (const t of consumed) firstSeen.delete(t);
+    }
+    // The archive skips an observation it already holds, so a failed drop that reruns does not log twice.
+    if (poolRoot) appendArchive(poolRoot, archived, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+    const discarded = archived.filter((a) => a.outcome === "discarded").length;
+    if (discarded > 0) runtime.notify?.(`memory: ${discarded} work observation(s) discarded (item archived or deleted)`, "info");
+    return { consumed, held };
+  }
+
+  /** Append mode: write due targets' pending observations to their logs. Runs inside the serialized queue. */
+  async function flushAppendBody(force: boolean, targets?: string[]): Promise<{ written: number; pending: number }> {
+    const folded = foldLedger(ledgerEvents);
+    const ids = observationIds(folded.activeObservations);
+    const idOf = new Map(folded.activeObservations.map((o, i) => [o, ids[i]!] as const));
+    const only = targets ? new Set(targets) : undefined;
+    const groups = new Map<string, Observation[]>();
+    for (const o of folded.activeObservations) {
+      const key = o.work || o.feature;
+      if (!key || (only && !only.has(key) && !(o.feature && only.has(o.feature)))) continue;
+      groups.set(key, [...(groups.get(key) ?? []), o]);
+    }
+    const t = nowMs();
+    const due = [...groups.values()].filter((g) => {
+      if (force) return true;
+      const oldest = Math.min(...g.map((o) => firstSeen.get(o.timestamp) ?? Date.parse(o.timestamp.replace(" ", "T")) ?? NaN));
+      return shouldFlushWorkLog(g.length, Number.isFinite(oldest) ? oldest : undefined, t);
+    }).flat();
+    if (due.length === 0 || !cfg.workRecordStore) return { written: 0, pending: 0 };
+    const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
+    const state = new WorkPendingState(poolRoot, undefined);
+    runtime.notify?.(`memory: appending ${due.length} work observation(s) to their logs`, "info");
+    const outcomes = await appendWorkLog({
+      store: cfg.workRecordStore,
+      engine,
+      pending: state,
+      src: runtime.name,
+      observations: due.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: o.work ?? "", feature: (o.feature ?? o.work)! })),
+    });
+    const settled = settleTagged(due, idOf, outcomes, folded.latestCoverageId, poolRoot);
+    return { written: settled.consumed.length, pending: settled.held.length };
   }
 
   async function consolidatePool(forceAll: boolean): Promise<void> {
@@ -286,7 +401,10 @@ export function createOrchestrator(
     const consumedWork = new Set<string>();
     const heldWork = new Set<string>();
     const tagged = promote.filter(isTagged);
-    if (tagged.length > 0) {
+    if (appendMode) {
+      // Append mode: tagged observations never reach the fold; they go to their logs, batched (all of them when forced).
+      await flushAppendBody(forceAll);
+    } else if (tagged.length > 0) {
       // Never the cwd: on the pi path that is the project being coded in, not the den.
       const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
       if (!poolRoot && !warnedNoDen) {
@@ -303,29 +421,9 @@ export function createOrchestrator(
         state,
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
-      const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
-      const archived: ArchiveItem[] = [];
-      for (const o of tagged) {
-        const out = status.get(idOf.get(o)!);
-        if (out?.status === "written") {
-          consumedWork.add(o.timestamp);
-          archived.push({ obs: o, id: idOf.get(o), outcome: "written", target: out.work });
-        } else if (out?.status === "discarded") {
-          consumedWork.add(o.timestamp);
-          archived.push({ obs: o, id: idOf.get(o), outcome: "discarded", target: out.reason });
-        } else heldWork.add(o.timestamp); // pending or no outcome: never the den
-      }
-      if (consumedWork.size > 0) {
-        appendEvent({
-          type: "observations_dropped",
-          observationTimestamps: [...consumedWork],
-          coversUpToId: folded.latestCoverageId ?? "",
-        });
-      }
-      // The archive skips an observation it already holds, so a failed drop that reruns does not log twice.
-      if (poolRoot) appendArchive(poolRoot, archived, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
-      const discarded = archived.filter((a) => a.outcome === "discarded").length;
-      if (discarded > 0) runtime.notify?.(`memory: ${discarded} work observation(s) discarded (item archived or deleted)`, "info");
+      const settled = settleTagged(tagged, idOf, outcomes, folded.latestCoverageId, poolRoot);
+      for (const t of settled.consumed) consumedWork.add(t);
+      for (const t of settled.held) heldWork.add(t);
     }
     // Defense in depth: nothing tagged reaches the den pass.
     promote = promote.filter((o) => !isTagged(o) && !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
@@ -497,6 +595,14 @@ export function createOrchestrator(
     })();
   }
 
+  function flushWorkLog(targets?: string[]): Promise<{ written: number; pending: number }> {
+    if (!appendMode) return Promise.resolve({ written: 0, pending: 0 });
+    return serialized(() => flushAppendBody(true, targets)).catch((err) => {
+      runtime.notify?.(`memory: work log flush failed: ${err instanceof Error ? err.message : err}`, "warning");
+      return { written: 0, pending: 0 };
+    });
+  }
+
   function getActiveObservations(): Observation[] {
     return foldLedger(ledgerEvents).activeObservations;
   }
@@ -517,5 +623,6 @@ export function createOrchestrator(
     getMemoryRoot,
     setDefaultDomain,
     drainWork,
+    flushWorkLog,
   };
 }

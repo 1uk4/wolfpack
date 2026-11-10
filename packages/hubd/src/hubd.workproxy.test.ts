@@ -1,5 +1,6 @@
 /** The hub-proxied Work API (work-proxy.ts): shapes of the agent's /work routes, whitelist, and worker-token scoping. */
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +48,20 @@ describe("hub work proxy", () => {
     expect(await r.json()).toEqual({ items: [] });
     // the key is NOT accepted on any other prefix
     expect((await fetch(`${hub.url}/v1/work?domain=personal`, { headers: { "X-API-Key": A } })).status).toBe(401);
+  });
+
+  it("GET /work?ids= returns only the named items: deduped, unknown skipped, empty = absent, over 200 = 400", async () => {
+    const { call, A } = await rig();
+    const mk = async (title: string) => ((await (await call(A, "POST", "", { ...feature, title })).json()) as { id: string }).id;
+    const [a, b, c] = [await mk("a"), await mk("b"), await mk("c")];
+    const ids = async (q: string) => ((await (await call(A, "GET", q)).json()) as { items: { id: string }[] }).items.map((i) => i.id).sort();
+    expect(await ids(`?domain=personal&ids=${a},${b},${a},work-personal-Zzzzzzz`)).toEqual([a, b].sort());
+    expect(await ids(`?domain=other&ids=${a}`)).toEqual([]); // the other filters still apply
+    expect(await ids("?domain=personal&ids=")).toEqual([a, b, c].sort()); // empty ids= is as if absent
+    const many = Array.from({ length: 201 }, (_, i) => `work-personal-X${String(i).padStart(6, "0")}`).join(",");
+    const r = await call(A, "GET", `?ids=${many}`);
+    expect(r.status).toBe(400);
+    expect(await r.json()).toMatchObject({ error: expect.stringContaining("200") });
   });
 
   it("create / get / patch / graduate keep the agent shapes for the wolf's own host", async () => {
@@ -285,6 +300,135 @@ describe("hub work proxy", () => {
     expect((await g.as("wa2", "PATCH", `/${id}`, { note: "fyi" })).status).toBe(200);
   });
 
+  describe("recordAppend", () => {
+    const line = (text: string, ids: string[], extra: object = {}) => ({ at: "2026-11-09T14:05:00.000Z", src: "w1", kind: "decision", text, ids, ...extra });
+    async function recRig() {
+      const g = await gateRig();
+      const id = await g.mk({ kind: "task", title: "T", body: "the plan", successCriteria: "ok" });
+      const append = (who: string, lines: object[], hdr: Record<string, string> = {}, extra: object = {}) =>
+        fetch(`${g.hub.url}/v1/workapi/work/${id}`, { method: "PATCH", headers: { "X-API-Key": g.A, "X-Wolf": who, "Content-Type": "application/json", ...hdr }, body: JSON.stringify({ op: "recordAppend", lines, ...extra }) });
+      const bodyOf = async () => ((await (await g.owner("GET", `/${id}`)).json()) as { body: string }).body;
+      return { ...g, id, append, bodyOf };
+    }
+
+    it("two concurrent appends both survive in the stored line shape, a non-assignee may append, Plan and Notes stay", async () => {
+      const r = await recRig();
+      await r.owner("PATCH", `/${r.id}`, { section: { name: "Plan", text: "the plan" } });
+      await r.owner("PATCH", `/${r.id}`, { section: { name: "Notes", text: "keep notes" } });
+      const [a, b] = await Promise.all([r.append("wa2", [line("first", ["o1"])]), r.append("wa", [line("second", ["o2"], { kind: "finding" })])]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const body = await r.bodyOf();
+      expect(body).toContain("- 14:05 [w1·decision] first <!-- src:o1 -->");
+      expect(body).toContain("- 14:05 [w1·finding] second <!-- src:o2 -->");
+      expect(body).toContain("## Record\n\n- 14:05");
+      expect(body).toContain("keep notes");
+      expect(body).toContain("the plan");
+    });
+
+    it("a same-key replay and a new key with the same ids both add nothing", async () => {
+      const r = await recRig();
+      const k = { "Idempotency-Key": "k-record-1" };
+      expect((await r.append("wa", [line("once", ["o1"])], k)).status).toBe(200);
+      expect((await r.append("wa", [line("once", ["o1"])], k)).status).toBe(200);
+      expect((await r.append("wa", [line("again", ["o1"])], { "Idempotency-Key": "k-record-2" })).status).toBe(200);
+      const body = await r.bodyOf();
+      expect(body.match(/<!-- src:o1 -->/g)).toHaveLength(1);
+      expect(body).not.toContain("again");
+    });
+
+    it("over the cap answers 409 log_full and leaves the body unchanged", async () => {
+      const r = await recRig();
+      for (let i = 0; i < 20; i++) expect((await r.append("wa", [line("x".repeat(230), [`a${i}`])])).status).toBe(200);
+      const before = await r.bodyOf();
+      const over = await r.append("wa", Array.from({ length: 20 }, (_, i) => line("y".repeat(230), [`b${i}`])));
+      expect(over.status).toBe(409);
+      expect(((await over.json()) as { code: string }).code).toBe("log_full");
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("rejects a heading, a long text and an archived item, the body unchanged", async () => {
+      const r = await recRig();
+      expect((await r.append("wa", [line("## Plan\n\n## Plan", ["h1"])])).status).toBe(400);
+      expect((await r.append("wa", [line("x".repeat(241), ["h2"])])).status).toBe(400);
+      await r.owner("PATCH", `/${r.id}`, { stage: "archived" });
+      const before = await r.bodyOf();
+      const res = await r.append("wa2", [line("late", ["l1"])]);
+      expect(res.status).toBe(409);
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("refuses an owner batch recordAppend on an archived item, the body unchanged", async () => {
+      const r = await recRig();
+      await r.owner("PATCH", `/${r.id}`, { stage: "archived" });
+      const before = await r.bodyOf();
+      const res = await r.owner("PATCH", `/${r.id}`, { ops: [{ op: "recordAppend", lines: [line("late", ["ob1"])] }, { op: "recordAppend", lines: [line("later", ["ob2"])] }] });
+      expect(res.status).toBe(409);
+      expect(await r.json(res)).toEqual({ error: "item is archived; its Record is closed", code: "record_closed" });
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("rejects whitespace-only text and a line with no ids", async () => {
+      const r = await recRig();
+      expect((await r.append("wa", [line("   ", ["w1"])])).status).toBe(400);
+      expect((await r.append("wa", [line("no ids", [])])).status).toBe(400);
+      expect(await r.bodyOf()).not.toContain("no ids");
+    });
+
+    it("refuses a non-owner request mixing recordAppend with another op (guard)", async () => {
+      const r = await recRig();
+      const before = await r.bodyOf();
+      const res = await r.as("wa", "PATCH", `/${r.id}`, { ops: [{ op: "recordAppend", lines: [line("mix", ["m1"])] }, { note: "n" }] });
+      expect(res.status).toBe(400);
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("fires no work.changed for a replay that adds nothing", async () => {
+      const r = await recRig();
+      const ev = await fetch(`${r.hub.url}/v1/events`, { headers: OP });
+      const reader = ev.body!.getReader();
+      const dec = new TextDecoder();
+      let seen = "";
+      const count = () => seen.split('"type":"work.changed"').length - 1;
+      const until = async (n: number) => {
+        const deadline = Date.now() + 3000;
+        while (count() < n && Date.now() < deadline) seen += dec.decode((await reader.read()).value);
+      };
+      await r.append("wa", [line("one", ["n1"])]);
+      await until(1);
+      expect((await r.append("wa", [line("one", ["n1"])])).status).toBe(200); // replay: adds nothing
+      // give a (wrong) replay event time to arrive, then check none did
+      const timeout = new Promise<void>((res) => setTimeout(res, 400));
+      await Promise.race([until(2), timeout]);
+      expect(count()).toBe(1);
+      await reader.cancel();
+    });
+
+    it("groups under a feature heading, creating it when absent", async () => {
+      const g = await gateRig();
+      const fid = await g.mk({ kind: "feature", title: "F", body: "x" });
+      const send = (text: string, ids: string[], group: string) => g.as("wa2", "PATCH", `/${fid}`, { op: "recordAppend", group, lines: [line(text, ids)] });
+      expect((await send("d1", ["g1"], "Decisions")).status).toBe(200);
+      expect((await send("c1", ["g2"], "Changes")).status).toBe(200);
+      expect((await send("d2", ["g3"], "Decisions")).status).toBe(200);
+      const body = ((await (await g.owner("GET", `/${fid}`)).json()) as { body: string }).body;
+      expect(body).toContain("### Decisions\n\n- 14:05 [w1·decision] d1 <!-- src:g1 -->\n- 14:05 [w1·decision] d2 <!-- src:g3 -->\n\n### Changes\n\n- 14:05 [w1·decision] c1");
+    });
+
+    it("fires work.changed", async () => {
+      const r = await recRig();
+      const ev = await fetch(`${r.hub.url}/v1/events`, { headers: OP });
+      const reader = ev.body!.getReader();
+      await r.append("wa", [line("live", ["e1"])]);
+      let seen = "";
+      const dec = new TextDecoder();
+      const deadline = Date.now() + 3000;
+      while (!seen.includes(r.id) && Date.now() < deadline) seen += dec.decode((await reader.read()).value);
+      await reader.cancel();
+      expect(seen).toContain('"type":"work.changed"');
+      expect(seen).toContain(r.id);
+    });
+  });
+
   it("an unknown assign target is a 400 that names it, for the owner too", async () => {
     const g = await gateRig();
     const id = await g.mk({ kind: "feature", title: "F", body: "x" });
@@ -380,5 +524,40 @@ describe("hub work proxy", () => {
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
     expect((await call(OP_TOKEN, "GET", `/${id}`)).status).toBe(200);
     expect((await call(OP_TOKEN, "GET", "")).status).toBe(200);
+  });
+
+  it("a read sees a note written through the proxy, and a ledger replaced by tmp+rename (same size and mtime, new inode)", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).not.toContain("zzfreshzz");
+    expect((await call(A, "PATCH", `/${id}`, { note: "zzfreshzz" })).status).toBe(200);
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).toContain("zzfreshzz");
+    // replace the ledger file with an equal-size copy that differs in content, keeping mtime: only the inode tells
+    const file = workLedgerFile(hubRoots(hub.dataDir));
+    const pinned = new Date("2026-11-01T00:00:00Z");
+    utimesSync(file, pinned, pinned);
+    expect(JSON.stringify(await (await call(A, "GET", `/${id}`)).json())).toContain("zzfreshzz"); // caches the state under the pinned mtime
+    const tmpFile = `${file}.swap`;
+    writeFileSync(tmpFile, readFileSync(file, "utf-8").replace("zzfreshzz", "yyswapyyy"));
+    utimesSync(tmpFile, pinned, pinned);
+    renameSync(tmpFile, file);
+    const body = JSON.stringify(await (await call(A, "GET", `/${id}`)).json());
+    expect(body).toContain("yyswapyyy");
+    expect(body).not.toContain("zzfreshzz");
+  });
+
+  it("a GET whose client hangs up before the answer neither wedges nor crashes the hub", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const port = Number(new URL(hub.url).port);
+    for (let i = 0; i < 20; i++) {
+      const s = connect(port, "127.0.0.1");
+      s.on("error", () => undefined);
+      s.write(`GET /v1/workapi/work/${id} HTTP/1.1\r\nHost: x\r\nX-API-Key: ${A}\r\n\r\n`);
+      s.destroy(); // gone before the hub can answer
+    }
+    const r = await call(A, "GET", `/${id}`); // a normal client is still served in full
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { item: { id: string } }).item.id).toBe(id);
   });
 });

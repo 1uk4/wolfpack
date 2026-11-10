@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchMemoryObservations, fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
+import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
 import { WorkIdChip } from "@/components/work-id-chip";
 import { ContextSection } from "@/components/context-section";
 import { useMemoryEvents } from "@/components/memory-events";
@@ -20,13 +20,11 @@ import {
 	reconcilePromote,
 	pendingWarning,
 	type PoolPending,
-	groupLabel,
+	buildMemoryTreeRows,
+	DEN_GROUP,
 	groupObservations,
-	liveGroups,
-	nestGroups,
-	type GroupNode,
-	type ObservationGroup,
-	observationsInGroup,
+	type MemoryNodeObservations,
+	type MemoryTree,
 	focusRefetchDue,
 	latestOnly,
 	parseOpen,
@@ -82,6 +80,9 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	const [obsPool, setObsPool] = useState<PoolObservation[] | null>(null);
 	const [poolError, setPoolError] = useState<string | null>(null);
 	const [poolPending, setPoolPending] = useState<PoolPending | null>(null);
+	const [tree, setTree] = useState<MemoryTree | null>(null);
+	const [treeError, setTreeError] = useState<string | null>(null);
+	const [treeVersion, setTreeVersion] = useState(0);
 	const [groupInfo, setGroupInfo] = useState<Record<string, GroupInfo | undefined>>({});
 	/** The group whose observations are open: DEN_GROUP or a work id; null = the list. */
 	const [openGroup, setOpenGroup] = useState<string | null>(null);
@@ -109,13 +110,18 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	const refreshPool = useCallback(async () => {
 		const guard = poolReq.current;
 		const token = guard.start();
-		const r = await fetchMemoryObservations(wolf);
+		const [r, t] = await Promise.all([fetchMemoryObservations(wolf), fetchMemoryTree(wolf)]);
 		if (!guard.isCurrent(token)) return;
 		if (r.ok) {
 			setObsPool(r.data.observations);
 			setPoolPending(r.data.pending ?? null);
 			setPoolError(null);
 		} else setPoolError(r.message);
+		if (t.ok) {
+			setTree(t.data);
+			setTreeError(null);
+			setTreeVersion((v) => v + 1);
+		} else setTreeError(t.message);
 	}, [wolf]);
 
 	// Titles and stages of the work items the pool mentions (the group's work, else its feature); the id stands in when a lookup fails.
@@ -167,6 +173,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 
 	useEffect(() => {
 		setObsPool(null);
+		setTree(null);
 		setPoolError(null);
 		setGroupInfo({});
 		infoAt.current.clear();
@@ -232,7 +239,6 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
-	const obsProps = { list: obsPool, pending: poolPending, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup };
 	const content = (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
 			{statusError && !status ? <p className="text-muted-foreground" data-testid="memory-status-error">Memory status unavailable: {statusError}</p> : null}
@@ -277,7 +283,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 				</div>
 			)}
 
-			<ObservationsSection observations={obsProps} />
+			<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
 		</div>
 	);
 	if (embedded) return content;
@@ -304,111 +310,154 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		</aside>
 	);
 }
+
+const chipOf = (id: string) => (
+	<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
+		<WorkIdChip id={id} />
+	</span>
+);
+
 /**
- * The observation pool, grouped. The Den is the first entry, a category of its own set apart from the work groups;
- * then the live work-item groups as a tree (archived items are left out). Opening a group lists its observations.
+ * The observation tree, live only (the home branch's `/memory/tree` endpoint; its `archived` counts are never shown).
+ * The Den is the first entry, a category of its own set apart by a divider; then each feature (title, chip, total pending)
+ * with its "Feature notes" row and its tasks indented beneath, one line each; then unresolved work. Items whose stage is
+ * archived, or with nothing pending, are left out (a feature header stays while it has live tasks). Tapping a row lists
+ * that node's pending observations; Back returns. Blocked/backoff notes come from the pool.
  */
-export function ObservationsSection({ observations }: {
-	/** The loaded observations (null until the first load), grouped; `open` is the group being read. */
-	observations: { list: PoolObservation[] | null; pending?: PoolPending | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
+export function ObservationsSection({ wolf, observations }: {
+	wolf: string;
+	observations: {
+		tree: MemoryTree | null;
+		error: string | null;
+		pool: PoolObservation[] | null;
+		pending?: PoolPending | null;
+		info: Readonly<Record<string, GroupInfo | undefined>>;
+		open: string | null;
+		onOpen: (id: string | null) => void;
+		/** Bumps when the tree was refetched, so an open node reloads. */
+		version?: number;
+	};
 }) {
-	const list = observations.list;
-	const groups = list ? liveGroups(groupObservations(list), observations.info) : [];
-	// a group that emptied (consolidated away) falls back to the list
-	const openKey = observations.open && groups.some((g) => g.key === observations.open) ? observations.open : null;
-	// the den first, as its own category; then work groups as a tree: a feature header, then its notes and its tasks (one level), indented
-	type Row = { header: GroupNode; g?: undefined; nested?: undefined; notes?: undefined; den?: undefined } | { header?: undefined; g: ObservationGroup; nested: boolean; notes: boolean; den?: boolean };
-	const denRows: Row[] = groups.filter((g) => g.kind === "den").map((g) => ({ g, nested: false, notes: false, den: true }));
-	const workRows: Row[] = nestGroups(groups.filter((g) => g.kind !== "den"), observations.info).flatMap((n): Row[] => n.header
-		? [{ header: n }, ...(n.own ? [{ g: n.own, nested: true, notes: true }] : []), ...n.children.map((g) => ({ g, nested: true, notes: false }))]
-		: n.own ? [{ g: n.own, nested: false, notes: false }] : []);
-	const rows: Row[] = [...denRows, ...workRows];
-	const denSplit = denRows.length > 0 && workRows.length > 0;
+	const { tree, pool, info, open } = observations;
+	const rows = tree ? buildMemoryTreeRows(tree) : [];
+	const archivedStage = (id: string, stage?: string) => (stage ?? info[id]?.stage) === "archived";
+	const blocked = new Map((pool ? groupObservations(pool) : []).filter((g) => g.blocked).map((g) => [g.key, g]));
+	const blockedNote = (id: string) => {
+		const g = blocked.get(id);
+		return g ? <span className="block truncate text-[11px] text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, info)}</span> : null;
+	};
+	const titleOf = (id: string): string => {
+		if (id === DEN_GROUP) return "Den";
+		for (const r of rows) {
+			if (r.kind === "feature") {
+				if (r.id === id) return r.title;
+				const t = r.tasks.find((x) => x.id === id);
+				if (t) return t.title;
+			}
+		}
+		return info[id]?.title || id;
+	};
+
+	if (open) return <NodeDetail wolf={wolf} id={open} label={titleOf(open)} version={observations.version ?? 0} onBack={() => observations.onOpen(null)} />;
+
+	// A row: optional inline chip, then a button with the label (empty = chip alone), the pending count and the blocked line.
+	const item = (key: string, id: string, label: string, count: number, o: { nested?: boolean; chip?: boolean; den?: boolean; divider?: boolean }) => (
+		<li key={key} className={`flex items-center gap-1.5 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent${o.nested ? " ml-4" : ""}${o.divider ? " mb-1 border-b border-border pb-1" : ""}`} {...(o.den ? { "data-testid": "memory-den" } : {})}>
+			{o.chip ? chipOf(id) : null}
+			<button type="button" className="flex min-w-0 flex-1 flex-col text-left focus-visible:ring-2 focus-visible:ring-ring" data-testid={`memory-obs-group-${id}`} data-count={count} onClick={() => observations.onOpen(id)}>
+				<span className="flex w-full min-w-0 items-center justify-between gap-2">
+					<span className="min-w-0 truncate">{label}</span>
+					<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+						<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{count}</span>
+						<ChevronRightIcon className="size-3" />
+					</span>
+				</span>
+				{blockedNote(id)}
+			</button>
+		</li>
+	);
+
+	const den = rows.find((r) => r.kind === "den");
+	const featureRows = rows.flatMap((r) => {
+		if (r.kind !== "feature") return [];
+		const tasks = r.tasks.filter((t) => t.pending > 0 && !archivedStage(t.id, t.stage));
+		const notes = r.own.pending > 0 && !archivedStage(r.id, r.stage) ? r.own.pending : 0;
+		if (tasks.length === 0 && notes === 0) return [];
+		return [{ f: r, tasks, notes, total: notes + tasks.reduce((n, t) => n + t.pending, 0) }];
+	});
+	const otherRows = rows.filter((r) => r.kind === "other" && r.pending > 0 && !archivedStage(r.id));
+	const workCount = featureRows.length + otherRows.length;
+	const showDen = !!den && den.pending > 0;
+	const empty = !showDen && workCount === 0;
+
 	return (
-		<section data-testid="memory-feed">
-			<div className="mb-1 flex items-center justify-between gap-2">
-				{openKey ? (
-					<button
-						type="button"
-						className="-ml-1 flex min-w-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label="Back to observation groups"
-						data-testid="memory-obs-back"
-						onClick={() => observations.onOpen(null)}
-					>
-						<ChevronLeftIcon className="size-3 shrink-0" />
-						<span className="truncate">{groupLabel(openKey, observations.info)}</span>
-					</button>
-				) : (
-					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
-				)}
-			</div>
-			{list === null ? (
+		<section data-testid="memory-feed" className="min-w-0">
+			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Observations</h3>
+			{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
+			{tree === null ? (
 				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
-			) : groups.length === 0 ? (
+			) : empty ? (
 				<p className="text-xs text-muted-foreground">No pending observations.</p>
-			) : openKey ? (
-				<ul className="flex flex-col gap-2" data-testid="memory-obs-items" data-group={openKey}>
-					{observationsInGroup(list, openKey).map((o) => (
+			) : (
+				<ul className="flex min-w-0 flex-col gap-1" data-testid="memory-obs-groups">
+					{showDen ? item("den", DEN_GROUP, "Den", den!.pending, { den: true, divider: workCount > 0 }) : null}
+					{featureRows.flatMap(({ f, tasks, notes, total }) => [
+						<li key={`feature-${f.id}`} className="flex items-center gap-1.5 px-1.5 py-1 text-xs" data-testid="memory-obs-feature" data-count={total}>
+							<span className="min-w-0 truncate font-medium">{f.title && f.title !== f.id ? f.title : ""}</span>
+							{chipOf(f.id)}
+							<span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground" data-testid="memory-obs-total">{total}</span>
+						</li>,
+						...(notes ? [item(`notes-${f.id}`, f.id, "Feature notes", notes, { nested: true })] : []),
+						...tasks.map((t) => item(t.id, t.id, t.title && t.title !== t.id ? t.title : "", t.pending, { nested: true, chip: true })),
+					])}
+					{otherRows.map((r) => item(r.id, r.id, info[r.id]?.title && info[r.id]!.title !== r.id ? info[r.id]!.title : "", r.pending, { chip: true }))}
+				</ul>
+			)}
+		</section>
+	);
+}
+
+/** One node's pending observations (archived ones are never listed). */
+function NodeDetail({ wolf, id, label, version, onBack }: { wolf: string; id: string; label: string; version: number; onBack: () => void }) {
+	const [node, setNode] = useState<MemoryNodeObservations | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	useEffect(() => {
+		let live = true;
+		void fetchMemoryNode(wolf, id).then((r) => {
+			if (!live) return;
+			if (r.ok) {
+				setNode(r.data);
+				setError(null);
+			} else setError(r.message);
+		});
+		return () => {
+			live = false;
+		};
+	}, [wolf, id, version]);
+	return (
+		<section data-testid="memory-feed" className="min-w-0">
+			<button
+				type="button"
+				className="-ml-1 mb-1 flex min-h-11 w-full items-center gap-1 rounded px-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+				aria-label="Back to observations"
+				data-testid="memory-obs-back"
+				onClick={onBack}
+			>
+				<ChevronLeftIcon className="size-4 shrink-0" />
+				<span className="min-w-0 break-words">{label}</span>
+			</button>
+			{node === null ? (
+				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{error ? `Observations unavailable: ${error}` : "Loading…"}</p>
+			) : (
+				<ul className="flex min-w-0 flex-col gap-2" data-testid="memory-obs-items" data-group={id}>
+					{node.pending.map((o) => (
 						<li key={o.id} className="text-xs" data-testid="memory-obs-item">
-							<div className="text-muted-foreground">{o.timestamp}</div>
+							{o.recordedAt ? <div className="text-muted-foreground">{o.recordedAt}</div> : null}
 							<div className="whitespace-pre-wrap break-words">{o.content}</div>
 						</li>
 					))}
+					{node.pending.length === 0 ? <li className="text-xs text-muted-foreground">Nothing pending.</li> : null}
 				</ul>
-			) : (
-				<>
-					{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
-					<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
-						{rows.map((row) => {
-							if (row.header) {
-								// feature header: title, chip, total of its own and its tasks' observations; not a button (the own notes are a row beneath)
-								return (
-									<li key={`feature-${row.header.key}`} className="flex items-center gap-1.5 px-1.5 py-1 text-xs" data-testid="memory-obs-feature" data-count={row.header.total}>
-										<span className="min-w-0 truncate font-medium">{groupLabel(row.header.key, observations.info)}</span>
-										<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
-											<WorkIdChip id={row.header.key} />
-										</span>
-										<span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground" data-testid="memory-obs-total">{row.header.total}</span>
-									</li>
-								);
-							}
-							const { g, nested, notes, den } = row;
-							const info = observations.info[g.key];
-							// title unknown (lookup failed or pending): the chip stands alone instead of repeating the id
-							const titled = notes || g.kind === "den" || (!!info?.title && info.title !== g.key);
-							const chip = g.kind === "work" ? (
-								<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
-									<WorkIdChip id={g.key} />
-								</span>
-							) : null;
-							return (
-								<li key={g.key} className={`flex flex-col rounded transition-colors hover:bg-accent${nested ? " ml-4" : ""}${den && denSplit ? " mb-1 border-b border-border pb-1" : ""}`} {...(den ? { "data-testid": "memory-den" } : {})}>
-									<div className="flex items-center gap-1.5 px-1.5 py-1 text-xs">
-										{!titled || (nested && !notes) ? chip : null}
-										<button
-											type="button"
-											className="flex min-w-0 flex-1 flex-col text-left focus-visible:ring-2 focus-visible:ring-ring"
-											data-testid={`memory-obs-group-${g.key}`}
-											data-count={g.count}
-											onClick={() => observations.onOpen(g.key)}
-										>
-											<span className="flex w-full min-w-0 items-center justify-between gap-2">
-											<span className="min-w-0 truncate">{notes ? "Feature notes" : titled ? groupLabel(g.key, observations.info) : ""}</span>
-											<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-												{info?.stage && !nested ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
-												<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
-												<ChevronRightIcon className="size-3" />
-											</span>
-											</span>
-											{g.blocked ? <span className="block truncate text-[11px] text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, observations.info)}{g.blockedCount && g.blockedCount !== g.count ? ` (${g.blockedCount} of ${g.count})` : ""}</span> : null}
-										</button>
-									</div>
-									{titled && chip && !nested ? <div className="px-1.5 pb-1">{chip}</div> : null}
-								</li>
-							);
-						})}
-					</ul>
-				</>
 			)}
 		</section>
 	);

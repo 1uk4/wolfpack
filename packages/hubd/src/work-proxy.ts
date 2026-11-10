@@ -27,17 +27,20 @@
  * Console/operator tokens can do anything (same whitelist). Errors are `{error: string}` like the agent's.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadWorkState, queryWork, resolveWorkItem, type CreateWorkInput, type WorkQuery } from "@wolfpack/kb/client";
+import { filterWork, loadWorkState, resolveWorkItem, type CreateWorkInput, type WorkId, type WorkQuery } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { CreateWorkRequestSchema, PatchWorkBatchSchema, PatchWorkOpSchema, type Actor } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
 import { HubError } from "./errors.js";
+import { cachedWorkState } from "./work-state.js";
 import { idempotencyKeyOf, type WorkIdempotency } from "./work-idempotency.js";
-import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY, RECORD_CLOSED } from "./work-writes.js";
+import { createItem, graduateItem, mapWorkError, normalisePatch, applyOps, type WorkOp, WORK_STORE_PERMISSION_DENIED, PARENT_CLOSED, WORK_STORE_READ_ONLY, RECORD_CLOSED, LOG_FULL } from "./work-writes.js";
 
 export const WORK_PROXY_PREFIX = "/v1/workapi";
 /** The refusal for a worker's loose create for another wolf: names who can do it. */
 export const LOOSE_CREATE_FOREIGN_WOLF = "a wolf can only create a loose item for itself; only the owner can assign one to another wolf";
+/** Most ids one `GET /work?ids=` may name. */
+const MAX_IDS = 200;
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 
 interface WolfRow {
@@ -56,6 +59,8 @@ export interface WorkProxyDeps {
   wolfActor: (tokenActor: Actor, named?: string) => Actor;
   /** First answers by `Idempotency-Key`: a resent write (a wolf's outbox replay) gets that answer and is not applied again. */
   idempotency?: WorkIdempotency;
+  /** A recordAppend was applied to this item (it appends no ledger event, so the console is told here: work.changed). */
+  recordAppended?: (id: string) => void;
 }
 
 const respond = (res: ServerResponse, status: number, body: unknown): void => {
@@ -65,7 +70,7 @@ const respond = (res: ServerResponse, status: number, body: unknown): void => {
 };
 const STATUS: Record<string, number> = { invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503 };
 /** Typed write failures (HubError details.code, see ERRNO_TABLE in work-writes.ts): the status is decided by the typed code, not the protocol code. */
-const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500, [PARENT_CLOSED]: 409, [RECORD_CLOSED]: 409 };
+const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500, [PARENT_CLOSED]: 409, [RECORD_CLOSED]: 409, [LOG_FULL]: 409 };
 
 /** Is this request under the proxy prefix? */
 export const isWorkProxyPath = (pathname: string): boolean => pathname === `${WORK_PROXY_PREFIX}/work` || pathname.startsWith(`${WORK_PROXY_PREFIX}/work/`);
@@ -118,18 +123,26 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     };
     const itemOf = (id: string) => {
       if (!WORK_ID.test(id)) throw new HubError("invalid_request", "malformed work item id");
-      const item = loadWorkState(d.roots).get(id as never);
+      const item = cachedWorkState(d.roots).get(id as never);
       if (!item || !domainOk(item.domain)) throw new HubError("not_found", `Work item not found: ${id}`); // a foreign domain looks absent
       return item;
     };
 
+    // A reader that already hung up gets nothing: skip the state load and the serialization (a retry storm must not queue work nobody reads).
+    const gone = (): boolean => req.socket?.destroyed === true || res.destroyed || res.writableEnded;
+    if (method === "GET" && gone()) return;
     if (rest.length === 0 && method === "GET") {
       const q: WorkQuery = {};
       for (const k of ["domain", "kind", "stage", "assignee", "area", "partOf"] as const) {
         const v = url.searchParams.get(k);
         if (v) (q as Record<string, string>)[k] = v;
       }
-      const items = queryWork(d.roots, q).filter((i) => domainOk(i.domain));
+      // `ids`: comma-separated full work ids; only those items, IN REQUEST ORDER (deduped, unknown skipped), other filters still apply (filterWork keeps input order). Empty `ids=` = absent; over MAX_IDS = 400.
+      const wanted = [...new Set((url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean))];
+      if (wanted.length > MAX_IDS) throw new HubError("invalid_request", `ids: at most ${MAX_IDS} ids per request`);
+      const state = cachedWorkState(d.roots);
+      const pool = wanted.length ? wanted.flatMap((id) => { const it = state.get(id as WorkId); return it ? [it] : []; }) : [...state.values()];
+      const items = filterWork(pool, q).filter((i) => domainOk(i.domain));
       return respond(res, 200, { items });
     }
     if (rest.length === 0 && method === "POST") {
@@ -170,7 +183,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         const item = state.get(id as never);
         if (!item) throw new HubError("not_found", `Work item not found: ${id}`);
         // normaliseOne maps ONLY the literal "Record" to the internal name "record", so this exemption cannot be reached with another spelling.
-        const isRecordWrite = (o: WorkOp): boolean => o.op === "section" && o.name === "record";
+        const isRecordWrite = (o: WorkOp): boolean => (o.op === "section" && o.name === "record") || o.op === "recordAppend";
         // A request of only notes and Record-section writes is open to any item; anything else (plan, other sections, body, a mix) goes through the full gate.
         if (worker && !ops.every((o) => o.op === "note" || isRecordWrite(o))) gate(item, actor.id);
         // The Record of an archived item is closed to workers, held or not (the owner is unaffected).
@@ -197,7 +210,11 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         }
         // A worker's feature cascade is limited to the children it holds; the owner's reaches every open child.
         const holder = worker ? actor.id : undefined;
-        return { item: applyOps(d.roots, id, finalOps, {}, { holder }), ...(reassigned.length ? { reassigned } : {}) };
+        const recordAdded = { count: 0 };
+        const applied = applyOps(d.roots, id, finalOps, {}, { holder, recordAdded });
+        // A replay that deduped to nothing changed no file: no work.changed.
+        if (recordAdded.count > 0) d.recordAppended?.(id);
+        return { item: applied, ...(reassigned.length ? { reassigned } : {}) };
       });
     }
     if (rest.length === 2 && rest[1] === "graduate" && method === "POST") {

@@ -21,6 +21,8 @@ import {
   MemoryStatusSchema,
   MemoryTopicSchema,
   MemoryObservationsSchema,
+  MemoryTreeSchema,
+  MemoryNodeObservationsSchema,
   PendingCardSchema,
   PromoteResponseSchema,
   SubmitAckSchema,
@@ -435,6 +437,10 @@ export const ROUTES = {
    * 400 `invalid_request` for a bad limit, 409 `memory_unavailable` when memory is inert or off.
    */
   getMemoryObservations: { method: "GET", path: "/v1/wolves/:name/memory/observations", response: { kind: "json", schema: MemoryObservationsSchema }, status: [200], error: err },
+  /** Observation counts per feature → task (pending in the pool, archived in the last 7 days). 409 `memory_unavailable` when memory is inert or off. */
+  getMemoryTree: { method: "GET", path: "/v1/wolves/:name/memory/tree", response: { kind: "json", schema: MemoryTreeSchema }, status: [200], error: err },
+  /** The observations behind one tree node (`:workId` a feature's own, a task, or `den`). `?limit=<n>` caps the archived list (default 100). */
+  getMemoryNodeObservations: { method: "GET", path: "/v1/wolves/:name/memory/tree/:workId", response: { kind: "json", schema: MemoryNodeObservationsSchema }, status: [200], error: err },
   /**
    * A work item's page data (plan + Record + links), fetched through the wolf's Work API client. 404 `not_found` for an unknown item or wolf,
    * 409 `memory_unavailable` when the wolf has no Work API configured, 502 `engine_error` when it cannot be reached.

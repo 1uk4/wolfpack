@@ -5,10 +5,12 @@ import { stripSources, parseRecordLines, formatSources } from "./record-sources.
 import {
   consolidateWorkRecords,
   HttpWorkRecordStore,
+  InMemoryWorkRecordStore,
   extractRecord,
   renderRecord,
   renderWorkingDocument,
   renderFeatureRecord,
+  renderFeatureView,
   replaceRecordSection,
   withoutRecord,
   resolveSources,
@@ -128,6 +130,37 @@ describe("renderWorkingDocument", () => {
     expect(out).toContain("the plan");
     expect(out).toContain("## Record");
   });
+
+  const lines = Array.from({ length: 200 }, (_, i) => `- 10:00 [w·note] log line number ${i} padding padding`);
+  const logDoc = `## Plan\n\nthe plan\n\n## Record\n\n${lines.join("\n")}`;
+
+  it("append mode keeps the newest log lines and marks the dropped older ones", () => {
+    const out = renderWorkingDocument(logDoc, DOCUMENT_CAP, { tail: true });
+    expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+    expect(out).toContain("log line number 199 ");
+    expect(out).not.toContain("log line number 0 ");
+    expect(out).toMatch(/… \d+ earlier lines/);
+  });
+
+  it("fold mode (default) keeps the head of an over-long Record, as before", () => {
+    const out = renderWorkingDocument(logDoc);
+    expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+    expect(out).toContain("log line number 0 ");
+    expect(out).not.toContain("log line number 199 ");
+    expect(out).not.toMatch(/earlier lines/);
+  });
+
+  it.each([["paragraph Record", `## Record\n\n${"A sentence of prose. ".repeat(400)}`], ["single over-long line", `## Record\n\n- ${"x".repeat(5000)}`]])(
+    "clips a %s to the cap in both modes, never to an empty Record",
+    (_n, record) => {
+      for (const opts of [undefined, { tail: true }]) {
+        const out = renderWorkingDocument(`## Plan\n\nthe plan\n\n${record}`, DOCUMENT_CAP, opts);
+        expect(out.length).toBeLessThanOrEqual(DOCUMENT_CAP);
+        expect(out).toContain("the plan");
+        expect(out).toMatch(/## Record\n\n(A sentence|- x)/);
+      }
+    },
+  );
 });
 
 // ── consolidateWorkRecords ───────────────────────────────────────────────────
@@ -136,6 +169,7 @@ function fakeStore(items: Record<string, Partial<WorkRecordItem>>, opts: { failG
   const gets: string[] = [];
   const writes: Array<{ id: string; body: string }> = [];
   const store: WorkRecordStore = {
+    appendRecord: async () => ({ ok: true }),
     async get(id) {
       gets.push(id);
       if (opts.failGet) throw new Error("Work API unreachable");
@@ -420,6 +454,49 @@ describe("the Record follows the item", () => {
   });
 });
 
+describe("renderFeatureView", () => {
+  const logBody = (n: number, tag: string) =>
+    `## Plan\n\np\n\n## Record\n\n${Array.from({ length: n }, (_, i) => `- 10:00 [w·note] ${tag} line ${i} some words here`).join("\n")}`;
+  const task = (i: number, stage = "in_build", body = logBody(30, `t${i}`)) => ({ id: `work-wolfpack-T${i}`, title: `Task ${i}`, stage, body });
+  const feature = { title: "Feat", body: `## Record\n\n${Array.from({ length: 300 }, (_, i) => `- feature fact ${i} with padding words`).join("\n")}` };
+
+  it("stays within the caps with a large Record and 8 open tasks, and counts the rest", () => {
+    const open = Array.from({ length: 8 }, (_, i) => task(i));
+    const out = renderFeatureView(feature, open);
+    const [rec, tasks] = out.split("\n\n## Open tasks");
+    expect(rec.length).toBeLessThanOrEqual(2500);
+    expect(rec).toContain("feature fact 299 ");
+    expect(rec).not.toContain("feature fact 0 ");
+    expect(tasks.length + 10).toBeLessThanOrEqual(1500);
+    expect(tasks).toContain("work-wolfpack-T4");
+    expect(tasks).not.toContain("work-wolfpack-T5");
+    expect(tasks).toContain("+3 more");
+    expect(tasks).toContain("t0 line 29 "); // newest whole line
+    expect(tasks).not.toContain("t0 line 0 ");
+  });
+
+  it("leaves out shipped and archived siblings", () => {
+    const out = renderFeatureView(feature, [task(1, "shipped"), task(2, "archived"), task(3)]);
+    expect(out).not.toContain("work-wolfpack-T1");
+    expect(out).not.toContain("work-wolfpack-T2");
+    expect(out).toContain("work-wolfpack-T3");
+    expect(out).not.toContain("more");
+  });
+
+  it("leaves out the bound task", () => {
+    const out = renderFeatureView(feature, [task(1), task(2)], "work-wolfpack-T1");
+    expect(out).not.toContain("work-wolfpack-T1");
+    expect(out).toContain("work-wolfpack-T2");
+  });
+
+  it("shows only title and stage for a task with no Record", () => {
+    const out = renderFeatureView({ title: "Feat", body: "" }, [task(1, "plan", "## Plan\n\njust a plan")]);
+    expect(out).toContain('work-wolfpack-T1 "Task 1" (plan)');
+    expect(out).not.toContain("just a plan");
+    expect(out).not.toContain("Feature Record");
+  });
+});
+
 describe("renderFeatureRecord", () => {
   it("names the feature, drops the Record heading, and is capped", () => {
     const out = renderFeatureRecord("Big feature", `## Plan\n\np\n\n${REC}\n`);
@@ -568,5 +645,85 @@ describe("pending entries do not outlive their observations", () => {
     expect(out[0]?.status).toBe("discarded");
     expect(state.entry("t1")).toBeUndefined();
     expect(state.entry("t2")).toBeDefined();
+  });
+});
+
+// ── appendRecord ─────────────────────────────────────────────────────────────
+
+describe("appendRecord", () => {
+  const line = (id: string, text = "did x") => ({ at: "2026-11-09T10:05:00Z", src: "hal", kind: "change" as const, text, ids: [id] });
+  const capture = (status = 200, json: unknown = {}) => {
+    const calls: Array<{ url: string; init: { method: string; headers: Record<string, string>; body: string } }> = [];
+    const fetchImpl = (async (url: string, init: { method: string; headers: Record<string, string>; body: string }) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(json), { status });
+    }) as unknown as typeof fetch;
+    return { calls, store: new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa") };
+  };
+
+  it("PATCHes {op:'recordAppend', lines} with an idempotency key and answers ok on 200", async () => {
+    const { calls, store } = capture();
+    const lines = [line("o1"), line("o2")];
+    expect(await store.appendRecord("work-x-1", lines)).toEqual({ ok: true });
+    expect(calls[0].url).toBe("http://h/v1/workapi/work/work-x-1");
+    expect(calls[0].init.method).toBe("PATCH");
+    expect(calls[0].init.headers["X-API-Key"]).toBe("tok");
+    expect(calls[0].init.headers["Idempotency-Key"]).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
+    expect(JSON.parse(calls[0].init.body)).toEqual({ op: "recordAppend", lines });
+  });
+
+  it("derives the same key for the same lines in any order, another for other lines, and uses an explicit key as given", async () => {
+    const { calls, store } = capture();
+    await store.appendRecord("t", [line("o1"), line("o2")]);
+    await store.appendRecord("t", [line("o2"), line("o1")]);
+    await store.appendRecord("t", [line("o3")]);
+    await store.appendRecord("t", [line("o1")], { idempotencyKey: "mine-1" });
+    const keys = calls.map((c) => c.init.headers["Idempotency-Key"]);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[3]).toBe("mine-1");
+  });
+
+  it("maps 409 log_full, an archived item, a refusal and an outage to results without throwing", async () => {
+    expect(await capture(409, { error: "full", code: "log_full" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "log_full" });
+    expect(await capture(409, { error: "closed", code: "record_closed" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "archived", message: "closed" });
+    expect(await capture(403, { error: "no" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "forbidden", message: "no" });
+    expect(await capture(502, {}).store.appendRecord("t", [line("o1")])).toMatchObject({ ok: false, code: "error" });
+    expect(await capture(500, { error: "boom" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "error", message: "boom" });
+    const down = new HttpWorkRecordStore("http://h/v1/workapi", "tok", (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch, "wa");
+    expect(await down.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "error", message: "ECONNREFUSED" });
+  });
+
+  it("the in-memory store appends, dedupes by line ids, and refuses past the cap and on archived items", async () => {
+    const mem = new InMemoryWorkRecordStore({
+      t: { id: "t", title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" },
+      a: { id: "a", title: "A", kind: "task", stage: "archived", body: "" },
+    });
+    expect(await mem.appendRecord("t", [line("o1", "first")])).toEqual({ ok: true });
+    expect(await mem.appendRecord("t", [line("o1", "first"), line("o2", "second")])).toEqual({ ok: true });
+    const body = (await mem.get("t"))!.body;
+    expect(body).toContain("## Plan\n\np");
+    expect(body.match(/first/g)).toHaveLength(1);
+    expect(body).toContain("- 10:05 [hal\u00b7change] second <!-- src:o2 -->");
+    const big = (p: string) => Array.from({ length: 20 }, (_, i) => line(`${p}${i}`, "y".repeat(240)));
+    expect(await mem.appendRecord("t", big("b"))).toEqual({ ok: true });
+    const full = (await mem.get("t"))!.body;
+    expect(await mem.appendRecord("t", big("c"))).toEqual({ ok: false, code: "log_full" });
+    expect((await mem.get("t"))!.body).toBe(full);
+    expect(await mem.appendRecord("a", [line("o1")])).toMatchObject({ ok: false, code: "archived" });
+  });
+
+  it("sends group in the PATCH, and the in-memory store inserts under that ### heading (creating it) like the hub", async () => {
+    const { calls, store } = capture();
+    await store.appendRecord("f", [line("o1")], { group: "Findings" });
+    expect(JSON.parse(calls[0].init.body)).toMatchObject({ op: "recordAppend", group: "Findings" });
+    const mem = new InMemoryWorkRecordStore({
+      f: { id: "f", title: "F", kind: "feature", stage: "in_build", body: "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->" },
+    });
+    await mem.appendRecord("f", [line("o2", "new change")], { group: "Changes" });
+    await mem.appendRecord("f", [line("o3", "new decision")], { group: "Decisions" });
+    expect((await mem.get("f"))!.body).toBe(
+      "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n- 10:05 [hal\u00b7change] new change <!-- src:o2 -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->\n\n### Decisions\n\n- 10:05 [hal\u00b7change] new decision <!-- src:o3 -->\n",
+    );
   });
 });

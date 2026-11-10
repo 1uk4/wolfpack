@@ -40,6 +40,8 @@ export interface GraduationDeps {
   drain: DrainWork;
   /** Ships an item that is not complete yet. */
   ship: (id: string) => Promise<unknown>;
+  /** Final feature pass before the distill (memory.workLog: append). Not set by the durable runtime today. */
+  finalPass?: (featureId: string) => Promise<unknown>;
   /** Called with every item that graduated (cache invalidation). */
   forget?: (id: string) => void;
 }
@@ -78,7 +80,7 @@ export function createGraduation(deps: GraduationDeps) {
     try {
       const scope = await assertReady(id);
       const roots = needRoots();
-      const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain, scope });
+      const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain, finalPass: deps.finalPass, scope });
       await mkdir(previewDir(), { recursive: true });
       await writeFile(previewFile(p.token), JSON.stringify(p));
       return p;
@@ -107,7 +109,7 @@ export function createGraduation(deps: GraduationDeps) {
     try {
       const roots = needRoots();
       const p = await loadPreview(id, token);
-      const done = await confirmGraduation({ client, roots, wolf: deps.wolfName, preview: p, ship: deps.ship, drain: deps.drain, engine: deps.engine() });
+      const done = await confirmGraduation({ client, roots, wolf: deps.wolfName, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
       // The graduation has happened (archived, token used): an unbind that fails is a warning, never an error, or the retry would find no token.
       let unbound: number[] = [];

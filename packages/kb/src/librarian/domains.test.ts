@@ -2,10 +2,10 @@
  * domains.test.ts — Tests for domain digest generation.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, mkdtempSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { renderDomainDigest } from "./domains.js";
+import { renderDomainDigest, renderDomainIndex } from "./domains.js";
 import { writeSections } from "./sections.js";
 import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
@@ -362,5 +362,62 @@ Test entry 3`;
 
     expect(digest.sections.map((s: any) => s.sectionId)).toEqual(["sec-test-parent"]);
     expect(digest.sections[0].children.map((s: any) => s.sectionId)).toEqual(["sec-test-child1"]);
+  });
+});
+
+describe("domains — cached entry reads give the same bytes as fresh reads", () => {
+  let root: string;
+  let roots: KbRoots;
+  const dir = () => join(root, "base", "domains", "d", "entries");
+  const entry = (id: string, title: string, section = "sec-d-1") =>
+    `---\nid: ${id}\ntitle: ${title}\nsection: ${section}\ncurrency: live\n---\n# ${title}\n\n${title} lede.\n`;
+  const renders = (r: KbRoots) => {
+    const out: Record<string, string> = {};
+    const sink = (f: string, c: string) => void (out[f.split("/").pop()!] = c.replace(/"generated": "[^"]*"/, '"generated": "T"'));
+    renderDomainIndex(r, "d", sink);
+    renderDomainDigest(r, "d", sink);
+    return out;
+  };
+  /** A copy of the KB at other paths: nothing of it is cached, so it is the fresh-read reference. */
+  const fresh = () => {
+    const copy = mkdtempSync(join(tmpdir(), "kb-fresh-"));
+    cpSync(root, copy, { recursive: true });
+    const out = renders({ kbBase: join(copy, "base"), opsRoot: join(copy, "ops"), denLocal: join(copy, "den") });
+    rmSync(copy, { recursive: true, force: true });
+    return out;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "kb-cache-"));
+    roots = { kbBase: join(root, "base"), opsRoot: join(root, "ops"), denLocal: join(root, "den") };
+    mkdirSync(dir(), { recursive: true });
+    writeFileSync(join(dir(), "a.md"), entry("a", "Alpha"));
+    writeFileSync(join(dir(), "b.md"), entry("b", "Beta"));
+    const sec = { id: "sec-d-1", domain: "d", parent: null, depth: 0, label: "r", title: "R", centroid: [0], memberCount: 2, childIds: [], summary: "s", summaryHash: "h", dirty: false, memberCountAtLastLabel: 0, created: "2024-01-01", updated: "2024-01-01" };
+    writeSections(roots, [sec as unknown as Section]);
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("re-reads a changed entry, drops a deleted one, picks up a new one: INDEX and digest bytes equal a cold render", () => {
+    expect(renders(roots)).toEqual(fresh());
+
+    writeFileSync(join(dir(), "a.md"), entry("a", "Alpha renamed")); // new size
+    rmSync(join(dir(), "b.md"));
+    writeFileSync(join(dir(), "c.md"), entry("c", "Gamma"));
+    const after = renders(roots);
+
+    expect(after["INDEX.md"]).toContain("Alpha renamed");
+    expect(after["INDEX.md"]).not.toContain("Beta");
+    expect(after["INDEX.md"]).toContain("Gamma");
+    expect(after).toEqual(fresh());
+  });
+
+  it("sees a sections snapshot written by someone else", () => {
+    renders(roots);
+    const file = join(root, "den", "sections", "_sections.json");
+    const other = JSON.parse(readFileSync(file, "utf-8"));
+    other[0].title = "Written by a hub commit";
+    writeFileSync(file, JSON.stringify(other)); // different size than the cached copy
+    expect(renders(roots)["_digest.json"]).toContain("Written by a hub commit");
   });
 });

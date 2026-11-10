@@ -32,6 +32,9 @@ export type CreateWorkRequest = z.infer<typeof CreateWorkRequestSchema>;
 export const CreateWorkResponseSchema = z.object({ id: z.string(), item: WorkWriteItemSchema });
 export type CreateWorkResponse = z.infer<typeof CreateWorkResponseSchema>;
 
+export const RECORD_LINE_KINDS = ["decision", "change", "finding", "problem"] as const;
+/** `recordAppend`: new Record lines (one per entry, text <= 240 chars, <= 20 per call) stored as `- HH:MM [src·kind] text <!-- src:ids -->`. */
+export const RecordLinesSchema = z.array(z.object({ at: z.string(), src: z.string().min(1), kind: z.enum(RECORD_LINE_KINDS), text: z.string().trim().min(1), ids: z.array(z.string()).min(1) }).strict()).min(1);
 const RelTarget = z.object({ rel: z.string(), target: z.string() });
 /**
  * `PATCH /v1/work/:id`. Either one op (exactly one field) or a batch `{ops:[...]}` of single-field ops. Deliberate behaviours: STRICT
@@ -55,6 +58,10 @@ export const PatchWorkOpSchema = z
     schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
     /** Replace the `plan`, `notes` or `Record` section of the body. `Record` is matched exactly (case and spacing); any other name (e.g. `log`) is `invalid_request`. */
     section: z.object({ name: z.string(), text: z.string() }).strict().optional(),
+    /** `{op:"recordAppend", lines, group?}`: atomically append lines to the `## Record` section (read-modify-write in the hub write queue). Open to any wolf like a note; 409 `log_full` over the Record cap. `group` (features): `Decisions`, `Changes`, `Findings` or `Problems & fixes`. */
+    op: z.literal("recordAppend").optional(),
+    lines: RecordLinesSchema.optional(),
+    group: z.string().optional(),
   })
   .strict();
 export type PatchWorkOp = z.infer<typeof PatchWorkOpSchema>;

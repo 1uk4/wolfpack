@@ -19,6 +19,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite, parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
+import { performance } from "node:perf_hooks";
+import type { Timings } from "./timings.js";
+import { listEntryFiles, readEntryCached } from "./entry-cache.js";
 import { InfraError } from "./backoff.js";
 import { groupOf } from "./anchors.js";
 import {
@@ -297,6 +300,9 @@ interface ScannedEntry {
   grouped: boolean;
 }
 
+const YIELD_EVERY = 25;
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+
 /** Every curated entry in kb-base with the text its vector is cached under. */
 function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
   const domainsRoot = join(roots.kbBase, "domains");
@@ -304,22 +310,17 @@ function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
   for (const domain of readdirSync(domainsRoot)) {
     const entriesDir = join(domainsRoot, domain, "entries");
     if (!existsSync(entriesDir)) continue;
-    for (const file of readdirSync(entriesDir).filter((f) => f.endsWith(".md"))) {
+    for (const file of listEntryFiles(entriesDir)) {
       // A concurrent admin op (retire, split-fat) can delete an entry file
       // between this readdir snapshot and the readFileSync. Treat vanished
       // entries as benignly skipped — they are not in the registry anymore
       // either, so the vector set would exclude them on the next tick anyway.
-      let raw: string;
-      try {
-        raw = readFileSync(join(entriesDir, file), "utf-8");
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
-        throw err;
-      }
-      const { fields } = parseFrontmatter(raw);
+      const cached = readEntryCached(join(entriesDir, file));
+      if (!cached) continue;
+      const fields = cached.fields;
       const text = embedInput({
         title: String(fields.title ?? ""),
-        summary: entrySummary(raw),
+        summary: cached.summary(),
         role: "document",
         model,
       });
@@ -328,7 +329,7 @@ function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
         domain: String(fields.domain ?? domain),
         text,
         hash: contentHash(text),
-        grouped: !!groupOf(raw),
+        grouped: !!cached.group(),
       };
     }
   }
@@ -348,7 +349,8 @@ export async function buildEntryVectors(
   roots: KbRoots,
   reg: Registry,
   embedder: Embedder,
-  model: string = resolveEmbedConfig().model
+  model: string = resolveEmbedConfig().model,
+  timings?: Timings
 ): Promise<EntryVector[]> {
   // entryId → canonicalId lookup from the registry.
   const canonicalOf = new Map<string, string>();
@@ -357,7 +359,18 @@ export async function buildEntryVectors(
   }
 
   const out: EntryVector[] = [];
-  for (const e of scanEntries(roots, model)) {
+  const it = scanEntries(roots, model);
+  let scanned = 0;
+  for (;;) {
+    // Let timers, /healthz and the watchdog ping run every 25 entries (the scan is read-only; no lock is held here).
+    // A hub commit can land during this yield, so one scan may see a mix of old and new entries. That only affects placement
+    // quality (the vectors are advisory), not correctness; a rebuild uses pause(), which waits for the tick to finish.
+    if (scanned++ % YIELD_EVERY === YIELD_EVERY - 1) await yieldToLoop();
+    const t0 = performance.now();
+    const n = it.next();
+    timings?.add("scan", performance.now() - t0);
+    if (n.done) break;
+    const e = n.value;
     // A grouped entry follows its holder's section: it takes no part in
     // similarity placement, so it is neither embedded nor vectored.
     if (e.grouped) continue;

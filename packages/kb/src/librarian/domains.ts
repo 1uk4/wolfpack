@@ -6,10 +6,10 @@
  * (see commit.quarantine) and surfaced as a recommendation. This keeps the KB
  * from growing an unmirrored, unreviewed domain behind your back.
  */
-import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
-import { atomicWrite, parseFrontmatter } from "@wolfpack/engine";
+import { atomicWrite } from "@wolfpack/engine";
 import { createHash } from "node:crypto";
 import { ENTRY_KINDS, FACET_KEYS, RELATION_KINDS } from "@wolfpack/engine";
 import { DIGEST } from "@wolfpack/engine";
@@ -22,8 +22,7 @@ import {
   type DigestSection,
 } from "../shared/index.js";
 import { resolveGateDomainsFile } from "../shared/domain-registry.js";
-import { entrySummary } from "./embed.js";
-import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
+import { listEntryFiles, readEntryCached } from "./entry-cache.js";
 import { readSections, getRoots, buildParentIndex } from "./sections.js";
 import type { Section, SectionId, Currency } from "../schema/knowledge.js";
 
@@ -108,18 +107,19 @@ export function renderDomainIndex(roots: KbRoots, domain: string, sink?: (file: 
   const dir = entriesDir(roots, domain);
   const rows: Array<GroupInfo & { title: string; summary: string; sub: string }> = [];
   if (existsSync(dir)) {
-    for (const f of readdirSync(dir).filter((x) => x.endsWith(".md"))) {
+    for (const f of listEntryFiles(dir)) {
       try {
-        const md = readFileSync(join(dir, f), "utf-8");
-        const { fields } = parseFrontmatter(md);
+        const e = readEntryCached(join(dir, f));
+        if (!e) continue;
+        const fields = e.fields;
         rows.push({
           id: f.replace(/\.md$/, ""),
           title: String(fields.title ?? f.replace(/\.md$/, "")),
-          summary: indexSummary(entrySummary(md)),
+          summary: indexSummary(e.summary()),
           sub: String(fields.subcategory ?? ""),
-          anchor: anchorOf(md),
-          group: groupOf(md),
-          groupDate: groupDateOf(md) ?? "",
+          anchor: e.anchor(),
+          group: e.group(),
+          groupDate: e.groupDate() ?? "",
         });
       } catch {
         /* skip unreadable entry */
@@ -165,12 +165,13 @@ export function renderDomainDigest(roots: KbRoots, domain: string, sink?: (file:
   const groupInfo: GroupInfo[] = [];
   const dir = entriesDir(roots, domain);
   if (existsSync(dir)) {
-    for (const f of readdirSync(dir).filter((x) => x.endsWith(".md"))) {
+    for (const f of listEntryFiles(dir)) {
       try {
-        const md = readFileSync(join(dir, f), "utf-8");
-        const { fields } = parseFrontmatter(md);
+        const e = readEntryCached(join(dir, f));
+        if (!e) continue;
+        const fields = e.fields;
         const entryId = f.replace(/\.md$/, "");
-        groupInfo.push({ id: entryId, anchor: anchorOf(md), group: groupOf(md), groupDate: groupDateOf(md) ?? "" });
+        groupInfo.push({ id: entryId, anchor: e.anchor(), group: e.group(), groupDate: e.groupDate() ?? "" });
         const currency = (fields.currency as Currency) ?? "live";
         const section = String(fields.section ?? "");
         entryMap.set(entryId, { currency, section });

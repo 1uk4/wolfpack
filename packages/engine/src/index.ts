@@ -34,6 +34,7 @@ export * from "./sandbox/index.js";
 
 // Prompts — central registry of all system prompts
 export * from "./prompts.js";
+export * from "./work-log.js";
 
 // Config — the editable control surface (vocabularies + numeric knobs)
 export * from "./config/index.js";
@@ -43,7 +44,7 @@ export type { KnowledgeAdapter, ExtractOptions, UsageRecord } from "./adapter.js
 
 // Adapters — provider implementations
 export { AnthropicAdapter } from "./adapters/anthropic.js";
-export { loadQuery } from "./adapters/claude-agent-sdk.js";
+export { loadQuery, warmClaudeAgentSdk } from "./adapters/claude-agent-sdk.js";
 export { LlmInfraError, OutputTruncatedError } from "./adapters/errors.js";
 export { createAdapter } from "./adapters/index.js";
 
@@ -53,3 +54,4 @@ export * from "./usage-log.js";
 
 // Pipeline — parse, search, commit, index
 export * from "./pipeline/index.js";
+export * from "./work-tidy.js";

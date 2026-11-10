@@ -67,8 +67,76 @@ export type WorkOp =
   | { op: "body"; text: string }
   | { op: "section"; name: SectionName; text: string }
   | { op: "standing"; value: boolean }
+  | { op: "recordAppend"; lines: RecordLine[]; group?: string }
   | { op: "schedule"; scheduledFor: string | null; durationMinutes?: number };
 
+
+export interface RecordLine { at: string; src: string; kind: string; text: string; ids: string[] }
+export const RECORD_MAX_LINES = 20;
+export const RECORD_MAX_TEXT = 240;
+export const RECORD_CAP_TASK = 6000;
+export const RECORD_CAP_FEATURE = 4000;
+/** The Record is full: 409 `log_full` (typed code in details). */
+export const LOG_FULL = "log_full";
+export const RECORD_GROUPS = ["Decisions", "Changes", "Findings", "Problems & fixes"] as const;
+
+/** The stored line: `- HH:MM [src·kind] text <!-- src:id1,id2 -->` (HH:MM is the UTC time of `at`). */
+function recordLineText(l: RecordLine): string {
+  const m = /T(\d\d:\d\d)/.exec(l.at);
+  if (!m) throw new HubError("invalid_request", "recordAppend line: at must be an ISO timestamp");
+  if (/[\r\n]/.test(l.text) || l.text.length > RECORD_MAX_TEXT) throw new HubError("invalid_request", `recordAppend line: text must be one line of at most ${RECORD_MAX_TEXT} characters`);
+  if (l.text.includes("<!--") || l.text.includes("-->")) throw new HubError("invalid_request", "recordAppend line: text must not contain comment markers");
+  if (/[\s\]\u00b7<>]/.test(l.src)) throw new HubError("invalid_request", "recordAppend line: src must be a plain label");
+  if (l.ids.some((i) => !/^[^\s,<>]+$/.test(i))) throw new HubError("invalid_request", "recordAppend line: ids must be plain tokens");
+  assertSectionText(l.text);
+  return `- ${m[1]} [${l.src}\u00b7${l.kind}] ${l.text.trim()}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`;
+}
+
+/** The `## Record` section text of a body ("" when absent): from the heading to the next H1/H2. */
+function recordSectionText(body: string): string {
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+  const start = lines.findIndex((l) => /^ {0,3}##[ \t]+Record[ \t]*$/.test(l));
+  if (start < 0) return "";
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) if (/^ {0,3}#{1,2}(?:[ \t]|$)/.test(lines[i]!)) { end = i; break; }
+  return lines.slice(start + 1, end).join("\n").trim();
+}
+
+/**
+ * Append lines to the Record of `body` (pure). Skips a line whose ids are all already in the Record. Returns the new body and how many lines
+ * were added; throws `log_full` (409) when the Record would pass the cap, `invalid_request` for bad lines or an unknown group.
+ */
+export function appendRecordLines(body: string, kind: string, lines: RecordLine[], group?: string): { body: string; added: number } {
+  if (lines.length > RECORD_MAX_LINES) throw new HubError("invalid_request", `recordAppend takes at most ${RECORD_MAX_LINES} lines per call`);
+  if (group !== undefined && !(RECORD_GROUPS as readonly string[]).includes(group)) throw new HubError("invalid_request", `group must be one of ${RECORD_GROUPS.join(", ")}`);
+  const stored = lines.map((l) => ({ l, text: recordLineText(l) }));
+  let rec = recordSectionText(body);
+  const seen = new Set<string>();
+  for (const m of rec.matchAll(/<!-- src:([^>]*?) -->/g)) for (const i of m[1]!.split(",")) seen.add(i);
+  const fresh: string[] = [];
+  for (const { l, text } of stored) {
+    if (l.ids.length && l.ids.every((i) => seen.has(i))) continue;
+    l.ids.forEach((i) => seen.add(i));
+    fresh.push(text);
+  }
+  if (fresh.length === 0) return { body, added: 0 };
+  if (group && kind === "feature") {
+    const rl = rec ? rec.split("\n") : [];
+    const h = rl.findIndex((x) => x.trim() === `### ${group}`);
+    if (h < 0) rl.push(...(rl.length ? [""] : []), `### ${group}`, "", ...fresh);
+    else {
+      let end = rl.length;
+      for (let i = h + 1; i < rl.length; i++) if (/^### /.test(rl[i]!)) { end = i; break; }
+      let at = end;
+      while (at > h + 1 && rl[at - 1]!.trim() === "") at--;
+      rl.splice(at, 0, ...fresh);
+    }
+    rec = rl.join("\n");
+  } else rec = rec ? `${rec}\n${fresh.join("\n")}` : fresh.join("\n");
+  const cap = kind === "feature" ? RECORD_CAP_FEATURE : RECORD_CAP_TASK;
+  if (rec.length > cap) throw new HubError("invalid_request", `the Record is full (limit ${cap} characters)`, { code: LOG_FULL });
+  return { body: replaceSection(body, "record", rec), added: fresh.length };
+}
 
 /** The only section name the Record writer sends, matched exactly (case and spacing): the heading `## Record`. */
 export const RECORD_SECTION_NAME = "Record";
@@ -105,6 +173,13 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
     if (!v.trim()) throw new HubError("invalid_request", `${name} must not be empty`);
     return v;
   };
+  if (b.op !== undefined || b.lines !== undefined || b.group !== undefined) {
+    if (b.op !== "recordAppend" || b.lines === undefined) throw new HubError("invalid_request", "recordAppend needs op: \"recordAppend\" and lines");
+    if (Object.keys(b).some((k) => k !== "op" && k !== "lines" && k !== "group")) throw new HubError("invalid_request", "one field per op");
+    if (b.lines.length > RECORD_MAX_LINES) throw new HubError("invalid_request", `recordAppend takes at most ${RECORD_MAX_LINES} lines per call`);
+    b.lines.forEach(recordLineText); // validate now: a bad line is a 400 before the queue
+    return [{ op: "recordAppend", lines: b.lines, group: b.group }];
+  }
   if (b.stage !== undefined) ops.push({ op: "stage", to: nonEmpty("stage", b.stage) });
   if (b.note !== undefined) ops.push({ op: "note", text: nonEmpty("note", b.note) });
   if (b.title !== undefined) ops.push({ op: "title", title: nonEmpty("title", b.title) });
@@ -141,7 +216,7 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
 
 /** `body` / `section` ops rewrite the .md only (no ledger event); every other op appends to the ledger. */
 export function isContentOp(op: WorkOp): boolean {
-  return op.op === "body" || op.op === "section";
+  return op.op === "body" || op.op === "section" || op.op === "recordAppend";
 }
 
 /**
@@ -241,7 +316,16 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
   if (ops.every(isContentOp)) {
     // Fold every edit over the body first (any failure throws before a write), then ONE atomic .md write.
     let body = resolveWorkItem(roots, domain, id)?.body ?? "";
-    for (const o of ops) body = o.op === "body" ? o.text : o.op === "section" ? replaceSection(body, o.name, o.text) : body;
+    for (const o of ops) {
+      if (o.op === "body") body = o.text;
+      else if (o.op === "section") body = replaceSection(body, o.name, o.text);
+      else if (o.op === "recordAppend") {
+        if (cur0.stage === "archived") throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
+        const r = appendRecordLines(body, String(cur0.kind), o.lines, o.group);
+        body = r.body;
+        if (opts.recordAdded) opts.recordAdded.count += r.added;
+      }
+    }
     commitWorkItem(roots, cur0, body);
     return cur0;
   }
@@ -314,6 +398,8 @@ function readNewBytes(file: string, offset: number): Buffer {
 /** Who is applying the ops: a worker's wolf (`holder`) cascades a feature assign only to the children it holds; unset (the owner) cascades to all open children. */
 export interface ApplyOptions {
   holder?: string;
+  /** Out: `count` is raised by the number of Record lines a recordAppend actually added (0 for a replay). */
+  recordAdded?: { count: number };
 }
 
 function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[], opts: ApplyOptions = {}): Item {
@@ -346,6 +432,16 @@ function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[], opts: Appl
         const cur = loadWorkState(roots).get(id as never);
         if (!cur) throw new Error(`work item ${id} not found`);
         commitWorkItem(roots, cur, o.text);
+        item = cur;
+        break;
+      }
+      case "recordAppend": {
+        const cur = loadWorkState(roots).get(id as never);
+        if (!cur) throw new Error(`work item ${id} not found`);
+        if (cur.stage === "archived") throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
+        const r = appendRecordLines(resolveWorkItem(roots, cur.domain as string, id)?.body ?? "", String(cur.kind), o.lines, o.group);
+        if (opts.recordAdded) opts.recordAdded.count += r.added;
+        if (r.added > 0) commitWorkItem(roots, cur, r.body);
         item = cur;
         break;
       }

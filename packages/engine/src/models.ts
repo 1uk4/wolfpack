@@ -38,6 +38,9 @@ export const ENGINE_STEPS = [
   "consolidate",
   "distill",
   "workRecord",
+  "workLog",
+  "workDistill",
+  "workCompact",
   "produce",
   "contradict",
   "classifyToSection",
@@ -46,6 +49,7 @@ export const ENGINE_STEPS = [
   "sectionSummary",
   "labelSection",
   "splitSection",
+  "workTidy",
 ] as const;
 export type EngineStep = (typeof ENGINE_STEPS)[number];
 
@@ -55,6 +59,9 @@ export const STEP_TIERS: Record<EngineStep, Tier> = {
   consolidate: "smart",
   distill: "smart",
   workRecord: "smart",
+  workLog: "fast",
+  workDistill: "smart",
+  workCompact: "fast",
   produce: "smart",
   contradict: "fast",
   classifyToSection: "fast",
@@ -63,6 +70,7 @@ export const STEP_TIERS: Record<EngineStep, Tier> = {
   sectionSummary: "fast",
   labelSection: "fast",
   splitSection: "fast",
+  workTidy: "smart",
 };
 
 /** pi's thinking levels (`pi --help`), used everywhere thinking is set. */

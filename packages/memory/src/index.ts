@@ -28,6 +28,9 @@ export { serializeBranchEntries, chunkSerialized } from "./serialize-branch.js";
 export {
   createOrchestrator,
   DEFAULT_CONFIG,
+  shouldFlushWorkLog,
+  WORK_LOG_FLUSH_COUNT,
+  WORK_LOG_FLUSH_AGE_MS,
   type MemoryOrchestrator,
   type OrchestratorConfig,
   type BoundWork,
@@ -166,6 +169,8 @@ export {
   DOCUMENT_CAP,
   renderWorkingDocument,
   renderFeatureRecord,
+  renderFeatureView,
+  type FeatureViewTask,
   type WorkRecord,
   resolveSources,
   findRecordLine,
@@ -177,6 +182,7 @@ export {
   type WorkRecordOutcome,
   type ConsolidateWorkOptions,
 } from "./work-record.js";
+export { appendWorkLog, LOG_FULL, type AppendWorkLogOptions, type WorkLogObservation, type WorkLogOutcome } from "./work-log.js";
 export { scanSecrets, scanSecretsForCrawl, looksSecretForCrawl, type SecretScan } from "./work/secrets.js";
 
 // Resend (Dewey rebuild from scratch)
@@ -200,6 +206,8 @@ export {
   type ArchiveItem,
   type ArchiveOutcome,
 } from "./work-pending.js";
+export { withPoolLock, type PoolLockOptions } from "./pool-lock.js";
+export { writeFileAtomic } from "./atomic-write.js";
 export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
 export { CHILDREN_CAP, LOG_TAIL, shapeWorkList, shapeWorkRecord, toWorkChild, withoutLog, logTail, type ShapeWorkItem, type ShapedWorkChild, type ShapedWorkListItem, type ShapedWorkRecord } from "./work-shape.js";
 export { parseRecordLines, stripSources, lineRef, numberRecordLines, formatSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";

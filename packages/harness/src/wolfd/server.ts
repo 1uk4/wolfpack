@@ -56,7 +56,7 @@ import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../me
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
-import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
@@ -977,6 +977,21 @@ export class WolfServer {
         const { state, reason } = memoryState(this.memoryReadInput());
         if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
         return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit), this.opts.work ?? {}));
+      }
+      case "getMemoryTree": {
+        this.checkWolf(params.name);
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        return this.json(res, 200, await readMemoryTree(this.opts.den!, this.opts.work ?? {}));
+      }
+      case "getMemoryNodeObservations": {
+        this.checkWolf(params.name);
+        if (params.workId !== "den" && !isWorkId(params.workId)) throw new HttpError("invalid_request", "malformed work id");
+        const rawLimit = url.searchParams.get("limit");
+        if (rawLimit !== null && !/^[1-9]\d{0,6}$/.test(rawLimit)) throw new HttpError("invalid_request", "limit must be a positive integer");
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        return this.json(res, 200, await readMemoryNode(this.opts.den!, params.workId, this.opts.work ?? {}, rawLimit === null ? undefined : Number(rawLimit)));
       }
       case "listWork": {
         this.checkWolf(params.name);

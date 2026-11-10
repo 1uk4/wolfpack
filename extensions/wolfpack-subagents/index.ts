@@ -38,6 +38,7 @@ import {
   wolfEnvPrefix,
 } from "./mux/index.ts";
 import { subagentEnvPrefix } from "./env-prefix.ts";
+import { resolveSubagentTask } from "./task-id.ts";
 
 import {
   countSessionEntryLines,
@@ -135,6 +136,12 @@ const SubagentParams = Type.Object({
         "true = run in a terminal pane the user can watch and you can steer live; false = background " +
         "process (no pane, can't be steered mid-run). Default: the agent's own setting (shown in " +
         "subagents_list). Usually omit this; set it only when the user asks to watch or not to watch.",
+    }),
+  ),
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "work item this subagent works on; defaults to the first work-… id in the task text",
     }),
   ),
   cwd: Type.Optional(
@@ -1434,8 +1441,10 @@ async function launchSubagent(
   // Snapshot the fully-resolved sandbox beside the session file so a later
   // `subagent_message({ name })` resume can replay the exact same
   // restriction instead of relaunching pi with all global extensions + tools.
+  const subagentTask = resolveSubagentTask({ explicit: params.taskId, brief: params.task });
   const loadout: SubagentLoadout = {
     agent: params.agent ?? null,
+    task: subagentTask ?? null,
     toolAllowlist,
     model: resolvedModel.piModel,
     thinking: resolvedModel.thinking,
@@ -1461,6 +1470,7 @@ async function launchSubagent(
     activityFile,
     surface,
     agent: params.agent ?? null,
+    task: subagentTask,
     agentDir: resolvedAgentDir,
     autoExit: autonomous,
     ...(grantSpawning && agentDefs?.subagentAgents ? { allowed: agentDefs.subagentAgents } : {}),
@@ -2293,6 +2303,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           id,
           activityFile,
           agent: loadout.agent,
+          task: loadout.task,
           agentDir: resumeAgentDir,
           autoExit,
           ...(loadout.spawnable && loadout.spawnable.length > 0 ? { allowed: loadout.spawnable } : {}),

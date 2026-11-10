@@ -17,6 +17,7 @@ let poolFetches = 0;
 const titles: Record<string, { title: string; stage: string; kind: string }> = {
 	"work-a": { title: "Fix the login", stage: "in_build", kind: "task" },
 	"work-f": { title: "Auth feature", stage: "approved", kind: "feature" },
+	"work-old": { title: "Old shipped thing", stage: "archived", kind: "task" },
 };
 Object.assign(globalThis, {
 	window: dom.window,
@@ -88,18 +89,18 @@ afterEach(async () => {
 });
 
 describe("observation pool in the Memory panel", () => {
-	it("loads the persisted pool on open (no live event needed) and groups it: Den, then work items with title, stage and count", async () => {
+	it("loads the persisted pool on open (no live event needed) and groups it: work items with title, stage and count, then the Den", async () => {
 		await mount();
 		assert.equal(poolFetches >= 1, true);
-		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.includes("Nothing captured yet"), false);
+		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.includes("No pending observations"), false);
 		const rows = qa('[data-testid="memory-obs-groups"] button');
-		assert.deepEqual(rows.map((r) => r.getAttribute("data-testid")), ["memory-obs-group-den", "memory-obs-group-work-f", "memory-obs-group-work-a"]);
-		assert.deepEqual(rows.map((r) => r.getAttribute("data-count")), ["2", "1", "2"]);
-		assert.match(rows[0]!.textContent!, /^Den/);
-		assert.match(rows[1]!.textContent!, /Auth feature/);
-		assert.match(rows[1]!.textContent!, /approved/);
-		assert.match(rows[2]!.textContent!, /Fix the login/);
-		assert.match(rows[2]!.textContent!, /in build/);
+		assert.deepEqual(rows.map((r) => r.getAttribute("data-testid")), ["memory-obs-group-work-f", "memory-obs-group-work-a", "memory-obs-group-den"]);
+		assert.deepEqual(rows.map((r) => r.getAttribute("data-count")), ["1", "2", "2"]);
+		assert.match(rows[0]!.textContent!, /Auth feature/);
+		assert.match(rows[0]!.textContent!, /approved/);
+		assert.match(rows[1]!.textContent!, /Fix the login/);
+		assert.match(rows[1]!.textContent!, /in build/);
+		assert.match(rows[2]!.textContent!, /^Den/);
 	});
 
 	it("shows \"waiting for Work API\" on a group whose observations are blocked, and only on that group", async () => {
@@ -136,14 +137,37 @@ describe("observation pool in the Memory panel", () => {
 		pool = [ob("1", "2026-10-26T09:00:00Z", "x", { work: "work-gone" })];
 		await mount();
 		const row = q('[data-testid="memory-obs-group-work-gone"]')!;
-		assert.match(row.textContent!, /work-gone/);
+		// title unknown: the chip stands alone, the id is not repeated as a title
+		assert.equal(row.parentElement!.querySelector('[data-work-id="work-gone"]') !== null, true);
 		assert.equal(row.querySelector('[data-testid="memory-obs-stage"]'), null);
+		assert.equal(row.textContent!.includes("work-gone"), false);
+	});
+
+	it("lists no archived work item's observations; a row is title and count, the id a chip that does not open the row", async () => {
+		pool = [
+			ob("1", "2026-10-26T09:00:00Z", "stale", { work: "work-old" }),
+			ob("2", "2026-10-26T10:00:00Z", "live", { work: "work-a" }),
+		];
+		await mount();
+		assert.equal(q('[data-testid="memory-obs-group-work-old"]'), null);
+		const row = q('[data-testid="memory-obs-group-work-a"]')!;
+		assert.equal(row.textContent!.includes("work-a"), false);
+		const chip = row.closest("li")!.querySelector('[data-work-id="work-a"]')!;
+		assert.equal(chip !== null, true);
+		await click(chip);
+		assert.equal(q('[data-testid="memory-obs-items"]'), null);
+	});
+
+	it("puts the Den section below the pool gauge and the work observations", async () => {
+		await mount();
+		const order = qa('[data-testid="memory-den"], [data-testid="memory-pool"], [data-testid="memory-feed"]').map((e) => e.getAttribute("data-testid"));
+		assert.deepEqual(order, ["memory-pool", "memory-feed", "memory-den"]);
 	});
 
 	it("an empty pool says nothing captured; a failed load says unavailable", async () => {
 		pool = [];
 		await mount();
-		assert.match(q('[data-testid="memory-feed"]')!.textContent!, /Nothing captured yet/);
+		assert.match(q('[data-testid="memory-feed"]')!.textContent!, /No pending observations/);
 		await act(async () => root!.unmount());
 		document.body.innerHTML = "";
 		poolStatus = 409;

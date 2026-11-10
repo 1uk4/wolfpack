@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeftIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryObservations, fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
+import { WorkIdChip } from "@/components/work-id-chip";
 import { ContextSection } from "@/components/context-section";
 import { useMemoryEvents } from "@/components/memory-events";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
@@ -21,6 +22,10 @@ import {
 	type PoolPending,
 	groupLabel,
 	groupObservations,
+	liveGroups,
+	nestGroups,
+	type GroupNode,
+	type ObservationGroup,
 	observationsInGroup,
 	focusRefetchDue,
 	latestOnly,
@@ -123,13 +128,18 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 			if (g.kind === "work") keys.add(g.key);
 			if (g.blockedKey) keys.add(g.blockedKey);
 		}
-		for (const key of keys) {
-			if (now - (infoAt.current.get(key) ?? -Infinity) < INFO_TTL_MS) continue;
+		const load = (key: string, withParent: boolean) => {
+			if (now - (infoAt.current.get(key) ?? -Infinity) < INFO_TTL_MS) return;
 			infoAt.current.set(key, now);
 			void fetchWorkRecord(wolf, key).then((r) => {
-				if (r.ok) setGroupInfo((m) => ({ ...m, [key]: { title: r.data.title || key, stage: r.data.stage || undefined } }));
+				if (!r.ok) return;
+				const partOf = r.data.partOf || undefined;
+				setGroupInfo((m) => ({ ...m, [key]: { title: r.data.title || key, stage: r.data.stage || undefined, partOf } }));
+				// the parent feature: its title and stage head the tree (a feature has no parent of its own to follow)
+				if (partOf && withParent) load(partOf, false);
 			});
-		}
+		};
+		for (const key of keys) load(key, true);
 	}, [obsPool, wolf]);
 
 	// Trailing-debounced refetch of status + pool: event bursts coalesce.
@@ -222,6 +232,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
+	const obsProps = { list: obsPool, pending: poolPending, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup };
 	const content = (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
 			{statusError && !status ? <p className="text-muted-foreground" data-testid="memory-status-error">Memory status unavailable: {statusError}</p> : null}
@@ -266,7 +277,9 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 				</div>
 			)}
 
-			<ObservationsSection observations={{ list: obsPool, pending: poolPending, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup }} />
+			<ObservationsSection scope="work" observations={obsProps} />
+
+			<ObservationsSection scope="den" observations={obsProps} />
 		</div>
 	);
 	if (embedded) return content;
@@ -293,18 +306,27 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		</aside>
 	);
 }
-
-/** The observation pool, grouped into the den and work items; opening a group lists its observations. */
-export function ObservationsSection({ observations }: {
+/**
+ * The observation pool, grouped. `scope="den"` is the Den section (below the work observations; nothing when the den is
+ * empty); `scope="work"` lists the live work-item groups (archived items are left out). Opening a group lists its observations.
+ */
+export function ObservationsSection({ observations, scope = "work" }: {
 	/** The loaded observations (null until the first load), grouped; `open` is the group being read. */
 	observations: { list: PoolObservation[] | null; pending?: PoolPending | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
+	scope?: "den" | "work";
 }) {
 	const list = observations.list;
-	const groups = list ? groupObservations(list) : [];
+	const groups = (list ? liveGroups(groupObservations(list), observations.info) : []).filter((g) => (g.kind === "den") === (scope === "den"));
 	// a group that emptied (consolidated away) falls back to the list
 	const openKey = observations.open && groups.some((g) => g.key === observations.open) ? observations.open : null;
+	if (scope === "den" && groups.length === 0) return null;
+	// the den as it is; work groups as a tree: a feature header, then its notes and its tasks (one level), indented
+	type Row = { header: GroupNode; g?: undefined; nested?: undefined; notes?: undefined } | { header?: undefined; g: ObservationGroup; nested: boolean; notes: boolean };
+	const rows: Row[] = scope === "den" ? groups.map((g) => ({ g, nested: false, notes: false })) : nestGroups(groups, observations.info).flatMap((n): Row[] => n.header
+		? [{ header: n }, ...(n.own ? [{ g: n.own, nested: true, notes: true }] : []), ...n.children.map((g) => ({ g, nested: true, notes: false }))]
+		: n.own ? [{ g: n.own, nested: false, notes: false }] : []);
 	return (
-		<section data-testid="memory-feed">
+		<section data-testid={scope === "den" ? "memory-den" : "memory-feed"}>
 			<div className="mb-1 flex items-center justify-between gap-2">
 				{openKey ? (
 					<button
@@ -318,50 +340,77 @@ export function ObservationsSection({ observations }: {
 						<span className="truncate">{groupLabel(openKey, observations.info)}</span>
 					</button>
 				) : (
-					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
+					<h3 className="text-xs font-medium uppercase text-muted-foreground">{scope === "den" ? "Den" : "Observations"}</h3>
 				)}
 			</div>
-				{list === null ? (
-					<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
-				) : groups.length === 0 ? (
-					<p className="text-xs text-muted-foreground">Nothing captured yet.</p>
-				) : openKey ? (
-					<ul className="flex flex-col gap-2" data-testid="memory-obs-items" data-group={openKey}>
-						{observationsInGroup(list, openKey).map((o) => (
-							<li key={o.id} className="text-xs" data-testid="memory-obs-item">
-								<div className="text-muted-foreground">{o.timestamp}</div>
-								<div className="whitespace-pre-wrap break-words">{o.content}</div>
-							</li>
-						))}
-					</ul>
-				) : (
-					<>
-					{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
+			{list === null ? (
+				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
+			) : groups.length === 0 ? (
+				<p className="text-xs text-muted-foreground">No pending observations.</p>
+			) : openKey ? (
+				<ul className="flex flex-col gap-2" data-testid="memory-obs-items" data-group={openKey}>
+					{observationsInGroup(list, openKey).map((o) => (
+						<li key={o.id} className="text-xs" data-testid="memory-obs-item">
+							<div className="text-muted-foreground">{o.timestamp}</div>
+							<div className="whitespace-pre-wrap break-words">{o.content}</div>
+						</li>
+					))}
+				</ul>
+			) : (
+				<>
+					{scope === "work" && pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 					<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
-						{groups.map((g) => {
-							const info = observations.info[g.key];
-							return (
-								<li key={g.key}>
-									<button
-										type="button"
-										className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-										data-testid={`memory-obs-group-${g.key}`}
-										data-count={g.count}
-										onClick={() => observations.onOpen(g.key)}
-									>
-										<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
-										<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-											{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, observations.info)}{g.blockedCount && g.blockedCount !== g.count ? ` (${g.blockedCount} of ${g.count})` : ""}</span> : null}
-											{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
-											<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
+						{rows.map((row) => {
+							if (row.header) {
+								// feature header: title, chip, total of its own and its tasks' observations; not a button (the own notes are a row beneath)
+								return (
+									<li key={`feature-${row.header.key}`} className="flex items-center gap-1.5 px-1.5 py-1 text-xs" data-testid="memory-obs-feature" data-count={row.header.total}>
+										<span className="min-w-0 truncate font-medium">{groupLabel(row.header.key, observations.info)}</span>
+										<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
+											<WorkIdChip id={row.header.key} />
 										</span>
-									</button>
+										<span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground" data-testid="memory-obs-total">{row.header.total}</span>
+									</li>
+								);
+							}
+							const { g, nested, notes } = row;
+							const info = observations.info[g.key];
+							// title unknown (lookup failed or pending): the chip stands alone instead of repeating the id
+							const titled = notes || g.kind === "den" || (!!info?.title && info.title !== g.key);
+							const chip = g.kind === "work" ? (
+								<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
+									<WorkIdChip id={g.key} />
+								</span>
+							) : null;
+							return (
+								<li key={g.key} className={`flex flex-col rounded transition-colors hover:bg-accent${nested ? " ml-4" : ""}`}>
+									<div className="flex items-center gap-1.5 px-1.5 py-1 text-xs">
+										{!titled || (nested && !notes) ? chip : null}
+										<button
+											type="button"
+											className="flex min-w-0 flex-1 flex-col text-left focus-visible:ring-2 focus-visible:ring-ring"
+											data-testid={`memory-obs-group-${g.key}`}
+											data-count={g.count}
+											onClick={() => observations.onOpen(g.key)}
+										>
+											<span className="flex w-full min-w-0 items-center justify-between gap-2">
+											<span className="min-w-0 truncate">{notes ? "Feature notes" : titled ? groupLabel(g.key, observations.info) : ""}</span>
+											<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+												{info?.stage && !nested ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
+												<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
+												<ChevronRightIcon className="size-3" />
+											</span>
+											</span>
+											{g.blocked ? <span className="block truncate text-[11px] text-amber-600" data-testid="memory-obs-blocked">{blockedLabel(g, observations.info)}{g.blockedCount && g.blockedCount !== g.count ? ` (${g.blockedCount} of ${g.count})` : ""}</span> : null}
+										</button>
+									</div>
+									{titled && chip && !nested ? <div className="px-1.5 pb-1">{chip}</div> : null}
 								</li>
 							);
 						})}
 					</ul>
-					</>
-				)}
+				</>
+			)}
 		</section>
 	);
 }

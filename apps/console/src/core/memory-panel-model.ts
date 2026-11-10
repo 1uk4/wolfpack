@@ -439,5 +439,52 @@ export function pendingWarning(p: PoolPending | undefined | null): string | null
 export interface GroupInfo {
 	title: string;
 	stage?: string;
+	/** The feature this item is part of (its id). */
+	partOf?: string;
 }
 export const groupLabel = (key: string, info: Readonly<Record<string, GroupInfo | undefined>>): string => (key === DEN_GROUP ? "Den" : info[key]?.title || key);
+
+/** Only live groups: a work item that is archived is done; its leftover observations are not listed. The den is always live. */
+export const liveGroups = (groups: readonly ObservationGroup[], info: Readonly<Record<string, GroupInfo | undefined>>): ObservationGroup[] =>
+	groups.filter((g) => g.kind === "den" || info[g.key]?.stage !== "archived");
+
+/** One top-level row of the tree: a feature header with its tasks beneath, or a plain group (`header` false). */
+export interface GroupNode {
+	/** The feature id (header) or the group's own key. */
+	key: string;
+	header: boolean;
+	/** Pending observations of the node and its tasks. */
+	total: number;
+	/** Observations bound directly to this key (undefined for a header built only from its tasks). */
+	own?: ObservationGroup;
+	children: ObservationGroup[];
+}
+
+/**
+ * Nest work groups under their feature (one level). A feature with live tasks gets a header even without
+ * observations of its own. Items without a known parent stay top-level. Rows keep the order of first appearance;
+ * the den is not a work group and is left to the caller.
+ */
+export function nestGroups(groups: readonly ObservationGroup[], info: Readonly<Record<string, GroupInfo | undefined>>): GroupNode[] {
+	const nodes = new Map<string, GroupNode>();
+	const node = (key: string): GroupNode => {
+		let n = nodes.get(key);
+		if (!n) nodes.set(key, (n = { key, header: false, total: 0, children: [] }));
+		return n;
+	};
+	for (const g of groups) {
+		const p = info[g.key]?.partOf;
+		const parent = p && p !== g.key && info[p] ? p : undefined;
+		if (parent) {
+			const n = node(parent);
+			n.children.push(g);
+			n.total += g.count;
+		} else {
+			const n = node(g.key);
+			n.own = g;
+			n.total += g.count;
+		}
+	}
+	for (const n of nodes.values()) if (n.children.length) n.header = true;
+	return [...nodes.values()];
+}

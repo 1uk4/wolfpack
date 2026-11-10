@@ -148,6 +148,8 @@ let root: Root | null = null;
 /** POSTs the page made (card answers, submits), bodies parsed. */
 let posts: { url: string; body: any }[] = [];
 
+/** When set, the thread GET (what useBarCards polls) returns these pending cards: a paged ask only reaches the note composer that way. */
+let pagedPending: unknown[] | null = null;
 async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?: boolean } = {}) {
 	posts = [];
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -156,6 +158,7 @@ async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?:
 			posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
 			return new Response(JSON.stringify({ disposition: "queued" }), { status: 200 });
 		}
+		if (/\/threads\/home\?limit=/.test(url) && pagedPending) return Response.json({ messages: [], pendingCards: pagedPending });
 		if (opts.inFlight && url.includes("/stream")) return new Promise<Response>(() => {}); // a turn that never ends
 		if (url.includes("/api/stt/token")) {
 			return tokenStatus === 200
@@ -274,6 +277,7 @@ afterEach(async () => {
 	root = null;
 	tokenStatus = 200;
 	FakeWS.last = null;
+	pagedPending = null;
 	store.clear();
 	document.body.innerHTML = "";
 });
@@ -384,7 +388,7 @@ describe("ThreadChat dictation", () => {
 		assert.match(toggle().textContent ?? "", /Dictation needs a Deepgram key/);
 	});
 
-	it("Send while recording finishes the run first: the final tail is in the submitted message", async () => {
+	it("Send while recording finishes the run first and does not send; the next Send submits the field with the final tail", async () => {
 		await mount(new CardClient(null));
 		await dictate("typed"); // linkedom cannot type: a first run seeds the composer
 		const ws = await recording("spoken tail");
@@ -394,12 +398,18 @@ describe("ThreadChat dictation", () => {
 		});
 		await closeSocket(ws);
 		await settle();
+		assert.equal(posts.filter((p) => !p.url.includes("abort")).length, 0, "first press does not send");
+		assert.equal(composer().value, "typed spoken tail");
+		await act(async () => {
+			composer().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+		});
+		await settle();
 		const sent = posts.filter((p) => !p.url.includes("abort"));
 		assert.equal(sent.length, 1);
 		assert.match(JSON.stringify(sent[0]!.body), /typed spoken tail/);
 	});
 
-	it("popped out: Enter while the floating chat's run is live sends the text with the dictated tail and leaves no draft behind", async () => {
+	it("popped out: Enter while the floating chat's run is live stops it and fills the composer without sending; the next Enter sends", async () => {
 		// A running turn makes Enter a steer, whose POST succeeds in the fake (a plain send would hit the unmocked stream and be restored).
 		await mount(new CardClient(null), { poppedOut: true, inFlight: true });
 		await dictate("typed"); // the bar's run (the page hook is off while popped out); the words reach the composer via the draft
@@ -407,6 +417,10 @@ describe("ThreadChat dictation", () => {
 		const ws = await recording("spoken tail");
 		await press(composer(), { key: "Enter" });
 		await closeSocket(ws);
+		await settle(400);
+		assert.equal(posts.filter((p) => p.url.includes("/submit")).length, 0, "first press does not send");
+		assert.equal(composer().value, "typed spoken tail");
+		await press(composer(), { key: "Enter" });
 		await settle(400);
 		const sent = posts.filter((p) => p.url.includes("/submit"));
 		assert.equal(sent.length, 1);
@@ -496,6 +510,10 @@ describe("ThreadChat dictation", () => {
 		assert.equal(pageComposers(), 0);
 		assert.match(q('[data-testid="chat-bar-attachments-waiting"]')?.textContent ?? "", /^1 attachment waiting in the thread$/);
 		await typeIn(barTa()!, "words only");
+		await press(barTa()!, { key: "Enter" }); // the run is live: this press only stops it
+		await closeSocket(FakeWS.last!);
+		await settle(100);
+		assert.equal(posts.filter((p) => p.url.includes("/submit")).length, 0, "first press does not send");
 		await press(barTa()!, { key: "Enter" });
 		await settle(100);
 		const sent = posts.filter((p) => p.url.includes("/submit"));
@@ -519,6 +537,154 @@ describe("ThreadChat dictation", () => {
 		const answers = posts.filter((p) => p.url.includes("/cards/"));
 		assert.equal(answers.length, 1);
 		assert.equal(answers[0]!.body.answers.why.value, "because and more");
+	});
+
+	it("dictating while the ask card's note composer is open fills the note, not the hidden draft, and Submit while recording only stops the run (tail lands in the note); the next press sends it with the answers", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		assert.equal(q('[data-note-mode="true"]') !== null, true, "note mode");
+		await dictate("first words");
+		assert.equal(composer().value, "first words", "the note field shows the words");
+		await settle(500);
+		assert.equal(DRAFT() ?? "", "", "the normal draft stays empty");
+		const ws = await recording("and the tail");
+		await act(async () => void q('[data-note-mode="true"] form')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+		await closeSocket(ws);
+		await settle();
+		assert.equal(posts.some((p) => p.url.endsWith("/cards/" + CALL + "/submit")), false, "the first press only stops dictation");
+		assert.equal(composer().value, "first words and the tail");
+		await act(async () => void q('[data-note-mode="true"] form')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+		await settle();
+		const submit = posts.find((p) => p.url.endsWith("/cards/" + CALL + "/submit"));
+		assert.equal(submit?.body.note.text, "first words and the tail");
+		assert.equal(posts.some((p) => p.url.endsWith("/threads/home/submit")), false, "no separate chat message");
+		assert.equal(DRAFT() ?? "", "");
+	});
+
+	it("with the floating-chat provider mounted (the real app), the note box's Dictate still fills the note, not the hidden draft", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED), { poppedOut: true });
+		await settle(80);
+		assert.equal(q('[data-note-mode="true"]') !== null, true, "note mode");
+		await dictate("by voice");
+		await settle(400);
+		assert.equal(composer().value, "by voice", "the note field shows the words");
+		assert.equal(DRAFT() ?? "", "", "the normal draft stays empty");
+	});
+
+	it("a drag over anywhere on the page is taken (so the browser never opens the file), and a drop outside the chat column (e.g. on the floating bar's area) still goes to the open answer", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		await click(q('[data-testid="ask-free"]')!);
+		await settle(30);
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-8", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		const dt = { types: ["Files"], files: [png] };
+		const over = Object.assign(new dom.window.Event("dragover", { bubbles: true, cancelable: true }), { dataTransfer: dt });
+		await act(async () => void document.body.dispatchEvent(over));
+		assert.equal(over.defaultPrevented, true, "dragover is taken anywhere");
+		await act(async () => void document.body.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: dt })));
+		await settle(100);
+		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1, "the chip sits in the open answer");
+		globalThis.fetch = prev;
+	});
+
+	it("an image pasted outside any composer (a card answer field) goes to the open answer", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		await click(q('[data-testid="ask-free"]')!);
+		await settle(30);
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-7", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		const paste = Object.assign(new dom.window.Event("paste", { bubbles: true, cancelable: true }), { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => png }] } });
+		await act(async () => void document.body.dispatchEvent(paste));
+		await settle(100);
+		assert.equal(paste.defaultPrevented, true);
+		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1);
+		globalThis.fetch = prev;
+	});
+
+	it("an image dropped while an answer field is open attaches to that question's answer, not the page composer or the note", async () => {
+		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
+		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
+		await mount(new CardClient(PAGED));
+		await settle(80);
+		await click(q('[data-testid="ask-free"]')!);
+		await settle(30);
+		assert.ok(q('[data-testid="ask-inline-composer"]'), "the answer field is open");
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).includes("/attachments") ? Response.json({ id: "up-9", name: "p.png", mimeType: "image/png", size: 4 }, { status: 201 }) : prev(input, init)) as typeof fetch;
+		const png = new File([new Uint8Array([137, 80, 78, 71])], "p.png", { type: "image/png" });
+		await act(async () => void q('[data-testid="thread-chat"]')!.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: { types: ["Files"], files: [png] } })));
+		await settle(100);
+		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1, "the chip sits in the open answer");
+		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1, "and nowhere else");
+		globalThis.fetch = prev;
+	});
+
+	it("Send while dictating shows a loader on the send button until the final transcript lands, then the field holds the text and nothing is sent", async () => {
+		await mount(new CardClient(null));
+		const ws = await recording("spoken");
+		const sendBtn = () => q('form[data-testid="composer"] button[type="submit"]')!;
+		assert.equal(sendBtn().getAttribute("data-finishing"), null, "no loader while recording");
+		await act(async () => void q('form[data-testid="composer"]')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+		assert.equal(sendBtn().getAttribute("data-finishing"), "true", "loader while the transcript is processing");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(sendBtn().getAttribute("data-finishing"), null, "loader gone once the words landed");
+		assert.equal(composer().value, "spoken");
+		assert.deepEqual(posts, [], "nothing sent");
+	});
+
+	it("the recording marker sits in the composer while recording, becomes a spinner while the run stops, and is gone once the words land", async () => {
+		await mount(new CardClient(null));
+		const marker = () => q('[data-testid="recording-marker"]');
+		assert.equal(marker(), null);
+		const ws = await recording("spoken");
+		assert.equal(marker()?.getAttribute("data-state"), "live");
+		await click(toggle()); // Stop
+		assert.equal(marker()?.getAttribute("data-state"), "stopping");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(marker(), null);
+	});
+
+	it("Enter pressed with focus on the page body (not the field) while dictating stops the run once, the words land in the composer and nothing is sent", async () => {
+		await mount(new CardClient(null));
+		const ws = await recording("spoken");
+		(document.activeElement as HTMLElement | null)?.blur?.();
+		const enter = () => act(async () => void document.body.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Enter" })));
+		await enter();
+		await enter(); // a second press while it settles does nothing
+		assert.equal(q('form[data-testid="composer"] button[type="submit"]')!.getAttribute("data-finishing"), "true", "spinner while it settles");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(composer().value, "spoken");
+		assert.equal(q('[data-testid="dictation-bar"]'), null, "the run ended");
+		assert.deepEqual(posts, [], "nothing sent");
+	});
+
+	it("Dictate moves focus into the composer", async () => {
+		await mount(new CardClient(null));
+		let focused = 0;
+		composer().focus = () => void focused++; // linkedom has no real focus tracking
+		const ws = await recording();
+		assert.ok(focused >= 1, "the composer was focused when Dictate started");
+		await click(toggle());
+		await closeSocket(ws);
+		await settle();
 	});
 
 	it("the wolfpack:kbd-toggle-dictation event starts and stops a run (⌘D)", async () => {
@@ -556,14 +722,35 @@ describe("ThreadChat dictation", () => {
 		assert.match(JSON.stringify(answers[0]!.body.answers.envs), /canary ring two/);
 	});
 
-	it("multi Other: Enter (Add) while dictating takes the dictated tail into the one entry, with no stray pending text", async () => {
+	it("free-text: Enter while dictating only stops the run (no newline) and the tail lands; the next Enter is the normal newline", async () => {
+		await mount(new CardClient(MIXED));
+		const field = q('[data-testid="card-text"]') as HTMLTextAreaElement;
+		await focus(field);
+		const ws = await recording("spoken answer");
+		const enterEv = () => Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Enter" });
+		const first = enterEv();
+		await act(async () => void field.dispatchEvent(first));
+		assert.equal(first.defaultPrevented, true, "first Enter is claimed, no newline");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(field.value, "spoken answer");
+		const next = enterEv();
+		await act(async () => void field.dispatchEvent(next));
+		assert.equal(next.defaultPrevented, false, "the next Enter keeps its normal (newline) behaviour");
+	});
+
+	it("multi Other: Enter while dictating only stops the run; the tail lands in the box and the next Enter adds the one entry", async () => {
 		await mount(new CardClient({ tool: "ask_user_question", fields: [{ id: "envs", kind: "multi", label: "Which?", allowOther: true, options: [{ label: "dev", value: "dev" }] }] }));
 		const other = q('[data-testid="card-other"]') as HTMLInputElement;
 		await focus(other);
 		const ws = await recording("canary ring");
-		// Add is still disabled (the transcript is deferred until the run ends); Enter in the box adds.
+		// Add is still disabled (the transcript is deferred until the run ends); the first Enter only stops the run.
 		await press(other, { key: "Enter" });
 		await closeSocket(ws);
+		await settle();
+		assert.equal(document.querySelectorAll('[data-testid="card-option"][data-custom="true"]').length, 0, "first Enter adds nothing");
+		assert.equal(other.value, "canary ring");
+		await press(other, { key: "Enter" });
 		await settle();
 		const rows = [...document.querySelectorAll('[data-testid="card-option"][data-custom="true"]')];
 		assert.equal(rows.length, 1);
@@ -576,12 +763,16 @@ describe("ThreadChat dictation", () => {
 		assert.deepEqual(answers[0]!.body.answers.envs, { value: ["canary ring"], other: ["canary ring"] });
 	});
 
-	it("Enter while busy and dictating finishes the run and steers the tail (the button stays Stop)", async () => {
+	it("Enter while busy and dictating stops the run and fills the field without steering; the next Enter steers (the button stays Stop)", async () => {
 		await mount(new CardClient(null), { inFlight: true });
 		const ws = await recording("spoken steer");
 		assert.equal(document.querySelector('[data-testid="composer"] button[aria-label="Stop"]')?.getAttribute("aria-label"), "Stop");
 		await press(composer(), { key: "Enter" });
 		await closeSocket(ws);
+		await settle();
+		assert.equal(posts.filter((p) => p.url.includes("/submit")).length, 0, "first press does not steer");
+		assert.equal(composer().value, "spoken steer");
+		await press(composer(), { key: "Enter" });
 		await settle();
 		assert.equal(posts.filter((p) => p.url.includes("abort")).length, 0, "no abort");
 		const sent = posts.filter((p) => p.url.includes("/submit"));

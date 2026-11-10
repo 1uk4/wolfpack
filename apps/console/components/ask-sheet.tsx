@@ -83,8 +83,21 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 	const skip = (id: string) => { clear(id); setSkippedIds((s) => new Set(s).add(id)); };
 	const unskip = (id: string) => setSkippedIds((s) => { const n = new Set(s); n.delete(id); return n; });
 	/** Open this question's composer in place. */
-	const reply = (id: string) => setAnswering({ callId: pc.callId, qid: id });
+	// The composer and the field are one text: opening it on an answered field starts from the bound answer (new words, typed or dictated, append to it).
+	const reply = (id: string) => {
+		const f = fields.find((x) => x.id === id);
+		const bound = f?.kind === "free-text" ? (typeof draft[id]?.value === "string" ? (draft[id]!.value as string) : "") : f?.kind === "single" ? (otherText(draft[id]) ?? "") : "";
+		if (bound !== "") inline.seed(id, bound);
+		setAnswering({ callId: pc.callId, qid: id });
+	};
 	const inline = useInlineAnswers(target, session.refetch);
+	/** A draft that only repeats the bound answer (seeded when the composer opened) is not "unsent". */
+	const unsentOf = (f: CardField): InlineDraft | undefined => {
+		const d = inline.drafts[f.id];
+		if (!d || d.atts.length > 0) return d;
+		const bound = f.kind === "free-text" ? draft[f.id]?.value : f.kind === "single" ? otherText(draft[f.id]) : undefined;
+		return typeof bound === "string" && d.text === bound ? undefined : d;
+	};
 	const composingId = answering !== null && answering.callId === pc.callId ? answering.qid : null;
 	// A click anywhere outside the open composer closes it (capture phase, so an option picked in the same click still gets it); the draft stays.
 	useEffect(() => {
@@ -220,7 +233,7 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 							{skipped && <span data-testid="ask-skipped" className="mb-1 block font-ui text-[11px] text-muted-foreground">Skipped</span>}
 							<div data-testid="ask-choices" role={skipped ? "group" : undefined} aria-labelledby={skipped ? labelId : undefined} aria-disabled={skipped ? true : undefined}>
 								{/* A click on a greyed choice only brings the question back; it never selects. */}
-								<Control field={f} labelId={labelId} qn={`Q${n}`} composer={composer(f)} unsent={inline.drafts[f.id]} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => { if (skipped) return unskip(f.id); syncCustoms(f, a); set(f.id, a); }} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
+								<Control field={f} labelId={labelId} qn={`Q${n}`} composer={composer(f)} unsent={unsentOf(f)} onReply={() => (skipped ? unskip(f.id) : reply(f.id))} value={draft[f.id]} onChange={(a) => { if (skipped) return unskip(f.id); syncCustoms(f, a); set(f.id, a); }} onClear={() => (skipped ? unskip(f.id) : clear(f.id))} />
 							</div>
 							{imagesOf(draft[f.id]).length > 0 && <Images target={target} ids={imagesOf(draft[f.id])} />}
 							</div>

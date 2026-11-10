@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
-import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { DictationBar, joinDictation, setDictationFocus, useDictation, recordingAt } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
@@ -93,8 +93,9 @@ export function DraftShell({
 	 * which reads its REF mirror, so the post-await timing of React's
 	 * re-render cannot eat the dictated tail. */
 	const handleSend = () => {
+		// Submit while dictating only stops the run (the words land in the field); the next press sends.
 		if (dictation.active) {
-			void dictation.finish().then(onSend);
+			void dictation.finish();
 			return;
 		}
 		onSend();
@@ -103,6 +104,16 @@ export function DraftShell({
 	 * the keyboard from the stop — falling edge of `active` only. */
 	const attachedRow = useAttachedStripRow("", ""); // phone: the floating chat's live run has no dock here
 	const composerInputRef = useRef<HTMLTextAreaElement>(null);
+	const recordingHere = recordingAt(null, dictation?.phase ?? "idle");
+	useEffect(() => {
+		setDictationFocus(() => {
+			const el = composerInputRef.current;
+			if (!el) return;
+			el.focus();
+			try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+		});
+		return () => setDictationFocus(null);
+	}, []);
 	const dictationWasActiveRef = useRef(false);
 	useEffect(() => {
 		if (dictation.active) {
@@ -152,6 +163,8 @@ export function DraftShell({
 										onSend={handleSend}
 										onStop={() => {}}
 										canSend={canSend}
+										finishing={dictation.phase === "stopping"}
+										recording={recordingHere}
 										inputRef={composerInputRef}
 										autoFocus
 										onEscape={dictation.active ? dictation.cancel : undefined}

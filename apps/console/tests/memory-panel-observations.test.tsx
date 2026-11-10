@@ -14,9 +14,22 @@ let pool: Obs[] = [];
 let poolStatus = 200;
 let poolPending: { count: number; oldestAgeMs?: number } | undefined;
 let treeFetches = 0;
+// The tree answer: a live feature with an own note, a live task, an unknown-title task, a task whose stage is archived,
+// a feature with only archived counts, an archived-stage feature with nothing live, a fully archived loose item, and the den.
 const tree = () => ({
-	features: [{ id: "work-d-f", title: "Auth feature", stage: "approved", own: { pending: 1, archived: 0 }, tasks: [{ id: "work-d-a", title: "Fix the login", pending: 2, archived: 1 }] }],
-	other: [],
+	features: [
+		{
+			id: "work-d-f", title: "Auth feature", stage: "approved", own: { pending: 1, archived: 7 },
+			tasks: [
+				{ id: "work-d-a", title: "Fix the login", stage: "in_build", pending: 2, archived: 1 },
+				{ id: "work-d-u", title: "work-d-u", pending: 1, archived: 0 },
+				{ id: "work-d-old", title: "Old shipped thing", stage: "archived", pending: 3, archived: 0 },
+			],
+		},
+		{ id: "work-d-done", title: "Done feature", stage: "approved", own: { pending: 0, archived: 5 }, tasks: [{ id: "work-d-t", title: "Done task", pending: 0, archived: 5 }] },
+		{ id: "work-d-gone", title: "Gone feature", stage: "archived", own: { pending: 4, archived: 0 }, tasks: [] },
+	],
+	other: [{ id: "work-d-x", pending: 0, archived: 2 }],
 	den: { pending: 2 },
 });
 const nodes: Record<string, unknown> = {
@@ -95,41 +108,64 @@ afterEach(async () => {
 });
 
 describe("observation tree in the Memory panel", () => {
-	it("shows features with counts, tasks only after expanding, then the Den", async () => {
+	it("shows live observations only: Pool, then Observations with the Den first and divided, features with notes and indented tasks, no archived anything", async () => {
 		await mount();
-		const feature = q('[data-testid="memory-obs-group-work-d-f"]')!;
-		assert.match(feature.textContent!, /Auth feature/);
-		assert.match(feature.textContent!, /3 pending · 1 archived/);
-		assert.equal(q('[data-testid="memory-obs-group-work-d-a"]'), null);
-		await click(q('[data-testid="memory-obs-toggle-work-d-f"]')!);
-		assert.match(q('[data-testid="memory-obs-group-work-d-a"]')!.textContent!, /Fix the login.*2 pending · 1 archived/);
-		await click(q('[data-testid="memory-obs-toggle-work-d-f"]')!);
-		assert.equal(q('[data-testid="memory-obs-group-work-d-a"]'), null);
-		assert.match(q('[data-testid="memory-obs-group-den"]')!.textContent!, /Den.*2 pending/);
+		assert.deepEqual(qa('[data-testid="memory-pool"], [data-testid="memory-feed"]').map((e) => e.getAttribute("data-testid")), ["memory-pool", "memory-feed"]);
+		const list = q('[data-testid="memory-obs-groups"]')!;
+		const lis = [...list.children] as HTMLElement[];
+		// Den first with its divider; no separate Den section
+		assert.equal(lis[0]!.getAttribute("data-testid"), "memory-den");
+		assert.match(lis[0]!.className, /border-b/);
+		assert.match(lis[0]!.textContent!, /Den\s*2/);
+		assert.equal(qa('section[data-testid="memory-den"]').length, 0);
+		// feature header: title, chip, total pending (own 1 + live tasks 2 + 1; the archived-stage task's 3 are left out)
+		const header = q('[data-testid="memory-obs-feature"]')!;
+		assert.equal(qa('[data-testid="memory-obs-feature"]').length, 1);
+		assert.match(header.textContent!, /Auth feature/);
+		assert.equal(header.querySelector('[data-work-id="work-d-f"]') !== null, true);
+		assert.equal(header.getAttribute("data-count"), "4");
+		// beneath it: Feature notes, then the live tasks, indented; the raw id is not repeated as a subtitle
+		assert.deepEqual(lis.slice(2).map((l) => l.querySelector("button")!.getAttribute("data-testid")), ["memory-obs-group-work-d-f", "memory-obs-group-work-d-a", "memory-obs-group-work-d-u"]);
+		assert.match(lis[2]!.textContent!, /Feature notes\s*1/);
+		const task = q('[data-testid="memory-obs-group-work-d-a"]')!;
+		assert.match(task.closest("li")!.className, /ml-4/);
+		assert.match(task.textContent!, /Fix the login\s*2/);
+		assert.equal(task.closest("li")!.querySelector('[data-work-id="work-d-a"]') !== null, true);
+		assert.equal(task.textContent!.includes("work-d-a"), false);
+		assert.equal(task.textContent!.includes("in build"), false);
+		// unknown title: the chip alone
+		const unknown = q('[data-testid="memory-obs-group-work-d-u"]')!;
+		assert.equal(unknown.textContent!.includes("work-d-u"), false);
+		assert.equal(unknown.closest("li")!.querySelector('[data-work-id="work-d-u"]') !== null, true);
+		// nothing archived: no counts, no archived-stage items, no all-archived groups
+		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.toLowerCase().includes("archived"), false);
+		for (const id of ["work-d-old", "work-d-done", "work-d-t", "work-d-gone", "work-d-x"]) assert.equal(q(`[data-testid="memory-obs-group-${id}"]`), null);
+		// clicking a chip does not open the row
+		await click(task.closest("li")!.querySelector('[data-work-id="work-d-a"]')!);
+		assert.equal(q('[data-testid="memory-obs-items"]'), null);
 	});
 
-	it("tapping a task replaces the list with its pending then archived observations; back returns", async () => {
+	it("tapping a task lists only its pending observations; back returns", async () => {
 		await mount();
-		await click(q('[data-testid="memory-obs-toggle-work-d-f"]')!);
 		await click(q('[data-testid="memory-obs-group-work-d-a"]')!);
 		assert.equal(q('[data-testid="memory-obs-groups"]'), null);
 		const items = qa('[data-testid="memory-obs-item"]');
-		assert.deepEqual(items.map((i) => i.getAttribute("data-state")), ["pending", "pending", "archived"]);
+		assert.equal(items.length, 2);
 		assert.match(items[0]!.textContent!, /task late/);
-		assert.match(items[2]!.textContent!, /task done/);
-		assert.match(items[2]!.textContent!, /written → Record of work-d-a/);
-		assert.match(q('[data-testid="memory-obs-truncated"]')!.textContent!, /not shown/);
+		assert.equal(q('[data-testid="memory-feed"]')!.textContent!.includes("task done"), false);
+		assert.equal(q('[data-testid="memory-obs-truncated"]'), null);
 		assert.match(q('[data-testid="memory-obs-back"]')!.textContent!, /Fix the login/);
 		await click(q('[data-testid="memory-obs-back"]')!);
 		assert.notEqual(q('[data-testid="memory-obs-groups"]'), null);
 	});
 
-	it("keeps the blocked reason on the blocked work item's row and warns about an old backlog", async () => {
-		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-d-f" }), blocked: "consolidation-failed" }];
+	it("keeps the blocked label on its own line inside the blocked row's button and warns about an old backlog", async () => {
+		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-d-a" }), blocked: "consolidation-failed" }];
 		poolPending = { count: 1, oldestAgeMs: 25 * 3_600_000 };
 		await mount();
 		assert.match(q('[data-testid="memory-obs-pending-warning"]')!.textContent!, /waited over 25 h/);
-		assert.match(q('[data-testid="memory-obs-group-work-d-f"]')!.textContent!, /consolidation failed/);
+		const blocked = q('[data-testid="memory-obs-group-work-d-a"]')!.querySelector('[data-testid="memory-obs-blocked"]')!;
+		assert.match(blocked.textContent!, /consolidation failed/);
 		assert.equal(q('[data-testid="memory-obs-group-den"]')!.querySelector('[data-testid="memory-obs-blocked"]'), null);
 	});
 
@@ -147,3 +183,4 @@ describe("observation tree in the Memory panel", () => {
 		assert.equal(treeFetches > before, true);
 	});
 });
+

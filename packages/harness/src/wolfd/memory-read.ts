@@ -201,7 +201,7 @@ export async function fetchWorkSources(endpoint: string | undefined, token: stri
   if (!base || !token) return undefined;
   try {
     const pages = await Promise.all(domains.map(async (d) => {
-      const res = await fetch(`${base}/work?domain=${encodeURIComponent(d)}`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
+      const res = await fetch(`${base}/work?domain=${encodeURIComponent(d)}&fields=summary`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { items?: Array<ApiWorkItem & { assignee?: string }> };
       if (!Array.isArray(data.items)) throw new Error("no items");
@@ -259,7 +259,7 @@ export async function readWorkList(domain: string, includeGraduated: boolean, wo
   const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
   if (!endpoint || !work.token) return { kind: "unconfigured" };
   try {
-    const res = await fetch(`${endpoint}/work?domain=${encodeURIComponent(domain)}`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
+    const res = await fetch(`${endpoint}/work?domain=${encodeURIComponent(domain)}&fields=summary${includeGraduated ? "" : "&archived=0"}`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
     if (!res.ok) return { kind: "error", message: `HTTP ${res.status}` };
     const data = (await res.json()) as { items?: ApiWorkItem[] };
     if (!Array.isArray(data.items)) return { kind: "error", message: "unexpected response" };
@@ -337,7 +337,7 @@ function boundItemCache(): void {
 async function fetchChunk(base: string, token: string, domain: string, ids: string[]): Promise<void> {
   let found: Map<string, LookedUp> | null = null;
   try {
-    const res = await fetch(`${base}/work?domain=${encodeURIComponent(domain)}&ids=${ids.map(encodeURIComponent).join(",")}`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
+    const res = await fetch(`${base}/work?domain=${encodeURIComponent(domain)}&fields=summary&ids=${ids.map(encodeURIComponent).join(",")}`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
     if (res.ok) {
       const data = (await res.json()) as { items?: ApiWorkItem[] };
       if (Array.isArray(data.items)) {

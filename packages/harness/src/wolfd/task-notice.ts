@@ -45,7 +45,7 @@ export function workApiReader(work: { endpoint?: string; token?: string }): Task
     async children(domain, featureId) {
       const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
       if (!endpoint || !work.token) return [];
-      const res = await fetch(`${endpoint}/work?domain=${encodeURIComponent(domain)}&partOf=${encodeURIComponent(featureId)}`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${endpoint}/work?domain=${encodeURIComponent(domain)}&partOf=${encodeURIComponent(featureId)}&fields=summary`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(3000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { items?: WorkItemLite[] };
       return (data.items ?? []).filter((i) => typeof i.id === "string" && i.partOf === featureId);

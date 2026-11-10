@@ -44,10 +44,10 @@ describe("fetchWorkSources scoping", () => {
   it("asks for one domain, or one request per domain merged, never the whole list; any failure is undefined", async () => {
     const { url, paths } = await recorder();
     expect(await fetchWorkSources(url, "tok", ["a"])).toEqual([{ id: "w-a", domain: "a" }]);
-    expect(paths).toEqual(["/work?domain=a"]);
+    expect(paths).toEqual(["/work?domain=a&fields=summary"]);
     paths.length = 0;
     expect(await fetchWorkSources(url, "tok", ["a", "b"])).toEqual([{ id: "w-a", domain: "a" }, { id: "w-b", domain: "b" }]);
-    expect([...paths].sort()).toEqual(["/work?domain=a", "/work?domain=b"]);
+    expect([...paths].sort()).toEqual(["/work?domain=a&fields=summary", "/work?domain=b&fields=summary"]);
     expect(await fetchWorkSources(url, "tok", ["a", "bad"])).toBeUndefined();
   });
 });

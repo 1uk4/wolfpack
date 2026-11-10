@@ -35,6 +35,35 @@ describe("withPoolLock", () => {
     expect(await withPoolLock(d, async () => "ran", { staleMs: 30_000 })).toBe("ran");
   });
 
+  it("lets only one of several waiters on the same stale lock hold it at a time", async () => {
+    const d = den();
+    mkdirSync(join(d, ".memory", "pool"), { recursive: true });
+    writeFileSync(lockFile(d), "999999");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockFile(d), old, old);
+    let holders = 0;
+    let maxHolders = 0;
+    await Promise.all(
+      Array.from({ length: 8 }, () =>
+        withPoolLock(d, async () => {
+          holders++;
+          maxHolders = Math.max(maxHolders, holders);
+          await new Promise((r) => setTimeout(r, 15));
+          holders--;
+        }, { staleMs: 30_000 }),
+      ),
+    );
+    expect(maxHolders).toBe(1);
+  });
+
+  it("does not remove a lock another holder took while its section ran", async () => {
+    const d = den();
+    await withPoolLock(d, async () => {
+      writeFileSync(lockFile(d), "someone-else");
+    });
+    expect(readFileSync(lockFile(d), "utf-8")).toBe("someone-else");
+  });
+
   it("waits on a fresh lock until it is released", async () => {
     const d = den();
     mkdirSync(join(d, ".memory", "pool"), { recursive: true });

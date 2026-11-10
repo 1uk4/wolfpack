@@ -278,6 +278,7 @@ async function writeToPool(
   bound: { taskId: string; featureId?: string } | null = null,
   defaultDomain?: string,
   generalToDen = false,
+  poolLock = false,
 ): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
@@ -297,7 +298,9 @@ async function writeToPool(
       })() : {}),
     }) + "\n"
   );
-  await withPoolLock(wolfDen, () => appendFile(poolFile, lines.join("")));
+  // The lock exists for subagents writing the parent's pool (memory.subagentMemory: on); off, a plain append as at the base.
+  if (poolLock) await withPoolLock(wolfDen, () => appendFile(poolFile, lines.join("")));
+  else await appendFile(poolFile, lines.join(""));
 }
 
 function renderSplitResult(
@@ -487,10 +490,10 @@ export default function createMemoryExtension(
       if (!opts.final) return;
       const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
       if (!text) return;
-      const result = await observe({ engine: getEngine(), chunkText: `[assistant]\n${text}`, mode: "conversation", domainContext: domainContext || undefined });
+      const result = await observe({ engine: getEngine(), chunkText: `[assistant]\n${text}`, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
         const bound = await subTag(sub);
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true);
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
         mem.observed(result.observations, bound, ctx.conversationId);
       }
       return;
@@ -539,10 +542,10 @@ export default function createMemoryExtension(
     let at = watermark.lastEntryId;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined });
+      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
         const bound = sub ? await subTag(sub) : await readBoundTask(ctx); // re-read every chunk, never cached
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true);
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
         mem.observed(result.observations, bound, ctx.conversationId);
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
@@ -682,6 +685,7 @@ export default function createMemoryExtension(
       kbRoots: kbRoots ?? undefined,
       workStore: recordStore(),
       ...(config.workLog ? { workLog: config.workLog } : {}),
+      ...(config.subagentMemory === "on" ? { poolLock: true } : {}),
       ...(config.engine ? { engine: config.engine } : {}),
       defaultDomain,
       domains,

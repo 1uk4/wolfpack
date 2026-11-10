@@ -2,8 +2,8 @@
  * Ship distill: when a task ships, one model call turns its log (the task's `## Record`) into at most 5 lines
  * of its feature's Record, exactly once.
  *
- * The once-only marker is carried by the lines' ids: every appended line has the id `distilled:<taskId>` (plus a
- * unique `distilled:<taskId>:<n>`), so it lands in the same atomic hub append as the lines themselves and shows
+ * The once-only marker is carried by the lines' ids: the lines of the LAST group carry `distilled:<taskId>` (every
+ * line also has a stable `distilled:<taskId>:<kind>:<n>`), so the marker means every group landed; it shows
  * up in the stored `<!-- src:… -->` comment. The hub dedupes a line whose ids are all present, so a racing second
  * ship adds nothing, and the check below (an id in the feature Record) stops a later ship before any model call.
  * (A literal `<!-- distilled:… -->` cannot be sent: the hub refuses comment markers in line text.)
@@ -57,7 +57,7 @@ export async function distillTaskToFeature(opts: {
     const marker = distilledId(taskId);
     const rec = extractRecord(feature.body) ?? "";
     const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`src:[^>]*${esc}(?=[,:\\s])`).test(rec)) {
+    if (new RegExp(`src:[^>]*${esc}(?=[,\\s])`).test(rec)) {
       return { ok: true, status: "already", lines: 0 };
     }
 
@@ -78,12 +78,16 @@ export async function distillTaskToFeature(opts: {
       const r = await appendCompacting({ store, engine, id: feature.id, kind: feature.kind, src: opts.src, group: "Changes", lines: [{ at, src: opts.src, kind: "change", text: `${taskId}: nothing durable to add`, ids: [marker] }] });
       return r.ok ? { ok: true, status: "marker-only", lines: 0 } : { ok: false, reason: `append failed: ${r.code}` };
     }
-    // One append per group (the hub places a call's lines under one heading); the marker id is on every line.
-    let n = 0;
-    for (const group of [...new Set(lines.map((l) => l.group))]) {
+    // One append per group (the hub places a call's lines under one heading). Each line has a stable per-group id
+    // (`distilled:<task>:<kind>:<n>`), so a retry after a partial failure is deduped by the hub. The completion marker
+    // `distilled:<task>` goes only on the LAST group's lines, so "already" means every group was written.
+    const groups = [...new Set(lines.map((l) => l.group))];
+    for (const [gi, group] of groups.entries()) {
+      const last = gi === groups.length - 1;
+      const kind = kindOfGroup(group);
       const batch: RecordAppendLine[] = lines
         .filter((l) => l.group === group)
-        .map((l) => ({ at, src: opts.src, kind: kindOfGroup(group), text: l.text.slice(0, MAX_TEXT), ids: [marker, `${marker}:${++n}`] }));
+        .map((l, i) => ({ at, src: opts.src, kind, text: l.text.slice(0, MAX_TEXT), ids: [`${marker}:${kind}:${i + 1}`, ...(last ? [marker] : [])] }));
       const r = await appendCompacting({ store, engine, id: feature.id, kind: feature.kind, src: opts.src, group, lines: batch });
       if (!r.ok) return { ok: false, reason: `append failed: ${r.code}` };
     }
@@ -130,7 +134,7 @@ export async function sweepPendingDistills(opts: {
       const rec = extractRecord((await opts.store.get(fid))?.body ?? "") ?? "";
       for (const k of kids) {
         const esc = distilledId(k.id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (!new RegExp(`src:[^>]*${esc}(?=[,:\\s])`).test(rec)) candidates.push({ id: k.id, updated: k.updated ?? "" });
+        if (!new RegExp(`src:[^>]*${esc}(?=[,\\s])`).test(rec)) candidates.push({ id: k.id, updated: k.updated ?? "" });
       }
     }
     candidates.sort((a, b) => a.updated.localeCompare(b.updated));

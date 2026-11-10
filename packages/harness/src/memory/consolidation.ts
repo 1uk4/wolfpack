@@ -156,6 +156,8 @@ export interface ConsolidationConfig {
   workStore?: WorkRecordStore;
   /** `memory.workLog`: "fold" (default) rewrites the Record; "append" appends a few log lines per task, batched by `shouldFlushWorkLog`. */
   workLog?: "fold" | "append";
+  /** `memory.subagentMemory: on`: settle the pool under the cross-process pool lock. Default off: no lock file. */
+  poolLock?: boolean;
   /** Clock (tests); append mode's age check uses it. */
   now?: () => Date;
 }
@@ -290,8 +292,10 @@ interface Handled {
  * the archive (id, content, outcome, target), then the pool is rewritten
  * without it, so nothing vanishes.
  */
-function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
-  // Read, split and rewrite under the pool lock (no model call inside): a concurrent append is never dropped.
+function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void, poolLock?: boolean): Promise<void> {
+  // Only with `memory.subagentMemory: on` (subagents append to this pool from other processes): read, split and
+  // rewrite under the pool lock (no model call inside) so a concurrent append is never dropped. Otherwise unchanged.
+  if (poolLock !== true) return settlePoolLocked(wolfDen, handled, onError);
   return withPoolFileLock(wolfDen, () => settlePoolLocked(wolfDen, handled, onError));
 }
 
@@ -365,6 +369,8 @@ export interface DrainWorkConfig {
   wolfName?: string;
   onProgress?: (msg: string) => void;
   onRecord?: ConsolidationConfig["onRecord"];
+  /** `memory.subagentMemory: on`: settle the pool under the cross-process pool lock. */
+  poolLock?: boolean;
   /** Gives up (and frees the pool lock) after this long; default 3 minutes. */
   timeoutMs?: number;
 }
@@ -415,7 +421,7 @@ export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ 
       }
     }
     if (cancelled()) throw new Error("cancelled");
-    await settlePool(wolfDen, handled, onProgress);
+    await settlePool(wolfDen, handled, onProgress, config.poolLock);
     onProgress?.(`Graduation drain: ${handled.length - discarded} folded, ${discarded} discarded, ${mine.length - handled.length} pending`);
     const stuck = outcomes.find((o) => o.status === "pending");
     if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
@@ -532,13 +538,13 @@ async function consolidatePoolInner(
   }
   const denTokens = denObs.reduce((sum, o) => sum + Math.ceil(o.content.length / 4), 0);
   if (denObs.length === 0 || (workObs.length > 0 && denObs.length < minObservations && denTokens < minTokens)) {
-    await settlePool(wolfDen, handled, onProgress);
+    await settlePool(wolfDen, handled, onProgress, config.poolLock);
     return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending, ...(retryAt ? { retryAt } : {}) };
   }
 
   if (config.sessionTopics) {
     const folded = await consolidateToSessionTopics({ ...config, sessionTopics: config.sessionTopics }, engine, denObs, domainCtx);
-    await settlePool(wolfDen, [...handled, ...denHandled("den")], onProgress);
+    await settlePool(wolfDen, [...handled, ...denHandled("den")], onProgress, config.poolLock);
     return {
       observationsProcessed: handled.length + denObs.length,
       topicsCreated: folded.created,
@@ -708,7 +714,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   renderDenIndex(wolfDen);
 
   // Archive processed observations (move to .memory/archive/)
-  await settlePool(wolfDen, [...handled, ...denOutcomes()], onProgress);
+  await settlePool(wolfDen, [...handled, ...denOutcomes()], onProgress, config.poolLock);
 
   onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 

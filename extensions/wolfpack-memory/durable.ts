@@ -30,7 +30,7 @@ export default function createWolfpackMemoryExtension(
   const { tasks, ...memoryConfig } = config;
   
   // memory.workLog is a memory-block field; the tasks extension needs it for its ship/archive/unbind hooks.
-  const tasksConfig: TasksConfig = { ...(memoryConfig.workLog ? { workLog: memoryConfig.workLog } : {}), ...(tasks ?? {}) };
+  const tasksConfig: TasksConfig = { ...(memoryConfig.workLog ? { workLog: memoryConfig.workLog } : {}), ...(memoryConfig.subagentMemory ? { subagentMemory: memoryConfig.subagentMemory } : {}), ...(tasks ?? {}) };
   
   const memoryExt = createMemoryExtension(memoryConfig, context);
   const tasksExt = createTasksExtension(tasksConfig, context);

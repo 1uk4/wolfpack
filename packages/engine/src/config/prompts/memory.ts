@@ -25,10 +25,6 @@ Format:
 - Single line of plain prose. No markdown, no bullets, no code fences, no tags, no emojis.
 - Do NOT include the timestamp inside the content string — it is a separate field.
 
-General flag:
-- Set "general": true only for: an owner preference (e.g. "never run gh pr merge; the owner merges"), a standing rule, or an environment or tooling fact that holds beyond this task (e.g. "workers can't run turbo; use npx turbo").
-- Everything else is "general": false, which is the default. When unsure, false.
-
 Preserve user assertions exactly:
   BAD:  User wondered if they have two kids.
   GOOD: User stated they have two kids.
@@ -51,6 +47,11 @@ Preserve distinguishing details:
 - Numerical results: exact values, units, direction.
 
 Respond with valid JSON matching the schema.`;
+
+/** Inserted into OBSERVER_SYSTEM only when `memory.generalToDen` is on. */
+export const OBSERVER_GENERAL_FLAG = `General flag:
+- Set "general": true only for: an owner preference (e.g. "never run gh pr merge; the owner merges"), a standing rule, or an environment or tooling fact that holds beyond this task (e.g. "workers can't run turbo; use npx turbo").
+- Everything else is "general": false, which is the default. When unsure, false.`;
 
 export const CONSOLIDATE_SYSTEM = `You are a knowledge consolidator for a coding agent's persistent memory.
 

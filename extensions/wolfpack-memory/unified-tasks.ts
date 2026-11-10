@@ -101,6 +101,8 @@ export interface TasksConfig {
   workStore?: WorkRecordStore;
   /** `memory.workLog` (durable.ts copies it from the memory block): `append` flushes a task's log before ship/unbind and distills it into its feature on ship/archive. Default fold: nothing changes. */
   workLog?: "fold" | "append";
+  /** `memory.subagentMemory` (durable.ts copies it): `on` takes the pool lock for the graduation drain. Default off: no lock. */
+  subagentMemory?: "on" | "off";
 }
 
 interface ActiveBinding {
@@ -655,8 +657,9 @@ export default function createTasksExtension(
   const appendMode = config.workLog === "append";
   const workStoreNow = (): WorkRecordStore | undefined => {
     // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
-    const explicit = new HttpWorkRecordStore(context.env?.WORK_ENDPOINT, context.env?.WORK_TOKEN, undefined, context.wolfName);
-    return config.workStore ?? (explicit.configured ? explicit : undefined);
+    // Flags off (fold): as at the base, no context.env means no explicit store. The process-env fallback is append-mode only.
+    const explicit = context.env || appendMode ? new HttpWorkRecordStore(context.env?.WORK_ENDPOINT, context.env?.WORK_TOKEN, undefined, context.wolfName) : undefined;
+    return config.workStore ?? (explicit?.configured ? explicit : undefined);
   };
   const drain = (workIds: string[]) =>
     drainWorkObservations({
@@ -666,6 +669,7 @@ export default function createTasksExtension(
       workIds,
       workLog: config.workLog,
       wolfName,
+      ...(config.subagentMemory === "on" ? { poolLock: true } : {}),
     });
 
   // ── memory.workLog: append — the task's log is flushed, then distilled into its feature (never fails the caller) ──

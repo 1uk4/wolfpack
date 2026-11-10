@@ -1470,7 +1470,14 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async () => {
     // Append mode: forced flush of the pending work logs before the orchestrator goes away (no-op in fold mode).
-    try { await orchestrator?.flushWorkLog(); } catch { /* never block shutdown */ }
+    // Bounded: a hung Work API must not hold shutdown (10 s).
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        orchestrator?.flushWorkLog(),
+        new Promise<void>((r) => { timer = setTimeout(r, 10_000); }),
+      ]).finally(() => clearTimeout(timer));
+    } catch { /* never block shutdown */ }
     enabled = false;
     orchestrator = null;
     runtime = null;
@@ -1560,6 +1567,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     try {
       if (chunks.length > 0) await orchestrator.processChunks(chunks);
       await Promise.allSettled([...observerTasks]);
+      // A subagent's pool is its own session ledger and its orchestrator never auto-consolidates (threshold Infinity):
+      // write the tail now. Append mode: flush the logs; fold mode: consolidate once.
+      if (workLogAppend) await orchestrator.flushWorkLog();
+      else await orchestrator.consolidateNow();
     } catch (err) {
       runtime?.notify(`observer error: ${err instanceof Error ? err.message : String(err)}`, "error");
     }

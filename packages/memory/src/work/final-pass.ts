@@ -14,6 +14,7 @@ import { z } from "zod";
 import { WORK_TIDY_SYSTEM, buildWorkTidyPrompt, parseWorkTidyOutput, type Engine } from "@wolfpack/engine";
 import { extractRecord, RECORD_HEADING, APPEND_CAP_FEATURE, type WorkRecordStore } from "../work-record.js";
 import { outcomesText } from "./rollup.js";
+import { appendCompacting } from "./compact.js";
 import { sweepPendingDistills, type SweepClient } from "./ship-distill.js";
 
 export type FinalPassResult =
@@ -65,7 +66,8 @@ export async function finalFeaturePass(opts: {
     const at = (opts.now?.() ?? new Date()).toISOString();
     const hhmm = /T(\d\d:\d\d)/.exec(at)?.[1] ?? "00:00";
     const markerOnly = async (before: number): Promise<FinalPassResult> => {
-      const r = await store.appendRecord(featureId, [{ at, src: opts.src, kind: "change", text: "final pass: nothing to tidy", ids: [marker] }], { group: "Changes" });
+      // On log_full, compact first (appendCompacting), so the pass is marked and does not re-run its model call on every graduation.
+      const r = await appendCompacting({ store, engine, id: featureId, kind: feature.kind, src: opts.src, group: "Changes", lines: [{ at, src: opts.src, kind: "change", text: "final pass: nothing to tidy", ids: [marker] }] });
       return r.ok ? { ok: true, status: "marker-only", before, after: before } : { ok: false, reason: `append failed: ${r.code}` };
     };
 
@@ -114,6 +116,7 @@ export async function finalFeaturePass(opts: {
       .map(([g, ls]) => `### ${g}\n\n${ls.map((l) => `- ${hhmm} [${opts.src}\u00b7${GROUP_KIND[g] ?? "change"}] ${l.text}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`).join("\n")}`);
     const record = [RECORD_HEADING, ...parts].join("\n\n");
     if (record.length > APPEND_CAP_FEATURE) return markerOnly(before);
+    // Known window: no hub compare-and-set, so a recordAppend landing between the re-read above and this write is overwritten.
     await store.setRecord(featureId, record);
     return { ok: true, status: "tidied", before, after };
   } catch (err) {

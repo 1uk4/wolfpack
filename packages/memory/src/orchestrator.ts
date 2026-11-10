@@ -234,7 +234,7 @@ export function createOrchestrator(
   async function processChunks(chunks: ConversationChunk[]): Promise<void> {
     // Observe each chunk (could parallelize later)
     for (const chunk of chunks) {
-      const result = await observe({ engine, chunkText: chunk.text, domainContext: domainContext || undefined });
+      const result = await observe({ engine, chunkText: chunk.text, domainContext: domainContext || undefined, generalFlag: cfg.generalToDen === true });
 
       if (result.observations.length > 0) {
         const uniqueObs = assignUniqueTimestamps(result.observations);
@@ -260,7 +260,7 @@ export function createOrchestrator(
           observations,
           coversUpToId: chunk.id,
         });
-        for (const o of observations) if (o.work || o.feature) firstSeen.set(o.timestamp, nowMs());
+        if (appendMode) for (const o of observations) if (o.work || o.feature) firstSeen.set(o.timestamp, nowMs());
 
         runtime.notify?.(
           `memory: +${observations.length} observations`,
@@ -269,7 +269,12 @@ export function createOrchestrator(
       }
     }
 
-    if (appendMode) await serialized(() => flushAppendBody(false));
+    if (appendMode) {
+      // Like flushWorkLog: a failed flush leaves the observations pending and must not reject processChunks.
+      await serialized(() => flushAppendBody(false)).catch((err) => {
+        runtime.notify?.(`memory: work log flush failed: ${err instanceof Error ? err.message : err}`, "warning");
+      });
+    }
 
     // Check if consolidation is needed
     const folded = foldLedger(ledgerEvents);

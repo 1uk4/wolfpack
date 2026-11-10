@@ -158,6 +158,7 @@ export async function compactRecord(opts: {
 
     const again = await store.get(id);
     if (!again || extractRecord(again.body) !== before) return { ok: false, reason: "changed" };
+    // Known window: no hub compare-and-set, so a recordAppend landing between the re-read above and this write is overwritten.
     await store.setRecord(id, rendered);
     return { ok: true, before: before.length, after: rendered.length, mode };
   } catch (err) {

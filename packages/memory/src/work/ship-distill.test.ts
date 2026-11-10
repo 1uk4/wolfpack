@@ -26,8 +26,8 @@ describe("distillTaskToFeature", () => {
     const { store, run } = setup();
     expect(await run()).toEqual({ ok: true, status: "distilled", lines: 2 });
     const body = (await store.get("f"))!.body;
-    expect(body).toContain("### Decisions\n\n- 10:30 [hal\u00b7decision] Use a TTL map <!-- src:distilled:t,distilled:t:1 -->");
-    expect(body).toContain("### Findings\n\n- 10:30 [hal\u00b7finding] Eviction ran on every read <!-- src:distilled:t,distilled:t:2 -->");
+    expect(body).toContain("### Decisions\n\n- 10:30 [hal\u00b7decision] Use a TTL map <!-- src:distilled:t:decision:1 -->");
+    expect(body).toContain("### Findings\n\n- 10:30 [hal\u00b7finding] Eviction ran on every read <!-- src:distilled:t:finding:1,distilled:t -->");
     expect(body).toContain("### Changes\n\n- 09:00 [x\u00b7Changes] earlier");
   });
 
@@ -38,6 +38,23 @@ describe("distillTaskToFeature", () => {
     expect(await run()).toEqual({ ok: true, status: "already", lines: 0 });
     expect(prompts).toHaveLength(1);
     expect((await store.get("f"))!.body).toBe(after);
+  });
+
+  it("a failure after the first group leaves no completion marker; the retry completes without repeating group one", async () => {
+    const { store, prompts, run } = setup();
+    const real = store.appendRecord.bind(store);
+    let calls = 0;
+    store.appendRecord = async (id, lines, group) => (++calls === 2 ? { ok: false, code: "unavailable" } : real(id, lines, group)) as never;
+    expect(await run()).toEqual({ ok: false, reason: "append failed: unavailable" });
+    const partial = (await store.get("f"))!.body;
+    expect(partial).toContain("Use a TTL map");
+    expect(partial).not.toMatch(/distilled:t(?=[,\s])/);
+    expect(await run()).toEqual({ ok: true, status: "distilled", lines: 2 });
+    const body = (await store.get("f"))!.body;
+    expect(body.match(/Use a TTL map/g)).toHaveLength(1);
+    expect(body).toMatch(/Eviction ran on every read <!-- src:[^>]*distilled:t(?=[,\s])/);
+    expect(prompts).toHaveLength(2);
+    expect(await run()).toEqual({ ok: true, status: "already", lines: 0 });
   });
 
   it("an empty model answer writes one marker line, so the task is not retried", async () => {
@@ -73,7 +90,7 @@ describe("distillTaskToFeature", () => {
     expect(res).toEqual({ ok: true, status: "distilled", lines: 1 });
     expect(steps).toEqual(["workDistill", "workCompact"]);
     const body = (await store.get("f"))!.body;
-    expect(body).toContain("Use a TTL map <!-- src:distilled:t,distilled:t:1 -->");
+    expect(body).toContain("Use a TTL map <!-- src:distilled:t:decision:1,distilled:t -->");
     expect(body).toContain("distilled:older,distilled:older:1");
     expect(await run()).toEqual({ ok: true, status: "already", lines: 0 });
     expect(steps).toHaveLength(2);

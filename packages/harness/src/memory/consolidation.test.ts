@@ -173,13 +173,23 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(poolLines()).toEqual([]);
   });
 
-  it("the pool rewrite waits for the pool lock, so a line appended meanwhile survives", async () => {
+  it("with the pool lock off (default) the pool rewrite takes no lock file", async () => {
+    poolWith([o(0), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    await withPoolLock(den, async () => {
+      // a held lock does not block the rewrite when the lock is not in use
+      await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    }, { timeoutMs: 100 });
+    expect(poolLines()).toEqual([]);
+  });
+
+  it("the pool rewrite waits for the pool lock (poolLock on), so a line appended meanwhile survives", async () => {
     poolWith([o(0), o(1), o(2), o(3), o(4), o(5)]);
     const m = mocks();
     const file = join(den, ".memory", "pool", "observations.jsonl");
     let run!: Promise<unknown>;
     await withPoolLock(den, async () => {
-      run = consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+      run = consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, poolLock: true });
       await new Promise((r) => setTimeout(r, 400));
       expect(poolLines()).toHaveLength(6); // not rewritten while another writer holds the lock
       appendFileSync(file, JSON.stringify(o(9, { content: "late arrival" })) + "\n");

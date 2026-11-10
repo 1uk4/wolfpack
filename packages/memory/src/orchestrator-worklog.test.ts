@@ -118,4 +118,11 @@ describe("orchestrator workLog append mode", () => {
     await full.orch.flushWorkLog();
     expect(full.orch.getActiveObservations()).toHaveLength(2);
   });
+
+  it("processChunks resolves when the log store throws, and the observations stay pending", async () => {
+    const t = setup({ appendResult: () => { throw new Error("hub down"); } });
+    await expect(t.feed(obs(6))).resolves.toBeUndefined();
+    expect(t.calls).toHaveLength(1); // the flush was attempted
+    expect(t.orch.getActiveObservations()).toHaveLength(6);
+  });
 });

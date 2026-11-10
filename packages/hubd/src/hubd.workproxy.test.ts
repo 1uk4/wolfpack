@@ -1,5 +1,6 @@
 /** The hub-proxied Work API (work-proxy.ts): shapes of the agent's /work routes, whitelist, and worker-token scoping. */
 import { appendFileSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -529,5 +530,20 @@ describe("hub work proxy", () => {
     const body = JSON.stringify(await (await call(A, "GET", `/${id}`)).json());
     expect(body).toContain("yyswapyyy");
     expect(body).not.toContain("zzfreshzz");
+  });
+
+  it("a GET whose client hangs up before the answer neither wedges nor crashes the hub", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const port = Number(new URL(hub.url).port);
+    for (let i = 0; i < 20; i++) {
+      const s = connect(port, "127.0.0.1");
+      s.on("error", () => undefined);
+      s.write(`GET /v1/workapi/work/${id} HTTP/1.1\r\nHost: x\r\nX-API-Key: ${A}\r\n\r\n`);
+      s.destroy(); // gone before the hub can answer
+    }
+    const r = await call(A, "GET", `/${id}`); // a normal client is still served in full
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { item: { id: string } }).item.id).toBe(id);
   });
 });

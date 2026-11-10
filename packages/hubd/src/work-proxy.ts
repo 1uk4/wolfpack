@@ -126,6 +126,9 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
       return item;
     };
 
+    // A reader that already hung up gets nothing: skip the state load and the serialization (a retry storm must not queue work nobody reads).
+    const gone = (): boolean => req.socket?.destroyed === true || res.destroyed || res.writableEnded;
+    if (method === "GET" && gone()) return;
     if (rest.length === 0 && method === "GET") {
       const q: WorkQuery = {};
       for (const k of ["domain", "kind", "stage", "assignee", "area", "partOf"] as const) {

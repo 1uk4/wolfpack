@@ -23,8 +23,8 @@ const summarize = (blocks: SeenBlock[], stop: string | undefined) => {
  * `maxTurns: 1` (set by the bridge) means: one model message, and pi, not the SDK, executes tools. When that message ends
  * in a tool_use the SDK denies the call (PreToolUse hook), wants a second turn, and reports `result.subtype ===
  * "error_max_turns"` ("Reached maximum number of turns (1)"). That is a NORMAL turn end for a tool round. The bridge
- * tolerates it only when it announced a tool call itself (`sawToolUse`); when it did not (a tool_use it could not map to a
- * served pi tool, a call it dropped), the round died with the fatal error and the worker had to be resumed by hand
+ * tolerates it only when it announced a tool call itself (`sawToolUse`); when it did not (a call it dropped; an unserved tool name is not
+ * one since bridge PR #2: it is passed to pi, which answers "Tool X not found"), the round died with the fatal error and the worker had to be resumed by hand
  * (work-wolfpack-beKfWkW; 11 of ~7.5k rounds in the soak log, all `sdkStopReason: tool_use`, all `tool_results` rounds).
  * This wrapper rewrites such a result (the stream saw a tool_use / stop_reason tool_use) to a plain success, so the bridge
  * ends the round normally and hands tool calls to the harness. The limit is NOT raised: the SDK never gets a second turn
@@ -35,7 +35,7 @@ const summarize = (blocks: SeenBlock[], stop: string | undefined) => {
  *
  * Bridge: `pi-claude-bridge-stateless/stateless` (dist/stateless/provider.js consume()), which is what claude-stateless
  * imports. It is NOT the retired `pi-claude-bridge` (durable-core) package, which has no error_max_turns handling. Verified by max-turns.bridge.test.ts: the rewritten
- * `success` result ends an unmapped-tool round as done/stop (the call itself is lost; the log line says so).
+ * `success` result ends a dropped-call round (tool_use only in a same-id `assistant` message) as done/stop (the call itself is lost; the log line says so).
  *
  * CHECK ON BRIDGE UPGRADE: the bridge only uses the async iterator and close() (like lazySdkQuery); interrupt(),
  * setModel() and the other Query methods are not forwarded. Re-check if a bridge version calls them.

@@ -1,8 +1,11 @@
 "use client";
 
+import type React from "react";
 import type { InputHTMLAttributes, Ref } from "react";
-import { InlineMic } from "@/components/dictation";
+import { InlineMic, useRecordingHere } from "@/components/dictation";
+import { RecordingMarker } from "@/components/recording-marker";
 import { cn } from "@/lib/utils";
+import { endOnFocus, endOnOutsideMouseDown } from "@/components/caret-end";
 import type { CardFieldAnswer } from "@wolfpack/client";
 
 /** Props spread onto a text input that is a dictation target. */
@@ -72,9 +75,24 @@ export function CardTextInput({
 	/** Inline dictation mic at the field's trailing edge (see InlineMic). */
 	mic?: { targetKey: string; onClaim: () => void };
 } & Omit<InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>, "value" | "onChange" | "className" | "ref">) {
+	const recording = useRecordingHere(mic?.targetKey ?? "\0none");
 	// Extra props (placeholder, onFocus, data-*, …) are spread so callers such as dictation can attach to the field.
+	// Editable fields land the caret at the end when focus arrives from outside; read-only previews take no focus handler (no keyboard trap).
+	const caret = rest.readOnly
+		? {}
+		: {
+				onMouseDown: (e: React.MouseEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+					rest.onMouseDown?.(e as never);
+					endOnOutsideMouseDown(e);
+				},
+				onFocus: (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+					rest.onFocus?.(e as never);
+					endOnFocus(e);
+				},
+			};
 	const common = {
 		...rest,
+		...caret,
 		"data-testid": testId,
 		className: cn("rounded-lg border bg-background text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className),
 		value,
@@ -102,6 +120,7 @@ export function CardTextInput({
 	return (
 		<div className={cn("relative", !multiline && "min-w-0 flex-1")}>
 			{field}
+			{recording && <RecordingMarker state={recording} className={cn("absolute", multiline ? "right-11 top-2.5" : "right-9 top-1/2 -translate-y-1/2")} />}
 			<InlineMic {...mic} className={cn("absolute", !multiline && "right-1.5", multiline ? "right-4 top-1.5" : "top-1/2 -translate-y-1/2")} />
 		</div>
 	);

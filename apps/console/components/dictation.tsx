@@ -285,6 +285,21 @@ export function useDictationUi(): DictationUi {
 	return useSyncExternalStore(subscribeUi, () => ui, () => ui);
 }
 
+/** Same answer as useRecordingHere, read at render time from the composer's own `dictation.phase` (which already re-renders it). The
+ *  composers use this: a second store subscription in the bar's composer perturbs the dock-while-dictating ordering. */
+export function recordingAt(key: string | null, phase: DictationPhase): "live" | "stopping" | undefined {
+	if (phase === "idle" || ui.targetKey !== key) return undefined;
+	return phase === "stopping" ? "stopping" : "live";
+}
+
+/** Is the live run writing into THIS field? `key` is a card field's claim key, or null for a composer / note box / inline answer
+ *  composer (no keyed claim on top). "stopping" while the final transcript flushes; undefined when idle or elsewhere. */
+export function useRecordingHere(key: string | null): "live" | "stopping" | undefined {
+	const s = useDictationUi();
+	if (s.phase === "idle" || s.targetKey !== key) return undefined;
+	return s.phase === "stopping" ? "stopping" : "live";
+}
+
 /** Claim the target imperatively; returns the release (identity-guarded). */
 export function claimDictationTarget(append: (text: string) => void, key?: string, opts: { transient?: boolean } = {}): () => void {
 	const claim: Claim = { append, key, transient: opts.transient === true };
@@ -302,6 +317,13 @@ export function claimDictationTarget(append: (text: string) => void, key?: strin
 			publishUi();
 		}
 	};
+}
+
+/** Where the words land when no field claims them: the visible composer registers a focus function here, and starting a run
+ *  (button, ⌘D) moves the caret into it, so Enter and typing go to the field that is recording. */
+let focusTarget: (() => void) | null = null;
+export function setDictationFocus(fn: (() => void) | null) {
+	focusTarget = fn;
 }
 
 function releaseTransientClaims() {
@@ -755,6 +777,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 	const toggle = useCallback(() => {
 		if (phase === "idle") {
 			if (interceptRef.current?.()) return;
+			if (!topClaim()) focusTarget?.();
 			void start();
 		}
 		else if (phase === "recording" || phase === "connecting") stop();
@@ -775,6 +798,23 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		window.addEventListener("wolfpack:kbd-toggle-dictation", onToggle);
 		return () => window.removeEventListener("wolfpack:kbd-toggle-dictation", onToggle);
 	}, [toggle]);
+	// Enter anywhere while a run is live finishes it, whatever has focus (the Dictate button, the body). A field that claimed the
+	// Enter (preventDefault) already did the same, so a claimed event is skipped; a press while it settles does nothing.
+	const finishRef = useRef(finish);
+	finishRef.current = finish;
+	const enterBusy = useRef(false);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Enter" || e.defaultPrevented || e.isComposing || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+			if (!enabled || shortcutHook() !== idRef.current || phaseRef.current === "idle") return;
+			e.preventDefault();
+			if (enterBusy.current) return;
+			enterBusy.current = true;
+			void finishRef.current().finally(() => void (enterBusy.current = false));
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [enabled]);
 	useEffect(() => {
 		window.addEventListener("wolfpack:kbd-cancel-dictation", cancel);
 		return () => window.removeEventListener("wolfpack:kbd-cancel-dictation", cancel);

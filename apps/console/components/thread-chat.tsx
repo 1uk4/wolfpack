@@ -508,6 +508,18 @@ function ThreadChatInner({
 	const graphDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeGraph));
 	const pinnedObjects = [decisionDismissed ? undefined : activeDecision, graphDismissed ? undefined : activeGraph].filter((a): a is NonNullable<typeof a> => a !== undefined);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	const recordingHere = recordingAt(null, dictation?.phase ?? "idle");
+	// Starting dictation (button, ⌘D) puts the caret at the end of this composer (the note box in note mode: same textarea).
+	useEffect(() => {
+		const focusEnd = () => {
+			const el = inputRef.current;
+			if (!el) return;
+			el.focus();
+			try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+		};
+		setDictationFocus(focusEnd);
+		return () => setDictationFocus(null);
+	}, []);
 	// The composer dock overlays the list (absolute, bottom-0) and its height varies (controls wrap on a phone, chips, dictation bar,
 	// subagent strip, safe-area inset). Measure it so the tail spacer clears the dock and its gradient glow exactly.
 	const [dockEl, setDockEl] = useState<HTMLDivElement | null>(null);
@@ -582,20 +594,15 @@ function ThreadChatInner({
 		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
 	}, [busy, send, steer, attachments, applyText, beginSend, setSendPending]);
-	// Finish a live dictation first: the spoken tail must be in the message. One send in flight at a time (a second
-	// Enter/click during the finish must not send twice); doSend runs through a ref so it sees the settled state, and
-	// does nothing (composer untouched) when the finish left no text and no ready attachment.
-	const doSendRef = useRef(doSend);
-	doSendRef.current = doSend;
+	// Submit while dictating only finishes the run (the spoken tail lands in the field); the next press sends. A press
+	// while the run is still settling does nothing.
 	const sendInFlight = useRef(false);
 	const onSend = useCallback(() => {
 		if (sendInFlight.current) return;
 		if (!dictation.active) return doSend();
 		sendInFlight.current = true;
-		void dictation.finish().then(() => {
-			sendInFlight.current = false;
-			doSendRef.current();
-		});
+		// Stop only: the first press puts the final transcript in the field; the next press sends it.
+		void dictation.finish().finally(() => void (sendInFlight.current = false));
 	}, [dictation, doSend]);
 
 	const onStop = useCallback(() => {
@@ -822,6 +829,8 @@ function ThreadChatInner({
 											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
 											canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !busy)}
+											finishing={dictation.phase === "stopping"}
+											recording={recordingHere}
 											onEscape={dictation.active ? dictation.cancel : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
 											enterSends={dictation.active}

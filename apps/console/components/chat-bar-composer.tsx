@@ -12,7 +12,7 @@ import { useAttachedThread } from "@/components/attached-thread";
 import { threadBase } from "@/components/thread-transport";
 import { newUploadState, startUploads } from "@/components/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/attachments";
-import { DictationBar, joinDictation, type Dictation } from "@/components/dictation";
+import { DictationBar, joinDictation, setDictationFocus, recordingAt, type Dictation } from "@/components/dictation";
 import { draftKey, readDraft, useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
@@ -33,6 +33,16 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 	const [text, setText] = useState("");
 	const textRef = useRef("");
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	const recordingHere = recordingAt(null, dictation.phase);
+	useEffect(() => {
+		setDictationFocus(() => {
+			const el = inputRef.current;
+			if (!el) return;
+			el.focus();
+			try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+		});
+		return () => setDictationFocus(null);
+	}, []);
 	const [error, setError] = useState<string | null>(null);
 	const applyText = useCallback((v: string) => {
 		textRef.current = v;
@@ -80,15 +90,14 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		}
 	}, [attachments, applyText, schedule, api, target, working, onReplied]);
 	const stop = useCallback(() => void abortThread(target), [target]);
-	// Enter while dictating finishes the run, then sends the spoken text (as on the thread page); one send in flight.
-	const sendRef = useRef(send);
-	sendRef.current = send;
+	// Submit while dictating only finishes the run (its last words land in the field); the NEXT press sends. A press while the
+	// run is still settling does nothing.
 	const sendInFlight = useRef(false);
 	const onSend = useCallback(() => {
 		if (sendInFlight.current) return;
 		if (!dictation.active) return void send();
 		sendInFlight.current = true;
-		void dictation.finish().then(() => sendRef.current()).finally(() => void (sendInFlight.current = false));
+		void dictation.finish().finally(() => void (sendInFlight.current = false));
 	}, [dictation, send]);
 
 	// While the questionnaire is expanded this composer is the NOTE's (Next / Submit); collapsing hands the note's images to the normal attachments (the text goes through the draft store).
@@ -131,6 +140,8 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 				onSend={noteMode ? () => session.press(sendNote) : onSend}
 				onStop={stop}
 				canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !working)}
+				finishing={dictation.phase === "stopping"}
+				recording={recordingHere}
 				onEscape={dictation.active ? dictation.cancel : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}

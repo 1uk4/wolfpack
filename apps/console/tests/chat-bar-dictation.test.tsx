@@ -242,15 +242,20 @@ describe("floating chat dictation", () => {
 		assert.deepEqual(posts.filter((u) => /\/(submit|questions\/q1\/text)$/.test(u)), ["/api/wolves/w/threads/a/cards/p1/questions/q1/text"]);
 	});
 
-	it("Enter while dictating finishes the run then sends the spoken text", async () => {
+	it("Submit while dictating only stops the run and fills the field; the next press sends it", async () => {
 		await mount("/kb", A);
 		await fire(barToggle(), "click", { detail: 1 });
 		await wait();
 		const ws = await say("send this");
 		await fire(q('[data-testid="chat-bar"] form')!, "submit");
+		await fire(q('[data-testid="chat-bar"] form')!, "submit"); // pressed again while the run settles: nothing
 		await endRun(ws);
 		await wait();
-		assert.ok(posts.some((u) => u.endsWith("/threads/a/submit")));
+		assert.equal(posts.filter((u) => u.endsWith("/threads/a/submit")).length, 0, "first press does not send");
+		assert.equal(barTa()!.value, "send this");
+		await fire(q('[data-testid="chat-bar"] form')!, "submit");
+		await wait();
+		assert.equal(posts.filter((u) => u.endsWith("/threads/a/submit")).length, 1);
 		assert.equal(barTa()!.value, "");
 	});
 

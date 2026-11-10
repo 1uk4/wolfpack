@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ReplyingChip } from "@/components/replying-chip";
-import { DictationBar, joinDictation, useDictationTarget, type Dictation } from "@/components/dictation";
+import { DictationBar, joinDictation, useDictationTarget, recordingAt, type Dictation } from "@/components/dictation";
 import { postReply } from "@/components/ask-reply-send";
 import { mergeRestored } from "@/components/composer-restore";
 import { newUploadState, startUploads } from "@/components/attachment-upload";
@@ -88,7 +88,7 @@ export function InlineAnswerComposer({ label, draft, error, dictation, onText, o
 		const id = requestAnimationFrame(() => inputRef.current?.focus());
 		return () => cancelAnimationFrame(id);
 	}, []);
-	// Enter while dictating finishes the run, then sends the spoken text; one send in flight.
+	// Enter while dictating only finishes the run (its last words land in the field); the NEXT press sends. A press while it settles does nothing.
 	const sending = useRef(false);
 	const sendRef = useRef(onSend);
 	sendRef.current = onSend;
@@ -96,9 +96,10 @@ export function InlineAnswerComposer({ label, draft, error, dictation, onText, o
 		if (sending.current) return;
 		if (!dictation?.active) return void sendRef.current();
 		sending.current = true;
-		void dictation.finish().then(() => sendRef.current()).finally(() => void (sending.current = false));
+		void dictation.finish().finally(() => void (sending.current = false));
 	}, [dictation]);
 	const live = dictation?.active === true;
+	const recordingHere = recordingAt(null, dictation?.phase ?? "idle");
 	return (
 		<div data-testid="ask-inline-composer" className="overflow-hidden rounded-xl bg-background/60 transition-colors focus-within:bg-background/80">
 			<ReplyingChip label={label} onClear={onClose} className="px-2 pt-1.5" />
@@ -110,6 +111,8 @@ export function InlineAnswerComposer({ label, draft, error, dictation, onText, o
 				onSend={send}
 				onStop={() => {}}
 				canSend={canSendWith(draft.text, draft.atts) || live}
+				finishing={dictation?.phase === "stopping"}
+				recording={recordingHere}
 				onEscape={live ? dictation!.cancel : onClose}
 				enterSends={live}
 				inputRef={inputRef}

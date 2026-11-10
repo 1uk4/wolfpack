@@ -28,6 +28,7 @@
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { RECORD_LINE_KINDS } from "@wolfpack/protocol";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
 import { formatSources, lineRef, noComments, numberRecordLines, parseRecordLines, stripSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
@@ -389,8 +390,11 @@ export class WorkApiError extends Error {
   }
 }
 
-/** A line for `appendRecord` (the hub's `recordAppend` line): `at` ISO time, `src` label, `kind` group word, one-line `text` (<= 240), source `ids`. */
-export interface RecordAppendLine { at: string; src: string; kind: string; text: string; ids: string[] }
+/** The protocol's line kind: decision | change | finding | problem. */
+export type RecordLineKind = (typeof RECORD_LINE_KINDS)[number];
+
+/** A line for `appendRecord` (the hub's `recordAppend` line): `at` ISO time, `src` label, `kind` (the protocol's line kind), one-line `text` (<= 240), source `ids` (at least one). */
+export interface RecordAppendLine { at: string; src: string; kind: RecordLineKind; text: string; ids: string[] }
 
 export type AppendRecordResult =
   | { ok: true }

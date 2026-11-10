@@ -629,7 +629,7 @@ describe("pending entries do not outlive their observations", () => {
 // ── appendRecord ─────────────────────────────────────────────────────────────
 
 describe("appendRecord", () => {
-  const line = (id: string, text = "did x") => ({ at: "2026-11-09T10:05:00Z", src: "hal", kind: "Changes", text, ids: [id] });
+  const line = (id: string, text = "did x") => ({ at: "2026-11-09T10:05:00Z", src: "hal", kind: "change" as const, text, ids: [id] });
   const capture = (status = 200, json: unknown = {}) => {
     const calls: Array<{ url: string; init: { method: string; headers: Record<string, string>; body: string } }> = [];
     const fetchImpl = (async (url: string, init: { method: string; headers: Record<string, string>; body: string }) => {
@@ -667,6 +667,9 @@ describe("appendRecord", () => {
     expect(await capture(409, { error: "closed", code: "record_closed" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "archived", message: "closed" });
     expect(await capture(403, { error: "no" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "forbidden", message: "no" });
     expect(await capture(502, {}).store.appendRecord("t", [line("o1")])).toMatchObject({ ok: false, code: "error" });
+    expect(await capture(500, { error: "boom" }).store.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "error", message: "boom" });
+    const down = new HttpWorkRecordStore("http://h/v1/workapi", "tok", (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch, "wa");
+    expect(await down.appendRecord("t", [line("o1")])).toEqual({ ok: false, code: "error", message: "ECONNREFUSED" });
   });
 
   it("the in-memory store appends, dedupes by line ids, and refuses past the cap and on archived items", async () => {
@@ -679,7 +682,7 @@ describe("appendRecord", () => {
     const body = (await mem.get("t"))!.body;
     expect(body).toContain("## Plan\n\np");
     expect(body.match(/first/g)).toHaveLength(1);
-    expect(body).toContain("- 10:05 [hal\u00b7Changes] second <!-- src:o2 -->");
+    expect(body).toContain("- 10:05 [hal\u00b7change] second <!-- src:o2 -->");
     const big = (p: string) => Array.from({ length: 20 }, (_, i) => line(`${p}${i}`, "y".repeat(240)));
     expect(await mem.appendRecord("t", big("b"))).toEqual({ ok: true });
     const full = (await mem.get("t"))!.body;
@@ -698,7 +701,7 @@ describe("appendRecord", () => {
     await mem.appendRecord("f", [line("o2", "new change")], { group: "Changes" });
     await mem.appendRecord("f", [line("o3", "new decision")], { group: "Decisions" });
     expect((await mem.get("f"))!.body).toBe(
-      "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n- 10:05 [hal\u00b7Changes] new change <!-- src:o2 -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->\n\n### Decisions\n\n- 10:05 [hal\u00b7Changes] new decision <!-- src:o3 -->\n",
+      "## Record\n\n### Changes\n\n- 09:00 [x\u00b7Changes] old <!-- src:a -->\n- 10:05 [hal\u00b7change] new change <!-- src:o2 -->\n\n### Findings\n\n- 09:01 [x\u00b7Findings] older <!-- src:b -->\n\n### Decisions\n\n- 10:05 [hal\u00b7change] new decision <!-- src:o3 -->\n",
     );
   });
 });

@@ -342,6 +342,52 @@ describe("hub work proxy", () => {
       expect(await r.bodyOf()).toBe(before);
     });
 
+    it("refuses an owner batch recordAppend on an archived item, the body unchanged", async () => {
+      const r = await recRig();
+      await r.owner("PATCH", `/${r.id}`, { stage: "archived" });
+      const before = await r.bodyOf();
+      const res = await r.owner("PATCH", `/${r.id}`, { ops: [{ op: "recordAppend", lines: [line("late", ["ob1"])] }, { op: "recordAppend", lines: [line("later", ["ob2"])] }] });
+      expect(res.status).toBe(409);
+      expect(await r.json(res)).toEqual({ error: "item is archived; its Record is closed", code: "record_closed" });
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("rejects whitespace-only text and a line with no ids", async () => {
+      const r = await recRig();
+      expect((await r.append("wa", [line("   ", ["w1"])])).status).toBe(400);
+      expect((await r.append("wa", [line("no ids", [])])).status).toBe(400);
+      expect(await r.bodyOf()).not.toContain("no ids");
+    });
+
+    it("refuses a non-owner request mixing recordAppend with another op (guard)", async () => {
+      const r = await recRig();
+      const before = await r.bodyOf();
+      const res = await r.as("wa", "PATCH", `/${r.id}`, { ops: [{ op: "recordAppend", lines: [line("mix", ["m1"])] }, { note: "n" }] });
+      expect(res.status).toBe(400);
+      expect(await r.bodyOf()).toBe(before);
+    });
+
+    it("fires no work.changed for a replay that adds nothing", async () => {
+      const r = await recRig();
+      const ev = await fetch(`${r.hub.url}/v1/events`, { headers: OP });
+      const reader = ev.body!.getReader();
+      const dec = new TextDecoder();
+      let seen = "";
+      const count = () => seen.split('"type":"work.changed"').length - 1;
+      const until = async (n: number) => {
+        const deadline = Date.now() + 3000;
+        while (count() < n && Date.now() < deadline) seen += dec.decode((await reader.read()).value);
+      };
+      await r.append("wa", [line("one", ["n1"])]);
+      await until(1);
+      expect((await r.append("wa", [line("one", ["n1"])])).status).toBe(200); // replay: adds nothing
+      // give a (wrong) replay event time to arrive, then check none did
+      const timeout = new Promise<void>((res) => setTimeout(res, 400));
+      await Promise.race([until(2), timeout]);
+      expect(count()).toBe(1);
+      await reader.cancel();
+    });
+
     it("groups under a feature heading, creating it when absent", async () => {
       const g = await gateRig();
       const fid = await g.mk({ kind: "feature", title: "F", body: "x" });

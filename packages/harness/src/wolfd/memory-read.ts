@@ -302,9 +302,12 @@ const TREE_WINDOW_MS = 7 * 24 * 3600_000;
 /** Bytes read from the end of each archive file (it rotates at 20 MB; the 7-day window sits at the tail). */
 const ARCHIVE_TAIL_BYTES = 4 * 1024 * 1024;
 const LOOKUP_TTL_MS = 30_000;
+/** At most this many archive files are read (newest first), so the total read stays under ARCHIVE_FILES_MAX * ARCHIVE_TAIL_BYTES. */
+const ARCHIVE_FILES_MAX = 3;
 export const NODE_ARCHIVED_DEFAULT_LIMIT = 100;
 
 interface LookedUp { title: string; stage?: string; partOf?: string }
+/** Per-process, keyed by work id only (not by endpoint or token): fine for one wolf per process, wrong if a process ever serves two Work APIs. */
 const lookupCache = new Map<string, { at: number; value: LookedUp | null }>();
 /** Test hook: forget cached work lookups. */
 export const resetWorkLookupCache = (): void => lookupCache.clear();
@@ -354,7 +357,11 @@ async function readTreeSources(den: string, now: number): Promise<{ pending: Pen
   const pending = pool.map((o, i): PendingEntry => ({ id: ids[i]!, content: o.content ?? "", ...(o.recordedAt ? { recordedAt: o.recordedAt } : {}), ...(o.work ? { work: o.work } : {}), ...(o.feature ? { feature: o.feature } : {}) }));
   const dir = join(den, ".memory", "pool");
   let names: string[] = [];
-  try { names = readdirSync(dir).filter((n) => /^archive(-\d+)?\.jsonl$/.test(n)); } catch { /* no archive yet */ }
+  try {
+    // `archive.jsonl` is the live file; `archive-<n>.jsonl` are rotations, a higher n being newer.
+    const rank = (n: string): number => (n === "archive.jsonl" ? Number.MAX_SAFE_INTEGER : Number(/^archive-(\d+)\.jsonl$/.exec(n)![1]));
+    names = readdirSync(dir).filter((n) => /^archive(-\d+)?\.jsonl$/.test(n)).sort((a, b) => rank(b) - rank(a)).slice(0, ARCHIVE_FILES_MAX);
+  } catch { /* no archive yet */ }
   const cutoff = now - TREE_WINDOW_MS;
   const archived: ArchivedEntry[] = [];
   for (const lines of await Promise.all(names.map((n) => readJsonlTail(join(dir, n), ARCHIVE_TAIL_BYTES)))) {

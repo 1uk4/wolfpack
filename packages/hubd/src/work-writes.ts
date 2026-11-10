@@ -316,7 +316,16 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
   if (ops.every(isContentOp)) {
     // Fold every edit over the body first (any failure throws before a write), then ONE atomic .md write.
     let body = resolveWorkItem(roots, domain, id)?.body ?? "";
-    for (const o of ops) body = o.op === "body" ? o.text : o.op === "section" ? replaceSection(body, o.name, o.text) : o.op === "recordAppend" ? appendRecordLines(body, String(cur0.kind), o.lines, o.group).body : body;
+    for (const o of ops) {
+      if (o.op === "body") body = o.text;
+      else if (o.op === "section") body = replaceSection(body, o.name, o.text);
+      else if (o.op === "recordAppend") {
+        if (cur0.stage === "archived") throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
+        const r = appendRecordLines(body, String(cur0.kind), o.lines, o.group);
+        body = r.body;
+        if (opts.recordAdded) opts.recordAdded.count += r.added;
+      }
+    }
     commitWorkItem(roots, cur0, body);
     return cur0;
   }
@@ -389,6 +398,8 @@ function readNewBytes(file: string, offset: number): Buffer {
 /** Who is applying the ops: a worker's wolf (`holder`) cascades a feature assign only to the children it holds; unset (the owner) cascades to all open children. */
 export interface ApplyOptions {
   holder?: string;
+  /** Out: `count` is raised by the number of Record lines a recordAppend actually added (0 for a replay). */
+  recordAdded?: { count: number };
 }
 
 function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[], opts: ApplyOptions = {}): Item {
@@ -429,6 +440,7 @@ function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[], opts: Appl
         if (!cur) throw new Error(`work item ${id} not found`);
         if (cur.stage === "archived") throw new HubError("invalid_request", "item is archived; its Record is closed", { code: RECORD_CLOSED });
         const r = appendRecordLines(resolveWorkItem(roots, cur.domain as string, id)?.body ?? "", String(cur.kind), o.lines, o.group);
+        if (opts.recordAdded) opts.recordAdded.count += r.added;
         if (r.added > 0) commitWorkItem(roots, cur, r.body);
         item = cur;
         break;

@@ -59,6 +59,16 @@ describe("readMemoryTree", () => {
     const t = await readMemoryTree(den, work, NOW);
     expect(t.features[0]!.tasks[0]).toMatchObject({ pending: 1, archived: 1 });
   });
+
+  it("reads at most the three newest archive files", async () => {
+    pool([]);
+    const tag = { work: "work-d-TASK", feature: "work-d-FEAT" };
+    archive([arch("live", "2026-11-08T00:00:00Z", tag)]);
+    for (const n of [1, 2, 3, 4]) archive([arch(`r${n}`, "2026-11-07T00:00:00Z", tag)], `archive-${n}.jsonl`);
+    const t = await readMemoryTree(den, work, NOW);
+    // archive.jsonl + archive-4 + archive-3; archive-1 and -2 are not read
+    expect(t.features[0]!.tasks[0]).toMatchObject({ archived: 3 });
+  });
 });
 
 describe("readMemoryNode", () => {

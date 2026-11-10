@@ -70,7 +70,7 @@ export async function distillTaskToFeature(opts: {
 
     const at = (opts.now?.() ?? new Date()).toISOString();
     if (!lines.length) {
-      const r = await store.appendRecord(feature.id, [{ at, src: opts.src, kind: "Changes", text: `${taskId}: nothing durable to add`, ids: [marker] }], { group: "Changes" });
+      const r = await store.appendRecord(feature.id, [{ at, src: opts.src, kind: "Changes" as unknown as RecordAppendLine["kind"], text: `${taskId}: nothing durable to add`, ids: [marker] }], { group: "Changes" });
       return r.ok ? { ok: true, status: "marker-only", lines: 0 } : { ok: false, reason: `append failed: ${r.code}` };
     }
     // One append per group (the hub places a call's lines under one heading); the marker id is on every line.
@@ -78,7 +78,7 @@ export async function distillTaskToFeature(opts: {
     for (const group of [...new Set(lines.map((l) => l.group))]) {
       const batch: RecordAppendLine[] = lines
         .filter((l) => l.group === group)
-        .map((l) => ({ at, src: opts.src, kind: group, text: l.text.slice(0, MAX_TEXT), ids: [marker, `${marker}:${++n}`] }));
+        .map((l) => ({ at, src: opts.src, kind: group as unknown as RecordAppendLine["kind"], text: l.text.slice(0, MAX_TEXT), ids: [marker, `${marker}:${++n}`] }));
       const r = await store.appendRecord(feature.id, batch, { group });
       if (!r.ok) return { ok: false, reason: `append failed: ${r.code}` };
     }

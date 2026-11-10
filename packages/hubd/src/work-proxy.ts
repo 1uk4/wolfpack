@@ -199,8 +199,10 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
         }
         // A worker's feature cascade is limited to the children it holds; the owner's reaches every open child.
         const holder = worker ? actor.id : undefined;
-        const applied = applyOps(d.roots, id, finalOps, {}, { holder });
-        if (finalOps.some((o) => o.op === "recordAppend")) d.recordAppended?.(id);
+        const recordAdded = { count: 0 };
+        const applied = applyOps(d.roots, id, finalOps, {}, { holder, recordAdded });
+        // A replay that deduped to nothing changed no file: no work.changed.
+        if (recordAdded.count > 0) d.recordAppended?.(id);
         return { item: applied, ...(reassigned.length ? { reassigned } : {}) };
       });
     }

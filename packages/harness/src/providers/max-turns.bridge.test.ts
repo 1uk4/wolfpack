@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createStatelessStreams } from "pi-claude-bridge-stateless/stateless";
 import { withMaxTurnsAsTurnEnd } from "./max-turns.js";
+import { withDroppedCallNet } from "./dropped-call.js";
 
 const MODEL = { id: "sonnet", api: "x", provider: "p", name: "s", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1e5, maxTokens: 1e4, reasoning: false } as any;
 const TOOLS = [{ name: "add", description: "add", parameters: { type: "object", properties: { a: { type: "number" } } } }];
@@ -31,9 +32,10 @@ let seq = 0;
 beforeAll(() => { root = mkdtempSync(join(tmpdir(), "max-turns-bridge-")); });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-async function round(queryFn: any) {
+async function round(queryFn: any, net?: (line: string) => void) {
   const streams = createStatelessStreams({ sessionDir: join(root, "cwd"), claudeDir: join(root, "claude"), queryFn } as any);
-  const s = (streams as any).streamSimple(MODEL, { messages: [{ role: "system", content: "x" }, { role: "user", content: "go", timestamp: 1 }] }, { tools: TOOLS, sessionId: `s${++seq}` });
+  const simple = net ? withDroppedCallNet((streams as any).streamSimple, net) : (streams as any).streamSimple;
+  const s = simple(MODEL, { messages: [{ role: "system", content: "x" }, { role: "user", content: "go", timestamp: 1 }] }, { tools: TOOLS, sessionId: `s${++seq}` });
   const types: string[] = [];
   for await (const e of s) types.push(e.type);
   return { types, msg: await s.result() };
@@ -65,5 +67,22 @@ describe("withMaxTurnsAsTurnEnd through the real claude-stateless bridge (work-w
     const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "add"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()));
     expect(msg.stopReason).toBe("toolUse");
     expect(msg.content.find((b: any) => b.type === "toolCall")).toMatchObject({ id: "toolu_1", name: "add", arguments: { a: 1 } });
+  });
+
+  it("logs a secret-free summary of the dropped tool_use at the round end (work-wolfpack-7g4ZFMJ)", async () => {
+    const lines: string[] = [];
+    const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "nope"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()), (l) => lines.push(l));
+    expect(msg.content.some((b: any) => b.type === "toolCall")).toBe(false);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("blocks=[tool_use]");
+    expect(lines[0]).toContain("mcp__custom-tools__nope#toolu_1(a)");
+    expect(lines[0]).toContain("stop_reason=tool_use");
+  });
+
+  it("stays silent for a served tool round", async () => {
+    const lines: string[] = [];
+    const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "add"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()), (l) => lines.push(l));
+    expect(msg.stopReason).toBe("toolUse");
+    expect(lines).toEqual([]);
   });
 });

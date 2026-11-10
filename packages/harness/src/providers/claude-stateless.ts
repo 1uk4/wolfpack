@@ -26,6 +26,7 @@ import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import { guardProviderStreams } from "./guard.js";
+import { withDroppedCallNet } from "./dropped-call.js";
 import { withMaxTurnsAsTurnEnd } from "./max-turns.js";
 import type { ProviderFactory } from "./types.js";
 
@@ -151,5 +152,8 @@ export const claudeStatelessFactory: ProviderFactory = (ctx) => {
     queryFn: withMaxTurnsAsTurnEnd(withFreshSystemPrompt((seams.queryFn ?? lazySdkQuery()) as (args: any) => any)) as never,
   });
   guardProviderStreams(handle.provider as never, { provider: CLAUDE_STATELESS_ID });
+  // Logs the SDK's final message for a round the bridge dropped a tool call in (work-wolfpack-7g4ZFMJ).
+  const p = handle.provider as any;
+  p.streamSimple = p.stream = withDroppedCallNet(p.streamSimple.bind(p));
   return { provider: handle.provider as never, forget: (id) => void handle.forget(id), dispose: () => void handle.dispose() };
 };

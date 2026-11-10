@@ -539,7 +539,7 @@ describe("ThreadChat dictation", () => {
 		assert.equal(answers[0]!.body.answers.why.value, "because and more");
 	});
 
-	it("dictating while the ask card's note composer is open fills the note, not the hidden draft, and Submit while recording sends the tail with the answers", async () => {
+	it("dictating while the ask card's note composer is open fills the note, not the hidden draft, and Submit while recording only stops the run (tail lands in the note); the next press sends it with the answers", async () => {
 		const PAGED = { tool: "ask", paged: true, fields: [{ id: "why", kind: "free-text", label: "Why?", optional: true }], steps: [{ fields: ["why"] }] } as unknown as Card;
 		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
 		await mount(new CardClient(PAGED));
@@ -552,6 +552,10 @@ describe("ThreadChat dictation", () => {
 		const ws = await recording("and the tail");
 		await act(async () => void q('[data-note-mode="true"] form')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
 		await closeSocket(ws);
+		await settle();
+		assert.equal(posts.some((p) => p.url.endsWith("/cards/" + CALL + "/submit")), false, "the first press only stops dictation");
+		assert.equal(composer().value, "first words and the tail");
+		await act(async () => void q('[data-note-mode="true"] form')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
 		await settle();
 		const submit = posts.find((p) => p.url.endsWith("/cards/" + CALL + "/submit"));
 		assert.equal(submit?.body.note.text, "first words and the tail");
@@ -628,6 +632,59 @@ describe("ThreadChat dictation", () => {
 		assert.equal(document.querySelectorAll('[data-testid="ask-inline-composer"] [data-testid="attachment-chip"]').length, 1, "the chip sits in the open answer");
 		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1, "and nowhere else");
 		globalThis.fetch = prev;
+	});
+
+	it("Send while dictating shows a loader on the send button until the final transcript lands, then the field holds the text and nothing is sent", async () => {
+		await mount(new CardClient(null));
+		const ws = await recording("spoken");
+		const sendBtn = () => q('form[data-testid="composer"] button[type="submit"]')!;
+		assert.equal(sendBtn().getAttribute("data-finishing"), null, "no loader while recording");
+		await act(async () => void q('form[data-testid="composer"]')!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+		assert.equal(sendBtn().getAttribute("data-finishing"), "true", "loader while the transcript is processing");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(sendBtn().getAttribute("data-finishing"), null, "loader gone once the words landed");
+		assert.equal(composer().value, "spoken");
+		assert.deepEqual(posts, [], "nothing sent");
+	});
+
+	it("the recording marker sits in the composer while recording, becomes a spinner while the run stops, and is gone once the words land", async () => {
+		await mount(new CardClient(null));
+		const marker = () => q('[data-testid="recording-marker"]');
+		assert.equal(marker(), null);
+		const ws = await recording("spoken");
+		assert.equal(marker()?.getAttribute("data-state"), "live");
+		await click(toggle()); // Stop
+		assert.equal(marker()?.getAttribute("data-state"), "stopping");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(marker(), null);
+	});
+
+	it("Enter pressed with focus on the page body (not the field) while dictating stops the run once, the words land in the composer and nothing is sent", async () => {
+		await mount(new CardClient(null));
+		const ws = await recording("spoken");
+		(document.activeElement as HTMLElement | null)?.blur?.();
+		const enter = () => act(async () => void document.body.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Enter" })));
+		await enter();
+		await enter(); // a second press while it settles does nothing
+		assert.equal(q('form[data-testid="composer"] button[type="submit"]')!.getAttribute("data-finishing"), "true", "spinner while it settles");
+		await closeSocket(ws);
+		await settle();
+		assert.equal(composer().value, "spoken");
+		assert.equal(q('[data-testid="dictation-bar"]'), null, "the run ended");
+		assert.deepEqual(posts, [], "nothing sent");
+	});
+
+	it("Dictate moves focus into the composer", async () => {
+		await mount(new CardClient(null));
+		let focused = 0;
+		composer().focus = () => void focused++; // linkedom has no real focus tracking
+		const ws = await recording();
+		assert.ok(focused >= 1, "the composer was focused when Dictate started");
+		await click(toggle());
+		await closeSocket(ws);
+		await settle();
 	});
 
 	it("the wolfpack:kbd-toggle-dictation event starts and stops a run (⌘D)", async () => {

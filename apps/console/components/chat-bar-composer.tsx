@@ -125,15 +125,13 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		else api.clearSent();
 		return ok;
 	}, [api, target, working, onReplied]);
-	// Submit while dictating: finish the run first so the last words are in the note (appendNoteText), then press with the settled session.
-	const sendNoteRef = useRef(sendNote);
-	sendNoteRef.current = sendNote;
+	// Submit while dictating only stops the run (the last words land in the note via appendNoteText); the next press does the normal job.
 	const noteInFlight = useRef(false);
 	const pressNote = useCallback(() => {
 		if (noteInFlight.current) return;
 		if (!dictation.active) return session?.press(sendNote);
 		noteInFlight.current = true;
-		void dictation.finish().then(() => sessionRef.current?.press(sendNoteRef.current)).finally(() => void (noteInFlight.current = false));
+		void dictation.finish().finally(() => void (noteInFlight.current = false));
 	}, [dictation, session, sendNote]);
 
 	return (

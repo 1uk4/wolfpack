@@ -28,7 +28,7 @@ import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer-controls";
 import { useAttachedThread } from "@/components/attached-thread";
-import { DictationBar, joinDictation, useBarShown } from "@/components/dictation";
+import { DictationBar, joinDictation, setDictationFocus, useBarShown, recordingAt } from "@/components/dictation";
 import { getInlineDropSink } from "@/components/ask-inline-composer";
 import { setPageNoteAppend, useThreadDictation } from "@/components/use-thread-dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
@@ -643,7 +643,7 @@ function ThreadChatInner({
 		// Stop only: the first press puts the final transcript in the field; the next press sends it.
 		void dictation.finish().finally(() => void (sendInFlight.current = false));
 	}, [dictation, doSend]);
-	// Submit/Next in note mode while dictating: finish the run first so the last words are in the note, then press (a ref sees the settled session).
+	// Submit/Next in note mode while dictating only stops the run (the last words land in the note); the next press does the normal job.
 	const pressNoteRef = useRef<() => void>(() => {});
 	pressNoteRef.current = () => session.press((t, refs) => submitToThread({ wolf, slug }, t, busy, refs).then((ok) => { if (ok) ask.settle(); return ok; }));
 	const noteInFlight = useRef(false);
@@ -651,7 +651,7 @@ function ThreadChatInner({
 		if (noteInFlight.current) return;
 		if (!dictation.active) return pressNoteRef.current();
 		noteInFlight.current = true;
-		void dictation.finish().then(() => pressNoteRef.current()).finally(() => void (noteInFlight.current = false));
+		void dictation.finish().finally(() => void (noteInFlight.current = false));
 	}, [dictation]);
 
 	const onStop = useCallback(() => {

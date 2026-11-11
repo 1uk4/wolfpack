@@ -1,4 +1,4 @@
-import { baseHealth, createLagMonitor, type LagMonitor } from "@wolfpack/protocol/health-lag";
+import { baseHealth, createLagMonitor, normaliseMachine, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import { HUB_HEALTH_MAX_HOSTS, HUB_HEALTH_MAX_WOLVES, type HealthBody, type HubHealthHost, type LinkPresence } from "@wolfpack/protocol";
 import { hubVersion } from "./settings.js";
 
@@ -26,6 +26,8 @@ export interface PackSummarySource {
   hosts: () => { name: string }[];
   wolves: () => { name: string; host?: string; status?: string }[];
   presence: (hostId: string) => LinkPresence;
+  /** The machine a host reported in its hello, when it did. */
+  machine?: (hostId: string) => string | undefined;
   /** Worker token label per host id (reads the token file: called only when `labelsDirty` was signalled). */
   labels: () => Map<string, string>;
   now?: () => number;
@@ -75,9 +77,10 @@ export function createPackSummary(src: PackSummarySource): PackSummary {
       const presence = src.presence(id);
       const raw = labels!.get(id);
       const label = raw !== undefined && HOSTNAME_LABEL.test(raw) ? raw : undefined; // /healthz is unauthenticated: free-text labels (a person's name) are never sent
+      const machine = normaliseMachine(src.machine?.(id)); // public /healthz: only a valid hostname label goes out
       const at = since.get(id);
       const status = presence === "online" ? "online" : "offline";
-      return { id, ...(label ? { label } : {}), presence, ...(at ? { since: at } : {}), wolves: byHost.get(id)!.sort().slice(0, HUB_HEALTH_MAX_WOLVES).map((name) => ({ name, status })) };
+      return { id, ...(label ? { label } : {}), ...(machine ? { machine } : {}), presence, ...(at ? { since: at } : {}), wolves: byHost.get(id)!.sort().slice(0, HUB_HEALTH_MAX_WOLVES).map((name) => ({ name, status })) };
     });
   };
   return {

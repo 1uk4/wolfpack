@@ -52,7 +52,7 @@ import {
 	updateOffered,
 	updateOutcome,
 	updateQuestion,
-	serviceCards,
+	machineServiceCards,
 	type ServiceCard,
 	type UpdateUnitView,
 	type HealthActionsView,
@@ -204,8 +204,6 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 					<p className="text-muted-foreground">{reachable ? "Checking the pack…" : "No report yet."}</p>
 				) : (
 					<>
-					<UpdatePanel actions={snapshot.actions} canAct={reachable} />
-					<ServiceCards snapshot={snapshot} canAct={reachable} fakes={health} />
 					{groupByHost(snapshot).map((c) => <HostSection key={c.id} card={c} now={now} canAct={reachable} actions={snapshot.actions} fakes={health} />)}
 					</>
 				)}
@@ -294,7 +292,7 @@ function useAction(url: string, service: string, outcome: (status: number, retry
 const BTN = "rounded-sm px-2.5 py-1 text-xs transition-colors max-md:px-3 max-md:py-2";
 const QUIET_BTN = cn(BTN, "border text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50");
 
-function LinkRow({ link, now, canRestart, actions, fakes }: { link: HealthLink; now: number; canRestart: boolean; actions: HealthActionsView | undefined; fakes: Fakes }) {
+function LinkRow({ link, now, canRestart, actions, fakes, extra }: { link: HealthLink; now: number; canRestart: boolean; actions: HealthActionsView | undefined; fakes: Fakes; extra?: React.ReactNode }) {
 	const restart = useAction("/api/health/restart", link.id, restartOutcome, fakes.fakeRestart);
 	const can = rowActions(link, actions);
 	const rollback = useAction("/api/health/rollback", can.rollback?.service ?? "", rollbackOutcome, fakes.fakeRollback);
@@ -373,6 +371,7 @@ function LinkRow({ link, now, canRestart, actions, fakes }: { link: HealthLink; 
 				{link.lastRestart && ` · restart ${link.lastRestart.ok ? "issued" : "failed"} ${ageText(now - Date.parse(link.lastRestart.at))}`}
 			</p>
 			{story && <p data-testid="pack-health-history" className="mt-1 break-words text-muted-foreground/70">{story}</p>}
+			{extra}
 			{ui.phase === "error" && <p data-testid="pack-health-restart-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
 			{rbUi.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rbUi.message}</p>}
 			{logsOpen && <LogsPanel service={link.id} fake={fakes.fakeLogs} canFetch={canRestart} />}
@@ -485,27 +484,28 @@ function UpdatePanel({ actions, canAct }: { actions: HealthActionsView | undefin
 
 type Sub = { channel: "stable" | "main"; mode: "off" | "button" | "auto" | "unknown"; exists?: boolean };
 
-/** One service's card: status, channel, running and latest version, Update and Roll back (each confirmed, then POSTed to the console server). */
-function ServiceCardView({ card, channel, canAct, fakes }: { card: ServiceCard; channel: string; canAct: boolean; fakes: Fakes }) {
+/**
+ * One service's update controls, inline in its row on the console's machine: channel, running and latest version, Update and Roll back (each confirmed,
+ * then POSTed to the console server). `ownRollback`: the row already has its own Roll back, so none is repeated here.
+ */
+function ServiceCardView({ card, channel, canAct, fakes, ownRollback }: { card: ServiceCard; channel: string; canAct: boolean; fakes: Fakes; ownRollback?: boolean }) {
 	const update = useAction("/api/health/update", card.component, updateOutcome, null, "component");
 	const rollback = useAction("/api/health/rollback", card.component, rollbackOutcome, fakes.fakeRollback);
 	const name = card.component === "hubd" ? "Hub" : card.component.charAt(0).toUpperCase() + card.component.slice(1);
+	const label = card.component === "wolfd" ? "Wolfd (all wolves)" : name;
 	return (
-		<div data-testid="pack-service-card" data-service={card.component} className="flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2">
-			<div className="flex items-center gap-2">
-				<span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[card.tone])} />
-				<span className="font-medium text-foreground">{name}</span>
-				<span className="ml-auto rounded-sm border px-1.5 text-muted-foreground">{channel}</span>
-			</div>
+		<div data-testid="pack-service-card" data-service={card.component} className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 border-t pt-1.5">
+			<span className="font-medium text-foreground">{label}</span>
+			<span className="rounded-sm border px-1.5 text-muted-foreground">{channel}</span>
 			<p className="text-muted-foreground/80">
 				{card.running ? `v${card.running}` : "version unknown"}
 				{card.latest ? ` → v${card.latest}` : " · up to date"}
 			</p>
-			<div className="flex flex-wrap items-center gap-1.5">
+			<div className="ml-auto flex flex-wrap items-center gap-1.5">
 				{card.canUpdate && (
 					<ActionControl verb="Update" sentText="Update started" testId="pack-card-update" ui={update.ui} waitS={update.waitS} disabled={!canAct} question={`Update ${name} to v${card.latest}?${card.component === "console" || card.component === "hubd" ? " It restarts." : ""}`} onAsk={() => update.setUi({ phase: "confirm" })} onCancel={() => update.setUi({ phase: "idle" })} onConfirm={() => void update.send()} />
 				)}
-				{card.rollbackTo && (
+				{card.rollbackTo && !ownRollback && (
 					<ActionControl verb="Roll back" sentText="Rollback started" testId="pack-card-rollback" ui={rollback.ui} waitS={rollback.waitS} disabled={!canAct} question={rollbackQuestion(name, card.running, card.rollbackTo)} onAsk={() => rollback.setUi({ phase: "confirm" })} onCancel={() => rollback.setUi({ phase: "idle" })} onConfirm={() => void rollback.send()} />
 				)}
 			</div>
@@ -515,11 +515,8 @@ function ServiceCardView({ card, channel, canAct, fakes }: { card: ServiceCard; 
 	);
 }
 
-/**
- * The four service cards plus the pack-wide auto switch and the channel picker (under Advanced). The subscription (GET/PUT
- * /api/health/subscription) is saved on change; behind-counts come from GET /api/health/update every 15 s. wolfd is never auto-updated.
- */
-function ServiceCards({ snapshot, canAct, fakes }: { snapshot: HealthSnapshotView; canAct: boolean; fakes: Fakes }) {
+/** What the console's machine card needs to update its services: the update units and the pack-wide subscription (GET/PUT /api/health/subscription, saved on change; behind-counts from GET /api/health/update every 15 s). */
+function useUpdateState() {
 	const [units, setUnits] = useState<UpdateUnitView[]>([]);
 	const [sub, setSub] = useState<Sub>({ channel: "stable", mode: "button" });
 	const [saveErr, setSaveErr] = useState<string | null>(null);
@@ -553,9 +550,15 @@ function ServiceCards({ snapshot, canAct, fakes }: { snapshot: HealthSnapshotVie
 			setSaveErr(`Could not save (${(e as Error).message === "401" ? "sign in first" : "failed"})`);
 		}
 	};
-	const cards = serviceCards(snapshot.links, snapshot.actions, units);
+	return { units, sub, save, saveErr };
+}
+
+/** The top of the console's machine card: the update banner, the pack-wide auto switch and the channel picker (under Advanced). wolfd is never auto-updated. */
+function UpdateHeader({ up, actions, canAct }: { up: ReturnType<typeof useUpdateState>; actions: HealthActionsView | undefined; canAct: boolean }) {
+	const { sub, save, saveErr } = up;
 	return (
-		<section data-testid="pack-service-cards" className="mb-4">
+		<section data-testid="pack-service-cards">
+			<UpdatePanel actions={actions} canAct={canAct} />
 			<div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
 				<label className="flex items-center gap-2 max-md:py-1">
 					<input type="checkbox" data-testid="pack-auto-switch" checked={sub.mode === "auto"} disabled={!canAct} onChange={(e) => void save({ ...sub, mode: e.target.checked ? "auto" : "button" })} />
@@ -564,10 +567,7 @@ function ServiceCards({ snapshot, canAct, fakes }: { snapshot: HealthSnapshotVie
 				<span className="text-muted-foreground/70">wolfd always waits for you</span>
 				{sub.exists === false && sub.mode === "unknown" && <span className="text-muted-foreground/70">not set (host default)</span>}
 			</div>
-			<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-				{cards.map((c) => <ServiceCardView key={c.component} card={c} channel={sub.channel} canAct={canAct} fakes={fakes} />)}
-			</div>
-			<details className="mt-2 text-muted-foreground">
+			<details className="text-muted-foreground">
 				<summary className="cursor-pointer select-none py-0.5 max-md:py-1.5">Advanced</summary>
 				<label className="mt-1 flex items-center gap-2">
 					Channel
@@ -583,7 +583,7 @@ function ServiceCards({ snapshot, canAct, fakes }: { snapshot: HealthSnapshotVie
 }
 
 /** The console's own row (it is not a probed link): only roll back, since it is the thing serving this page. */
-function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView | undefined; canAct: boolean; fakes: Fakes }) {
+function ConsoleRow({ actions, canAct, fakes, extra }: { actions: HealthActionsView | undefined; canAct: boolean; fakes: Fakes; extra?: React.ReactNode }) {
 	const rb = actions?.rollback.find((r) => r.service === "console");
 	const rollback = useAction("/api/health/rollback", "console", rollbackOutcome, fakes.fakeRollback);
 	const [now, setNow] = useState(() => Date.now());
@@ -620,6 +620,7 @@ function ConsoleRow({ actions, canAct, fakes }: { actions: HealthActionsView | u
 				)}
 			</div>
 			{rollback.ui.phase === "error" && <p data-testid="pack-health-rollback-error" className="mt-1 text-red-600 dark:text-red-400">{rollback.ui.message}</p>}
+			{extra}
 		</div>
 	);
 }
@@ -737,33 +738,61 @@ function MacCommands({ commands }: { commands: string[] }) {
  * One host (work-wolfpack-w7RPvtd): its hub, its workerd units with the wolves each runs nested under it, this console if it runs here,
  * and the host's map facts (services, paths, backups) folded away at the bottom. A map host with nothing probed from here: facts only.
  */
-function HostSection({ card, now, canAct, actions, fakes }: { card: HostCard; now: number; canAct: boolean; actions: HealthActionsView | undefined; fakes: Fakes }) {
-	const row = (l: HealthLink) => <LinkRow key={l.id} link={l} now={now} canRestart={canAct} actions={actions} fakes={fakes} />;
+function HostSection(p: { card: HostCard; now: number; canAct: boolean; actions: HealthActionsView | undefined; fakes: Fakes }) {
+	// Only the console's own machine has the updater: its card owns the update state (a hook, so a separate component).
+	return p.card.console ? <ConsoleHostSection {...p} /> : <HostBody {...p} up={null} />;
+}
+
+function ConsoleHostSection(p: { card: HostCard; now: number; canAct: boolean; actions: HealthActionsView | undefined; fakes: Fakes }) {
+	return <HostBody {...p} up={useUpdateState()} />;
+}
+
+function HostBody({ card, now, canAct, actions, fakes, up }: { card: HostCard; now: number; canAct: boolean; actions: HealthActionsView | undefined; fakes: Fakes; up: ReturnType<typeof useUpdateState> | null }) {
+	// ONE list per machine: the services that run here, each with its update controls inline on the console's machine. The hub card is only
+	// there when the hub runs here. wolfd's controls sit on the first workerd row that has wolves (one wolfd release for all of them);
+	// workerd's on the first workerd row.
+	const byComponent = new Map((up ? machineServiceCards(card, actions, up.units) : []).map((c) => [c.component, c]));
+	const firstWolfWorkerd = card.workerds.find((w) => w.wolves.length > 0)?.link.id ?? card.workerds[0]?.link.id;
+	const controls = (l: HealthLink, component: ServiceCard["component"]) => {
+		const c = up && byComponent.get(component);
+		return c && up ? <ServiceCardView card={c} channel={up.sub.channel} canAct={canAct} fakes={fakes} ownRollback={!!rowActions(l, actions).rollback} /> : undefined;
+	};
+	const row = (l: HealthLink, extra?: React.ReactNode) => <LinkRow key={l.id} link={l} now={now} canRestart={canAct} actions={actions} fakes={fakes} extra={extra} />;
+	const workerdRow = (w: HostCard["workerds"][number], i: number) =>
+		row(w.link, <>{i === 0 && controls(w.link, "workerd")}{w.link.id === firstWolfWorkerd && controls(w.link, "wolfd")}</>);
 	const note = !card.checked ? "not checked from here" : card.console ? "this console runs here" : "checked over the network";
 	const titleId = "pack-host-" + card.id.replace(/[^a-z0-9-]/g, "-");
 	// The Mac stack commands are the same for every row of a host: shown once, at the foot of the card.
 	const macCommands = [...card.workerds.flatMap((w) => [w.link, ...w.wolves]), ...card.wolves].map((l) => rowActions(l, actions).macCommands).find((c) => c !== null) ?? null;
 	return (
-		<section data-testid="pack-host" data-host={card.id} aria-labelledby={titleId} className="mb-4">
+		<section data-testid="pack-host" data-host={card.id} aria-labelledby={titleId} className="pb-4">
 			<h3 id={titleId} className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-xs">
 				<span className="font-semibold uppercase tracking-widest text-muted-foreground">{card.label}</span>
 				{card.label !== card.id && card.checked && <span className="text-muted-foreground/60">{card.id}</span>}
 				<span className="text-muted-foreground/60">· {note}</span>
 			</h3>
-			<div className="flex flex-col gap-1.5">
-				{card.hub && row(card.hub)}
-				{card.workerds.map((w) => (
-					<div key={w.link.id} className="flex flex-col gap-1.5">
-						{row(w.link)}
-						{w.wolves.length > 0 && (
-							<div data-testid="pack-host-wolves" data-via={w.link.id} className="ml-3 flex flex-col gap-1.5 border-l pl-2.5">
-								{w.wolves.map(row)}
-							</div>
-						)}
+			<div className="flex min-w-0 flex-col gap-1.5">
+				{up && <UpdateHeader up={up} actions={actions} canAct={canAct} />}
+				{(card.hub || card.workerds.length > 0 || card.console) && (
+					<div role="group" aria-label={`Services on ${card.label}`} className="flex min-w-0 flex-col gap-1.5">
+						<h4 className="text-muted-foreground/70">Services</h4>
+						{card.hub && row(card.hub, controls(card.hub, "hubd"))}
+						{card.workerds.map(workerdRow)}
+						{card.console && <ConsoleRow actions={actions} canAct={canAct} fakes={fakes} extra={up && byComponent.get("console") ? <ServiceCardView card={byComponent.get("console")!} channel={up.sub.channel} canAct={canAct} fakes={fakes} ownRollback /> : undefined} />}
 					</div>
-				))}
-				{card.wolves.map(row)}
-				{card.console && <ConsoleRow actions={actions} canAct={canAct} fakes={fakes} />}
+				)}
+				{(card.wolves.length > 0 || card.workerds.some((w) => w.wolves.length > 0)) && (
+					<div role="group" aria-label={`Wolves on ${card.label}`} className="flex min-w-0 flex-col gap-1.5">
+						<h4 className="text-muted-foreground/70">Wolves</h4>
+						{card.workerds.filter((w) => w.wolves.length > 0).map((w) => (
+							<div key={w.link.id} data-testid="pack-host-wolves" data-via={w.link.id} className="flex min-w-0 flex-col gap-1.5">
+								<span className="text-muted-foreground/60">under {w.link.id}</span>
+								<div className="ml-3 flex flex-col gap-1.5 border-l pl-2.5">{w.wolves.map((l) => row(l))}</div>
+							</div>
+						))}
+						{card.wolves.map((l) => row(l))}
+					</div>
+				)}
 				{macCommands && <MacCommands commands={macCommands} />}
 				{card.facts && <HostFacts facts={card.facts} open={!card.checked} />}
 			</div>

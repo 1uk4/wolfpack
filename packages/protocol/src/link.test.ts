@@ -24,4 +24,12 @@ describe("hello wolves: additive KB flags", () => {
     const hello = { t: "hello", v: 1, hostId: "box", laptop: false, wolves: [{ name: "a", domains: [], kbReadable: true }], kbRevisions: {} };
     expect(parseLinkFrame(JSON.stringify(hello)).ok).toBe(true);
   });
+
+  it("hello carries an optional machine name", () => {
+    const hello = { t: "hello", v: 1, hostId: "sfo-01-wolves", laptop: false, wolves: [], kbRevisions: {} };
+    const withMachine = parseLinkFrame(JSON.stringify({ ...hello, machine: "sfo-01" }));
+    expect(withMachine.ok && withMachine.frame).toMatchObject({ machine: "sfo-01" });
+    const without = parseLinkFrame(JSON.stringify(hello));
+    expect(without.ok && (without.frame as { machine?: string }).machine).toBeUndefined();
+  });
 });

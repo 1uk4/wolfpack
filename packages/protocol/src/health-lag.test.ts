@@ -3,10 +3,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { stampedVersion } from "./health-lag.js";
+import { machineName, normaliseMachine, stampedVersion } from "./health-lag.js";
+
+describe("normaliseMachine", () => {
+  it("lowercases, trims and keeps the first dot-label; rejects anything that is not a hostname label", () => {
+    expect(normaliseMachine(" SFO-01 ")).toBe("sfo-01");
+    expect(normaliseMachine("Lukas-MacBook.local")).toBe("lukas-macbook");
+    expect(normaliseMachine("sfo.01")).toBe("sfo");
+    expect(normaliseMachine("my_box")).toBeUndefined();
+    expect(normaliseMachine("  ")).toBeUndefined();
+    expect(normaliseMachine(undefined)).toBeUndefined();
+    expect(normaliseMachine("a".repeat(64))).toBeUndefined();
+  });
+});
+
+describe("machineName", () => {
+  it("prefers WOLFPACK_MACHINE, else the OS hostname, lowercased with .local dropped", () => {
+    expect(machineName({ WOLFPACK_MACHINE: "  SFO-01 " }, () => "ignored")).toBe("sfo-01");
+    expect(machineName({}, () => "Lukas-MacBook.local")).toBe("lukas-macbook");
+    expect(machineName({ WOLFPACK_MACHINE: "  " }, () => "Box")).toBe("box");
+  });
+});
 
 let dir: string;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  if (dir) rmSync(dir, { recursive: true, force: true });
+  dir = "";
+});
 const at = (...p: string[]) => pathToFileURL(join(dir, ...p));
 
 describe("stampedVersion", () => {

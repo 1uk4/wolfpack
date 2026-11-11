@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, type HealthLink } from "../src/core/pack-health-view.ts";
+import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, type HealthLink } from "../src/core/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-09T14:10:00Z");
 const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink> = {}): HealthLink => ({
@@ -42,6 +42,17 @@ describe("service cards (one per service in the pack panel)", () => {
 			],
 		);
 		assert.equal(serviceCards(links, { systemd: false, rollback: [] }, units).some((c) => c.canUpdate || c.rollbackTo !== null), false);
+	});
+});
+
+describe("update controls per machine", () => {
+	it("offers the service cards (Update, Roll back) only on the console's own machine, built from that machine's links", () => {
+		const actions = { systemd: true, rollback: [{ service: "hubd", from: "0.1.14", to: "0.1.13", last: null }] } as unknown as Parameters<typeof serviceCards>[1];
+		const units = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }];
+		const here = { console: true, hub: link("hubd", "ok"), workerds: [{ link: link("workerd", "ok"), wolves: [link("wolfd@hal", "ok")] }], wolves: [] };
+		const other = { console: false, hub: null, workerds: [{ link: link("workerd-ci", "ok", { version: "0.1.2" }), wolves: [] }], wolves: [] };
+		assert.deepEqual(machineServiceCards(here, actions, units).map((c) => [c.component, c.canUpdate]), [["console", false], ["hubd", true], ["wolfd", false], ["workerd", false]]);
+		assert.deepEqual(machineServiceCards(other, actions, units), []);
 	});
 });
 

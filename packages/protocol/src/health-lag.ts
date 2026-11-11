@@ -94,7 +94,24 @@ export function packageVersion(url: URL): string | undefined {
   }
 }
 
+/** The machine this process runs on: `WOLFPACK_MACHINE` if set, else the OS hostname; lowercased, trimmed, a trailing `.local` dropped. */
+export function machineName(env: Record<string, string | undefined> = process.env, host: () => string = hostname): string {
+  return normaliseMachine(env.WOLFPACK_MACHINE) ?? normaliseMachine(host()) ?? "";
+}
+
+const MACHINE_LABEL = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * THE machine-name rule, used by workerd, hubd and the console: trim, lowercase, keep the first dot-label (drops `.local`, `sfo.01` -> `sfo`),
+ * then require a hostname label (letters, digits, `-`, at most 63). Anything else (empty, `my_box`) is undefined.
+ */
+export function normaliseMachine(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const label = raw.trim().toLowerCase().split(".")[0] ?? "";
+  return MACHINE_LABEL.test(label) ? label : undefined;
+}
+
 /** Standard fields of a /healthz body. `lag` covers the monitor's rolling window (see createLagMonitor); `host` is os.hostname(). */
 export function baseHealth(service: string, monitor: LagMonitor, version?: string): HealthBody {
-  return { ok: true, service, host: hostname(), ...(version ? { version } : {}), uptimeS: Math.round(process.uptime()), lag: monitor.sample() };
+  return { ok: true, service, host: hostname(), machine: machineName(), ...(version ? { version } : {}), uptimeS: Math.round(process.uptime()), lag: monitor.sample() };
 }

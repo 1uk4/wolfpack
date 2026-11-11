@@ -520,6 +520,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       hosts: () => registry.list("hosts") as { name: string }[],
       wolves: () => registry.list("wolves") as { name: string; host?: string; status?: string }[],
       presence: (h) => link.presence(h),
+      machine: (h) => link.machine(h),
       // A host's label is its newest worker token's label (operator `--label`, else the hostname workerd sent when pairing).
       labels: () => new Map(tokens.list().filter((t) => t.kind === "worker" && t.hostId && t.label).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((t) => [t.hostId!, t.label] as const)),
       now: opts.now,

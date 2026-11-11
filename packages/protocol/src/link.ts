@@ -73,6 +73,8 @@ export const LinkHelloSchema = z.object({
   v: z.number().int().nonnegative(),
   hostId: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(64),
   laptop: z.boolean(),
+  /** Additive: the machine the worker runs on (WOLFPACK_MACHINE or hostname). Several hostIds can share one machine. Absent = older worker. */
+  machine: z.string().min(1).max(128).optional(),
   wolves: z.array(LinkWolfSchema).max(LINK_MAX_WOLVES),
   /** Per-domain KB cursors the worker has applied. */
   kbRevisions: Revisions.default({}),

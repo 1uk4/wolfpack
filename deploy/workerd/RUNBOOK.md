@@ -44,6 +44,8 @@ cd /root/workerd-stage/deploy
 ./setup.sh --dry-run setup --announce hal --port 7142
 ./setup.sh --dry-run install --bundle /root/workerd-stage/bundle
 ```
+Set `WOLFPACK_MACHINE` in the env file (sfo-01: `sfo-01`; the Mac: `mac`): workerd sends it in its hub hello and `/healthz`, and the pack panel groups every workerd on one machine into one card, whatever its hub host id (`sfo-01-wolves`). Default: the OS hostname.
+
 Resolve every `WOULD FAIL` line first. If `/etc/wolfpack/workerd.env` already exists, its `WORKERD_PORT` and `WORKERD_ANNOUNCE` win and `--port`/`--announce` are ignored (setup prints a NOTICE).
 ## E. Install (sfo-01, root); the service is enabled but not started yet
 ```

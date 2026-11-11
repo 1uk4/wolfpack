@@ -234,6 +234,40 @@ describe("pack health: GET /api/health", () => {
 		assert.equal(linkOf(snap, "hub-link@cron").host, "cron"); // not "ada-lovelace"
 	});
 
+	it("groups by the machine services report: hubd, workerd-wolves (host id sfo-01-wolves) and its wolf share the machine sfo-01 whatever their hostnames; a hub-only host uses its machine over its label", async () => {
+		const fakeFetch = (async (url: string) => {
+			if (url === "http://127.0.0.1:3150/healthz") {
+				return new Response(JSON.stringify({ ok: true, service: "hubd", host: "ip-10-0-0-5", machine: "sfo-01", hosts: [
+					{ id: "sfo-01-wolves", label: "ip-10-0-0-5", machine: "sfo-01", presence: "online", wolves: [{ name: "hal", status: "online" }] },
+					{ id: "ci", label: "ci-runner", machine: "Build-Box", presence: "offline", wolves: [] },
+				] }));
+			}
+			return new Response(JSON.stringify({ ok: true, service: "workerd", host: "ip-10-0-0-5", machine: "sfo-01", hubHostId: "sfo-01-wolves", wolves: [{ name: "hal", state: "online" }] }));
+		}) as unknown as typeof fetch;
+		const health = createPackHealth({ targets: healthTargets({ WOLFPACK_HEALTH_WORKERDS: "workerd-wolves=http://127.0.0.1:7141" }), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {} });
+		const snap = await health.tick();
+		for (const id of ["hubd", "workerd-wolves", "wolfd@hal"]) assert.equal(linkOf(snap, id).host, "sfo-01", id);
+		assert.equal(linkOf(snap, "hub-link@ci").host, "build-box");
+		assert.deepEqual(snap.hosts?.filter((h) => h.isThisConsole).map((h) => h.id), ["luka-air"]);
+	});
+
+	it("puts the same worker in one group by the local and the hub path whatever the case or .local; an invalid machine name falls back to the hostname", async () => {
+		const fakeFetch = (async (url: string) => {
+			if (url === "http://127.0.0.1:3150/healthz") {
+				return new Response(JSON.stringify({ ok: true, service: "hubd", hosts: [
+					{ id: "ci", label: "ci-runner", machine: "Build-Box.local", presence: "online", wolves: [] },
+					{ id: "odd", label: "odd-host", machine: "my_box", presence: "offline", wolves: [] },
+				] }));
+			}
+			return new Response(JSON.stringify({ ok: true, service: "workerd", host: "Other-Host", machine: "my_box", wolves: [] }));
+		}) as unknown as typeof fetch;
+		const health = createPackHealth({ targets: healthTargets({ WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:7141" }), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {} });
+		const snap = await health.tick();
+		assert.equal(linkOf(snap, "hub-link@ci").host, "build-box"); // hub path: .local and case dropped
+		assert.equal(linkOf(snap, "hub-link@odd").host, "odd-host"); // invalid machine: the label, as before
+		assert.equal(linkOf(snap, "workerd").host, "other-host"); // local path: invalid machine, hostname
+	});
+
 	it("reports a refused hub as down and a hanging hub as frozen, keeping lastOkAt, without calling the hub's API", async () => {
 		const s = await setup();
 		await s.tick(T0);

@@ -32,6 +32,7 @@ import {
   type LinkContributeAck,
   type LinkPresence,
 } from "@wolfpack/protocol";
+import { normaliseMachine } from "@wolfpack/protocol/health-lag";
 import type { AuthIdentity } from "./auth.js";
 import type { Registry } from "./registry.js";
 
@@ -84,6 +85,8 @@ export interface Link {
   sendToWolf(wolf: string, frame: LinkFrame): boolean;
   /** Identity of the host's live link (changes on every reconnect); undefined when there is none. */
   epoch(hostId: string): number | undefined;
+  /** The machine the host last reported in its hello (kept while it is offline); undefined for an older worker. */
+  machine(hostId: string): string | undefined;
   readonly relayHeadTimeoutMs: number;
 }
 
@@ -135,6 +138,7 @@ export function createLink(opts: LinkOptions): Link {
   };
   /** What each live host was last told, so a grants frame goes out only when the union really changed. Pruned on disconnect. */
   const sentGrants = new Map<string, string>();
+  const machines = new Map<string, string>();
   const pushGrants = (hostIds: Iterable<string>) => {
     const all = grantedAll();
     if (!all) return; // skip: never send or cache [] on error
@@ -246,6 +250,9 @@ export function createLink(opts: LinkOptions): Link {
     }
     byHost.set(c.hostId, c);
     c.hello = h;
+    const machine = normaliseMachine(h.machine);
+    if (machine) machines.set(c.hostId, machine);
+    else machines.delete(c.hostId); // an older worker reconnecting clears the stale value
     // Hello accepted: now allow full-size frames (ws keeps the limit on the receiver; there is no public setter).
     const receiver = (c.ws as unknown as { _receiver?: { _maxPayload?: number } })._receiver;
     if (receiver && typeof receiver._maxPayload === "number") receiver._maxPayload = LINK_MAX_PAYLOAD;
@@ -413,6 +420,7 @@ export function createLink(opts: LinkOptions): Link {
     },
     sendToHost,
     epoch: (hostId) => byHost.get(hostId)?.epoch,
+    machine: (hostId) => machines.get(hostId),
     relayHeadTimeoutMs: t.relayHeadTimeoutMs,
     pushKbChanged,
     sendToWolf(wolf, frame) {

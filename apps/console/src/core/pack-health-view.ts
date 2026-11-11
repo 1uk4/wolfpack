@@ -1,5 +1,5 @@
 /** Pack health view model (work-wolfpack-6imFEq7): pure wording and colour for the sidebar bar and the health modal. */
-import type { HostInfo } from "./pack-hosts.ts";
+import type { HostCard, HostInfo } from "./pack-hosts.ts";
 
 export type HealthStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
 export type Tone = "red" | "amber" | "grey" | "green";
@@ -135,6 +135,20 @@ export function serviceCards(links: HealthLink[], actions: HealthActionsView | u
 			rollbackTo: systemd && rb && rollbackOffered(rb) ? rb.to : null,
 		};
 	});
+}
+
+/**
+ * The update controls of one machine card. The updater and the subscription file are per machine, so only the console's own machine
+ * has them (built from the links on that machine); other machines show status and version only.
+ */
+export function machineServiceCards(
+	m: Pick<HostCard, "console" | "hub" | "workerds" | "wolves">,
+	actions: HealthActionsView | undefined,
+	units: UpdateUnitView[],
+): ServiceCard[] {
+	if (!m.console) return [];
+	const links = [...(m.hub ? [m.hub] : []), ...m.workerds.flatMap((w) => [w.link, ...w.wolves]), ...m.wolves];
+	return serviceCards(links, actions, units);
 }
 
 /** The confirm text: the target's X.Y.Z, with the build only when both cores are equal; says when a version is unknown. */

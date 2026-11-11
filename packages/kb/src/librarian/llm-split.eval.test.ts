@@ -17,7 +17,9 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { judgeSplit, memorySplitCache, type Partitioner } from "./llm-split.js";
 import { planRebuild, insertEntry, repairPath, type RebuildEntry, type RebuildState } from "./rebuild.js";
-import { ari, type Vec } from "./tree-rules.js";
+import { ari, DEFAULT_RULES, type Vec } from "./tree-rules.js";
+/** The join bar off: these shapes were measured without it (it joins leftovers to their closest group; see tree-rules.test.ts). */
+const NO_JOIN = { ...DEFAULT_RULES, joinLeftovers: false };
 
 interface Fx { id: string; title: string; summary: string; vec: Vec }
 const F = JSON.parse(readFileSync(new URL("../../test/fixtures/tree-eval/sections.json", import.meta.url), "utf-8")) as {
@@ -52,7 +54,7 @@ const toEntries = (es: Fx[]): RebuildEntry[] => es.map((e) => ({ id: e.id, title
 const groupSizes = (labels: number[], k: number) => Array.from({ length: k }, (_, g) => labels.filter((l) => l === g).length).sort((a, b) => a - b);
 
 describe("B: the validated LLM partition on the real sections (size gate off)", () => {
-  const judge = (es: Fx[]) => judgeSplit({ partitioner: stub(), ignoreSize: true }, { domain: "wp", parentTitle: "p", members: toMembers(es) });
+  const judge = (es: Fx[]) => judgeSplit({ partitioner: stub(), ignoreSize: true, rules: NO_JOIN }, { domain: "wp", parentTitle: "p", members: toMembers(es) });
 
   it("Console Chat: four categories survive (one of them partial), the rest are leftovers", async () => {
     const v = await judge(set(CONSOLE));
@@ -89,7 +91,7 @@ describe("B: the validated LLM partition on the real sections (size gate off)", 
 
 describe("B: rebuild shapes", () => {
   const namer = async () => ({ title: `T${Math.random()}`, summary: "s" });
-  const rebuild = (es: Fx[]) => planRebuild({ domain: "wp", entries: toEntries(es), namer, partitioner: stub() });
+  const rebuild = (es: Fx[]) => planRebuild({ domain: "wp", entries: toEntries(es), namer, partitioner: stub(), rules: NO_JOIN });
   const direct = (plan: Awaited<ReturnType<typeof rebuild>>, id: string) => [...plan.state.assignment.values()].filter((s) => s === id).length;
 
   it("Console Chat (30): a root holding its 13 leftovers plus four groups", async () => {
@@ -123,13 +125,13 @@ describe("B: acceptance — one-by-one inserts vs rebuild", () => {
   async function run(fx: Fx[]) {
     const entries = toEntries(fx);
     const ids = entries.map((e) => e.id).sort();
-    const reb = await planRebuild({ domain: "wp", entries, namer, partitioner: stub() });
+    const reb = await planRebuild({ domain: "wp", entries, namer, partitioner: stub(), rules: NO_JOIN });
     const spy = vi.fn(stub());
     const cache = memorySplitCache();
     const info = new Map<string, { title: string; summary?: string }>();
     const st: RebuildState = { sections: [], assignment: new Map() };
     const vec = new Map<string, number[]>();
-    for (const e of [...entries].sort((a, b) => (a.id < b.id ? -1 : 1))) await insertEntry(st, e, vec, "wp", undefined, { partitioner: spy, cache, info });
+    for (const e of [...entries].sort((a, b) => (a.id < b.id ? -1 : 1))) await insertEntry(st, e, vec, "wp", NO_JOIN, { partitioner: spy, cache, info });
     const lab = (s: RebuildState) => { const m = new Map<string, number>(); return ids.map((i) => { const x = s.assignment.get(i)!; if (!m.has(x)) m.set(x, m.size); return m.get(x)!; }); };
     return { ari: ari(lab(reb.state), lab(st)), st, vec, spy, cache, info };
   }
@@ -150,7 +152,7 @@ describe("B: acceptance — one-by-one inserts vs rebuild", () => {
       expect(distinct().size).toBe(spy.mock.calls.length);
       const snap = () => JSON.stringify({ s: st.sections.map((s) => [s.id, s.parent, s.memberCount]), a: [...st.assignment].sort() });
       const before = snap();
-      const pass = async () => { for (const s of [...st.sections]) expect(await repairPath(st, String(s.id), vec, "wp", undefined, { partitioner: spy, cache, info })).toEqual([]); };
+      const pass = async () => { for (const s of [...st.sections]) expect(await repairPath(st, String(s.id), vec, "wp", NO_JOIN, { partitioner: spy, cache, info })).toEqual([]); };
       // A section the inserts never landed in (a parent holding > splitAbove leftovers) is judged for the first time here,
       // which may ask once for its member set; after that, passes are free.
       await pass();

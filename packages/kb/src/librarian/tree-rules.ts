@@ -492,7 +492,8 @@ export const isPartition = (d: PartitionDecision | PartitionRejected): d is Part
 /**
  * The "join bar". After a partition is validated, each leftover joins the kept group whose centroid it is closest to, provided
  * (1) cos(entry, best) >= max(joinFloor, bar(best)), bar = the lowest leave-one-out cosine of best's own coherent members to
- *     their group (the same measure as the coherence test, as in the measured prototype), and
+ *     their group (a within-group measure; validatePartition's coherence test instead compares a member's own group with the other
+ *     categories' centroids built from all proposed members), and
  * (2) it beats the runner-up group by joinMargin (skipped with a single kept group).
  * Otherwise it stays a leftover. Centroids and bars come from the coherent members only, before any join. X are CENTRED vectors
  * (centre(vectors)); keptSets are member indexes per kept group. Never creates a group. Off with rules.joinLeftovers = false.
@@ -503,7 +504,10 @@ export function joinLeftovers(
   const sets = keptSets.map((s) => [...s]);
   if (!rules.joinLeftovers || keptSets.length === 0 || leftovers.length === 0) return { sets, leftovers: [...leftovers], joined: 0 };
   const info = keptSets.map((ix) => {
-    const loo = ix.map((i) => cosine(unit(meanVec(ix.filter((j) => j !== i).map((j) => X[j]))), X[i]));
+    // leave-one-out mean of the other members = (S - x_i) / (g - 1); the group sum S is computed once
+    const sum = new Array<number>(X[ix[0]]?.length ?? 0).fill(0);
+    for (const i of ix) for (let d = 0; d < sum.length; d++) sum[d] += X[i][d];
+    const loo = ix.length > 1 ? ix.map((i) => cosine(unit(sum.map((s, d) => (s - X[i][d]) / (ix.length - 1))), X[i])) : [];
     return { cent: unit(meanVec(ix.map((i) => X[i]))), thr: Math.max(ix.length > 1 ? Math.min(...loo) : -Infinity, rules.joinFloor) };
   });
   const still: number[] = [];
@@ -518,6 +522,7 @@ export function joinLeftovers(
 
 /** Apply joinLeftovers to a validated decision (labels/leftovers updated; reports unchanged). */
 export function applyJoin(vectors: Vec[], d: PartitionDecision, rules: TreeRules = DEFAULT_RULES): { d: PartitionDecision; joined: number } {
+  if (!rules.joinLeftovers || d.leftovers.length === 0) return { d, joined: 0 };
   const sets = d.names.map((_, g) => d.labels.flatMap((l, i) => (l === g ? [i] : [])));
   const r = joinLeftovers(centre(vectors), sets, d.leftovers, rules);
   if (r.joined === 0) return { d, joined: 0 };

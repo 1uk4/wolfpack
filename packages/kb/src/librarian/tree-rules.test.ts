@@ -169,6 +169,21 @@ describe("joinLeftovers (the join bar)", () => {
     expect(r.sets).toEqual([[0, 1, 2]]);
     expect(r.leftovers).toEqual([]);
   });
+  it("measures every leftover against the bar of the original members, not of the group as it grows", () => {
+    // One group at 0 and 30 deg: centroid 15, bar 0.866. The leftover at 15 joins. Had the group (now 0, 15, 30) been re-measured, its
+    // weakest member would score cos 22.5 = 0.924, and the leftover at 40 (cos 25 = 0.906 to the centroid) would be turned away.
+    const X = [at(0), at(30), at(15), at(40)];
+    const r = joinLeftovers(X, [[0, 1]], [2, 3]);
+    expect(r.sets).toEqual([[0, 1, 2, 3]]);
+    expect(r.joined).toBe(2);
+  });
+  it("joins into groups of one member, where only joinFloor applies", () => {
+    // Two single-member groups at 0 and 90 deg: no leave-one-out bar exists. 20 deg sits 20 from A and 70 from B; 80 deg the reverse.
+    const X = [at(0), at(90), at(20), at(80)];
+    const r = joinLeftovers(X, [[0], [1]], [2, 3]);
+    expect(r.sets).toEqual([[0, 2], [1, 3]]);
+    expect(r.leftovers).toEqual([]);
+  });
   it("changes nothing when joinLeftovers is false", () => {
     const { X, kept } = groups([20]);
     const r = joinLeftovers(X, kept, [4], { ...DEFAULT_RULES, joinLeftovers: false });

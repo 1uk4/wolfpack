@@ -230,20 +230,41 @@ describe("judgeSplit", () => {
     expect(v.decision?.leftovers).toHaveLength(18);
   });
 
-  it("places leftovers that clear the join bar in their closest group and reports how many", async () => {
-    const e4 = make([6, 6, 6]);
-    const c = (k: number) => e4.filter((e) => cluster(e.id, SIZES) === k);
-    const mixed = [...c(2).slice(0, 4), ...c(1).slice(0, 2)];
-    const v = await judgeSplit({ partitioner: async () => ({
-      categories: [
-        { name: "A", ids: c(0).map((e) => e.id) },
-        { name: "B", ids: c(1).slice(2).map((e) => e.id) },
-        { name: "Mixed", ids: mixed.map((e) => e.id) },
-      ], doesntFit: c(2).slice(4).map((e) => e.id),
-    }) }, { domain: "wp", parentTitle: "P", members: members(e4) });
-    // the same four leftovers as the test above; three of them clear the bar of the group they sit closest to
-    expect(v.joined).toBe(3);
-    expect(v.decision?.leftovers).toHaveLength(1);
+  describe("the join bar, on a worked example", () => {
+    // 2-D unit vectors at these angles. They are antipodal in pairs, so the mean is zero and centring leaves them as they are.
+    //   m0..m2 = A at 0, 20, -20 deg      (A's centroid is 0 deg; its bar is cos 30 = 0.866: the weakest member leaves a mean 30 deg away)
+    //   m3..m5 = B at 180, 200, 160 deg   (centroid 180 deg, bar 0.866)
+    //   m6 = 10 deg  -> cos 10 = 0.985 to A, -0.985 to B: clears A's bar, joins A
+    //   m7 = 190 deg -> joins B the same way
+    //   m8 = 90, m9 = 270 deg -> cos 0 to both centroids, below joinFloor 0.05: stay loose
+    const ANGLES = [0, 20, -20, 180, 200, 160, 10, 190, 90, 270];
+    const ms: JudgeMember[] = ANGLES.map((deg, i) => ({ id: `m${i}`, title: `m${i}`, summary: "", vector: [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)] }));
+    const ids = (a: number, b: number) => ms.slice(a, b).map((m) => m.id);
+    const EXPECTED = [0, 0, 0, 1, 1, 1, 0, 1, -1, -1];
+
+    it("joins each leftover that clears the bar to the group it sits closest to, and leaves the rest loose", async () => {
+      const calls: string[] = [];
+      const v = await judgeSplit({ ignoreSize: true, partitioner: async ({ parentTitle, members: asked }) => {
+        calls.push(parentTitle);
+        // the second pass (over the 4 leftovers) finds nothing new
+        return asked.length === 10 ? { categories: [{ name: "A", ids: ids(0, 3) }, { name: "B", ids: ids(3, 6) }], doesntFit: ids(6, 10) } : { categories: [], doesntFit: asked.map((m) => m.id) };
+      } }, { domain: "wp", parentTitle: "P", members: ms });
+      expect(calls).toHaveLength(2);
+      expect(v.decision?.labels).toEqual(EXPECTED);
+      expect(v.decision?.leftovers).toEqual([8, 9]);
+      expect(v.joined).toBe(2);
+    });
+
+    it("joins after the second pass when only one first-pass category survived", async () => {
+      const v = await judgeSplit({ ignoreSize: true, partitioner: async ({ members: asked }) =>
+        asked.length === 10 ? { categories: [{ name: "A", ids: ids(0, 3) }], doesntFit: ids(3, 10) }
+          // the 7 leftovers: B is found, m6..m9 stay out
+          : { categories: [{ name: "B", ids: ids(3, 6) }], doesntFit: ids(6, 10) },
+      }, { domain: "wp", parentTitle: "P", members: ms });
+      expect(v.decision?.names).toEqual(["A", "B"]);
+      expect(v.decision?.labels).toEqual(EXPECTED);
+      expect(v.joined).toBe(2);
+    });
   });
 
   it("a category dropped for incoherence is reported, and its members are leftovers", async () => {

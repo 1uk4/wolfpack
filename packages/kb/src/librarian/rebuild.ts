@@ -322,7 +322,7 @@ function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): stri
       out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? (c.why === "partial" ? "kept (partial)" : "kept") : `dropped (${c.why})`}`);
     }
     if (v.joined) out.push(`  - joined ${v.joined} leftover${v.joined === 1 ? "" : "s"} to their closest group`);
-    if (v.doesntFit?.length) out.push(`  - doesn't fit: ${v.doesntFit.map((i) => byEntry.get(i)?.title ?? i).join("; ")}`);
+    if (v.doesntFit?.length) out.push(`  - doesn't fit${v.joined ? " (before joins)" : ""}: ${v.doesntFit.map((i) => byEntry.get(i)?.title ?? i).join("; ")}`);
     if (!v.decision && v.reason) out.push(`  → no split: ${v.reason}`);
   } else if (v.source === "kmeans") {
     out.push(`grouping from k-means${v.fallbackReason ? ` (the LLM proposal failed: ${v.fallbackReason})` : ""}`);

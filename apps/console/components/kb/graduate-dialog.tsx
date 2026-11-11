@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
-import { KbMarkdown } from "@/components/kb-markdown";
+import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { graduationWolf, type GraduateState, type GraduationObservations, type GraduationPreview } from "@/src/core";
 import type { GraduateClient } from "./graduate-client";
 import { graduateStore, useGraduateDone, useGraduateJob, type GraduateTarget } from "./graduate-store";

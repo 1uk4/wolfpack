@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { createThreadApi } from "../src/server/thread-api.ts";
-import { createMemoryApi } from "../src/server/memory-api.ts";
+import { createMemoryApi } from "../src/server/kb/memory-api.ts";
 import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 
 const startHub = async () => {

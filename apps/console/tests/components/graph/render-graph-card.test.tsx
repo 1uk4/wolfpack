@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { GraphCard } from "../../../components/graph/graph-card.tsx";
 import { GraphUnavailable, KbMirrorLabel } from "../../../components/graph/graph-home.tsx";
 import { describeNode } from "../../../src/core/graph/kb-graph-model.ts";
-import type { KbGraph } from "../../../src/core/kb.ts";
+import type { KbGraph } from "../../../src/core/kb/kb.ts";
 
 const graph: KbGraph = {
 	nodes: [

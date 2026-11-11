@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { NotFoundError, ProtocolError, type ConsoleClient, type MemoryEvent } from "@wolfpack/client";
-import { FIRST_PULL_MS, createMemoryApi } from "../src/server/memory-api.ts";
+import { FIRST_PULL_MS, createMemoryApi } from "../../../src/server/kb/memory-api.ts";
 
 function stub(partial: Record<string, unknown>): () => ConsoleClient {
 	return () => partial as unknown as ConsoleClient;

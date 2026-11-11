@@ -32,13 +32,13 @@ import {
 	type KbGraph,
 	type MemoryEventFrame,
 } from "@/src/core";
-import { fetchWolves } from "../kb-client";
+import { fetchWolves } from "../kb/kb-client";
 import { useMemoryEvents } from "../memory-events";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";
-import { useGraduated } from "../graduation-signal";
-import { useLibrarian } from "../use-librarian";
+import { useGraduated } from "../kb/graduation-signal";
+import { useLibrarian } from "../kb/use-librarian";
 
 function Placeholder({ title, children }: { title: string; children?: React.ReactNode }) {
 	return (

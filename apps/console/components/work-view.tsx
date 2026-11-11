@@ -45,9 +45,9 @@ import {
 	type WorkSortCol,
 } from "@/src/core";
 import { createWorkClient, type WorkClient, type WorkDomain } from "./work-client";
-import { createGraduateClient, type GraduateClient } from "./graduate-client";
-import { GraduateControl } from "./graduate-dialog";
-import { useGraduated } from "./graduation-signal";
+import { createGraduateClient, type GraduateClient } from "./kb/graduate-client";
+import { GraduateControl } from "./kb/graduate-dialog";
+import { useGraduated } from "./kb/graduation-signal";
 
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
 export const DEFAULT_WORK_DOMAIN = "wolfpack";

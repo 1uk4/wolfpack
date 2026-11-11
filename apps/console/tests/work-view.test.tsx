@@ -44,7 +44,7 @@ const { WorkList, WORK_DOMAIN_KEY } = await import("../components/work-view.tsx"
 const { WorkReaderHost } = await import("../components/work-reader.tsx");
 const { FakeNav, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
 import type { WorkClient } from "../components/work-client.ts";
-import type { WorkListItem } from "../src/core/kb.ts";
+import type { WorkListItem } from "../src/core/kb/kb.ts";
 import { NOTE_H, WORK_ROW_H } from "../src/core/work-connectors.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "wolfpack", dependsOn: [], ...over });

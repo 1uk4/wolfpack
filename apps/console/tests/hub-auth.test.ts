@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { bearerOf, buildHubCookie, clearHubCookies, cookieAuthAllowed, cookieTokenOf, HUB_COOKIE, HUB_COOKIE_HOST, syncHubCookie, withCookieBearer, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, tokenFromPairingInput, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
-import { createMemoryApi } from "../src/server/memory-api.ts";
+import { createMemoryApi } from "../src/server/kb/memory-api.ts";
 import { createConsoleClient, makeRequestToken, nextRequestToken } from "../src/server/console-client.ts";
 
 const mem = (): TokenStorage & { m: Map<string, string> } => {

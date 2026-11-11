@@ -38,13 +38,13 @@ import {
 	workWolfCandidates,
 	type PaneWork,
 } from "@/src/core";
-import { KbMarkdown } from "@/components/kb-markdown";
-import { fetchKbEntry, fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb-client";
-import { EntryBody } from "@/components/entry-reader";
+import { KbMarkdown } from "@/components/kb/kb-markdown";
+import { fetchKbEntry, fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
+import { EntryBody } from "@/components/kb/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
-import { createGraduateClient, type GraduateClient } from "../graduate-client";
-import { GraduateControl } from "../graduate-dialog";
-import { useGraduated } from "../graduation-signal";
+import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
+import { GraduateControl } from "../kb/graduate-dialog";
+import { useGraduated } from "../kb/graduation-signal";
 import { RouteNav, isEditableTarget, type RouteNavModel } from "./graph-route-nav.tsx";
 
 // ---- Data ------------------------------------------------------------------

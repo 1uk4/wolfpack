@@ -6,7 +6,7 @@
  * `den:<wolf>:<topic>` (den topic). Only ids present in the graph are
  * returned, so the caller can pulse blindly.
  */
-import type { KbGraph, MemoryEventFrame } from "../kb.ts";
+import type { KbGraph, MemoryEventFrame } from "../kb/kb.ts";
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 

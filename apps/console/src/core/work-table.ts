@@ -8,8 +8,8 @@
 
 import { fuzzyScore } from "./fuzzy.ts";
 import { stageLabel } from "./graph/kb-graph-model.ts";
-import { graduateState, NO_GRADUATE, type GraduateState } from "./graduate.ts";
-import type { WorkListItem } from "./kb.ts";
+import { graduateState, NO_GRADUATE, type GraduateState } from "./kb/graduate.ts";
+import type { WorkListItem } from "./kb/kb.ts";
 
 export type WorkSortCol = "name" | "stage" | "created";
 export interface WorkSort {

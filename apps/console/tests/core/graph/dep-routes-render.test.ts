@@ -8,7 +8,7 @@ import { buildDepDrawList, edgeKey, type DepRouteSelection } from "../../../src/
 import { DEP_ARROW_MAX_RATIO } from "../../../src/core/graph/dep-palette.ts";
 import { blockedWorkIds, factorySprings, nodeStyle, toCanvasData } from "../../../src/core/graph/kb-graph-model.ts";
 import { createGraphSimulation } from "../../../src/core/graph/layout.ts";
-import type { KbGraph, KbGraphNode } from "../../../src/core/kb.ts";
+import type { KbGraph, KbGraphNode } from "../../../src/core/kb/kb.ts";
 
 const pos = (o: Record<string, [number, number]>) => new Map(Object.entries(o).map(([k, [x, y]]) => [k, { x, y }]));
 const positions = pos({ a: [0, 0], b: [10, 0], c: [20, 0], far: [5000, 5000], x: [3, 3] });

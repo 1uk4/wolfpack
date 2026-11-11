@@ -39,7 +39,7 @@ const { describeNode } = await import("../../../src/core/graph/kb-graph-model.ts
 const { routeForNode, reconcileCursor } = await import("../../../src/core/graph/dep-route-adapter.ts");
 const { startCursor } = await import("../../../src/core/work-route.ts");
 const { GRAPH_PANE_WIDTH_KEY, PANE_MAX_WIDTH, PANE_MIN_WIDTH, clampPaneWidth, parsePaneWidth, paneWork, stripComments, PaneCache } = await import("../../../src/core/graph/graph-pane.ts");
-import type { KbGraph } from "../../../src/core/kb.ts";
+import type { KbGraph } from "../../../src/core/kb/kb.ts";
 import type { NodeCard } from "../../../src/core/graph/kb-graph-model.ts";
 
 const w = (id: string, workKind: string, stage: string, label = id) => ({ id: `work:${id}`, kind: "work" as const, label, depth: 3, domain: "d", workKind, stage, assignee: "hal", updated: "2026-10-27" });

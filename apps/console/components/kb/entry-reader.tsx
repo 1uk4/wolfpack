@@ -7,8 +7,8 @@ import { useRouter } from "next/navigation";
 import { ChevronRightIcon } from "lucide-react";
 import { isDictationActive } from "@/components/dictation";
 import { hasInAppHistory } from "@/components/nav-tracker";
-import { KbMarkdown } from "@/components/kb-markdown";
-import { fetchKbEntry, type KbResult } from "@/components/kb-client";
+import { KbMarkdown } from "@/components/kb/kb-markdown";
+import { fetchKbEntry, type KbResult } from "@/components/kb/kb-client";
 import { TopBar } from "@/components/top-bar";
 import {
 	entryBreadcrumb,

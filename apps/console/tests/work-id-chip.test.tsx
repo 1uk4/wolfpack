@@ -29,7 +29,7 @@ const { MessageResponse } = await import("../components/ai-elements/message.tsx"
 const { WorkIdChip, WorkItemCard, lookupWorkItem, resetWorkLookupCache, criteriaExcerpt } = await import("../components/work-id-chip.tsx");
 const { AskCard } = await import("../components/ask-card.tsx");
 const { linkifyWorkIds, workIdFromHref } = await import("../src/core/index.ts");
-const { KbMarkdown } = await import("../components/kb-markdown.tsx");
+const { KbMarkdown } = await import("../components/kb/kb-markdown.tsx");
 type Card = import("@wolfpack/client").Card;
 
 const ID = "work-wolfpack-cEg92qS";

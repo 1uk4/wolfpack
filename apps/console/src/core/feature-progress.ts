@@ -6,7 +6,7 @@
  */
 
 import type { GraphData } from "@wolfpack/protocol/objects";
-import type { WorkRecordResponse } from "./kb.ts";
+import type { WorkRecordResponse } from "./kb/kb.ts";
 import { buildTaskGraph, GRAPH_STATUS_OF } from "./task-graph.ts";
 
 export type FeatureGraph =

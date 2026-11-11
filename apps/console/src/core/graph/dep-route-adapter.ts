@@ -6,7 +6,7 @@
  */
 
 import type { DepRouteSelection } from "./dep-draw-list.ts";
-import type { KbGraph } from "../kb.ts";
+import type { KbGraph } from "../kb/kb.ts";
 import { buildTaskGraph, type TaskGraphModel } from "../task-graph.ts";
 import { ROUTE_PARENT_MODE, computeWorkRoute, startCursor, type RouteCursor, type WorkNode, type WorkRoute, type RouteParentMode as WorkRouteParentMode } from "../work-route.ts";
 

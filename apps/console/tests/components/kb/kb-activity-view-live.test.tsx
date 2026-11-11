@@ -22,9 +22,9 @@ Object.assign(globalThis, {
 	self: globalThis, // next/link's idle-prefetch helper reads `self`
 });
 
-const { KbActivityView } = await import("../components/kb-activity-view.tsx");
-const { ServerEventsProvider } = await import("../components/server-events.tsx");
-const { kbActivityFixture } = await import("./fixtures/kb-activity.ts");
+const { KbActivityView } = await import("../../../components/kb/kb-activity-view.tsx");
+const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
+const { kbActivityFixture } = await import("../../fixtures/kb-activity.ts");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TIMING = { debounceMs: 25, pollMs: 5_000 };

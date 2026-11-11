@@ -42,7 +42,7 @@ const { nodeClickAction } = await import("../components/graph/graph-view.tsx");
 const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
 const { WorkItemView } = await import("../components/work-item-page.tsx");
-const { EntryReaderView, shouldGoBackOnEscape } = await import("../components/entry-reader.tsx");
+const { EntryReaderView, shouldGoBackOnEscape } = await import("../components/kb/entry-reader.tsx");
 
 const src = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -355,7 +355,7 @@ describe("decoupling", () => {
 	it("the graph knows nothing of the Work list", () => {
 		const g = src("../components/graph/graph-view.tsx");
 		for (const bad of ["useWorkView", "WorkButton", "publishPane", "publishRoute", "yieldEsc", "colWidth", "splitWidth", "workSel"]) assert.ok(!g.includes(bad), bad);
-		const entry = src("../components/entry-reader.tsx");
+		const entry = src("../components/kb/entry-reader.tsx");
 		assert.ok(!entry.includes("useWorkView") && !entry.includes("left:"));
 	});
 	it("no Work provider or layer state is left", () => {
@@ -549,6 +549,6 @@ describe("entry page Esc", () => {
 	});
 	it("back vs home: hasInAppHistory is false on a deep link", () => {
 		assert.equal(hasInAppHistory(), false);
-		assert.match(src("../components/entry-reader.tsx"), /hasInAppHistory\(\)\) router\.back\(\);\s*else router\.push\("\/"\)/);
+		assert.match(src("../components/kb/entry-reader.tsx"), /hasInAppHistory\(\)\) router\.back\(\);\s*else router\.push\("\/"\)/);
 	});
 });

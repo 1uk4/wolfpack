@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { nodeStyle, stageLabel } from "../../../src/core/graph/kb-graph-model.ts";
 import { buildTaskGraph } from "../../../src/core/task-graph.ts";
-import type { KbGraphNode } from "../../../src/core/kb.ts";
+import type { KbGraphNode } from "../../../src/core/kb/kb.ts";
 
 const node = (stage: string, workKind: string): Pick<KbGraphNode, "kind" | "stage" | "workKind"> => ({ kind: "work", stage, workKind });
 

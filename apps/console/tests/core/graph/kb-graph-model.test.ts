@@ -29,7 +29,7 @@ import {
 	toCanvasData,
 	visibleNodeIds,
 } from "../../../src/core/graph/kb-graph-model.ts";
-import type { KbGraph, KbGraphNode } from "../../../src/core/kb.ts";
+import type { KbGraph, KbGraphNode } from "../../../src/core/kb/kb.ts";
 
 const node = (n: Partial<KbGraphNode> & Pick<KbGraphNode, "id" | "kind">): KbGraphNode => ({
 	label: n.id,

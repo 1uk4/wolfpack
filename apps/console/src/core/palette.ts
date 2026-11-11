@@ -7,8 +7,8 @@
 
 import { fuzzyScore } from "./fuzzy.ts";
 import { isSettled, type SubagentState } from "./subagents.ts";
-import { KB_ACTIVITY_HREF } from "./kb.ts";
-import type { KbGraphNode } from "./kb.ts";
+import { KB_ACTIVITY_HREF } from "./kb/kb.ts";
+import type { KbGraphNode } from "./kb/kb.ts";
 import { threadColor } from "./thread-color.ts";
 import { threadHref, threadLabel } from "./thread-adapter.ts";
 

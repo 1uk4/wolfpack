@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { toCanvasData } from "../../../src/core/graph/kb-graph-model.ts";
 import { WORK_LINK, createGraphSimulation, incrementalLayout, subtreeLinkLength } from "../../../src/core/graph/layout.ts";
 import { routeLinkSet } from "../../../src/core/graph/route-layout.ts";
-import type { KbGraph, KbGraphNode } from "../../../src/core/kb.ts";
+import type { KbGraph, KbGraphNode } from "../../../src/core/kb/kb.ts";
 
 const DEPTH = { domain: 0, factory: 1, section: 1, entry: 2, work: 3, "den-topic": 4 } as const;
 const n = (id: string, kind: KbGraphNode["kind"]): KbGraphNode => ({ id, kind, label: id, depth: DEPTH[kind], domain: "d" });

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BusyError, NotFoundError, ProtocolError, type ConsoleClient } from "@wolfpack/client";
-import { createKbActivityApi } from "../src/server/kb-activity-api.ts";
-import { kbActivityFixture } from "./fixtures/kb-activity.ts";
+import { createKbActivityApi } from "../../../src/server/kb/kb-activity-api.ts";
+import { kbActivityFixture } from "../../fixtures/kb-activity.ts";
 
 const stub = (p: Record<string, unknown>) => () => p as unknown as ConsoleClient;
 const failing = (e: Error) => createKbActivityApi(stub({ getKbActivity: async () => { throw e; } }));

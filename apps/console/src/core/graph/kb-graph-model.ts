@@ -16,8 +16,8 @@
  *   - parseFocusParam: the `/?focus=<nodeId>` URL contract.
  */
 
-import { entryHref, workHref } from "../kb.ts";
-import type { KbGraph, KbGraphNode, KbNodeKind } from "../kb.ts";
+import { entryHref, workHref } from "../kb/kb.ts";
+import type { KbGraph, KbGraphNode, KbNodeKind } from "../kb/kb.ts";
 import { subtreeLinkLength } from "./layout.ts";
 import { NODE_ID_PATTERN } from "./graph-persistence.ts";
 import type { GraphLayerToggles, GroupBy } from "./render-settings.ts";

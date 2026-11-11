@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { activityWolves, createDebounce, createPendingPulses, createPulseBatcher, eventNodeIds, pulseTargets } from "../../../src/core/graph/graph-activity.ts";
-import type { MemoryEventFrame } from "../../../src/core/kb.ts";
+import type { MemoryEventFrame } from "../../../src/core/kb/kb.ts";
 
 const ids = ["work:w1", "den:ada:t1", "ent:e1", "den:bob:t2"];
 const graph = { nodes: ids.map((id) => ({ id })) } as never;

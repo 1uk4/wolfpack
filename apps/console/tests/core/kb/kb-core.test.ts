@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { KB_MIRROR_LABEL, entryHref, findKbSource, findLibrarian, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
+import { KB_MIRROR_LABEL, entryHref, findKbSource, findLibrarian, parseMemoryEventFrame, workHref } from "../../../src/core/kb/kb.ts";
 
 const base = { wolf: "1uk4", timestamp: "2026-10-26T00:00:00.000Z", domain: "d" };
 

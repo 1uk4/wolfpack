@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { composeItemDocument } from "../src/core/item-document.ts";
+import { composeItemDocument } from "../../../src/core/kb/item-document.ts";
 
-import type { ItemRecord } from "../src/core/item-document.ts";
+import type { ItemRecord } from "../../../src/core/kb/item-document.ts";
 
 const none: ItemRecord = { record: "", inheritedFrom: null };
 const compose = (plan: string, rec: ItemRecord = none, successCriteria?: string) => composeItemDocument({ plan, successCriteria }, rec);

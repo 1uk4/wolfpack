@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { KbActivityBody, KbActivityUnavailable } from "../components/kb-activity-view.tsx";
-import { initialActivityState } from "../src/core/kb-activity-model.ts";
-import { kbActivityFixture } from "./fixtures/kb-activity.ts";
+import { KbActivityBody, KbActivityUnavailable } from "../../../components/kb/kb-activity-view.tsx";
+import { initialActivityState } from "../../../src/core/kb/kb-activity-model.ts";
+import { kbActivityFixture } from "../../fixtures/kb-activity.ts";
 
 const now = Date.parse("2026-11-05T10:00:00Z");
 

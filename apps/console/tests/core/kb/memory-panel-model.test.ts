@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import {
 	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary, triggerText,
 	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, groupObservations, blockedLabel, buildMemoryTreeRows, consolidateMessage, reconcilePromote, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
-} from "../src/core/index.ts";
+} from "../../../src/core/index.ts";
 
 const base = { wolf: "w", timestamp: "2026-10-26T00:00:00Z", domain: "d" };
 const obs = (threadId: string | undefined, target: unknown, summary = "s"): MemoryEventFrame =>
@@ -11,7 +11,7 @@ const obs = (threadId: string | undefined, target: unknown, summary = "s"): Memo
 const st = (state: MemoryStatus["state"]): MemoryStatus => ({ state, reason: "why", pool: null, sessionTopics: [], denTopics: [], lastPromote: null });
 const rec = (o: Partial<WorkRecordResponse>): WorkRecordResponse => ({ id: "a", title: "A", kind: "task", stage: "plan", plan: "", record: "", ...o });
 
-import { pendingWarning, nestGroups, type ObservationGroup } from "../src/core/memory-panel-model.ts";
+import { pendingWarning, nestGroups, type ObservationGroup } from "../../../src/core/kb/memory-panel-model.ts";
 
 describe("nestGroups", () => {
 	const g = (key: string, count: number): ObservationGroup => ({ key, kind: "work", count, latest: "2026-11-01" });

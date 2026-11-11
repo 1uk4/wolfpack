@@ -5,7 +5,7 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { SubagentModalProvider } from "@/components/subagent-modal";
-import { GraduateToasts } from "@/components/graduate-dialog";
+import { GraduateToasts } from "@/components/kb/graduate-dialog";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";

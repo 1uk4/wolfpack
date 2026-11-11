@@ -20,8 +20,8 @@ import {
 	reconcileActivity,
 	sinceCutoff,
 	routingSummary,
-} from "../src/core/kb-activity-model.ts";
-import { kbActivityFixture } from "./fixtures/kb-activity.ts";
+} from "../../../src/core/kb/kb-activity-model.ts";
+import { kbActivityFixture } from "../../fixtures/kb-activity.ts";
 
 describe("kb-activity model", () => {
 	it("decisionOutcome normalises spellings", () => {

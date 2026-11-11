@@ -20,10 +20,10 @@
  */
 
 import type { ConsoleClient } from "@wolfpack/client";
-import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
-import { findKbSource } from "../core/kb.ts";
-import { getConsoleClient } from "./console-client.ts";
-import type { ClientSource } from "./thread-api.ts";
+import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { findKbSource } from "../../core/kb/kb.ts";
+import { getConsoleClient } from "../console-client.ts";
+import type { ClientSource } from "../thread-api.ts";
 
 /** Mirrors the protocol's ERROR_HTTP_STATUS (clients map from `code`, never status). */
 const STATUS_BY_CODE: Record<string, number> = {

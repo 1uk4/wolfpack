@@ -28,7 +28,7 @@ import {
 	wolfItems,
 	type PaletteItem,
 } from "@/src/core";
-import { fetchKbGraph, fetchWolves, postConsolidate, postPromote } from "@/components/kb-client";
+import { fetchKbGraph, fetchWolves, postConsolidate, postPromote } from "@/components/kb/kb-client";
 
 type Wolves = { name: string; status?: string; librarian?: boolean; kbReadable?: boolean }[];
 

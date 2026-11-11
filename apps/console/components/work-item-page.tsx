@@ -7,12 +7,12 @@ import { XIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { TaskGraph } from "@/components/task-graph";
-import { KbMarkdown } from "@/components/kb-markdown";
-import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb-client";
+import { KbMarkdown } from "@/components/kb/kb-markdown";
+import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
 import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
 import { TopBar } from "@/components/top-bar";
 import { WorkBadges } from "@/components/work-badges";
-import { useLibrarian } from "@/components/use-librarian";
+import { useLibrarian } from "@/components/kb/use-librarian";
 import { buildTaskGraph, featureThreadWolves, resolveWork, threadHref, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 
 export type WorkPageState =

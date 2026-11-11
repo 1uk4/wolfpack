@@ -5,7 +5,7 @@
  */
 
 export * from "./events-stream.ts";
-export * from "./graph-positions.ts";
+export * from "./kb/graph-positions.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).
@@ -29,8 +29,8 @@ export * from "./model-catalog.ts";
 // Response handlers the /api/wolves routes and the wolf pages share.
 export * from "./console-client.ts";
 export * from "./thread-api.ts";
-export * from "./memory-api.ts";
-export * from "./kb-activity-api.ts";
+export * from "./kb/memory-api.ts";
+export * from "./kb/kb-activity-api.ts";
 export * from "./needs-you-api.ts";
 export * from "./devices-api.ts";
 export * from "./prompts-api.ts";

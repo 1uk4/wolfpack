@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KbGraph } from "@/src/core";
-import { fetchKbGraph, type KbGraphOptions } from "../kb-client";
+import { fetchKbGraph, type KbGraphOptions } from "../kb/kb-client";
 
 export type KbGraphStatus = "loading" | "ready" | "unavailable" | "error";
 

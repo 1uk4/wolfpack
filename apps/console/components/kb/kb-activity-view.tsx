@@ -36,7 +36,7 @@ import {
 	type KbActivityState,
 } from "@/src/core";
 import { fetchKbActivity } from "./kb-activity-client";
-import { useOptionalServerEvent, useOptionalServerResync } from "./server-events";
+import { useOptionalServerEvent, useOptionalServerResync } from "../server-events";
 import { ledgerTimeIso, parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 
 const absolute = (iso: string): string => {

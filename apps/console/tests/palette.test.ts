@@ -13,7 +13,7 @@ import {
 	type PaletteItem,
 } from "../src/core/palette.ts";
 import { actionForBinding, bindingForAction, KEYBOARD_ACTIONS } from "../src/core/keyboard.ts";
-import type { KbGraphNode } from "../src/core/kb.ts";
+import type { KbGraphNode } from "../src/core/kb/kb.ts";
 
 const node = (n: Partial<KbGraphNode> & Pick<KbGraphNode, "id" | "kind" | "label">): KbGraphNode =>
 	({ depth: 2, ...n }) as KbGraphNode;

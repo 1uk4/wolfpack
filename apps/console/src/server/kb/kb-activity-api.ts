@@ -4,9 +4,9 @@
  * (since, before, limit, domain) passes through; the hub validates it.
  */
 
-import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
-import { getConsoleClient } from "./console-client.ts";
-import type { ClientSource } from "./thread-api.ts";
+import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { getConsoleClient } from "../console-client.ts";
+import type { ClientSource } from "../thread-api.ts";
 
 const STATUS_BY_CODE: Record<string, number> = {
 	busy: 409,

@@ -7,7 +7,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { InfoIcon, LockIcon, PencilIcon } from "lucide-react";
-import { KbMarkdown } from "@/components/kb-markdown";
+import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { HOST_LABEL, type Host } from "../src/core/prompt-flows.ts";
 import { parseFrontmatter, readerModeOf, splitVars } from "../src/core/prompt-reader.ts";
 

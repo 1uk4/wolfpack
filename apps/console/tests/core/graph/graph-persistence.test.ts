@@ -18,7 +18,7 @@ import {
 // ── the seam, BEFORE any config-loading import ──────────────────────────────
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "wp-graph-pos-"));
 process.env.WOLFPACK_DATA_DIR = TMP;
-const { commitGraphPositions, graphPositions } = await import("../../../src/server/graph-positions.ts");
+const { commitGraphPositions, graphPositions } = await import("../../../src/server/kb/graph-positions.ts");
 const { POSITIONS_FILE } = await import("../../../config.ts");
 
 describe("sanitizePositions", () => {

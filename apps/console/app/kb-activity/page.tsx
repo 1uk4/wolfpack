@@ -1,4 +1,4 @@
-import { KbActivityView } from "@/components/kb-activity-view";
+import { KbActivityView } from "@/components/kb/kb-activity-view";
 
 export const dynamic = "force-dynamic";
 

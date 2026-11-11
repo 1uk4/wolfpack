@@ -29,8 +29,8 @@ import {
 } from "@/components/pack-health-store";
 import { cn } from "@/lib/utils";
 import { DomainsTab } from "@/components/pack-domains";
-import { fetchKbActivity } from "@/components/kb-activity-client";
-import { curatorStuck, kbRelativeTime } from "@/src/core/kb-activity-model";
+import { fetchKbActivity } from "@/components/kb/kb-activity-client";
+import { curatorStuck, kbRelativeTime } from "@/src/core/kb/kb-activity-model";
 import { groupByHost, type HostCard } from "@/src/core/pack-hosts";
 import {
 	ageText,

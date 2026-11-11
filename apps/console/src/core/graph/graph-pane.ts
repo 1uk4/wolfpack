@@ -3,8 +3,8 @@
  * the Record/log text the pane shows, the lazy-fetch cache). No React here.
  */
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import { composeItemDocument } from "../item-document.ts";
-import type { WorkRecordResponse } from "../kb.ts";
+import { composeItemDocument } from "../kb/item-document.ts";
+import type { WorkRecordResponse } from "../kb/kb.ts";
 
 /** localStorage key of the pane's width (per-device). */
 export const GRAPH_PANE_WIDTH_KEY = "wolfpack.graph.pane-width.v1";

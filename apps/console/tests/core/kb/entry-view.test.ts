@@ -9,7 +9,7 @@ import {
 	headingSlug,
 	parseWikilink,
 	rewriteWikilinks,
-} from "../src/core/entry-view.ts";
+} from "../../../src/core/kb/entry-view.ts";
 
 describe("parseWikilink", () => {
 	it("handles plain, alias, heading and heading+alias", () => {

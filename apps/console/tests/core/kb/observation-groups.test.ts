@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEN_GROUP, groupKeyOf, groupLabel, groupObservations, mergeObservations, observationsInGroup } from "../src/core/index.ts";
+import { DEN_GROUP, groupKeyOf, groupLabel, groupObservations, mergeObservations, observationsInGroup } from "../../../src/core/index.ts";
 
 const o = (id: string, at: string, tags: { work?: string; feature?: string } = {}) => ({ id, timestamp: at, recordedAt: at, content: id, tokenCount: 1, ...tags });
 

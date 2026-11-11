@@ -2,7 +2,7 @@
  * Pure view model for the work item page: which wolves to ask, and where the
  * Record comes from (a task's Record usually lives on its parent feature).
  */
-import type { WorkRecordResponse } from "./kb.ts";
+import type { WorkRecordResponse } from "./kb/kb.ts";
 
 export interface WolfLike {
 	name: string;

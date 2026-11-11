@@ -5,8 +5,8 @@
  * and merged over what is stored — ids it doesn't mention are kept, they
  * belong to layers or domains that are currently hidden.
  */
-import { mergePositions, sanitizePositions, type PositionMap } from "../core/graph/graph-persistence.ts";
-import { readGraphPositions, writeGraphPositions } from "../store/graph-positions.ts";
+import { mergePositions, sanitizePositions, type PositionMap } from "../../core/graph/graph-persistence.ts";
+import { readGraphPositions, writeGraphPositions } from "../../store/graph-positions.ts";
 
 export function graphPositions(): PositionMap {
 	return readGraphPositions();

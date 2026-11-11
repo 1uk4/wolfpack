@@ -4,9 +4,9 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createHealthApi } from "../src/server/health-api.ts";
-import { createDomainsApi } from "../src/server/domains-api.ts";
-import { createSessionWitness } from "../src/server/session-witness.ts";
+import { createHealthApi } from "../../../src/server/pack/health-api.ts";
+import { createDomainsApi } from "../../../src/server/pack/domains-api.ts";
+import { createSessionWitness } from "../../../src/server/session-witness.ts";
 
 type Call = { method: string; url: string; auth: string | null; body: unknown };
 type Reply = { status: number; body: unknown } | "down";

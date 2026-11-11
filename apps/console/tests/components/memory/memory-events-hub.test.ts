@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createMemoryHub, type MemorySource } from "../components/memory-events.tsx";
+import { createMemoryHub, type MemorySource } from "../../../components/memory/memory-events.tsx";
 
 class FakeSource implements MemorySource {
 	closed = false;

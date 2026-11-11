@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { errorText, machineServices, offersOwnControls, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, type HealthLink } from "../src/core/pack-health-view.ts";
+import { errorText, machineServices, offersOwnControls, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, type HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-09T14:10:00Z");
 const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink> = {}): HealthLink => ({

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { hubPublicUrl } from "../src/server/hub-public-url.ts";
-import { pairLink } from "../src/server/devices-api.ts";
+import { hubPublicUrl } from "../../../src/server/pack/hub-public-url.ts";
+import { pairLink } from "../../../src/server/pack/devices-api.ts";
 
 test("hubPublicUrl: runtime env, first name wins, trailing slashes trimmed, blank = unset", () => {
 	assert.equal(hubPublicUrl({}), undefined);

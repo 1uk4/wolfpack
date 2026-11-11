@@ -44,7 +44,7 @@ function useFetcher(): { call: Fetcher; ready: boolean } {
 	useEffect(() => {
 		const search = window.location?.search ?? "";
 		if (process.env.NODE_ENV === "production" || !/[?&]packFixture=/.test(search)) return setReady(true);
-		void import("@/components/pack-domains-fixtures").then((m) => {
+		void import("@/components/pack/pack-domains-fixtures").then((m) => {
 			const f = m.domainFixtureFromUrl(search);
 			if (f) setFx(() => m.fixtureDomainsFetch(f));
 			setReady(true);

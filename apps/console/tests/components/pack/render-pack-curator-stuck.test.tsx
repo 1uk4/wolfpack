@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CuratorStuckWarning } from "../components/pack-health.tsx";
+import { CuratorStuckWarning } from "../../../components/pack/pack-health.tsx";
 
 describe("CuratorStuckWarning (pack health)", () => {
 	it("says the hub curator is stuck, since when, and that new sweeps are skipped", () => {

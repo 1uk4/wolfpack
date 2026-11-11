@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ConsoleClient } from "@wolfpack/client";
 import { DevicesView, addedDescendants, lastUsedLabel, type DeviceRow } from "../components/settings/devices-section.tsx";
-import { createDevicesApi, pairLink } from "../src/server/devices-api.ts";
+import { createDevicesApi, pairLink } from "../src/server/pack/devices-api.ts";
 import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 import { eventsResponse, eventsRoute } from "../src/server/events-stream.ts";
 import { setConsoleClient } from "../src/server/console-client.ts";

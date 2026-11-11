@@ -7,7 +7,7 @@ import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { SubagentModalProvider } from "@/components/subagent-modal";
 import { GraduateToasts } from "@/components/kb/graduate-dialog";
 import { ServerEventsProvider } from "@/components/server-events";
-import { MemoryEventsProvider } from "@/components/memory-events";
+import { MemoryEventsProvider } from "@/components/memory/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
 import { AttachedThreadProvider } from "@/components/attached-thread";
 import { NavTracker } from "@/components/nav-tracker";

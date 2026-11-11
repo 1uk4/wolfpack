@@ -4,8 +4,8 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemoryEventsProvider } from "../components/memory-events.tsx";
-import { MemoryPanel, ObservationsSection } from "../components/memory-panel.tsx";
+import { MemoryEventsProvider } from "../../../components/memory/memory-events.tsx";
+import { MemoryPanel, ObservationsSection } from "../../../components/memory/memory-panel.tsx";
 
 describe("MemoryPanel SSR", () => {
 	it("renders the open shell with the feed (unbound) and no banner before any fetch", () => {

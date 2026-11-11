@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { createSubscriptionHandler } from "../src/server/subscription-api.ts";
+import { createSubscriptionHandler } from "../../../src/server/pack/subscription-api.ts";
 
 const req = (method: string, body?: unknown) => new Request("http://c/api/health/subscription", { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "content-type": "application/json" } });
 

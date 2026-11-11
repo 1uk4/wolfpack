@@ -18,7 +18,7 @@ const g = globalThis as Record<string, unknown>;
 g.EventSource = FakeEventSource;
 g.window = { setTimeout: () => 0, clearTimeout: () => {} }; // inert timers: no stall fallback during the test
 
-const { subscribePackHealth, openPackHealth, closePackHealth } = await import("../components/pack-health-store.ts");
+const { subscribePackHealth, openPackHealth, closePackHealth } = await import("../../../components/pack/pack-health-store.ts");
 const openStreams = () => FakeEventSource.all.filter((s) => !s.closed).length;
 
 describe("pack health store", () => {

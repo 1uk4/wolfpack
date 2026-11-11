@@ -69,8 +69,8 @@ Object.assign(globalThis, {
 	},
 });
 
-const { MemoryPanel } = await import("../components/memory-panel.tsx");
-const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { MemoryPanel } = await import("../../../components/memory/memory-panel.tsx");
+const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
 
 let emit: (frame: unknown) => void = () => {};
 const source = () => ({

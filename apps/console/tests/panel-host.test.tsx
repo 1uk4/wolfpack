@@ -33,9 +33,9 @@ const workRecord = { id: "work-1", title: "Item", kind: "task", stage: "in_build
 const boundStatus = { state: "on", bound: { workId: "work-1", title: "Item" }, pool: { count: 1, tokens: 10, consolidateAtTokens: 100, poolTarget: 50, trigger: "tokens" } };
 
 const { PanelHostProvider, RightPanelHost, usePanelHost, usePanelState, PANELS } = await import("../components/panel-host.tsx");
-const { MemoryPanel } = await import("../components/memory-panel.tsx");
+const { MemoryPanel } = await import("../components/memory/memory-panel.tsx");
 const { parseSelections, resolveSelected, withSelection, RIGHT_PANEL_KEY } = await import("../src/core/index.ts");
-const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { MemoryEventsProvider } = await import("../components/memory/memory-events.tsx");
 type PanelDef = (typeof PANELS)[number];
 
 let emit: (frame: unknown) => void = () => {};

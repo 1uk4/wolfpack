@@ -1,4 +1,4 @@
-import { createUpdatesHandler } from "@/src/server/updates-api";
+import { createUpdatesHandler } from "@/src/server/pack/updates-api";
 
 export const dynamic = "force-dynamic";
 

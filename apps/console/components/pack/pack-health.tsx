@@ -26,12 +26,12 @@ import {
 	subscribePackHealth,
 	watchPackHealth,
 	type PackHealthState,
-} from "@/components/pack-health-store";
+} from "@/components/pack/pack-health-store";
 import { cn } from "@/lib/utils";
-import { DomainsTab } from "@/components/pack-domains";
+import { DomainsTab } from "@/components/pack/pack-domains";
 import { fetchKbActivity } from "@/components/kb/kb-activity-client";
 import { curatorStuck, kbRelativeTime } from "@/src/core/kb/kb-activity-model";
-import { groupByHost, type HostCard } from "@/src/core/pack-hosts";
+import { groupByHost, type HostCard } from "@/src/core/pack/pack-hosts";
 import {
 	ageText,
 	BACK_MS,
@@ -60,7 +60,7 @@ import {
 	type HealthSnapshotView,
 	type RestartOutcome,
 	type Tone,
-} from "@/src/core/pack-health-view";
+} from "@/src/core/pack/pack-health-view";
 
 const DOT: Record<Tone, string> = { red: "bg-red-500", amber: "bg-amber-500", grey: "bg-muted-foreground/50", green: "bg-emerald-500" };
 const TEXT: Record<Tone, string> = { red: "text-red-600 dark:text-red-400", amber: "text-amber-600 dark:text-amber-400", grey: "text-muted-foreground", green: "text-emerald-600 dark:text-emerald-400" };

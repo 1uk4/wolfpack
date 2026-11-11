@@ -30,7 +30,7 @@ Object.assign(globalThis, {
 const { ATTACHMENT_MAX_BYTES, FIXTURE_THREAD, MockConsoleClient } = await import("@wolfpack/client");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
-const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { MemoryEventsProvider } = await import("../components/memory/memory-events.tsx");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { AttachmentChips, Composer } = await import("../components/composer.tsx");
 const { SessionModel } = await import("../components/session-core.ts");

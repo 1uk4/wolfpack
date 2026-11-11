@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { InventoryListed } from "@wolfpack/protocol";
-import { createInventoryClient } from "../src/server/inventory.ts";
-import { createPackHealth } from "../src/server/pack-health.ts";
+import { createInventoryClient } from "../../../src/server/pack/inventory.ts";
+import { createPackHealth } from "../../../src/server/pack/pack-health.ts";
 
 const manifest = (v: string) => async () => ({ manifest: { schema: 1 as const, generatedAt: "", components: { workerd: { version: v, tag: "", sha: "", publishedAt: "", notesUrl: "" }, wolfd: { version: v, tag: "", sha: "", publishedAt: "", notesUrl: "" } } } });
 const listed = (over: Partial<InventoryListed>): InventoryListed => ({ machine: "sfo-01", kind: "workerd", id: "sfo-01-wolves", ageS: 3, ...over });

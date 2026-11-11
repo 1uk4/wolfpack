@@ -9,8 +9,8 @@
  * (the Mac card fills in from the hub in the sfo-01 view; sfo-01's from the hub in the Mac view), `hub-view-host-offline` has a host the
  * hub sees offline, and `hub-unreachable-last-seen` keeps the hub's last list while the hub is down. All ignored in a production build.
  */
-import type { HealthLink, HealthSnapshotView } from "@/src/core/pack-health-view";
-import type { HostInfo } from "@/src/core/pack-hosts";
+import type { HealthLink, HealthSnapshotView } from "@/src/core/pack/pack-health-view";
+import type { HostInfo } from "@/src/core/pack/pack-hosts";
 
 export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac", "two-hosts-mac-view", "hub-view-host-offline", "hub-unreachable-last-seen"] as const;
 export type HealthFixture = (typeof HEALTH_FIXTURES)[number];

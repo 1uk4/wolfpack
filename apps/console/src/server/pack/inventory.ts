@@ -5,7 +5,7 @@
  * service itself reported; a service with no channel or a `-dev` version gets no verdict.
  */
 import { CONSOLE_REPORT_EVERY_MS, type InventoryEntry, type InventoryListed, type ManifestResult } from "@wolfpack/protocol";
-import { isNewerVersion } from "../core/pack-health-view.ts";
+import { isNewerVersion } from "../../core/pack/pack-health-view.ts";
 
 /** One inventory row as the panel gets it. `latest`: the channel's newer version when this row is behind, else null. */
 export interface RemoteService extends InventoryListed {

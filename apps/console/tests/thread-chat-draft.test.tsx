@@ -36,7 +36,7 @@ const { cardsOfThread, threadMessagesToNative } = await import("../src/core/inde
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
-const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { MemoryEventsProvider } = await import("../components/memory/memory-events.tsx");
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 
 const KEY = `wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`;

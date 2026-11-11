@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createHealthConnection, type EventSourceLike, type HealthConnectionDeps } from "../src/core/pack-health-connection.ts";
+import { createHealthConnection, type EventSourceLike, type HealthConnectionDeps } from "../../../src/core/pack/pack-health-connection.ts";
 
 /** Fake clock, EventSource and fetch: the system boundaries the connection is given. */
 function harness(opts: { eventSource?: boolean; fetch?: "ok" | "fail" | "manual" } = {}) {

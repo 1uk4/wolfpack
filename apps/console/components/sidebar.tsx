@@ -7,7 +7,7 @@ import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, Workflow
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/needs-you";
 import { UpdateNotice } from "@/components/update-notice";
-import { PackHealthBar, PackHealthHost } from "@/components/pack-health";
+import { PackHealthBar, PackHealthHost } from "@/components/pack/pack-health";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ChatBar } from "@/components/chat-bar";

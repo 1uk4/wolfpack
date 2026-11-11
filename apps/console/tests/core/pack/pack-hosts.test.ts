@@ -1,8 +1,8 @@
 /** The health modal's per-host cards (work-wolfpack-w7RPvtd) at their seam: groupByHost over a snapshot. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { groupByHost, type HostCard } from "../src/core/pack-hosts.ts";
-import type { HealthLink, HealthSnapshotView } from "../src/core/pack-health-view.ts";
+import { groupByHost, type HostCard } from "../../../src/core/pack/pack-hosts.ts";
+import type { HealthLink, HealthSnapshotView } from "../../../src/core/pack/pack-health-view.ts";
 
 const link = (id: string, host: string, over: Partial<HealthLink> = {}): HealthLink => ({
 	id,

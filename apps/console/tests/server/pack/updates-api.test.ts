@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { createUpdatesHandler } from "../src/server/updates-api.ts";
+import { createUpdatesHandler } from "../../../src/server/pack/updates-api.ts";
 
 const servers: Server[] = [];
 after(() => {

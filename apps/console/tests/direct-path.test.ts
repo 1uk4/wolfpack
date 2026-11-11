@@ -12,8 +12,8 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { ProtocolError, type ConsoleClient } from "@wolfpack/client";
 import { withDirect, createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
-import { directRoute, directTarget } from "../src/server/direct-path.ts";
-import { createPackHealth, healthTargets, type HealthSnapshot } from "../src/server/pack-health.ts";
+import { directRoute, directTarget } from "../src/server/pack/direct-path.ts";
+import { createPackHealth, healthTargets, type HealthSnapshot } from "../src/server/pack/pack-health.ts";
 import { createSessionWitness, setSessionWitness } from "../src/server/session-witness.ts";
 
 const cleanups: (() => Promise<void> | void)[] = [];

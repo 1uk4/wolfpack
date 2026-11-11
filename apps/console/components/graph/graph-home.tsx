@@ -33,7 +33,7 @@ import {
 	type MemoryEventFrame,
 } from "@/src/core";
 import { fetchWolves } from "../kb/kb-client";
-import { useMemoryEvents } from "../memory-events";
+import { useMemoryEvents } from "../memory/memory-events";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";

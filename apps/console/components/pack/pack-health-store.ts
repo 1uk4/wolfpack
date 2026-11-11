@@ -8,8 +8,8 @@
  *   dev: ?healthFixture=<name> / ?healthRestart= / ?healthLogs= / ?healthRollback=<status> load components/pack-health-fixtures.ts with a dynamic import, only
  *        outside production, so the fixtures stay out of the production bundle.
  */
-import { createHealthConnection, type HealthConnectionDeps } from "@/src/core/pack-health-connection";
-import type { HealthSnapshotView } from "@/src/core/pack-health-view";
+import { createHealthConnection, type HealthConnectionDeps } from "@/src/core/pack/pack-health-connection";
+import type { HealthSnapshotView } from "@/src/core/pack/pack-health-view";
 
 export interface PackHealthState {
 	snapshot: HealthSnapshotView | null;
@@ -59,7 +59,7 @@ function startSource(): () => void {
 	if (process.env.NODE_ENV === "production" || !/[?&]health(Fixture|Restart|Logs|Rollback)=/.test(search)) return startLive();
 	let stopped = false;
 	let stop = () => {};
-	void import("@/components/pack-health-fixtures").then(({ fixtureFromUrl, fixtureSnapshot }) => {
+	void import("@/components/pack/pack-health-fixtures").then(({ fixtureFromUrl, fixtureSnapshot }) => {
 		if (stopped) return;
 		const { fixture, restartStatus, logsStatus, rollbackStatus } = fixtureFromUrl(search);
 		set({ fakeRestart: restartStatus, fakeLogs: logsStatus, fakeRollback: rollbackStatus });

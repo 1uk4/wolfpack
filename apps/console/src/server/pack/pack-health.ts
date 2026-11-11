@@ -50,7 +50,7 @@ import { homedir } from "node:os";
 import { machineName, normaliseMachine } from "@wolfpack/protocol/health-lag";
 import { join } from "node:path";
 import type { InventoryView, RemoteService } from "./inventory.ts";
-import { hostId, hostLabel, parseHostLabels, type HostInfo } from "../core/pack-hosts.ts";
+import { hostId, hostLabel, parseHostLabels, type HostInfo } from "../../core/pack/pack-hosts.ts";
 import { probeHealth, type InventoryEntry, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
 
 export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct" | "hublink";

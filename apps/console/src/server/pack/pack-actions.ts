@@ -11,7 +11,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { isNewerVersion as isNewer } from "../core/pack-health-view.ts";
+import { isNewerVersion as isNewer } from "../../core/pack/pack-health-view.ts";
 import { execRunner, type CommandRunner, type PackHealth } from "./pack-health.ts";
 
 export const ROLLBACK_SERVICES = ["hubd", "workerd", "console"] as const;

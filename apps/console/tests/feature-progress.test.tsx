@@ -36,7 +36,7 @@ const { FIXTURE_THREAD } = await import("@wolfpack/client");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
-const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { MemoryEventsProvider } = await import("../components/memory/memory-events.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 
 const kid = (id: string, stage: string, dependsOn: string[] = []) => ({ id, title: `Task ${id}`, kind: "task", stage, dependsOn });

@@ -1,14 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-	// Desktop target (Electron wrapper, 2026-09-17): standalone output = a
-	// self-contained .next/standalone/server.js the Electron shell spawns
-	// on 127.0.0.1. Harmless for plain web deploys (extra build output).
-	// The manual copies the docs require — public/ and .next/static — are
-	// done by scripts/build-server.mjs.
+	// Self-contained server in .next/standalone, which the desktop shell spawns.
+	// scripts/build-server.mjs copies public/ and .next/static next to it.
 	output: "standalone",
-	// Anti-framing on every route (clickjacking: the console acts with the paired browser's hub token). frame-ancestors is the modern control,
-	// X-Frame-Options the legacy one; tests/next-config.test.ts and the tracer proof pin both.
+
+	// No framing on any route: the console acts with the paired browser's hub token.
+	// tests/next-config.test.ts pins both headers.
 	async headers() {
 		return [
 			{
@@ -20,58 +18,26 @@ const nextConfig: NextConfig = {
 			},
 		];
 	},
-	// SAFETY (empirically verified 2026-09-17): without this, output file
-	// tracing sweeps the repo's real data/ — chat records, graph ledgers —
-	// INTO the standalone bundle. A shipped desktop app would carry the
-	// developer's session data inside it.
-	//
-	// SECRETS (2026-10-08, caught in the payload audit): the same sweep
-	// ships the repo-root auth.json — the DEV BYOK key store — byte-identical
-	// into the DMG (the packaged app never reads it: the shell passes
-	// WOLFPACK_AUTH_FILE → userData). Excluded here; build-server.mjs also REFUSES
-	// to package any standalone still containing it. .env* belt-and-braces
-	// the same class (not observed swept, same seam).
-	//
-	// ⚠ EXCLUDE PATTERNS ARE LOAD-BEARING IN WAYS THE DOCS DON'T DESCRIBE
-	// (empirically established 2026-10-08): adding dir excludes like
-	// "dist/**/*" / "./dist/**/*" for repo-root output dirs STRIPPED THE
-	// server-external packages (pi-ai / pi-agent-core lost everything
-	// under their dist/ — the traced copy collapsed to a bare package.json
-	// and the packaged server died on ERR_MODULE_NOT_FOUND; openai/
-	// @anthropic-ai — pi-ai's deps — vanished from the trace entirely).
-	// Anchored "./"-prefixed forms behave the same. Only the three entries
-	// below are verified safe (complete externals trace + clean payload).
-	// The recursive-DMG payload (repo dist/ swept into the bundle, shipping
-	// the previous build inside the next) is instead prevented by the
-	// desktop:dist clean step AND targeted post-trace curation in
-	// scripts/build-server.mjs (2026-10-11): remove standalone-root dist/
-	// and node_modules/electron/. Runtime dependencies' dist/ dirs
-	// stay intact, and the script guards against leaked data/keys.
+
+	// Keep local data and secrets out of the traced standalone bundle. Only these
+	// three patterns are safe: broader directory excludes (such as "dist/**/*")
+	// stripped the external pi packages from the trace and broke the packaged server.
+	// scripts/build-server.mjs also refuses to package a bundle that holds auth.json.
 	outputFileTracingExcludes: {
-		"*": [
-			"data/**/*",
-			"auth.json",
-			".env*",
-		],
+		"*": ["data/**/*", "auth.json", ".env*"],
 	},
-	// Empirically verified gaps (2026-09-17 standalone smoke): the tracer
-	// misses JSON loaded via `import ... with { type: "json" }` attributes —
-	// pi-ai's provider catalog (39 JSON files) vanished from the trace and
-	// the server 500s on module load. Include the whole data dirs of the
-	// runtime-loaded engine packages.
+
+	// The tracer misses JSON loaded with `import ... with { type: "json" }`, so
+	// include the data of the engine packages that are loaded at runtime.
 	outputFileTracingIncludes: {
 		"*": [
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 		],
 	},
-	// Framework-free core lives in src/ (plain TS, imported by routes and CLI alike).
-	// The pi engine must stay external: its providers are runtime-loaded Node
-	// code (undici streams, catalog data) that breaks when bundled into routes.
-	serverExternalPackages: [
-		"@earendil-works/pi-ai",
-		"@earendil-works/pi-agent-core",
-	],
+
+	// The pi engine loads provider code at runtime; bundling it into routes breaks it.
+	serverExternalPackages: ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core"],
 };
 
 export default nextConfig;

@@ -711,14 +711,10 @@ body {
 	[data-testid="composer-controls"] label {
 		min-height: 44px;
 	}
-	/* the textarea gets its own full-width row; attach / model / auto-ship / send wrap beneath it */
+	/* the text wrapper gets its own full-width row (max-md:order-first basis-full in composer.tsx; the textarea sits inside that
+	   wrapper, so order/flex on the textarea itself never reached the form's row); attach / model / auto-ship / send wrap beneath it */
 	[data-testid="composer"] {
-		flex-wrap: wrap;
 		align-items: center;
-	}
-	[data-testid="composer"] textarea {
-		order: -1;
-		flex: 1 1 100%;
 	}
 	/* send stays at the right end of the button row even with no controls beside it (the floating chat has none) */
 	[data-testid="composer"] > button[type="submit"] {

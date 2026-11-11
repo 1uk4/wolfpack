@@ -132,7 +132,7 @@ export function Composer({
 		{chips}
 			<form
 				data-testid="composer"
-				className="flex items-end gap-1.5 p-1.5"
+				className="flex items-end gap-1.5 p-1.5 max-md:flex-wrap"
 				onSubmit={(e) => {
 					e.preventDefault();
 					act();
@@ -173,7 +173,7 @@ export function Composer({
 						</button>
 					</>
 				)}
-				<div className="relative flex min-w-0 flex-1">
+				<div className="relative flex min-w-0 flex-1 max-md:order-first max-md:basis-full">
 				<textarea
 					ref={inputRef}
 					value={value}

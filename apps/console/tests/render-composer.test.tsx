@@ -57,6 +57,14 @@ describe("Composer", () => {
 		assert.ok(html.includes("size-10"), "40px send button (10px = 25%)");
 	});
 
+	it("on phones the text field's wrapper takes its own full-width first row, the buttons wrap beneath", () => {
+		const html = render();
+		const wrapper = /<div class="([^"]*)"><textarea/.exec(html)?.[1] ?? "";
+		assert.match(wrapper, /\bmax-md:order-first\b/);
+		assert.match(wrapper, /\bmax-md:basis-full\b/);
+		assert.match(/<form[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "", /\bmax-md:flex-wrap\b/);
+	});
+
 	it("disabled when nothing to send", () => {
 		const html = render({ canSend: false });
 		assert.ok(/aria-label="Send"[^>]*disabled|disabled[^>]*aria-label="Send"/.test(html), "send disabled");

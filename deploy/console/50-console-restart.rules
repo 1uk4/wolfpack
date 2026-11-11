@@ -9,6 +9,7 @@ polkit.addRule(function (action, subject) {
     var unit = action.lookup("unit"), verb = action.lookup("verb");
     if (verb == "restart" && /^(hubd|workerd(-[a-z0-9]+)*|wolfd@[a-z0-9][a-z0-9-]*)\.service$/.test(unit)) return polkit.Result.YES;
     if (verb == "start" && unit == "wolfpack-auto-update-now.service") return polkit.Result.YES;
+    if (verb == "start" && /^wolfpack-auto-update-now@(hubd|workerd|console|wolfd)\.service$/.test(unit)) return polkit.Result.YES;
     if (verb == "start" && /^wolfpack-rollback@(hubd|workerd|console)\.service$/.test(unit)) return polkit.Result.YES;
   }
 });

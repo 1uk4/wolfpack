@@ -37,6 +37,8 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/console
+# The release-channel file (written by the pack panel); setup.sh of deploy/auto-update creates it. The `-` prefix: not an error before that setup ran.
+ReadWritePaths=-/var/lib/wolfpack-subscription
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

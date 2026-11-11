@@ -17,6 +17,9 @@ AssertPathExists=/usr/local/lib/wolfpack/console-rollback-release.sh
 [Service]
 Type=oneshot
 User=root
+# Hold the version being left (auto-update.mjs hold records it as failedTarget), so auto-update never reinstalls it. The leading - means a failed hold NEVER blocks the rollback; `hold` prints "WARNING: could not hold" to the journal. @NODE@ is filled in by deploy/console/setup.sh.
+EnvironmentFile=-/etc/wolfpack/auto-update.env
+ExecStartPre=-@NODE@ /opt/wolfpack-auto-update/auto-update.mjs hold %i
 ExecStart=/bin/bash /usr/local/lib/wolfpack/console-rollback-release.sh %i --rollback
 TimeoutStartSec=300
 # A second start while one runs is merged by systemd (oneshot "activating"); the script's flock also refuses a concurrent deploy.

@@ -94,3 +94,12 @@ To turn it on:
   2. If the log says `another run holds ...` or `... .takeover was left by a run that died mid-takeover`, check for a leftover `.takeover`: `cat /run/wolfpack-auto-update.lock.takeover` (sfo-01) or `cat ~/.wolfpack/auto-update/run.lock.takeover` (Mac). Its first field is a pid.
   3. If that pid is dead (`kill -0 <pid>` fails, or `ps -p <pid>` shows nothing), remove the file by hand: `rm /run/wolfpack-auto-update.lock.takeover` or `rm ~/.wolfpack/auto-update/run.lock.takeover`. Never remove it while the pid is alive. The next run takes over the dead lock and writes a fresh `lastCheck`.
   4. To check at once, run a manual pass (`auto-update.mjs run --now` on sfo-01, `node scripts/auto-update-mac.mjs run --now` on the Mac) and read the status again.
+
+## Release channel and owner steps (work-wolfpack-pr6t1Y9)
+- The channel and mode live in `/var/lib/wolfpack-subscription/subscription.json` (root:console 0775 directory, apart from the root-only updater state dir; Mac: `~/.wolfpack/release-channel.json`); see docs/releases.md. The pack panel edits it.
+- After deploying this change, once on sfo-01: re-run `deploy/auto-update/setup.sh` (installs `wolfpack-auto-update-now@.service` and creates `/var/lib/wolfpack-subscription`; run it after `deploy/console/setup.sh` so the `console` group exists) and `deploy/console/setup.sh` (polkit rule, rollback unit with the baked node path, console.service write access to the new directory). Then `systemctl daemon-reload && systemctl restart console`.
+- If an earlier build made `/var/lib/wolfpack-auto-update` group-writable: `chmod 0755 /var/lib/wolfpack-auto-update && chgrp root /var/lib/wolfpack-auto-update`, and move any `subscription.json` from there to the new directory.
+- A corrupt subscription file is logged and ignored (stable, `WOLFPACK_AUTO_UPDATE=1` decides), never silently turning auto off.
+- Clear an old failure hold if one is set: `node scripts/auto-update.mjs run --clear-failed`.
+- Mac: `node scripts/auto-update-mac.mjs install`, then reload the launchd job.
+- First `wolfpack release publish`: check the `release-main` run is green, `main-manifest` has `main.json`, and the panel (channel main) shows the prerelease as latest.

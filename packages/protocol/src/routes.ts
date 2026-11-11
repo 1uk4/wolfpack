@@ -301,7 +301,7 @@ export const ROUTES = {
     error: err,
   },
   /**
-   * A diagram the wolf rendered (render_mermaid / render_svg with `save_as` + `persist: true`), by id: the value of a
+   * A diagram the wolf rendered (a diagram tool that persisted the PNG), by id: the value of a
    * card field's `diagram`. Use it as an `<img src>`. Served only from the wolf's own persisted viz directory; the id is
    * the file name `viz-<slug>-<ms>.png` and nothing else (a path, URL or `..` is 404 `not_found`, as is an unpublished
    * id). `Content-Type: image/png`, `X-Content-Type-Options: nosniff`.

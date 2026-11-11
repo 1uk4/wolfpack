@@ -121,7 +121,6 @@ Not part of the learnharness copy. Upstream licences checked on 2026-11-05 (`gh 
 |---|---|---|---|
 | `extensions/wolfpack-telegram` | badlogic/pi-telegram | MIT | Keeps `"license": "MIT"`; credited in NOTICE |
 | `extensions/wolfpack-subagents` | amosblomqvist/pi-interactive-subagents (original HazAT/pi-interactive-subagents) | MIT (Copyright (c) 2026 HazAT) | MIT notice reproduced in NOTICE; package stays AGPL-3.0-only |
-| `extensions/wolfpack-visual-tools` | amosblomqvist/learn | **none** (no LICENSE file) | Needs the author's permission or a rewrite |
 | `extensions/wolfpack-memory` | none found | n/a | Written in this repo (first commit "replace packages/pi-extension with extensions/wolfpack-memory", no upstream references) |
 
 ## Known leftovers

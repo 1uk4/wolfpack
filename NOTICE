@@ -47,10 +47,3 @@ AGPL-3.0-only work, which MIT permits.
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
-
-NOT YET CLEARED (no licence upstream)
-
-extensions/wolfpack-visual-tools is ported from
-https://github.com/amosblomqvist/learn (extensions/visual-tools). The
-upstream repository carries no licence file, so no licence has been granted.
-It is credited here pending the author's permission or a rewrite.

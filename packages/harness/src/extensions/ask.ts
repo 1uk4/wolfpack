@@ -22,7 +22,7 @@ const Question = Type.Object({
     description: "single = pick one, multi = pick several, confirm = yes/no, free = typed reply, slider = one number on a scale.",
   }),
   context: Type.Optional(Type.String({ description: "Markdown the owner needs to answer THIS question (each question carries its own context)." })),
-  diagram: Type.Optional(Type.String({ description: "Id of a diagram you rendered: the filename returned by render_mermaid / render_svg called with save_as AND persist: true (viz-<slug>-<ms>.png). An id only, never a path or URL." })),
+  diagram: Type.Optional(Type.String({ description: "Id of a diagram you rendered: the filename of a PNG a diagram tool persisted in the viz dir (viz-<slug>-<ms>.png). An id only, never a path or URL." })),
   choices: Type.Optional(Type.Array(Choice, { description: "single/multi only." })),
   min: Type.Optional(Type.Number({ description: "slider: lowest value (< max)." })),
   max: Type.Optional(Type.Number({ description: "slider: highest value." })),
@@ -172,7 +172,7 @@ export function createAskExtension(bridge: AskBridge = new AskBridge(), opts: As
       defineTool({
         name: "ask",
         description:
-          "Ask the owner structured questions after you have given the big picture in your normal chat message. pages[] each with a title and questions[]; every question has its own markdown `context`. kinds: single, multi, confirm, free, slider. Every choice needs a non-empty `tradeoff`. Questions are skippable unless `required`; single/multi offer an Other box unless `noOther`. A question may show a `diagram` you rendered (render_mermaid / render_svg with save_as and persist: true; pass the returned filename). The answers come back together in one message when the owner submits. " + ASK_TURN_RULE,
+          "Ask the owner structured questions after you have given the big picture in your normal chat message. pages[] each with a title and questions[]; every question has its own markdown `context`. kinds: single, multi, confirm, free, slider. Every choice needs a non-empty `tradeoff`. Questions are skippable unless `required`; single/multi offer an Other box unless `noOther`. A question may show a `diagram` you rendered with a diagram tool and persisted (pass the returned filename). The answers come back together in one message when the owner submits. " + ASK_TURN_RULE,
         parameters: AskParams,
         raisesCard: true,
         async execute(args) {

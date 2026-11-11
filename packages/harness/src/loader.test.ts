@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadExtensions } from "./loader.js";
+import { loadExtensions, reportLoad } from "./loader.js";
 
 describe("loadExtensions from the den", () => {
   let den: string;
@@ -31,5 +31,16 @@ describe("loadExtensions from the den", () => {
     const r = await loadExtensions(["plain", "ghost"], { ...base(), wolfConfig: {} });
     expect(r.lifecycles).toEqual([]);
     expect(r.failed.map((f) => f.name)).toEqual(["ghost"]);
+  });
+
+  it("a name wolf.yaml still lists but nothing provides is warned about and skipped, not fatal", async () => {
+    install("plain", `module.exports = { default: { name: "plain" } };`);
+    const r = await loadExtensions(["visual-tools", "plain"], { ...base(), wolfConfig: {} });
+    expect(r.extensions.map((e) => e.name)).toEqual(["plain"]);
+    expect(r.failed.map((f) => ({ name: f.name, notFound: f.notFound }))).toEqual([{ name: "visual-tools", notFound: true }]);
+    const warnings: string[] = [];
+    reportLoad(r, { info: () => {}, warn: (l) => warnings.push(l) });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/^Extension visual-tools: Not found/);
   });
 });

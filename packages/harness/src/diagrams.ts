@@ -1,6 +1,6 @@
 /**
- * Published diagrams: the PNGs `render_mermaid` / `render_svg` write with `save_as` AND `persist: true`
- * (extensions/wolfpack-visual-tools, `publish()`): `<viz dir>/viz-<slug>-<ms>.png`, where the viz dir is
+ * Published diagrams: PNGs that a diagram tool (plugged into the visualizer agent) persists as
+ * `<viz dir>/viz-<slug>-<ms>.png`, where the viz dir is
  * `WOLFPACK_VIZ_DIR` if set, else `<wolf den>/viz`.
  *
  * Ephemeral renders (the default) go to `$TMPDIR/wolfpack-viz`, which is cleaned up, possibly before the owner answers a
@@ -36,5 +36,5 @@ export function diagramPath(den: string, id: string, env: NodeJS.ProcessEnv = pr
 /** Why `id` cannot be attached to a card (model-facing), or undefined. */
 export function diagramProblem(den: string, id: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (diagramPath(den, id, env)) return undefined;
-  return `diagram "${id}" is not a published diagram. Use the filename returned by render_mermaid / render_svg called with save_as AND persist: true (like viz-my-diagram-1731000000000.png): an id only, never a path or URL; ephemeral renders cannot be attached.`;
+  return `diagram "${id}" is not a published diagram. Use the filename returned by a diagram tool that persisted the PNG (like viz-my-diagram-1731000000000.png): an id only, never a path or URL; ephemeral renders cannot be attached.`;
 }

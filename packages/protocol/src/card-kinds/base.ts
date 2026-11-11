@@ -36,8 +36,8 @@ export const cardFieldBase = z.object({
   /** Extra context shown under the label. */
   description: z.string().optional(),
   /**
-   * The `ask` tool: id of a diagram the wolf rendered and persisted (render_mermaid / render_svg with `save_as` and
-   * `persist: true`). Served by `GET /v1/threads/:id/diagrams/:diagramId`. An id only: never a path or URL, the console must not build one.
+   * The `ask` tool: id of a diagram the wolf rendered and persisted (by a diagram tool, as
+   * a PNG in the viz dir). Served by `GET /v1/threads/:id/diagrams/:diagramId`. An id only: never a path or URL, the console must not build one.
    */
   diagram: z.string().regex(DIAGRAM_ID_RE, "a diagram is the file name of a published render (viz-<slug>-<ms>.png), never a path or URL").optional(),
   /** Conditional visibility (stepped/dependent cards); absent = always shown. */

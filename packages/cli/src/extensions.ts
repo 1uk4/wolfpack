@@ -72,14 +72,6 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     runtimes: ["pi-durable"],
   },
   {
-    key: "visual-tools",
-    label: "Visual tools (Mermaid + SVG makers)",
-    description:
-      "Mermaid + SVG authoring tools for the visualizer subagent — render-and-inspect diagram loops that publish PNGs into <cwd>/viz (wolfpack-visual-tools)",
-    dir: "wolfpack-visual-tools",
-    runtimes: ["pi", "pi-durable"],
-  },
-  {
     key: "browser",
     label: "Browser",
     description: "Guarded headless Chromium (Playwright) tools; off unless wolf.yaml `browser: { enabled: true }` (wolfpack-browser)",

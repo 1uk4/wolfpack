@@ -32,24 +32,33 @@ export function initialListOpen(mobile: boolean, stored: string | null, path = "
  *  a smaller gap is browser chrome / a stale value left after the keyboard closed, and must not shrink the shell. */
 export const KEYBOARD_MIN_GAP = 150;
 
-/** Height the phone shell should take, px, or null for "use 100dvh". Only an open keyboard (a gap >= KEYBOARD_MIN_GAP) shrinks it. */
-export function keyboardShellHeight(vv: { height: number } | null | undefined, innerHeight: number): number | null {
+/** The tallest viewport seen at the current width. In the iOS home-screen app the keyboard can shrink innerHeight together with the
+ *  visualViewport (no gap between them), so the gap alone never shows it; the drop from the tallest height does. A width change
+ *  (rotation) starts over, so landscape is not read as a keyboard. */
+export function trackTallestViewport(prev: { width: number; height: number } | null, width: number, height: number): { width: number; height: number } {
+	if (!prev || prev.width !== width) return { width, height };
+	return height > prev.height ? { width, height } : prev;
+}
+
+/** Height the phone shell should take, px, or null for "use 100dvh". Only an open keyboard shrinks it: a gap >= KEYBOARD_MIN_GAP
+ *  between the layout height (or, when given, the tallest height seen) and the visual viewport. */
+export function keyboardShellHeight(vv: { height: number } | null | undefined, innerHeight: number, tallest?: number): number | null {
 	if (!vv) return null;
 	const h = Math.max(0, Math.round(vv.height));
-	return innerHeight - h >= KEYBOARD_MIN_GAP ? h : null;
+	return Math.max(innerHeight, tallest ?? 0) - h >= KEYBOARD_MIN_GAP ? h : null;
 }
 
 /** Top offset of the phone shell, px: while the keyboard is open iOS pans the visual viewport inside the layout viewport (offsetTop > 0),
  *  and a `position: fixed` shell pinned at top:0 then sits partly off-screen with its composer still under the keyboard. 0 otherwise. */
-export function keyboardShellTop(vv: { height: number; offsetTop: number } | null | undefined, innerHeight: number): number {
-	if (!vv || keyboardShellHeight(vv, innerHeight) === null) return 0;
+export function keyboardShellTop(vv: { height: number; offsetTop: number } | null | undefined, innerHeight: number, tallest?: number): number {
+	if (!vv || keyboardShellHeight(vv, innerHeight, tallest) === null) return 0;
 	return Math.max(0, Math.round(vv.offsetTop));
 }
 
 /** Bottom padding of the thread, as a CSS length: iOS keeps reporting the home-indicator inset (~34pt) while the keyboard is open, but the
  *  keyboard covers the indicator, so an open keyboard gets 0 (the composer sits on it); otherwise exactly one inset. */
-export function shellBottomInset(vv: { height: number } | null | undefined, innerHeight: number): string {
-	return keyboardShellHeight(vv, innerHeight) === null ? "env(safe-area-inset-bottom)" : "0px";
+export function shellBottomInset(vv: { height: number } | null | undefined, innerHeight: number, tallest?: number): string {
+	return keyboardShellHeight(vv, innerHeight, tallest) === null ? "env(safe-area-inset-bottom)" : "0px";
 }
 
 /** Whether the thread composer takes focus when the page loads. A touch device (coarse pointer) must not: focusing on load opens the iOS

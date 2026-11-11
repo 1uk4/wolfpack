@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer, trackTallestViewport } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -67,6 +67,26 @@ test("shellBottomInset drops the home-indicator inset while the keyboard is open
 test("the composer takes focus on load only with a fine pointer; on a phone the keyboard would open and pan the standalone page", () => {
 	assert.equal(shouldAutoFocusComposer({ coarse: true }), false);
 	assert.equal(shouldAutoFocusComposer({ coarse: false }), true);
+});
+
+test("keyboard detection also works when iOS standalone shrinks innerHeight together with the visual viewport", () => {
+	// standalone: keyboard opens, innerHeight 852 -> 560 and vv.height 560; the old innerHeight - vv gap is 0
+	let seen = trackTallestViewport(null, 393, 852);
+	seen = trackTallestViewport(seen, 393, 560);
+	assert.equal(seen.height, 852);
+	assert.equal(keyboardShellHeight({ height: 560 }, 560, seen.height), 560);
+	assert.equal(shellBottomInset({ height: 560 }, 560, seen.height), "0px");
+	// Safari / closed keyboard: unchanged
+	assert.equal(keyboardShellHeight({ height: 852 }, 852, 852), null);
+	assert.equal(keyboardShellHeight({ height: 740 }, 852, 852), null);
+	assert.equal(keyboardShellHeight({ height: 500 }, 852), 500);
+});
+
+test("rotation resets the tallest viewport, so landscape is not read as an open keyboard", () => {
+	const portrait = trackTallestViewport(null, 393, 852);
+	const landscape = trackTallestViewport(portrait, 852, 393);
+	assert.deepEqual(landscape, { width: 852, height: 393 });
+	assert.equal(keyboardShellHeight({ height: 393 }, 393, landscape.height), null);
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

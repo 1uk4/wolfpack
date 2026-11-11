@@ -128,6 +128,18 @@ export function tokenFromHash(hash: string): string | undefined {
 	return t || undefined;
 }
 
+const RAW_TOKEN = /^[A-Za-z0-9._~+/=-]{1,512}$/;
+
+/** Sign-in box input: a pairing link (the token after `#token=`, other hash params ignored) or a raw token. Anything else is undefined. */
+export function tokenFromPairingInput(input: string): string | undefined {
+	const s = input.trim();
+	if (!s) return undefined;
+	const i = s.indexOf("#");
+	if (i >= 0) return tokenFromHash(s.slice(i));
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return undefined; // a link with no fragment
+	return RAW_TOKEN.test(s) ? s : undefined;
+}
+
 type FetchFn = typeof fetch;
 
 /**

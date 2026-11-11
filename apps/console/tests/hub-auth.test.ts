@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
-import { bearerOf, buildHubCookie, clearHubCookies, cookieAuthAllowed, cookieTokenOf, HUB_COOKIE, HUB_COOKIE_HOST, syncHubCookie, withCookieBearer, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
+import { bearerOf, buildHubCookie, clearHubCookies, cookieAuthAllowed, cookieTokenOf, HUB_COOKIE, HUB_COOKIE_HOST, syncHubCookie, withCookieBearer, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, tokenFromPairingInput, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
 import { createMemoryApi } from "../src/server/memory-api.ts";
 import { createConsoleClient, makeRequestToken, nextRequestToken } from "../src/server/console-client.ts";
 
@@ -62,6 +62,17 @@ describe("withHubAuth", () => {
 		release();
 		await pending;
 		assert.equal(readHubToken(storage), "new");
+	});
+	it("tokenFromPairingInput takes a raw token or the token after #token= in a pairing link, nothing else", () => {
+		assert.equal(tokenFromPairingInput("  abc123_-.~  "), "abc123_-.~");
+		assert.equal(tokenFromPairingInput("http://127.0.0.1:3231/pair#token=abc123"), "abc123");
+		assert.equal(tokenFromPairingInput("https://c.example/pair#x=1&token=a%2Bb&y=2"), "a+b");
+		assert.equal(tokenFromPairingInput("#token=abc123"), "abc123");
+		assert.equal(tokenFromPairingInput("http://127.0.0.1:3231/pair"), undefined, "a link without a token");
+		assert.equal(tokenFromPairingInput("http://x/pair#token="), undefined);
+		assert.equal(tokenFromPairingInput("not a token!"), undefined, "spaces and punctuation");
+		assert.equal(tokenFromPairingInput("   "), undefined);
+		assert.equal(tokenFromPairingInput(""), undefined);
 	});
 	it("helpers: fragment token, bearer parsing, clear", () => {
 		assert.equal(tokenFromHash("#token=a%2Bb"), "a+b");

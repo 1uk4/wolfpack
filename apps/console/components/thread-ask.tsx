@@ -68,7 +68,7 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 	return {
 		pending: true,
 		sheet: (
-			<div data-testid="ask-sheet-host" data-layout="fullscreen" data-composing={composing ? "true" : undefined} role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto flex flex-col" style={{ maxHeight: `calc(100dvh - env(safe-area-inset-top) - 0.5rem - ${composing ? "1rem" : "10rem"})` }}>
+			<div data-testid="ask-sheet-host" data-layout="fullscreen" data-composing={composing ? "true" : undefined} role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto flex min-h-0 flex-col">
 				<button type="button" aria-label="Put the questions away" data-testid="ask-sheet-close" onClick={() => setOpen(false)} className="flex min-h-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
 					<ChevronDownIcon aria-hidden className="size-5" />
 				</button>

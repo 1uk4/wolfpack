@@ -838,7 +838,13 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 			assert.equal(layer.getAttribute("data-layout"), "fullscreen");
 			// sized to its content, capped below the safe-area top; sits on the composer card instead of being pinned to the screen
 			assert.doesNotMatch(layer.getAttribute("class") ?? "", /\b(fixed|top-0|h-full|h-dvh)\b/);
-			assert.match(layer.getAttribute("style") ?? "", /max-height:[^;]*env\(safe-area-inset-top\)/);
+			// bounded by layout, not viewport arithmetic: no inline cap; the sheet shrinks (min-h-0) inside a dock that is at most as tall as
+			// the area below the header (max-h-full), so its top can never slide under the header or git row
+			assert.equal(layer.style.maxHeight, "");
+			assert.ok((layer.getAttribute("class") ?? "").split(/\s+/).includes("min-h-0"), "host shrinks");
+			const dockEl = q('[data-testid="dock-fade"]')!.parentElement!;
+			const dockCls = (dockEl.getAttribute("class") ?? "").split(/\s+/);
+			assert.ok(dockCls.includes("max-h-full") && dockCls.includes("flex-col"), `dock classes: ${dockEl.className}`);
 			assert.equal(layer.getAttribute("role"), "dialog");
 			assert.equal(layer.getAttribute("aria-modal"), "false");
 			assert.equal(layer.getAttribute("aria-label"), "Questions");

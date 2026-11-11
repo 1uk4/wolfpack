@@ -25,10 +25,6 @@ Inc., with modifications. Message, Reasoning and ReasoningTrigger still follow
 upstream's structure. The licence text is in
 licenses/vercel-ai-elements.Apache-2.0.txt. Upstream publishes no NOTICE file.
 
-apps/console/public/fonts/cmunbx.ttf: Computer Modern Bold, licensed under the
-SIL Open Font License 1.1. The licence text is in
-apps/console/public/fonts/OFL.txt.
-
 extensions/wolfpack-telegram is based on badlogic/pi-telegram (MIT) and keeps
 its MIT license.
 

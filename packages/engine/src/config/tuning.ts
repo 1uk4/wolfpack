@@ -79,6 +79,8 @@ export const SWEEP = {
   backoffMaxMs: 900_000,
   /** Timeout for one Ollama embedding call, so a hung server can't hold a tick. */
   embedTimeoutMs: 30_000,
+  /** Ollama keep_alive sent with each embedding call, so the model stays loaded across a curator burst (ticks ~60 s apart; host default is 30s). */
+  embedKeepAlive: "5m",
 } as const;
 
 /**
@@ -312,6 +314,12 @@ export const SECTION_TREE = {
     nInit: 20,
     /** Permutation-null replicates and the p-value a split must beat. */
     nullReplicates: 100,
+    /**
+     * Largest section the k-means comparison line in a rebuild proposal is computed for. The diagnostic runs the full chooseSplit
+     * (k up to maxKFor, nullReplicates fits per k, silhouettes), which for a 276-member root took 19+ minutes on one core and
+     * blocked hubd's event loop. Above this the proposal says it was skipped; the split decision never depends on it.
+     */
+    diagnosticsMaxMembers: 60,
     nullAlpha: 0.05,
     /** Seed/bootstrap stability: mean ARI between re-clusterings must reach this. */
     minAri: 0.7,
@@ -328,6 +336,12 @@ export const SECTION_TREE = {
     llmMinPartialShare: 0.3,
     /** Across the first pass and the leftover pass together, at most this many groups come out of one section. */
     llmMaxCategoriesTotal: 8,
+    /** After a validated LLM partition, a leftover joins its closest kept group (see joinLeftovers). False = leftovers stay in the parent. */
+    joinLeftovers: true,
+    /** A joining leftover needs at least this cosine to the group centroid (centred vectors), on top of the group's own weakest-member bar. */
+    joinFloor: 0.05,
+    /** ...and must beat the runner-up group by at least this much (skipped with a single kept group). */
+    joinMargin: 0.01,
     /** Child label restating the parent: token Jaccard at or above this. */
     restateJaccard: 0.6,
     /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */

@@ -18,6 +18,7 @@ import {
 	attentionGroups,
 	contributionList,
 	curatorNote,
+	curatorStuck,
 	hubIsOlder,
 	domainBlocks,
 	entryHref,
@@ -199,6 +200,7 @@ export function KbActivityBody({
 }) {
 	const { data } = state;
 	const note = curatorNote(data);
+	const stuckSince = curatorStuck(data);
 	const blocks = domainBlocks(data, extras);
 	const chip = (active: boolean) => `rounded border px-1.5 py-0.5 text-[11px] ${active ? "border-foreground/40 bg-accent text-foreground" : "border-border text-muted-foreground hover:text-foreground"}`;
 	return (
@@ -214,6 +216,12 @@ export function KbActivityBody({
 					))}
 				</span>
 			</h1>
+			{stuckSince ? (
+				<div role="alert" className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300" data-testid="kb-curator-stuck">
+					<p>Curator stuck since {new Date(parseLedgerTime(stuckSince)).toLocaleString()} ({kbRelativeTime(stuckSince, now)})</p>
+					<p className="mt-0.5 text-[12px] opacity-80">The sweep ran past its time budget and hasn't stopped; new sweeps are skipped until it does.</p>
+				</div>
+			) : null}
 			{note ? <p className="mb-4 text-sm text-muted-foreground" data-testid="kb-curator-note">{note}</p> : null}
 			{hubIsOlder(data) ? <p className="mb-4 text-[12px] text-muted-foreground/70" data-testid="kb-hub-older">The hub is older than this console: entry and waiting counts are unavailable.</p> : null}
 			<ContributionsList data={data} now={now} />

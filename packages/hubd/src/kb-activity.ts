@@ -126,7 +126,7 @@ export function createKbActivity(d: { roots: KbRoots; inboxRoot: string; receipt
         attention,
         decisions: page.decisions,
         changes: page.changes,
-        ...(on && st ? { sweep: { running: st.running, ...(st.running && current ? { current } : {}), ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),
+        ...(on && st ? { sweep: { running: st.running, ...(st.stuckSince ? { stuckSince: st.stuckSince } : {}), ...(st.running && current ? { current } : {}), ...(st.last ? { last: { ...st.last, ...(st.last.error ? { error: safeError(st.last.error) } : {}) } } : {}) } } : {}),
       } as KbActivityResponse;
     },
   };

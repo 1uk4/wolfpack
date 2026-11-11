@@ -384,6 +384,72 @@ describe("hub curator: failures", () => {
     expect((await hub.runCuratorOnce())!.outcome).not.toBe("skipped"); // the refused pause left no pause count behind
   }, 30_000);
 
+  it("an over-budget sweep keeps the tick in flight until it really ends: no second sweep starts, pause is refused, then ticks resume", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inCall = new Promise<void>((r) => (entered = r));
+    let calls = 0;
+    const gated = { ...engine, call: async (...a: [string, any]) => { calls++; entered(); await gate; return (engine as any).call(...a); } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => gated, closeWaitMs: 50, outerBudgetMs: 60 }) });
+    drop(dir, 1);
+    const tick = hub.runCuratorOnce();
+    await inCall;
+    await new Promise((r) => setTimeout(r, 200)); // past the outer budget; the sweep is aborted but still alive
+    expect(await hub.runCuratorOnce()).toMatchObject({ outcome: "busy", error: /still running/ }); // no second sweep while the first is alive; told apart from off/closing (undefined)
+    await expect(hub.pauseCurator()).rejects.toMatchObject({ code: "busy" });
+    expect(existsSync(leaseFile(contributionsRoot(dir)))).toBe(true);
+    release();
+    expect((await tick)!.error).toMatch(/time budget/);
+    expect(readdirSync(lane(dir)).filter((f) => f.endsWith(".md"))).toHaveLength(1); // the item stays queued
+    const resume = await hub.pauseCurator(); // the sweep has really ended: pause now resolves
+    resume();
+  }, 30_000);
+
+  it("a sweep that never ends after its abort: the hard cap releases the tick, the status marks it stuck until the sweep ends", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inCall = new Promise<void>((r) => (entered = r));
+    let calls = 0;
+    const gated = { ...engine, call: async (...a: [string, any]) => { calls++; entered(); await gate; return (engine as any).call(...a); } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => gated, outerBudgetMs: 60, abortGraceMs: 30, abortCapMs: 100 }) });
+    drop(dir, 1);
+    const activity = async () => (await (await fetch(hub.url + "/v1/kb/activity", { headers: OP })).json()) as { sweep?: { stuckSince?: string } };
+    const tick = hub.runCuratorOnce();
+    await inCall;
+    expect((await tick)!.error).toMatch(/no longer waiting/); // released although the sweep is alive
+    expect((await activity()).sweep?.stuckSince).toMatch(/^\d{4}-/);
+    // inflight is free but the sweep is alive: the next tick reports it instead of "ran" with an empty result, and starts nothing
+    const callsBefore = calls;
+    drop(dir, 1);
+    expect(await hub.runCuratorOnce()).toMatchObject({ outcome: "busy", error: /stuck since \d{4}-/ });
+    expect(calls).toBe(callsBefore);
+    await expect(hub.pauseCurator()).rejects.toMatchObject({ code: "busy", message: /stuck/ }); // no resume function while the old sweep is alive
+    release();
+    await new Promise((r) => setTimeout(r, 100));
+    (await hub.pauseCurator())(); // the sweep settled: pause works again
+    expect((await activity()).sweep?.stuckSince).toBeUndefined(); // the sweep ended: marker cleared
+  }, 30_000);
+
+  it("a pause that began before the hard cap fired is refused (busy, stuck) when the cap lands during its wait", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inCall = new Promise<void>((r) => (entered = r));
+    const gated = { ...engine, call: async (...a: [string, any]) => { entered(); await gate; return (engine as any).call(...a); } };
+    const { hub, dir } = await start({ curator: curatorOpts({ createEngine: () => gated, outerBudgetMs: 60, abortGraceMs: 30, abortCapMs: 100, closeWaitMs: 5000 }) });
+    drop(dir, 1);
+    const tick = hub.runCuratorOnce();
+    await inCall;
+    // the pause starts while the tick is in flight; the cap releases the tick (the sweep stays alive) inside the pause's wait
+    await expect(hub.pauseCurator()).rejects.toMatchObject({ code: "busy", message: /stuck/ });
+    await tick;
+    release();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await hub.runCuratorOnce()).not.toMatchObject({ outcome: "skipped" }); // the refused pause left no pause count behind
+  }, 30_000);
+
   it("close() while a tick is in flight: nothing is written after the close, the lease stays until the tick ends, then goes", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));

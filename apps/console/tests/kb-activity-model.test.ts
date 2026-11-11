@@ -8,6 +8,7 @@ import {
 	hubIsOlder,
 	domainBlocks,
 	curatorNote,
+	curatorStuck,
 	decisionOutcome,
 	decisionRows,
 	groupIncoming,
@@ -505,5 +506,22 @@ describe("zone-less ledger times (run under TZ=America/Los_Angeles)", () => {
 	});
 	it("a genuinely future time still clamps to just now", () => {
 		assert.equal(kbRelativeTime("2026-11-06 04:00", Date.parse("2026-11-06T03:00:00Z")), "just now");
+	});
+});
+
+describe("curatorStuck", () => {
+	const stuck = () => kbActivityFixture({ sweep: { running: true, stuckSince: "2026-11-05T09:45:00.000Z" } });
+	it("returns the stuck-since time when the hub reports it", () => {
+		assert.equal(curatorStuck(stuck()), "2026-11-05T09:45:00.000Z");
+	});
+	it("is null when the hub does not report it (older hub, or a healthy sweep)", () => {
+		assert.equal(curatorStuck(kbActivityFixture()), null);
+		assert.equal(curatorStuck(kbActivityFixture({ sweep: { running: true } })), null);
+	});
+	it("clears when a later response has no stuckSince", () => {
+		const first = reconcileActivity(null, stuck());
+		assert.equal(curatorStuck(first.data), "2026-11-05T09:45:00.000Z");
+		const later = reconcileActivity(first, kbActivityFixture({ sweep: { running: false } }));
+		assert.equal(curatorStuck(later.data), null);
 	});
 });

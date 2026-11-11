@@ -319,6 +319,75 @@ describe("runSweepTick", () => {
     expect(readBackoff(roots)).toBeNull();
   });
 
+  it("an over-budget sweep is aborted but the tick settles only once the sweep really ended; the item stays queued and uncommitted", async () => {
+    drop("a");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = { ...engine, call: async (...a: [string, { parse: (v: unknown) => unknown }]) => { await gate; return (engine as any).call(...a); } } as unknown as Engine;
+    let settled = false;
+    const p = runSweepTick({ roots, createEngine: () => slow, notify: () => {}, alert: () => {}, budgetMs: 1000, outerBudgetMs: 40 });
+    const outcome = p.then(() => "ok", (e: Error) => e.name).finally(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(settled).toBe(false); // budget passed, sweep still alive: the tick has not returned
+    release();
+    expect(await outcome).toBe("BudgetExceeded");
+    expect(queued()).toEqual(["a.md"]);
+    expect(readdirSync(join(roots.kbBase, "domains", "wp", "entries"))).toEqual([]);
+  });
+
+  it("an abort that lands before the next item starts leaves it queued and uncommitted", async () => {
+    drop("a");
+    writeFileSync(join(roots.kbBase, "domains", "wp", "entries", "kb-wp-0.md"), "---\nid: kb-wp-0\ntitle: Old\ndomain: wp\n---\n# Old\n\nLede.\n"); // forces an embed call while the vectors load
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    fetchMock.mockImplementation(async () => { await gate; return new Response(JSON.stringify({ embedding: [1, 0, 0] })); });
+    const engineCalls = (engine.call as ReturnType<typeof vi.fn>).mock.calls.length;
+    const p = runSweepTick({ roots, createEngine, notify: () => {}, alert: () => {}, budgetMs: 1000, outerBudgetMs: 40 });
+    const outcome = p.then(() => "ok", (e: Error) => e.name);
+    await new Promise((r) => setTimeout(r, 150)); // the budget ended while the vectors were still loading
+    release();
+    expect(await outcome).toBe("BudgetExceeded");
+    expect((engine.call as ReturnType<typeof vi.fn>).mock.calls.length).toBe(engineCalls); // the item never started
+    expect(queued()).toEqual(["a.md"]);
+    expect(readdirSync(join(roots.kbBase, "domains", "wp", "entries"))).toEqual(["kb-wp-0.md"]);
+  });
+
+  describe("a sweep that ignores its abort", () => {
+    afterEach(() => vi.useRealTimers());
+    const stuckEngine = () => {
+      let release!: () => void;
+      let markReached!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const reached = new Promise<void>((r) => (markReached = r)); // the sweep is inside the stuck engine call
+      return { release, reached, engine: { ...engine, call: async (...a: [string, { parse: (v: unknown) => unknown }]) => { markReached(); await gate; return (engine as any).call(...a); } } as unknown as Engine };
+    };
+
+    it("stops waiting after the grace plus the cap: SweepStuck, marker set until the sweep ends, alert repeats then stops", async () => {
+      drop("a");
+      vi.useFakeTimers();
+      const s = stuckEngine();
+      const marks: boolean[] = [];
+      const p = runSweepTick({ roots, createEngine: () => s.engine, notify: () => {}, alert: (m) => void alerts.push(m), budgetMs: 100_000, outerBudgetMs: 1000, abortGraceMs: 1000, abortRepeatMs: 2000, abortCapMs: 5000, onSweepStuck: (v) => void marks.push(v) });
+      const outcome = p.then(() => "ok", (e: Error) => e.name);
+      await s.reached; // real file I/O (async ledger read) must finish before the clock moves
+      await vi.advanceTimersByTimeAsync(1000); // budget spent: aborted
+      expect(marks).toEqual([true]);
+      await vi.advanceTimersByTimeAsync(1000); // grace over: first alert
+      expect(alerts.filter((m) => /still running/.test(m))).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(alerts.filter((m) => /still running/.test(m))).toHaveLength(2); // repeated
+      await vi.advanceTimersByTimeAsync(4000); // cap (grace + 5 s after the abort) reached
+      expect(await outcome).toBe("SweepStuck");
+      expect(marks).toEqual([true]); // the sweep is still alive: the marker stays
+      s.release();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(marks).toEqual([true, false]); // it settled: cleared
+      const n = alerts.filter((m) => /still running/.test(m)).length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(alerts.filter((m) => /still running/.test(m))).toHaveLength(n); // no more alerts
+    });
+  });
+
   it("compacts the vector cache (reorg on), dropping vectors of entries that no longer exist", async () => {
     const dir = vectorsDir(roots);
     mkdirSync(dir, { recursive: true });

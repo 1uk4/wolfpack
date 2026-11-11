@@ -1037,6 +1037,8 @@ export const KbActivityResponseSchema = z.object({
       /** The contribution being worked on (from the sweep's sweep-current.json); absent when idle or on an older hub. */
       current: z.object({ from: z.string(), denTopicId: z.string(), startedAt: z.number(), route: z.string().optional() }).optional(),
       last: z.object({ finishedAt: z.string(), processed: z.number().int().nonnegative(), error: z.string().optional() }).optional(),
+      /** ISO time the hub set when the outer budget aborted a sweep that has not ended yet; cleared when that sweep ends. Absent otherwise or on an older hub. */
+      stuckSince: z.string().optional(),
     })
     .optional(),
 });

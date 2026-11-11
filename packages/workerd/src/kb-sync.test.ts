@@ -579,6 +579,21 @@ describe("worker KB sync (hubd + workerd rig)", () => {
     expect(calls).toBe(n);
   });
 
+  it("failure backoff is jittered by +-20% of the exponential delay", async () => {
+    const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
+    await online(r);
+    const delays: number[] = [];
+    for (const rand of [0, 1]) {
+      const logs: string[] = [];
+      const a = direct(r, ["alpha"], { baseMs: 1000, capMs: 60_000, rand: () => rand, log: (m) => logs.push(m), fetchImpl: (async () => new Response("no", { status: 403 })) as typeof fetch });
+      a.sync.start();
+      await r.eventually(() => logs.some((l) => l.includes("retry in")), "first failure logged");
+      delays.push(Number(/retry in (\d+)ms/.exec(logs.find((l) => l.includes("retry in"))!)![1]));
+      a.sync.stop();
+    }
+    expect(delays).toEqual([800, 1200]);
+  });
+
   it("an in-flight sync neither resets active:true after removal nor writes after stop()", async () => {
     const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
     await r.kbWrite("alpha", `entries/${E1}.md`, entry(E1));

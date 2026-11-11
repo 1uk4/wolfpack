@@ -1,13 +1,9 @@
 "use client";
 
-// Must stay the first import: copies the pre-rename localStorage keys before any read.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { MenuShell } from "@/components/menu-shell";
-import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
-import { ActivitySection } from "@/components/activity-dock";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/needs-you";
 import { UpdateNotice } from "@/components/update-notice";
@@ -32,9 +28,9 @@ import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, thread
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title">;
 
-const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
+const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
 
 /**
@@ -361,7 +357,6 @@ export function SessionRow({
 	active,
 	onOpen,
 	kbdSelected = false,
-	onContextMenu,
 	nested = false,
 	indented = false,
 	offline = false,
@@ -385,7 +380,6 @@ export function SessionRow({
 	 *  visually distinct from the active session, which stays filled. */
 	kbdSelected?: boolean;
 	/** Right-click opens the context menu (wave 6: Rename / Delete). */
-	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
 	const openWorkItem = useOpenWorkItem();
 	// The thread you are looking at needs no mark: you are already there.
@@ -409,7 +403,6 @@ export function SessionRow({
 				<button
 					type="button"
 					onClick={onOpen}
-					onContextMenu={onContextMenu}
 					data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 					data-compact="true"
 					data-state={chat.state ?? ""}
@@ -439,7 +432,6 @@ export function SessionRow({
 		<button
 			type="button"
 			onClick={onOpen}
-			onContextMenu={onContextMenu}
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 			data-offline={offline || undefined}
 			title={offline ? "offline" : undefined}
@@ -487,55 +479,6 @@ export function SessionRow({
 	);
 }
 
-/** The inline-rename row (wave 6): same geometry as SessionRow, but the
- *  title line becomes a text input — select-all on entry (the click means
- *  "replace", the header rename's rule), Enter/blur commits, Esc discards.
- *  The meta line stays so the row never changes height mid-edit. */
-export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; onCommit: (next: string) => void; onCancel: () => void }) {
-	const [draft, setDraft] = useState(chat.title);
-	const inputRef = useRef<HTMLInputElement | null>(null);
-	useEffect(() => {
-		const el = inputRef.current;
-		if (el) {
-			el.focus();
-			el.select();
-		}
-	}, []);
-	return (
-		<div
-			data-testid="session-rename-row"
-			className="relative mb-0.5 flex w-full items-center rounded-lg bg-accent px-3 py-2"
-		>
-			{/* NOTHING MOVES (owner, polish round): an idle row renders no
-			    status spacer (SessionStatus is null when not busy), so the
-			    title starts at the row's own px-3 — 12px in. The old rename
-			    row always carried a 14px spacer + gap + the input's border
-			    and padding, landing the text ~41px in (and the meta with
-			    it). The input here is borderless and padding-free at the
-			    exact title x; the underline is the only editing cue. */}
-			<span className="flex min-w-0 w-full flex-col">
-				<input
-					ref={inputRef}
-					value={draft}
-					spellCheck={false}
-					onChange={(e) => setDraft(e.target.value)}
-					onBlur={() => onCommit(draft)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") e.currentTarget.blur();
-						if (e.key === "Escape") {
-							e.stopPropagation(); // discard, not also the sidebar/chat chains
-							onCancel();
-						}
-					}}
-					aria-label="Rename session"
-					data-testid="session-rename-input"
-					className="wp-input w-full min-w-0 truncate border-0 border-b border-border bg-transparent px-0 text-foreground outline-none"
-				/>
-				<span className="block truncate text-xs text-muted-foreground">{sessionMeta(chat)}</span>
-			</span>
-		</div>
-	);
-}
 
 /** The wolf's liveness on its own group header: a dot plus an explicit word (never colour-only). Compact on phones. */
 export function WolfBadge({ wolf }: { wolf: WolfStatus }) {
@@ -642,14 +585,7 @@ export function SessionsSidebar() {
 	const renderGroup = (g: { top: SessionItem; kids: SessionItem[] }, indented: boolean) => {
 							const row = (c: SessionItem, nested: boolean, indented = false) => {
 								const at = shown!.indexOf(c);
-								return renamingId === c.id ? (
-									<RenameRow
-										key={c.id}
-										chat={c}
-										onCommit={(next) => void commitRename(c.id, next)}
-										onCancel={() => setRenamingId(null)}
-									/>
-								) : (
+								return (
 									<SessionRow
 										key={c.id}
 										chat={c}
@@ -664,8 +600,6 @@ export function SessionsSidebar() {
 											setKbdIndex(null);
 											openItem(c);
 										}}
-										// Thread rows: a color-only menu (rename/delete/export are legacy chat-record actions).
-										onContextMenu={(e) => openContext(e, c)}
 									/>
 								);
 							};
@@ -706,18 +640,6 @@ export function SessionsSidebar() {
 		}
 	}), []);
 
-	/* Instant rename propagation (2026-09-17): the chat header's rename
-	   commits dispatch wolfpack:chat-renamed; patch the snapshot in place instead
-	   of waiting for the 2.5s poll. */
-	useEffect(() => {
-		const onRenamed = (e: Event) => {
-			const { id, title } = (e as CustomEvent<{ id: string; title: string }>).detail;
-			setChats((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, title } : c)) : prev));
-		};
-		window.addEventListener("wolfpack:chat-renamed", onRenamed);
-		return () => window.removeEventListener("wolfpack:chat-renamed", onRenamed);
-	}, []);
-
 	/* INSTANT TURN-STATE (owner, sidebar round 2026-10-02): the open
 	   session broadcasts wolfpack:turn-state the instant its turn starts
 	   (submitted — the optimistic machine's own flip) and at settle —
@@ -750,12 +672,11 @@ export function SessionsSidebar() {
 
 	/* PUSH (architecture S6, 2026-10-02): the 2.5s poll is RETIRED — the
 	   last standing network poll in the app. List truth arrives as
-	   events: chats-changed (create/rename/delete — the list-SHAPE
-	   writes), and turn-started/turn-settled for EVERY chat (unfiltered:
+	   events: turn-started/turn-settled for EVERY chat (unfiltered:
 	   any chat's turn flips busy/order/phase in this list). Announced
 	   fetches ride the 250ms trailing debounce (the S4/S5 law); resync
-	   (reconnect / dev-restart) is immediate. wolfpack:turn-state +
-	   wolfpack:chat-renamed stay for same-tab INSTANTS — local beats any
+	   (reconnect / dev-restart) is immediate. wolfpack:turn-state
+	   stays for same-tab INSTANTS — local beats any
 	   round-trip. */
 	const refreshRef = useRef(refresh);
 	refreshRef.current = refresh;
@@ -772,7 +693,6 @@ export function SessionsSidebar() {
 			void refreshRef.current();
 		}, wait);
 	};
-	useServerEvent("chats-changed", scheduleEventRefresh);
 	useServerEvent("turn-started", scheduleEventRefresh);
 	useServerEvent("turn-settled", scheduleEventRefresh);
 	useServerEvent("compaction-changed", scheduleEventRefresh);
@@ -815,86 +735,6 @@ export function SessionsSidebar() {
 	const [kbdIndex, setKbdIndex] = useState<number | null>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
-
-	/* ── Wave 6 chunk A: context menu + inline rename + deletion ──
-	   Right-click a session row → MenuShell: the two management actions
-	   first (owner ruling), then — below a hairline — the extraction
-	   coverage block (owner-locked redesign 2026-09-24, order refined
-	   2026-09-24: Rename/Delete on top, the numbers + manual Extract
-	   affordance at the bottom). The anchor is the row that was
-	   right-clicked — assigned into a ref before the state flip so the
-	   shell measures it on its first (hidden) pass. */
-	const [ctxChatId, setCtxChatId] = useState<string | null>(null);
-	const ctxAnchorRef = useRef<HTMLElement | null>(null);
-	const [renamingId, setRenamingId] = useState<string | null>(null);
-	const [deleting, setDeleting] = useState<ChatListItem | null>(null);
-
-	const openContext = (e: React.MouseEvent<HTMLButtonElement>, chat: ChatListItem) => {
-		if ((chat as SessionItem).href) return; // a thread row has no custom menu
-		e.preventDefault(); // suppress the native menu
-		ctxAnchorRef.current = e.currentTarget;
-		setCtxChatId(chat.id);
-	};
-
-	// The menu contract (agent-section's): any pointerdown outside the menu
-	// or its row closes it; Esc is CLAIMED so it never also aborts a turn
-	// or folds the sidebar. Right-clicking another row re-anchors: its
-	// pointerdown closes this menu, its contextmenu opens the next.
-	useEffect(() => {
-		if (ctxChatId === null) return;
-		const onPointerDown = (e: PointerEvent) => {
-			const target = e.target as Node;
-			if (target instanceof Element && target.closest("[data-wp-menu]")) return;
-			if (ctxAnchorRef.current?.contains(target)) return;
-			setCtxChatId(null);
-		};
-		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.stopPropagation();
-				setCtxChatId(null);
-			}
-		};
-		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKeyDown);
-		};
-	}, [ctxChatId]);
-
-	// Inline rename (owner ruling, wave 6): the row swaps to a text input;
-	// commit rides the SAME plumbing as the header rename — PUT the title,
-	// then wolfpack:chat-renamed patches every listener (this sidebar's own
-	// listener patches the snapshot instantly; an open chat header hears
-	// it too). Esc discards; empty commit discards (the header's rules).
-	const commitRename = useCallback(async (id: string, next: string) => {
-		setRenamingId(null);
-		const t = next.trim();
-		if (t === "") return;
-		try {
-			const res = await fetch(`/api/chats/${id}`, {
-				method: "PUT",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title: t }),
-			});
-			if (!res.ok) throw new Error(`rename failed: ${res.status}`);
-			window.dispatchEvent(new CustomEvent("wolfpack:chat-renamed", { detail: { id, title: t } }));
-		} catch (err) {
-			console.error("rename failed:", err); // keep the old title
-		}
-	}, []);
-
-	// Delete success: patch the list instantly (the poll is the backstop),
-	// navigate home if the open session died (the chat view unmounts —
-	// drafts die with it, no orphan bubbles).
-	const onDeleted = useCallback(
-		(id: string) => {
-			setDeleting(null);
-			setChats((prev) => (prev ? prev.filter((c) => c.id !== id) : prev));
-			if (pathname === `/chat/${id}`) router.push("/");
-		},
-		[pathname, router],
-	);
 
 	useEffect(() => {
 		const onFocusSearch = () => {
@@ -1118,9 +958,6 @@ export function SessionsSidebar() {
 					    populates and grows when processes run. The session list is
 					    flex-1, so this pins to the bottom. Sidebar closed = the
 					    learner opted out (no ambient signal, user decision). */}
-					{/* The legacy session-job feed: only drawn while a non-wolfd job runs. */}
-					<ActivitySection hideWhenEmpty />
-
 					{/* Settings entry (settings-app wave): same row language as
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
@@ -1146,71 +983,6 @@ export function SessionsSidebar() {
 					</div>
 				</div>
 
-				{/* The context menu (wave 6): the management actions. MenuShell
-				    owns placement/focus/arrow cycling; the dismissal effect above
-				    owns the contract. */}
-				{ctxChatId !== null && (
-					<MenuShell
-						anchorRef={ctxAnchorRef}
-						testid="session-context-menu"
-						preferredSide="down"
-						menuClass="flex w-52 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
-					>
-						<button
-							type="button"
-							data-testid="ctx-rename"
-							onClick={() => {
-								setRenamingId(ctxChatId);
-								setCtxChatId(null);
-							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
-						>
-							Rename
-						</button>
-						{/* Export as Markdown (owner, release polish 2026-10-06): the
-					    session-markdown engine's user-facing debut — same-origin
-						    anchor download; the route's Content-Disposition names the
-						    file. Sits with the management actions, above Delete (the
-						    destructive action stays last — the danger-fence law). */}
-						<button
-							type="button"
-							data-testid="ctx-export-md"
-							onClick={() => {
-								const chatId = ctxChatId;
-								setCtxChatId(null);
-								const a = document.createElement("a");
-								a.href = `/api/chats/${chatId}/markdown`;
-								a.download = ""; // the route's filename wins
-								document.body.appendChild(a);
-								a.click();
-								a.remove();
-							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
-						>
-							Export as Markdown…
-						</button>
-						<button
-							type="button"
-							data-testid="ctx-delete"
-							onClick={() => {
-								const target = chats?.find((c) => c.id === ctxChatId);
-								if (target) setDeleting(target);
-								setCtxChatId(null);
-							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
-						>
-							Delete…
-						</button>
-					</MenuShell>
-				)}
-
-				{/* The delete dialog (wave 6) — portaled to body
-				    by the component itself, lives here for state locality. */}
-				<DeleteSessionDialog
-					chat={deleting}
-					onClose={() => setDeleting(null)}
-					onDeleted={onDeleted}
-				/>
 			</aside>
 	);
 }

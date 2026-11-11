@@ -61,7 +61,7 @@ function sseResponse(...events: unknown[]): Response {
 /** CONNECTION DIET B mock (owner, 2026-10-10 — parallel-session freeze
  *  postmortem): send() no longer consumes the POST response — it acks,
  *  closes, and reattaches. The wire sequence a send drives: POST /api/chat
- *  (tiny JSON ack) → GET /api/chats/chat_x (record refetch — the
+ *  (tiny JSON ack) → GET /api/wolves/w/threads/chat_x (record refetch — the
  *  write-ahead absorbs the optimistic bubble) → GET .../stream (the SSE
  *  wire). `userText` seeds the record's write-ahead user message; `post`
  *  overrides the ack (409/error-path tests keep their own scripts);
@@ -78,12 +78,12 @@ function dietFetch(opts: {
 			if (opts.onPost && typeof init?.body === "string") opts.onPost(init.body);
 			return opts.post?.() ?? Response.json({ ok: true });
 		}
-		if (url === "/api/chats/chat_x") {
+		if (url === "/api/wolves/w/threads/chat_x") {
 			const messages =
 				opts.userText === undefined ? [] : [{ id: "u1", role: "user", content: opts.userText, timestamp: 1 }];
 			return Response.json({ messages });
 		}
-		if (url === "/api/chats/chat_x/stream") return opts.stream();
+		if (url === "/api/wolves/w/threads/chat_x/stream") return opts.stream();
 		throw new Error(`unexpected fetch: ${url}`);
 	}) as typeof globalThis.fetch;
 }
@@ -124,13 +124,12 @@ function plainTransport(chatId: string): SessionTransport {
 	return {
 		submitUrl: "/api/chat",
 		submitBody: (input) => JSON.stringify({ chatId, input }),
-		recordUrl: `/api/chats/${encodeURIComponent(chatId)}`,
+		recordUrl: `/api/wolves/w/threads/${encodeURIComponent(chatId)}`,
 		parseRecord: (json) => {
 			const messages = (json as { messages?: LhMessage[] }).messages;
 			return Array.isArray(messages) ? messages : null;
 		},
-		streamUrl: `/api/chats/${encodeURIComponent(chatId)}/stream`,
-		retryOnBusy: true,
+		streamUrl: `/api/wolves/w/threads/${encodeURIComponent(chatId)}/stream`,
 		createWire: () => (raw) => [raw],
 	};
 }
@@ -148,17 +147,14 @@ interface Call {
 
 function installFetch(routes: {
 	chatPOST: (call: Call, attempt: number) => Response;
-	jobsGET?: (poll: number) => boolean;
 }): Call[] {
 	const calls: Call[] = [];
-	let poll = 0;
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		calls.push({ url, body: init?.body as string | undefined });
 		if (url === "/api/chat" && init?.method === "POST") {
 			return routes.chatPOST(calls.at(-1)!, calls.filter((c) => c.url === "/api/chat").length);
 		}
-		if (url.startsWith("/api/jobs")) return Response.json({ turnInFlight: routes.jobsGET?.(++poll) ?? false });
 		throw new Error(`unexpected fetch: ${url}`);
 	}) as typeof globalThis.fetch;
 	return calls;
@@ -185,63 +181,13 @@ describe("postInputEvent (the 409 identity-retry)", { skip: process.env.NO_SLOW 
 
 	it("passes non-409 responses through untouched", async () => {
 		const calls = installFetch({ chatPOST: () => new Response("stream", { status: 200 }) });
-		const m = model({ pollMs: 10, waitMaxMs: 100 });
+		const m = model();
 		const res = await m.postInputEvent({ type: "text", text: "hi" });
 		assert.equal(res.status, 200);
 		assert.equal(calls.length, 1, "no polling, single call");
 		assert.deepEqual(JSON.parse(calls[0]!.body!), { chatId: "chat_x", input: { type: "text", text: "hi" } });
 	});
 
-	it("waits out the turn, then re-POSTs the SAME event body (identity retry)", async () => {
-		const event: ChatInput = { type: "text", text: "my question while the wake turn ran" };
-		const calls = installFetch({
-			chatPOST: (_c, n) => (n === 1 ? new Response("busy", { status: 409 }) : new Response("stream", { status: 200 })),
-			jobsGET: (poll) => poll <= 1, // first poll: still running; second: done
-		});
-		const m = model({ pollMs: 10, waitMaxMs: 100 });
-		const res = await m.postInputEvent(event);
-		assert.equal(res.status, 200);
-		const posts = calls.filter((c) => c.url === "/api/chat");
-		assert.equal(posts.length, 2, "one 409, one retry");
-		assert.equal(posts[1]!.body, posts[0]!.body, "the event body is byte-identical");
-	});
-
-	it("never reads the record — the event is the only payload", async () => {
-		const calls = installFetch({
-			chatPOST: (_c, n) => (n === 1 ? new Response("busy", { status: 409 }) : new Response("stream", { status: 200 })),
-		});
-		const m = model({ pollMs: 10, waitMaxMs: 100 });
-		assert.equal((await m.postInputEvent({ type: "text", text: "q" })).status, 200);
-		assert.equal(
-			calls.filter((c) => c.url.startsWith("/api/chats/")).length,
-			0,
-			"the retry never reads the record — the server owns it",
-		);
-	});
-
-	it("loops on repeated 409s, re-POSTing the same event each time", async () => {
-		const event: ChatInput = { type: "answer", toolCallId: "call-1", answer: { correct: true } as never };
-		const calls = installFetch({
-			chatPOST: (_c, n) => (n <= 2 ? new Response("busy", { status: 409 }) : new Response("stream", { status: 200 })),
-		});
-		const m = model({ pollMs: 10, waitMaxMs: 100 });
-		assert.equal((await m.postInputEvent(event)).status, 200);
-		const posts = calls.filter((c) => c.url === "/api/chat");
-		assert.equal(posts.length, 3);
-		assert.ok(posts.every((c) => c.body === posts[0]!.body), "every attempt carries the same event");
-	});
-
-	it("gives up after the deadline and surfaces the last 409", async () => {
-		const calls = installFetch({
-			chatPOST: () => new Response("busy", { status: 409 }),
-			jobsGET: () => true,
-		});
-		const m = model({ pollMs: 10, waitMaxMs: 100 });
-		const res = await m.postInputEvent({ type: "text", text: "q" });
-		assert.equal(res.status, 409);
-		const polls = calls.filter((c) => c.url.startsWith("/api/jobs")).length;
-		assert.ok(polls <= 15, `expected bounded polling (~10×10ms), got ${polls}`);
-	});
 });
 
 // ─── send: optimistic appends + wire consumption ────────────────────────────
@@ -507,14 +453,14 @@ describe("resumeStream (the reattach path)", () => {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
 			urls.push(url);
-			if (url === "/api/chats/chat_x") return Response.json({ messages: [] });
-			if (url === "/api/chats/chat_x/stream")
+			if (url === "/api/wolves/w/threads/chat_x") return Response.json({ messages: [] });
+			if (url === "/api/wolves/w/threads/chat_x/stream")
 				return dripped(sse({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }, "[DONE]"), 8);
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();
 		await m.resumeStream();
-		assert.deepEqual(urls, ["/api/chats/chat_x", "/api/chats/chat_x/stream"]);
+		assert.deepEqual(urls, ["/api/wolves/w/threads/chat_x", "/api/wolves/w/threads/chat_x/stream"]);
 		assert.equal(m.getState().status, "ready");
 	});
 
@@ -523,7 +469,7 @@ describe("resumeStream (the reattach path)", () => {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
 			urls.push(url);
-			if (url === "/api/chats/chat_x/stream")
+			if (url === "/api/wolves/w/threads/chat_x/stream")
 				return sseResponse(
 					{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
 					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }], stopReason: "stop" } },
@@ -536,7 +482,7 @@ describe("resumeStream (the reattach path)", () => {
 		await m.resumeStream(false);
 		// one round-trip: straight to the stream — the page render already
 		// read the record; the replay rebuilds the partial regardless.
-		assert.deepEqual(urls, ["/api/chats/chat_x/stream"]);
+		assert.deepEqual(urls, ["/api/wolves/w/threads/chat_x/stream"]);
 		assert.equal(m.getState().status, "ready");
 		// the mid-session caller (handoff watch) keeps the default refetch
 		// (the earlier test in this block pins that order).
@@ -547,7 +493,7 @@ describe("resumeStream (the reattach path)", () => {
 		const gate = new Promise<Response>((res) => (release = res));
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x") return gate; // the POST hangs
+			if (url === "/api/wolves/w/threads/chat_x") return gate; // the POST hangs
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();
@@ -633,10 +579,10 @@ describe("resumeStream (the reattach path)", () => {
 				});
 				return Response.json({ ok: true });
 			}
-			if (url === "/api/chats/chat_x") {
+			if (url === "/api/wolves/w/threads/chat_x") {
 				return Response.json({ messages: [{ id: "u1", role: "user", content: "quiz me", timestamp: 1 }] });
 			}
-			if (url === "/api/chats/chat_x/stream") return new Response("data: [DONE]\n\n", { status: 200 });
+			if (url === "/api/wolves/w/threads/chat_x/stream") return new Response("data: [DONE]\n\n", { status: 200 });
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();
@@ -698,7 +644,7 @@ describe("resumeStream (the reattach path)", () => {
 		};
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x/stream") return replay();
+			if (url === "/api/wolves/w/threads/chat_x/stream") return replay();
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();
@@ -718,8 +664,8 @@ describe("resumeStream (the reattach path)", () => {
 		let settled = 0;
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x") return Response.json({ messages: [] });
-			if (url === "/api/chats/chat_x/stream") return dripped(sse({ type: "turn-settled" }, "[DONE]"), 8);
+			if (url === "/api/wolves/w/threads/chat_x") return Response.json({ messages: [] });
+			if (url === "/api/wolves/w/threads/chat_x/stream") return dripped(sse({ type: "turn-settled" }, "[DONE]"), 8);
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model({ onReattachSettled: () => settled++ });
@@ -736,8 +682,8 @@ describe("resumeStream (the reattach path)", () => {
 		// live continuation; the settle sync lands the canon).
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x") return Response.json({ messages: [assistantMsg("seed", "the question")] });
-			if (url === "/api/chats/chat_x/stream")
+			if (url === "/api/wolves/w/threads/chat_x") return Response.json({ messages: [assistantMsg("seed", "the question")] });
+			if (url === "/api/wolves/w/threads/chat_x/stream")
 				return sseResponse(
 					{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "the reaction" }] } },
 					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the reaction" }], stopReason: "stop" } },
@@ -760,8 +706,8 @@ describe("resumeStream (the reattach path)", () => {
 	it("survives a body split byte-by-byte across reads (the framing pin)", async () => {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x") return Response.json({ messages: [] });
-			if (url === "/api/chats/chat_x/stream")
+			if (url === "/api/wolves/w/threads/chat_x") return Response.json({ messages: [] });
+			if (url === "/api/wolves/w/threads/chat_x/stream")
 				return dripped(
 					sse(
 						{ type: "message_start", message: { role: "assistant", content: [] } },
@@ -780,8 +726,8 @@ describe("resumeStream (the reattach path)", () => {
 	it("an unhappy endpoint surfaces the error banner", async () => {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x") return Response.json({ messages: [] });
-			if (url === "/api/chats/chat_x/stream") return new Response("boom", { status: 500 });
+			if (url === "/api/wolves/w/threads/chat_x") return Response.json({ messages: [] });
+			if (url === "/api/wolves/w/threads/chat_x/stream") return new Response("boom", { status: 500 });
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();

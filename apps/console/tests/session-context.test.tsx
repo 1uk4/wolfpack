@@ -4,8 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { RenameRow, SessionRow } from "../components/sidebar.tsx";
-import { DeleteSessionBody, DeleteSessionDialog } from "../components/delete-session-dialog.tsx";
+import { SessionRow } from "../components/sidebar.tsx";
 import type { ChatListItem } from "../src/core/index.ts";
 
 /**
@@ -15,84 +14,17 @@ import type { ChatListItem } from "../src/core/index.ts";
  * dialog's shape.
  */
 
-const chat: ChatListItem = {
+const chat: ChatListItem & { href: string } = {
 	id: "c1",
+	href: "/t/c1",
 	title: "Wave mechanics",
 	updatedAt: new Date().toISOString(),
 	busy: false,
-} as unknown as ChatListItem;
+} as unknown as ChatListItem & { href: string };
 
 describe("SessionRow — the right-click seam", () => {
 	it("rows carry the session-row testid (context menu anchors to it)", () => {
 		const html = renderToStaticMarkup(<SessionRow chat={chat} active={false} onOpen={() => {}} />);
 		assert.ok(html.includes('data-testid="session-row"'));
-	});
-});
-
-describe("RenameRow — the inline rename surface", () => {
-	it("renders the draft input with the current title, keeping the meta line", () => {
-		const html = renderToStaticMarkup(
-			<RenameRow chat={chat} onCommit={() => {}} onCancel={() => {}} />,
-		);
-		assert.ok(html.includes('data-testid="session-rename-input"'));
-		// controlled draft starts from the current title
-		assert.ok(html.includes(`value="${chat.title}"`));
-		// the meta line rides along (row never changes height mid-edit)
-		assert.ok(html.includes("session-rename-row"));
-		// (owner, polish round) NOTHING MOVES: no status spacer, no input
-		// border/padding — the draft text sits at the idle row's title x,
-		// and the input is the ONLY shift-proof editing cue (underline).
-		assert.ok(!html.includes("w-3.5 shrink-0"), "no always-on spacer (idle rows have none)");
-		const input = html.split('data-testid="session-rename-input"')[1]?.split("/>")[0] ?? "";
-		assert.ok(input.includes("px-0"), "input carries no left padding");
-		assert.ok(input.includes("border-b"), "the underline is the editing cue");
-		assert.ok(!input.includes("bg-background"), "no filled field box — text stays put");
-	});
-});
-
-describe("DeleteSessionDialog — the node-dialog shape (portals no-op in SSR; pin the pure body)", () => {
-	it("closed (chat=null) renders nothing", () => {
-		const html = renderToStaticMarkup(
-			<DeleteSessionDialog chat={null} onClose={() => {}} onDeleted={() => {}} />,
-		);
-		assert.equal(html, "");
-	});
-
-	it("red mono title 'Delete session?' (abort-turn look), the session name below in mono at normal size, no code-block chrome", () => {
-		const html = renderToStaticMarkup(
-			<DeleteSessionBody
-				chat={{ id: "c1", title: "Orbital mechanics" }}
-				busy={false}
-				failure={null}
-				onClose={() => {}}
-				onRun={() => {}}
-			/>,
-		);
-		assert.match(html, /Delete session\?/);
-		const title = html.match(/<h2[^>]*>/)?.[0] ?? "";
-		assert.match(title, /text-sm font-semibold text-destructive/); // red, abort-turn look (owner, 2026-10-13)
-		assert.ok(!title.includes("font-title"), "no serif display title");
-		// the name: mono, normal text-sm size (owner, 2026-10-13), NO bg-muted code-block chrome
-		const name = html.match(/data-testid="session-name-code"[^>]*>/)?.[0] ?? "";
-		assert.match(name, /font-mono text-sm/);
-		assert.ok(!name.includes("bg-muted"), "no code-block chrome");
-		assert.match(html, /data-testid="session-name-code"[^>]*>Orbital mechanics</);
-	});
-
-	it("bottom row matches the node dialog: quiet Cancel + destructive-red Delete", () => {
-		const html = renderToStaticMarkup(
-			<DeleteSessionBody
-				chat={{ id: "c1", title: "Orbital mechanics" }}
-				busy={true}
-				failure={null}
-				onClose={() => {}}
-				onRun={() => {}}
-			/>,
-		);
-		assert.match(html, /data-testid="delete-cancel"[^>]*>Cancel</);
-		const del = html.match(/data-testid="delete-confirm"[^>]*>/)?.[0] ?? "";
-		assert.match(del, /border-destructive\/50/);
-		assert.match(html, /data-testid="delete-confirm"[^>]*>Deleting…</); // busy label on Delete
-		assert.ok(!html.includes("delete-traces"), "no graph-traces option");
 	});
 });

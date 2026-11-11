@@ -6,7 +6,6 @@ import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { SubagentModalProvider } from "@/components/subagent-modal";
 import { GraduateToasts } from "@/components/graduate-dialog";
-import { ActivityProvider } from "@/components/activity-dock";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
@@ -54,14 +53,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 				<MemoryEventsProvider>
 					<AppearanceProvider>
 						<SidebarProvider>
-							<ActivityProvider>
 								<SubagentModalProvider>
 									<AttachedThreadProvider>
 										<AppShell>{children}</AppShell>
 									</AttachedThreadProvider>
 									<GraduateToasts />
 								</SubagentModalProvider>
-							</ActivityProvider>
 						</SidebarProvider>
 					</AppearanceProvider>
 				</MemoryEventsProvider>

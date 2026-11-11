@@ -328,10 +328,10 @@ async function locked(o, now, log, base) {
 				s.state = "failed";
 				continue;
 			}
-			delete s.failedTarget; // superseded by a newer release (or cleared): this one may be tried
+			if (s.failedTarget && superseded(u)) delete s.failedTarget; // a newer release lifts the hold; a manual run bypasses it but keeps it until an install succeeds
 			const was = s.state;
 			for (const k of ["code", "message"]) delete s[k];
-			s.state = "idle";
+			s.state = s.failedTarget ? "failed" : "idle";
 			if (!o.manual && u.component === "wolfd") continue; // wolfd updates by button only: every timer run skips it
 			const cur = runningCore(s.current);
 			const tgt = releaseCore(s.target, channel);
@@ -362,6 +362,7 @@ async function locked(o, now, log, base) {
 				}
 				s.finishedAt = now();
 				if (r.ok) {
+					delete s.failedTarget; // only a successful install of this unit lifts its hold
 					s.state = "updated";
 					s.current = (await o.deps.currentVersion(u)) ?? s.target;
 					if (status.result === "ok") status.result = "updated";
@@ -396,8 +397,11 @@ export function holdUnits({ statusFile, lockFile, units, component, currentVersi
 		const v = u ? currentVersion(u) : null;
 		if (!u || !v) return false;
 		const status = readStatus(statusFile) ?? { schema: 1, host, enabled: false, lastCheck: now().toISOString(), result: "ok", units: {} };
-		const s = (status.units[u.id] ??= { component: u.component, current: null, target: null });
-		Object.assign(s, { state: "failed", failedTarget: v, code: "rolled-back", message: `rolled back by hand from ${v}; held until a newer release`, finishedAt: now().toISOString() });
+		// The rollback unit `workerd` is the component's link unit; `workerd-wolves` runs the same component, so it is held too.
+		for (const x of units.filter((x) => x === u || (component === "workerd" && x.id === "workerd-wolves"))) {
+			const s = (status.units[x.id] ??= { component: x.component, current: null, target: null });
+			Object.assign(s, { state: "failed", failedTarget: v, code: "rolled-back", message: `rolled back by hand from ${v}; held until a newer release`, finishedAt: now().toISOString() });
+		}
 		writeStatus(statusFile, status);
 		return true;
 	} finally {
@@ -579,8 +583,8 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 		console.log(`auto-update: ${result}`);
 		process.exitCode = exitCodeFor(result, flags.includes("--now"));
 	} else if (cmd === "hold" && flags[0]) {
-		// After a hand rollback (the rollback unit calls this): hold the version rolled back from. Run BEFORE the swap, with the running version.
-		const ok = holdUnits({ ...paths, units: sfoUnits(env), component: flags[0], currentVersion: (u) => firstLine(u.versionFile)?.replace(/\+.*$/, "") ?? null });
+		// After a successful hand rollback (the rollback unit's ExecStartPost): hold the version rolled back from, which the swap left in `previous`.
+		const ok = holdUnits({ ...paths, units: sfoUnits(env), component: flags[0], currentVersion: (u) => firstLine(u.versionFile.replace("/current/", "/previous/"))?.replace(/\+.*$/, "") ?? null });
 		if (ok) console.log(`auto-update: holding ${flags[0]}`);
 		else {
 			console.error(`auto-update: WARNING: could not hold ${flags[0]}; the version rolled back from is NOT held and a timer run may reinstall it`);

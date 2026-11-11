@@ -20,6 +20,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_MANIFEST_URL, checkUpdates, createManifestFetcher, probeHealth, type ManifestResult, type UpdateRow } from "@wolfpack/protocol";
 import { stampedVersion } from "@wolfpack/protocol/health-lag";
+import { readSubscription } from "./subscription-api.ts";
 
 export type UpdateState = "idle" | "updating" | "updated" | "failed" | "disabled";
 
@@ -62,6 +63,8 @@ const STEPS: Record<string, string> = {
 	workerd: "On the Mac: pnpm runtime:update, then pnpm stack restart.",
 	wolfd: "On the Mac: pnpm runtime:update, then pnpm stack restart (sfo-01 wolves: deploy the wolfd release).",
 };
+
+export const DEFAULT_MAIN_MANIFEST_URL = DEFAULT_MANIFEST_URL.replace("stable-manifest/stable.json", "main-manifest/main.json");
 
 export const DEFAULT_AUTO_UPDATE_STATUS = "/var/lib/wolfpack-auto-update/status.json";
 
@@ -156,7 +159,11 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): () => Promise<Upda
 	const env = o.env ?? process.env;
 	const url = env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL;
 	const off = url === "off";
-	const manifest = o.manifest ?? (off ? async (): Promise<ManifestResult> => ({ manifest: null, error: "update check is off (WOLFPACK_UPDATE_MANIFEST_URL=off)" }) : createManifestFetcher({ url }));
+	const stableManifest = off ? async (): Promise<ManifestResult> => ({ manifest: null, error: "update check is off (WOLFPACK_UPDATE_MANIFEST_URL=off)" }) : createManifestFetcher({ url });
+	const mainManifest = off ? stableManifest : createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
+	const subscriptionFile = env.WOLFPACK_SUBSCRIPTION_FILE?.trim() || undefined;
+	// The subscribed channel (read on every request) picks the manifest; an injected `manifest` replaces both.
+	const manifest = () => (o.manifest ?? (readSubscription(subscriptionFile).channel === "main" ? mainManifest : stableManifest))();
 	const timeoutMs = o.probeTimeoutMs ?? 3_000;
 	const own = consoleVersion(o.consoleDir);
 	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || DEFAULT_AUTO_UPDATE_STATUS;

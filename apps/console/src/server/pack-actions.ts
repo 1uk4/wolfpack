@@ -325,7 +325,6 @@ export function createRollbacker(o: { releases: () => ReleaseInfo[]; run?: Comma
 // ---- UPDATE (work-wolfpack-7eP9W3Z) ----
 
 export const UPDATE_UNIT = "wolfpack-auto-update-now.service";
-export const UPDATE_MIN_INTERVAL_MS = 5 * 60_000;
 
 /** One component that has a newer stable release than the one running. */
 export interface UpdateUnit {
@@ -336,12 +335,16 @@ export interface UpdateUnit {
 
 export type UpdateOutcome =
 	| { ok: true; service: "update"; at: string; units: UpdateUnit[] }
-	| { ok: false; service: "update"; code: "no_update" | "running" | "rate_limited" | "failed"; message: string; retryAfterS?: number };
+	| { ok: false; service: "update"; code: "invalid_request" | "no_update" | "up_to_date" | "running" | "failed"; message: string };
+
+/** The components the pack panel can update one by one (units: wolfpack-auto-update-now@<component>.service). */
+export const UPDATE_COMPONENTS = ["console", "hubd", "wolfd", "workerd"] as const;
 
 export interface Updater {
-	update(by: string): Promise<UpdateOutcome>;
+	/** `component` undefined = Update all (the all-units unit); else just that component (400 unknown, 409 up_to_date). */
+	update(by: string, component?: unknown): Promise<UpdateOutcome>;
 	/** The manual unit's last run (systemctl show, argv, 3 s timeout); null: never ran or unreadable. */
-	last(): Promise<RollbackLast | null>;
+	last(unit?: string): Promise<RollbackLast | null>;
 	/** The components behind the latest stable release now. */
 	available(): Promise<UpdateUnit[]>;
 }
@@ -349,44 +352,42 @@ export interface Updater {
 /**
  * Owner-initiated update: `systemctl --no-ask-password --no-block start wolfpack-auto-update-now.service` (root oneshot running
  * `auto-update.mjs run --now`; polkit allows exactly that start). Refused while nothing is behind (`available`), while the unit is
- * activating, and within `minIntervalMs` (default 5 min) of the last accepted start. The kill switch and the failed-hold stay the
- * script's: it exits without installing. Never automatic: only POST /api/health/update calls it.
+ * activating. The kill switch (and `mode: off`) stay the script's: it exits without installing. Every run it starts is manual
+ * (`--now`), so it bypasses every failedTarget hold (a rollback hold or a failed install); a hold is cleared only by a successful
+ * install of that unit. Never automatic: only POST /api/health/update calls it.
  */
-export function createUpdater(o: { available: () => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; minIntervalMs?: number; log?: (m: string) => void }): Updater {
+export function createUpdater(o: { available: () => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; log?: (m: string) => void }): Updater {
 	const run = o.run ?? execRunner;
 	const show = o.show ?? showRunner;
 	const now = o.now ?? Date.now;
-	const minInterval = o.minIntervalMs ?? UPDATE_MIN_INTERVAL_MS;
 	const log = o.log ?? ((m: string) => console.log(m));
-	let lastStart: number | undefined;
 	let starting = false;
 	const available = () => o.available().catch(() => [] as UpdateUnit[]);
-	const last = async (): Promise<RollbackLast | null> => {
-		const r = await show("systemctl", ["show", UPDATE_UNIT, "-p", SHOW_PROPS, "--timestamp=unix"]);
+	const last = async (unit: string = UPDATE_UNIT): Promise<RollbackLast | null> => {
+		const r = await show("systemctl", ["show", unit, "-p", SHOW_PROPS, "--timestamp=unix"]);
 		return r.code === 0 ? parseShow(r.stdout ?? "") : null;
 	};
 	return {
 		last,
 		available,
-		async update(by) {
-			const units = await available();
-			if (units.length === 0) return { ok: false, service: "update", code: "no_update", message: "nothing is behind the latest stable release" };
+		async update(by, component) {
+			if (component !== undefined && !(UPDATE_COMPONENTS as readonly unknown[]).includes(component)) return { ok: false, service: "update", code: "invalid_request", message: "unknown component" };
+			const all = await available();
+			const units = component === undefined ? all : all.filter((u) => u.component === component);
+			if (units.length === 0) return component === undefined ? { ok: false, service: "update", code: "no_update", message: "nothing is behind the latest release" } : { ok: false, service: "update", code: "up_to_date", message: `${component as string} is up to date` };
+			const unit = component === undefined ? UPDATE_UNIT : `wolfpack-auto-update-now@${component as string}.service`;
 			const t = now();
-			if (lastStart !== undefined && t - lastStart < minInterval) {
-				log(`console: health update RATE-LIMITED by ${by}`);
-				return { ok: false, service: "update", code: "rate_limited", message: `updated less than ${Math.round(minInterval / 60_000)} min ago`, retryAfterS: Math.ceil((minInterval - (t - lastStart)) / 1000) };
-			}
 			// `starting` is set before the first await, so a second press arriving while `last()` is read cannot also start the unit.
 			if (starting) return { ok: false, service: "update", code: "running", message: "an update is already running" };
 			starting = true;
 			let r: Awaited<ReturnType<CommandRunner>>;
 			try {
-				if ((await last())?.result === "running") return { ok: false, service: "update", code: "running", message: "an update is already running" };
-				r = await run("systemctl", ["--no-ask-password", "--no-block", "start", UPDATE_UNIT]);
+				// One check: the all-units run or this component's run is still going (the script's own lock covers the rest).
+				if ((await last(UPDATE_UNIT))?.result === "running" || (unit !== UPDATE_UNIT && (await last(unit))?.result === "running")) return { ok: false, service: "update", code: "running", message: "an update is already running" };
+				r = await run("systemctl", ["--no-ask-password", "--no-block", "start", unit]);
 			} finally {
 				starting = false;
 			}
-			if (r.code === 0) lastStart = t;
 			log(`console: health update ${units.map((u) => `${u.component} ${u.from ?? "?"} -> ${u.to}`).join(", ")} by ${by}: ${r.code === 0 ? "started" : `FAILED (exit ${r.code}) ${r.stderr.trim()}`}`);
 			return r.code === 0 ? { ok: true, service: "update", at: new Date(t).toISOString(), units } : { ok: false, service: "update", code: "failed", message: `systemctl exited ${r.code}` };
 		},

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, updateFinished, updateOffered, updateOutcome, updateQuestion, type HealthLink } from "../src/core/pack-health-view.ts";
+import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, type HealthLink } from "../src/core/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-09T14:10:00Z");
 const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink> = {}): HealthLink => ({
@@ -20,6 +20,30 @@ const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink
 	...over,
 });
 const snap = (...links: HealthLink[]) => ({ checkedAt: "2026-11-09T14:09:58Z", intervalMs: 5000, links });
+
+describe("service cards (one per service in the pack panel)", () => {
+	it("gives console, hubd, wolfd and workerd one card each with running and latest version, Update only when behind, Roll back only when an older release is kept", () => {
+		const links = [link("hubd", "ok", { version: "0.1.14" }), link("workerd", "down", { version: "0.1.5" }), link("wolfd@hal", "ok", { version: "0.1.14" })];
+		const actions = {
+			systemd: true,
+			rollback: [
+				{ service: "console", from: "0.1.19", to: "0.1.18" },
+				{ service: "workerd", from: "0.1.5", to: "0.1.4" },
+			],
+		};
+		const units = [{ component: "hubd", from: "0.1.14", to: "0.1.15-main.2" }];
+		assert.deepEqual(
+			serviceCards(links, actions, units).map((c) => [c.component, c.running, c.latest, c.canUpdate, c.rollbackTo, c.tone]),
+			[
+				["console", "0.1.19", null, false, "0.1.18", "green"],
+				["hubd", "0.1.14", "0.1.15-main.2", true, null, "green"],
+				["wolfd", "0.1.14", null, false, null, "green"],
+				["workerd", "0.1.5", null, false, "0.1.4", "red"],
+			],
+		);
+		assert.equal(serviceCards(links, { systemd: false, rollback: [] }, units).some((c) => c.canUpdate || c.rollbackTo !== null), false);
+	});
+});
 
 describe("pack health summary (the sidebar bar)", () => {
 	it("is green 'All good' when every link is ok", () => {

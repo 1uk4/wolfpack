@@ -92,7 +92,7 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 	const showOut = new Map<string, string>();
 	const showRun: CommandRunner = async (file, args) => {
 		shows.push([file, ...args]);
-		const unit = args.find((a) => a.startsWith("wolfpack-rollback@") || a === "wolfpack-auto-update-now.service") ?? "";
+		const unit = args.find((a) => a.startsWith("wolfpack-rollback@") || a.startsWith("wolfpack-auto-update-now")) ?? "";
 		return { code: 0, stderr: "", stdout: showOut.get(unit) ?? "" };
 	};
 	const releases = createReleaseReader({ optRoot: o.optRoot ?? path.join(os.tmpdir(), "wolfpack-no-opt"), ttlMs: 0, statusTtlMs: 5_000, run: showRun, now: clock.now });
@@ -774,13 +774,13 @@ describe("pack health: POST /api/health/rollback", () => {
 	});
 });
 
-const updateReq = (token?: string) =>
-	new Request("http://c/api/health/update", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: "{}" });
+const updateReq = (token?: string, component?: unknown) =>
+	new Request("http://c/api/health/update", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(component === undefined ? {} : { component }) });
 const UPDATE_UNIT = "wolfpack-auto-update-now.service";
 const PENDING: UpdateUnit[] = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: "0.1.18", to: "0.1.19" }];
 
 describe("pack health: POST /api/health/update", () => {
-	it("needs a verified device; starts exactly the manual auto-update unit (argv, no shell) naming the units that will update; one start per 5 min", async () => {
+	it("needs a verified device; starts exactly the manual auto-update unit (argv, no shell) naming the units that will update", async () => {
 		const s = await setup();
 		await s.tick(T0);
 		s.setPending(PENDING);
@@ -791,13 +791,28 @@ describe("pack health: POST /api/health/update", () => {
 		assert.equal(ok.status, 202);
 		assert.deepEqual(((await ok.json()) as { units: UpdateUnit[] }).units, PENDING);
 		assert.deepEqual(s.runs, [["systemctl", "--no-ask-password", "--no-block", "start", UPDATE_UNIT]]);
-		s.clock.set(T0 + 4 * 60_000);
-		const limited = await s.api.update(updateReq("tok"));
-		assert.equal(limited.status, 429);
-		assert.equal(limited.headers.get("retry-after"), "60");
+	});
+
+	it("updates one component through its own template unit: 400 for an unknown name, 409 up_to_date when it is current, and 409 running while any update unit is still activating", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.setPending(PENDING);
+		s.witness.verified("tok");
+		const bad = await s.api.update(updateReq("tok", "nope"));
+		assert.equal(bad.status, 400);
+		const cur = await s.api.update(updateReq("tok", "workerd"));
+		assert.equal(cur.status, 409);
+		assert.equal(((await cur.json()) as { code: string }).code, "up_to_date");
+		assert.deepEqual(s.runs, []);
+		const ok = await s.api.update(updateReq("tok", "hubd"));
+		assert.equal(ok.status, 202);
+		assert.deepEqual(((await ok.json()) as { units: UpdateUnit[] }).units, [PENDING[0]]);
+		assert.deepEqual(s.runs, [["systemctl", "--no-ask-password", "--no-block", "start", "wolfpack-auto-update-now@hubd.service"]]);
+		s.setShow(UPDATE_UNIT, "ActiveState=activating\nResult=success\nExecMainStatus=0\n");
+		const busy = await s.api.update(updateReq("tok", "console"));
+		assert.equal(busy.status, 409);
+		assert.equal(((await busy.json()) as { code: string }).code, "running");
 		assert.equal(s.runs.length, 1);
-		s.clock.set(T0 + 5 * 60_000);
-		assert.equal((await s.api.update(updateReq("tok"))).status, 202);
 	});
 
 	it("refuses with 409 when nothing is behind, or while the unit is still activating, without starting it", async () => {
@@ -844,7 +859,7 @@ describe("pack health: POST /api/health/update", () => {
 		assert.equal(s.availableCalls.n, 2);
 	});
 
-	it("a start systemctl refuses (502) does not use up the 5 min slot", async () => {
+	it("a start systemctl refuses answers 502 and the next press can start it", async () => {
 		const s = await setup();
 		await s.tick(T0);
 		s.setPending(PENDING);

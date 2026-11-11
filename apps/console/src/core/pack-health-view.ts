@@ -105,6 +105,38 @@ export function rollbackOffered(r: { from: string | null; to: string | null }): 
 	return !isNewerVersion(r.to, r.from);
 }
 
+export interface ServiceCard {
+	component: "console" | "hubd" | "wolfd" | "workerd";
+	running: string | null;
+	/** The subscribed channel's newer version, when this service is behind. */
+	latest: string | null;
+	tone: Tone;
+	canUpdate: boolean;
+	/** The kept previous release, when Roll back is offered. */
+	rollbackTo: string | null;
+}
+
+const CARD_ORDER = ["console", "hubd", "wolfd", "workerd"] as const;
+
+/** One card per service for the pack panel. Update and Roll back need systemd. */
+export function serviceCards(links: HealthLink[], actions: HealthActionsView | undefined, units: UpdateUnitView[]): ServiceCard[] {
+	const systemd = !!actions?.systemd;
+	return CARD_ORDER.map((component) => {
+		const rb = actions?.rollback.find((r) => r.service === component);
+		const ls = links.filter((l) => l.kind === component);
+		const unit = units.find((u) => u.component === component);
+		const worst = ls.map((l) => toneOf(l.status)).reduce<Tone>((a, t) => (RANK[t] > RANK[a] ? t : a), "green");
+		return {
+			component,
+			running: component === "console" ? (rb?.from ?? null) : (ls[0]?.version ?? null),
+			latest: unit?.to ?? null,
+			tone: component === "console" ? "green" : ls.length ? worst : "grey",
+			canUpdate: systemd && !!unit,
+			rollbackTo: systemd && rb && rollbackOffered(rb) ? rb.to : null,
+		};
+	});
+}
+
 /** The confirm text: the target's X.Y.Z, with the build only when both cores are equal; says when a version is unknown. */
 export function rollbackQuestion(name: string, from: string | null, to: string | null): string {
 	if (!to) return `Roll ${name} back to the previous release (its version is unknown)?`;

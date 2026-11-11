@@ -52,6 +52,8 @@ import {
 	updateOffered,
 	updateOutcome,
 	updateQuestion,
+	serviceCards,
+	type ServiceCard,
 	type UpdateUnitView,
 	type HealthActionsView,
 	type HealthLink,
@@ -203,6 +205,7 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 				) : (
 					<>
 					<UpdatePanel actions={snapshot.actions} canAct={reachable} />
+					<ServiceCards snapshot={snapshot} canAct={reachable} fakes={health} />
 					{groupByHost(snapshot).map((c) => <HostSection key={c.id} card={c} now={now} canAct={reachable} actions={snapshot.actions} fakes={health} />)}
 					</>
 				)}
@@ -251,7 +254,7 @@ async function copyText(text: string): Promise<boolean> {
  * One confirmable POST action (restart or roll back): confirm, send, then "sent", a 429 countdown, or an error line. `fake` answers with a
  * status instead of calling the server (dev fixtures).
  */
-function useAction(url: string, service: string, outcome: (status: number, retryAfter: string | null, body?: unknown) => RestartOutcome, fake: number | null) {
+function useAction(url: string, service: string, outcome: (status: number, retryAfter: string | null, body?: unknown) => RestartOutcome, fake: number | null, key = "service") {
 	const [ui, setUi] = useState<ActionUi>({ phase: "idle" });
 	const [tick, setTick] = useState(0);
 	const waitS = ui.phase === "wait" ? Math.max(0, Math.ceil((ui.until - Date.now()) / 1000)) : 0;
@@ -272,7 +275,7 @@ function useAction(url: string, service: string, outcome: (status: number, retry
 		} else {
 			try {
 				// The hub-auth fetch wrapper (components/hub-auth.tsx) adds the device bearer to every /api/ call.
-				const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service }) });
+				const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: service }) });
 				status = r.status;
 				retry = r.headers.get("Retry-After");
 				if (status !== 202) body = await r.json().catch(() => null);
@@ -284,7 +287,7 @@ function useAction(url: string, service: string, outcome: (status: number, retry
 		if (out.kind === "issued") setUi({ phase: "issued", at: Date.now() });
 		else if (out.kind === "wait") setUi({ phase: "wait", until: Date.now() + out.retryS * 1000 });
 		else setUi({ phase: "error", message: out.message });
-	}, [fake, url, service, outcome]);
+	}, [fake, url, service, outcome, key]);
 	return { ui, setUi, waitS, send };
 }
 
@@ -477,6 +480,105 @@ function UpdatePanel({ actions, canAct }: { actions: HealthActionsView | undefin
 			</div>
 			{ui.phase === "error" && <p data-testid="pack-health-update-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
 		</div>
+	);
+}
+
+type Sub = { channel: "stable" | "main"; mode: "off" | "button" | "auto" | "unknown"; exists?: boolean };
+
+/** One service's card: status, channel, running and latest version, Update and Roll back (each confirmed, then POSTed to the console server). */
+function ServiceCardView({ card, channel, canAct, fakes }: { card: ServiceCard; channel: string; canAct: boolean; fakes: Fakes }) {
+	const update = useAction("/api/health/update", card.component, updateOutcome, null, "component");
+	const rollback = useAction("/api/health/rollback", card.component, rollbackOutcome, fakes.fakeRollback);
+	const name = card.component === "hubd" ? "Hub" : card.component.charAt(0).toUpperCase() + card.component.slice(1);
+	return (
+		<div data-testid="pack-service-card" data-service={card.component} className="flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2">
+			<div className="flex items-center gap-2">
+				<span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[card.tone])} />
+				<span className="font-medium text-foreground">{name}</span>
+				<span className="ml-auto rounded-sm border px-1.5 text-muted-foreground">{channel}</span>
+			</div>
+			<p className="text-muted-foreground/80">
+				{card.running ? `v${card.running}` : "version unknown"}
+				{card.latest ? ` → v${card.latest}` : " · up to date"}
+			</p>
+			<div className="flex flex-wrap items-center gap-1.5">
+				{card.canUpdate && (
+					<ActionControl verb="Update" sentText="Update started" testId="pack-card-update" ui={update.ui} waitS={update.waitS} disabled={!canAct} question={`Update ${name} to v${card.latest}?${card.component === "console" || card.component === "hubd" ? " It restarts." : ""}`} onAsk={() => update.setUi({ phase: "confirm" })} onCancel={() => update.setUi({ phase: "idle" })} onConfirm={() => void update.send()} />
+				)}
+				{card.rollbackTo && (
+					<ActionControl verb="Roll back" sentText="Rollback started" testId="pack-card-rollback" ui={rollback.ui} waitS={rollback.waitS} disabled={!canAct} question={rollbackQuestion(name, card.running, card.rollbackTo)} onAsk={() => rollback.setUi({ phase: "confirm" })} onCancel={() => rollback.setUi({ phase: "idle" })} onConfirm={() => void rollback.send()} />
+				)}
+			</div>
+			{update.ui.phase === "error" && <p className="text-red-600 dark:text-red-400">{update.ui.message}</p>}
+			{rollback.ui.phase === "error" && <p className="text-red-600 dark:text-red-400">{rollback.ui.message}</p>}
+		</div>
+	);
+}
+
+/**
+ * The four service cards plus the pack-wide auto switch and the channel picker (under Advanced). The subscription (GET/PUT
+ * /api/health/subscription) is saved on change; behind-counts come from GET /api/health/update every 15 s. wolfd is never auto-updated.
+ */
+function ServiceCards({ snapshot, canAct, fakes }: { snapshot: HealthSnapshotView; canAct: boolean; fakes: Fakes }) {
+	const [units, setUnits] = useState<UpdateUnitView[]>([]);
+	const [sub, setSub] = useState<Sub>({ channel: "stable", mode: "button" });
+	const [saveErr, setSaveErr] = useState<string | null>(null);
+	useEffect(() => {
+		let stop = false;
+		const poll = async () => {
+			try {
+				const [u, s] = await Promise.all([fetch("/api/health/update", { cache: "no-store" }), fetch("/api/health/subscription", { cache: "no-store" })]);
+				if (u.ok && !stop) setUnits(((await u.json()) as { units?: UpdateUnitView[] }).units ?? []);
+				if (s.ok && !stop) setSub((await s.json()) as Sub);
+			} catch {
+				/* keep the last view */
+			}
+		};
+		void poll();
+		const t = setInterval(() => void poll(), 15_000);
+		return () => {
+			stop = true;
+			clearInterval(t);
+		};
+	}, []);
+	const save = async (next: Sub) => {
+		const prev = sub;
+		setSub(next);
+		setSaveErr(null);
+		try {
+			const r = await fetch("/api/health/subscription", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel: next.channel, mode: next.mode === "unknown" ? "button" : next.mode }) });
+			if (!r.ok) throw new Error(String(r.status));
+		} catch (e) {
+			setSub(prev);
+			setSaveErr(`Could not save (${(e as Error).message === "401" ? "sign in first" : "failed"})`);
+		}
+	};
+	const cards = serviceCards(snapshot.links, snapshot.actions, units);
+	return (
+		<section data-testid="pack-service-cards" className="mb-4">
+			<div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+				<label className="flex items-center gap-2 max-md:py-1">
+					<input type="checkbox" data-testid="pack-auto-switch" checked={sub.mode === "auto"} disabled={!canAct} onChange={(e) => void save({ ...sub, mode: e.target.checked ? "auto" : "button" })} />
+					<span>Update automatically</span>
+				</label>
+				<span className="text-muted-foreground/70">wolfd always waits for you</span>
+				{sub.exists === false && sub.mode === "unknown" && <span className="text-muted-foreground/70">not set (host default)</span>}
+			</div>
+			<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+				{cards.map((c) => <ServiceCardView key={c.component} card={c} channel={sub.channel} canAct={canAct} fakes={fakes} />)}
+			</div>
+			<details className="mt-2 text-muted-foreground">
+				<summary className="cursor-pointer select-none py-0.5 max-md:py-1.5">Advanced</summary>
+				<label className="mt-1 flex items-center gap-2">
+					Channel
+					<select data-testid="pack-channel" value={sub.channel} disabled={!canAct} onChange={(e) => void save({ ...sub, channel: e.target.value as Sub["channel"] })} className="rounded-sm border bg-background px-2 py-1 max-md:py-2">
+						<option value="stable">stable</option>
+						<option value="main">main (testing)</option>
+					</select>
+				</label>
+			</details>
+			{saveErr && <p className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
+		</section>
 	);
 }
 

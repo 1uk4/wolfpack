@@ -163,6 +163,25 @@ describe("runAutoUpdate", () => {
 		expect(h.calls).toHaveLength(4);
 	});
 
+	it("a manual run clears a failed-install hold only by installing that unit; a manual run that installs nothing keeps it", async () => {
+		const running: Record<string, string | null> = { hubd: "0.1.13" };
+		const h = host({ running, versions: { hubd: "0.1.14" }, healthy: false });
+		await h.run();
+		expect(h.status()?.units.hubd).toMatchObject({ state: "failed", failedTarget: "0.1.14" });
+		h.state.healthy = true;
+		running.hubd = "0.1.14"; // already at the target (put there by hand): the manual run has nothing to install
+		await h.run({ manual: true });
+		expect(h.calls).toHaveLength(2);
+		expect(h.status()?.units.hubd).toMatchObject({ state: "failed", failedTarget: "0.1.14" });
+		running.hubd = "0.1.13";
+		await h.run(); // a timer run still respects the hold
+		expect(h.calls).toHaveLength(2);
+		expect((await h.run({ manual: true })).result).toBe("updated");
+		expect(h.calls).toHaveLength(4);
+		expect(h.status()?.units.hubd).toMatchObject({ state: "updated", current: "0.1.14" });
+		expect(h.status()?.units.hubd.failedTarget).toBeUndefined();
+	});
+
 	it("a hand rollback holds the version it left until a newer release is published", async () => {
 		const h = host({ running: { hubd: "0.1.14" }, versions: { hubd: "0.1.14" } });
 		expect((await h.run()).result).toBe("ok");
@@ -174,6 +193,16 @@ describe("runAutoUpdate", () => {
 		expect(held.calls).toEqual([]);
 		const newer = host({ running: { hubd: "0.1.13" }, versions: { hubd: "0.1.15" } });
 		expect((await newer.run()).result).toBe("updated");
+	});
+
+	it("a workerd rollback holds both workerd units", async () => {
+		const units = ["workerd", "workerd-wolves", "hubd"].map((id) => ({ id, component: id === "hubd" ? "hubd" : "workerd" }));
+		const statusFile = path.join(dir, "status.json");
+		expect(holdUnits({ statusFile, lockFile: path.join(dir, "run.lock"), units, component: "workerd", currentVersion: () => "0.1.5" })).toBe(true);
+		const s = readStatus(statusFile)?.units;
+		expect(s?.workerd).toMatchObject({ failedTarget: "0.1.5", state: "failed" });
+		expect(s?.["workerd-wolves"]).toMatchObject({ failedTarget: "0.1.5", state: "failed" });
+		expect(s?.hubd).toBeUndefined();
 	});
 
 	it("a pause keeps a failure: after pausing and resuming, the failed version is still not installed again", async () => {

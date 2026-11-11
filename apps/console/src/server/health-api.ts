@@ -112,7 +112,7 @@ export function createHealthApi(d: HealthApiDeps) {
 	};
 
 	/** The shared gate of every action: the bearer header, checked as in RESTART AUTH. Returns who asked, or the error response. */
-	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change"): Promise<string | Response> => {
+	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change" | "subscription"): Promise<string | Response> => {
 		const token = bearerOf(req.headers.get("authorization"));
 		const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
 		if (!auth.ok && auth.busy !== undefined) {
@@ -216,9 +216,10 @@ export function createHealthApi(d: HealthApiDeps) {
 		async update(req: Request): Promise<Response> {
 			const gate = await gateOf(req, "update");
 			if (gate instanceof Response) return gate;
-			const out = await d.updater.update(gate);
+			const component = await req.json().then((b: { component?: unknown } | null) => b?.component, () => undefined); // no or non-JSON body = Update all
+			const out = await d.updater.update(gate, component);
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
-			return failure(out, { no_update: 409, running: 409, rate_limited: 429, failed: 502 }[out.code]);
+			return failure(out, { invalid_request: 400, no_update: 409, up_to_date: 409, running: 409, failed: 502 }[out.code]);
 		},
 
 		/** GET /api/health/update: what an update would change, and how the manual unit's last run ended. */

@@ -355,7 +355,8 @@ describe("ChatBar cards", () => {
 		await act(async () => void props(ta(), "onKeyDown")({ key: "Escape", preventDefault() {}, stopPropagation() {} }));
 		assert.equal(q('[data-testid="answering-chip"]') === null, true);
 		assert.equal(bottomComposers().length, 1);
-		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: half/);
+		assert.equal(q('[data-testid="ask-unsent"]'), null);
+		assert.equal(props(q('[data-testid="ask-free"]')!, "value"), "half");
 		await click(qa('[data-testid="ask-free"], [data-testid="ask-other"]')[0]!);
 		assert.equal(bottomComposers().length, 0);
 		await click(q('[data-testid="answering-chip-clear"]'));

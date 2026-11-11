@@ -17,7 +17,7 @@ import { cardNoteUrl, cardPageDraftUrl, cardSubmitUrl, threadBase } from "@/comp
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { readyRefs, type PendingAttachment } from "@/components/composer/attachments";
 import { imagesOf, withImages } from "@/components/ask/ask-images";
-import { pageBody, pageFieldIds, reconcile, seedAll, unanswered } from "@/components/ask/ask-answers";
+import { applyTyped, pageBody, pageFieldIds, reconcile, seedAll, unanswered } from "@/components/ask/ask-answers";
 import { joinDictation } from "@/lib/composer-draft";
 import { threadSlug, visibleFields, type AttachedRef } from "@/src/core";
 
@@ -139,8 +139,10 @@ export interface AskSession {
 	page: number;
 	pages: number;
 	fields: CardField[];
-	/** Every page's answers as held locally. */
+	/** Every page's answers as held locally, with the text sitting in an inline composer (unsent) counted in. */
 	draft: Record<string, CardFieldAnswer>;
+	/** The sheet reports the text of a question's open or closed inline composer: it is part of the answers at once, so Next and Submit never drop it. */
+	setTyped: (id: string, text: string) => void;
 	set: (id: string, a: CardFieldAnswer) => void;
 	clear: (id: string) => void;
 	/** Is the sheet expanded over the transcript (the composer is then the note's)? */
@@ -212,8 +214,15 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	const pageRef = useRef(page);
 	pageRef.current = page;
 	const [draft, setDraftState] = useState<Record<string, CardFieldAnswer>>(() => seedAll(pc));
+	const [typed, setTypedState] = useState<Record<string, string>>({});
+	const setTyped = useCallback((id: string, text: string) => setTypedState((t) => (text === "" ? (id in t ? (({ [id]: _g, ...rest }) => rest)(t) : t) : t[id] === text ? t : { ...t, [id]: text })), []);
+	useEffect(() => setTypedState({}), [callId]);
+	const shown = useMemo(() => applyTyped(pc.card.fields, draft, typed), [pc.card, draft, typed]);
 	const draftRef = useRef(draft);
 	draftRef.current = draft;
+	// What is sent and checked: the answers plus the typed text (kept current in render so a press right after a keystroke sees it).
+	const shownRef = useRef(shown);
+	shownRef.current = shown;
 	const [expanded, setExpanded] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	// Per card: a late response for a card left behind must not block (or settle) the one on screen.
@@ -308,9 +317,9 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	const qn = (f: CardField) => `Q${pc.card.fields.findIndex((x) => x.id === f.id) + 1}`;
 	const last = page >= pages - 1;
 	const missing = useMemo(() => {
-		if (!last) return visibleFields(pc.card, draft).filter((f) => fields.some((x) => x.id === f.id) && unanswered(f, draft)).map(qn);
-		return visibleFields(pc.card, draft).filter((f) => unanswered(f, draft)).map(qn);
-	}, [pc.card, draft, fields, last]); // eslint-disable-line react-hooks/exhaustive-deps
+		if (!last) return visibleFields(pc.card, shown).filter((f) => fields.some((x) => x.id === f.id) && unanswered(f, shown)).map(qn);
+		return visibleFields(pc.card, shown).filter((f) => unanswered(f, shown)).map(qn);
+	}, [pc.card, shown, fields, last]); // eslint-disable-line react-hooks/exhaustive-deps
 	const base = askComposerAction({ pages, page, missing, noteEmpty, expanded, armed, own });
 	// Armed lives only while the confirm applies to the same open questions on the same page: any change disarms.
 	const missingKey = missing.join(",");
@@ -336,7 +345,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		const from = pageRef.current;
 		setError(null);
 		setPage(to);
-		const r = await request(cardPageDraftUrl(wolf, slug, cid, from), "PUT", { answers: pageBody(fieldsOf(from), draftRef.current, pcRef.current.card), goto: to, stepsKey: stepsKey(pcRef.current.card) });
+		const r = await request(cardPageDraftUrl(wolf, slug, cid, from), "PUT", { answers: pageBody(fieldsOf(from), shownRef.current, pcRef.current.card), goto: to, stepsKey: stepsKey(pcRef.current.card) });
 		flying.current.delete(cid);
 		if (r.ok) return refetch();
 		if (callIdRef.current !== cid) {
@@ -359,7 +368,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		timer.current = null;
 		dirty.current = false; // the submit body carries the note
 		const n = noteBody(noteRef.current);
-		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers: pageBody(fieldsOf(pageRef.current), draftRef.current, pcRef.current.card), ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
+		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers: pageBody(fieldsOf(pageRef.current), shownRef.current, pcRef.current.card), ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
 		flying.current.delete(cid);
 		setBusyIds((s) => {
 			const o = new Set(s);
@@ -481,7 +490,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	}, [callId]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	return {
-		pc, active: card !== undefined, collapse, page, pages, fields, draft, set, clear, expanded, setExpanded, note, noteEmpty, setNoteText, appendNoteText, addNoteFiles, removeNoteAtt,
+		pc, active: card !== undefined, collapse, page, pages, fields, draft: shown, setTyped, set, clear, expanded, setExpanded, note, noteEmpty, setNoteText, appendNoteText, addNoteFiles, removeNoteAtt,
 		missing, action, busy, error, setError, next, back, press, disarm, takeNote, refetch,
 	};
 }

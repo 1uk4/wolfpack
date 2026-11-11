@@ -97,3 +97,26 @@ export function reconcile(pc: PendingCard, local: Record<string, CardFieldAnswer
 	}
 	return out;
 }
+
+/** The answers with text still sitting in an inline composer (not sent) counted in: a free question answers with it, a single question picks Other with it, a multi question gains it as a custom entry. Images stay as they are. */
+export function applyTyped(fields: readonly CardField[], draft: Record<string, CardFieldAnswer>, typed: Record<string, string>): Record<string, CardFieldAnswer> {
+	let out = draft;
+	for (const f of fields) {
+		const text = (typed[f.id] ?? "").trim();
+		if (text === "") continue;
+		let a: CardFieldAnswer | undefined;
+		if (f.kind === "free-text") a = make({ value: text });
+		else if (f.kind === "single" && (f as { allowOther?: boolean }).allowOther !== false) a = make({ value: text, other: true } satisfies SingleA);
+		else if (f.kind === "multi" && (f as { allowOther?: boolean }).allowOther === true) {
+			const cur = read<AnyA>(draft[f.id]);
+			const custom = Array.isArray(cur?.other) ? (cur.other as string[]) : [];
+			const picked = Array.isArray(cur?.value) ? (cur.value as string[]).filter((v) => !custom.includes(v)) : [];
+			const others = custom.includes(text) ? custom : [...custom, text];
+			a = make({ value: [...picked, ...others], other: others } satisfies MultiA);
+		}
+		if (!a) continue;
+		if (out === draft) out = { ...draft };
+		out[f.id] = withImages(a, imagesOf(draft[f.id]));
+	}
+	return out;
+}

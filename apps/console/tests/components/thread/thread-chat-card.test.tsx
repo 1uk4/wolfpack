@@ -716,7 +716,8 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		await click(q('[data-testid="answering-chip-clear"]')!);
 		assert.equal(q('[data-testid="answering-chip"]') === null, true);
 		assert.equal(q('[data-testid="thread-composer-card"]') !== null, true);
-		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: draft/);
+		assert.equal(q('[data-testid="ask-unsent"]'), null);
+		assert.equal(propsOf(q('[data-testid="ask-free"]')!, "value"), "draft");
 		await act(async () => void propsOf(q('[data-testid="ask-collapse"]')!, "onClick")({})); // collapsed: a normal composer again
 		await typeText("plain message");
 		await enter();

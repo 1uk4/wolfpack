@@ -91,12 +91,15 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 		setAnswering({ callId: pc.callId, qid: id });
 	};
 	const inline = useInlineAnswers(target, session.refetch);
-	/** A draft that only repeats the bound answer (seeded when the composer opened) is not "unsent". */
+	// Typed or dictated text is the answer as it lands (the session counts it in `draft`, see applyTyped): Next and Submit send it without a Send press.
+	const { setTyped } = session;
+	useEffect(() => {
+		for (const f of fields) setTyped(f.id, inline.drafts[f.id]?.text ?? "");
+	}, [inline.drafts, fields, setTyped]);
+	/** Only queued images are still "unsent" (they leave with Send); text already counts as the answer. */
 	const unsentOf = (f: CardField): InlineDraft | undefined => {
 		const d = inline.drafts[f.id];
-		if (!d || d.atts.length > 0) return d;
-		const bound = f.kind === "free-text" ? draft[f.id]?.value : f.kind === "single" ? otherText(draft[f.id]) : undefined;
-		return typeof bound === "string" && d.text === bound ? undefined : d;
+		return d && d.atts.length > 0 ? d : undefined;
 	};
 	const composingId = answering !== null && answering.callId === pc.callId ? answering.qid : null;
 	// A click anywhere outside the open composer closes it (capture phase, so an option picked in the same click still gets it); the draft stays.
@@ -270,7 +273,7 @@ function Control({ field, labelId, qn, composer, unsent, onReply, value, onChang
 	// Reply mode starts on click, Enter or Space, never on focus: reply() moves focus to the composer, which would trap a keyboard user tabbing through.
 	const replyKeys = { onClick: onReply, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onReply(); } } };
 	const hint = (bound: boolean) => bound && <span data-testid="ask-replace-answer-hint" className="mt-0.5 block font-ui text-xs text-muted-foreground">Tap to replace this answer</span>;
-	const unsentNote = hasUnsent(unsent) && <span data-testid="ask-unsent" className="mt-0.5 block font-ui text-xs text-muted-foreground">Unsent{unsent!.text.trim() !== "" ? `: ${unsent!.text.trim()}` : ""}{unsent!.atts.length > 0 ? ` (${unsent!.atts.length} image${unsent!.atts.length === 1 ? "" : "s"})` : ""}. Tap to continue</span>;
+	const unsentNote = hasUnsent(unsent) && <span data-testid="ask-unsent" className="mt-0.5 block font-ui text-xs text-muted-foreground">Unsent{unsent!.text.trim() !== "" ? `: ${unsent!.text.trim()}` : ""} ({unsent!.atts.length} image{unsent!.atts.length === 1 ? "" : "s"}). Tap to continue</span>;
 	if (field.kind === "free-text") {
 		const v = typeof value?.value === "string" ? value.value : "";
 		if (composer) return <div onClick={stop}>{composer}</div>;

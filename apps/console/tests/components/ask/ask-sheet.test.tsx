@@ -533,16 +533,56 @@ describe("ask sheet inline composer", () => {
 		assert.equal(props(q('[data-testid="ask-free"]')!, "value"), "because"); // the field now holds the sent text
 	});
 
-	it("× closes it and keeps the draft: the field says Unsent and reopening restores the text", async () => {
+	it("× closes it and keeps the draft: the field shows the text as its answer (no Unsent label) and reopening restores it", async () => {
 		await render(FREE());
 		await open();
 		await type("half a thought");
 		await click(q('[data-testid="answering-chip-clear"]'));
 		assert.equal(composer() === null, true);
 		assert.equal(texts().length, 0);
-		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /Unsent: half a thought/);
+		assert.equal(q('[data-testid="ask-unsent"]'), null);
+		assert.equal(props(q('[data-testid="ask-free"]')!, "value"), "half a thought");
 		await open();
 		assert.equal(props(area(), "value"), "half a thought");
+	});
+
+	it("text typed into a single question's Other box counts as the answer on Submit without pressing Send (work-wolfpack-gJ8E7TX)", async () => {
+		await render(one([{ id: "q1", kind: "single", label: "Pick", options: OPTS }]));
+		await click(q('[data-testid="ask-other"]'));
+		await type("typed only");
+		await click(q('[data-testid="press"]'));
+		await settle();
+		assert.deepEqual(posts.at(-1)!.body.answers, { q1: { value: "typed only", other: true } });
+	});
+
+	it("text left in a single question's Other box after tapping out of it is still the answer on Submit (work-wolfpack-gJ8E7TX)", async () => {
+		await render(one([{ id: "q1", kind: "single", label: "Pick", options: OPTS }]));
+		await click(q('[data-testid="ask-other"]'));
+		await type("left behind");
+		await act(async () => void document.body.dispatchEvent(new dom.window.Event("click", { bubbles: true }))); // tap outside: the composer closes
+		assert.equal(composer() === null, true);
+		await click(q('[data-testid="press"]'));
+		await settle();
+		assert.deepEqual(posts.at(-1)!.body.answers, { q1: { value: "left behind", other: true } });
+	});
+
+	it("text typed into a multi question's Other box joins the custom answers on Submit without pressing Send (work-wolfpack-gJ8E7TX)", async () => {
+		await render(one([{ id: "q1", kind: "multi", label: "Tags", allowOther: true, options: OPTS }]));
+		await click(qa('[data-testid="ask-option"]')[0]!);
+		await click(q('[data-testid="ask-other"]'));
+		await type("typed only");
+		await click(q('[data-testid="press"]'));
+		await settle();
+		assert.deepEqual(posts.at(-1)!.body.answers, { q1: { value: ["a", "typed only"], other: ["typed only"] } });
+	});
+
+	it("text typed into a free field is saved with the page on Next without pressing Send (work-wolfpack-gJ8E7TX)", async () => {
+		await render(pending({ card: { ...card(), fields: [{ id: "q1", kind: "free-text", label: "Why" }, { id: "q2", kind: "free-text", label: "More", optional: true }], steps: [{ title: "A", fields: ["q1"] }, { title: "B", fields: ["q2"] }] } as never }));
+		await open();
+		await type("typed only");
+		await click(q('[data-testid="press"]'));
+		await settle();
+		assert.deepEqual(posts.at(-1)!.body.answers, { q1: { value: "typed only" } });
 	});
 
 	it("a click outside closes it and keeps the draft; a click inside does not", async () => {
@@ -553,7 +593,8 @@ describe("ask sheet inline composer", () => {
 		assert.equal(composer() !== null, true);
 		await act(async () => void document.body.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
 		assert.equal(composer() === null, true);
-		assert.match(q('[data-testid="ask-unsent"]')!.textContent!, /keep/);
+		assert.equal(q('[data-testid="ask-unsent"]'), null);
+		assert.equal(props(q('[data-testid="ask-free"]')!, "value"), "keep");
 	});
 
 	it("a failed send puts the text and the image back and says why", async () => {

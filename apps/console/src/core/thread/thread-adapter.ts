@@ -113,7 +113,7 @@ export function threadMessagesToNative(messages: readonly ThreadMessage[]): LhMe
 				...group.map((g) =>
 					"tool" in g
 						? ({ type: "toolCall", id: g.tool.callId, name: g.tool.name, arguments: g.tool.args ?? {} } as Block)
-						: ({ type: "object", objectId: g.object.objectId, objectType: g.object.type, rev: g.object.rev, data: g.object.data, upsertSeq: g.object.seq } as unknown as Block),
+						: ({ type: "object", objectId: g.object.objectId, objectType: g.object.type, rev: g.object.rev, data: g.object.data, upsertSeq: g.object.seq, pinned: g.object.pinned, pinRev: g.object.pinRev } as unknown as Block),
 				),
 			];
 			out.push({ id: step === 0 ? m.id : `${m.id}-s${step}`, ...assistantShell(content, timestamp, "toolUse") } as LhMessage);
@@ -182,7 +182,13 @@ export class ThreadEventAdapter {
 				// (max rev wins, first position — src/core/thread/objects.ts).
 				return this.grow(at, (blocks) => [
 					...blocks,
-					{ type: "object", objectId: ev.objectId, objectType: ev.objectType, rev: ev.rev, data: ev.data } as unknown as Block,
+					{ type: "object", objectId: ev.objectId, objectType: ev.objectType, rev: ev.rev, data: ev.data, pinned: ev.pinned, pinRev: ev.pinRev } as unknown as Block,
+				]);
+			case "object-pin":
+				// Only the pin state: folded onto the object of that id (collapseObjects). An unknown id is dropped there.
+				return this.grow(at, (blocks) => [
+					...blocks,
+					{ type: "object", objectId: ev.objectId, pinOnly: true, pinned: ev.pinned, pinRev: ev.pinRev } as unknown as Block,
 				]);
 			case "card-pending":
 			case "card-settled":
@@ -192,6 +198,8 @@ export class ThreadEventAdapter {
 			case "error":
 				this.lastError = ev.message;
 				return [{ type: "error", errorText: ev.message }];
+			default:
+				return []; // an event type this console does not know (a newer wolfd): skip it, never break the stream
 		}
 	}
 

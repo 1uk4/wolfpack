@@ -346,6 +346,14 @@ describe("ThreadEventAdapter: snapshot frames", () => {
 		assert.deepEqual(a.apply(snapshot("unrelated")), []);
 	});
 
+	it("skips an event type it does not know (a newer wolfd) without breaking the turn", () => {
+		const a = new ThreadEventAdapter();
+		a.apply({ ...env, id: 1, type: "turn-start", turnId: "t" } as ThreadEvent);
+		assert.deepEqual(a.apply({ ...env, id: 2, type: "from-the-future", turnId: "t" } as never), []);
+		const out = a.apply({ ...env, id: 3, type: "text-delta", turnId: "t", text: "still here" } as ThreadEvent);
+		assert.equal(blocks(out.find((e) => e.type === "message_update" || e.type === "message_start")!).at(-1)?.text, "still here");
+	});
+
 	it("ignores a snapshot without an in-flight turn", () => {
 		const a = new ThreadEventAdapter();
 		const s = snapshot("x") as { inFlight?: unknown };

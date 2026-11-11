@@ -2,7 +2,7 @@
 
 import { useId, type KeyboardEvent } from "react";
 import { checklistProgress } from "@wolfpack/protocol/objects";
-import { PANEL_CHECKLIST, closePanel, dismiss, dismissKey, togglePanel, useDismissed, useOpenPanel } from "@/components/thread/pin-store";
+import { PANEL_CHECKLIST, activeDismissKey, closePanel, dismiss, togglePanel, useDismissed, useOpenPanel } from "@/components/thread/pin-store";
 import { ChecklistItems } from "@/components/thread/checklist-card";
 import { sessionFindHasForegroundLayer } from "@/components/thread/session-find";
 import { cn } from "@/lib/utils";
@@ -43,7 +43,7 @@ export const PINNED_CHECKLIST_RESERVE = "pt-24";
 export function PinnedChecklist({ active, threadId, onDismiss }: { active: ActiveChecklist | undefined; threadId: string; onDismiss?: () => void }) {
 	const open = useOpenPanel(threadId) === PANEL_CHECKLIST; // default collapsed; opening it collapses every other pinned panel
 	const panelId = useId();
-	const dismissed = useDismissed(active ? dismissKey(threadId, active.objectId) : undefined);
+	const dismissed = useDismissed(active ? activeDismissKey(threadId, active) : undefined);
 	if (!active || dismissed) return null;
 	const { data } = active;
 	const { done, total } = checklistProgress(data);
@@ -59,7 +59,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 	};
 	const close = () => {
 		closePanel(threadId, PANEL_CHECKLIST);
-		dismiss(dismissKey(threadId, active.objectId));
+		dismiss(activeDismissKey(threadId, active));
 		onDismiss?.(); // the focused × is about to unmount: hand focus on (the composer)
 	};
 	return (

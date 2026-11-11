@@ -43,7 +43,7 @@ const { PinnedChecklist } = await import("../../../components/thread/pinned-chec
 const { resetDismissedCache, resetOpenPanels } = await import("../../../components/thread/pin-store.ts");
 const { SessionModel } = await import("../../../components/thread/session-core.ts");
 const { threadTransport } = await import("../../../components/thread/thread-transport.ts");
-const { renderItems, threadMessagesToNative, collapseObjects, activeChecklist } = await import("../../../src/core/index.ts");
+const { renderItems, threadMessagesToNative, collapseObjects, activeChecklist, activeObject } = await import("../../../src/core/index.ts");
 
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 const realFetch = globalThis.fetch;
@@ -672,6 +672,14 @@ describe("pinned checklist card", () => {
 		assert.match(list[199]!, /"cl"/);
 	});
 
+	it("a dismissal stored before pinRev existed (two-part key) still hides an object that has no pin action", async () => {
+		const threadId = `pin-${++seq}`;
+		store.set("wp.pinned-checklist.dismissed.v1", JSON.stringify([JSON.stringify([threadId, "cl"])]));
+		resetDismissedCache();
+		await remount(threadId, hist(obj("cl", 1, mk("Plan", ["todo"]), 1)));
+		assert.equal(status(), null);
+	});
+
 	it("a storage event from another tab hides the card", async () => {
 		const threadId = `pin-${++seq}`;
 		const h = hist(obj("cl", 1, mk("Plan", ["todo"]), 1));
@@ -740,6 +748,38 @@ describe("pinned decision and graph", () => {
 		assert.equal(q('[data-testid="pinned-decision"]'), null);
 		await mount(threadId, h);
 		assert.equal(q('[data-testid="pinned-decision"]'), null);
+	});
+
+	it("agent pins: omitted auto-pins the newest, pinned:false keeps one out, pinning an older one shows it, unpin removes it; live and reload agree", async () => {
+		const dec = (objectId: string, seq: number, pin: object = {}) => ({ ...decisionOf(objectId), seq, ...pin });
+		const shown = (objects: unknown[]) => activeObject(view(seeded(hist(...objects))), "decision")?.objectId;
+		assert.equal(shown([dec("a", 1), dec("b", 2)]), "b", "omitted: newest");
+		assert.equal(shown([dec("a", 1), dec("b", 2, { pinned: false, pinRev: 1 })]), "a", "pinned:false keeps the newest out");
+		assert.equal(shown([dec("a", 3, { pinned: true, pinRev: 2 }), dec("b", 2)]), "a", "pinning an older object shows it");
+		assert.equal(shown([dec("a", 1), dec("b", 4, { pinned: false, pinRev: 2 })]), "a", "unpinned newest falls back");
+		assert.equal(shown([dec("a", 3, { pinned: false, pinRev: 1 })]), undefined, "an unpinned object is never shown");
+		const up = (objectId: string, extra: object = {}) => ev({ type: "object-upsert", objectId, objectType: "decision", rev: 1, data: { ...d1, objectId }, textOffset: 0, ...extra });
+		const pinEv = (objectId: string, pinned: boolean, pinRev: number) => ev({ type: "object-pin", objectId, pinned, pinRev });
+		const liveShown = (...events: ThreadEvent[]) => activeObject(view(liveModel([ev({ type: "turn-start" }), ...events])), "decision")?.objectId;
+		assert.equal(liveShown(up("a"), up("b", { pinned: false, pinRev: 1 })), "a");
+		assert.equal(liveShown(up("a"), up("b"), pinEv("a", true, 1)), "a", "live pin of an older object");
+		assert.equal(liveShown(up("a"), up("b"), pinEv("b", false, 1)), "a", "live unpin");
+	});
+
+	it("an agent pin after the owner's × shows the object again; a plain revision keeps it dismissed", async () => {
+		const threadId = `po-${++seq}`;
+		const at = (rev: number, pin: object = {}) => hist({ ...decisionOf("d"), rev, seq: rev, ...pin });
+		const dismissIt = () => click('[data-testid="pinned-decision"] [data-testid="pinned-object-close"]');
+		await mount(threadId, at(1));
+		await dismissIt();
+		assert.equal(q('[data-testid="pinned-decision"]'), null);
+		await mount(threadId, at(2));
+		assert.equal(q('[data-testid="pinned-decision"]'), null, "a revision without a pin action stays dismissed");
+		await mount(threadId, at(2, { pinned: true, pinRev: 1 }));
+		assert.ok(q('[data-testid="pinned-decision"]'), "a fresh agent pin overrides the ×");
+		await dismissIt();
+		await mount(threadId, at(3, { pinned: true, pinRev: 1 }));
+		assert.equal(q('[data-testid="pinned-decision"]'), null, "dismissed again at this pinRev: stays hidden");
 	});
 
 	it("expands a pin to the card, then collapses it again", async () => {

@@ -12,7 +12,7 @@ import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/thread/card-registry";
 import { PINNED_OBJECT_ROW_REM, PinnedObjects, pinnedObjectDismissKey } from "@/components/thread/pinned-objects";
-import { dismissKey, useDismissed } from "@/components/thread/pin-store";
+import { activeDismissKey, useDismissed } from "@/components/thread/pin-store";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/thread/pinned-checklist";
 import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/thread/feature-progress";
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
@@ -509,7 +509,7 @@ function ThreadChatInner({
 	const progressShown = featureProgress.state.phase === "ready";
 	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && initialBound !== undefined);
 	const active = useMemo(() => activeChecklist(messages), [messages]);
-	const dismissedChecklist = useDismissed(active ? dismissKey(threadId, active.objectId) : undefined);
+	const dismissedChecklist = useDismissed(active ? activeDismissKey(threadId, active) : undefined);
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
 	// Decisions and graphs pin in any thread (stacked under the checklist / feature progress), updating in place per objectId.
 	const activeDecision = useMemo(() => activeObject(messages, "decision"), [messages]);

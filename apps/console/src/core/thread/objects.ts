@@ -26,6 +26,11 @@ export interface ObjectBlock {
 	data: unknown;
 	/** History only: the server's thread-wide ordinal of the object's latest upsert (survives reload). */
 	upsertSeq?: number;
+	/** The agent's explicit pin state and its ordering token (absent: never set, auto-pin). */
+	pinned?: boolean;
+	pinRev?: number;
+	/** A live `object-pin` event: carries only the pin state, folded onto the object of that id by collapseObjects. */
+	pinOnly?: boolean;
 }
 
 export const isObjectBlock = (b: { type: string }): b is ObjectBlock => b.type === "object";
@@ -33,8 +38,10 @@ export const isObjectBlock = (b: { type: string }): b is ObjectBlock => b.type =
 /** The view part of an object block, or undefined when its data is not valid for its type (never half-drawn). */
 export function objectPartOf(block: ObjectBlock, id: string): LhViewPart | undefined {
 	if (typeof block.objectId !== "string" || block.objectId === "") return undefined;
+	const pin = { ...(typeof block.pinned === "boolean" ? { pinned: block.pinned } : {}), ...(typeof block.pinRev === "number" ? { pinRev: block.pinRev } : {}) };
+	if (block.pinOnly) return typeof block.pinned === "boolean" && typeof block.pinRev === "number" ? { type: "object", id, objectId: block.objectId, pinOnly: true, ...pin } : undefined;
 	const data = parseObjectData(block.objectType, block.data);
-	return data === undefined ? undefined : { type: "object", id, objectId: block.objectId, objectType: block.objectType, rev: block.rev, data, ...(typeof block.upsertSeq === "number" ? { upsertSeq: block.upsertSeq } : {}) };
+	return data === undefined ? undefined : { type: "object", id, objectId: block.objectId, objectType: block.objectType, rev: block.rev, data, ...pin, ...(typeof block.upsertSeq === "number" ? { upsertSeq: block.upsertSeq } : {}) };
 }
 
 /**
@@ -49,6 +56,12 @@ export function collapseObjects(messages: LhViewMessage[]): void {
 		if (m.role !== "assistant") continue;
 		m.parts = m.parts.filter((p) => {
 			if (p.type !== "object") return true;
+			if (p.pinOnly) {
+				// A live pin action: the higher pinRev wins, and the pin counts as the object's latest event.
+				const target = first.get(p.objectId as string);
+				if (target && (p.pinRev ?? 0) > (target.pinRev ?? 0)) Object.assign(target, { pinned: p.pinned, pinRev: p.pinRev, recency: ++last });
+				return false;
+			}
 			const recency = typeof p.upsertSeq === "number" ? p.upsertSeq : last + 1;
 			last = Math.max(last, recency);
 			const kept = first.get(p.objectId as string);
@@ -62,6 +75,7 @@ export function collapseObjects(messages: LhViewMessage[]): void {
 				kept.objectType = p.objectType;
 				kept.data = p.data;
 				kept.recency = recency;
+				if (typeof p.pinRev === "number" && p.pinRev > (kept.pinRev ?? 0)) Object.assign(kept, { pinned: p.pinned, pinRev: p.pinRev });
 			}
 			return false;
 		});
@@ -71,12 +85,15 @@ export function collapseObjects(messages: LhViewMessage[]): void {
 export interface ActiveChecklist {
 	objectId: string;
 	rev: number;
+	/** The agent's pin count for this object (0 when it never pinned explicitly): part of the dismissal key. */
+	pinRev: number;
 	data: ChecklistData;
 }
 
 interface ActiveBase {
 	objectId: string;
 	rev: number;
+	pinRev: number;
 }
 /** Parsed (valid) data; `data` follows `type`. */
 export type ActiveObject = (ActiveBase & { type: "decision"; data: DecisionData }) | (ActiveBase & { type: "graph"; data: GraphData });
@@ -87,11 +104,11 @@ export function activeObject(messages: LhViewMessage[], type: "decision" | "grap
 	for (const m of messages) {
 		if (m.role !== "assistant") continue;
 		for (const p of m.parts) {
-			if (p.type !== "object" || p.objectType !== type) continue;
+			if (p.type !== "object" || p.objectType !== type || p.pinned === false) continue;
 			const data = parseObjectData(type, p.data);
 			if (!data) continue;
 			const seq = typeof p.recency === "number" ? p.recency : 0;
-			if (!best || seq >= best.seq) best = { seq, value: { objectId: p.objectId as string, rev: p.rev as number, type, data } as ActiveObject };
+			if (!best || seq >= best.seq) best = { seq, value: { objectId: p.objectId as string, rev: p.rev as number, pinRev: p.pinRev ?? 0, type, data } as ActiveObject };
 		}
 	}
 	return best?.value;
@@ -106,10 +123,10 @@ export function activeChecklist(messages: LhViewMessage[]): ActiveChecklist | un
 	for (const m of messages) {
 		if (m.role !== "assistant") continue;
 		for (const p of m.parts) {
-			if (p.type !== "object" || p.objectType !== "checklist") continue;
+			if (p.type !== "object" || p.objectType !== "checklist" || p.pinned === false) continue;
 			const data = parseObjectData("checklist", p.data);
 			const seq = typeof p.recency === "number" ? p.recency : 0;
-			if (data && (!best || seq >= best.seq)) best = { seq, value: { objectId: p.objectId as string, rev: p.rev as number, data } };
+			if (data && (!best || seq >= best.seq)) best = { seq, value: { objectId: p.objectId as string, rev: p.rev as number, pinRev: p.pinRev ?? 0, data } };
 		}
 	}
 	return best?.value;

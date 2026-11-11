@@ -52,6 +52,9 @@ export interface LhViewPart extends Record<string, unknown> {
 	rawInput?: unknown;
 	errorText?: string;
 	data?: unknown;
+	/** Object parts: the agent's pin count, and whether this part is only a live pin action (folded by collapseObjects). */
+	pinRev?: number;
+	pinOnly?: boolean;
 }
 
 /** The user-bubble attachments part: `data` is the message's `UiAttachment[]` (thumbnails render from it). */

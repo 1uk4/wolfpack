@@ -3,7 +3,7 @@
 import { useId, type KeyboardEvent } from "react";
 import { DecisionCard } from "@/components/thread/decision-card";
 import { PlanGraphCard } from "@/components/thread/plan-graph-card";
-import { closePanel, dismiss, dismissKey, togglePanel, useOpenPanel } from "@/components/thread/pin-store";
+import { activeDismissKey, closePanel, dismiss, togglePanel, useOpenPanel } from "@/components/thread/pin-store";
 import { sessionFindHasForegroundLayer } from "@/components/thread/session-find";
 import type { ActiveObject } from "@/src/core";
 
@@ -15,7 +15,7 @@ const LABEL = { decision: "Decision", graph: "Graph" } as const;
 /** Dismissal and expansion are keyed by kind + objectId, so a decision and a checklist sharing an objectId never collide. */
 const pinId = (a: ActiveObject) => `${a.type}:${a.objectId}`;
 /** The persisted dismissal key of a pinned decision/graph (checklists keep their plain `[threadId, objectId]` key). */
-export const pinnedObjectDismissKey = (threadId: string, a: ActiveObject | undefined) => (a ? dismissKey(threadId, pinId(a)) : undefined);
+export const pinnedObjectDismissKey = (threadId: string, a: ActiveObject | undefined) => (a ? activeDismissKey(threadId, a, pinId(a)) : undefined);
 
 /**
  * One pinned decision or graph: a collapsed row "Decision · title" (toggle) with a dismiss ×; expanded it shows the same
@@ -61,7 +61,7 @@ export function PinnedObject({ active, threadId, onDismiss }: { active: ActiveOb
 				data-testid="pinned-object-close"
 				onClick={() => {
 					closePanel(threadId, key);
-					dismiss(dismissKey(threadId, key));
+					dismiss(activeDismissKey(threadId, active, key));
 					onDismiss?.();
 				}}
 				className="absolute right-1 top-1 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"

@@ -11,7 +11,14 @@ import { useSyncExternalStore } from "react";
  */
 const DISMISSED_KEY = "wp.pinned-checklist.dismissed.v1";
 const DISMISSED_MAX = 200;
-export const dismissKey = (threadId: string, objectId: string) => JSON.stringify([threadId, objectId]);
+/**
+ * `pinRev` is the agent's pin count for the object (0/absent: it never pinned explicitly). A dismissal is made at the pinRev
+ * then shown, so a later agent pin or unpin (higher pinRev) is a different key and shows the object again, while a plain
+ * revision (same pinRev) stays dismissed.
+ */
+export const dismissKey = (threadId: string, objectId: string, pinRev?: number) => JSON.stringify(pinRev ? [threadId, objectId, pinRev] : [threadId, objectId]);
+/** The dismissal key of an active pinned object; `id` overrides the objectId part (decisions and graphs namespace it by kind). */
+export const activeDismissKey = (threadId: string, a: { objectId: string; pinRev: number }, id: string = a.objectId) => dismissKey(threadId, id, a.pinRev);
 /** Fallback when localStorage is unavailable (private mode, quota): dismissal then lasts for the page's lifetime. Capped like the stored list. */
 let memoryDismissed: string[] = [];
 const dismissListeners = new Set<() => void>();

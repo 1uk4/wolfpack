@@ -22,7 +22,7 @@ async function runThroughView(engine: ScriptedEngine): Promise<{ viewText: strin
   await server.attach();
   const url = await server.listen();
   const client = new HttpConsoleClient({ baseUrl: url, retryDelayMs: 5 });
-  const [{ ThreadEventAdapter }, { createThreadApi }] = await Promise.all([load("core/thread-adapter.ts"), load("server/thread-api.ts")]);
+  const [{ ThreadEventAdapter }, { createThreadApi }] = await Promise.all([load("core/thread/thread-adapter.ts"), load("server/thread/thread-api.ts")]);
   const thread = (await client.listThreads("w"))[0];
   await client.submit(thread.id, "hi");
   const slug = thread.id.startsWith("w/") ? thread.id.slice(2) : thread.id;

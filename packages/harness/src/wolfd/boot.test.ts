@@ -129,6 +129,7 @@ describe("startWolf", () => {
       "ask_revise",
       "bash",
       "edit",
+      "pin",
       "read",
       "show_checklist",
       "show_decision",

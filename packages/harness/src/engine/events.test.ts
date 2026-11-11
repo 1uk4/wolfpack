@@ -251,6 +251,22 @@ describe("object-upsert (show_decision)", () => {
     expect(upserts(m.push([toolEnd("c1")])).map((u) => u.rev)).toEqual([1]);
   });
 
+  it("seedObjects: a mid-turn joiner's next pin continues the pinRev counted in the snapshot", () => {
+    const pinCall = (id: string, pinned: boolean) => ({ type: "toolCall", id, name: "pin", arguments: { objectId: "d1", pinned } });
+    const m = createEventMapper(snap([asstEntry([call("c0", { ...dec(), pinned: true }), pinCall("p0", false)]), resultEntry("c0"), resultEntry("p0")], { run: { inputs: [1] } }));
+    const out = m.push([
+      ev({ type: "tool_execution_start", toolCallId: "p1", toolName: "pin", args: { objectId: "d1", pinned: true } }),
+      ev({ type: "tool_execution_end", toolCallId: "p1", toolName: "pin", entry: { kind: "pi.tool_result", id: 9, conversationId: 1, model: [{ role: "toolResult", toolCallId: "p1", content: [{ type: "text", text: "ok" }], isError: false }] } }),
+    ]);
+    expect(out.filter((e) => e.type === "object-pin")).toEqual([expect.objectContaining({ objectId: "d1", pinned: true, pinRev: 3 })]);
+  });
+
+  it("a revision that omits `pinned` after `pinned: false` carries no pin state (the object stays unpinned)", () => {
+    const out = map(start(), toolStart("c1", { ...dec(), pinned: false }), toolEnd("c1"), toolStart("c2", dec("b")), toolEnd("c2"), end(), sub(1, "done"));
+    const ups = out.filter((e) => e.type === "object-upsert") as unknown as Array<{ pinned?: boolean; pinRev?: number }>;
+    expect(ups.map((u) => [u.pinned, u.pinRev])).toEqual([[false, 1], [undefined, undefined]]);
+  });
+
   it("the resync path (mid-stream engine snapshot) re-seeds revs from the snapshot", () => {
     const m = createEventMapper();
     const first = m.push([start(), toolStart("c1", dec()), toolEnd("c1")]);

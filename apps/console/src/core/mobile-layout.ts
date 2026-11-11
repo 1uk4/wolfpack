@@ -39,6 +39,13 @@ export function keyboardShellHeight(vv: { height: number } | null | undefined, i
 	return innerHeight - h >= KEYBOARD_MIN_GAP ? h : null;
 }
 
+/** Top offset of the phone shell, px: while the keyboard is open iOS pans the visual viewport inside the layout viewport (offsetTop > 0),
+ *  and a `position: fixed` shell pinned at top:0 then sits partly off-screen with its composer still under the keyboard. 0 otherwise. */
+export function keyboardShellTop(vv: { height: number; offsetTop: number } | null | undefined, innerHeight: number): number {
+	if (!vv || keyboardShellHeight(vv, innerHeight) === null) return 0;
+	return Math.max(0, Math.round(vv.offsetTop));
+}
+
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
 

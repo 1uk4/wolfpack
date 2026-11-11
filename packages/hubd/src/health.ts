@@ -15,7 +15,42 @@ export interface HubHealth {
 
 export function createHubHealth(hosts?: () => HubHealthHost[]): HubHealth {
   const monitor: LagMonitor = createLagMonitor();
-  return { body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }), stop: () => monitor.stop() };
+  const env = Number(process.env.HUBD_LOOP_STALL_MS);
+  const stall = createStallWatch({ thresholdMs: env > 0 ? env : DEFAULT_STALL_MS });
+  return { body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }), stop: () => { monitor.stop(); stall.stop(); } };
+}
+
+export const DEFAULT_STALL_MS = 5_000;
+
+export interface StallWatchOptions {
+  /** Warn when a tick arrives more than this many ms later than scheduled. Default 5000 (env HUBD_LOOP_STALL_MS). */
+  thresholdMs?: number;
+  /** Tick period, ms; also the rate limit: at most one warning per tick. */
+  intervalMs?: number;
+  now?: () => number;
+  warn?: (line: string) => void;
+}
+
+/**
+ * Logs one warning line when the event loop stalls: a timer scheduled every `intervalMs` fires late by more than `thresholdMs`.
+ * A stall surfaces once, when it ends (the late tick), so a long stall never floods the journal. What was in flight is not
+ * logged: hubd keeps no cheap counter of curator or Work API reads in progress. The timer is unref'd.
+ */
+export function createStallWatch(opts: StallWatchOptions = {}): { tick(): void; stop(): void } {
+  const threshold = opts.thresholdMs ?? DEFAULT_STALL_MS;
+  const interval = opts.intervalMs ?? 1_000;
+  const now = opts.now ?? Date.now;
+  const warn = opts.warn ?? ((l: string) => console.error(l));
+  let last = now();
+  const tick = () => {
+    const t = now();
+    const lag = t - last - interval;
+    last = t;
+    if (lag > threshold) warn(`${new Date(t).toISOString()} hubd: event loop stalled for ${Math.round(lag)} ms (threshold ${threshold} ms)`);
+  };
+  const timer = setInterval(tick, interval);
+  timer.unref();
+  return { tick, stop: () => clearInterval(timer) };
 }
 
 /** A pairing label is sent on /healthz only when it looks like a hostname. */

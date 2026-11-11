@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer, trackTallestViewport } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer, trackTallestViewport, shouldResetPageScroll } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -87,6 +87,12 @@ test("rotation resets the tallest viewport, so landscape is not read as an open 
 	const landscape = trackTallestViewport(portrait, 852, 393);
 	assert.deepEqual(landscape, { width: 852, height: 393 });
 	assert.equal(keyboardShellHeight({ height: 393 }, 393, landscape.height), null);
+});
+
+test("the page scroll iOS adds when the keyboard opens is undone, so the pinned shell and its header stay on screen", () => {
+	assert.equal(shouldResetPageScroll(true, 120), true); // keyboard open, document scrolled: reset
+	assert.equal(shouldResetPageScroll(true, 0), false); // already at the top: no write
+	assert.equal(shouldResetPageScroll(false, 120), false); // keyboard closed: never touch the scroll
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

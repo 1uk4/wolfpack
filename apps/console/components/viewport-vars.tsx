@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, trackTallestViewport } from "@/src/core";
+import { MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldResetPageScroll, trackTallestViewport } from "@/src/core";
 
 /** Publishes --wp-vvh (the visible height above the on-screen keyboard) on <html>, phones only. iOS Safari does not shrink the layout
  *  viewport when the keyboard opens, so `dvh` alone leaves the composer under it; globals.css sizes the thread to this var. */
@@ -42,10 +42,13 @@ export function ViewportVars() {
 			const nextInset = inset === "0px" ? inset : "";
 			if (nextInset !== lastInset) nextInset ? root.style.setProperty("--wp-safe-bottom", nextInset) : root.style.removeProperty("--wp-safe-bottom");
 			lastInset = nextInset;
+			// iOS also scrolls the document when the focused field opens the keyboard; the shell is fixed, so that only pushes the header under the status bar
+			if (shouldResetPageScroll(h !== null, window.scrollY)) window.scrollTo(0, 0);
 		};
 		apply();
 		vv?.addEventListener("resize", apply);
 		vv?.addEventListener("scroll", apply);
+		window.addEventListener("scroll", apply, { passive: true });
 		mq.addEventListener("change", apply);
 		// Rotation changes innerHeight without a visualViewport event on some iOS versions, and it settles a frame late.
 		let raf = 0;
@@ -58,6 +61,7 @@ export function ViewportVars() {
 		return () => {
 			vv?.removeEventListener("resize", apply);
 			vv?.removeEventListener("scroll", apply);
+			window.removeEventListener("scroll", apply);
 			mq.removeEventListener("change", apply);
 			window.removeEventListener("resize", applyNextFrame);
 			window.removeEventListener("orientationchange", applyNextFrame);

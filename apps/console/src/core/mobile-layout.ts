@@ -65,6 +65,11 @@ export function shellBottomInset(vv: { height: number } | null | undefined, inne
  *  keyboard, which pans the standalone PWA and leaves a body-coloured band under the page (owner, 2026-11-11). Desktop keeps it. */
 export const shouldAutoFocusComposer = ({ coarse }: { coarse: boolean }): boolean => !coarse;
 
+/** Whether to scroll the document back to the top: iOS scrolls it when a focused field opens the keyboard, and the phone shell is a
+ *  fixed, full-height box that never needs the document scrolled, so that scroll only pushes the header under the status bar.
+ *  Only while the keyboard is open and the document is actually scrolled; a closed keyboard never has its scroll touched. */
+export const shouldResetPageScroll = (keyboardOpen: boolean, scrollY: number): boolean => keyboardOpen && scrollY > 0;
+
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
 

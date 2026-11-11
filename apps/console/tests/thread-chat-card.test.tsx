@@ -844,7 +844,10 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 			assert.ok((layer.getAttribute("class") ?? "").split(/\s+/).includes("min-h-0"), "host shrinks");
 			const dockEl = q('[data-testid="dock-fade"]')!.parentElement!;
 			const dockCls = (dockEl.getAttribute("class") ?? "").split(/\s+/);
-			assert.ok(dockCls.includes("max-h-full") && dockCls.includes("flex-col"), `dock classes: ${dockEl.className}`);
+			// the cap leaves a 0.75rem gap under the git row, so the sheet's top border and rounded corners are not clipped by the area's overflow
+			assert.ok(dockCls.includes("max-h-[calc(100%-0.75rem)]") && dockCls.includes("flex-col"), `dock classes: ${dockEl.className}`);
+			// the fade above the sheet gives way first at the cap instead of eating the sheet's room
+			assert.ok(!(q('[data-testid="dock-fade"]')!.getAttribute("class") ?? "").split(/\s+/).includes("shrink-0"), "fade can collapse");
 			assert.equal(layer.getAttribute("role"), "dialog");
 			assert.equal(layer.getAttribute("aria-modal"), "false");
 			assert.equal(layer.getAttribute("aria-label"), "Questions");

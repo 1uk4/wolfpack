@@ -120,7 +120,7 @@ USAGE
     [[ $HTIMEOUT =~ ^[0-9]+$ && $SETTLE =~ ^[0-9]+$ ]] || die "--health-timeout/--settle must be integers" 2
     [ "$(id -u)" = 0 ] || die "run as root" 2
     local OPT="$OPT_ROOT/wolfpack-$COMP" SVC="$COMP.service" was=0 cur prev to from iid iid2 nr1 nr2 t=0
-    vof() { local v; v=$(head -n1 "$1/VERSION" 2>/dev/null </dev/null) && [[ $v =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]] && echo "${BASH_REMATCH[1]}" || echo "${1##*/}"; }
+    vof() { local v; v=$(head -n1 "$1/VERSION" 2>/dev/null </dev/null) && [[ $v =~ ^([0-9]+\.[0-9]+\.[0-9]+(-main\.[1-9][0-9]*)?) ]] && echo "${BASH_REMATCH[1]}" || echo "${1##*/}"; }
     if : >>"$LOGF" 2>/dev/null; then exec > >(tee -a "$LOGF") 2>&1; chmod 600 "$LOGF" 2>/dev/null || true; fi
     log "=== $(date -u +%FT%TZ) rollback $COMP (owner-initiated)"
     command -v flock >/dev/null || die "flock (util-linux) is required"
@@ -191,7 +191,7 @@ USAGE
   [ -n "$COMP" ] && [ -n "$VER" ] || usage
   VER="${VER#v}"
   case "$COMP" in wolfd|hubd|workerd|console) ;; *) die "unknown component '$COMP' (wolfd|hubd|workerd|console)" 2 ;; esac
-  [[ $VER =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version must be X.Y.Z, got '$VER'" 2
+  [[ $VER =~ ^[0-9]+\.[0-9]+\.[0-9]+(-main\.[1-9][0-9]*)?$ ]] || die "version must be X.Y.Z or X.Y.Z-main.N, got '$VER'" 2
   [[ $HTIMEOUT =~ ^[0-9]+$ && $SETTLE =~ ^[0-9]+$ ]] || die "--health-timeout/--settle must be integers" 2
   local USR="" HOME_DIR="" UNIT="" REL="" PREV="" ENVF="" SOCK="" OPT="" SVC=""
   if [ "$COMP" = wolfd ]; then
@@ -229,7 +229,7 @@ USAGE
 
   cur_version() { # <dir> -> X.Y.Z of <dir>/VERSION, or fail
     local f=$1/VERSION v; [ -f "$f" ] || return 1
-    v=$(head -n1 "$f" </dev/null); [[ $v =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+    v=$(head -n1 "$f" </dev/null); [[ $v =~ ^([0-9]+\.[0-9]+\.[0-9]+(-main\.[1-9][0-9]*)?) ]] || return 1
     echo "${BASH_REMATCH[1]}"
   }
 

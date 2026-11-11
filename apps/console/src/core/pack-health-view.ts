@@ -71,29 +71,44 @@ export function rowActions(
 	return { logs: l.restartable, rollback: rb && rollbackOffered(rb) ? { service: rb.service, to: rb.to } : null, macCommands: null, restart: l.restartable };
 }
 
-/** The X.Y.Z core of a version as numbers, or null when it has none. */
-const coreOf = (v: string | null): [number, number, number] | null => {
-	const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
-	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+/** X.Y.Z[-pre] of a version (any +build ignored), or null when it has none. */
+const parseV = (v: string | null): { core: number[]; pre: string[] } | null => {
+	const m = v ? /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(v) : null;
+	return m ? { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ? m[4].split(".") : [] } : null;
 };
-const cmpCore = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+/** Semver order of X.Y.Z[-pre] (`0.1.21-main.3` < `0.1.21`); builds ignored. null when either has no version. */
+function cmpV(a: string | null, b: string | null): number | null {
+	const x = parseV(a);
+	const y = parseV(b);
+	if (!x || !y) return null;
+	for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i]! - y.core[i]!;
+	if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length;
+	for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+		const p = x.pre[i];
+		const q = y.pre[i];
+		if (p === undefined) return -1;
+		if (q === undefined) return 1;
+		if (p === q) continue;
+		return /^\d+$/.test(p) && /^\d+$/.test(q) ? Number(p) - Number(q) : p < q ? -1 : 1;
+	}
+	return 0;
+}
+
+/** True when `to` is newer than `from`; equal versions (another build) and unknown versions are not. Shared with the server's rollback guard. */
+export const isNewerVersion = (to: string | null, from: string | null): boolean => (cmpV(to, from) ?? 0) > 0;
 
 /**
- * Whether Roll back is offered: never when `to` is newer than `from` on the X.Y.Z core (after a rollback, `previous` is the release just
- * left, so "rolling back" would go forward). Equal cores (another build) and unknown versions stay offered.
+ * Whether Roll back is offered: never when `to` is newer than `from` (after a rollback, `previous` is the release just
+ * left, so "rolling back" would go forward). Equal versions (another build) and unknown versions stay offered.
  */
 export function rollbackOffered(r: { from: string | null; to: string | null }): boolean {
-	const a = coreOf(r.from);
-	const b = coreOf(r.to);
-	return !(a && b && cmpCore(b, a) > 0);
+	return !isNewerVersion(r.to, r.from);
 }
 
 /** The confirm text: the target's X.Y.Z, with the build only when both cores are equal; says when a version is unknown. */
 export function rollbackQuestion(name: string, from: string | null, to: string | null): string {
 	if (!to) return `Roll ${name} back to the previous release (its version is unknown)?`;
-	const a = coreOf(from);
-	const b = coreOf(to);
-	const shown = a && b && cmpCore(a, b) === 0 ? to : (/^\d+\.\d+\.\d+/.exec(to)?.[0] ?? to);
+	const shown = cmpV(from, to) === 0 ? to : (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/.exec(to)?.[0] ?? to);
 	return from ? `Roll ${name} back to v${shown}?` : `Roll ${name} back to v${shown} (the running version is unknown)?`;
 }
 

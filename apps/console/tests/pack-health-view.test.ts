@@ -119,6 +119,15 @@ describe("service actions per row", () => {
 		assert.deepEqual(on("0.1.20", null), { service: "hubd", to: null });
 	});
 
+	it("orders main prereleases below their release when deciding the roll back", () => {
+		const on = (from: string | null, to: string | null) => rowActions(link("hubd", "ok"), { systemd: true, rollback: [{ service: "hubd", from, to }] }).rollback;
+		assert.deepEqual(on("0.1.21", "0.1.21-main.3"), { service: "hubd", to: "0.1.21-main.3" });
+		assert.equal(on("0.1.21-main.3", "0.1.21"), null);
+		assert.deepEqual(on("0.1.21-main.10", "0.1.21-main.9"), { service: "hubd", to: "0.1.21-main.9" });
+		assert.equal(on("0.1.21-main.9", "0.1.21-main.10"), null);
+		assert.equal(rollbackQuestion("hubd", "0.1.21", "0.1.21-main.3"), "Roll hubd back to v0.1.21-main.3?");
+	});
+
 	it("names the target in the confirm: the X.Y.Z, the build only when the versions are equal, and says when a version is unknown", () => {
 		assert.equal(rollbackQuestion("hubd", "0.1.14+abc", "0.1.13+def"), "Roll hubd back to v0.1.13?");
 		assert.equal(rollbackQuestion("hubd", "0.1.18+b", "0.1.18+a"), "Roll hubd back to v0.1.18+a?");

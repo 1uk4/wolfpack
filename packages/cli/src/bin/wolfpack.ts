@@ -3,6 +3,7 @@
  * wolfpack CLI — entry point.
  */
 
+import { execFileSync } from "node:child_process";
 import { hostAdd } from "../commands/host-add.js";
 import { hostList } from "../commands/host-list.js";
 import { hostStatus } from "../commands/host-status.js";
@@ -57,6 +58,7 @@ ${c.bold("COMMANDS")}
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
   deploy <wolf> --release <tag>   Host downloads + verifies a release, switches, health-checks, rolls back (--host, --dry-run, --component hubd|workerd)
   release [component...]         Tag + push changed components (--dry-run, --minor, --major, --version X.Y.Z, --yes)
+  release publish [--ref <br>]   Publish the main channel: dispatch release-main.yml (default ref wolf/1uk4)
   test [run|related] [paths…]     Run vitest with a result cache; agents queue for a slot (-t <name>, --no-cache)
   preview <ref>|status|off        Run a branch on the Mac stack and return to stable (--dry-run)
   stack <verb>                    Live Mac stack under launchd: install|start|stop|restart|status|logs [-f]|uninstall
@@ -414,6 +416,15 @@ async function main(): Promise<void> {
 
       case "release": {
         const a = process.argv.slice(3);
+        if (a[0] === "publish") {
+          // Dispatch release-main.yml from <ref> (the workflow file comes from that branch, so it works before it reaches stable) (tags + builds -main.N prereleases + writes main.json). Needs an authenticated `gh`.
+          const ri = a.indexOf("--ref");
+          const ref = ri >= 0 ? a[ri + 1] : "wolf/1uk4";
+          if (!ref) throw new Error("Usage: wolfpack release publish [--ref <branch>]");
+          execFileSync("gh", ["workflow", "run", "release-main.yml", "--ref", ref, "-f", `ref=${ref}`], { stdio: "inherit" });
+          console.log(`dispatched release-main for ${ref}; watch it with: gh run list --workflow release-main.yml`);
+          break;
+        }
         const vi = a.indexOf("--version");
         await releaseCmd({
           only: a.filter((x, i) => !x.startsWith("-") && a[i - 1] !== "--version"),

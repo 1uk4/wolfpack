@@ -16,6 +16,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { isNewerVersion as isNewer } from "../core/pack-health-view.ts";
 import { execRunner, type CommandRunner, type PackHealth } from "./pack-health.ts";
 
 export const LOG_LINES_DEFAULT = 100;
@@ -131,17 +132,6 @@ export type RollbackOutcome =
 	| { ok: true; service: string; at: string; to: string | null }
 	| { ok: false; service: string; code: "invalid_request" | "no_previous" | "previous_is_newer" | "rate_limited" | "failed"; message: string; retryAfterS?: number };
 
-/** X.Y.Z core of a version, or null when it has none. */
-const coreOf = (v: string | null): [number, number, number] | null => {
-	const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
-	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-};
-/** True when `to` is newer than `from` on the X.Y.Z core; equal cores and unknown versions are not (same rule as the UI's rollbackOffered). */
-const isNewer = (to: string | null, from: string | null): boolean => {
-	const a = coreOf(from);
-	const b = coreOf(to);
-	return !!(a && b && (b[0] - a[0] || b[1] - a[1] || b[2] - a[2]) > 0);
-};
 
 export interface Rollbacker {
 	rollback(service: unknown, by: string): Promise<RollbackOutcome>;

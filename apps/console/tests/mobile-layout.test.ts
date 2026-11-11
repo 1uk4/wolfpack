@@ -39,6 +39,11 @@ test("the floating back control shows only on a phone, list closed, with no Side
 	assert.equal(needsFloatingBack(false, false, 0), false);
 });
 
+test("the floating back control is hidden on the home page, where there is nothing to go back to", () => {
+	assert.equal(needsFloatingBack(true, false, 0, "/"), false);
+	assert.equal(needsFloatingBack(true, false, 0, "/graph"), true);
+});
+
 test("keyboardShellHeight shrinks the shell only for an open keyboard, not a small or stale viewport gap", () => {
 	assert.equal(keyboardShellHeight({ height: 500.4 }, 852), 500); // keyboard open
 	assert.equal(keyboardShellHeight({ height: 740 }, 852), null); // 112px short: stale/chrome, use 100dvh

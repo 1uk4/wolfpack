@@ -55,5 +55,6 @@ export function shellBottomInset(vv: { height: number } | null | undefined, inne
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
 
-/** The fixed back-to-list control is needed only on a phone, with the list closed, on a page that mounts no SidebarToggle of its own. */
-export const needsFloatingBack = (mobile: boolean, listOpen: boolean, toggles: number): boolean => mobile && !listOpen && toggles === 0;
+/** The fixed back-to-list control is needed only on a phone, with the list closed, on a page that mounts no SidebarToggle of its own.
+ *  Never on the home page "/": it is the app's start, so there is nothing to go back to. */
+export const needsFloatingBack = (mobile: boolean, listOpen: boolean, toggles: number, path = ""): boolean => mobile && !listOpen && toggles === 0 && path !== "/";

@@ -212,14 +212,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			{/* phone: the shell owns the top safe-area inset (pages without a header must not draw under the notch) */}
 			<div data-wp-shell className={cn("flex h-dvh max-md:pt-[env(safe-area-inset-top)]", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
-			<FloatingBack toggles={toggles} open={open && !narrow} mobile={mobile} onClick={toggle} />
+			<FloatingBack toggles={toggles} open={open && !narrow} mobile={mobile} path={pathname} onClick={toggle} />
 		</SidebarContext.Provider>
 	);
 }
 
 /** Phone only: a fixed back-to-list button for pages that render no SidebarToggle (graph "/", KB activity). */
-function FloatingBack({ toggles, open, mobile, onClick }: { toggles: number; open: boolean; mobile: boolean; onClick: () => void }) {
-	if (!needsFloatingBack(mobile, open, toggles)) return null;
+function FloatingBack({ toggles, open, mobile, path, onClick }: { toggles: number; open: boolean; mobile: boolean; path: string | null; onClick: () => void }) {
+	if (!needsFloatingBack(mobile, open, toggles, path ?? "")) return null;
 	return (
 		<button
 			type="button"

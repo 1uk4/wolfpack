@@ -786,3 +786,23 @@ html,
 body {
 	touch-action: manipulation;
 }
+
+/* Text shimmer (components/ai-elements/shimmer.tsx): a highlight sweeps across muted text. */
+@keyframes wp-shimmer-sweep {
+	from { background-position: 100% center, 0 0; }
+	to { background-position: 0% center, 0 0; }
+}
+.wp-shimmer {
+	background-image:
+		linear-gradient(90deg, #0000 calc(50% - var(--spread)), var(--color-background), #0000 calc(50% + var(--spread))),
+		linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground));
+	background-size: 250% 100%, auto;
+	background-repeat: no-repeat;
+	background-clip: text;
+	animation: wp-shimmer-sweep var(--shimmer-duration, 2s) linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.wp-shimmer {
+		animation: none;
+	}
+}

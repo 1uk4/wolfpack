@@ -390,6 +390,11 @@ export function curatorNote(data: KbActivityResponse): string | null {
 	return null;
 }
 
+/** When the curator got stuck (the hub's `sweep.stuckSince`: its time budget aborted a sweep that has not ended), or null. Older hubs omit it. */
+export function curatorStuck(data: KbActivityResponse): string | null {
+	return data.sweep?.stuckSince ?? null;
+}
+
 // ── time ────────────────────────────────────────────────────────────────────
 
 export function kbAge(ms: number): string {

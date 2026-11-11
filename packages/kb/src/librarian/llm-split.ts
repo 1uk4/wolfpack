@@ -15,7 +15,7 @@ import { atomicWrite } from "@wolfpack/engine";
 import type { Engine } from "@wolfpack/engine";
 import { proposeSplit, type SplitMember, type SplitProposal } from "./summarize.js";
 import {
-  DEFAULT_RULES, chooseSplit, isSplit, validatePartition, isPartition,
+  DEFAULT_RULES, chooseSplit, isSplit, validatePartition, isPartition, applyJoin,
   type CategoryReport, type PartitionDecision, type SplitDecision, type SplitRejected, type TreeRules, type Vec,
 } from "./tree-rules.js";
 
@@ -100,7 +100,11 @@ export interface SplitVerdict {
   fallbackReason?: string;
   /** k-means result beside the LLM one (diagnostics) or in its place (fallback). */
   kmeans?: SplitDecision | SplitRejected;
+  /** Set when diagnostics were asked for but the section is above rules.diagnosticsMaxMembers. */
+  kmeansSkipped?: string;
   cached?: boolean;
+  /** Leftovers placed in their closest group by the join bar (LLM source). */
+  joined?: number;
 }
 
 /**
@@ -167,24 +171,30 @@ export async function judgeSplit(
     members: proposal.categories.map((c) => asIdx(c.ids, c.name)),
     doesntFit: asIdx(proposal.doesntFit, "doesn't fit"),
   }, rules);
-  const diag = deps.diagnostics ? kmeans() : undefined;
+  const diagSkipped = deps.diagnostics && members.length > rules.diagnosticsMaxMembers
+    ? `k-means comparison skipped: ${members.length} members > ${rules.diagnosticsMaxMembers}` : undefined;
+  const diag = deps.diagnostics && !diagSkipped ? kmeans() : undefined;
   if (!isPartition(result) && result.single) {
     // One category survived: the leftovers may hold its partner.
     const two = await secondPass(deps, rules, args, members, vectors, result.single);
-    if (two.d.k >= 2) return {
-      source: "llm", decision: { labels: two.d.labels, k: two.d.k, names: two.d.names, leftovers: two.d.leftovers },
-      categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached: cached && !two.asked,
-    };
+    if (two.d.k >= 2) {
+      const j = applyJoin(vectors, two.d, rules);
+      return {
+        source: "llm", decision: { labels: j.d.labels, k: j.d.k, names: j.d.names, leftovers: j.d.leftovers }, joined: j.joined,
+        categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached: cached && !two.asked,
+      };
+    }
   }
   if (!isPartition(result)) {
     deps.notify?.(`no split: ${result.reason}`);
-    return { source: "llm", reason: result.reason, categories: result.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached };
+    return { source: "llm", reason: result.reason, categories: result.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached };
   }
   const final = await secondPass(deps, rules, args, members, vectors, result);
+  const j = applyJoin(vectors, final.d, rules);
   return {
-    source: "llm",
-    decision: { labels: final.d.labels, k: final.d.k, names: final.d.names, leftovers: final.d.leftovers },
-    categories: final.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached: cached && !final.asked,
+    source: "llm", joined: j.joined,
+    decision: { labels: j.d.labels, k: j.d.k, names: j.d.names, leftovers: j.d.leftovers },
+    categories: final.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached: cached && !final.asked,
   };
 }
 

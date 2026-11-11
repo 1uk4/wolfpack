@@ -31,7 +31,7 @@ import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openS
 import { randomBytes } from "node:crypto";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
-import { appendLedger } from "@wolfpack/kb/librarian";
+import { appendLedger, invalidateLedgerCache } from "@wolfpack/kb/librarian";
 import { KbEventSchema, contentHash, ev, ledgerFile, readDomainRegistry, type KbRoots } from "@wolfpack/kb/shared";
 import { KB_COMMIT_PATH, KB_HASH, KbCommitRequestSchema, type Actor, type KbChange, type KbCommitRequest, type KbCommitResponse } from "@wolfpack/protocol";
 import { HubError } from "./errors.js";
@@ -300,6 +300,7 @@ function rollbackLedger(roots: KbRoots, j: Journal): void {
     return;
   }
   truncateSync(file, j.ledgerOffset);
+  invalidateLedgerCache(roots); // in-place cut, same inode: the async reader cache cannot tell (see ledger.ts)
   fsyncPath(file);
 }
 

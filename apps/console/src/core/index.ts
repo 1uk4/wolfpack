@@ -13,7 +13,6 @@
  */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 export * from "./contracts.ts";
 export * from "./ports.ts";
 export * from "./render-settings.ts";

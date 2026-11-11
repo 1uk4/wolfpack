@@ -1,7 +1,6 @@
 /** Pure model of the console's switchable right-panel host: persisted per-thread selection. */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 export const RIGHT_PANEL_KEY = "wolfpack.right-panel.v1";
 export const DEFAULT_PANEL_ID = "memory";
 

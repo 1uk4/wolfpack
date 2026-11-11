@@ -57,5 +57,3 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld("wolfpack", api);
-// legacy window.lh shim, remove after the next desktop release
-contextBridge.exposeInMainWorld("lh", api);

@@ -1,7 +1,6 @@
 "use client";
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "@/src/core/legacy-storage-boot.ts";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -88,13 +87,12 @@ declare global {
 	interface Window {
 		/** Preload bridge (electron/preload.cjs) — Electron only, absent in the browser. */
 		wolfpack?: DesktopBridgeApi;
-		lh?: DesktopBridgeApi; // legacy window.lh shim, remove after the next desktop release
 	}
 }
 
-/** The desktop preload bridge: `window.wolfpack`, or the old preload's legacy global. */
+/** The desktop preload bridge: `window.wolfpack`. */
 export const desktopBridge = (): DesktopBridgeApi | undefined =>
-	typeof window === "undefined" ? undefined : (window.wolfpack ?? window.lh); // legacy window.lh shim, remove after the next desktop release
+	typeof window === "undefined" ? undefined : window.wolfpack;
 
 const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean; closeList: () => void; registerToggle: () => () => void }>({
 	open: false,

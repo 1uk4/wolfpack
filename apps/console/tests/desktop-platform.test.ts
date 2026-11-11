@@ -75,10 +75,8 @@ describe("desktop window chrome", () => {
 			}),
 		};
 		runInNewContext(readFileSync(new URL("../../desktop/electron/preload.cjs", import.meta.url), "utf8"), context);
-		// window.wolfpack is the bridge; window.lh is the legacy alias of the same object until the next desktop release.
-		assert.deepEqual([...exposed.keys()], ["wolfpack", "lh"]);
+		assert.deepEqual([...exposed.keys()], ["wolfpack"]);
 		const bridge = exposed.get("wolfpack") as Record<string, unknown>;
-		assert.ok(exposed.get("lh") === bridge);
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
 			"expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform",

@@ -64,6 +64,30 @@ describe("hub work proxy", () => {
     expect(await r.json()).toMatchObject({ error: expect.stringContaining("200") });
   });
 
+  it("GET /work?fields=summary drops log and successCriteria, archived=0 drops archived items, no params is unchanged", async () => {
+    const { call, A } = await rig();
+    const mk = async (title: string) => ((await (await call(A, "POST", "", { ...feature, title, successCriteria: "done when x" })).json()) as { id: string }).id;
+    const [live, old] = [await mk("live"), await mk("old")];
+    await call(A, "PATCH", `/${live}`, { note: "hello" });
+    await call(A, "PATCH", `/${old}`, { stage: "archived" });
+    type Row = Record<string, unknown> & { id: string };
+    const list = async (q: string) => ((await (await call(A, "GET", `?domain=personal${q}`)).json()) as { items: Row[] }).items;
+    const full = await list("");
+    expect(full.map((i) => i.id).sort()).toEqual([live, old].sort());
+    const fl = full.find((i) => i.id === live)!;
+    expect(fl.log).toBeDefined();
+    expect(fl.successCriteria).toBe("done when x");
+    const slim = await list("&fields=summary");
+    expect(slim.map((i) => i.id).sort()).toEqual([live, old].sort());
+    const sl = slim.find((i) => i.id === live)!;
+    expect("log" in sl).toBe(false);
+    expect("successCriteria" in sl).toBe(false);
+    const { log: _l, successCriteria: _s, ...rest } = fl;
+    expect(sl).toEqual(rest);
+    expect((await list("&archived=0")).map((i) => i.id)).toEqual([live]);
+    expect((await list("&archived=0&fields=summary"))[0]).toEqual(rest);
+  });
+
   it("create / get / patch / graduate keep the agent shapes for the wolf's own host", async () => {
     const { call, A } = await rig();
     const c = await call(A, "POST", "", feature);

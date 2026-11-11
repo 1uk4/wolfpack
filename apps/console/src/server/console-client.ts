@@ -81,6 +81,11 @@ export class HubAuthError extends Error {
 	}
 }
 
+/** True for a HubAuthError as routes see it (matched by name + `hubAuth`, since Next bundles the client per route). */
+export function isHubAuthError(err: unknown): err is HubAuthError {
+	return err instanceof Error && err.name === "ProtocolError" && (err as Error & { hubAuth?: boolean }).hubAuth === true;
+}
+
 /**
  * Work reads against the hub with a PER-REQUEST token. Inside a request scope only the browser's forwarded token is used; no token
  * rejects (the route answers 401, the browser goes to /pair): the env token/key never stands in for a request that did not authenticate.

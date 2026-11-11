@@ -8,7 +8,7 @@
  * ONE VIEW PROTOCOL: every turn is a server-side background process (owner
  * ruling 2026-09-25); this model is a view. Sends POST one explicit input
  * event ({chatId, input}); the response and the reattach stream
- * (GET /api/chats/[id]/stream) are the SAME verbatim AgentEvent SSE,
+ * (the thread stream) are the SAME verbatim AgentEvent SSE,
  * applied by the same function. Status vocabulary (pre-Wave-D parity):
  * ready | submitted | streaming | error.
  */
@@ -31,11 +31,6 @@ import {
 
 export type SessionStatus = "ready" | "submitted" | "streaming" | "error";
 
-/** How often to poll turnInFlight while a racing turn runs (409 retry). */
-export const TURN_POLL_MS = 500;
-/** Give up waiting (a wake turn can run long) and surface the 409. */
-export const TURN_WAIT_MAX_MS = 30_000;
-
 /**
  * THE WIRE SEAM: where a session's turn traffic goes and how its events are
  * read. A thread session (ConsoleClient-backed) supplies its routes and a `createWire`
@@ -45,9 +40,6 @@ export const TURN_WAIT_MAX_MS = 30_000;
 export interface SessionTransport {
 	submitUrl: string;
 	submitBody(input: ChatInput, opts?: { whenBusy?: "steer" }): string;
-	/** Present: a mid-turn steer rides the submit route (whenBusy "steer")
-	 *  with a local echo, instead of the legacy /steer queue route. */
-	steersViaSubmit?: boolean;
 	recordUrl: string;
 	/** Paged transcript fetch: the `limit` messages before message id `before` (absent: transport does not page). */
 	/** Raw JSON of a loaded older page (side data such as card calls). */
@@ -64,8 +56,6 @@ export interface SessionTransport {
 	attachmentUrl?: (id: string) => string;
 	/** Abort route (POST); absent: the legacy global abort is the caller's. */
 	abortUrl?: string;
-	/** Poll out a racing turn on 409 (legacy wake race) vs. surface it. */
-	retryOnBusy: boolean;
 	createWire(): (raw: Record<string, unknown>) => Record<string, unknown>[];
 }
 
@@ -78,11 +68,8 @@ function hasMoreOf(json: unknown): boolean | undefined {
 export interface SessionModelDeps {
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch?: typeof globalThis.fetch;
-	/** Injectable retry timing (tests). */
-	pollMs?: number;
 	/** Where the turn traffic goes (the wolf thread routes). */
 	transport: SessionTransport;
-	waitMaxMs?: number;
 }
 
 /** One attachment on a text input: the wire ref is the id; the rest feeds the optimistic bubble. */
@@ -93,30 +80,6 @@ export type ChatAttachment = UiAttachment;
 let localSeq = 0;
 function localId(): string {
 	return `c_${Date.now().toString(36)}_${(localSeq++).toString(36)}`;
-}
-
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const t = setTimeout(resolve, ms);
-		signal?.addEventListener(
-			"abort",
-			() => {
-				clearTimeout(t);
-				reject(new DOMException("Aborted", "AbortError"));
-			},
-			{ once: true },
-		);
-	});
-}
-
-async function turnInFlight(model: SessionModel): Promise<boolean | null> {
-	try {
-		const res = await model.fetch(`/api/jobs?chatId=${encodeURIComponent(model.chatId)}`);
-		if (!res.ok) return null;
-		return ((await res.json()) as { turnInFlight?: boolean }).turnInFlight === true;
-	} catch {
-		return null; // network hiccup: keep waiting, the deadline bounds us
-	}
 }
 
 /** One wire event off the SSE body: parsed JSON, or the [DONE] terminal. */
@@ -248,35 +211,12 @@ export interface SessionState {
 	/** Server start of the turn now running (ISO), when the server sent one; undefined while idle and for older servers. */
 	turnStartedAt: string | undefined;
 	error: { message: string } | null;
-	/** Steers sent but not yet drained (composer steering, 2026-10-03):
-	 *  the queued indicator's truth. An entry dies when its id lands in
-	 *  the messages (the drain's verbatim events upsert the real card) —
-	 *  visibleQueuedSteers is the pure fold. */
-	steerQueue: SteerQueueItem[];
 	/** Transcript paging: older messages exist on the server beyond those loaded. */
 	hasMore: boolean;
 	/** An older page is being fetched. */
 	loadingEarlier: boolean;
 	/** How many earlier (paged-in) messages precede the record: grows only when a page prepends rows. */
 	earlierCount: number;
-}
-
-/** One queued composer steer: the client-minted id (the upsert key) + text. */
-export interface SteerQueueItem {
-	id: string;
-	text: string;
-}
-
-/** The indicator's fold (pure): a queued steer stays visible until its id
- *  lands in the message list — from the live stream's upsert, the settle
- *  sync, or a reload. A steer parked server-side (stranded behind a
- *  question) keeps its line: honest "waiting" until the next run drains it. */
-export function visibleQueuedSteers(
-	queue: readonly SteerQueueItem[],
-	messages: readonly LhMessage[],
-): SteerQueueItem[] {
-	const ids = new Set(messages.map((m) => (m as { id?: string }).id));
-	return queue.filter((s) => !ids.has(s.id));
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
@@ -296,10 +236,6 @@ export class SessionModel {
 	readonly transport: SessionTransport;
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch: typeof globalThis.fetch;
-	/** Steers sent but not yet drained (the queued indicator's truth). */
-	private steerQueueValue: SteerQueueItem[] = [];
-	private readonly pollMs: number;
-	private readonly waitMaxMs: number;
 	private onReattachSettled?: () => void;
 	/** The hook's re-render trigger (set by the adapter). */
 	onChange?: () => void;
@@ -344,8 +280,6 @@ export class SessionModel {
 		// (Node's undici doesn't care, so the tests never saw it). Always go
 		// through a receiver-preserving wrapper.
 		this.fetch = opts.fetch ?? ((...args) => globalThis.fetch(...args));
-		this.pollMs = opts.pollMs ?? TURN_POLL_MS;
-		this.waitMaxMs = opts.waitMaxMs ?? TURN_WAIT_MAX_MS;
 		this.onChange = opts.onChange;
 		this.onReattachSettled = opts.onReattachSettled;
 	}
@@ -367,7 +301,6 @@ export class SessionModel {
 			status: this.statusValue,
 			turnStartedAt: this.turnStartedAtValue,
 			error: this.errorValue,
-			steerQueue: this.steerQueueValue,
 			hasMore: this.hasMoreValue,
 			earlierCount: this.older.length,
 			loadingEarlier: this.loadingEarlierValue,
@@ -467,17 +400,7 @@ export class SessionModel {
 			body,
 			signal,
 		};
-		let response = await this.fetch(this.transport.submitUrl, init);
-		let waited = 0;
-		while (this.transport.retryOnBusy && response.status === 409) {
-			await response.body?.cancel().catch(() => {});
-			if (signal?.aborted || waited >= this.waitMaxMs) return response;
-			await delay(this.pollMs, signal);
-			waited += this.pollMs;
-			if (signal?.aborted) return response;
-			if ((await turnInFlight(this)) !== false) continue;
-			response = await this.fetch(this.transport.submitUrl, init); // may 409 again → loop
-		}
+		const response = await this.fetch(this.transport.submitUrl, init);
 		return response;
 	}
 
@@ -785,55 +708,12 @@ export class SessionModel {
 		}
 	}
 
-	/**
-	 *  STEER (composer steering, owner arc 2026-10-03): the learner's
-	 *  mid-turn message for the RUNNING turn. NOT a turn — no optimistic
-	 *  transcript card, no status flip: the message joins the queued
-	 *  indicator (the quiet line above the composer) and POSTs to the
-	 *  steer route, which hands it to the live agent's steering queue.
-	 *  When pi drains it at the next response boundary, the verbatim
-	 *  message events upsert the real card (the client-minted id is the
-	 *  key) and the indicator's fold drops the line. A 409 means the turn
-	 *  settled mid-send (the race): fall back to the plain text send —
-	 *  the entry is dropped and send() pushes its own optimistic card.
-	 */
+	/** STEER: the learner's mid-turn message. The text is recorded in history inside the running turn,
+	 *  so echo it as a normal user message (local id; adoptRecord drops it
+	 *  once the record carries the server copy) and submit whenBusy "steer". */
 	async steer(text: string, attachments?: ChatAttachment[]): Promise<void> {
 		const t = text.trim();
 		if (!t && !attachments?.length) return;
-		// Attachments ride the submit route only (the legacy /steer queue takes text).
-		if (this.transport.steersViaSubmit) return this.steerViaSubmit(t, attachments);
-		if (!t) return;
-		const id = `steer_${localId()}`;
-		this.steerQueueValue = [...this.steerQueueValue, { id, text: t }];
-		this.onChange?.();
-		const dropSteer = () => {
-			this.steerQueueValue = this.steerQueueValue.filter((s) => s.id !== id);
-			this.onChange?.();
-		};
-		try {
-			const res = await this.fetch(`/api/chats/${this.chatId}/steer`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ input: { type: "steer", id, text: t } }),
-			});
-			if (res.ok) return; // parked or delivered — the stream lands the card
-			if (res.status === 409) {
-				dropSteer();
-				await this.send({ type: "text", text: t }); // the settle race: plain send
-				return;
-			}
-			dropSteer();
-			this.setError((await res.text()) || `The steer failed (${res.status}).`);
-		} catch (err) {
-			dropSteer();
-			this.setError((err as Error).message);
-		}
-	}
-
-	/** Thread steer: the text is recorded in history inside the running turn,
-	 *  so echo it as a normal user message (local id; adoptRecord drops it
-	 *  once the record carries the server copy) and submit whenBusy "steer". */
-	private async steerViaSubmit(t: string, attachments?: ChatAttachment[]): Promise<void> {
 		const echo: LhMessage = { ...newUserMessage(t, attachments), id: localId() };
 		const dropEcho = () =>
 			this.mutate(() => {
@@ -865,30 +745,6 @@ export class SessionModel {
 	submitAnswer(tool: string, toolCallId: string, output: QuestionAnswerData): Promise<void> {
 		void tool;
 		return this.send({ type: "answer", toolCallId, answer: output });
-	}
-
-	/** The dismissal path (owner design 2026-10-03, "A2"): the skipped
-	 * toolResult lands optimistically, then the SILENT route persists it
-	 * — no turn, no stream, nothing wakes. The session pauses at the
-	 * user's choice; the next plain send is the wake. On failure the
-	 * durable record wins: the error surfaces, the record-changed sync
-	 * (or any later refetch) replaces the optimistic append with truth. */
-	async dismissQuestion(toolCallId: string, answer: QuestionAnswerData): Promise<void> {
-		if (!this.readyRef) return;
-		const tool = pendingCallTool([...this.base, ...this.tail], toolCallId) ?? "quiz";
-		this.mutate(() => {
-			this.tail = [...this.tail, { ...newAnswerResult(toolCallId, tool, answer), id: localId() }];
-		});
-		try {
-			const res = await this.fetch(`/api/chats/${this.chatId}/dismiss`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ input: { type: "dismiss", toolCallId, answer } }),
-			});
-			if (!res.ok) throw new Error(`The dismissal failed (${res.status}).`);
-		} catch (err) {
-			this.setError((err as Error).message);
-		}
 	}
 
 	/** Local detach: cancel the consume, keep the partial tail. The page's

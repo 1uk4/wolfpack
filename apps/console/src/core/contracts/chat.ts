@@ -48,7 +48,7 @@ export const CURRENT_CHAT_VERSION = 1;
 /** The conversation agents' runtime model choice (model-control wave,
  *  2026-09-12): a per-chat override of config.ts's pinned prober/teacher
  *  spec. Absent fields fall back to config; written by the model picker
- *  (PUT /api/chats/[id]/settings) and read at turn composition — the
+ *  (the chat settings update) and read at turn composition — the
  *  agents are stateless per turn, so a change takes effect on the next
  *  turn by construction. Background sub-agents are NEVER overridden
  *  (config-pinned: they're infrastructure, not conversation). */
@@ -154,7 +154,7 @@ export interface ChatListItem extends ChatSummary {
  * Tool parts render via components/card-registry.tsx, keyed by tool name
  * ("research", "demo", "visual", …). Workers add renderers there — chat.tsx
  * is off-limits to artifact work. A renderer receives the raw tool part: an
- * activity card while state is input-available (poll /api/jobs), the
+ * activity card while state is input-available, the
  * artifact (iframe / svg) when output-available.
  */
 export interface ArtifactPartProps {

@@ -1,6 +1,6 @@
 # learnharness provenance
 
-> Snapshot against upstream `6cba9c8` taken on 2026-11-05.
+> Snapshot against upstream `6cba9c8` taken on 2026-11-05; totals refreshed after work-wolfpack-63WjMQd (see Removed in work-wolfpack-63WjMQd).
 
 Inventory of what `apps/console` and `apps/desktop` took from **learnharness** (https://github.com/amosblomqvist/learnharness, Copyright (c) Amos Blomqvist, AGPL-3.0-only; all 712 upstream commits are by him).
 
@@ -13,12 +13,12 @@ Inventory of what `apps/console` and `apps/desktop` took from **learnharness** (
 
 | Class | Files |
 |---|---|
-| (a) copied, unchanged | 155 |
-| (b) copied, modified | 149 |
-| (c) new in wolfpack | 247 |
-| Upstream files removed (not present now) | 178 |
-| Tracked files now | 551 |
-| Upstream files mapped | 482 |
+| (a) copied, unchanged | 109 |
+| (b) copied, modified | 109 |
+| (c) new in wolfpack | 245 |
+| Upstream files removed (not present now) | 264 |
+| Tracked files now | 617 |
+| Upstream files mapped | 218 |
 
 Note: the copy commit also brought compiled artifacts (`*.js`, `*.d.ts`, `*.map`) that were never upstream; they are no longer tracked and are not counted. Lockfiles (`package-lock.json`) are not carried (removed). Upstream `LICENSE` was not carried either (restored at repo root as `LICENSE`).
 
@@ -26,31 +26,31 @@ Note: the copy commit also brought compiled artifacts (`*.js`, `*.d.ts`, `*.map`
 
 | Component | Files (unchanged / modified / new) | Lines now | % upstream-derived |
 |---|---|---|---|
-| Tests | 192 (43 / 56 / 93) | 40152 | 54% |
-| Console UI & core logic (chat shell, sidebar, composer, keyboard, work views) | 142 (24 / 37 / 81) | 29194 | 51% |
+| Tests | 161 (31 / 38 / 92) | 33392 | 46% |
+| Console UI & core logic (chat shell, sidebar, composer, keyboard, work views) | 127 (17 / 29 / 81) | 26099 | 46% |
 | Knowledge / task graph views | 24 (2 / 2 / 20) | 6675 | 26% |
 | App setup, config & storage | 28 (15 / 12 / 1) | 5629 | 97% |
-| Server & API routes | 74 (18 / 15 / 41) | 5494 | 68% |
-| Chat rendering (markdown, tool rows, streaming) | 24 (11 / 9 / 4) | 3971 | 81% |
-| Agent / provider layer (src/agent) | 14 (8 / 5 / 1) | 1584 | 91% |
+| Server & API routes | 53 (5 / 7 / 41) | 3081 | 45% |
+| Chat rendering (markdown, tool rows, streaming) | 17 (8 / 5 / 4) | 2920 | 76% |
+| Agent / provider layer (src/agent) | 3 (0 / 3 / 0) | 224 | 81% |
 | Electron shell & build/packaging | 11 (2 / 5 / 4) | 1427 | 78% |
-| UI kit, fonts & theme | 16 (15 / 0 / 1) | 1338 | 91% |
+| UI kit, fonts & theme | 15 (14 / 0 / 1) | 1320 | 91% |
 | Build config & misc (tsconfig, next, eslint, scripts) | 9 (4 / 4 / 1) | 515 | 95% |
-| CI / release workflow | 2 (2 / 0 / 0) | 323 | 100% |
+| CI / release workflow | 0 (0 / 0 / 0) | 0 | 0% |
 | Docs & skills | 4 (0 / 4 / 0) | 254 | 90% |
 | Desktop packaging assets (icons, dmg background, entitlements) | 11 (11 / 0 / 0) | 105 | 100% |
-| **All** | 551 | 96661 | 57% |
+| **All** | 617 | 81641 | 51% |
 
 ## Components
 
 ### Tests
 
-- Status mix: 43 unchanged, 56 modified, 93 new; 0 binary. Still upstream-derived: 54%.
+- Status mix: 31 unchanged, 38 modified, 92 new; 0 binary. Still upstream-derived: 46%.
 - Rework to replace: Rewrite alongside the code they cover; delete upstream tests as the code is replaced.
 
 ### Console UI & core logic (chat shell, sidebar, composer, keyboard, work views)
 
-- Status mix: 24 unchanged, 37 modified, 81 new; 0 binary. Still upstream-derived: 51%.
+- Status mix: 17 unchanged, 29 modified, 81 new; 0 binary. Still upstream-derived: 46%.
 - Rework to replace: Rewrite the remaining upstream shell components (sidebar, composer, session, keyboard, top-bar) one by one.
 
 ### Knowledge / task graph views
@@ -65,17 +65,17 @@ Note: the copy commit also brought compiled artifacts (`*.js`, `*.d.ts`, `*.map`
 
 ### Server & API routes
 
-- Status mix: 18 unchanged, 15 modified, 41 new; 0 binary. Still upstream-derived: 68%.
+- Status mix: 5 unchanged, 7 modified, 41 new; 0 binary. Still upstream-derived: 45%.
 - Rework to replace: Re-implement the routes against the wolfpack hub API (many already new); drop the rest.
 
 ### Chat rendering (markdown, tool rows, streaming)
 
-- Status mix: 11 unchanged, 9 modified, 4 new; 0 binary. Still upstream-derived: 81%.
+- Status mix: 8 unchanged, 5 modified, 4 new; 0 binary. Still upstream-derived: 76%.
 - Rework to replace: Re-implement markdown/tool-row/streaming rendering; the ai-elements wrappers are the main upstream-derived pieces.
 
 ### Agent / provider layer (src/agent)
 
-- Status mix: 8 unchanged, 5 modified, 1 new; 0 binary. Still upstream-derived: 91%.
+- Status mix: 0 unchanged, 3 modified, 0 new; 0 binary. Still upstream-derived: 81%.
 - Rework to replace: Replace with the wolfpack agent runtime (packages/agent); most upstream tools/prompts can simply be deleted.
 
 ### Electron shell & build/packaging
@@ -85,7 +85,7 @@ Note: the copy commit also brought compiled artifacts (`*.js`, `*.d.ts`, `*.map`
 
 ### UI kit, fonts & theme
 
-- Status mix: 15 unchanged, 0 modified, 1 new; 1 binary. Still upstream-derived: 91%.
+- Status mix: 14 unchanged, 0 modified, 1 new; 1 binary. Still upstream-derived: 91%.
 - Rework to replace: Swap shadcn-style primitives for our own kit or regenerate from shadcn (MIT) directly; replace cmunbx.ttf if not needed.
 
 ### Build config & misc (tsconfig, next, eslint, scripts)
@@ -95,7 +95,7 @@ Note: the copy commit also brought compiled artifacts (`*.js`, `*.d.ts`, `*.map`
 
 ### CI / release workflow
 
-- Status mix: 2 unchanged, 0 modified, 0 new; 0 binary. Still upstream-derived: 100%.
+- Status mix: 0 unchanged, 0 modified, 0 new; 0 binary. Still upstream-derived: 0%.
 - Rework to replace: Write wolfpack CI/release workflows from scratch.
 
 ### Docs & skills
@@ -131,23 +131,112 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/docs/desktop-release.md` (one mention, if not reworded).
 - Credits in the extension READMEs and source comments listed above (kept on purpose).
 
+## Removed in work-wolfpack-63WjMQd
+
+The unused local chat, its routes and the dead components, tools and tests were deleted (93 files, 14065 lines; 46 unchanged-copied, 40 modified-copied, 2 wolfpack-new). Ten npm packages nothing imported were dropped from apps/console/package.json. The attribution in NOTICE and this file is unchanged. The upstream clone was not reachable when this refresh ran, so class counts, line totals and percentages are the previous snapshot minus the removed files (and minus lines removed from edited files): deleted class (a) lines count as fully upstream, class (b) as upstream lines minus lines deleted vs upstream, class (c) as none. Re-run the blob-hash comparison against 6cba9c8 for exact figures.
+
+Totals: tracked files 617; lines now 81641; upstream-derived 51%.
+
+<details><summary>Removed files (class, lines when deleted)</summary>
+
+- `apps/console/.github/workflows/ci.yml` (a, 67)
+- `apps/console/.github/workflows/release.yml` (a, 256)
+- `apps/console/app/api/activity/route.ts` (a, 14)
+- `apps/console/app/api/chats/[id]/dismiss/route.ts` (a, 65)
+- `apps/console/app/api/chats/[id]/markdown/route.ts` (a, 37)
+- `apps/console/app/api/chats/[id]/settings/route.ts` (a, 48)
+- `apps/console/app/api/chats/[id]/steer/route.ts` (a, 32)
+- `apps/console/app/api/chats/[id]/stream/route.ts` (a, 23)
+- `apps/console/app/api/jobs/route.ts` (a, 23)
+- `apps/console/app/api/models/route.ts` (a, 11)
+- `apps/console/components/artifacts/live-tool-card.tsx` (a, 65)
+- `apps/console/components/compaction-divider.tsx` (a, 48)
+- `apps/console/components/enter-submits.ts` (a, 78)
+- `apps/console/components/field-cycle.ts` (a, 36)
+- `apps/console/components/jobs-context.ts` (a, 18)
+- `apps/console/components/latex-glyph.tsx` (a, 53)
+- `apps/console/components/queued-steers.tsx` (a, 36)
+- `apps/console/components/setup-cta.tsx` (a, 101)
+- `apps/console/components/stats-bar.tsx` (a, 195)
+- `apps/console/components/thinking-default.ts` (a, 54)
+- `apps/console/components/ui/textarea.tsx` (a, 18)
+- `apps/console/src/agent/provider-events.ts` (a, 119)
+- `apps/console/src/agent/subagents/aborts.ts` (a, 62)
+- `apps/console/src/agent/tools/find.ts` (a, 87)
+- `apps/console/src/agent/tools/fs-shared.ts` (a, 201)
+- `apps/console/src/agent/tools/grep.ts` (a, 178)
+- `apps/console/src/agent/tools/heal.ts` (a, 48)
+- `apps/console/src/agent/tools/ls.ts` (a, 77)
+- `apps/console/src/agent/tools/read.ts` (a, 120)
+- `apps/console/src/server/dismissal-park.ts` (a, 80)
+- `apps/console/src/server/pi/call-ids.ts` (a, 212)
+- `apps/console/src/server/pi/ui-stream.ts` (a, 337)
+- `apps/console/src/server/turn-liveness.ts` (a, 74)
+- `apps/console/src/server/turn-runs.ts` (a, 81)
+- `apps/console/tests/call-ids.test.ts` (a, 142)
+- `apps/console/tests/chat-birth-stamp.test.ts` (a, 108)
+- `apps/console/tests/enter-submits.test.ts` (a, 82)
+- `apps/console/tests/fs-tools.test.ts` (a, 252)
+- `apps/console/tests/provider-events.test.ts` (a, 117)
+- `apps/console/tests/read-tool.test.ts` (a, 125)
+- `apps/console/tests/render-compaction-divider.test.tsx` (a, 80)
+- `apps/console/tests/render-queued-steers.test.tsx` (a, 51)
+- `apps/console/tests/render-stats-bar.test.tsx` (a, 140)
+- `apps/console/tests/setup-dialog-interaction.test.tsx` (a, 185)
+- `apps/console/tests/thinking-default.test.ts` (a, 59)
+- `apps/console/tests/turn-liveness.test.ts` (a, 60)
+- `apps/console/app/api/activity/abort/route.ts` (b, 44)
+- `apps/console/app/api/chats/[id]/route.ts` (b, 59)
+- `apps/console/app/api/chats/route.ts` (b, 39)
+- `apps/console/components/abort-turn-dialog.tsx` (b, 139)
+- `apps/console/components/activity-dock.tsx` (b, 450)
+- `apps/console/components/artifacts/dispatch-card.tsx` (b, 116)
+- `apps/console/components/artifacts/job-card.tsx` (b, 45)
+- `apps/console/components/artifacts/steer-card.tsx` (b, 73)
+- `apps/console/components/composer-actions.tsx` (b, 17)
+- `apps/console/components/delete-session-dialog.tsx` (b, 185)
+- `apps/console/components/model-picker.tsx` (b, 426)
+- `apps/console/components/new-session.tsx` (b, 287)
+- `apps/console/components/plan-block.tsx` (b, 651)
+- `apps/console/components/setup-dialog.tsx` (b, 588)
+- `apps/console/src/agent/subagents/pi-run.ts` (b, 145)
+- `apps/console/src/agent/tool-execute.ts` (b, 232)
+- `apps/console/src/core/session-markdown.ts` (b, 121)
+- `apps/console/src/server/chat-handler.ts` (b, 352)
+- `apps/console/src/server/chats.ts` (b, 55)
+- `apps/console/src/server/jobs.ts` (b, 692)
+- `apps/console/src/server/observability.ts` (b, 57)
+- `apps/console/src/server/turn-service.ts` (b, 70)
+- `apps/console/tests/activity-feed.test.ts` (b, 99)
+- `apps/console/tests/api-key-hook.test.ts` (b, 46)
+- `apps/console/tests/chat-flow.test.ts` (b, 1629)
+- `apps/console/tests/composer-actions.test.tsx` (b, 43)
+- `apps/console/tests/dismissal-park.test.ts` (b, 174)
+- `apps/console/tests/jobs.test.ts` (b, 1091)
+- `apps/console/tests/markdown-export.test.ts` (b, 81)
+- `apps/console/tests/provider-neutral-agents.test.ts` (b, 225)
+- `apps/console/tests/render-abort-turn-dialog.test.tsx` (b, 47)
+- `apps/console/tests/render-activity-dock.test.tsx` (b, 221)
+- `apps/console/tests/render-live-tool-card.test.tsx` (b, 40)
+- `apps/console/tests/render-new-session.test.tsx` (b, 123)
+- `apps/console/tests/render-plan-block.test.tsx` (b, 144)
+- `apps/console/tests/repair-math-display.test.tsx` (b, 87)
+- `apps/console/tests/session-identity.test.ts` (b, 188)
+- `apps/console/tests/session-markdown.test.ts` (b, 115)
+- `apps/console/tests/tool-abort.test.ts` (b, 156)
+- `apps/console/tests/tool-heal.test.ts` (b, 182)
+- `apps/console/src/agent/assistant-agent.ts` (c, 91)
+- `apps/console/tests/helpers/question-tools.ts` (c, 85)
+
+</details>
+
 ## Files per class
 
 <details><summary>(a) Copied, unchanged</summary>
 
-- `apps/console/.github/workflows/ci.yml`
-- `apps/console/.github/workflows/release.yml`
-- `apps/console/app/api/activity/route.ts`
 - `apps/console/app/api/chat/route.ts` (since removed: threads use the wolf thread transport, `/api/wolves/<wolf>/threads/<slug>/...`; the console has no `POST /api/chat` or compaction of its own)
-- `apps/console/app/api/chats/[id]/dismiss/route.ts`
-- `apps/console/app/api/chats/[id]/markdown/route.ts`
-- `apps/console/app/api/chats/[id]/settings/route.ts`
-- `apps/console/app/api/chats/[id]/steer/route.ts`
-- `apps/console/app/api/chats/[id]/stream/route.ts`
 - `apps/console/app/api/events/route.ts`
 - `apps/console/app/api/graph/render-settings/route.ts`
-- `apps/console/app/api/jobs/route.ts`
-- `apps/console/app/api/models/route.ts`
 - `apps/console/app/api/settings/[section]/route.ts`
 - `apps/console/app/api/settings/prompts/[...segment]/route.ts`
 - `apps/console/app/api/settings/route.ts`
@@ -157,26 +246,19 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/components.json`
 - `apps/console/components/ai-elements/conversation.tsx`
 - `apps/console/components/ai-elements/shimmer.tsx`
-- `apps/console/components/artifacts/live-tool-card.tsx`
 - `apps/console/components/artifacts/tool-call-card.tsx`
 - `apps/console/components/backdrop-dismiss.ts`
 - `apps/console/components/cluster-geometry.ts`
-- `apps/console/components/compaction-divider.tsx`
 - `apps/console/components/confidence-rail.tsx`
 - `apps/console/components/dock-state-key.ts`
-- `apps/console/components/enter-submits.ts`
-- `apps/console/components/field-cycle.ts`
 - `apps/console/components/focus-hygiene.ts`
-- `apps/console/components/jobs-context.ts`
 - `apps/console/components/keyboard-shortcuts.tsx`
-- `apps/console/components/latex-glyph.tsx`
 - `apps/console/components/lh-mark.tsx`
 - `apps/console/components/menu-shell.tsx`
 - `apps/console/components/mermaid-error.tsx`
 - `apps/console/components/mermaid-render.ts`
 - `apps/console/components/pan-zoom.ts`
 - `apps/console/components/popover-dismiss.ts`
-- `apps/console/components/queued-steers.tsx`
 - `apps/console/components/session-find-dom.ts`
 - `apps/console/components/session-find.tsx`
 - `apps/console/components/session-navigation.tsx`
@@ -186,10 +268,7 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/components/settings/keyboard-section.tsx`
 - `apps/console/components/settings/keys-section.tsx`
 - `apps/console/components/settings/model-menu.tsx`
-- `apps/console/components/setup-cta.tsx`
-- `apps/console/components/stats-bar.tsx`
 - `apps/console/components/thinking-block.tsx`
-- `apps/console/components/thinking-default.ts`
 - `apps/console/components/top-bar.tsx`
 - `apps/console/components/ui/button-group.tsx`
 - `apps/console/components/ui/button.tsx`
@@ -198,7 +277,6 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/components/ui/hint.tsx`
 - `apps/console/components/ui/input.tsx`
 - `apps/console/components/ui/separator.tsx`
-- `apps/console/components/ui/textarea.tsx`
 - `apps/console/components/ui/tooltip.tsx`
 - `apps/console/components/update-banner.tsx`
 - `apps/console/components/usage-format.ts`
@@ -209,26 +287,13 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/public/fonts/cmunbx.ttf`
 - `apps/console/public/worklets/pcm-capture.js`
 - `apps/console/scripts/dev-fresh.sh`
-- `apps/console/src/agent/provider-events.ts`
-- `apps/console/src/agent/subagents/aborts.ts`
-- `apps/console/src/agent/tools/find.ts`
-- `apps/console/src/agent/tools/fs-shared.ts`
-- `apps/console/src/agent/tools/grep.ts`
-- `apps/console/src/agent/tools/heal.ts`
-- `apps/console/src/agent/tools/ls.ts`
-- `apps/console/src/agent/tools/read.ts`
 - `apps/console/src/core/argument-heal.ts`
 - `apps/console/src/core/fuzzy.ts`
 - `apps/console/src/core/math-delims.ts`
 - `apps/console/src/core/prices.ts`
 - `apps/console/src/core/session-find.ts`
 - `apps/console/src/core/value-debris.ts`
-- `apps/console/src/server/dismissal-park.ts`
 - `apps/console/src/server/keys.ts`
-- `apps/console/src/server/pi/call-ids.ts`
-- `apps/console/src/server/pi/ui-stream.ts`
-- `apps/console/src/server/turn-liveness.ts`
-- `apps/console/src/server/turn-runs.ts`
 - `apps/console/src/store/auth.ts`
 - `apps/console/src/store/jobs.ts`
 - `apps/console/src/store/prompt-overrides.ts`
@@ -236,11 +301,8 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/tests/auth-store.test.ts`
 - `apps/console/tests/backdrop-dismiss.test.ts`
 - `apps/console/tests/byok-refusal.test.ts`
-- `apps/console/tests/call-ids.test.ts`
-- `apps/console/tests/chat-birth-stamp.test.ts`
 - `apps/console/tests/dictation-warm.test.ts`
 - `apps/console/tests/dock-state-key.test.ts`
-- `apps/console/tests/enter-submits.test.ts`
 - `apps/console/tests/fixtures/golden-data/chats/chat_mv27rrra_feff23b6.json`
 - `apps/console/tests/fixtures/golden-data/chats/chat_mv293wv5_10656952.json`
 - `apps/console/tests/fixtures/golden-data/graph/render-settings.json`
@@ -252,7 +314,6 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/tests/fixtures/golden-data/settings.json`
 - `apps/console/tests/font-menu.test.tsx`
 - `apps/console/tests/fresh-env-keys.test.ts`
-- `apps/console/tests/fs-tools.test.ts`
 - `apps/console/tests/fuzzy.test.ts`
 - `apps/console/tests/katex-security.test.ts`
 - `apps/console/tests/keyboard-toggle-sidebar.test.ts`
@@ -260,22 +321,14 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/tests/openrouter-free-models.test.ts`
 - `apps/console/tests/pan-zoom.test.ts`
 - `apps/console/tests/prices-sync.test.ts`
-- `apps/console/tests/provider-events.test.ts`
-- `apps/console/tests/read-tool.test.ts`
-- `apps/console/tests/render-compaction-divider.test.tsx`
 - `apps/console/tests/render-markdown.test.tsx`
-- `apps/console/tests/render-queued-steers.test.tsx`
-- `apps/console/tests/render-stats-bar.test.tsx`
 - `apps/console/tests/render-update-banner.test.tsx`
 - `apps/console/tests/server-events.test.tsx`
 - `apps/console/tests/server-keys.test.ts`
 - `apps/console/tests/session-find.test.tsx`
 - `apps/console/tests/settings-signal.test.ts`
-- `apps/console/tests/setup-dialog-interaction.test.tsx`
-- `apps/console/tests/thinking-default.test.ts`
 - `apps/console/tests/title-from-prompt.test.ts`
 - `apps/console/tests/tooltip-mechanism.test.tsx`
-- `apps/console/tests/turn-liveness.test.ts`
 - `apps/console/tsconfig.json`
 - `apps/desktop/build/background.png`
 - `apps/desktop/build/background@2x.png`
@@ -298,33 +351,20 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/.gitignore` (+3 / -0 of 18)
 - `apps/console/AGENTS.md` (+1 / -1 of 15)
 - `apps/console/README.md` (+18 / -65 of 78)
-- `apps/console/app/api/activity/abort/route.ts` (+8 / -18 of 54)
-- `apps/console/app/api/chats/[id]/route.ts` (+9 / -46 of 96)
-- `apps/console/app/api/chats/route.ts` (+4 / -36 of 71)
 - `apps/console/app/api/graph/positions/route.ts` (+23 / -11 of 24)
 - `apps/console/app/api/settings/prompts/route.ts` (+2 / -3 of 29)
 - `apps/console/app/chat/new/page.tsx` (+12 / -24 of 30)
 - `apps/console/app/layout.tsx` (+22 / -10 of 41)
-- `apps/console/components/abort-turn-dialog.tsx` (+2 / -7 of 144)
-- `apps/console/components/activity-dock.tsx` (+21 / -70 of 500)
 - `apps/console/components/ai-elements/message.tsx` (+33 / -3 of 407)
 - `apps/console/components/ai-elements/reasoning.tsx` (+6 / -1 of 221)
 - `apps/console/components/answered-card.tsx` (+12 / -27 of 234)
-- `apps/console/components/artifacts/dispatch-card.tsx` (+6 / -8 of 118)
-- `apps/console/components/artifacts/job-card.tsx` (+16 / -90 of 119)
-- `apps/console/components/artifacts/steer-card.tsx` (+26 / -81 of 128)
 - `apps/console/components/braille-spinner.tsx` (+5 / -2 of 68)
 - `apps/console/components/chat.tsx` (+99 / -621 of 2376)
-- `apps/console/components/composer-actions.tsx` (+5 / -44 of 56)
 - `apps/console/components/composer.tsx` (+144 / -105 of 162)
-- `apps/console/components/delete-session-dialog.tsx` (+14 / -70 of 242)
 - `apps/console/components/dictation.tsx` (+188 / -9 of 747)
 - `apps/console/components/graph-canvas.ts` (+585 / -261 of 1737)
 - `apps/console/components/graph-view.tsx` (+429 / -1521 of 1715)
 - `apps/console/components/md-blocks.tsx` (+167 / -1 of 472)
-- `apps/console/components/model-picker.tsx` (+3 / -3 of 427)
-- `apps/console/components/new-session.tsx` (+11 / -120 of 380)
-- `apps/console/components/plan-block.tsx` (+13 / -356 of 994)
 - `apps/console/components/question-dock.tsx` (+26 / -95 of 913)
 - `apps/console/components/server-events.tsx` (+28 / -0 of 155)
 - `apps/console/components/session-core.ts` (+277 / -65 of 745)
@@ -333,7 +373,6 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/components/settings/agent-section.tsx` (+54 / -345 of 924)
 - `apps/console/components/settings/appearance-section.tsx` (+2 / -95 of 428)
 - `apps/console/components/settings/settings-dialog.tsx` (+2 / -18 of 446)
-- `apps/console/components/setup-dialog.tsx` (+3 / -3 of 588)
 - `apps/console/components/sidebar.tsx` (+251 / -150 of 935)
 - `apps/console/config.ts` (+5 / -46 of 145)
 - `apps/console/docs/desktop-release.md` (+2 / -0 of 98)
@@ -343,9 +382,7 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/scripts/sync-pricing.ts` (+4 / -7 of 121)
 - `apps/console/src/agent/models.ts` (+0 / -13 of 132)
 - `apps/console/src/agent/prompt-segments.ts` (+18 / -73 of 134)
-- `apps/console/src/agent/subagents/pi-run.ts` (+10 / -17 of 153)
 - `apps/console/src/agent/system-prompt.md` (+1 / -11 of 11)
-- `apps/console/src/agent/tool-execute.ts` (+0 / -29 of 261)
 - `apps/console/src/core/auth-keys.ts` (+2 / -21 of 204)
 - `apps/console/src/core/compaction.ts` (+16 / -58 of 395)
 - `apps/console/src/core/contracts.ts` (+3 / -6 of 18)
@@ -364,69 +401,47 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/src/core/prompt-segments.ts` (+13 / -22 of 50)
 - `apps/console/src/core/question-core.ts` (+2 / -25 of 787)
 - `apps/console/src/core/render-settings.ts` (+40 / -14 of 394)
-- `apps/console/src/core/session-markdown.ts` (+28 / -119 of 211)
 - `apps/console/src/core/session-navigation.ts` (+0 / -8 of 47)
 - `apps/console/src/core/settings-resolution.ts` (+3 / -118 of 256)
 - `apps/console/src/core/settings.ts` (+16 / -176 of 644)
 - `apps/console/src/core/tool-parts.ts` (+0 / -6 of 139)
 - `apps/console/src/core/view.ts` (+69 / -104 of 457)
-- `apps/console/src/server/chat-handler.ts` (+18 / -177 of 572)
-- `apps/console/src/server/chats.ts` (+9 / -114 of 160)
 - `apps/console/src/server/compaction.ts` (+3 / -11 of 301)
 - `apps/console/src/server/events-stream.ts` (+24 / -1 of 81)
 - `apps/console/src/server/index.ts` (+9 / -4 of 45)
-- `apps/console/src/server/jobs.ts` (+16 / -24 of 683)
 - `apps/console/src/server/model-catalog.ts` (+2 / -32 of 303)
-- `apps/console/src/server/observability.ts` (+8 / -58 of 107)
 - `apps/console/src/server/settings-body.ts` (+6 / -111 of 390)
 - `apps/console/src/server/stores.ts` (+1 / -3 of 34)
-- `apps/console/src/server/turn-service.ts` (+4 / -64 of 130)
 - `apps/console/src/store/chats.ts` (+26 / -55 of 219)
 - `apps/console/src/store/render-settings.ts` (+0 / -3 of 43)
-- `apps/console/tests/activity-feed.test.ts` (+0 / -3 of 102)
-- `apps/console/tests/api-key-hook.test.ts` (+4 / -12 of 55)
 - `apps/console/tests/auth-keys.test.ts` (+6 / -19 of 109)
 - `apps/console/tests/auth-provider-keys.test.ts` (+7 / -2 of 92)
-- `apps/console/tests/chat-flow.test.ts` (+7 / -22 of 1644)
 - `apps/console/tests/chat-store-events.test.ts` (+1 / -3 of 77)
 - `apps/console/tests/compaction-service.test.ts` (+0 / -1 of 206)
 - `apps/console/tests/compaction.test.ts` (+7 / -27 of 430)
-- `apps/console/tests/composer-actions.test.tsx` (+9 / -42 of 86)
 - `apps/console/tests/data-dir-seam.test.ts` (+3 / -2 of 50)
 - `apps/console/tests/desktop-payload.test.ts` (+15 / -11 of 96)
 - `apps/console/tests/desktop-platform.test.ts` (+11 / -8 of 258)
-- `apps/console/tests/dismissal-park.test.ts` (+4 / -32 of 202)
 - `apps/console/tests/esc-layering.test.ts` (+2 / -13 of 52)
 - `apps/console/tests/events.test.ts` (+3 / -0 of 131)
 - `apps/console/tests/fixtures/golden-data/README.md` (+3 / -5 of 47)
 - `apps/console/tests/golden-fixtures.test.ts` (+7 / -88 of 231)
 - `apps/console/tests/graph-canvas.test.ts` (+78 / -124 of 416)
-- `apps/console/tests/jobs.test.ts` (+44 / -736 of 1779)
 - `apps/console/tests/layout.test.ts` (+80 / -321 of 490)
 - `apps/console/tests/mac-signing-toolchain.test.ts` (+3 / -2 of 124)
-- `apps/console/tests/markdown-export.test.ts` (+2 / -2 of 81)
 - `apps/console/tests/model-catalog.test.ts` (+0 / -38 of 329)
 - `apps/console/tests/prompt-overrides.test.ts` (+75 / -167 of 432)
-- `apps/console/tests/provider-neutral-agents.test.ts` (+81 / -194 of 338)
 - `apps/console/tests/question-core.test.ts` (+5 / -28 of 821)
-- `apps/console/tests/render-abort-turn-dialog.test.tsx` (+1 / -1 of 47)
-- `apps/console/tests/render-activity-dock.test.tsx` (+20 / -49 of 251)
 - `apps/console/tests/render-cards.test.tsx` (+14 / -191 of 777)
 - `apps/console/tests/render-composer.test.tsx` (+2 / -36 of 118)
 - `apps/console/tests/render-graph-chrome.test.tsx` (+9 / -21 of 70)
-- `apps/console/tests/render-live-tool-card.test.tsx` (+2 / -5 of 43)
 - `apps/console/tests/render-md-blocks.test.tsx` (+20 / -18 of 274)
-- `apps/console/tests/render-new-session.test.tsx` (+3 / -84 of 204)
-- `apps/console/tests/render-plan-block.test.tsx` (+11 / -153 of 286)
 - `apps/console/tests/render-settings.test.ts` (+43 / -16 of 361)
 - `apps/console/tests/render-settings.test.tsx` (+20 / -124 of 283)
 - `apps/console/tests/render-sidebar.test.tsx` (+45 / -53 of 163)
-- `apps/console/tests/repair-math-display.test.tsx` (+5 / -144 of 252)
 - `apps/console/tests/schema-stamps.test.ts` (+3 / -46 of 117)
 - `apps/console/tests/session-context.test.tsx` (+5 / -35 of 128)
 - `apps/console/tests/session-core.test.ts` (+44 / -45 of 1115)
-- `apps/console/tests/session-identity.test.ts` (+5 / -9 of 192)
-- `apps/console/tests/session-markdown.test.ts` (+16 / -127 of 226)
 - `apps/console/tests/session-navigation.test.ts` (+5 / -23 of 84)
 - `apps/console/tests/settings-body.test.ts` (+9 / -105 of 291)
 - `apps/console/tests/settings-pure.test.ts` (+11 / -95 of 407)
@@ -434,8 +449,6 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/tests/settings-store.test.ts` (+4 / -4 of 76)
 - `apps/console/tests/settings.test.ts` (+11 / -84 of 216)
 - `apps/console/tests/stream-activity.test.ts` (+1 / -2 of 59)
-- `apps/console/tests/tool-abort.test.ts` (+1 / -1 of 156)
-- `apps/console/tests/tool-heal.test.ts` (+13 / -21 of 190)
 - `apps/console/tests/tool-parts.test.ts` (+0 / -38 of 480)
 - `apps/console/tests/usage.test.ts` (+2 / -71 of 307)
 - `apps/console/tests/zero-keys.test.tsx` (+0 / -7 of 164)
@@ -552,7 +565,6 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/components/work-view.tsx`
 - `apps/console/lib/composer-draft.ts`
 - `apps/console/scripts/test.sh`
-- `apps/console/src/agent/assistant-agent.ts`
 - `apps/console/src/core/branch-graph.ts`
 - `apps/console/src/core/coalesced-refresh.ts`
 - `apps/console/src/core/dep-draw-list.ts`
@@ -626,7 +638,6 @@ The lh-debrand branch fixes the `homepage` fields, the electron-builder `publish
 - `apps/console/tests/graph-persistence.test.ts`
 - `apps/console/tests/graph-route.test.tsx`
 - `apps/console/tests/graph-work-depth.test.ts`
-- `apps/console/tests/helpers/question-tools.ts`
 - `apps/console/tests/helpers/thread-fetch.ts`
 - `apps/console/tests/hub-auth.test.ts`
 - `apps/console/tests/inline-mic.test.tsx`

@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 
 export const REPO = "1uk4/wolfpack";
 export const MANIFEST_URL = `https://github.com/${REPO}/releases/download/stable-manifest/stable.json`;
+export const MAIN_MANIFEST_URL = `https://github.com/${REPO}/releases/download/main-manifest/main.json`;
 
 /**
  * Status readers call the updater stale when `lastCheck` is older than this: two timer intervals. Both timers run every 30 min
@@ -56,19 +57,53 @@ export function ageText(iso, nowMs = Date.now()) {
 
 // ---- versions: only plain releases take part ----
 
-const TARGET = /^(\d+)\.(\d+)\.(\d+)$/;
-const RUNNING = /^(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?$/;
-/** [x, y, z] of a release target: plain X.Y.Z only, else null (prereleases, build metadata, dev builds, bare shas). */
-export function releaseCore(v) {
+const TARGET = /^(\d+)\.(\d+)\.(\d+)(?:-main\.([1-9]\d*))?$/;
+const RUNNING = /^(\d+)\.(\d+)\.(\d+)(?:-main\.([1-9]\d*))?(?:\+[0-9A-Za-z.-]+)?$/;
+// [x, y, z, pre]: pre is N of X.Y.Z-main.N, Infinity for a release (so a prerelease sorts below its release).
+const parts = (m) => [+m[1], +m[2], +m[3], m[4] ? +m[4] : Infinity];
+/**
+ * [x, y, z, pre] of a release target: plain X.Y.Z, or X.Y.Z-main.N when `channel` is not stable; else null (build metadata, dev builds,
+ * bare shas, and prereleases on the stable channel).
+ */
+export function releaseCore(v, channel = "stable") {
 	const m = typeof v === "string" ? TARGET.exec(v) : null;
-	return m ? [+m[1], +m[2], +m[3]] : null;
+	return m && (!m[4] || channel !== "stable") ? parts(m) : null;
 }
-/** [x, y, z] of a running version: X.Y.Z, or X.Y.Z+build (a restamped checkout), else null. */
+/** [x, y, z, pre] of a running version: X.Y.Z[-main.N], or with +build (a restamped checkout), else null. */
 function runningCore(v) {
 	const m = typeof v === "string" ? RUNNING.exec(v.trim()) : null;
-	return m ? [+m[1], +m[2], +m[3]] : null;
+	return m ? parts(m) : null;
 }
-const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || (a[3] === b[3] ? 0 : a[3] > b[3] ? 1 : -1);
+
+/** True when running version `a` (X.Y.Z[-main.N][+build]) is at or above `b` (X.Y.Z[-main.N]); false when either is unreadable. */
+export function versionAtLeast(a, b) {
+	const x = runningCore(a);
+	const y = runningCore(b);
+	return !!x && !!y && cmp(x, y) >= 0;
+}
+
+export const CHANNELS = ["stable", "main"];
+export const MODES = ["off", "button", "auto"];
+/**
+ * The subscription file `{schema:1, channel, mode}`; invalid parts fall back to stable + button. → null when the file is missing, or
+ * corrupt (that one is logged): the caller then behaves as if there were no file (stable, WOLFPACK_AUTO_UPDATE=1 opt-in).
+ */
+export function readSubscription(file, log = console.error) {
+	let text;
+	try {
+		text = fs.readFileSync(file, "utf8");
+	} catch {
+		return null;
+	}
+	try {
+		const s = JSON.parse(text);
+		return { channel: CHANNELS.includes(s?.channel) ? s.channel : "stable", mode: MODES.includes(s?.mode) ? s.mode : "button" };
+	} catch {
+		log(`auto-update: ${file} is not valid JSON; ignoring it (stable, WOLFPACK_AUTO_UPDATE decides)`);
+		return null;
+	}
+}
 const isDev = (v) => /-dev(?:[.+]|$)/.test(v);
 
 // ---- files: status, lock, kill switch ----
@@ -175,7 +210,12 @@ export function acquireLock(file, hooks = {}, log = console.error) {
  * One check-and-update pass. Never throws for an expected failure; returns { result, status }.
  *   units        [{ id, component, ... }] in update order (`component` = the manifest key)
  *   statusFile, lockFile, disabledFile   paths
+ *   mode         off | button | auto (the subscription file): off stops every run, button installs only on a manual run, auto also on
+ *                the timer. Without it `enabled` (WOLFPACK_AUTO_UPDATE=1) decides, as before.
+ *   channel      stable (default) | main: main also takes X.Y.Z-main.N targets
+ *   only         [component] limit the run to these components
  *   enabled      the host opted in (timer runs); manual  a `--now` run; clearFailed  forget recorded failures first
+ *   wolfd is never updated by a timer run (button only): an unattended run skips it, a manual run does not.
  *   now          clock () => Date
  *   deps         { fetchManifest() -> manifest, currentVersion(unit) -> string|null, verify?(unit, entry) -> {ok, sha256?, code?, message?},
  *                  install(unit, entry, verified) -> {ok, code?, message?}, probe(unit, entry) -> {healthy, message?} }
@@ -185,7 +225,7 @@ export function acquireLock(file, hooks = {}, log = console.error) {
 export async function runAutoUpdate(o) {
 	const now = () => (o.now ? o.now() : new Date()).toISOString();
 	const log = o.log ?? (() => {});
-	const base = (extra) => ({ schema: 1, host: o.host, enabled: !!o.enabled, lastCheck: now(), ...extra });
+	const base = (extra) => ({ schema: 1, host: o.host, enabled: o.mode ? o.mode === "auto" : !!o.enabled, lastCheck: now(), ...extra });
 
 	// Every branch writes the status file, so every branch takes the lock first; a held lock means the other run owns the file.
 	const release = acquireLock(o.lockFile);
@@ -216,7 +256,17 @@ async function locked(o, now, log, base) {
 		}
 		return s;
 	};
-	const disabledReason = fs.existsSync(o.disabledFile) ? `kill switch: ${o.disabledFile} exists` : !o.enabled && !o.manual ? "not enabled (set WOLFPACK_AUTO_UPDATE=1, or run with --now)" : null;
+	const channel = o.channel ?? "stable";
+	const enabled = o.mode ? o.mode === "auto" : !!o.enabled;
+	const disabledReason = fs.existsSync(o.disabledFile)
+		? `kill switch: ${o.disabledFile} exists`
+		: o.mode === "off"
+			? "mode is off"
+			: !enabled && !o.manual
+				? o.mode
+					? `mode is ${o.mode}: the timer installs nothing`
+					: "not enabled (set WOLFPACK_AUTO_UPDATE=1, or run with --now)"
+				: null;
 	if (disabledReason) {
 		// A pause shows at the top (enabled:false, disabledReason); a failed unit stays failed, so resuming never retries it.
 		const units = Object.fromEntries(
@@ -258,11 +308,13 @@ async function locked(o, now, log, base) {
 		// A recorded failure halts the host until a newer release of that unit appears (or someone clears it).
 		const superseded = (u) => {
 			const s = units[u.id];
-			const latest = releaseCore(manifest.components[u.component]?.version);
-			const failedAt = releaseCore(s.failedTarget);
+			const latest = releaseCore(manifest.components[u.component]?.version, channel);
+			const failedAt = releaseCore(s.failedTarget, "main");
 			return !!latest && (!failedAt || cmp(latest, failedAt) > 0);
 		};
-		const stillFailed = new Set(o.units.filter((u) => units[u.id].failedTarget && !superseded(u)).map((u) => u.id));
+		// Any manual run (Update all, a card's Update, --now [--only]) is the owner asking: it bypasses the hold. Timer runs respect it.
+		const bypass = !!o.manual;
+		const stillFailed = new Set(bypass ? [] : o.units.filter((u) => units[u.id].failedTarget && !superseded(u)).map((u) => u.id));
 		let halt = [...stillFailed][0];
 
 		for (const u of o.units) {
@@ -270,17 +322,19 @@ async function locked(o, now, log, base) {
 			const entry = manifest.components[u.component];
 			s.current = (await o.deps.currentVersion(u)) ?? null;
 			s.target = entry?.version ?? null;
+			if (o.only && !o.only.includes(u.component)) continue; // --only: the others are left as they are
 			if (stillFailed.has(u.id)) {
 				s.target = s.failedTarget;
 				s.state = "failed";
 				continue;
 			}
-			delete s.failedTarget; // superseded by a newer release (or cleared): this one may be tried
+			if (s.failedTarget && superseded(u)) delete s.failedTarget; // a newer release lifts the hold; a manual run bypasses it but keeps it until an install succeeds
 			const was = s.state;
 			for (const k of ["code", "message"]) delete s[k];
-			s.state = "idle";
+			s.state = s.failedTarget ? "failed" : "idle";
+			if (!o.manual && u.component === "wolfd") continue; // wolfd updates by button only: every timer run skips it
 			const cur = runningCore(s.current);
-			const tgt = releaseCore(s.target);
+			const tgt = releaseCore(s.target, channel);
 			if (!entry || !tgt) s.message = "no stable release";
 			else if (!s.current) s.message = "running version unknown (not installed?)";
 			else if (isDev(s.current)) (s.code = "dev-build"), (s.message = "dev build: never auto-updated");
@@ -308,6 +362,7 @@ async function locked(o, now, log, base) {
 				}
 				s.finishedAt = now();
 				if (r.ok) {
+					delete s.failedTarget; // only a successful install of this unit lifts its hold
 					s.state = "updated";
 					s.current = (await o.deps.currentVersion(u)) ?? s.target;
 					if (status.result === "ok") status.result = "updated";
@@ -329,6 +384,31 @@ async function locked(o, now, log, base) {
 	}
 }
 
+/**
+ * A hand rollback of unit `component` (the unit id): records the version rolled back FROM as `failedTarget`, so the updater never
+ * reinstalls it; only a newer release (or --clear-failed) lifts the hold. `currentVersion(unit)` reads that version (after the swap it is
+ * the `previous` release). Takes the run lock; returns false when another run holds it or the unit/version is unknown.
+ */
+export function holdUnits({ statusFile, lockFile, units, component, currentVersion, host = "sfo-01", now = () => new Date() }) {
+	const release = acquireLock(lockFile);
+	if (!release) return false;
+	try {
+		const u = units.find((x) => x.id === component);
+		const v = u ? currentVersion(u) : null;
+		if (!u || !v) return false;
+		const status = readStatus(statusFile) ?? { schema: 1, host, enabled: false, lastCheck: now().toISOString(), result: "ok", units: {} };
+		// The rollback unit `workerd` is the component's link unit; `workerd-wolves` runs the same component, so it is held too.
+		for (const x of units.filter((x) => x === u || (component === "workerd" && x.id === "workerd-wolves"))) {
+			const s = (status.units[x.id] ??= { component: x.component, current: null, target: null });
+			Object.assign(s, { state: "failed", failedTarget: v, code: "rolled-back", message: `rolled back by hand from ${v}; held until a newer release`, finishedAt: now().toISOString() });
+		}
+		writeStatus(statusFile, status);
+		return true;
+	} finally {
+		release();
+	}
+}
+
 // ---- asset verification: the published .sha256 must match GitHub's own digest of the asset ----
 
 /**
@@ -337,7 +417,7 @@ async function locked(o, now, log, base) {
  * for the asset on upload. deploy-release.sh then checks the downloaded tarball against that same .sha256 before installing.
  * `assets` = scripts/release-components.json; `fetch` is injectable.
  */
-export function createReleaseVerifier({ assets, fetch: f = fetch, repo = REPO, timeoutMs = 20_000 } = {}) {
+export function createReleaseVerifier({ assets, fetch: f = fetch, repo = REPO, timeoutMs = 20_000, channel = "stable" } = {}) {
 	const get = async (url, accept) => {
 		const res = await f(url, { headers: { accept, "user-agent": "wolfpack-auto-update" }, signal: AbortSignal.timeout(timeoutMs) });
 		if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} for ${url}`), { status: res.status });
@@ -346,7 +426,7 @@ export function createReleaseVerifier({ assets, fetch: f = fetch, repo = REPO, t
 	return async (unit, entry) => {
 		const { component } = unit;
 		const version = entry?.version;
-		if (!releaseCore(version) || entry.tag !== `${component}/v${version}`) return { ok: false, code: "checksum", message: `manifest tag ${entry?.tag} does not match ${component} ${version}` };
+		if (!releaseCore(version, channel) || entry.tag !== `${component}/v${version}`) return { ok: false, code: "checksum", message: `manifest tag ${entry?.tag} does not match ${component} ${version}` };
 		const pattern = assets?.[component]?.asset;
 		if (!pattern) return { ok: false, code: "checksum", message: `no release asset known for ${component}` };
 		const asset = pattern.replace("{version}", version);
@@ -362,7 +442,7 @@ export function createReleaseVerifier({ assets, fetch: f = fetch, repo = REPO, t
 			return { ok: false, code: "release-unreachable", message: String(e?.message ?? e) };
 		}
 		if (rel?.draft) return { ok: false, code: "checksum", message: `${entry.tag} is a draft release` };
-		if (rel?.prerelease) return { ok: false, code: "checksum", message: `${entry.tag} is a prerelease` };
+		if (rel?.prerelease && channel === "stable") return { ok: false, code: "checksum", message: `${entry.tag} is a prerelease` };
 		const digest = /^sha256:([0-9a-f]{64})$/.exec(rel?.assets?.find((a) => a?.name === asset)?.digest ?? "")?.[1];
 		if (!digest) return { ok: false, code: "checksum", message: `GitHub lists no sha256 digest for ${asset}` };
 		const m = /^([0-9a-f]{64}) [ *](\S+)\s*$/.exec(sumText.trim());
@@ -407,20 +487,20 @@ const envValue = (file, key) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sameRelease = (a, b) => {
 	const x = runningCore(a); // the running side may carry +build
-	const y = releaseCore(b);
+	const y = releaseCore(b, "main");
 	return !!x && !!y && cmp(x, y) === 0;
 };
 
 /** Real deps on sfo-01: deploy-release.sh does download + sha256 + install (+ its existing swap-back); the probe reads /healthz. */
-export function sfoDeps(env, { dir = path.dirname(fileURLToPath(import.meta.url)), log = console.log } = {}) {
+export function sfoDeps(env, { dir = path.dirname(fileURLToPath(import.meta.url)), log = console.log, channel = "stable" } = {}) {
 	const assets = JSON.parse(fs.readFileSync(fs.existsSync(path.join(dir, "release-components.json")) ? path.join(dir, "release-components.json") : path.join(dir, "../scripts/release-components.json"), "utf8"));
-	const manifestUrl = env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || MANIFEST_URL;
+	const manifestUrl = env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || (channel === "main" ? MAIN_MANIFEST_URL : MANIFEST_URL);
 	const deployScript = path.join(dir, "deploy-release.sh");
 	const RC = { 1: "refused", 2: "usage", 3: "rolled-back", 4: "rollback-unhealthy" };
 	return {
 		fetchManifest: async () => (await fetch(manifestUrl, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) }).then((r) => (r.ok ? r : Promise.reject(new Error(`HTTP ${r.status}`))))).json(),
 		currentVersion: (u) => firstLine(u.versionFile),
-		verify: createReleaseVerifier({ assets }),
+		verify: createReleaseVerifier({ assets, channel }),
 		install: (u, entry, verified) => {
 			// No default port exists: hubd.service, workerd.service and workerd-wolves.service refuse to start without <PFX>_PORT,
 			// and deploy-release.sh skips its listening check. Without it the /healthz probe cannot run, so refuse before installing.
@@ -474,7 +554,7 @@ export function exitCodeFor(result, manual) {
 
 export function sfoPaths(env) {
 	const state = env.WOLFPACK_AUTO_UPDATE_STATE || "/var/lib/wolfpack-auto-update";
-	return { statusFile: path.join(state, "status.json"), disabledFile: path.join(state, "auto-update.disabled"), lockFile: "/run/wolfpack-auto-update.lock" };
+	return { subscriptionFile: env.WOLFPACK_SUBSCRIPTION_FILE?.trim() || "/var/lib/wolfpack-subscription/subscription.json", statusFile: path.join(state, "status.json"), disabledFile: path.join(state, "auto-update.disabled"), lockFile: "/run/wolfpack-auto-update.lock" };
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -484,20 +564,34 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 	if (cmd === "status") {
 		console.log(JSON.stringify(readStatus(paths.statusFile), null, 2));
 	} else if (cmd === "run") {
+		// The subscription file decides channel and mode; a missing file keeps today's behaviour (stable, WOLFPACK_AUTO_UPDATE=1 opt-in).
+		const sub = readSubscription(paths.subscriptionFile) ?? { channel: "stable", mode: undefined };
+		const oi = flags.indexOf("--only");
 		const { result } = await runAutoUpdate({
 			host: env.WOLFPACK_AUTO_UPDATE_HOST || "sfo-01",
 			units: sfoUnits(env),
 			...paths,
 			enabled: env.WOLFPACK_AUTO_UPDATE === "1",
+			mode: sub.mode,
+			channel: sub.channel,
+			only: oi >= 0 && flags[oi + 1] ? [flags[oi + 1]] : undefined,
 			manual: flags.includes("--now"),
 			clearFailed: flags.includes("--clear-failed"),
-			deps: sfoDeps(env),
+			deps: sfoDeps(env, { channel: sub.channel }),
 			log: console.log,
 		});
 		console.log(`auto-update: ${result}`);
 		process.exitCode = exitCodeFor(result, flags.includes("--now"));
+	} else if (cmd === "hold" && flags[0]) {
+		// After a successful hand rollback (the rollback unit's ExecStartPost): hold the version rolled back from, which the swap left in `previous`.
+		const ok = holdUnits({ ...paths, units: sfoUnits(env), component: flags[0], currentVersion: (u) => firstLine(u.versionFile.replace("/current/", "/previous/"))?.replace(/\+.*$/, "") ?? null });
+		if (ok) console.log(`auto-update: holding ${flags[0]}`);
+		else {
+			console.error(`auto-update: WARNING: could not hold ${flags[0]}; the version rolled back from is NOT held and a timer run may reinstall it`);
+			process.exitCode = 1;
+		}
 	} else {
-		console.error("usage: auto-update.mjs run [--now] [--clear-failed] | status");
+		console.error("usage: auto-update.mjs run [--now] [--only <component>] [--clear-failed] | hold <unit-id> | status");
 		process.exitCode = 2;
 	}
 }

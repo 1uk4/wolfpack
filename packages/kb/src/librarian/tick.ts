@@ -20,10 +20,10 @@ import type { SweepWriter } from "./sweep-writer.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
 import { countPending } from "./intake.js";
-import { readLedger, foldRegistry } from "./ledger.js";
+import { readLedgerAsync, foldRegistry } from "./ledger.js";
 import { createEmbedder, buildEntryVectors, currentEntryHashes, type CachedEmbedder } from "./embed.js";
 import { backoffRemainingMs, classifyError, noteInfraFailure, type Alert } from "./backoff.js";
-import { withBudget } from "./park.js";
+import { BudgetExceeded, SweepStuck } from "./park.js";
 import { noteDrainProgress, flushDrain } from "./drain.js";
 import { flushWorkLinks, hasPendingWorkLinks, httpNotePoster, type NotePoster } from "./work-links.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -40,6 +40,16 @@ export interface SweepTickOptions {
   alert?: Alert;
   /** Test seam: the run budget for the one item (default SWEEP.runBudgetMs). */
   budgetMs?: number;
+  /** Test seam: the outer budget for the whole sweep (default SWEEP.runBudgetMs + 4 embed timeouts). */
+  outerBudgetMs?: number;
+  /** Test seam: how long an aborted sweep may keep running before a loud warning (default 60 s). */
+  abortGraceMs?: number;
+  /** Test seam: the warning repeats this often while the aborted sweep still runs (default 5 min). */
+  abortRepeatMs?: number;
+  /** Test seam: after the grace, how much longer the tick waits for the aborted sweep before it stops waiting and throws SweepStuck (default 5 min). */
+  abortCapMs?: number;
+  /** Called with true when the outer budget aborts the sweep and with false when that sweep finally settles (even after the tick gave up waiting). */
+  onSweepStuck?: (stuck: boolean) => void;
   /** Where link-back notes for graduated work go (default: the Work API from WORK_ENDPOINT / WORK_TOKEN; none → they stay queued). */
   notePoster?: NotePoster | null;
   /** Structured sweep progress (see SweepContext.onEvent). */
@@ -181,6 +191,61 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   }
 }
 
+const ABORT_GRACE_MS = 60_000;
+const ABORT_REPEAT_MS = 5 * 60_000;
+const ABORT_CAP_MS = 5 * 60_000;
+
+interface AbortTiming { graceMs: number; repeatMs: number; capMs: number; warn: (m: string) => void; onStuck?: (stuck: boolean) => void }
+
+/**
+ * Run `run` under an outer budget. On expiry abort it and wait for it to really settle: warn after the grace and again every
+ * `repeatMs` until it ends. If it is still alive `capMs` after the grace, stop waiting and reject with SweepStuck (the KB lock
+ * stays the overlap guard). Otherwise reject with BudgetExceeded once it has ended.
+ */
+async function sweepWithin<T>(ms: number, t: AbortTiming, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const real = run(controller.signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"expired">((r) => { timer = setTimeout(() => r("expired"), ms); });
+  try {
+    const first = await Promise.race([real, expired]);
+    if (first !== "expired") return first;
+  } finally {
+    clearTimeout(timer);
+  }
+  const err = new BudgetExceeded(ms, "sweep");
+  controller.abort(err);
+  t.onStuck?.(true);
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  let alertTimer: ReturnType<typeof setInterval> | undefined;
+  const warnStill = () => t.warn(`sweep: still running after its ${Math.round(ms / 1000)}s budget was aborted; no new sweep starts until it ends`);
+  graceTimer = setTimeout(() => {
+    warnStill();
+    alertTimer = setInterval(warnStill, t.repeatMs);
+    alertTimer.unref();
+  }, t.graceMs);
+  graceTimer.unref();
+  // Observe the real sweep to the end: it clears the stuck marker and the alerts whenever it settles, even after the tick gave up waiting.
+  const ended = real.then(
+    () => undefined,
+    (e) => {
+      if (e !== err) t.warn(`sweep: the aborted sweep ended with an error: ${e instanceof Error ? e.message : String(e)}`); // the abort reason itself is expected
+    },
+  ).finally(() => {
+    clearTimeout(graceTimer);
+    clearInterval(alertTimer);
+    t.onStuck?.(false);
+  });
+  let capTimer: ReturnType<typeof setTimeout> | undefined;
+  const capped = new Promise<"cap">((r) => { capTimer = setTimeout(() => r("cap"), t.graceMs + t.capMs); capTimer.unref(); });
+  try {
+    if ((await Promise.race([ended.then(() => "ended" as const), capped])) === "cap") throw new SweepStuck(ms, Math.round((t.graceMs + t.capMs) / 1000));
+  } finally {
+    clearTimeout(capTimer);
+  }
+  throw err;
+}
+
 async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const { roots, notify } = opts;
   const engine = opts.createEngine();
@@ -191,19 +256,18 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   let liveEntries = 0;
   const timings = createTimings();
   // The ledger is parsed once per tick; the sweep's duplicate check and the vectors share it (nothing appends before both ran).
-  let ledgerMemo: KbEvent[] | undefined;
-  const readLog = () => (ledgerMemo ??= readLedger(roots));
+  let ledgerMemo: Promise<KbEvent[]> | undefined;
+  const readLog = () => (ledgerMemo ??= readLedgerAsync(roots));
   const loadEntryVectors = async () => {
-    const reg = foldRegistry(readLog());
+    const reg = foldRegistry(await readLog());
     const vectors = await buildEntryVectors(roots, reg, getEmbedder(), undefined, timings);
     liveEntries = vectors.length;
     return vectors;
   };
 
-  // A hung call must never hold the tick: past the run budget plus slack, give
-  // up (the KB lock still guards against overlap).
-  const swept = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
-    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer, timings, readLog })
+  // Past the run budget plus slack the sweep is aborted (it stops at the next item boundary) and the tick waits for it to end.
+  const swept = await sweepWithin(opts.outerBudgetMs ?? SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, { graceMs: opts.abortGraceMs ?? ABORT_GRACE_MS, repeatMs: opts.abortRepeatMs ?? ABORT_REPEAT_MS, capMs: opts.abortCapMs ?? ABORT_CAP_MS, warn: (m) => void opts.alert?.(m), onStuck: opts.onSweepStuck }, (signal) =>
+    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, lane: opts.lane, writer: opts.writer, timings, readLog, signal }),
   );
 
   let reorged: ReorgResult | undefined;

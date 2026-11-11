@@ -65,6 +65,24 @@ describe("GET /api/updates", () => {
 		}
 	});
 
+	it("compares against the subscribed channel's manifest: on main a -main.N prerelease is newer than the running one, on stable the stable manifest is used", async () => {
+		const stable = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { workerd: entry("workerd", "0.1.5") } });
+		const main = await serve({ schema: 1, channel: "main", sha: "abc", ref: "wolf/1uk4", generatedAt: "2026-11-09T03:30:00Z", components: { workerd: entry("workerd", "0.1.6-main.2") } });
+		const workerd = await serve({ ok: true, service: "workerd", version: "0.1.6-main.1+abc1234" });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		const sub = join(dir, "subscription.json");
+		const env = { WOLFPACK_UPDATE_MANIFEST_URL: `${stable}/stable.json`, WOLFPACK_UPDATE_MAIN_MANIFEST_URL: `${main}/main.json`, WOLFPACK_API_URL: workerd, WOLFPACK_SUBSCRIPTION_FILE: sub };
+		try {
+			const get = createUpdatesHandler({ env, consoleDir: dir });
+			const row = async () => (await get()).components.find((c) => c.component === "workerd");
+			assert.deepEqual([(await row())?.latest, (await row())?.outdated], ["0.1.5", false]); // no file: stable
+			writeFileSync(sub, JSON.stringify({ schema: 1, channel: "main", mode: "button" }));
+			assert.deepEqual([(await row())?.latest, (await row())?.outdated], ["0.1.6-main.2", true]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("shows the host's auto-update status file per component: failed with its code, updating, updated, idle, and disabled by the kill switch", async () => {
 		const manifestBase = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.19"), hubd: entry("hubd", "0.1.15"), workerd: entry("workerd", "0.1.6"), wolfd: entry("wolfd", "0.1.15") } });
 		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));

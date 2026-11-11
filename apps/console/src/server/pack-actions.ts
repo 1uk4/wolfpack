@@ -1,12 +1,7 @@
 /**
- * PACK HEALTH SERVICE ACTIONS (work-wolfpack-yM3uTlj): recent logs and owner-initiated rollback, next to restart (pack-health.ts).
+ * PACK HEALTH SERVICE ACTIONS (work-wolfpack-yM3uTlj): owner-initiated rollback, next to restart (pack-health.ts).
  * Everything runs on the console's own host, argv only, never through the hub or a wolf.
  *
- * LOGS  `journalctl -u <unit>.service [-u wolfpack-rollback@<unit>.service] -n <n> -o short-iso --no-pager` for a unit
- *       `health.restartable()` names (the restart allowlist). The rollback unit's journal is included for hubd/workerd, so a rollback's
- *       outcome shows in the same panel. Each line is redacted (redactLogLine), at most LOG_LINE_MAX chars, and the newest lines are kept
- *       within LOG_BYTES_MAX. The console user needs journal read access (group systemd-journal, deploy/console/RUNBOOK.md); without it
- *       journalctl shows only the user's own messages plus a hint, which is answered as journal_denied, never as an empty log.
  * ROLLBACK  `systemctl --no-ask-password --no-block start wolfpack-rollback@<svc>.service` for svc in ROLLBACK_SERVICES (fixed), a root
  *       oneshot unit (deploy/console/wolfpack-rollback@.service) running `deploy-release.sh <svc> --rollback`. Allowed by the polkit rule
  *       deploy/console/50-console-restart.rules (start of exactly those three instances). One per service per 10 min. Never automatic:
@@ -16,132 +11,17 @@
 import { execFile } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { isNewerVersion as isNewer } from "../core/pack-health-view.ts";
 import { execRunner, type CommandRunner, type PackHealth } from "./pack-health.ts";
 
-export const LOG_LINES_DEFAULT = 100;
-export const LOG_LINES_MAX = 200;
-export const LOG_BYTES_MAX = 64 * 1024;
-export const LOG_LINE_MAX = 4000;
 export const ROLLBACK_SERVICES = ["hubd", "workerd", "console"] as const;
 export type RollbackService = (typeof ROLLBACK_SERVICES)[number];
 export const ROLLBACK_MIN_INTERVAL_MS = 10 * 60_000;
-
-const R = "[redacted]";
-// Cookie / Set-Cookie: the whole header value (every pair, and its attributes), up to a closing quote or the end of the line.
-const COOKIE_RE = /\b((?:set-)?cookie)(["']?\s*[:=]\s*)(["']?)[^"'\n]*/gi;
-// Known token formats, caught by their prefix so short ones are caught too. Ours (hub device and wolf tokens, the direct token: 32-byte
-// base64url; the local work-server token: 48 hex) have no prefix and are caught by the run rule below or by their key name.
-const PREFIXED_RE = [
-	/\b(?:sk-ant-|sk-|pk-|rk-)[A-Za-z0-9_-]{8,}/g, // Anthropic / OpenAI-style keys
-	/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{8,}/g, // GitHub tokens
-	/\bgithub_pat_[A-Za-z0-9_]{8,}/g,
-	/\bglpat-[A-Za-z0-9_-]{8,}/g, // GitLab
-	/\bxox[abprs]-[A-Za-z0-9-]{8,}/g, // Slack
-	/(?<!\d)\d{8,10}:[A-Za-z0-9_-]{30,}/g, // Telegram bot token (<bot id>:<secret>), also inside /bot<token>/ URL paths
-	/\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
-	/\bAIza[0-9A-Za-z_-]{20,}/g, // Google API key
-	/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWT
-];
-const BEARER_RE = /\b(Bearer|Basic|Token)\s+(?!\[redacted\])[^\s,;"'<>]+/gi;
-// key=value / key: value where the key ends in token, password, secret, key, authorization, cookie, credential(s). Never re-redacts.
-const KV_RE = /\b([A-Za-z0-9_.-]*?(?:token|passw(?:or)?d|secret|key|authorization|cookie|credentials?))(["']?\s*[=:]\s*["']?)(?!(?:Bearer|Basic|Token)\s)(?!\[redacted\])([^\s,;&"'<>]+)/gi;
-// Long runs of token alphabet (33+ chars), judged one /-separated segment at a time (a path or URL keeps its plain segments; a token
-// in one segment is redacted alone). A segment is redacted when one unbroken part is 24+ chars, or when 20+ of its chars sit in parts
-// that mix letters with digits or upper with lower case (a base64url token split by - and _), so hyphenated names
-// (feat-a1b2-pack-health-...) stay. Not secrets in these logs, so they stay: a plain 40-hex (git sha) or 64-hex (sha256) segment, and
-// UUIDs (8-4-4-4-12 hex: systemd invocation ids, request ids), which are left out before the segment is judged.
-const RUN_RE = /[A-Za-z0-9+/=_.-]{33,}/g;
-const DENSE_RE = /[A-Za-z0-9+=]{24,}/;
-const HASH_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const mixed = (part: string) => (/\d/.test(part) && /[A-Za-z]/.test(part)) || (/[a-z]/.test(part) && /[A-Z]/.test(part));
-const looksRandom = (segment: string) => {
-	if (HASH_RE.test(segment)) return false;
-	const rest = segment.replace(UUID_RE, "-");
-	if (DENSE_RE.test(rest)) return true;
-	return rest.split(/[_.\-+=]+/).reduce((n, p) => n + (mixed(p) ? p.length : 0), 0) >= 20;
-};
-
-/** One journal line with anything that looks like a credential replaced by [redacted]. */
-export function redactLogLine(line: string): string {
-	let out = line.replace(COOKIE_RE, (_m, k: string, sep: string, q: string) => `${k}${sep}${q}${R}`);
-	for (const re of PREFIXED_RE) out = out.replace(re, R);
-	return out
-		.replace(BEARER_RE, (_m, kind: string) => `${kind} ${R}`)
-		.replace(KV_RE, (_m, k: string, sep: string) => `${k}${sep}${R}`)
-		.replace(RUN_RE, (m) => m.split("/").map((seg) => (looksRandom(seg) ? R : seg)).join("/"));
-}
-
-const DENIED_RE = /not seeing messages from other users|insufficient permissions|No journal files were (?:opened|found)/i;
-
-export type LogsOutcome =
-	| { ok: true; service: string; lines: string[]; truncated: boolean }
-	| { ok: false; service: string; code: "invalid_request" | "journal_denied" | "unsupported" | "too_large" | "failed" | "rate_limited"; message: string; retryAfterS?: number };
-
-export interface LogReader {
-	read(service: unknown, lines: string | null, by: string): Promise<LogsOutcome>;
-}
-
-/** Reads a restartable unit's journal. At most `maxInFlight` (default 2) journalctl runs at once; beyond: rate_limited. */
-export function createLogReader(o: { health: PackHealth; run?: CommandRunner; maxInFlight?: number; log?: (m: string) => void }): LogReader {
-	const run = o.run ?? execRunner;
-	const log = o.log ?? ((m: string) => console.log(m));
-	const max = o.maxInFlight ?? 2;
-	let inFlight = 0;
-	return {
-		async read(service, rawLines, by) {
-			const name = typeof service === "string" ? service : "";
-			if (!o.health.restartable().has(name)) return { ok: false, service: name, code: "invalid_request", message: "unknown service" };
-			let n = LOG_LINES_DEFAULT;
-			if (rawLines !== null) {
-				if (!/^\d{1,6}$/.test(rawLines) || Number(rawLines) < 1) return { ok: false, service: name, code: "invalid_request", message: "lines must be a positive integer" };
-				n = Math.min(Number(rawLines), LOG_LINES_MAX);
-			}
-			if (inFlight >= max) return { ok: false, service: name, code: "rate_limited", message: "another log read is running", retryAfterS: 2 };
-			inFlight++;
-			let r: Awaited<ReturnType<CommandRunner>>;
-			try {
-				const units = ["-u", `${name}.service`, ...((ROLLBACK_SERVICES as readonly string[]).includes(name) ? ["-u", `wolfpack-rollback@${name}.service`] : [])];
-				r = await run("journalctl", [...units, "-n", String(n), "-o", "short-iso", "--no-pager"]);
-			} finally {
-				inFlight--;
-			}
-			log(`console: health logs ${name} (${n} lines) by ${by}: exit ${r.code}`);
-			const out = r.stdout ?? "";
-			if (r.code === 127) return { ok: false, service: name, code: "unsupported", message: "journalctl is not available on this host" };
-			if (DENIED_RE.test(out) || DENIED_RE.test(r.stderr)) return { ok: false, service: name, code: "journal_denied", message: "the console user cannot read the system journal (add it to systemd-journal)" };
-			if (r.overflow) return { ok: false, service: name, code: "too_large", message: "the journal output was larger than the console reads at once (4 MiB); ask for fewer lines" };
-			if (r.code !== 0) return { ok: false, service: name, code: "failed", message: `journalctl exited ${r.code}` };
-			const all = out.split("\n").filter((l, i, a) => !(l === "" && i === a.length - 1));
-			const kept: string[] = [];
-			let bytes = 0;
-			for (let i = all.length - 1; i >= 0; i--) {
-				const line = redactLogLine(all[i]!.slice(0, LOG_LINE_MAX));
-				const size = Buffer.byteLength(line) + (kept.length > 0 ? 1 : 0);
-				if (bytes + size > LOG_BYTES_MAX) break;
-				bytes += size;
-				kept.push(line);
-			}
-			return { ok: true, service: name, lines: kept.reverse(), truncated: kept.length < all.length };
-		},
-	};
-}
 
 export type RollbackOutcome =
 	| { ok: true; service: string; at: string; to: string | null }
 	| { ok: false; service: string; code: "invalid_request" | "no_previous" | "previous_is_newer" | "rate_limited" | "failed"; message: string; retryAfterS?: number };
 
-/** X.Y.Z core of a version, or null when it has none. */
-const coreOf = (v: string | null): [number, number, number] | null => {
-	const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
-	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-};
-/** True when `to` is newer than `from` on the X.Y.Z core; equal cores and unknown versions are not (same rule as the UI's rollbackOffered). */
-const isNewer = (to: string | null, from: string | null): boolean => {
-	const a = coreOf(from);
-	const b = coreOf(to);
-	return !!(a && b && (b[0] - a[0] || b[1] - a[1] || b[2] - a[2]) > 0);
-};
 
 export interface Rollbacker {
 	rollback(service: unknown, by: string): Promise<RollbackOutcome>;
@@ -335,7 +215,6 @@ export function createRollbacker(o: { releases: () => ReleaseInfo[]; run?: Comma
 // ---- UPDATE (work-wolfpack-7eP9W3Z) ----
 
 export const UPDATE_UNIT = "wolfpack-auto-update-now.service";
-export const UPDATE_MIN_INTERVAL_MS = 5 * 60_000;
 
 /** One component that has a newer stable release than the one running. */
 export interface UpdateUnit {
@@ -346,12 +225,16 @@ export interface UpdateUnit {
 
 export type UpdateOutcome =
 	| { ok: true; service: "update"; at: string; units: UpdateUnit[] }
-	| { ok: false; service: "update"; code: "no_update" | "running" | "rate_limited" | "failed"; message: string; retryAfterS?: number };
+	| { ok: false; service: "update"; code: "invalid_request" | "no_update" | "up_to_date" | "running" | "failed"; message: string };
+
+/** The components the pack panel can update one by one (units: wolfpack-auto-update-now@<component>.service). */
+export const UPDATE_COMPONENTS = ["console", "hubd", "wolfd", "workerd"] as const;
 
 export interface Updater {
-	update(by: string): Promise<UpdateOutcome>;
+	/** `component` undefined = Update all (the all-units unit); else just that component (400 unknown, 409 up_to_date). */
+	update(by: string, component?: unknown): Promise<UpdateOutcome>;
 	/** The manual unit's last run (systemctl show, argv, 3 s timeout); null: never ran or unreadable. */
-	last(): Promise<RollbackLast | null>;
+	last(unit?: string): Promise<RollbackLast | null>;
 	/** The components behind the latest stable release now. */
 	available(): Promise<UpdateUnit[]>;
 }
@@ -359,44 +242,42 @@ export interface Updater {
 /**
  * Owner-initiated update: `systemctl --no-ask-password --no-block start wolfpack-auto-update-now.service` (root oneshot running
  * `auto-update.mjs run --now`; polkit allows exactly that start). Refused while nothing is behind (`available`), while the unit is
- * activating, and within `minIntervalMs` (default 5 min) of the last accepted start. The kill switch and the failed-hold stay the
- * script's: it exits without installing. Never automatic: only POST /api/health/update calls it.
+ * activating. The kill switch (and `mode: off`) stay the script's: it exits without installing. Every run it starts is manual
+ * (`--now`), so it bypasses every failedTarget hold (a rollback hold or a failed install); a hold is cleared only by a successful
+ * install of that unit. Never automatic: only POST /api/health/update calls it.
  */
-export function createUpdater(o: { available: () => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; minIntervalMs?: number; log?: (m: string) => void }): Updater {
+export function createUpdater(o: { available: () => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; log?: (m: string) => void }): Updater {
 	const run = o.run ?? execRunner;
 	const show = o.show ?? showRunner;
 	const now = o.now ?? Date.now;
-	const minInterval = o.minIntervalMs ?? UPDATE_MIN_INTERVAL_MS;
 	const log = o.log ?? ((m: string) => console.log(m));
-	let lastStart: number | undefined;
 	let starting = false;
 	const available = () => o.available().catch(() => [] as UpdateUnit[]);
-	const last = async (): Promise<RollbackLast | null> => {
-		const r = await show("systemctl", ["show", UPDATE_UNIT, "-p", SHOW_PROPS, "--timestamp=unix"]);
+	const last = async (unit: string = UPDATE_UNIT): Promise<RollbackLast | null> => {
+		const r = await show("systemctl", ["show", unit, "-p", SHOW_PROPS, "--timestamp=unix"]);
 		return r.code === 0 ? parseShow(r.stdout ?? "") : null;
 	};
 	return {
 		last,
 		available,
-		async update(by) {
-			const units = await available();
-			if (units.length === 0) return { ok: false, service: "update", code: "no_update", message: "nothing is behind the latest stable release" };
+		async update(by, component) {
+			if (component !== undefined && !(UPDATE_COMPONENTS as readonly unknown[]).includes(component)) return { ok: false, service: "update", code: "invalid_request", message: "unknown component" };
+			const all = await available();
+			const units = component === undefined ? all : all.filter((u) => u.component === component);
+			if (units.length === 0) return component === undefined ? { ok: false, service: "update", code: "no_update", message: "nothing is behind the latest release" } : { ok: false, service: "update", code: "up_to_date", message: `${component as string} is up to date` };
+			const unit = component === undefined ? UPDATE_UNIT : `wolfpack-auto-update-now@${component as string}.service`;
 			const t = now();
-			if (lastStart !== undefined && t - lastStart < minInterval) {
-				log(`console: health update RATE-LIMITED by ${by}`);
-				return { ok: false, service: "update", code: "rate_limited", message: `updated less than ${Math.round(minInterval / 60_000)} min ago`, retryAfterS: Math.ceil((minInterval - (t - lastStart)) / 1000) };
-			}
 			// `starting` is set before the first await, so a second press arriving while `last()` is read cannot also start the unit.
 			if (starting) return { ok: false, service: "update", code: "running", message: "an update is already running" };
 			starting = true;
 			let r: Awaited<ReturnType<CommandRunner>>;
 			try {
-				if ((await last())?.result === "running") return { ok: false, service: "update", code: "running", message: "an update is already running" };
-				r = await run("systemctl", ["--no-ask-password", "--no-block", "start", UPDATE_UNIT]);
+				// One check: the all-units run or this component's run is still going (the script's own lock covers the rest).
+				if ((await last(UPDATE_UNIT))?.result === "running" || (unit !== UPDATE_UNIT && (await last(unit))?.result === "running")) return { ok: false, service: "update", code: "running", message: "an update is already running" };
+				r = await run("systemctl", ["--no-ask-password", "--no-block", "start", unit]);
 			} finally {
 				starting = false;
 			}
-			if (r.code === 0) lastStart = t;
 			log(`console: health update ${units.map((u) => `${u.component} ${u.from ?? "?"} -> ${u.to}`).join(", ")} by ${by}: ${r.code === 0 ? "started" : `FAILED (exit ${r.code}) ${r.stderr.trim()}`}`);
 			return r.code === 0 ? { ok: true, service: "update", at: new Date(t).toISOString(), units } : { ok: false, service: "update", code: "failed", message: `systemctl exited ${r.code}` };
 		},

@@ -76,6 +76,11 @@ export interface CuratorOptions {
   budgetMs?: number;
   /** How long close() waits for a tick in flight, ms (default 15000, under the unit's TimeoutStopSec=20). A tick still running after that stops writing (every writer call checks the closing flag) and the lease is released when it ends. */
   closeWaitMs?: number;
+  /** Test seams: outer sweep budget, and the grace before a still-running aborted sweep is warned about (see SweepTickOptions). */
+  outerBudgetMs?: number;
+  abortGraceMs?: number;
+  abortRepeatMs?: number;
+  abortCapMs?: number;
   /** @internal TEST-ONLY: runs inside an entry write, after the file was read for the compare-and-set and before the commit (a racing writer). */
   afterEntryRead?: (entryId: string) => void;
   /** @internal TEST-ONLY: wraps the tick's writer (failure injection). */
@@ -87,7 +92,8 @@ export interface CuratorOptions {
 }
 
 export interface CuratorRun {
-  outcome: "idle" | "backoff" | "ran" | "skipped";
+  /** busy: a tick is already in flight (error says when it is a budget-aborted sweep that has not ended). */
+  outcome: "idle" | "backoff" | "ran" | "skipped" | "busy";
   processed: number;
   created: number;
   merged: number;
@@ -101,7 +107,7 @@ export interface CuratorRun {
 export interface Curator {
   /** Start the timer (a no-op with pollMs 0 or when off). */
   start(): void;
-  /** One tick now. Undefined when off, closing, or a tick is already running. */
+  /** One tick now. Undefined when off or closing; outcome "busy" when a tick is already running. */
   runOnce(): Promise<CuratorRun | undefined>;
   /** Stop the timer, wait (bounded) for a tick in flight, release the lease. */
   close(): Promise<void>;
@@ -117,6 +123,8 @@ export interface Curator {
 export interface CuratorStatus {
   enabled: boolean;
   running: boolean;
+  /** ISO time since which a sweep that the outer budget aborted has not ended (it still holds the KB lock). Absent when none. */
+  stuckSince?: string;
   last?: { finishedAt: string; processed: number; error?: string };
 }
 
@@ -295,6 +303,7 @@ export function createCurator(deps: CuratorDeps): Curator {
   let warnedWolf = false;
   let running = false;
   let last: CuratorStatus["last"];
+  let stuckSince: number | undefined; // set while a sweep the outer budget aborted has not ended
 
   if (enabled && o.embedModel && !isNomicModel(o.embedModel) && process.env.WOLFPACK_EMBED_MODEL !== o.embedModel) {
     // The task prefix (nomic only) is keyed on the process-wide model name, which sweep.ts reads itself; an option cannot reach it.
@@ -373,6 +382,11 @@ export function createCurator(deps: CuratorDeps): Curator {
         leaseOwner: "none", // the hub lease is held by this curator for its whole life
         ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : o.embedUrl || o.embedModel ? { getEmbedder: () => createEmbedder(deps.roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }) } : {}),
         budgetMs: o.budgetMs,
+        outerBudgetMs: o.outerBudgetMs,
+        abortGraceMs: o.abortGraceMs,
+        abortRepeatMs: o.abortRepeatMs,
+        abortCapMs: o.abortCapMs,
+        onSweepStuck: (stuck) => { stuckSince = stuck ? (o.now ?? Date.now)() : undefined; },
         notePoster: null, // work link-back notes stay queued; the hub owns the work ledger and has no Work API to post to
         notify: (m) => console.log(`[curator] ${m}`),
         alert: (m) => console.warn(`[curator] ${m}`),
@@ -396,7 +410,10 @@ export function createCurator(deps: CuratorDeps): Curator {
   };
 
   const runOnce = (): Promise<CuratorRun | undefined> => {
-    if (!enabled || closing || inflight) return Promise.resolve(undefined);
+    if (!enabled || closing) return Promise.resolve(undefined);
+    // A sweep the cap gave up on still holds the KB lock: a new tick would hit KbLockBusy, which sweep.ts turns into an empty "ran". Say so instead.
+    if (stuckSince !== undefined) return Promise.resolve({ outcome: "busy", processed: 0, created: 0, merged: 0, rejected: 0, parked: 0, remaining: 0, error: `the previous sweep is still running (stuck since ${new Date(stuckSince).toISOString()})` });
+    if (inflight) return Promise.resolve({ outcome: "busy", processed: 0, created: 0, merged: 0, rejected: 0, parked: 0, remaining: 0, error: "a tick is already running" });
     if (pausedBy > 0) return Promise.resolve({ outcome: "skipped", processed: 0, created: 0, merged: 0, rejected: 0, parked: 0, remaining: 0, error: "paused for a KB rebuild" });
     if (freshLeaseIn(wolfLeaseDirs(deps.roots), "wolf")) {
       if (!warnedWolf) console.warn("[curator] skipped: a wolf-side sweep holds the sweep lease");
@@ -412,7 +429,7 @@ export function createCurator(deps: CuratorDeps): Curator {
   };
 
   return {
-    status: () => ({ enabled, running, ...(last ? { last } : {}) }),
+    status: () => ({ enabled, running, ...(stuckSince !== undefined ? { stuckSince: new Date(stuckSince).toISOString() } : {}), ...(last ? { last } : {}) }),
     start() {
       if (!enabled || pollMs <= 0 || timer) return;
       timer = setInterval(() => void runOnce().catch((e) => console.error("[curator] tick failed:", err1(e))), pollMs);
@@ -434,6 +451,7 @@ export function createCurator(deps: CuratorDeps): Curator {
     },
     runOnce,
     async pause() {
+      if (stuckSince !== undefined) throw new HubError("busy", `the previous sweep is still running (stuck since ${new Date(stuckSince).toISOString()}); it holds the KB lock, retry after it ends`);
       pausedBy++;
       const p = inflight;
       if (p) {
@@ -443,6 +461,10 @@ export function createCurator(deps: CuratorDeps): Curator {
         if (inflight) { // still running after the bounded wait: it holds an old view and could commit later, so do not hand out the lock
           pausedBy--;
           throw new HubError("busy", "a curator tick is still running; retry");
+        }
+        if (stuckSince !== undefined) { // the hard cap fired during the wait: the old sweep is alive and holds the KB lock
+          pausedBy--;
+          throw new HubError("busy", `the previous sweep is still running (stuck since ${new Date(stuckSince).toISOString()}); it holds the KB lock, retry after it ends`);
         }
       }
       let done = false;
@@ -460,6 +482,11 @@ export function createCurator(deps: CuratorDeps): Curator {
         await Promise.race([p.catch(() => undefined), new Promise<void>((r) => (to = setTimeout(r, o.closeWaitMs ?? DEFAULT_CLOSE_WAIT_MS)))]);
         if (to) clearTimeout(to);
       }
+      // The lease can be released while a stuck sweep (one the hard cap stopped waiting for) is still alive. That is safe: every
+      // writer call of that sweep checks `closing`; a call that opens a new item is refused, including one in the middle of an item
+      // that has not committed yet (an item already committed finishes, see the gate above). The KB lock heartbeat
+      // keeps running while the old sweep is alive, so wolf-side sweepers or a rebuild get `KbLockBusy`. So the release is not
+      // chained onto that sweep.
       const l = lease;
       lease = undefined;
       if (!l) return;

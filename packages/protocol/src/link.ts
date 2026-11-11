@@ -9,6 +9,7 @@
  * Request ids are prefixed by the side that opened them: `h-` (hub) or `w-` (worker; reserved, not used yet).
  */
 import { z } from "zod";
+import { INVENTORY_MAX_ENTRIES, InventoryEntrySchema } from "./inventory.js";
 
 export const LINK_PROTOCOL_VERSION = 1;
 export const LINK_PATH = "/v1/link";
@@ -73,6 +74,8 @@ export const LinkHelloSchema = z.object({
   v: z.number().int().nonnegative(),
   hostId: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(64),
   laptop: z.boolean(),
+  /** Additive: the machine the worker runs on (WOLFPACK_MACHINE or hostname). Several hostIds can share one machine. Absent = older worker. */
+  machine: z.string().min(1).max(128).optional(),
   wolves: z.array(LinkWolfSchema).max(LINK_MAX_WOLVES),
   /** Per-domain KB cursors the worker has applied. */
   kbRevisions: Revisions.default({}),
@@ -91,7 +94,11 @@ export const LinkWelcomeSchema = z.object({
   hubRevisions: Revisions.default({}),
   /** Additive: the KB domains the registry grants this host (union over its non-retired wolves). The worker syncs ONLY these. Absent (older hub, or a registry read failed) = keep the current set; only an explicit array replaces it. */
   grantedDomains: z.array(z.string().min(1).max(64)).max(1024).optional(),
+  /** Additive: this hub accepts `report` frames. The worker sends them only when it is set, so an old hub never sees an unknown frame. */
+  inventory: z.boolean().optional(),
 });
+/** Additive, worker -> hub: the services this worker's machine runs (itself and its wolfds). Replaces the host's previous report. */
+export const LinkReportSchema = z.object({ t: z.literal("report"), entries: z.array(InventoryEntrySchema).max(INVENTORY_MAX_ENTRIES) });
 /** Additive, hub -> worker: the host's granted KB domain union changed (registry edit, wolf.add accepted, retire). Replaces the previous set. */
 export const LinkGrantsSchema = z.object({ t: z.literal("grants"), domains: z.array(z.string().min(1).max(64)).max(1024) });
 export const LinkWolfAddSchema = z.object({ t: z.literal("wolf.add"), wolf: LinkWolfSchema });
@@ -173,6 +180,7 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
   LinkReceiptAckSchema,
   LinkHelloSchema,
   LinkWelcomeSchema,
+  LinkReportSchema,
   LinkWolfAddSchema,
   LinkWolfRemoveSchema,
   LinkPingSchema,
@@ -193,6 +201,7 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
 ]);
 export type LinkFrame = z.infer<typeof LinkFrameSchema>;
 export type LinkHello = z.infer<typeof LinkHelloSchema>;
+export type LinkReport = z.infer<typeof LinkReportSchema>;
 export type LinkGrants = z.infer<typeof LinkGrantsSchema>;
 export type LinkKbChanged = z.infer<typeof LinkKbChangedSchema>;
 export type LinkWelcome = z.infer<typeof LinkWelcomeSchema>;

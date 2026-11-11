@@ -200,7 +200,7 @@ export class Supervisor implements WolfRegistry {
     } catch {
       /* logging must never take the supervisor down */
     }
-    (this.opts.log ?? ((l) => process.stderr.write(`${l}\n`)))(`[${name}] ${text}`);
+    (this.opts.log ?? ((l) => process.stderr.write(`${new Date().toISOString()} ${l}\n`)))(`[${name}] ${text}`);
   }
 
   private pipeLines(c: Child, stream: NodeJS.ReadableStream, tag: string): void {

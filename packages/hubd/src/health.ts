@@ -1,4 +1,5 @@
-import { baseHealth, createLagMonitor, type LagMonitor } from "@wolfpack/protocol/health-lag";
+import type { InventoryEntry } from "@wolfpack/protocol";
+import { baseHealth, createLagMonitor, machineName, normaliseMachine, readMachineChannel, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import { HUB_HEALTH_MAX_HOSTS, HUB_HEALTH_MAX_WOLVES, type HealthBody, type HubHealthHost, type LinkPresence } from "@wolfpack/protocol";
 import { hubVersion } from "./settings.js";
 
@@ -10,12 +11,54 @@ import { hubVersion } from "./settings.js";
  */
 export interface HubHealth {
   body(): HealthBody;
+  /** hubd's own inventory entry (version, channel, uptime, lag). */
+  self(): InventoryEntry;
   stop(): void;
 }
 
 export function createHubHealth(hosts?: () => HubHealthHost[]): HubHealth {
   const monitor: LagMonitor = createLagMonitor();
-  return { body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }), stop: () => monitor.stop() };
+  const channel = readMachineChannel();
+  const env = Number(process.env.HUBD_LOOP_STALL_MS);
+  const stall = createStallWatch({ thresholdMs: env > 0 ? env : DEFAULT_STALL_MS });
+  return {
+    body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }),
+    self: () => ({ machine: machineName(), kind: "hubd", id: "hubd", version: hubVersion(), ...(channel ? { channel } : {}), uptimeS: Math.round(process.uptime()), lagMs: Math.round(monitor.sample().p99Ms) }),
+    stop: () => { monitor.stop(); stall.stop(); },
+  };
+}
+
+export const DEFAULT_STALL_MS = 5_000;
+
+export interface StallWatchOptions {
+  /** Warn when a tick arrives more than this many ms later than scheduled. Default 5000 (env HUBD_LOOP_STALL_MS). */
+  thresholdMs?: number;
+  /** Tick period, ms; also the rate limit: at most one warning per tick. */
+  intervalMs?: number;
+  now?: () => number;
+  warn?: (line: string) => void;
+}
+
+/**
+ * Logs one warning line when the event loop stalls: a timer scheduled every `intervalMs` fires late by more than `thresholdMs`.
+ * A stall surfaces once, when it ends (the late tick), so a long stall never floods the journal. What was in flight is not
+ * logged: hubd keeps no cheap counter of curator or Work API reads in progress. The timer is unref'd.
+ */
+export function createStallWatch(opts: StallWatchOptions = {}): { tick(): void; stop(): void } {
+  const threshold = opts.thresholdMs ?? DEFAULT_STALL_MS;
+  const interval = opts.intervalMs ?? 1_000;
+  const now = opts.now ?? Date.now;
+  const warn = opts.warn ?? ((l: string) => console.error(l));
+  let last = now();
+  const tick = () => {
+    const t = now();
+    const lag = t - last - interval;
+    last = t;
+    if (lag > threshold) warn(`${new Date(t).toISOString()} hubd: event loop stalled for ${Math.round(lag)} ms (threshold ${threshold} ms)`);
+  };
+  const timer = setInterval(tick, interval);
+  timer.unref();
+  return { tick, stop: () => clearInterval(timer) };
 }
 
 /** A pairing label is sent on /healthz only when it looks like a hostname. */
@@ -26,6 +69,8 @@ export interface PackSummarySource {
   hosts: () => { name: string }[];
   wolves: () => { name: string; host?: string; status?: string }[];
   presence: (hostId: string) => LinkPresence;
+  /** The machine a host reported in its hello, when it did. */
+  machine?: (hostId: string) => string | undefined;
   /** Worker token label per host id (reads the token file: called only when `labelsDirty` was signalled). */
   labels: () => Map<string, string>;
   now?: () => number;
@@ -75,9 +120,10 @@ export function createPackSummary(src: PackSummarySource): PackSummary {
       const presence = src.presence(id);
       const raw = labels!.get(id);
       const label = raw !== undefined && HOSTNAME_LABEL.test(raw) ? raw : undefined; // /healthz is unauthenticated: free-text labels (a person's name) are never sent
+      const machine = normaliseMachine(src.machine?.(id)); // public /healthz: only a valid hostname label goes out
       const at = since.get(id);
       const status = presence === "online" ? "online" : "offline";
-      return { id, ...(label ? { label } : {}), presence, ...(at ? { since: at } : {}), wolves: byHost.get(id)!.sort().slice(0, HUB_HEALTH_MAX_WOLVES).map((name) => ({ name, status })) };
+      return { id, ...(label ? { label } : {}), ...(machine ? { machine } : {}), presence, ...(at ? { since: at } : {}), wolves: byHost.get(id)!.sort().slice(0, HUB_HEALTH_MAX_WOLVES).map((name) => ({ name, status })) };
     });
   };
   return {

@@ -16,7 +16,7 @@ overrides:
 #   checks (and may swap in) its native binary, as under npm.
 # false: nothing needs these (binaries ship as optional dependencies; electron-winstaller only matters for Windows packaging).
 allowBuilds:
-  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/b2a40263e4c33d10ddf07d2fb9d8a3c96ae99b8c: true
+  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91b1fc4d1f7be552c8e88913aaa7fa00c3058c8d: true
   esbuild: true
   "@google/genai": false
   electron-winstaller: false

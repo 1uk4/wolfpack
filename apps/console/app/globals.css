@@ -682,7 +682,7 @@ body {
 	   mode; while the keyboard is open --wp-vvh gives an explicit height, which wins over bottom. */
 	[data-wp-shell] {
 		position: fixed;
-		top: 0;
+		top: var(--wp-vvt, 0px); /* iOS pans the visual viewport when the keyboard opens; the shell follows it */
 		left: 0;
 		right: 0;
 		bottom: 0;

@@ -102,7 +102,6 @@ export function threadTransport(
 			}),
 		uploadUrl: `${base}/attachments`,
 		attachmentUrl: (id) => attachmentUrl(wolf, slug, id),
-		steersViaSubmit: true,
 		// The record is the newest page only: the full transcript is never refetched on a settle.
 		recordUrl: `${base}?limit=${THREAD_PAGE_SIZE}`,
 		onPage,
@@ -114,7 +113,6 @@ export function threadTransport(
 		recordIdle: (json) => (json as { busy?: unknown }).busy === false,
 		streamUrl: `${base}/stream`,
 		abortUrl: `${base}/abort`,
-		retryOnBusy: false,
 		// Fresh adapter per consume: it carries the in-flight message.
 		createWire: () => {
 			const adapter = new ThreadEventAdapter();

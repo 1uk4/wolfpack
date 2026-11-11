@@ -19,8 +19,7 @@ import { PlanGraphCard } from "@/components/plan-graph-card";
  * here — add renderers below, do NOT edit their dispatch.
  *
  * Typical tool shape: while the part is input-available render an activity
- * card (the chat view's jobs feed reads GET /api/jobs?chatId=…; on
- * completion call ChatActionsContext.syncFromServer()); when
+ * card (on completion call ChatActionsContext.syncFromServer()); when
  * output-available render the artifact itself from part.output. Job tools
  * register JobCard (components/artifacts/job-card.tsx) under their name.
  */

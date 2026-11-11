@@ -29,7 +29,7 @@ describe("readWorkList", () => {
   it("filters by domain, maps the view's fields and hides graduated and archived items by default", async () => {
     const url = await serve(200, { items });
     const r = await readWorkList("my domain", false, { endpoint: url, token: "tok" });
-    expect(lastUrl).toBe("/work?domain=my%20domain");
+    expect(lastUrl).toBe("/work?domain=my%20domain&fields=summary&archived=0");
     expect(r).toEqual({
       kind: "ok",
       items: [
@@ -43,6 +43,7 @@ describe("readWorkList", () => {
     const r = await readWorkList("d", true, { endpoint: url, token: "tok" });
     expect(r.kind === "ok" && r.items.map((i) => i.id)).toEqual(["f1", "i1", "g1", "a1"]);
     expect(r.kind === "ok" && r.items[2]!.graduated).toBe("2026-10-02");
+    expect(lastUrl).toBe("/work?domain=d&fields=summary"); // archived items are wanted, so no archived=0
   });
   it("reports unconfigured, refused and unreachable", async () => {
     expect(await readWorkList("d", false, {})).toEqual({ kind: "unconfigured" });

@@ -33,7 +33,7 @@ done
 if [ "$CMD" = uninstall ]; then
   run systemctl disable --now wolfpack-auto-update.timer || true
   run systemctl stop wolfpack-auto-update-now.service || true
-  run rm -f "$UNIT_DIR/wolfpack-auto-update.timer" "$UNIT_DIR/wolfpack-auto-update.service" "$UNIT_DIR/wolfpack-auto-update-now.service"
+  run rm -f "$UNIT_DIR/wolfpack-auto-update.timer" "$UNIT_DIR/wolfpack-auto-update.service" "$UNIT_DIR/wolfpack-auto-update-now.service" "$UNIT_DIR/wolfpack-auto-update-now@.service"
   run systemctl daemon-reload
   run rm -rf --one-file-system "$OPT"
   log "removed; $ENV_FILE and /var/lib/wolfpack-auto-update kept"
@@ -41,7 +41,7 @@ if [ "$CMD" = uninstall ]; then
 fi
 
 SRC=("$ROOT/scripts/auto-update.mjs" "$ROOT/scripts/release-components.json" "$ROOT/infra/release/deploy-release.sh" "$HERE/RUNBOOK.md")
-for f in "${SRC[@]}" "$HERE/wolfpack-auto-update.service" "$HERE/wolfpack-auto-update-now.service" "$HERE/wolfpack-auto-update.timer" "$HERE/auto-update.env.example"; do
+for f in "${SRC[@]}" "$HERE/wolfpack-auto-update.service" "$HERE/wolfpack-auto-update-now.service" "$HERE/wolfpack-auto-update-now@.service" "$HERE/wolfpack-auto-update.timer" "$HERE/auto-update.env.example"; do
   [ -f "$f" ] || die "missing $f (run from a full repo copy)"
 done
 node=$(command -v node) || die "node not found"
@@ -63,7 +63,13 @@ if ((DRY)); then echo "DRY-RUN: write $UNIT_DIR/wolfpack-auto-update.service (@N
   install -m 0644 "$HERE/wolfpack-auto-update.timer" "$UNIT_DIR/wolfpack-auto-update.timer"
   sed "s|@NODE@|$node|" "$HERE/wolfpack-auto-update-now.service" >"$UNIT_DIR/wolfpack-auto-update-now.service.tmp"
   chmod 644 "$UNIT_DIR/wolfpack-auto-update-now.service.tmp"; mv "$UNIT_DIR/wolfpack-auto-update-now.service.tmp" "$UNIT_DIR/wolfpack-auto-update-now.service"
+  sed "s|@NODE@|$node|" "$HERE/wolfpack-auto-update-now@.service" >"$UNIT_DIR/wolfpack-auto-update-now@.service.tmp"
+  chmod 644 "$UNIT_DIR/wolfpack-auto-update-now@.service.tmp"; mv "$UNIT_DIR/wolfpack-auto-update-now@.service.tmp" "$UNIT_DIR/wolfpack-auto-update-now@.service"
 fi
 run systemctl daemon-reload
-log "installed (wolfpack-auto-update-now.service for the console's Update button needs no further step; install deploy/console/50-console-restart.rules via deploy/console/setup.sh for polkit)"
+
+log "updater state dir stays root-only; the console-writable subscription.json gets its own directory"
+run install -d -m 0755 -o root -g root /var/lib/wolfpack-auto-update
+if getent group console >/dev/null 2>&1; then run install -d -m 0775 -o root -g console /var/lib/wolfpack-subscription; else run install -d -m 0775 -o root -g root /var/lib/wolfpack-subscription; echo "NOTICE: no console group yet; re-run this after deploy/console/setup.sh so the panel can save its channel and mode"; fi
+log "installed (wolfpack-auto-update-now[@].service for the console's Update buttons need no further step; install deploy/console/50-console-restart.rules via deploy/console/setup.sh for polkit)"
 log "To also turn the timer on: set WOLFPACK_AUTO_UPDATE=1 in $ENV_FILE, then systemctl enable --now wolfpack-auto-update.timer (RUNBOOK.md)"

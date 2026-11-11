@@ -5,8 +5,7 @@
  * Usage: npx tsx scripts/sync-pricing.ts
  *
  * The catalogs are pi-ai's curated, versioned snapshots — the SAME source
- * piEngineFor resolves engines from and /api/models serves the picker
- * from — so the money channel's lookup table can never disagree with the
+ * piEngineFor resolves engines from — so the money channel's lookup table can never disagree with the
  * engine. Fully offline (the JSON ships in node_modules); refreshes happen
  * by bumping @earendil-works/pi-ai and re-running this script. The tables
  * are generated; hand edits are overwritten. A model missing from the
@@ -91,8 +90,7 @@ function main(): void {
  *  script 2026-09-20): pre-wave records stamped with bare slugs render
  *  unpriced.
  *  Context-window limits are NOT a table (owner amendment, 2026-09-23):
- *  every meter's denominator reads pi's LIVE catalog (GET /api/models /
- *  the activity feed's server-side join) — missing model, usage-only.
+ *  every meter's denominator reads pi's LIVE catalog — missing model, usage-only.
  *  Refresh: bump @earendil-works/pi-ai, then npx tsx scripts/sync-pricing.ts
  *  (reads pi-ai's shipped catalogs — the same source the engine and the
  *  picker use). Forgetting the re-run is exactly how models go unpriced

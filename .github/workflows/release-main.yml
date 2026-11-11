@@ -1,0 +1,86 @@
+# Main channel: on demand (`wolfpack release publish`), tag each component changed since its last tag as <component>/vX.Y.Z-main.N at the
+# tip of `ref` (default wolf/1uk4), build each tag with release.yml (GitHub prereleases), then write main.json (top-level sha/channel/ref,
+# newest version per component across both channels) to the `main-manifest` release. Same planner as release-stable.yml.
+# No PAT, no new secrets. Deploying stays with the pack panel.
+name: release-main
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: branch or sha to publish to the main channel
+        type: string
+        default: wolf/1uk4
+permissions:
+  contents: write
+concurrency:
+  group: release-stable   # shared with release-stable.yml: never tag two channels at once
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tags: ${{ steps.tag.outputs.tags }}
+      sha: ${{ steps.tag.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - id: tag
+        name: tag changed components as -main.N (one push per tag)
+        run: |
+          node scripts/auto-tag.mjs --channel main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.tags != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.tag.outputs.tags) }}
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ matrix.tag }}
+
+  manifest:
+    needs: [tag, build]
+    if: ${{ always() && needs.tag.result == 'success' && needs.tag.outputs.tags != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.tag.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: build main.json from the published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+        run: |
+          node scripts/stable-manifest.mjs --repo "$GITHUB_REPOSITORY" --check-releases --channel main --ref "$REF" --out "$RUNNER_TEMP/main.json"
+          cat "$RUNNER_TEMP/main.json"
+      - name: publish to the main-manifest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view main-manifest >/dev/null 2>&1 || gh release create main-manifest --target "$GITHUB_SHA" --latest=false --prerelease \
+            --title "main manifest" --notes "Machine-readable latest main-channel version per component (main.json). Rewritten by release-main.yml."
+          gh release upload main-manifest "$RUNNER_TEMP/main.json" --clobber

@@ -46,6 +46,20 @@ describe("settings overview API", () => {
 		assert.match(byName.hal.error, /unreachable/);
 	});
 
+	it("a revoked hub token on the hub settings or a wolf read answers 401 + the hub-auth marker, not a 200 with error strings", async () => {
+		for (const path of ["/v1/settings", "/v1/wolves/local/prompts"]) {
+			stubHub();
+			const inner = globalThis.fetch;
+			globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+				return url.pathname === path ? reply({ code: "unauthorized", message: "revoked", retryable: false }, 401) : inner(input, init);
+			}) as typeof fetch;
+			const res = await createSettingsOverviewApi(hubClient).overview();
+			assert.equal(res.status, 401, path);
+			assert.equal(res.headers.get("X-Wolfpack-Hub-Auth"), "required", path);
+		}
+	});
+
 	it("calls the hub with the browser's device token and never the console's env hub token", async () => {
 		const auth = stubHub();
 		await createSettingsOverviewApi(hubClient).overview();

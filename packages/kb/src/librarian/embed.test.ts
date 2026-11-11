@@ -41,6 +41,12 @@ describe("vector cache", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("asks ollama to keep the model loaded for 5m between curator ticks", async () => {
+    await createEmbedder(roots).embed("k", "k");
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as { body: string }).body) as { keep_alive?: string };
+    expect(body.keep_alive).toBe("5m");
+  });
+
   it("shouldCompact fires once the file holds over twice the live entries plus slack", async () => {
     const e = createEmbedder(roots);
     for (let i = 0; i < 60; i++) await e.embed(`t${i}`, `h${i}`);

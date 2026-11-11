@@ -146,15 +146,14 @@ describe("runtime-preview-switch", () => {
 			fs.mkdirSync(path.join(tmp, "rt", "apps", "console", ".next", "static"), { recursive: true });
 			fs.writeFileSync(path.join(tmp, "rt", "apps", "console", ".next", "static", "a.js"), "a");
 			fs.mkdirSync(path.join(tmp, "rt", "apps", "console", "public"), { recursive: true });
-			fs.mkdirSync(path.join(ud, "LearnHarness"), { recursive: true });
-			fs.writeFileSync(path.join(ud, "LearnHarness", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
-			fs.mkdirSync(path.join(ud, "Wolfpack Console"), { recursive: true }); // exists, but has no console.json
+			fs.mkdirSync(path.join(ud, "Wolfpack Console"), { recursive: true });
+			fs.writeFileSync(path.join(ud, "Wolfpack Console", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
 			local = { port: "3230", home: path.join(tmp, "home"), userDataRoot: ud, runtimeDir: path.join(tmp, "rt"), node: "/usr/bin/node" };
 		});
 
 		/** An old preview pointed the app at the local console: console.json holds the preview url, with a backup of the original. */
 		const pointOld = (withRecord: boolean) => {
-			const file = path.join(ud, "LearnHarness", "console.json");
+			const file = path.join(ud, "Wolfpack Console", "console.json");
 			fs.copyFileSync(file, `${file}.preview-backup`);
 			fs.writeFileSync(file, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" }));
 			if (withRecord) fs.writeFileSync(stateFile, JSON.stringify({ ...state(), apps: [{ file, fileExisted: true, previous: "https://sfo-01.example" }] }));
@@ -169,8 +168,7 @@ describe("runtime-preview-switch", () => {
 			expect(text).toContain("apps/console/server.js");
 			expect(s.full).toContainEqual(["bootstrap", `gui/501`, plistPath]);
 			expect(fs.existsSync(path.join(tmp, "rt", "apps", "console", ".next", "standalone", "apps", "console", ".next", "static", "a.js"))).toBe(true);
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
-			expect(fs.existsSync(path.join(ud, "Wolfpack Console", "console.json"))).toBe(false);
+			expect(read("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 			expect(s.logs.join("\n")).not.toContain("reopen");
 		});
 
@@ -178,7 +176,7 @@ describe("runtime-preview-switch", () => {
 			pointOld(true);
 			const off = sw({ clear: true, local });
 			expect(await off.run()).toBe(0);
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(read("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 			expect(off.full).toContainEqual(["bootout", "gui/501/com.wolfpack.preview-console"]);
 		});
 
@@ -186,14 +184,13 @@ describe("runtime-preview-switch", () => {
 			const s = sw({ deep: okDeep(), local: { ...local, keepConsole: true } });
 			expect(await s.run()).toBe(0);
 			expect(s.full.some((a) => String(a[1] ?? "").includes("preview-console") || String(a[2] ?? "").includes("preview-console"))).toBe(false);
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(read("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
 		it("a failed deep check stops the console before rolling back and leaves console.json untouched", async () => {
 			const s = sw({ deep: { ...okDeep(), fetchJson: async () => ({ wolves: [] }) }, local });
 			expect(await s.run()).toBe(1);
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
-			expect(fs.existsSync(path.join(ud, "Wolfpack Console", "console.json"))).toBe(false);
+			expect(read("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 			expect(s.full).toContainEqual(["bootout", "gui/501/com.wolfpack.preview-console"]);
 			expect(phase()).toBe("rolled-back");
 		});
@@ -201,7 +198,7 @@ describe("runtime-preview-switch", () => {
 		it("off after an old crash between pointing the files and writing state restores the original from the backup", async () => {
 			pointOld(false);
 			expect(await sw({ clear: true, local }).run()).toBe(0);
-			expect(read("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(read("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
 		it("a busy console port fails the preview with the reason, starts no console and rolls back", async () => {
@@ -209,14 +206,14 @@ describe("runtime-preview-switch", () => {
 			expect(await s.run()).toBe(1);
 			expect(state()).toMatchObject({ phase: "rolled-back", reason: expect.stringContaining("3230") });
 			expect(s.full.some((a) => a[0] === "bootstrap" && String(a[2]).includes("preview-console"))).toBe(false);
-			expect(read("LearnHarness").consoleUrl).toBe("https://sfo-01.example");
+			expect(read("Wolfpack Console").consoleUrl).toBe("https://sfo-01.example");
 		});
 
 		it("healthz never answering on off still stops the console and restores an old pointing", async () => {
 			pointOld(true);
 			const off = sw({ clear: true, local, healthy: false });
 			expect(await off.run()).toBe(1);
-			expect(read("LearnHarness").consoleUrl).toBe("https://sfo-01.example");
+			expect(read("Wolfpack Console").consoleUrl).toBe("https://sfo-01.example");
 			expect(off.full).toContainEqual(["bootout", "gui/501/com.wolfpack.preview-console"]);
 		});
 	});

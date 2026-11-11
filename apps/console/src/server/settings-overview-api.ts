@@ -7,7 +7,7 @@
  */
 import type { ConsoleClient, HubSettings, PromptView, WolfSettingsView } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../core/hub-auth.ts";
-import { getConsoleClient } from "./console-client.ts";
+import { getConsoleClient, isHubAuthError } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
 export interface CompactionPromptInfo {
@@ -80,8 +80,14 @@ export function compactionPrompts(wolves: WolfSettings[] = []): CompactionPrompt
 export function createSettingsOverviewApi(source: ClientSource, opts: { wolfTimeoutMs?: number } = {}) {
 	const timeoutMs = opts.wolfTimeoutMs ?? 8000;
 	async function overview(c: ConsoleClient): Promise<SettingsOverview> {
+		// A revoked/missing token must reach the route (401 + marker), not become a per-section error string.
+		let authLost: unknown;
+		const note = (e: unknown): string => {
+			if (isHubAuthError(e)) authLost ??= e;
+			return errText(e);
+		};
 		const hubP: Promise<SettingsOverview["hub"]> = c.getHubSettings
-			? withTimeout(c.getHubSettings(), timeoutMs).then((settings) => ({ ok: true, settings }), (e) => ({ ok: false, error: errText(e) }))
+			? withTimeout(c.getHubSettings(), timeoutMs).then((settings) => ({ ok: true, settings }), (e) => ({ ok: false, error: note(e) }))
 			: Promise.resolve({ ok: false, error: "hub settings are not available on this console (no hub configured)" });
 		let wolves: Awaited<ReturnType<ConsoleClient["listWolves"]>> = [];
 		let wolvesError: string | undefined;
@@ -95,18 +101,19 @@ export function createSettingsOverviewApi(source: ClientSource, opts: { wolfTime
 			wolves.map(async (w): Promise<WolfSettings> => {
 				const base: WolfSettings = { name: w.name, host: w.host, online: w.status !== "offline" };
 				const cfgP = c.getWolfSettings
-					? withTimeout(c.getWolfSettings(w.name), timeoutMs).then((config) => ({ config }), (e) => ({ configError: errText(e) }))
+					? withTimeout(c.getWolfSettings(w.name), timeoutMs).then((config) => ({ config }), (e) => ({ configError: note(e) }))
 					: Promise.resolve({ configError: "wolf settings are not available on this console" });
 				if (!c.listPrompts) return { ...base, ...(await cfgP), error: "prompts are not available on this console" };
 				try {
 					const [prompts, cfg] = await Promise.all([withTimeout(c.listPrompts(w.name), timeoutMs), cfgP]);
 					return { ...base, prompts, ...cfg };
 				} catch (e) {
-					return { ...base, ...(await cfgP), error: errText(e) };
+					return { ...base, ...(await cfgP), error: note(e) };
 				}
 			}),
 		);
 		const [hub, wolfList] = await Promise.all([hubP, wolvesP]);
+		if (authLost) throw authLost;
 		return { hub, wolves: wolfList, ...(wolvesError ? { wolvesError } : {}), compaction: { prompts: compactionPrompts(wolfList) } };
 	}
 	return {

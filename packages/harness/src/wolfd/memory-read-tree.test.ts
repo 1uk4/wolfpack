@@ -117,6 +117,7 @@ describe("work lookups cost at most one Work API request per domain (work-wolfpa
     const t = await readMemoryTree(den, work, NOW);
     const q = urls.map((u) => new URL(u).searchParams);
     expect(q.map((p) => p.get("domain"))).toEqual(["a", "b", "a", "b"]);
+    expect(q.map((p) => p.get("fields"))).toEqual(["summary", "summary", "summary", "summary"]); // titles and stages only: no log or criteria
     expect(idsOf(urls[0]!)).toEqual(Array.from({ length: 20 }, (_, i) => tid("a", i)));
     expect(idsOf(urls[2]!)).toEqual(["work-a-FEAT"]);
     expect(idsOf(urls[3]!)).toEqual(["work-b-FEAT"]);

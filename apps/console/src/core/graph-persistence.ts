@@ -12,7 +12,6 @@
  */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 import type { Position } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
 

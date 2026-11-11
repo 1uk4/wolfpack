@@ -20,7 +20,7 @@ import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { writeIntent, clearIntent, replayIntent, intentDigest, intentWrittenCount } from "./intent.js";
 import { renderEntry } from "./commit.js";
-import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
+import { readLedger, readLedgerAsync, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox, countPending, DEFAULT_LANE } from "./intake.js";
 import { defaultSweepWriter, type SweepWriter } from "./sweep-writer.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
@@ -87,6 +87,8 @@ export interface SweepContext {
   /** Time budget for the run's one contribution (default SWEEP.runBudgetMs).
    *  A test seam: lets tests exercise parking without waiting minutes. */
   budgetMs?: number;
+  /** The caller's outer budget: when it aborts, the sweep stops at the next item boundary and cancels the engine call in flight. */
+  signal?: AbortSignal;
   /** Called when the run starts real work ("started", once) and when a contribution ends in create/merge/reject/parked
    *  ("item"). Never called for an empty inbox. A throwing callback is ignored. */
   onEvent?: (event: SweepEvent) => void;
@@ -95,7 +97,7 @@ export interface SweepContext {
   /** Where the sweep's writes go (default: straight to disk; see sweep-writer.ts). */
   writer?: SweepWriter;
   /** The tick's once-per-tick ledger read (memoized by the caller, so vectors and sweep parse the file once). Default: read it. */
-  readLog?: () => KbEvent[];
+  readLog?: () => KbEvent[] | Promise<KbEvent[]>;
   /** Step timings for the tick's one log line (see timings.ts). */
   timings?: Timings;
 }
@@ -410,7 +412,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const timed = <X>(step: string, fn: () => X): X => (T ? T.time(step, fn) : fn());
   // The sweep appends to its own copy: the tick's memoized ledger (ctx.readLog) is shared with the vector scan and must not see mid-sweep events.
   // The "ledger" step is timed here only (the tick's memo is not timed separately).
-  const log = timed("ledger", () => (ctx.readLog ? ctx.readLog().slice() : readLedger(roots)));
+  const ledgerT0 = performance.now();
+  const log = (ctx.readLog ? await ctx.readLog() : await readLedgerAsync(roots)).slice();
+  T?.add("ledger", performance.now() - ledgerT0);
   const seen = seenHashes(log);
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) await w.markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));
@@ -472,6 +476,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   );
 
   for (const c of contributions) {
+    if (ctx.signal?.aborted) {
+      ctx.notify?.("sweep: outer budget spent, stopping before the next item");
+      break;
+    }
     result.processed++;
 
     // One summary line per contribution: route, target size, LLM time, outcome.
@@ -516,7 +524,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         call: async (step, schema, opts) => {
           const t = Date.now();
           try {
-            return await engine.call(step, schema, { ...opts, signal });
+            const out = await engine.call(step, schema, { ...opts, signal: ctx.signal ? AbortSignal.any([signal, ctx.signal]) : signal });
+            // An engine that ignored the abort must not let the item commit after the outer budget ended.
+            ctx.signal?.throwIfAborted();
+            return out;
           } finally {
             llmMs += Date.now() - t;
           }
@@ -1018,6 +1029,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     } catch (err) {
       const reason = cleanError(err);
       result.processed--;
+      if (ctx.signal?.aborted) {
+        // The caller's outer budget ended mid-item: not the item's fault, so no attempt is counted and it stays queued.
+        outcome = "aborted by the outer sweep budget, stays queued";
+        break;
+      }
       result.errors++;
       if (classifyError(err) === "infra") {
         // Not the item's fault: no attempt is counted, the item stays queued,

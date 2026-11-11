@@ -20,7 +20,6 @@
  */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 export type KeyAction =
 	| "toggle-dictation"
 	| "open-palette"

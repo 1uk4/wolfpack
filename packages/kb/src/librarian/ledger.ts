@@ -7,7 +7,9 @@
  * package. Replayable: delete vectors/clusters caches and rebuild from here.
  */
 import { existsSync, readFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   KbEventSchema,
   type KbEvent,
@@ -41,6 +43,166 @@ export function readLedger(roots: KbRoots): KbEvent[] {
     if (parsed.success) out.push(parsed.data);
   }
   return out;
+}
+
+interface LedgerCache {
+  ino: number;
+  mtimeMs: number;
+  /** Bytes consumed: everything up to and including the last newline read. */
+  offset: number;
+  /** The last bytes before `offset`, to notice a rewrite that kept the file at least as long. */
+  tail: Buffer;
+  lines: number;
+  events: KbEvent[];
+}
+/**
+ * Module-level: lives for the life of the process, one entry per ledger path, holding every parsed event. Accepted: the ledger is
+ * append-only and bounded in practice, and the cache is what makes repeat reads cheap.
+ */
+const ledgerCache = new Map<string, LedgerCache>();
+/** Per-path invalidation counter: a read that started before an invalidate must not publish its (stale) result. */
+const ledgerGeneration = new Map<string, number>();
+/** Per-path chain so overlapping calls never parse the same byte range twice. */
+const inflight = new Map<string, Promise<unknown>>();
+const TAIL_BYTES = 64;
+const SLICE_MS = 5;
+/** First-read slice size: bounds the synchronous alloc + decode between yields. */
+const READ_CHUNK = 256 * 1024;
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+
+/**
+ * Same events as readLedger, without blocking the event loop: the file is read asynchronously, only the bytes appended
+ * since the last call are parsed (the ledger is append-only), and parsing yields to the loop every few ms. A changed inode,
+ * a shorter file or a changed tail means it was rewritten or compacted: full re-read. A rewrite that grows the file and
+ * keeps the same inode and the same last 64 bytes before the cached offset is NOT detected. A final line without a newline
+ * is used if it parses as JSON, otherwise held until complete. Calls on the same path are serialized.
+ * Returns the cache's own array, frozen (copy it before mutating, as sweep.ts does); the events in it are frozen too.
+ */
+export function readLedgerAsync(roots: KbRoots): Promise<KbEvent[]> {
+  const file = ledgerFile(roots);
+  const prev = inflight.get(file) ?? Promise.resolve();
+  const run = prev.then(() => readLedgerOnce(file));
+  const settled = run.catch(() => undefined);
+  inflight.set(file, settled);
+  void settled.then(() => {
+    if (inflight.get(file) === settled) inflight.delete(file);
+  });
+  return run;
+}
+
+async function readLedgerOnce(file: string): Promise<KbEvent[]> {
+  const generation = ledgerGeneration.get(file) ?? 0;
+  let fh;
+  try {
+    fh = await open(file, "r");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      ledgerCache.delete(file);
+      return [];
+    }
+    throw err;
+  }
+  try {
+    const st = await fh.stat(); // same file as the bytes read below
+    let c = ledgerCache.get(file);
+    // Cross-process fallback for rewrites (a coarse-timestamp filesystem can make the mtime check reset falsely; that only costs an extra full read): new inode, shorter file, or an mtime older than the cached one.
+    if (c && (c.ino !== st.ino || st.size < c.offset || st.mtimeMs < c.mtimeMs)) c = undefined;
+    if (c && c.tail.length > 0) {
+      const probe = Buffer.alloc(c.tail.length);
+      await fh.read(probe, 0, probe.length, c.offset - c.tail.length);
+      if (!probe.equals(c.tail)) c = undefined;
+    }
+    const baseOffset = c?.offset ?? 0;
+    let lines = c?.lines ?? 0;
+    let tail = c?.tail ?? Buffer.alloc(0);
+    // Everything is parsed into locals and published to the cache in one assignment at the end, so a throw or
+    // an overlapping reader never sees a half-updated entry.
+    const fresh: KbEvent[] = [];
+    let consumed = 0; // bytes from baseOffset that are parsed
+    let carry: Buffer = Buffer.alloc(0); // bytes read past `consumed`, not yet ended by a newline
+    let readPos = baseOffset;
+    let sliceStart = performance.now();
+
+    const parseLine = (raw: Buffer) => {
+      lines++;
+      const line = raw.toString("utf-8");
+      if (!line.trim()) return;
+      let json: unknown;
+      try {
+        json = JSON.parse(line);
+      } catch (err) {
+        console.warn(`ledger: skipping unparseable line ${lines} of ${file}: ${err instanceof Error ? err.message : err}`);
+        return;
+      }
+      const parsed = KbEventSchema.safeParse(json);
+      if (parsed.success) fresh.push(Object.freeze(parsed.data));
+    };
+
+    while (readPos < st.size) {
+      const chunk = Buffer.alloc(Math.min(READ_CHUNK, st.size - readPos));
+      const { bytesRead } = await fh.read(chunk, 0, chunk.length, readPos);
+      if (bytesRead === 0) break;
+      readPos += bytesRead;
+      const data = carry.length ? Buffer.concat([carry, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
+      const end = data.lastIndexOf(0x0a) + 1; // complete lines in this slice
+      let pos = 0;
+      while (pos < end) {
+        const nl = data.indexOf(0x0a, pos);
+        parseLine(data.subarray(pos, nl));
+        pos = nl + 1;
+        if (performance.now() - sliceStart > SLICE_MS) {
+          await yieldToLoop();
+          sliceStart = performance.now();
+        }
+      }
+      consumed += end;
+      carry = Buffer.from(data.subarray(end));
+      if (end > 0) tail = Buffer.from(data.subarray(Math.max(0, end - TAIL_BYTES), end));
+      // the next fh.read is itself a real yield to the loop, so no extra setImmediate here
+    }
+    if (carry.length > 0) {
+      // Unterminated last line: the sync read parses it, so take it when it is valid JSON; a torn one waits.
+      let whole = false;
+      try {
+        JSON.parse(carry.toString("utf-8"));
+        whole = true;
+      } catch {
+        /* torn: hold */
+      }
+      if (whole) {
+        parseLine(carry);
+        consumed += carry.length;
+        tail = Buffer.from(carry.subarray(Math.max(0, carry.length - TAIL_BYTES)));
+      }
+    }
+    const next: LedgerCache = {
+      ino: st.ino,
+      mtimeMs: st.mtimeMs,
+      offset: baseOffset + consumed,
+      tail,
+      lines,
+      events: c ? (fresh.length === 0 ? c.events : c.events.concat(fresh)) : fresh,
+    };
+    if ((ledgerGeneration.get(file) ?? 0) === generation) ledgerCache.set(file, next);
+    return Object.freeze(next.events) as KbEvent[]; // shared with the cache: sweep.ts copies before it appends
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Drop the cached events for this ledger so the next read parses the file from byte 0, and make any read already in
+ * flight skip publishing its result to the cache. Call it after anything that rewrites the ledger in place. The one such
+ * writer is the kb-commits rollback (rollbackLedger in packages/hubd/src/kb-commits.ts, which truncates the file): it
+ * keeps the inode, and a later append can grow the file past the cached offset with different bytes, which the
+ * size/mtime/tail probe catches only probabilistically. It runs in the hubd process, so invalidating here is exact.
+ * Appends (appendLedger) never change the inode and need nothing; writeDurable (tmp + rename in kb-commits.ts) gives a
+ * new inode, caught by the inode check.
+ */
+export function invalidateLedgerCache(roots: KbRoots): void {
+  const file = ledgerFile(roots);
+  ledgerGeneration.set(file, (ledgerGeneration.get(file) ?? 0) + 1);
+  ledgerCache.delete(file);
 }
 
 export function appendLedger(roots: KbRoots, events: KbEvent[]): void {

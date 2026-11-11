@@ -55,8 +55,8 @@ beforeEach(() => {
 	tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rtwt-")));
 	home = path.join(tmp, "home");
 	fs.mkdirSync(path.join(home, "Library", "LaunchAgents"), { recursive: true });
-	fs.mkdirSync(path.join(ud(), "LearnHarness"), { recursive: true });
-	fs.writeFileSync(path.join(ud(), "LearnHarness", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example" }));
+	fs.mkdirSync(path.join(ud(), "Wolfpack Console"), { recursive: true });
+	fs.writeFileSync(path.join(ud(), "Wolfpack Console", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example" }));
 	main = path.join(tmp, "main");
 	g(tmp, "init", "-q", "-b", "main", main);
 	g(main, "config", "user.email", "t@t");
@@ -703,7 +703,7 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		});
 	});
 	describe("off stops the console, then asks about the wolves only if they were moved", () => {
-		const appUrl = () => JSON.parse(fs.readFileSync(path.join(ud(), "LearnHarness", "console.json"), "utf8")).consoleUrl;
+		const appUrl = () => JSON.parse(fs.readFileSync(path.join(ud(), "Wolfpack Console", "console.json"), "utf8")).consoleUrl;
 		const consoleStopped = (h: ReturnType<typeof harness>) => h.lc.some((a) => a[0] === "bootout" && a[1].endsWith("com.wolfpack.preview-console"));
 
 		it("with only the console running it stops it without a question and clears the state; the wolves are never touched", async () => {

@@ -1,6 +1,6 @@
 /**
  * Runs the wrapper through the REAL claude-stateless bridge (`pi-claude-bridge-stateless/stateless`, npm alias for
- * 1uk4/pi-claude-bridge @45eb3f33, dist/stateless/provider.js), the package claudeStatelessFactory imports at runtime.
+ * 1uk4/pi-claude-bridge @91b1fc4d, dist/stateless/provider.js), the package claudeStatelessFactory imports at runtime.
  * NOT `pi-claude-bridge` (durable-core), which is the separate claude-bridge provider with no error_max_turns handling.
  * Only the SDK query is faked.
  */
@@ -10,18 +10,27 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createStatelessStreams } from "pi-claude-bridge-stateless/stateless";
 import { withMaxTurnsAsTurnEnd } from "./max-turns.js";
+import { withDroppedCallNet } from "./dropped-call.js";
 
 const MODEL = { id: "sonnet", api: "x", provider: "p", name: "s", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1e5, maxTokens: 1e4, reasoning: false } as any;
 const TOOLS = [{ name: "add", description: "add", parameters: { type: "object", properties: { a: { type: "number" } } } }];
 const PREFIX = "mcp__custom-tools__";
 const ev = (event: any) => ({ type: "stream_event", event });
-const toolBlock = (name: string) => [
+const toolBlock = (name: string, json = '{"a":1}') => [
   ev({ type: "message_start", message: { id: "m1", usage: { input_tokens: 2 } } }),
   ev({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name, input: {} } }),
-  ev({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"a":1}' } }),
+  ev({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: json } }),
   ev({ type: "content_block_stop", index: 0 }),
   ev({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } }),
   ev({ type: "message_stop" }),
+];
+// The one shape the bridge still drops (PR #2 passes unserved names to pi): the stream carries no content block, and the
+// tool_use arrives in a whole `assistant` message with the SAME id as the stream, which consume() treats as already delivered.
+const droppedShape = (json = '{"a":1}') => [
+  ev({ type: "message_start", message: { id: "m1", usage: { input_tokens: 2 } } }),
+  ev({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } }),
+  ev({ type: "message_stop" }),
+  { type: "assistant", message: { id: "m1", model: "sonnet", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_1", name: PREFIX + "add", input: JSON.parse(json) }] } },
 ];
 const MAX_TURNS = { type: "result", subtype: "error_max_turns", is_error: true, errors: ["Reached maximum number of turns (1)"], usage: { input_tokens: 2, output_tokens: 9 }, num_turns: 2, session_id: "s" };
 const fake = (msgs: any[], throwAfter?: string) => () => (async function* () { for (const m of msgs) yield m; if (throwAfter) throw new Error(throwAfter); })();
@@ -31,9 +40,10 @@ let seq = 0;
 beforeAll(() => { root = mkdtempSync(join(tmpdir(), "max-turns-bridge-")); });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-async function round(queryFn: any) {
+async function round(queryFn: any, net?: (line: string) => void) {
   const streams = createStatelessStreams({ sessionDir: join(root, "cwd"), claudeDir: join(root, "claude"), queryFn } as any);
-  const s = (streams as any).streamSimple(MODEL, { messages: [{ role: "system", content: "x" }, { role: "user", content: "go", timestamp: 1 }] }, { tools: TOOLS, sessionId: `s${++seq}` });
+  const simple = net ? withDroppedCallNet((streams as any).streamSimple, net) : (streams as any).streamSimple;
+  const s = simple(MODEL, { messages: [{ role: "system", content: "x" }, { role: "user", content: "go", timestamp: 1 }] }, { tools: TOOLS, sessionId: `s${++seq}` });
   const types: string[] = [];
   for await (const e of s) types.push(e.type);
   return { types, msg: await s.result() };
@@ -45,25 +55,73 @@ describe("withMaxTurnsAsTurnEnd through the real claude-stateless bridge (work-w
     expect(msg.stopReason).toBe("toolUse");
   });
 
-  it("reproduces the failure: an unmapped tool_use + error_max_turns is fatal without the wrapper", async () => {
-    const { msg } = await round(fake([...toolBlock(PREFIX + "nope"), MAX_TURNS], "Reached maximum number of turns (1)"));
+  it("reproduces the failure: a tool_use the bridge does not announce + error_max_turns is fatal without the wrapper", async () => {
+    const { msg } = await round(fake([...droppedShape(), MAX_TURNS], "Reached maximum number of turns (1)"));
     expect(msg.stopReason).toBe("error");
     expect(msg.errorMessage).toMatch(/maximum number of turns/);
   });
 
-  it("the dropped/unmapped tool_use case ends the round cleanly with the wrapper (no fatal error, no CONNECTION_LOST)", async () => {
+  it("an unserved tool name now reaches pi as a tool call (bridge PR #2): toolUse, no fatal error, the net logs nothing", async () => {
+    const lines: string[] = [];
+    const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "nope"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()), (l) => lines.push(l));
+    expect(lines).toEqual([]);
+    expect(msg.stopReason).toBe("toolUse");
+    expect(msg.errorMessage).toBeUndefined();
+    expect(msg.content.find((b: any) => b.type === "toolCall")).toMatchObject({ name: "nope" });
+  });
+
+  it("the dropped tool_use case ends the round cleanly with the wrapper (no fatal error, no CONNECTION_LOST)", async () => {
     const log = vi.fn();
-    const { types, msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "nope"), MAX_TURNS], "Reached maximum number of turns (1)"), log));
+    const { types, msg } = await round(withMaxTurnsAsTurnEnd(fake([...droppedShape(), MAX_TURNS], "Reached maximum number of turns (1)"), log));
     expect(msg.stopReason).toBe("stop");
     expect(msg.errorMessage).toBeUndefined();
     expect(types.at(-1)).toBe("done");
     expect(msg.content.some((b: any) => b.type === "toolCall")).toBe(false); // the unmapped call is lost: logged below
-    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls.filter((c) => String(c[0]).includes("rewrote error_max_turns"))).toHaveLength(1);
   });
 
-  it("a served tool_use with the wrapper still ends as toolUse and returns the call to the harness", async () => {
-    const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "add"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()));
+  it("a served tool_use with the wrapper still ends as toolUse, returns the call to the harness and the net logs nothing", async () => {
+    const lines: string[] = [];
+    const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "add"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()), (l) => lines.push(l));
+    expect(lines).toEqual([]);
     expect(msg.stopReason).toBe("toolUse");
     expect(msg.content.find((b: any) => b.type === "toolCall")).toMatchObject({ id: "toolu_1", name: "add", arguments: { a: 1 } });
+  });
+
+  it("logs a secret-free summary of the dropped tool_use at the round end (work-wolfpack-7g4ZFMJ)", async () => {
+    const lines: string[] = [];
+    const { msg } = await round(withMaxTurnsAsTurnEnd(fake([...droppedShape('{"a":"SECRET"}'), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn()), (l) => lines.push(l));
+    expect(msg.content.some((b: any) => b.type === "toolCall")).toBe(false);
+    expect(lines.join("\n")).not.toContain("SECRET");
+    expect(lines).toHaveLength(2); // the round and its one retry both dropped
+    expect(lines[0]).toContain("blocks=[tool_use]");
+    expect(lines[0]).toContain("stop_reason=tool_use");
+  });
+
+  const dropRound = () => withMaxTurnsAsTurnEnd(fake([...droppedShape(), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn())({});
+  const okRound = () => withMaxTurnsAsTurnEnd(fake([...toolBlock(PREFIX + "add"), MAX_TURNS], "Reached maximum number of turns (1)"), vi.fn())({});
+  const seqQuery = (...rounds: Array<() => any>) => { let i = 0; return vi.fn(() => rounds[Math.min(i++, rounds.length - 1)]()); };
+
+  it("retries a dropped round once and returns the retry's tool call (work-wolfpack-7g4ZFMJ)", async () => {
+    const q = seqQuery(dropRound, okRound);
+    const { types, msg } = await round(q, vi.fn());
+    expect(msg.stopReason).toBe("toolUse");
+    expect(types.filter((t) => t === "start")).toHaveLength(1);
+    expect(msg.content.find((b: any) => b.type === "toolCall")).toMatchObject({ name: "add" });
+  });
+
+  it("ends with a clear error when the retry drops too (work-wolfpack-7g4ZFMJ)", async () => {
+    const q = seqQuery(dropRound, dropRound);
+    const { types, msg } = await round(q, vi.fn());
+    expect(msg.stopReason).toBe("error");
+    expect(msg.errorMessage).toBe("The model's tool call was lost (bridge dropped it); please resend");
+    expect(types.at(-1)).toBe("error");
+  });
+
+  it("leaves a legitimate empty end of turn (no rewrite) alone", async () => {
+    const q = vi.fn(fake([ev({ type: "message_start", message: { id: "m1" } }), ev({ type: "message_delta", delta: { stop_reason: "end_turn" } }), ev({ type: "message_stop" }), { type: "result", subtype: "success", is_error: false, result: "", usage: {}, session_id: "s" }]));
+    const { msg } = await round(withMaxTurnsAsTurnEnd(q, vi.fn()), vi.fn());
+    expect(msg.stopReason).toBe("stop");
+    expect(msg.errorMessage).toBeUndefined();
   });
 });

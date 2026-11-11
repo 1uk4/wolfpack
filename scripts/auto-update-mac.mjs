@@ -24,7 +24,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MANIFEST_URL, readStatus, runAutoUpdate } from "./auto-update.mjs";
+import { MAIN_MANIFEST_URL, MANIFEST_URL, readStatus, readSubscription, runAutoUpdate, versionAtLeast } from "./auto-update.mjs";
 import { liveWolvesDir, packHome } from "./live-paths.mjs";
 
 const LABEL = "com.wolfpack.auto-update";
@@ -37,6 +37,7 @@ export function macPaths(env = process.env, home = os.homedir()) {
 	const runtime = env.STACK_RUNTIME || path.join(wolves, "runtime/wolfpack");
 	return {
 		runtime,
+		channelFile: path.join(pack, "release-channel.json"),
 		statusFile: path.join(pack, "auto-update/status.json"),
 		lockFile: path.join(pack, "auto-update/run.lock"),
 		disabledFile: path.join(pack, "auto-update.disabled"),
@@ -46,6 +47,12 @@ export function macPaths(env = process.env, home = os.homedir()) {
 	};
 }
 
+/** ~/.wolfpack/release-channel.json `{schema:1, channel, mode}`; no file = stable and the WOLFPACK_AUTO_UPDATE opt-in (mode undefined). */
+export function macChannel(p) {
+	const s = readSubscription(p.channelFile); // null: missing or corrupt (logged) = no file
+	return s ? { channel: s.channel, mode: s.mode } : { channel: "stable", mode: undefined };
+}
+
 const firstLine = (f) => {
 	try {
 		return fs.readFileSync(f, "utf8").split("\n")[0].trim() || null;
@@ -53,12 +60,7 @@ const firstLine = (f) => {
 		return null;
 	}
 };
-const core = (v) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(v ?? "")?.slice(1, 4).map(Number) ?? null;
-const atLeast = (a, b) => {
-	const x = core(a);
-	const y = core(b);
-	return !!x && !!y && (x[0] - y[0] || x[1] - y[1] || x[2] - y[2]) >= 0;
-};
+const atLeast = versionAtLeast; // prerelease-aware, the same order as the shared core
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function healthVersion(port) {
@@ -72,20 +74,25 @@ async function healthVersion(port) {
 }
 
 /** Real Mac deps. runtime:update and stack restart run from the runtime checkout (the same scripts a person would run). */
-export function macDeps(p, env = process.env) {
-	const node = (script, args) => spawnSync(process.execPath, [path.join(p.runtime, "scripts", script), ...args], { cwd: p.runtime, env, stdio: "inherit" }).status;
+export function macDeps(p, env = process.env, channel = "stable") {
+	let sha = null; // main channel: the commit the manifest names
+	let versions = ""; // its per-component versions, `console=…,hubd=…`: runtime-update records them so the services report the release version
+	const node = (script, args) => spawnSync(process.execPath, [path.join(p.runtime, "scripts", script), ...args], { cwd: p.runtime, env: { ...env, STACK_RUNTIME: p.runtime }, stdio: "inherit" }).status;
 	return {
 		fetchManifest: async () => {
-			const r = await fetch(env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || MANIFEST_URL, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+			const r = await fetch(env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || (channel === "main" ? MAIN_MANIFEST_URL : MANIFEST_URL), { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
 			if (!r.ok) throw new Error(`HTTP ${r.status}`);
-			return r.json();
+			const m = await r.json();
+			sha = channel === "main" && typeof m?.sha === "string" ? m.sha : null;
+			versions = Object.entries(m?.components ?? {}).filter(([, e]) => typeof e?.version === "string" && /^[\w.+-]+$/.test(e.version)).map(([k, e]) => `${k}=${e.version}`).join(",");
+			return m;
 		},
 		currentVersion: () => healthVersion(p.port),
 		install: (_u, entry) => {
 			// runtime:update quietly falls back to npm without pnpm; under launchd that means a wrong install, so stop here instead.
 			const pnpm = spawnSync("pnpm", ["--version"], { env, stdio: "ignore" });
 			if (pnpm.error || pnpm.status !== 0) return { ok: false, code: "no-pnpm", message: `pnpm not found on PATH (${env.PATH ?? "unset"}); reinstall the plist: node scripts/auto-update-mac.mjs install` };
-			if (node("runtime-update.mjs", []) !== 0) return { ok: false, code: "refresh-failed", message: "pnpm runtime:update failed (dirty or diverged runtime, fetch or build error); see the log" };
+			if (node("runtime-update.mjs", channel === "main" && sha ? ["--sha", sha, ...(versions ? ["--versions", versions] : [])] : []) !== 0) return { ok: false, code: "refresh-failed", message: "pnpm runtime:update failed (dirty or diverged runtime, fetch or build error); see the log" };
 			const stamped = firstLine(path.join(p.runtime, "packages/workerd/VERSION"));
 			if (!atLeast(stamped, entry.version)) return { ok: false, code: "behind-stable", message: `Mac behind stable: merge stable back (checkout stamps ${stamped ?? "no version"}, stable is ${entry.version})` };
 			if (node("stack.mjs", ["restart"]) !== 0) return { ok: false, code: "restart-failed", message: "pnpm stack restart failed" };
@@ -197,6 +204,7 @@ export async function main(argv, env = process.env) {
 		console.error("usage: auto-update-mac.mjs run [--now] [--clear-failed] | status | install | uninstall");
 		return 2;
 	}
+	const sub = macChannel(p);
 	const { result } = await runAutoUpdate({
 		host: os.hostname().replace(/\.local$/, "") || "mac",
 		units: [{ id: "stack", component: "workerd" }],
@@ -204,9 +212,11 @@ export async function main(argv, env = process.env) {
 		lockFile: p.lockFile,
 		disabledFile: p.disabledFile,
 		enabled: env.WOLFPACK_AUTO_UPDATE === "1",
+		mode: sub.mode,
+		channel: sub.channel,
 		manual: flags.includes("--now"),
 		clearFailed: flags.includes("--clear-failed"),
-		deps: macDeps(p, env),
+		deps: macDeps(p, env, sub.channel),
 		log: (m) => console.log(`${new Date().toISOString()} ${m}`),
 	});
 	console.log(`auto-update: ${result}`);

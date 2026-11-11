@@ -32,7 +32,6 @@ const { createActivityBridge } = await import("../src/server/needs-you-api.ts");
 const { SubagentModalProvider } = await import("../components/subagent-modal.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
 const strip = await import("../components/subagent-strip.tsx");
-const { ActivitySection } = await import("../components/activity-dock.tsx");
 const { SessionRow, SessionsSidebar } = await import("../components/sidebar.tsx");
 const { SidebarProvider } = await import("../components/sidebar.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
@@ -476,15 +475,6 @@ describe("Stop", () => {
 		assert.match(q('[data-testid="subagent-stop-error"]')!.textContent!, /Could not stop worker/);
 		await fire(child(1, { state: "stopped", finishedAt: ago(0) }));
 		assert.ok(q('[data-testid="subagent-stop-error"]') === null);
-	});
-});
-
-describe("the legacy activity section", () => {
-	it("hideWhenEmpty draws nothing without jobs; without the flag the header stays", () => {
-		assert.equal(renderToStaticMarkup(<ActivitySection feed={{ jobs: [] }} hideWhenEmpty />), "");
-		assert.match(renderToStaticMarkup(<ActivitySection feed={{ jobs: [] }} />), /Background agents/);
-		const job = { id: "j", kind: "research", chatId: "c", toolCallId: "t", status: "running", activity: "x", createdAt: ago(1000), updatedAt: ago(0), title: "T", contextLimit: null };
-		assert.match(renderToStaticMarkup(<ActivitySection feed={{ jobs: [job] as never }} hideWhenEmpty />), /Background agents/);
 	});
 });
 

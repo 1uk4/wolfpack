@@ -210,4 +210,3 @@ export const SETTINGS_SECTIONS = {
 	models: parseModelsSettingsBody,
 } as const;
 
-export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;

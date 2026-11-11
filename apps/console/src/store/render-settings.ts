@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { RENDER_SETTINGS_FILE } from "../../config.ts";
-import { DEFAULT_RENDER_SETTINGS, sanitizeRenderSettings, type GraphRenderSettings } from "../core/render-settings.ts";
+import { sanitizeRenderSettings, type GraphRenderSettings } from "../core/render-settings.ts";
 
 /** The persisted settings, or null when no file exists yet (first boot). */
 export function readRenderSettings(): GraphRenderSettings | null {
@@ -37,4 +37,3 @@ export function writeRenderSettings(raw: unknown): GraphRenderSettings {
 	return settings;
 }
 
-export { DEFAULT_RENDER_SETTINGS };

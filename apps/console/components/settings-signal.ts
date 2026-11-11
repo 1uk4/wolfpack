@@ -12,7 +12,6 @@
  * The event carries the section name so ONE event serves all sections —
  * readers filter on what they actually read.
  */
-import { useEffect, useRef } from "react";
 
 export const SETTINGS_SAVED_EVENT = "wolfpack:settings-saved";
 
@@ -40,11 +39,3 @@ export function onSettingsSaved(handler: (section: SettingsSection) => void): ()
 	return () => window.removeEventListener(SETTINGS_SAVED_EVENT, listener);
 }
 
-/** Reader subscription: re-invokes whenever a writer lands, with the
- *  handler captured through a ref so callers never churn the
- *  subscription (and never stale-close over it either). */
-export function useSettingsSaved(handler: (section: SettingsSection) => void): void {
-	const saved = useRef(handler);
-	saved.current = handler;
-	useEffect(() => onSettingsSaved((section) => saved.current(section)), []);
-}

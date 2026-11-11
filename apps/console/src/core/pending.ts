@@ -63,10 +63,6 @@ function findPending(messages: UIMessage[], names: readonly string[]): PendingTo
 	return null;
 }
 
-export function findPendingToolCall(messages: UIMessage[]): PendingToolCall | null {
-	return findPending(messages, QUESTION_TOOLS);
-}
-
 // ─── Turn activity label (2026-09-19, the “Writing a question…” fix) ──────
 
 /**
@@ -106,5 +102,4 @@ export function streamingToolActivity(messages: UIMessage[]): string | null {
 	}
 	return null;
 }
-
 

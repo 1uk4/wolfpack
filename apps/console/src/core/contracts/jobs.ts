@@ -7,7 +7,6 @@
  * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
  */
 import type { CallUsage } from "./chat.ts";
-import type { LhMessage, LhMarkerMessage } from "../native-messages.ts";
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 
@@ -60,63 +59,6 @@ export interface JobUsage {
 	 *  until the first call completes; absent provider fields stay absent
 	 *  (never zero). */
 	lastStep?: CallUsage;
-}
-
-/** The per-model-call usage shape we fold into JobUsage — the SDK's
- * LanguageModelUsage narrowed structurally (no runtime "ai" import: any
- * object with these fields folds, including the real thing and test fakes). */
-export interface UsageStepLike {
-	inputTokens?: number | undefined;
-	inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number } | undefined;
-	outputTokens?: number | undefined;
-	outputTokenDetails?: { reasoningTokens?: number } | undefined;
-}
-
-/** pi-ai's Usage shape (input/output/cacheRead/cacheWrite/reasoning?) →
- * UsageStepLike. Structural — no pi import here; the engine band maps at
- * its boundaries. */
-export function piUsageToStep(usage: {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	reasoning?: number;
-}): UsageStepLike {
-	return {
-		inputTokens: usage.input,
-		outputTokens: usage.output,
-		inputTokenDetails: { cacheReadTokens: usage.cacheRead, cacheWriteTokens: usage.cacheWrite },
-		outputTokenDetails: usage.reasoning !== undefined ? { reasoningTokens: usage.reasoning } : undefined,
-	};
-}
-
-/** Fold one model call's usage into the run's running total (pure). A
- * field neither the total nor the step reported stays undefined; once
- * reported, later unreported calls contribute 0. The `steps` counter is
- * the billing count: one per model call, reported or not. */
-export function accumulateJobUsage(
-	total: JobUsage | undefined,
-	model: string,
-	step: UsageStepLike,
-): JobUsage {
-	const add = (a: number | undefined, b: number | undefined): number | undefined =>
-		a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
-	return {
-		model,
-		inputTokens: add(total?.inputTokens, step.inputTokens),
-		outputTokens: add(total?.outputTokens, step.outputTokens),
-		cacheReadTokens: add(total?.cacheReadTokens, step.inputTokenDetails?.cacheReadTokens),
-		cacheWriteTokens: add(total?.cacheWriteTokens, step.inputTokenDetails?.cacheWriteTokens),
-		reasoningTokens: add(total?.reasoningTokens, step.outputTokenDetails?.reasoningTokens),
-		steps: (total?.steps ?? 0) + 1,
-		lastStep: {
-			inputTokens: step.inputTokens,
-			outputTokens: step.outputTokens,
-			cacheReadTokens: step.inputTokenDetails?.cacheReadTokens,
-			cacheWriteTokens: step.inputTokenDetails?.cacheWriteTokens,
-			reasoningTokens: step.outputTokenDetails?.reasoningTokens,
-		},
-	};
 }
 
 /**
@@ -185,15 +127,6 @@ export interface SubagentArtifactData {
 	result: JobResult;
 }
 
-/** A result steer's marker details: the UI's meta + the result in one
- *  payload. */
-export interface SteerDetails extends SubagentResultMeta {
-	result: JobResult;
-}
-
-/** Anything the wake pipeline may queue and deliver — a native marker. */
-export type SteerMessage = LhMarkerMessage;
-
 /** Whether a result is the failure shape. */
 export function isSubagentFailure(_kind: JobKind, result: JobResult): boolean {
 	return result.failed === true;
@@ -207,52 +140,3 @@ function steerText(kind: JobKind, result: JobResult): string {
 	return `The ${kind} job is complete — its result follows.\n\n${result.brief}`;
 }
 
-/**
- * Build the steer message for a finished job (pure — shared by the runner,
- * the wake pipeline, and tests). Deterministic id per job makes re-delivery
- * idempotent.
- */
-export function buildSubagentSteer(
-	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
-	result: JobResult,
-): SteerMessage {
-	return {
-		id: `steer_${job.id}`,
-		role: "custom",
-		customType: "subagent-steer",
-		content: steerText(job.kind, result),
-		display: true,
-		details: {
-			jobId: job.id,
-			kind: job.kind,
-			toolCallId: job.toolCallId,
-			result,
-		},
-		timestamp: Date.now(),
-	};
-}
-
-/** Build the abort steer for an aborted job (pure — shared by the
- * abort path in src/server/jobs.ts and tests). Same id space as the result
- * steer (exactly one delivers). */
-export function buildAbortSteer(
-	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
-): SteerMessage {
-	const meta = { jobId: job.id, kind: job.kind, toolCallId: job.toolCallId, aborted: true } as const;
-	return {
-		id: `steer_${job.id}`,
-		role: "custom",
-		customType: "subagent-abort",
-		content: `The ${job.kind} job was aborted by the user — no result is coming. Acknowledge it in one line and continue without it (a re-dispatch is fine if the user wants it).`,
-		display: true,
-		details: meta,
-		timestamp: Date.now(),
-	};
-}
-
-/** True when the transcript already carries this steer — idempotent
- *  delivery: every steer id is deterministic per its event
- *  (steer_<jobId> for jobs). */
-export function steerDelivered(messages: LhMessage[], steerId: string): boolean {
-	return messages.some((m) => m.id === steerId);
-}

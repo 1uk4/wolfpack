@@ -84,12 +84,6 @@ export interface UiAttachment {
 /** A record message: a native pi message (or our marker) plus the record id. */
 export type LhMessage = (UserMessage & { attachments?: UiAttachment[] } | AssistantMessage | ToolResultMessage | LhMarkerMessage) & { id: string };
 
-/** A record message list is assignable to the agent's context — that IS
- *  the replay (ui-stream/chat-handler assign it to initialState.messages). */
-export function asAgentMessages(messages: readonly LhMessage[]): AgentMessage[] {
-	return messages as unknown as AgentMessage[];
-}
-
 // ─── id minting ──────────────────────────────────────────────────────────────
 
 /** The app-wide message id shape (same as the UIMessage-era mint). */
@@ -121,15 +115,6 @@ export function newUserMessage(text: string, attachments?: UiAttachment[]): LhMe
 		timestamp: Date.now(),
 		...(attachments?.length ? { attachments } : {}),
 	};
-}
-
-/** A steered user message (mid-turn composer steering, owner 2026-10-03):
- *  a plain user message with the CLIENT-minted steer id — the same object
- *  rides agent.steer(), the live stream's message events, and the settled
- *  record, so the optimistic queued indicator and the transcript card
- *  upsert by one identity. */
-export function newUserSteer(text: string, id: string): LhMessage & UserMessage {
-	return { id, role: "user", content: text, timestamp: Date.now() };
 }
 
 /** The learner's answer — the question call's tool result (fork 1).
@@ -293,12 +278,6 @@ export function danglingQuestionOf(
 		return null; // the newest assistant message's questions are all answered
 	}
 	return null;
-}
-
-/** Every toolResult id in the record — answer-event validation (the call
- *  must be a DANGLING question call, not an already-answered one). */
-export function answeredCallIds(messages: readonly LhMessage[]): Set<string> {
-	return resultIdsFrom(messages);
 }
 
 // ─── the continuation fold (Wave D: the SDK's

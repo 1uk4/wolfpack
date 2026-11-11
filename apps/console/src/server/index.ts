@@ -22,7 +22,6 @@ export {
 // Importing this module runs the idempotent boot fill-gap — every consumer
 // keeps its plain process.env reads (that seam is the point).
 export * from "./keys.ts";
-export { authStore } from "../store/auth.ts";
 export * from "./settings-body.ts";
 export * from "./model-catalog.ts";
 

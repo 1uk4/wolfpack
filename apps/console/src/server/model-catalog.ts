@@ -20,7 +20,6 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { piModels } from "../agent/models.ts";
-import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
@@ -124,25 +123,6 @@ export function toModelDto(model: Model<Api>): ModelDto {
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
 	};
-}
-
-/** The live-limits index (context-meter amendment, owner 2026-09-23):
- *  provider:id → contextWindow from pi's catalog, over the SAME keyed
- *  providers the picker federates. The one source for every context
- *  meter's denominator — the stats-bar join holds /api/models' copy,
- *  and the activity feed (observability.ts) resolves job limits
- *  server-side through this. No hardcoded fallback exists anywhere:
- *  a model missing here reads limit-null (usage-only, honest render). */
-export function catalogContextLimits(): Map<string, number> {
-	const keyed = keyedProviderIds();
-	const index = new Map<string, number>();
-	for (const provider of piModels().getProviders()) {
-		if (!keyed.has(provider.id)) continue;
-		for (const model of piModels().getModels(provider.id)) {
-			index.set(`${provider.id}:${model.id}`, model.contextWindow);
-		}
-	}
-	return index;
 }
 
 /** The full picker payload: every model of every configured provider

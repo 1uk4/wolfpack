@@ -44,7 +44,6 @@ import {
 
 /** What the region glow (and the cluster pull) groups nodes by. */
 export type GroupBy = "domain" | "section";
-export const GROUP_BY_OPTIONS: readonly GroupBy[] = ["domain", "section"];
 
 /** The optional graph layers (query params of the librarian's graph route).
  *  Open work and the KB itself are always on. */
@@ -86,7 +85,6 @@ export interface GraphRenderSettings {
 	 *  since 2026-09-13 (user request) — was session-only dev state. */
 	physics: PhysicsTuning;
 }
-
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 

@@ -43,10 +43,6 @@ import { cn } from "@/lib/utils";
 let allUserThinkingOpen: boolean | null = null;
 const userThinkingListeners = new Set<(open: boolean) => void>();
 
-export function currentUserThinkingOpen(): boolean {
-	return allUserThinkingOpen ?? true;
-}
-
 /** The row's starting state: an explicit ⌘T set wins over the row's own
  *  default (late mounts honor the last set — same path as the live sync,
  *  readable at render time so static SSR reflects the store too). */

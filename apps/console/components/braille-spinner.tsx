@@ -32,7 +32,6 @@ const FRAMES: ReadonlyArray<{ dots: ReadonlyArray<readonly [number, number]> }> 
 
 /** The animation constants (mirrors globals.css .braille-frame). */
 export const SPINNER_FRAME_MS = 80;
-export const SPINNER_FRAMES = FRAMES.length;
 
 export function BrailleSpinner({
 	className,

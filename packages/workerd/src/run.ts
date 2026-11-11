@@ -128,7 +128,7 @@ export interface RunningWorkerd {
 }
 
 export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningWorkerd> {
-  const log = opts.log ?? ((l: string) => process.stderr.write(`${l}\n`));
+  const log = opts.log ?? ((l: string) => process.stderr.write(`${new Date().toISOString()} ${l}\n`));
   const root = opts.wolvesDir ?? `${process.env.HOME}/wolves/local`;
   const linkOnly = opts.linkOnly ?? envLinkOnly();
   const announce = linkOnly ? [...new Set(opts.announce ?? envAnnounce())] : [];

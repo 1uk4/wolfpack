@@ -321,6 +321,7 @@ function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): stri
     for (const c of v.categories ?? []) {
       out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? (c.why === "partial" ? "kept (partial)" : "kept") : `dropped (${c.why})`}`);
     }
+    if (v.joined) out.push(`  - joined ${v.joined} leftover${v.joined === 1 ? "" : "s"} to their closest group`);
     if (v.doesntFit?.length) out.push(`  - doesn't fit: ${v.doesntFit.map((i) => byEntry.get(i)?.title ?? i).join("; ")}`);
     if (!v.decision && v.reason) out.push(`  → no split: ${v.reason}`);
   } else if (v.source === "kmeans") {

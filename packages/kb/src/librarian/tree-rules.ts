@@ -12,7 +12,7 @@ import { SECTION_TREE } from "@wolfpack/engine";
 
 export type Vec = number[];
 export type TreeRules = {
-  [K in keyof typeof SECTION_TREE.rules]: number;
+  [K in keyof typeof SECTION_TREE.rules]: (typeof SECTION_TREE.rules)[K] extends boolean ? boolean : number;
 };
 export const DEFAULT_RULES: TreeRules = { ...SECTION_TREE.rules };
 
@@ -486,3 +486,42 @@ export function validatePartition(
   return decide(survivors);
 }
 export const isPartition = (d: PartitionDecision | PartitionRejected): d is PartitionDecision => !("split" in d);
+
+// ── placing leftovers in their closest kept group ────────────────────────────
+
+/**
+ * The "join bar". After a partition is validated, each leftover joins the kept group whose centroid it is closest to, provided
+ * (1) cos(entry, best) >= max(joinFloor, bar(best)), bar = the lowest leave-one-out cosine of best's own coherent members to
+ *     their group (the same measure as the coherence test, as in the measured prototype), and
+ * (2) it beats the runner-up group by joinMargin (skipped with a single kept group).
+ * Otherwise it stays a leftover. Centroids and bars come from the coherent members only, before any join. X are CENTRED vectors
+ * (centre(vectors)); keptSets are member indexes per kept group. Never creates a group. Off with rules.joinLeftovers = false.
+ */
+export function joinLeftovers(
+  X: Vec[], keptSets: number[][], leftovers: number[], rules: TreeRules = DEFAULT_RULES,
+): { sets: number[][]; leftovers: number[]; joined: number } {
+  const sets = keptSets.map((s) => [...s]);
+  if (!rules.joinLeftovers || keptSets.length === 0 || leftovers.length === 0) return { sets, leftovers: [...leftovers], joined: 0 };
+  const info = keptSets.map((ix) => {
+    const loo = ix.map((i) => cosine(unit(meanVec(ix.filter((j) => j !== i).map((j) => X[j]))), X[i]));
+    return { cent: unit(meanVec(ix.map((i) => X[i]))), thr: Math.max(ix.length > 1 ? Math.min(...loo) : -Infinity, rules.joinFloor) };
+  });
+  const still: number[] = [];
+  let joined = 0;
+  for (const e of leftovers) {
+    const sc = info.map((x, g) => ({ g, s: cosine(x.cent, X[e]) })).sort((a, b) => b.s - a.s);
+    const [b, s2] = [sc[0], sc[1]];
+    if (b.s >= info[b.g].thr && (!s2 || b.s - s2.s >= rules.joinMargin)) { sets[b.g].push(e); joined++; } else still.push(e);
+  }
+  return { sets, leftovers: still, joined };
+}
+
+/** Apply joinLeftovers to a validated decision (labels/leftovers updated; reports unchanged). */
+export function applyJoin(vectors: Vec[], d: PartitionDecision, rules: TreeRules = DEFAULT_RULES): { d: PartitionDecision; joined: number } {
+  const sets = d.names.map((_, g) => d.labels.flatMap((l, i) => (l === g ? [i] : [])));
+  const r = joinLeftovers(centre(vectors), sets, d.leftovers, rules);
+  if (r.joined === 0) return { d, joined: 0 };
+  const labels = new Array<number>(vectors.length).fill(-1);
+  r.sets.forEach((s, g) => s.forEach((i) => { labels[i] = g; }));
+  return { d: { ...d, labels, leftovers: r.leftovers }, joined: r.joined };
+}

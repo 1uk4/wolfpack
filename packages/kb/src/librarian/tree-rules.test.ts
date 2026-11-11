@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   rng, hashSeed, centre, kmeansPP, chooseSplit, isSplit, extractLeftovers, findMisplaced,
-  hashSectionId, restatesParent, ari, DEFAULT_RULES, type Vec,
+  hashSectionId, restatesParent, ari, DEFAULT_RULES, joinLeftovers, type Vec,
 } from "./tree-rules.js";
 
 const DIM = 24;
@@ -129,5 +129,51 @@ describe("hashSectionId / restatesParent", () => {
     expect(restatesParent("Shipping Policy", "Task Creation Workflow and Shipping Policy")).toBe(false);
     expect(restatesParent("Discord Tooling", "Console Chat and Integrations")).toBe(false);
     expect(restatesParent("Subagent Side Panel", "Console Chat and Integrations")).toBe(false);
+  });
+});
+
+describe("joinLeftovers (the join bar)", () => {
+  /** A unit vector at `deg` degrees (2-D, already centred). */
+  const at = (deg: number): Vec => [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)];
+  // Group A: members at 0 and 30 degrees (bar = cos 30 = 0.866, centroid 15). Group B: 30 and 60 (centroid 45, bar 0.866).
+  const groups = (extra: number[]): { X: Vec[]; kept: number[][] } => ({ X: [at(0), at(30), at(30), at(60), ...extra.map(at)], kept: [[0, 1], [2, 3]] });
+
+  it("joins an entry that clears the bar and beats the runner-up by the margin", () => {
+    const { X, kept } = groups([20]); // A: cos 5 = 0.996, B: cos 25 = 0.906
+    const r = joinLeftovers(X, kept, [4]);
+    expect(r.sets).toEqual([[0, 1, 4], [2, 3]]);
+    expect(r.leftovers).toEqual([]);
+    expect(r.joined).toBe(1);
+  });
+  it("leaves an entry below the group's bar loose", () => {
+    const { X, kept } = groups([-40]); // A: cos 55 = 0.57 < 0.866
+    const r = joinLeftovers(X, kept, [4]);
+    expect(r.sets).toEqual(kept);
+    expect(r.leftovers).toEqual([4]);
+  });
+  it("leaves an entry below joinFloor loose even when the group's bar is lower", () => {
+    // One group of two orthogonal members (bar 0, centroid 45); the entry at 133.3 has cos 0.03 to it.
+    const X = [at(0), at(90), at(133.3)];
+    const r = joinLeftovers(X, [[0, 1]], [2]);
+    expect(r.leftovers).toEqual([2]);
+    expect(r.joined).toBe(0);
+  });
+  it("leaves an entry loose when the two closest groups tie inside the margin", () => {
+    const { X, kept } = groups([30]); // cos 15 to both centroids
+    const r = joinLeftovers(X, kept, [4]);
+    expect(r.leftovers).toEqual([4]);
+  });
+  it("skips the margin with a single kept group", () => {
+    const X = [at(0), at(30), at(15)];
+    const r = joinLeftovers(X, [[0, 1]], [2]);
+    expect(r.sets).toEqual([[0, 1, 2]]);
+    expect(r.leftovers).toEqual([]);
+  });
+  it("changes nothing when joinLeftovers is false", () => {
+    const { X, kept } = groups([20]);
+    const r = joinLeftovers(X, kept, [4], { ...DEFAULT_RULES, joinLeftovers: false });
+    expect(r.sets).toEqual(kept);
+    expect(r.leftovers).toEqual([4]);
+    expect(r.joined).toBe(0);
   });
 });

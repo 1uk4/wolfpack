@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { judgeSplit, memorySplitCache, fileSplitCache, splitCacheKey, type Partitioner, type SplitProposal, type JudgeMember } from "./llm-split.js";
 import { planRebuild, insertEntry, repairPath, type RebuildEntry, type Namer, type RebuildState } from "./rebuild.js";
-import { validatePartition, isPartition, rng } from "./tree-rules.js";
+import { validatePartition, isPartition, rng, DEFAULT_RULES } from "./tree-rules.js";
+/** The join bar off: these tests check which entries are left over by validation; the join itself is covered below and in tree-rules.test.ts. */
+const NO_JOIN = { ...DEFAULT_RULES, joinLeftovers: false };
 
 const DIM = 24;
 /** n entries per cluster `axes[c]`, unit length (like the embedder's). */
@@ -138,7 +140,7 @@ describe("judgeSplit", () => {
         { name: "B", ids: c(1).slice(2).map((e) => e.id) },
         { name: "Mixed", ids: mixed.map((e) => e.id) },
       ], doesntFit: c(2).slice(4).map((e) => e.id),
-    }) }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    }), rules: NO_JOIN }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(v.decision?.names).toEqual(["A", "B", "Mixed"]);
     expect(v.categories?.find((x) => x.name === "Mixed")).toMatchObject({ kept: true, why: "partial" });
     const ids = e4.map((e) => e.id).sort();
@@ -223,9 +225,25 @@ describe("judgeSplit", () => {
       ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1).slice(0, 3) }], doesntFit: [...of(1).slice(3), ...of(2), ...of(3)] }
       // the second "B" lies on top of the first one, so the joint validation drops the old B (its members no longer beat the new B)
       : { categories: [{ name: "B", ids: of(1).slice(3) }, { name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] });
-    const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    const v = await judgeSplit({ partitioner: part, rules: NO_JOIN }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(v.decision?.names).toEqual(["A", "B"]);
     expect(v.decision?.leftovers).toHaveLength(18);
+  });
+
+  it("places leftovers that clear the join bar in their closest group and reports how many", async () => {
+    const e4 = make([6, 6, 6]);
+    const c = (k: number) => e4.filter((e) => cluster(e.id, SIZES) === k);
+    const mixed = [...c(2).slice(0, 4), ...c(1).slice(0, 2)];
+    const v = await judgeSplit({ partitioner: async () => ({
+      categories: [
+        { name: "A", ids: c(0).map((e) => e.id) },
+        { name: "B", ids: c(1).slice(2).map((e) => e.id) },
+        { name: "Mixed", ids: mixed.map((e) => e.id) },
+      ], doesntFit: c(2).slice(4).map((e) => e.id),
+    }) }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    // the same four leftovers as the test above; three of them clear the bar of the group they sit closest to
+    expect(v.joined).toBe(3);
+    expect(v.decision?.leftovers).toHaveLength(1);
   });
 
   it("a category dropped for incoherence is reported, and its members are leftovers", async () => {

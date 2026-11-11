@@ -212,6 +212,24 @@ describe("messagesFromEntries", () => {
     expect(JSON.stringify(args).length).toBeLessThanOrEqual(4200);
     expect(args.content).not.toMatch(/[\ud800-\udbff]…$/);
   });
+  it("terminates on an ask-shaped call with hundreds of short strings, returning a truncated object", { timeout: 2000 }, () => {
+    const choices = (q: number) => [0, 1, 2].map((c) => ({ label: `choice label number ${q}-${c}`, value: `choice value number ${q}-${c}`, tradeoff: `choice tradeoff text ${q}-${c}` }));
+    const questions = Array.from({ length: 20 }, (_, q) => ({ id: `question-id-${q}`, ask: `question text number ${q}`, choices: choices(q) }));
+    const msgs = messagesFromEntries([
+      entry(1, "pi.assistant", { role: "assistant", content: [{ type: "toolCall", id: "c", name: "ask", arguments: { pages: [{ title: "a page title here", questions }] } }] }),
+    ]);
+    const args: any = msgs[0].tools![0].args;
+    expect(typeof args).toBe("object");
+    expect(args._truncated).toBe(true);
+    expect(args.pages[0].questions[19].choices[2].tradeoff.length).toBe(17);
+  });
+  it("leaves 17-character strings alone, even when the total stays over the cap", { timeout: 2000 }, () => {
+    const lone = messagesFromEntries([entry(1, "pi.assistant", { role: "assistant", content: [{ type: "toolCall", id: "c", name: "r", arguments: { s: "x".repeat(17) } }] })]);
+    expect(lone[0].tools![0].args).toEqual({ s: "x".repeat(17) });
+    const many = Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`k${i}`, "y".repeat(17)]));
+    const msgs = messagesFromEntries([entry(2, "pi.assistant", { role: "assistant", content: [{ type: "toolCall", id: "d", name: "r", arguments: many }] })]);
+    expect(msgs[0].tools![0].args).toEqual(many);
+  });
   it("small args carry no _truncated", () => {
     const msgs = messagesFromEntries([entry(1, "pi.assistant", { role: "assistant", content: [{ type: "toolCall", id: "c", name: "r", arguments: { path: "a" } }] })]);
     expect(msgs[0].tools![0].args).toEqual({ path: "a" });

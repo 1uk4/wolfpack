@@ -42,14 +42,14 @@ import {
 import { useAppearance } from "./appearance.tsx";
 import { SettingsSection } from "./controls.tsx";
 import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
-import { notifySettingsSaved } from "@/components/settings-signal";
+import { notifySettingsSaved } from "@/components/settings/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";
 import { AppearanceSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { DevicesSection } from "./devices-section.tsx";
-import { PromptsView } from "@/components/prompts-view";
-import { WolfSettingsView } from "@/components/wolf-settings-view";
+import { PromptsView } from "@/components/settings/prompts-view";
+import { WolfSettingsView } from "@/components/settings/wolf-settings-view";
 import { parseSettingsRoute, settingsTabHref } from "./settings-route.ts";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining

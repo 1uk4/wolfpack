@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
+import { DEFAULT_THINKING_ORDER } from "../core/settings/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 
 /** App identity is immutable and shared by Models and every native Agent.

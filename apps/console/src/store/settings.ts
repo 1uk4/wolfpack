@@ -23,7 +23,7 @@ import { SETTINGS_FILE } from "../../config.ts";
 import {
 	sanitizeUserSettings,
 	type UserSettings,
-} from "../core/settings.ts";
+} from "../core/settings/settings.ts";
 import type { SettingsStore } from "../core/ports.ts";
 
 /** The persisted record, or null when none exists (first boot). Runs the

@@ -18,7 +18,7 @@ import type {
 	JobRecord,
 	TurnUsage,
 } from "./contracts.ts";
-import type { UserSettings } from "./settings.ts";
+import type { UserSettings } from "./settings/settings.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
 

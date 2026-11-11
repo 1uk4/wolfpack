@@ -38,21 +38,21 @@ export * from "./input-events.ts";
 // the deleted server projection to the client side. Pure, browser-safe.
 export * from "./view.ts";
 export * from "./tool-parts.ts";
-export * from "./prices.ts";
+export * from "./settings/prices.ts";
 export * from "./fuzzy.ts";
 export * from "./subagents.ts";
 export * from "./palette.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved
 // view. Browser-safe — the Wave-4 panel imports these directly.
-export * from "./settings.ts";
-export * from "./settings-resolution.ts";
+export * from "./settings/settings.ts";
+export * from "./settings/settings-resolution.ts";
 export * from "./session-find.ts";
 export * from "./session-navigation.ts";
 // auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +
 // shape rules + masking — pure, browser-safe (the auth page binds to the
 // /api/keys routes built on it).
-export * from "./auth-keys.ts";
+export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./keyboard.ts";
 // Pure, browser-safe.
@@ -96,4 +96,4 @@ export * from "./work/work-connectors.ts";
 export * from "./graph/branch-graph.ts";
 export { graphKey, newestRequest } from "./graph/graph-fetch.ts";
 export * from "./work/work-id-link.ts";
-export * from "./wolf-settings-form.ts";
+export * from "./settings/wolf-settings-form.ts";

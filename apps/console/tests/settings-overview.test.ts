@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { createConsoleClient } from "../src/server/console-client.ts";
-import { createSettingsOverviewApi } from "../src/server/settings-overview-api.ts";
+import { createSettingsOverviewApi } from "../src/server/settings/settings-overview-api.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {

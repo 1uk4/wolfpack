@@ -401,7 +401,7 @@ describe("deep links", () => {
 	});
 	it("/kb/entry/<id> is a standalone page outside the (home) graph layout; / and /work both mount the reader host", () => {
 		assert.match(src("../../../app/kb/entry/[id]/page.tsx"), /EntryReaderPage/);
-		assert.ok(!existsSync(new URL("../app/(home)/kb/entry", import.meta.url)));
+		assert.ok(!existsSync(new URL("../../../app/(home)/kb/entry", import.meta.url)));
 	});
 
 	it("exactly one WorkReaderHost is mounted, in the shell every page (threads included) renders under", () => {

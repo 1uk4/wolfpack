@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldResetPageScroll, trackTallestViewport } from "@/src/core";
+import { MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldResetPageScroll, standaloneViewportShort, trackTallestViewport } from "@/src/core";
 
 /** Publishes --wp-vvh (the visible height above the on-screen keyboard) on <html>, phones only. iOS Safari does not shrink the layout
  *  viewport when the keyboard opens, so `dvh` alone leaves the composer under it; globals.css sizes the thread to this var. */
@@ -15,6 +15,12 @@ export function ViewportVars() {
 		let lastTop = "";
 		let lastInset = "";
 		let tallest: { width: number; height: number } | null = null;
+		// One hidden probe reads env(safe-area-inset-top) (no JS API for it)
+		const probe = document.createElement("div");
+		probe.setAttribute("aria-hidden", "true");
+		probe.style.cssText = "position:fixed;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top)";
+		document.body.appendChild(probe);
+		const standalone = () => (navigator as Navigator & { standalone?: boolean }).standalone === true || window.matchMedia("(display-mode: standalone)").matches;
 		const apply = () => {
 			if (!mq.matches) {
 				tallest = null;
@@ -39,7 +45,9 @@ export function ViewportVars() {
 			lastTop = nextTop;
 			// keyboard open: no home-indicator padding under the composer (css falls back to env(...) when the var is unset)
 			const inset = shellBottomInset(vv, window.innerHeight, tall);
-			const nextInset = inset === "0px" ? inset : "";
+			// home-screen app whose viewport already ends above the home indicator: the bottom inset would only waste space
+			const short = h === null && standaloneViewportShort({ standalone: standalone(), keyboardOpen: false, innerWidth: window.innerWidth, innerHeight: window.innerHeight, screenWidth: window.screen.width, screenHeight: window.screen.height, insetTop: parseFloat(getComputedStyle(probe).paddingTop) || 0 });
+			const nextInset = inset === "0px" || short ? "0px" : "";
 			if (nextInset !== lastInset) nextInset ? root.style.setProperty("--wp-safe-bottom", nextInset) : root.style.removeProperty("--wp-safe-bottom");
 			lastInset = nextInset;
 			// iOS also scrolls the document when the focused field opens the keyboard; the shell is fixed, so that only pushes the header under the status bar
@@ -62,6 +70,7 @@ export function ViewportVars() {
 			vv?.removeEventListener("resize", apply);
 			vv?.removeEventListener("scroll", apply);
 			window.removeEventListener("scroll", apply);
+			probe.remove();
 			mq.removeEventListener("change", apply);
 			window.removeEventListener("resize", applyNextFrame);
 			window.removeEventListener("orientationchange", applyNextFrame);

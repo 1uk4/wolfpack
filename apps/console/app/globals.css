@@ -178,6 +178,12 @@
 	}
 }
 
+/* html's background propagates to the canvas, which paints the whole screen, including the strip iOS's home-screen app leaves below the
+   layout viewport. A mounted thread sets --wp-canvas-bg to its tint so that strip matches the chat; elsewhere the default dark. */
+html {
+	background-color: var(--wp-canvas-bg, var(--color-background));
+}
+
 body {
 	background: var(--color-background);
 	color: var(--color-foreground);

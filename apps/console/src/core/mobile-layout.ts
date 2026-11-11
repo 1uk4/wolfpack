@@ -70,6 +70,25 @@ export const shouldAutoFocusComposer = ({ coarse }: { coarse: boolean }): boolea
  *  Only while the keyboard is open and the document is actually scrolled; a closed keyboard never has its scroll touched. */
 export const shouldResetPageScroll = (keyboardOpen: boolean, scrollY: number): boolean => keyboardOpen && scrollY > 0;
 
+/** True in the iOS home-screen app (black-translucent) when the layout viewport ends one top inset above the screen bottom: iOS sizes it
+ *  screen - top inset, anchors it at the top, and clips everything past it, so the bottom strip is only the canvas colour. The viewport
+ *  then already ends above the home indicator, so the thread drops its bottom inset. Standalone, keyboard closed, a top inset, and a
+ *  shortfall equal to it (within 2px); orientation aware (iOS may report unrotated screen dims). Never true in a Safari tab. */
+export function standaloneViewportShort(o: {
+	standalone: boolean;
+	keyboardOpen: boolean;
+	innerWidth: number;
+	innerHeight: number;
+	screenWidth: number;
+	screenHeight: number;
+	insetTop: number;
+}): boolean {
+	if (!o.standalone || o.keyboardOpen || o.insetTop <= 0) return false;
+	const landscape = o.innerWidth > o.innerHeight;
+	const screen = landscape ? Math.min(o.screenWidth, o.screenHeight) : Math.max(o.screenWidth, o.screenHeight);
+	return Math.abs(screen - o.innerHeight - o.insetTop) <= 2;
+}
+
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
 

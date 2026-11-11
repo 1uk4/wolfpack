@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer, trackTallestViewport, shouldResetPageScroll } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer, trackTallestViewport, shouldResetPageScroll, standaloneViewportShort } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -93,6 +93,20 @@ test("the page scroll iOS adds when the keyboard opens is undone, so the pinned 
 	assert.equal(shouldResetPageScroll(true, 120), true); // keyboard open, document scrolled: reset
 	assert.equal(shouldResetPageScroll(true, 0), false); // already at the top: no write
 	assert.equal(shouldResetPageScroll(false, 120), false); // keyboard closed: never touch the scroll
+});
+
+test("standaloneViewportShort spots the iOS home-screen app's layout viewport that ends one top inset above the screen bottom", () => {
+	// the owner's iPhone 16 Pro numbers: layout viewport 812 = screen 874 - top inset 62
+	const pwa = { standalone: true, keyboardOpen: false, innerWidth: 402, innerHeight: 812, screenWidth: 402, screenHeight: 874, insetTop: 62 };
+	assert.equal(standaloneViewportShort(pwa), true);
+	assert.equal(standaloneViewportShort({ ...pwa, keyboardOpen: true }), false);
+	assert.equal(standaloneViewportShort({ ...pwa, standalone: false }), false); // Safari tab
+	assert.equal(standaloneViewportShort({ ...pwa, innerHeight: 760 }), false); // shortfall is not the inset: browser chrome
+	assert.equal(standaloneViewportShort({ ...pwa, insetTop: 0, innerHeight: 874 }), false);
+	// landscape: the short screen side is the height
+	assert.equal(standaloneViewportShort({ ...pwa, innerWidth: 874, innerHeight: 402, insetTop: 0 }), false);
+	assert.equal(standaloneViewportShort({ ...pwa, innerWidth: 874, innerHeight: 382, insetTop: 20 }), true);
+	assert.equal(standaloneViewportShort({ ...pwa, innerWidth: 874, innerHeight: 382, insetTop: 20, screenWidth: 874, screenHeight: 402 }), true); // rotated screen dims
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

@@ -266,6 +266,14 @@ function ThreadChatInner({
 	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads, colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor).hex;
 	const tint = threadTint(tintHex);
 	const tintSolid = threadTintSolid(tintHex);
+	// The page canvas (html background) takes the chat colour while a thread is open, so the strip the iOS home-screen app leaves under the viewport matches it
+	useEffect(() => {
+		const root = document.documentElement;
+		root.style.setProperty("--wp-canvas-bg", tintSolid);
+		return () => {
+			root.style.removeProperty("--wp-canvas-bg");
+		};
+	}, [tintSolid]);
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);

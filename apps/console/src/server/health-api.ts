@@ -6,7 +6,6 @@
  *   GET  /api/health/stream   SSE: the snapshot now and after every probe round (`data: <HealthSnapshot>`), `: ping` every 25 s
  *   POST /api/health/restart  {service: "hubd" | "workerd" | "wolfd@<name>"}; needs `Authorization: Bearer <device token>`.
  *                             202 {ok, service, at} | 400 invalid_request | 401 unauthorized | 429 rate_limited (+Retry-After) | 501 unsupported (no systemd) | 502 failed
- *   GET  /api/health/logs     ?service=<restartable id>&lines=<1..200, default 100>; same auth (work-wolfpack-yM3uTlj, pack-actions.ts).
  *                             200 {ok, service, lines, truncated} | 400 invalid_request | 401 | 429 | 501 unsupported (no journalctl)
  *                             | 502 journal_denied (console user not in systemd-journal) | 502 failed
  *   POST /api/health/rollback {service: "hubd" | "workerd" | "console"}; same auth; one per service per 10 min. Owner-initiated only.
@@ -32,8 +31,11 @@
  */
 import { bearerOf } from "../core/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
-import { createLogReader, createReleaseReader, createRollbacker, createUpdater, type LogReader, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
-import { createUpdatesHandler } from "./updates-api.ts";
+import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
+import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler } from "./updates-api.ts";
+import { createInventoryClient, type InventoryClient } from "./inventory.ts";
+import { DEFAULT_MANIFEST_URL, createManifestFetcher, type InventoryEntry } from "@wolfpack/protocol";
+import { createLagMonitor, machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { sessionWitness, type SessionWitness } from "./session-witness.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -64,7 +66,6 @@ export function hubTokenCheck(wolvesUrl: string | undefined, o: { timeoutMs?: nu
 export interface HealthApiDeps {
 	health: PackHealth;
 	restarter: Restarter;
-	logs: LogReader;
 	rollbacker: Rollbacker;
 	updater: Updater;
 	witness: SessionWitness;
@@ -112,7 +113,7 @@ export function createHealthApi(d: HealthApiDeps) {
 	};
 
 	/** The shared gate of every action: the bearer header, checked as in RESTART AUTH. Returns who asked, or the error response. */
-	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change"): Promise<string | Response> => {
+	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change" | "subscription"): Promise<string | Response> => {
 		const token = bearerOf(req.headers.get("authorization"));
 		const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
 		if (!auth.ok && auth.busy !== undefined) {
@@ -190,17 +191,6 @@ export function createHealthApi(d: HealthApiDeps) {
 			return failure(out, out.code === "invalid_request" ? 400 : out.code === "rate_limited" ? 429 : out.code === "unsupported" ? 501 : 502);
 		},
 
-		/** GET /api/health/logs?service=<id>&lines=<n>: the unit's recent journal, redacted (pack-actions.ts). Same auth as restart. */
-		async logs(req: Request): Promise<Response> {
-			const gate = await gateOf(req, "log read");
-			if (gate instanceof Response) return gate;
-			const q = new URL(req.url).searchParams;
-			const out = await d.logs.read(q.get("service"), q.get("lines"), gate);
-			if (out.ok) return Response.json(out, { headers: NO_STORE });
-			const status = { invalid_request: 400, rate_limited: 429, unsupported: 501, journal_denied: 502, too_large: 502, failed: 502 }[out.code];
-			return failure(out, status);
-		},
-
 		/** POST /api/health/rollback {service}: start the root oneshot wolfpack-rollback@<service> (pack-actions.ts). Same auth as restart. */
 		async rollback(req: Request): Promise<Response> {
 			const gate = await gateOf(req, "rollback");
@@ -216,9 +206,10 @@ export function createHealthApi(d: HealthApiDeps) {
 		async update(req: Request): Promise<Response> {
 			const gate = await gateOf(req, "update");
 			if (gate instanceof Response) return gate;
-			const out = await d.updater.update(gate);
+			const component = await req.json().then((b: { component?: unknown } | null) => b?.component, () => undefined); // no or non-JSON body = Update all
+			const out = await d.updater.update(gate, component);
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
-			return failure(out, { no_update: 409, running: 409, rate_limited: 429, failed: 502 }[out.code]);
+			return failure(out, { invalid_request: 400, no_update: 409, up_to_date: 409, running: 409, failed: 502 }[out.code]);
 		},
 
 		/** GET /api/health/update: what an update would change, and how the manual unit's last run ended. */
@@ -264,7 +255,26 @@ export function packHealth(env: Record<string, string | undefined> = process.env
 	if (!h[MONITOR]) {
 		const interval = Number(env.WOLFPACK_HEALTH_INTERVAL_MS);
 		const releases = releaseReader();
+		// The pack inventory (work-wolfpack-ZproKxi): polled from the hub with the env hub token; this console's heartbeat rides the same client.
+		const stable = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL });
+		const main = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
+		const started = Date.now();
+		const lag = createLagMonitor();
+		const self = (): InventoryEntry => {
+			const channel = readMachineChannel();
+			const version = consoleVersion();
+			return { machine: machineName(), kind: "console", id: "console", ...(version ? { version } : {}), ...(channel ? { channel } : {}), uptimeS: Math.round((Date.now() - started) / 1000), lagMs: lag.sample().p99Ms };
+		};
+		const inv: InventoryClient = createInventoryClient({
+			hubUrl: env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "") || undefined,
+			token: () => env.WOLFPACK_HUB_TOKEN?.trim() || undefined,
+			self,
+			manifest: async (c) => (c === "main" ? main() : stable()),
+		});
+		inv.start();
 		h[MONITOR] = createPackHealth({
+			inventory: () => inv.view(),
+			self,
 			targets: healthTargets(env),
 			...(interval >= 1000 ? { intervalMs: interval } : {}),
 			actions: () => ({ systemd: SYSTEMD, rollback: SYSTEMD ? releases() : [] }),
@@ -283,7 +293,6 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 		h[KEY] = createHealthApi({
 			health,
 			restarter: createRestarter({ health, systemd: SYSTEMD }),
-			logs: createLogReader({ health }),
 			rollbacker: createRollbacker({ releases: releaseReader() }),
 			updater: createUpdater({ available: availableUpdates(env) }),
 			witness: sessionWitness(env),

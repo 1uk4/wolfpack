@@ -51,7 +51,7 @@ export function resolveVersion(component, cwd = process.cwd(), { release } = {})
 	} catch {
 		return null; // no such tag reachable
 	}
-	const m = /\/v(\d+\.\d+\.\d+)$/.exec(tag);
+	const m = /\/v(\d+\.\d+\.\d+(?:-main\.[1-9]\d*)?)$/.exec(tag);
 	if (!m) return null;
 	const head = git(cwd, "rev-parse", "HEAD");
 	if (git(cwd, "rev-list", "-n", "1", tag) === head) return m[1];
@@ -80,8 +80,8 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 	} else if (arg && !arg.startsWith("-")) {
 		const i = process.argv.indexOf("--release");
 		const release = i > 0 ? process.argv[i + 1] : undefined;
-		if (i > 0 && !/^\d+\.\d+\.\d+$/.test(release ?? "")) {
-			console.error("--release needs X.Y.Z");
+		if (i > 0 && !/^\d+\.\d+\.\d+(-main\.[1-9]\d*)?$/.test(release ?? "")) {
+			console.error("--release needs X.Y.Z or X.Y.Z-main.N");
 			process.exit(2);
 		}
 		const v = resolveVersion(arg, process.cwd(), { release });

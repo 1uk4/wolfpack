@@ -40,6 +40,15 @@ describe("KbActivityBody", () => {
 		assert.match(html, /1 contribution: too vague/);
 		assert.ok(html.indexOf('data-domain="wolfpack"') < html.indexOf('data-testid="kb-attention"'));
 	});
+	it("warns that the curator is stuck only when the hub reports stuckSince, and drops it once a later response omits it", () => {
+		const render = (d: ReturnType<typeof kbActivityFixture>) => renderToStaticMarkup(<KbActivityBody state={initialActivityState(d)} now={now} />);
+		const stuck = render(kbActivityFixture({ sweep: { running: true, stuckSince: "2026-11-05T09:45:00.000Z" } }));
+		assert.match(stuck, /data-testid="kb-curator-stuck"/);
+		assert.match(stuck, /Curator stuck since .*\(15m ago\)/);
+		assert.match(stuck, /new sweeps are skipped until it does/);
+		assert.doesNotMatch(render(kbActivityFixture()), /kb-curator-stuck/);
+		assert.doesNotMatch(render(kbActivityFixture({ sweep: { running: false } })), /kb-curator-stuck/);
+	});
 	it("shows sweeping; provisional rows are marked", () => {
 		const s = { ...initialActivityState(kbActivityFixture()), sweeping: true };
 		assert.match(renderToStaticMarkup(<KbActivityBody state={s} now={now} />), /data-testid="kb-sweeping"/);

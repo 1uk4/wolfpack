@@ -72,6 +72,61 @@ describe("runtime-update", () => {
 		expect(g(origin, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/stable");
 	});
 
+	it("--sha <commit> checks out exactly that commit (detached) from origin's branches and builds, so the main channel runs what its manifest names", async () => {
+		const clone = path.join(tmp, "owner2");
+		g(tmp, "clone", "-q", "-b", "stable", origin, clone);
+		g(clone, "config", "user.email", "o@o");
+		g(clone, "config", "user.name", "o");
+		g(clone, "checkout", "-q", "-b", "wolf/1uk4");
+		commit(clone, "apps/console/m.tsx", "m");
+		const sha = g(clone, "rev-parse", "HEAD");
+		commit(clone, "later.txt", "later");
+		g(clone, "push", "-q", "origin", "wolf/1uk4");
+		const { r, s } = await run(["--sha", sha]);
+		expect(r.exitCode).toBe(0);
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(sha);
+		expect(g(rtWt, "branch", "--show-current")).toBe("");
+		expect(s.build).toHaveBeenCalledWith(rtWt);
+		const bad = await run(["--sha", "0123456789abcdef0123456789abcdef01234567"]);
+		expect(bad.r.exitCode).toBe(1);
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(sha);
+		// A short sha is refused: the manifest names a full commit id.
+		expect((await run(["--sha", sha.slice(0, 7)])).r.exitCode).toBe(1);
+	});
+
+	it("--sha with --versions records the manifest's per-component versions for the checked-out sha in runtime-release.json", async () => {
+		const clone = path.join(tmp, "owner3");
+		g(tmp, "clone", "-q", "-b", "stable", origin, clone);
+		g(clone, "config", "user.email", "o@o");
+		g(clone, "config", "user.name", "o");
+		g(clone, "checkout", "-q", "-b", "wolf/1uk4");
+		commit(clone, "apps/console/r.tsx", "r");
+		const sha = g(clone, "rev-parse", "HEAD");
+		g(clone, "push", "-q", "origin", "wolf/1uk4");
+		const file = path.join(tmp, "runtime-release.json");
+		const logs: string[] = [];
+		const r = await runUpdate({ argv: ["--sha", sha, "--versions", "console=0.1.20-main.3,hubd=0.1.15,workerd=0.1.6,wolfd=0.1.15"], env: { WOLVES_DIR: path.join(tmp, "wolves"), WOLFPACK_RUNTIME_RELEASE_FILE: file }, cwd: intWt, steps: steps(), log: (m: string) => logs.push(m), warn: () => {} });
+		expect(r.exitCode).toBe(0);
+		expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ sha, channel: "main", versions: { console: "0.1.20-main.3", hubd: "0.1.15", workerd: "0.1.6", wolfd: "0.1.15" } });
+	});
+
+	it("--sha refuses a commit that exists locally but is on no origin branch any more", async () => {
+		const clone = path.join(tmp, "owner3");
+		g(tmp, "clone", "-q", "-b", "stable", origin, clone);
+		g(clone, "config", "user.email", "o@o");
+		g(clone, "config", "user.name", "o");
+		g(clone, "checkout", "-q", "-b", "tmp");
+		commit(clone, "t.txt", "t");
+		const sha = g(clone, "rev-parse", "HEAD");
+		g(clone, "push", "-q", "origin", "tmp");
+		g(rtWt, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"); // the object is now in the runtime repo
+		g(clone, "push", "-q", "origin", ":tmp"); // ... and gone from origin
+		const before = g(rtWt, "rev-parse", "HEAD");
+		const r = await run(["--sha", sha]);
+		expect(r.r.exitCode).toBe(1);
+		expect(g(rtWt, "rev-parse", "HEAD")).toBe(before);
+	});
+
 	it("refuses a branch argument, pointing at wolfpack pr prepare, and changes nothing", async () => {
 		const stableBefore = g(rtWt, "rev-parse", "HEAD");
 		ownerMerges("a.txt");

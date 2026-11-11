@@ -171,7 +171,10 @@ const defaultSteps = (pnpmFound) => ({
 export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), steps = {}, pnpmFound = probePnpm, log = console.log, warn = console.warn } = {}) {
 	const st = { ...defaultSteps(pnpmFound), ...steps };
 	const dryRun = argv.includes("--dry-run");
-	const branch = argv.find((a) => !a.startsWith("--"));
+	const shaAt = argv.indexOf("--sha");
+	const sha = shaAt >= 0 ? argv[shaAt + 1] : undefined; // main channel: the exact commit the manifest names
+	const versionsAt = argv.indexOf("--versions");
+	const branch = argv.find((a, i) => !a.startsWith("--") && (shaAt < 0 || i !== shaAt + 1) && (versionsAt < 0 || i !== versionsAt + 1));
 	const runtime = env.RUNTIME_BRANCH || "stable";
 	const wolvesDir = env.WOLVES_DIR || path.join(os.homedir(), "wolves", "local");
 	const tag = dryRun ? "[dry-run] " : "";
@@ -188,11 +191,55 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 		);
 	}
 
+	if (shaAt >= 0 && !/^[0-9a-f]{40}$/.test(sha ?? "")) return fail("--sha needs a full 40-character commit id");
 	const wts = worktrees(cwd);
-	const rtWt = wts.get(runtime);
+	// After a --sha run the runtime worktree is detached; the STACK_RUNTIME path finds it again so a plain run returns to the branch.
+	const detachedRt = env.STACK_RUNTIME && [...git(cwd, "worktree", "list", "--porcelain").split("\n")].includes(`worktree ${env.STACK_RUNTIME}`) ? env.STACK_RUNTIME : undefined;
+	const rtWt = wts.get(runtime) ?? detachedRt;
 	if (!rtWt) return fail(`branch ${runtime} is not checked out in any worktree`);
 	log(`${tag}runtime ${runtime} @ ${rtWt}`);
 	if (isDirty(rtWt)) return fail(`runtime worktree ${rtWt} has uncommitted changes; commit or stash them first`);
+	if (sha) {
+		// Main channel: the exact commit the manifest names, detached; any branch on origin may carry it. Build and refresh as usual.
+		const f = tryGit(rtWt, "fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*");
+		if (!f.ok) return fail(`git fetch failed: ${f.out.split("\n")[0]}. Nothing was changed.`);
+		const full = tryGit(rtWt, "rev-parse", "--verify", `${sha}^{commit}`);
+		if (!full.ok) return fail(`commit ${sha} is not in the repository after fetching origin. Nothing was changed.`);
+		// The object may exist locally from an old fetch; it must still be reachable from a branch on origin.
+		const onOrigin = tryGit(rtWt, "branch", "-r", "--contains", full.out);
+		if (!onOrigin.ok || !onOrigin.out.split("\n").some((l) => /^\s*origin\/(?!HEAD)\S/.test(l))) return fail(`commit ${sha} is not reachable from any origin branch. Nothing was changed.`);
+		const before = git(rtWt, "rev-parse", "HEAD");
+		const changed = git(rtWt, "diff", "--name-only", before, full.out).split("\n").filter(Boolean);
+		if (!dryRun) {
+			const co = tryGit(rtWt, "checkout", "--detach", full.out);
+			if (!co.ok) return fail(`cannot check out ${sha}: ${co.out.split("\n")[0]}`);
+			// The services built from this checkout report these release versions (stampedVersion reads the file while its sha is HEAD).
+			const vAt = argv.indexOf("--versions");
+			if (vAt >= 0) {
+				const versions = Object.fromEntries((argv[vAt + 1] ?? "").split(",").map((p) => p.split("=")).filter(([k, v]) => k && v));
+				const file = env.WOLFPACK_RUNTIME_RELEASE_FILE || path.join(os.homedir(), ".wolfpack", "runtime-release.json");
+				try {
+					fs.mkdirSync(path.dirname(file), { recursive: true });
+					fs.writeFileSync(file, `${JSON.stringify({ sha: full.out, channel: "main", versions })}\n`);
+				} catch (err) {
+					warn(`runtime:update: could not write ${file}: ${err.message}`);
+				}
+			}
+			try {
+				st.build(rtWt);
+			} catch (err) {
+				return fail(`build failed in ${rtWt}: ${err.message}`);
+			}
+		}
+		const refreshedSha = await st.refreshExtensions({ repo: rtWt, wolvesDir, dryRun, log });
+		const clsSha = classify(changed, refreshedSha.map((r) => r.wolf), choosePm(rtWt, { pnpmFound }).pm);
+		for (const l of clsSha.lines) log(`=> ${l}`);
+		return { exitCode: 0, classification: clsSha, files: changed, refreshed: refreshedSha };
+	}
+	if (!wts.get(runtime) && !dryRun) {
+		const co = tryGit(rtWt, "checkout", runtime);
+		if (!co.ok) return fail(`cannot return ${rtWt} to ${runtime}: ${co.out.split("\n")[0]}`);
+	}
 
 	// Fetch only the remote-tracking ref; nothing is pushed or merged anywhere.
 	const remoteRef = `origin/${runtime}`;

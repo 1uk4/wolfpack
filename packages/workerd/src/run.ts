@@ -1,6 +1,8 @@
 import { discoverWolves } from "@wolfpack/engine";
 import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } from "@wolfpack/harness/sandbox";
-import { WorkerdServer } from "./proxy.js";
+import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
+import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
+import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
@@ -173,6 +175,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));
   let link: HubLink | undefined;
   let kbSync: KbSync | undefined;
+  let inventory: InventoryReporter | undefined;
   let wake: { stop(): void } | undefined;
   let serverUrl = "";
   const relay = new WorkerRelay({ baseUrl: () => serverUrl, send: (f, written) => link?.sendFrame(f, written) ?? false });
@@ -207,10 +210,25 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       log,
       ...opts.kbSync,
     });
+    // Inventory (work-wolfpack-ZproKxi): report only when the hub's welcome advertised it, so an old hub never sees an unknown frame.
+    let inventoryOn = false;
+    inventory = createInventoryReporter({
+      hostId: hubCfg.hostId,
+      machine: machineName(),
+      ...(WORKERD_VERSION ? { version: WORKERD_VERSION } : {}),
+      channel: () => readMachineChannel(),
+      children: () => supervisor.status(),
+      send: (entries) => link!.sendFrame({ t: "report", entries }),
+      enabled: () => inventoryOn,
+    });
     link = new HubLink({
       ...hubCfg,
       kbRevisions: () => kbSync!.revisions(),
-      onWelcome: (w) => kbSync!.applyWelcome(w.grantedDomains),
+      onWelcome: (w) => {
+        kbSync!.applyWelcome(w.grantedDomains);
+        inventoryOn = w.inventory === true;
+        void inventory?.report();
+      },
       onGrants: (d) => kbSync!.setGranted(d),
       onKbChanged: (d, rev, epoch) => kbSync!.notify(d, rev, epoch),
       outbox,
@@ -223,11 +241,18 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       wolves: () => (linkOnly ? announce.map((name): LinkWolf => ({ name, domains: [] })) : supervisor.configs().map(linkWolf)),
       log,
       onRelay: (f) => (f.t === "req" ? relay.handle(f) : f.t === "cancel" ? relay.cancel(f.id) : relay.hubPause(f.id, f.t === "pause")),
-      onLinkDown: () => relay.abortAll(),
+      onLinkDown: () => {
+        inventoryOn = false;
+        relay.abortAll();
+      },
       onRetired: (names) => log(`[workerd] hub retired wolves: ${names.join(", ")}`),
       ...opts.linkOptions,
     });
-    supervisor.onChange((e) => (e.type === "add" ? link!.wolfAdded(linkWolf(e.config)) : link!.wolfRemoved(e.name)));
+    supervisor.onChange((e) => {
+      if (e.type === "add") link!.wolfAdded(linkWolf(e.config));
+      else link!.wolfRemoved(e.name);
+      void inventory?.report();
+    });
     kbSync.start();
     // Link-only: the feed is OFF unless explicitly enabled (opts.feed === true or WORKERD_FEED=1/true/on/yes).
     const feedExplicit = opts.feed === true || /^(1|true|on|yes)$/i.test((process.env.WORKERD_FEED ?? "").trim());
@@ -272,6 +297,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     errors,
     async close() {
       wake?.stop();
+      inventory?.stop();
       kbSync?.stop();
       if (feed) clearInterval(feed);
       await link?.stop();

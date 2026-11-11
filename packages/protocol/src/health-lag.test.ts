@@ -3,10 +3,41 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { stampedVersion } from "./health-lag.js";
+import { machineName, normaliseMachine, stampedVersion, subscriptionFile } from "./health-lag.js";
+
+describe("subscriptionFile", () => {
+  it("WOLFPACK_SUBSCRIPTION_FILE wins; a Mac uses ~/.wolfpack/release-channel.json; other hosts use the sfo-01 path", () => {
+    expect(subscriptionFile({ WOLFPACK_SUBSCRIPTION_FILE: " /x/s.json " }, "darwin", "/Users/me")).toBe("/x/s.json");
+    expect(subscriptionFile({}, "darwin", "/Users/me")).toBe("/Users/me/.wolfpack/release-channel.json");
+    expect(subscriptionFile({}, "linux", "/home/me")).toBe("/var/lib/wolfpack-subscription/subscription.json");
+  });
+});
+
+describe("normaliseMachine", () => {
+  it("lowercases, trims and keeps the first dot-label; rejects anything that is not a hostname label", () => {
+    expect(normaliseMachine(" SFO-01 ")).toBe("sfo-01");
+    expect(normaliseMachine("Lukas-MacBook.local")).toBe("lukas-macbook");
+    expect(normaliseMachine("sfo.01")).toBe("sfo");
+    expect(normaliseMachine("my_box")).toBeUndefined();
+    expect(normaliseMachine("  ")).toBeUndefined();
+    expect(normaliseMachine(undefined)).toBeUndefined();
+    expect(normaliseMachine("a".repeat(64))).toBeUndefined();
+  });
+});
+
+describe("machineName", () => {
+  it("prefers WOLFPACK_MACHINE, else the OS hostname, lowercased with .local dropped", () => {
+    expect(machineName({ WOLFPACK_MACHINE: "  SFO-01 " }, () => "ignored")).toBe("sfo-01");
+    expect(machineName({}, () => "Lukas-MacBook.local")).toBe("lukas-macbook");
+    expect(machineName({ WOLFPACK_MACHINE: "  " }, () => "Box")).toBe("box");
+  });
+});
 
 let dir: string;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  if (dir) rmSync(dir, { recursive: true, force: true });
+  dir = "";
+});
 const at = (...p: string[]) => pathToFileURL(join(dir, ...p));
 
 describe("stampedVersion", () => {
@@ -16,6 +47,20 @@ describe("stampedVersion", () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "0.1.0" }));
     writeFileSync(join(dir, "VERSION"), "0.1.14+90091017\n");
     expect(stampedVersion([at("dist", "VERSION"), at("VERSION")], at("package.json"))).toBe("0.1.14+90091017");
+  });
+
+  it("a runtime-release.json whose sha matches the checkout's HEAD gives the component's release version; a different sha keeps -dev", () => {
+    dir = mkdtempSync(join(tmpdir(), "stamp-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@wolfpack/harness", version: "0.1.0" }));
+    const file = join(dir, "runtime-release.json");
+    writeFileSync(file, JSON.stringify({ sha: "a".repeat(40), channel: "main", versions: { console: "0.2.0", wolfd: "0.1.15" } }));
+    expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: file, head: "a".repeat(40) })).toBe("0.1.15");
+    expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: file, head: "b".repeat(40) })).toBe("0.1.0-dev");
+    expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: join(dir, "none.json"), head: "a".repeat(40) })).toBe("0.1.0-dev");
+    for (const bad of ["{not json", "null", JSON.stringify({ sha: 5, versions: { wolfd: 7 } }), JSON.stringify({ sha: "a".repeat(40) })]) {
+      writeFileSync(file, bad);
+      expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: file, head: "a".repeat(40) })).toBe("0.1.0-dev");
+    }
   });
 
   it("falls back to <package.json version>-dev when nothing is stamped, and undefined when neither is readable", () => {

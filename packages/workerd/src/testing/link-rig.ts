@@ -84,7 +84,7 @@ export interface LinkRigOptions {
   feed?: boolean;
   /** Pass as workerd's hubInboxRoot; "hub" = the rig hub's inbox root. */
   hubInboxRoot?: string;
-  linkOptions?: { retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
+  linkOptions?: { retryBaseMs?: number; maxItemRetries?: number; parkedRetryMs?: number; foreignRetries?: number; sendWindow?: number };
   /** Registry domains created up front (the registry must know a domain before a wolf can be granted it). */
   kbDomains?: string[];
   /** Registry-granted domains per wolf (operator side). */

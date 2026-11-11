@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { judgeSplit, memorySplitCache, fileSplitCache, splitCacheKey, type Partitioner, type SplitProposal, type JudgeMember } from "./llm-split.js";
 import { planRebuild, insertEntry, repairPath, type RebuildEntry, type Namer, type RebuildState } from "./rebuild.js";
-import { validatePartition, isPartition, rng } from "./tree-rules.js";
+import { validatePartition, isPartition, rng, DEFAULT_RULES } from "./tree-rules.js";
+/** The join bar off: these tests check which entries are left over by validation; the join itself is covered below and in tree-rules.test.ts. */
+const NO_JOIN = { ...DEFAULT_RULES, joinLeftovers: false };
 
 const DIM = 24;
 /** n entries per cluster `axes[c]`, unit length (like the embedder's). */
@@ -138,7 +140,7 @@ describe("judgeSplit", () => {
         { name: "B", ids: c(1).slice(2).map((e) => e.id) },
         { name: "Mixed", ids: mixed.map((e) => e.id) },
       ], doesntFit: c(2).slice(4).map((e) => e.id),
-    }) }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    }), rules: NO_JOIN }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(v.decision?.names).toEqual(["A", "B", "Mixed"]);
     expect(v.categories?.find((x) => x.name === "Mixed")).toMatchObject({ kept: true, why: "partial" });
     const ids = e4.map((e) => e.id).sort();
@@ -223,9 +225,46 @@ describe("judgeSplit", () => {
       ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1).slice(0, 3) }], doesntFit: [...of(1).slice(3), ...of(2), ...of(3)] }
       // the second "B" lies on top of the first one, so the joint validation drops the old B (its members no longer beat the new B)
       : { categories: [{ name: "B", ids: of(1).slice(3) }, { name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] });
-    const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
+    const v = await judgeSplit({ partitioner: part, rules: NO_JOIN }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(v.decision?.names).toEqual(["A", "B"]);
     expect(v.decision?.leftovers).toHaveLength(18);
+  });
+
+  describe("the join bar, on a worked example", () => {
+    // 2-D unit vectors at these angles. They are antipodal in pairs, so the mean is zero and centring leaves them as they are.
+    //   m0..m2 = A at 0, 20, -20 deg      (A's centroid is 0 deg; its bar is cos 30 = 0.866: the weakest member leaves a mean 30 deg away)
+    //   m3..m5 = B at 180, 200, 160 deg   (centroid 180 deg, bar 0.866)
+    //   m6 = 10 deg  -> cos 10 = 0.985 to A, -0.985 to B: clears A's bar, joins A
+    //   m7 = 190 deg -> joins B the same way
+    //   m8 = 90, m9 = 270 deg -> cos 0 to both centroids, below joinFloor 0.05: stay loose
+    const ANGLES = [0, 20, -20, 180, 200, 160, 10, 190, 90, 270];
+    const ms: JudgeMember[] = ANGLES.map((deg, i) => ({ id: `m${i}`, title: `m${i}`, summary: "", vector: [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)] }));
+    const ids = (a: number, b: number) => ms.slice(a, b).map((m) => m.id);
+    const EXPECTED = [0, 0, 0, 1, 1, 1, 0, 1, -1, -1];
+
+    it("joins each leftover that clears the bar to the group it sits closest to, and leaves the rest loose", async () => {
+      const calls: string[] = [];
+      const v = await judgeSplit({ ignoreSize: true, partitioner: async ({ parentTitle, members: asked }) => {
+        calls.push(parentTitle);
+        // the second pass (over the 4 leftovers) finds nothing new
+        return asked.length === 10 ? { categories: [{ name: "A", ids: ids(0, 3) }, { name: "B", ids: ids(3, 6) }], doesntFit: ids(6, 10) } : { categories: [], doesntFit: asked.map((m) => m.id) };
+      } }, { domain: "wp", parentTitle: "P", members: ms });
+      expect(calls).toHaveLength(2);
+      expect(v.decision?.labels).toEqual(EXPECTED);
+      expect(v.decision?.leftovers).toEqual([8, 9]);
+      expect(v.joined).toBe(2);
+    });
+
+    it("joins after the second pass when only one first-pass category survived", async () => {
+      const v = await judgeSplit({ ignoreSize: true, partitioner: async ({ members: asked }) =>
+        asked.length === 10 ? { categories: [{ name: "A", ids: ids(0, 3) }], doesntFit: ids(3, 10) }
+          // the 7 leftovers: B is found, m6..m9 stay out
+          : { categories: [{ name: "B", ids: ids(3, 6) }], doesntFit: ids(6, 10) },
+      }, { domain: "wp", parentTitle: "P", members: ms });
+      expect(v.decision?.names).toEqual(["A", "B"]);
+      expect(v.decision?.labels).toEqual(EXPECTED);
+      expect(v.joined).toBe(2);
+    });
   });
 
   it("a category dropped for incoherence is reported, and its members are leftovers", async () => {
@@ -531,6 +570,29 @@ describe("dry run and --yes share a file-backed split cache", () => {
       expect(splitCalls).toBe(before + 1); // the fresh answer was written back and is now what is cached
     } finally { rmSync(base, { recursive: true, force: true }); }
   }, 120_000);
+});
+
+describe("k-means diagnostic cap (diagnosticsMaxMembers)", () => {
+  it("above the cap the diagnostic is skipped and recorded, and the verdict is the same as without diagnostics", async () => {
+    const sizes = [22, 22, 22];
+    const es = make(sizes);
+    const part: Partitioner = async () => ideal(es, sizes);
+    const args = { domain: "wp", parentTitle: "P", members: members(es) };
+    const withDiag = await judgeSplit({ partitioner: part, diagnostics: true }, args);
+    const without = await judgeSplit({ partitioner: part }, args);
+    expect(withDiag.kmeans).toBeUndefined();
+    expect(withDiag.kmeansSkipped).toBe("k-means comparison skipped: 66 members > 60");
+    expect(withDiag.source).toBe("llm");
+    expect(withDiag.decision).toEqual(without.decision);
+    expect(withDiag.decision?.k).toBe(3);
+  });
+
+  it("at or below the cap the diagnostic still runs", async () => {
+    const es = make(SIZES);
+    const v = await judgeSplit({ partitioner: async () => ideal(es), diagnostics: true }, { domain: "wp", parentTitle: "P", members: members(es) });
+    expect(v.kmeans).toBeDefined();
+    expect(v.kmeansSkipped).toBeUndefined();
+  });
 });
 
 describe("category cap keeps the largest categories; prompt pin", () => {

@@ -33,6 +33,7 @@ systemctl show hubd -p DropInPaths                                              
 journalctl -u hubd -n 20 --no-pager                                             # listening, no errors
 ```
 **Roll back the unit:** restore the previous unit/drop-ins from the copy noted before the change (`cp -a /etc/systemd/system/hubd.service /root/hubd.service.bak-<date>` and `cp -a /etc/systemd/system/hubd.service.d /root/hubd.service.d.bak-<date>` first), then `systemctl daemon-reload && systemctl restart hubd`. The old Dewey `/home` binds only work if that home still exists; without it use the saved `curator-local.conf` drop-in instead.
+- Machine name: `WOLFPACK_MACHINE` (sfo-01: `sfo-01`) names the machine hubd runs on; it is shown on `/healthz` so the console's pack panel puts the hub on that machine's card. Set the same value in workerd's env. Default: the OS hostname.
 - Contributions: hubd stores them in `/var/lib/hubd/kb/ops/contributions/<wolf>/`, the hub curator sweeps them and writes receipts to `/var/lib/hubd/kb/ops/receipts/<wolf>/` (the link relays them to workers). Other env hubd reads: `HUBD_PUBLIC_URL`, `HUBD_CONSOLE_URL`, KB poll/settle (`kbPollMs`, `kbSettleMs`) and relay/link timers are code options with defaults, not env vars. **Removed in ticket 11:** `HUBD_API_KEY` and the `X-Wolfpack-Actor` header no longer exist; `hubd serve` refuses to start while `HUBD_API_KEY` is set, so delete it from `/etc/wolfpack/hubd.env`. Only per-device tokens (`hubd pair`) authenticate; clients use `WOLFPACK_HUB_TOKEN`.
 
 ## 0. Build (Mac)

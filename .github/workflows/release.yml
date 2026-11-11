@@ -43,12 +43,13 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}   # empty on a tag push
         run: |
           TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
-          if [[ ! "$TAG" =~ ^([a-z0-9]+)/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then echo "::error::tag '$TAG' is not <component>/vX.Y.Z"; exit 1; fi
+          if [[ ! "$TAG" =~ ^([a-z0-9]+)/v([0-9]+\.[0-9]+\.[0-9]+(-main\.[1-9][0-9]*)?)$ ]]; then echo "::error::tag '$TAG' is not <component>/vX.Y.Z or <component>/vX.Y.Z-main.N"; exit 1; fi
           COMP="${BASH_REMATCH[1]}"; VER="${BASH_REMATCH[2]}"
+          PRE=""; if [[ "$VER" == *-main.* ]]; then PRE="--prerelease"; fi
           node -e 'const c=require("./scripts/release-components.json");if(!c[process.argv[1]]||process.argv[1][0]=="_"){console.error("::error::unknown component "+process.argv[1]);process.exit(1)}' "$COMP"
           ASSET=$(node -p 'require("./scripts/release-components.json")[process.argv[1]].asset.replace("{version}",process.argv[2])' "$COMP" "$VER")
           SMOKE=$(node -p 'require("./scripts/release-components.json")[process.argv[1]].smoke' "$COMP")
-          { echo "tag=$TAG"; echo "component=$COMP"; echo "version=$VER"; echo "asset=$ASSET"; echo "smoke=$SMOKE"; } >> "$GITHUB_OUTPUT"
+          { echo "tag=$TAG"; echo "component=$COMP"; echo "version=$VER"; echo "asset=$ASSET"; echo "smoke=$SMOKE"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
       - run: npm ci --no-audit --no-fund
         if: steps.tag.outputs.component != 'wolfd'   # wolfd is built inside Docker (infra/release/Dockerfile)
       - name: build + stamp + guard + sha256 (${{ steps.tag.outputs.component }} only)
@@ -67,4 +68,4 @@ jobs:
           gh release create "${{ steps.tag.outputs.tag }}" \
             "$RUNNER_TEMP/rel/${{ steps.tag.outputs.asset }}" \
             "$RUNNER_TEMP/rel/${{ steps.tag.outputs.asset }}.sha256" \
-            --title "${{ steps.tag.outputs.tag }}" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+            --title "${{ steps.tag.outputs.tag }}" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag ${{ steps.tag.outputs.prerelease }}

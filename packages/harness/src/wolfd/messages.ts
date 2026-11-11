@@ -74,7 +74,9 @@ function sliceSafe(s: string, n: number): string {
 /**
  * Cap tool args but keep them an OBJECT: every string value (nested included) is cut to ARG_STRING_CAP; if the JSON
  * is still over TOOL_CAP, the largest string values are shortened first until it fits. Any cut sets `_truncated: true`
- * at the top level.
+ * at the top level. Always terminates: it stops when a cut no longer shortens the string, when the longest string is
+ * 17 or fewer (a cut to 16 + "…" no longer shrinks it), or at a hard iteration cap. In those cases the best-effort
+ * object is returned even though it may still be over TOOL_CAP.
  */
 function capArgs(args: unknown): unknown {
   let cut = false;
@@ -91,7 +93,7 @@ function capArgs(args: unknown): unknown {
   const capped = cap(args);
   if (!capped || typeof capped !== "object" || Array.isArray(capped)) return capped;
   const obj = capped as Record<string, unknown>;
-  const size = () => (JSON.stringify(obj) ?? "").length;
+  let total = (JSON.stringify(obj) ?? "").length;
   // Shorten the largest string values (top-level and nested) until the total fits.
   const strings: Array<{ holder: Record<string, unknown> | unknown[]; key: string | number }> = [];
   const collect = (h: Record<string, unknown> | unknown[]) => {
@@ -101,11 +103,18 @@ function capArgs(args: unknown): unknown {
     }
   };
   collect(obj);
-  while (size() > TOOL_CAP) {
-    const get = (r: (typeof strings)[number]) => (r.holder as never)[r.key] as string;
+  const get = (r: (typeof strings)[number]) => (r.holder as never)[r.key] as string;
+  // Backstop: each cut at least halves a string or ends the loop, so this is never reached in practice.
+  const maxPasses = strings.length * 64 + 64;
+  for (let pass = 0; total > TOOL_CAP && pass < maxPasses; pass++) {
     const big = strings.reduce((m, r) => (get(r).length > get(m).length ? r : m), strings[0]!);
-    if (!big || get(big).length <= 16) break;
-    (big.holder as Record<string | number, unknown>)[big.key] = `${sliceSafe(get(big), Math.max(16, Math.floor(get(big).length / 2)))}…`;
+    if (!big) break;
+    const old = get(big);
+    if (old.length <= 17) break;
+    const next = `${sliceSafe(old, Math.max(16, Math.floor(old.length / 2)))}…`;
+    if (next.length >= old.length) break;
+    (big.holder as Record<string | number, unknown>)[big.key] = next;
+    total -= JSON.stringify(old).length - JSON.stringify(next).length;
     cut = true;
   }
   return cut ? { ...obj, _truncated: true } : obj;

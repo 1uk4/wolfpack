@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type CommandRunner, type HealthSnapshot, type LinkSnapshot } from "../src/server/pack-health.ts";
 import { createSessionWitness, setSessionWitness } from "../src/server/session-witness.ts";
-import { createLogReader, createReleaseReader, createRollbacker, createUpdater, type UpdateUnit } from "../src/server/pack-actions.ts";
+import { createReleaseReader, createRollbacker, createUpdater, type UpdateUnit } from "../src/server/pack-actions.ts";
 import { createConsoleClient, makeRequestToken } from "../src/server/console-client.ts";
 
 type Mode = "ok" | "hang" | "slow-lag" | "http500" | "http401" | "wrong-service" | "bad-body" | "legacy";
@@ -92,7 +92,7 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 	const showOut = new Map<string, string>();
 	const showRun: CommandRunner = async (file, args) => {
 		shows.push([file, ...args]);
-		const unit = args.find((a) => a.startsWith("wolfpack-rollback@") || a === "wolfpack-auto-update-now.service") ?? "";
+		const unit = args.find((a) => a.startsWith("wolfpack-rollback@") || a.startsWith("wolfpack-auto-update-now")) ?? "";
 		return { code: 0, stderr: "", stdout: showOut.get(unit) ?? "" };
 	};
 	const releases = createReleaseReader({ optRoot: o.optRoot ?? path.join(os.tmpdir(), "wolfpack-no-opt"), ttlMs: 0, statusTtlMs: 5_000, run: showRun, now: clock.now });
@@ -105,12 +105,11 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 	const logs: string[] = [];
 	const restarter = createRestarter({ health, run, now: clock.now, minIntervalMs: 60_000, log: (m) => logs.push(m), systemd: o.systemd ?? true });
 	const witness = createSessionWitness({ now: clock.now });
-	const logReader = createLogReader({ health, run, log: (m) => logs.push(m) });
 	const rollbacker = createRollbacker({ releases, run, now: clock.now, log: (m) => logs.push(m) });
 	let pending: UpdateUnit[] = [];
 	const availableCalls = { n: 0 };
 	const updater = createUpdater({ available: async () => { availableCalls.n++; return pending; }, run, show: showRun, now: clock.now, log: (m) => logs.push(m) });
-	const api = createHealthApi({ health, restarter, logs: logReader, rollbacker, updater, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
+	const api = createHealthApi({ health, restarter, rollbacker, updater, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
 	const get = async () => (await (await api.get()).json()) as HealthSnapshot;
 	const tick = async (at: number) => { clock.set(at); return health.tick(); };
 	return {
@@ -168,6 +167,15 @@ describe("pack health: GET /api/health", () => {
 		const down = await health.tick();
 		assert.equal(linkOf(down, "workerd").status, "down");
 		assert.equal(linkOf(down, "workerd").host, "build-box");
+	});
+
+	it("carries this console's own entry as `self` even when the hub has no inventory", async () => {
+		const fakeFetch = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetch;
+		const entry = { machine: "luka-air", kind: "console" as const, id: "console", version: "0.1.20", channel: "main" as const, uptimeS: 42, lagMs: 3 };
+		const health = createPackHealth({ targets: healthTargets({}), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {}, inventory: () => null, self: () => entry });
+		const snap = await health.tick();
+		assert.equal(snap.inventory, null);
+		assert.deepEqual(snap.self, entry);
 	});
 
 	it("lists the hosts and wolves the hub reports: a local workerd stands in for its host's hub link, the hub's wolves join or enrich it, the rest show hub-only without actions", async () => {
@@ -232,6 +240,40 @@ describe("pack health: GET /api/health", () => {
 		assert.deepEqual(snap.links.map((l) => l.id).sort(), ["hub-link@cron", "hubd", "wolfd@hal", "workerd"]); // no hub-link@sfo: the workerd is that host
 		assert.equal(linkOf(snap, "workerd").hubPresence, "online");
 		assert.equal(linkOf(snap, "hub-link@cron").host, "cron"); // not "ada-lovelace"
+	});
+
+	it("groups by the machine services report: hubd, workerd-wolves (host id sfo-01-wolves) and its wolf share the machine sfo-01 whatever their hostnames; a hub-only host uses its machine over its label", async () => {
+		const fakeFetch = (async (url: string) => {
+			if (url === "http://127.0.0.1:3150/healthz") {
+				return new Response(JSON.stringify({ ok: true, service: "hubd", host: "ip-10-0-0-5", machine: "sfo-01", hosts: [
+					{ id: "sfo-01-wolves", label: "ip-10-0-0-5", machine: "sfo-01", presence: "online", wolves: [{ name: "hal", status: "online" }] },
+					{ id: "ci", label: "ci-runner", machine: "Build-Box", presence: "offline", wolves: [] },
+				] }));
+			}
+			return new Response(JSON.stringify({ ok: true, service: "workerd", host: "ip-10-0-0-5", machine: "sfo-01", hubHostId: "sfo-01-wolves", wolves: [{ name: "hal", state: "online" }] }));
+		}) as unknown as typeof fetch;
+		const health = createPackHealth({ targets: healthTargets({ WOLFPACK_HEALTH_WORKERDS: "workerd-wolves=http://127.0.0.1:7141" }), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {} });
+		const snap = await health.tick();
+		for (const id of ["hubd", "workerd-wolves", "wolfd@hal"]) assert.equal(linkOf(snap, id).host, "sfo-01", id);
+		assert.equal(linkOf(snap, "hub-link@ci").host, "build-box");
+		assert.deepEqual(snap.hosts?.filter((h) => h.isThisConsole).map((h) => h.id), ["luka-air"]);
+	});
+
+	it("puts the same worker in one group by the local and the hub path whatever the case or .local; an invalid machine name falls back to the hostname", async () => {
+		const fakeFetch = (async (url: string) => {
+			if (url === "http://127.0.0.1:3150/healthz") {
+				return new Response(JSON.stringify({ ok: true, service: "hubd", hosts: [
+					{ id: "ci", label: "ci-runner", machine: "Build-Box.local", presence: "online", wolves: [] },
+					{ id: "odd", label: "odd-host", machine: "my_box", presence: "offline", wolves: [] },
+				] }));
+			}
+			return new Response(JSON.stringify({ ok: true, service: "workerd", host: "Other-Host", machine: "my_box", wolves: [] }));
+		}) as unknown as typeof fetch;
+		const health = createPackHealth({ targets: healthTargets({ WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:7141" }), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {} });
+		const snap = await health.tick();
+		assert.equal(linkOf(snap, "hub-link@ci").host, "build-box"); // hub path: .local and case dropped
+		assert.equal(linkOf(snap, "hub-link@odd").host, "odd-host"); // invalid machine: the label, as before
+		assert.equal(linkOf(snap, "workerd").host, "other-host"); // local path: invalid machine, hostname
 	});
 
 	it("reports a refused hub as down and a hanging hub as frozen, keeping lastOkAt, without calling the hub's API", async () => {
@@ -562,108 +604,6 @@ describe("pack health: POST /api/health/restart", () => {
 	});
 });
 
-const logsReq = (query: string, token?: string) => new Request(`http://c/api/health/logs?${query}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
-
-describe("pack health: GET /api/health/logs", () => {
-	it("reads a known unit's journal via argv journalctl (default 100 lines, at most 200) with secrets redacted; unknown units and no token run nothing", async () => {
-		const s = await setup({ wolves: () => [{ name: "hal", state: "online", restarts: 0 }] });
-		await s.tick(T0);
-		assert.equal((await s.api.logs(logsReq("service=hubd"))).status, 401);
-		s.witness.verified("tok");
-		for (const bad of ["service=ssh", "service=hubd%3B%20rm", "service=wolfd%40ghost", "service=hubd&lines=abc", "service=hubd&lines=0"]) {
-			const r = await s.api.logs(logsReq(bad, "tok"));
-			assert.equal(r.status, 400, bad);
-			assert.equal(((await r.json()) as { code: string }).code, "invalid_request");
-		}
-		assert.deepEqual(s.runs, []);
-		s.setStdout(
-			[
-				"2026-11-08T10:00:00+0000 sfo-01 hubd[1]: listening on 100.120.154.69:3150",
-				"2026-11-08T10:00:01+0000 sfo-01 hubd[1]: Authorization: Bearer abc.DEF-123_xyz",
-				"2026-11-08T10:00:02+0000 sfo-01 hubd[1]: retry token=s3cr3t-value password=hunter2 api_key=K1 secret: shh",
-				"2026-11-08T10:00:03+0000 sfo-01 hubd[1]: digest 0123456789abcdef0123456789abcdef0123456789 blob QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZn",
-				"",
-			].join("\n"),
-		);
-		const r = await s.api.logs(logsReq("service=hubd", "tok"));
-		assert.equal(r.status, 200);
-		const body = (await r.json()) as { service: string; lines: string[] };
-		assert.equal(body.service, "hubd");
-		assert.deepEqual(body.lines, [
-			"2026-11-08T10:00:00+0000 sfo-01 hubd[1]: listening on 100.120.154.69:3150",
-			"2026-11-08T10:00:01+0000 sfo-01 hubd[1]: Authorization: Bearer [redacted]",
-			"2026-11-08T10:00:02+0000 sfo-01 hubd[1]: retry token=[redacted] password=[redacted] api_key=[redacted] secret: [redacted]",
-			"2026-11-08T10:00:03+0000 sfo-01 hubd[1]: digest [redacted] blob [redacted]",
-		]);
-		assert.equal((await s.api.logs(logsReq("service=workerd&lines=500", "tok"))).status, 200);
-		assert.equal((await s.api.logs(logsReq("service=wolfd%40hal&lines=7", "tok"))).status, 200);
-		// hubd and workerd can be rolled back, so their logs include the rollback unit's output
-		assert.deepEqual(s.runs, [
-			["journalctl", "-u", "hubd.service", "-u", "wolfpack-rollback@hubd.service", "-n", "100", "-o", "short-iso", "--no-pager"],
-			["journalctl", "-u", "workerd.service", "-u", "wolfpack-rollback@workerd.service", "-n", "200", "-o", "short-iso", "--no-pager"],
-			["journalctl", "-u", "wolfd@hal.service", "-n", "7", "-o", "short-iso", "--no-pager"],
-		]);
-	});
-
-	it("redacts every value of a cookie header and short prefixed tokens in a URL path, and leaves git and sha256 hashes, paths and UUIDs intact", async () => {
-		const s = await setup();
-		s.witness.verified("tok");
-		await s.tick(T0);
-		s.setStdout(
-			[
-				"h hubd[1]: Cookie: sid=abc123; csrf=xyz789; theme=dark",
-				"h hubd[1]: Set-Cookie: wp_session=Qm9vb3Q; Path=/; HttpOnly",
-				"h hubd[1]: GET https://api.github.com/repos/x/ghp_Ab12Cd34Ef56/hooks -> 401",
-				"h hubd[1]: POST /bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawy/sendMessage",
-				"h hubd[1]: deployed 0123456789abcdef0123456789abcdef01234567 sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-				"h hubd[1]: paired device tok-a1b2c3d4e5 with jVx-c_9Qp2LmA7-Rt4_Kw8sZ-e1N0yHb_U6fD3gW-Io",
-				"h systemd[1]: Starting /usr/local/lib/wolfpack/console-rollback-release.sh in /home/wolf-hal2/workspaces/wolfpack/feat-A1Yps0p-pack-health",
-				"h hubd[1]: invocation 3f2a9c1e-7b4d-4e8a-9f01-2c3d4e5f6a7b requestId=0c9e8d7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f done",
-				"h hubd[1]: GET /api/devices/Zk3qT9xLmW2vR8yN4pB7sD1fH6jK0gC5aE-uI_oQ2zY/status 200",
-			].join("\n"),
-		);
-		const body = (await (await s.api.logs(logsReq("service=hubd", "tok"))).json()) as { lines: string[] };
-		assert.deepEqual(body.lines, [
-			"h hubd[1]: Cookie: [redacted]",
-			"h hubd[1]: Set-Cookie: [redacted]",
-			"h hubd[1]: GET https://api.github.com/repos/x/[redacted]/hooks -> 401",
-			"h hubd[1]: POST /bot[redacted]/sendMessage",
-			"h hubd[1]: deployed 0123456789abcdef0123456789abcdef01234567 sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-			"h hubd[1]: paired device tok-a1b2c3d4e5 with [redacted]",
-			"h systemd[1]: Starting /usr/local/lib/wolfpack/console-rollback-release.sh in /home/wolf-hal2/workspaces/wolfpack/feat-A1Yps0p-pack-health",
-			"h hubd[1]: invocation 3f2a9c1e-7b4d-4e8a-9f01-2c3d4e5f6a7b requestId=0c9e8d7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f done",
-			"h hubd[1]: GET /api/devices/[redacted]/status 200",
-		]);
-	});
-
-	it("keeps only the newest lines within 64 KiB and names a denied journal or a host without journalctl by a short code", async () => {
-		const s = await setup();
-		s.witness.verified("tok");
-		await s.tick(T0);
-		const line = (i: number) => `2026-11-08T10:00:00+0000 h hubd[1]: line ${String(i).padStart(4, "0")} ${"word ".repeat(100)}`;
-		s.setStdout(Array.from({ length: 200 }, (_, i) => line(i)).join("\n"));
-		const big = (await (await s.api.logs(logsReq("service=hubd&lines=200", "tok"))).json()) as { lines: string[]; truncated: boolean };
-		assert.equal(big.truncated, true);
-		assert.equal(big.lines.at(-1), line(199));
-		assert.ok(big.lines.join("\n").length <= 64 * 1024, String(big.lines.join("\n").length));
-		assert.equal(big.lines[0], line(200 - big.lines.length));
-		s.setStdout("Hint: You are currently not seeing messages from other users and the system.\n      Users in groups 'adm', 'systemd-journal' can see all messages.\n-- No entries --\n");
-		const denied = await s.api.logs(logsReq("service=hubd", "tok"));
-		assert.equal(denied.status, 502);
-		assert.equal(((await denied.json()) as { code: string }).code, "journal_denied");
-		s.setStdout("");
-		s.setExit(127);
-		const missing = await s.api.logs(logsReq("service=hubd", "tok"));
-		assert.equal(missing.status, 501);
-		assert.equal(((await missing.json()) as { code: string }).code, "unsupported");
-		s.setExit(1);
-		s.setOverflow(true);
-		const huge = await s.api.logs(logsReq("service=hubd", "tok"));
-		assert.equal(huge.status, 502);
-		assert.equal(((await huge.json()) as { code: string }).code, "too_large");
-	});
-});
-
 const rollbackReq = (service: unknown, token?: string) =>
 	new Request("http://c/api/health/rollback", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ service }) });
 
@@ -774,13 +714,13 @@ describe("pack health: POST /api/health/rollback", () => {
 	});
 });
 
-const updateReq = (token?: string) =>
-	new Request("http://c/api/health/update", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: "{}" });
+const updateReq = (token?: string, component?: unknown) =>
+	new Request("http://c/api/health/update", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(component === undefined ? {} : { component }) });
 const UPDATE_UNIT = "wolfpack-auto-update-now.service";
 const PENDING: UpdateUnit[] = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: "0.1.18", to: "0.1.19" }];
 
 describe("pack health: POST /api/health/update", () => {
-	it("needs a verified device; starts exactly the manual auto-update unit (argv, no shell) naming the units that will update; one start per 5 min", async () => {
+	it("needs a verified device; starts exactly the manual auto-update unit (argv, no shell) naming the units that will update", async () => {
 		const s = await setup();
 		await s.tick(T0);
 		s.setPending(PENDING);
@@ -791,13 +731,28 @@ describe("pack health: POST /api/health/update", () => {
 		assert.equal(ok.status, 202);
 		assert.deepEqual(((await ok.json()) as { units: UpdateUnit[] }).units, PENDING);
 		assert.deepEqual(s.runs, [["systemctl", "--no-ask-password", "--no-block", "start", UPDATE_UNIT]]);
-		s.clock.set(T0 + 4 * 60_000);
-		const limited = await s.api.update(updateReq("tok"));
-		assert.equal(limited.status, 429);
-		assert.equal(limited.headers.get("retry-after"), "60");
+	});
+
+	it("updates one component through its own template unit: 400 for an unknown name, 409 up_to_date when it is current, and 409 running while any update unit is still activating", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.setPending(PENDING);
+		s.witness.verified("tok");
+		const bad = await s.api.update(updateReq("tok", "nope"));
+		assert.equal(bad.status, 400);
+		const cur = await s.api.update(updateReq("tok", "workerd"));
+		assert.equal(cur.status, 409);
+		assert.equal(((await cur.json()) as { code: string }).code, "up_to_date");
+		assert.deepEqual(s.runs, []);
+		const ok = await s.api.update(updateReq("tok", "hubd"));
+		assert.equal(ok.status, 202);
+		assert.deepEqual(((await ok.json()) as { units: UpdateUnit[] }).units, [PENDING[0]]);
+		assert.deepEqual(s.runs, [["systemctl", "--no-ask-password", "--no-block", "start", "wolfpack-auto-update-now@hubd.service"]]);
+		s.setShow(UPDATE_UNIT, "ActiveState=activating\nResult=success\nExecMainStatus=0\n");
+		const busy = await s.api.update(updateReq("tok", "console"));
+		assert.equal(busy.status, 409);
+		assert.equal(((await busy.json()) as { code: string }).code, "running");
 		assert.equal(s.runs.length, 1);
-		s.clock.set(T0 + 5 * 60_000);
-		assert.equal((await s.api.update(updateReq("tok"))).status, 202);
 	});
 
 	it("refuses with 409 when nothing is behind, or while the unit is still activating, without starting it", async () => {
@@ -844,7 +799,7 @@ describe("pack health: POST /api/health/update", () => {
 		assert.equal(s.availableCalls.n, 2);
 	});
 
-	it("a start systemctl refuses (502) does not use up the 5 min slot", async () => {
+	it("a start systemctl refuses answers 502 and the next press can start it", async () => {
 		const s = await setup();
 		await s.tick(T0);
 		s.setPending(PENDING);

@@ -122,9 +122,13 @@ cmd_setup() {
 install_rollback() {
   [[ -f $HERE/wolfpack-rollback@.service && -f $HERE/deploy-release.sh ]] || { echo "NOTICE: bundle has no rollback unit/script; the modal's Roll back answers 502 until a newer bundle is installed"; return 0; }
   log "pack-health rollback unit (root oneshot; started only on the owner's request)"
+  local node
+  node="$(command -v node || true)"; [[ -n $node ]] || node=/usr/bin/node
   run install -d -o root -g root -m 0755 "$(dirname "$ROLLBACK_SCRIPT")"
   run install -o root -g root -m 0755 "$HERE/deploy-release.sh" "$ROLLBACK_SCRIPT"
-  run install -o root -g root -m 0644 "$HERE/wolfpack-rollback@.service" "$ROLLBACK_UNIT"
+  if ((DRY)); then echo "DRY-RUN: install $ROLLBACK_UNIT with @NODE@=$node"; else
+    sed "s|@NODE@|$node|" "$HERE/wolfpack-rollback@.service" >"$ROLLBACK_UNIT.tmp" && chmod 644 "$ROLLBACK_UNIT.tmp" && mv "$ROLLBACK_UNIT.tmp" "$ROLLBACK_UNIT"
+  fi
 }
 
 cmd_install() {

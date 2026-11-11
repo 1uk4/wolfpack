@@ -197,7 +197,7 @@ function GraphHomeInner() {
 	useEffect(() => {
 		if (!missing) return;
 		setNotice("That item isn't in the graph.");
-		router.replace("/", { scroll: false });
+		router.replace("/graph", { scroll: false });
 	}, [missing, router]);
 	const present = step.kind === "focus";
 	useEffect(() => {
@@ -225,7 +225,7 @@ function GraphHomeInner() {
 				settings={settings}
 				changeSettings={changeSettings}
 				focusId={present ? focusParam : null}
-				onFocusHandled={() => router.replace("/", { scroll: false })}
+				onFocusHandled={() => router.replace("/graph", { scroll: false })}
 				controllerRef={controllerRef}
 			/>
 		);

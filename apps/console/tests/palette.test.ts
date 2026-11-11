@@ -41,7 +41,7 @@ describe("buildCommandItems", () => {
 		const items = buildCommandItems("1uk4");
 		assert.deepEqual(items.filter((i) => i.command === "consolidate" || i.command === "promote").map((i) => i.hint), ["1uk4", "1uk4"]);
 		assert.equal(items.find((i) => i.id === "cmd:kb-activity")?.href, "/kb-activity");
-		assert.equal(items.find((i) => i.id === "cmd:graph")?.href, "/");
+		assert.equal(items.find((i) => i.id === "cmd:graph")?.href, "/graph");
 		assert.equal(items.find((i) => i.label === "Switch model")?.command, "switch-model");
 	});
 });

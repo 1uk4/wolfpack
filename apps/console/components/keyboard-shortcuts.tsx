@@ -125,7 +125,7 @@ export function KeyboardShortcuts() {
 					handlersRef.current.openSettings();
 					break;
 				case "jump-graph":
-					handlersRef.current.router.push("/");
+					handlersRef.current.router.push("/graph");
 					break;
 				case "cheat-sheet":
 					handlersRef.current.setCheatOpen(true);

@@ -382,9 +382,9 @@ describe("a graph node click: the reader only", () => {
 });
 
 describe("sidebar", () => {
-	it("has two plain links: Graph to / and Work to /work", () => {
+	it("has two plain links: Graph to /graph and Work to /work", () => {
 		const bar = src("../components/sidebar.tsx");
-		assert.match(bar, /href="\/"[\s\S]{0,120}data-testid="nav-graph"/);
+		assert.match(bar, /href="\/graph"[\s\S]{0,120}data-testid="nav-graph"/);
 		assert.match(bar, /<WorkNavEntry \/>/);
 		const nav = src("../components/work-nav-link.tsx");
 		assert.match(nav, /href="\/work"/);
@@ -405,7 +405,7 @@ describe("deep links", () => {
 	});
 
 	it("exactly one WorkReaderHost is mounted, in the shell every page (threads included) renders under", () => {
-		const mounts = ["../components/sidebar.tsx", "../app/(home)/page.tsx", "../app/work/page.tsx", "../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
+		const mounts = ["../components/sidebar.tsx", "../app/page.tsx", "../app/graph/page.tsx", "../app/work/page.tsx", "../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
 		assert.deepEqual(mounts, ["../components/sidebar.tsx"]);
 	});
 });

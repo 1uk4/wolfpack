@@ -72,7 +72,7 @@ export function currentWolfOf(pathname: string | null | undefined): string | nul
 /** The fixed commands; memory commands only exist with a current wolf. */
 export function buildCommandItems(currentWolf: string | null): PaletteItem[] {
 	const items: PaletteItem[] = [
-		{ id: "cmd:graph", kind: "command", label: "Open graph", href: "/", keywords: ["home", "knowledge"] },
+		{ id: "cmd:graph", kind: "command", label: "Open graph", href: "/graph", keywords: ["home", "knowledge"] },
 		{ id: "cmd:kb-activity", kind: "command", label: "Open KB activity", href: KB_ACTIVITY_HREF, keywords: ["kb", "curator", "pipeline", "decisions"] },
 		{ id: "cmd:model", kind: "command", label: "Switch model", command: "switch-model", keywords: ["picker", "llm"] },
 	];

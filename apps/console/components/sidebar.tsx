@@ -784,8 +784,8 @@ export function SessionsSidebar() {
 					<Hint
 						// Kept (owner, subtlety round 2026-09-25) but to the RIGHT
 						// of the logo, carrying its real shortcut: ⌘G jumps to
-						// the graph view (keyboard-shortcuts routes it to "/",
-						// the same destination as this logo).
+						// the graph view (keyboard-shortcuts routes it to "/graph"
+						// and the Graph item); the logo goes to the home page "/".
 						label="Home"
 						action="jump-graph"
 						side="right"
@@ -823,13 +823,13 @@ export function SessionsSidebar() {
 						New session
 					</button>
 					<Link
-						href="/"
+						href="/graph"
 						onClick={closeList}
 						data-testid="nav-graph"
-						aria-current={pathname === "/" ? "page" : undefined}
+						aria-current={pathname === "/graph" ? "page" : undefined}
 						className={cn(
 							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
-							pathname === "/" ? "bg-accent text-foreground" : "text-muted-foreground",
+							pathname === "/graph" ? "bg-accent text-foreground" : "text-muted-foreground",
 						)}
 					>
 						<NetworkIcon className="size-3" />

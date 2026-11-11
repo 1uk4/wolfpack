@@ -28,7 +28,12 @@ const BEST_MODE = arg("best-mode", "min") as "min" | "p25";
 const USE_CLAUDE = argv.includes("--claude");
 const CLAUDE_MAX = Number(arg("claude-max", "60"));
 const DOMAIN = "wolfpack";
-const rules = DEFAULT_RULES;
+let rules = DEFAULT_RULES;
+// --sweep (work-wolfpack-pVfVjXK): dial sensitivity from cached answers only. The engine is never built and the
+// partitioner stays undefined; grow()/pass() take an exact-cache-only branch first and count misses as needsClaude.
+const SWEEP = argv.includes("--sweep");
+if (SWEEP && USE_CLAUDE) throw new Error("--sweep never calls Claude: do not combine it with --claude");
+const FLOOR_EX = Number(arg("floor", "0.05"));
 mkdirSync(OUT, { recursive: true });
 
 // ── inputs ───────────────────────────────────────────────────────────────────
@@ -46,7 +51,7 @@ const claudeCache: Record<string, Prop> = existsSync(claudeCachePath) ? JSON.par
 let claudeCalls = 0;
 let partitioner: ReturnType<typeof enginePartitioner> | undefined;
 let engineNote = "not requested (run with --claude)";
-if (USE_CLAUDE) {
+if (USE_CLAUDE && !SWEEP) {
   try {
     const { loadModelTable } = await import("@wolfpack/engine");
     const { createLibrarianEngine } = await import("../dist/librarian/engine.js");
@@ -117,15 +122,19 @@ interface Node { name: string; direct: string[]; children: Node[]; note?: string
 interface Placement { entry: string; section: string; target: string; score: number; threshold: number; second: string; secondScore: number }
 interface Move { entry: string; group: string; own: number; other: number; rival?: string }
 interface NewGroup { section: string; name: string; members: string[] }
-interface Cfg { label: string; delta: number; place?: { m: number; mode: "min" | "p25" }; claude?: boolean }
-interface Stats { placements: Placement[]; gained: Move[]; newGroups: NewGroup[]; approx: number; pending: string[]; claudeCalls: number; failures: string[] }
+interface Cfg { label: string; delta: number; place?: { m: number; mode: "min" | "p25" | "median"; floor?: number }; claude?: boolean; maxDepth?: number }
+interface Stats { leftMiss: number; placements: Placement[]; gained: Move[]; newGroups: NewGroup[]; approx: number; pending: string[]; claudeCalls: number; failures: string[] }
 
 async function pass(vecs: Vec[], ids: string[], first: Decision, salt: string, cfg: Cfg, st: Stats, title0: string): Promise<Decision> {
   if (first.leftovers.length < rules.minGroup) return first;
   const leftIds = first.leftovers.map((i) => ids[i]);
   const key = splitCacheKey(DOMAIN + salt, leftIds);
   let prop: Prop | undefined;
-  if (salt === "#leftovers3") {
+  if (SWEEP) {
+    const hit = exact.get(key) ?? claudeCache[key];
+    if (!hit) { st.leftMiss++; return first; }
+    prop = { ...hit, categories: hit.categories.slice(0, rules.llmMaxCategories) };
+  } else if (salt === "#leftovers3") {
     prop = claudeCache[key];
     if (!prop) {
       if (!partitioner || claudeCalls >= CLAUDE_MAX) return first;
@@ -162,9 +171,15 @@ async function grow(node: Node, memberIds: string[], depth: number, cfg: Cfg, st
   const ids = [...memberIds].sort();
   node.direct = ids;
   if (ids.length <= rules.splitAbove) return;
+  if (cfg.maxDepth && depth >= cfg.maxDepth) return;
   const vecs = ids.map((id) => byId.get(id)!.vector);
   const key = splitCacheKey(DOMAIN, ids);
-  let l = partitioner ? ((exact.get(key) ?? claudeCache[key]) ? { prop: (exact.get(key) ?? claudeCache[key]) as Prop, approx: false } : undefined) : lookup(key, ids);
+  let l: { prop: Prop; approx: boolean } | undefined;
+  if (SWEEP) {
+    const hit = exact.get(key) ?? claudeCache[key];
+    l = hit ? { prop: { ...hit, categories: hit.categories.slice(0, rules.llmMaxCategories) }, approx: false } : undefined;
+    if (!l) { st.pending.push(`${node.name} (${ids.length})`); return; }
+  } else l = partitioner ? ((exact.get(key) ?? claudeCache[key]) ? { prop: (exact.get(key) ?? claudeCache[key]) as Prop, approx: false } : undefined) : lookup(key, ids);
   if (!l && partitioner && claudeCalls < CLAUDE_MAX) {
     try {
       claudeCalls++; st.claudeCalls++;
@@ -180,7 +195,7 @@ async function grow(node: Node, memberIds: string[], depth: number, cfg: Cfg, st
   const rp = resolver(ids);
   const p = { names: l.prop.categories.map((c) => c.name), members: l.prop.categories.map((c) => rp(c.ids)) };
   let d = validate(vecs, p, rules, cfg.delta);
-  if (cfg.delta === 0) checkAgainstReal(vecs, p, d);
+  if (cfg.delta === 0 && !SWEEP) checkAgainstReal(vecs, p, d);
   if (!d.ok) {
     const one = d.reports.map((x, c) => (x.kept ? c : -1)).filter((c) => c >= 0);
     if (one.length !== 1) return;
@@ -204,7 +219,8 @@ async function grow(node: Node, memberIds: string[], depth: number, cfg: Cfg, st
     const info = groups.map((g) => {
       const ix = g.base.map((id) => pos.get(id)!);
       const loo = ix.map((i) => cosine(unit(meanVec(ix.filter((j) => j !== i).map((j) => X[j]))), X[i])).sort((a, b) => a - b);
-      return { cent: unit(meanVec(ix.map((i) => X[i]))), thr: cfg.place!.mode === "min" ? loo[0] : percentile(loo, 0.25) };
+      const bar = cfg.place!.mode === "min" ? loo[0] : cfg.place!.mode === "median" ? percentile(loo, 0.5) : percentile(loo, 0.25);
+      return { cent: unit(meanVec(ix.map((i) => X[i]))), thr: Math.max(bar, cfg.place!.floor ?? -Infinity) };
     });
     const still: string[] = [];
     for (const id of loose) {
@@ -254,12 +270,102 @@ const f = (x: number) => x.toFixed(3);
 // ── run ──────────────────────────────────────────────────────────────────────
 interface Result { cfg: Cfg; root: Node; st: Stats }
 async function run(cfg: Cfg): Promise<Result> {
-  const st: Stats = { placements: [], gained: [], newGroups: [], approx: 0, pending: [], claudeCalls: 0, failures: [] };
+  const st: Stats = { leftMiss: 0, placements: [], gained: [], newGroups: [], approx: 0, pending: [], claudeCalls: 0, failures: [] };
   const root: Node = { name: `ROOT (${DOMAIN})`, direct: [], children: [] };
   await grow(root, entries.map((e) => e.id), 0, cfg, st);
   return { cfg, root, st };
 }
 
+// ── --sweep: one dial at a time, cached answers only ─────────────────────────
+if (SWEEP) {
+  partitioner = (async () => { throw new Error("sweep: the partitioner was called (no Claude calls are allowed in --sweep)"); }) as unknown as typeof partitioner;
+  const D = { ...DEFAULT_RULES };
+  const N = entries.length;
+  interface Row { dial: string; setting: string; lt: number; perLevel: string; secs: number; depth: number; kids: number; changed: number; needs: number; needs2: number; ms: number; res: Result }
+  const pathsOf = (root: Node): Map<string, string> => {
+    const m = new Map<string, string>();
+    const walk = (n: Node, p: string) => { for (const id of n.direct) m.set(id, p); n.children.forEach((c) => walk(c, p + " / " + c.name)); };
+    walk(root, root.name); return m;
+  };
+  const depthOf = (n: Node): number => (n.children.length ? 1 + Math.max(...n.children.map(depthOf)) : 0);
+  const kidsOf = (n: Node): number => Math.max(n.children.length, ...n.children.map(kidsOf), 0);
+  let basePaths: Map<string, string> | undefined;
+  const exec = async (dial: string, setting: string, over: Partial<typeof D>, cfg: Partial<Cfg>): Promise<Row> => {
+    rules = { ...D, ...over };
+    const t0 = performance.now();
+    const res = await run({ label: `${dial}: ${setting}`, delta: 0, ...cfg });
+    const ms = performance.now() - t0;
+    const lv = levels(res.root), paths = pathsOf(res.root);
+    basePaths ??= paths;
+    let changed = 0; for (const [id, p] of paths) if (basePaths.get(id) !== p) changed++;
+    const row: Row = { dial, setting, lt: looseTotal(res.root), perLevel: lv.map((x) => `d${x.depth}:${x.loose}`).join(" "), secs: countSections(res.root), depth: depthOf(res.root), kids: kidsOf(res.root), changed, needs: res.st.pending.length, needs2: res.st.leftMiss, ms, res };
+    rules = D; return row;
+  };
+  const rows: Row[] = [];
+  const add = async (dial: string, setting: string, over: Partial<typeof D>, cfg: Partial<Cfg> = {}) => { const r = await exec(dial, setting, over, cfg); rows.push(r); return r; };
+  // default run first (also checks the δ=0 copy against the real validatePartition once)
+  rules = D;
+  const dflt = await add("default", "all defaults", {});
+  for (const v of [6, 8, 10, 14, 20]) await add("splitAbove", String(v), { splitAbove: v });
+  for (const v of [2, 3, 4, 5]) await add("llmMaxCategories", String(v), { llmMaxCategories: v });
+  for (const v of [2, 3, 4, 5, 6]) await add("minGroup", String(v), { minGroup: v });
+  for (const v of [-0.05, 0, 0.03, 0.05, 0.08, 0.12]) await add("delta", String(v), {}, { delta: v });
+  await add("join", "off", {});
+  for (const mode of ["median", "p25", "min"] as const) for (const floor of [0, 0.02, 0.05, 0.08]) await add("join", `${mode === "min" ? "weakest" : mode} floor ${floor}`, {}, { place: { m: 0.01, mode, floor } });
+  for (const v of [2, 3, 4, 0]) await add("maxDepth", v ? String(v) : "none", {}, { maxDepth: v });
+  // maxDepth does nothing at defaults (the default tree stops at depth 2), so repeat it on top of the join where the tree goes deeper
+  for (const v of [2, 3, 4]) await add("maxDepth+join", `${v} (with join weakest floor 0.05)`, {}, { maxDepth: v, place: { m: 0.01, mode: "min", floor: 0.05 } });
+  const sweepRows = rows.length;
+  const COMBOS: { label: string; over: Partial<typeof D>; cfg: Partial<Cfg> }[] = JSON.parse(arg("combos", JSON.stringify([
+    { label: "join weakest floor 0.05 + δ 0.03", over: {}, cfg: { delta: 0.03, place: { m: 0.01, mode: "min", floor: 0.05 } } },
+    { label: "join weakest floor 0.05 + δ 0.03 + minGroup 2", over: { minGroup: 2 }, cfg: { delta: 0.03, place: { m: 0.01, mode: "min", floor: 0.05 } } },
+    { label: "join weakest floor 0.05 + δ 0.03 + splitAbove 14", over: { splitAbove: 14 }, cfg: { delta: 0.03, place: { m: 0.01, mode: "min", floor: 0.05 } } },
+  ])));
+  for (const c of COMBOS) await add("combo", c.label, c.over, c.cfg);
+  // verdicts: range over each dial's settings
+  const dials = ["splitAbove", "llmMaxCategories", "minGroup", "delta", "join", "maxDepth"];
+  const span = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+  const dialRows = (d: string) => rows.slice(0, sweepRows).filter((r) => (d === "maxDepth" ? r.dial === "maxDepth+join" : r.dial === d)); // maxDepth is judged on the join-on rows only: without join the default tree never passes depth 2
+  const verdicts = dials.map((d) => {
+    const rs = dialRows(d);
+    const l = span(rs.map((r) => r.lt)), s = span(rs.map((r) => r.secs)), dp = span(rs.map((r) => r.depth));
+    const basic = l >= 20 || s >= 4 || dp >= 1, adv = l >= 10 || s >= 2 || dp >= 0.5;
+    const needs = span(rs.map((r) => r.needs + r.needs2)), maxN = Math.max(...rs.map((r) => r.needs + r.needs2));
+    return { d, rs, l, s, dp, verdict: basic ? "Basic" : adv ? "Advanced" : "Drop", maxN, needs };
+  });
+  const rangeOf = (d: string) => { const rs = dialRows(d); return rs.map((r) => r.setting).join(", ").replace(/ \(with join weakest floor 0\.05\)/g, "") + (d === "maxDepth" ? " (measured with join weakest floor 0.05)" : ""); };
+  // timing: median of 5 planning passes from cache
+  const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const timeCfg = async (over: Partial<typeof D>, cfg: Partial<Cfg>) => { const t: number[] = []; for (let i = 0; i < 5; i++) { rules = { ...D, ...over }; const t0 = performance.now(); await run({ label: "t", delta: 0, ...cfg }); t.push(performance.now() - t0); rules = D; } return median(t); };
+  const heavy = rows.find((r) => r.dial === "join" && r.setting === "weakest floor 0.05")!; // most work per pass: placement plus re-judging grown groups
+  const heavyOver = ((): [Partial<typeof D>, Partial<Cfg>] => { const c = COMBOS.find((x) => `${x.label}` === heavy.setting); return c ? [c.over, c.cfg] : [{}, {}]; })();
+  void heavyOver;
+  const tDefault = await timeCfg({}, {});
+  const heavyDef = heavy.dial === "combo" ? heavyOver : heavy.dial === "join" ? [{}, { place: { m: 0.01, mode: (heavy.setting.startsWith("median") ? "median" : heavy.setting.startsWith("p25") ? "p25" : "min") as "min", floor: Number(heavy.setting.split(" ").pop()) } }] as [Partial<typeof D>, Partial<Cfg>] : heavy.dial === "delta" ? [{}, { delta: Number(heavy.setting) }] as [Partial<typeof D>, Partial<Cfg>] : heavy.dial === "splitAbove" ? [{ splitAbove: Number(heavy.setting) }, {}] as [Partial<typeof D>, Partial<Cfg>] : heavy.dial === "minGroup" ? [{ minGroup: Number(heavy.setting) }, {}] as [Partial<typeof D>, Partial<Cfg>] : [{}, {}] as [Partial<typeof D>, Partial<Cfg>];
+  const tHeavy = await timeCfg(heavyDef[0], heavyDef[1]);
+  // join floor examples: weakest-member bar with no floor; joined = score >= FLOOR_EX, refused = below it
+  const jr = rows.find((r) => r.dial === "join" && r.setting === "weakest floor 0")!;
+  const pl = jr.res.st.placements.slice().sort((a, b) => a.score - b.score);
+  const joined = pl.filter((p) => p.score >= FLOOR_EX), refused = pl.filter((p) => p.score < FLOOR_EX);
+  const ex = (p: Placement) => `- "${title(p.entry)}" → **${p.target}** (in ${p.section}); score ${f(p.score)}, group bar ${f(p.threshold)}, runner-up ${p.second} ${f(p.secondScore)}`;
+  const S: string[] = [];
+  S.push("# KB tree dials: sensitivity sweep (work-wolfpack-pVfVjXK)", "");
+  S.push("| Dial | Range | Loose moved | Sections moved | Depth moved | Verdict |", "|---|---|---|---|---|---|");
+  const nice: Record<string, string> = { splitAbove: "Section size before splitting", llmMaxCategories: "Most groups per section", minGroup: "Smallest group", delta: "Group strictness (δ)", join: "Join bar (+ floor)", maxDepth: "Deepest level" };
+  for (const v of verdicts) S.push(`| ${nice[v.d]} | ${rangeOf(v.d)} | ${v.l} | ${v.s} | ${v.dp} | **${v.verdict}** |`);
+  S.push("", `Entries: ${N}. Thresholds: Basic = loose ≥ 20, or sections ≥ 4, or depth ≥ 1; Advanced = at least half of those (loose ≥ 10, sections ≥ 2, depth ≥ 0.5); else Drop. "Moved" = max minus min across the dial's settings.`, "");
+  S.push("## Caveats", "", `- Zero Claude calls: engine never constructed, \`partitioner\` replaced by a function that throws, \`--sweep\` refuses \`--claude\`, grow()/pass() look up exact cache keys only (no approximate overlap). Claude calls made: ${claudeCalls}.`, "- needsClaude = sections above splitAbove with no cached answer (left whole) + leftover re-asks with no cached answer. A small splitAbove makes many more sections eligible, so those rows are lower bounds on how much would move; larger-than-default branch counts cannot be measured.", "- llmMaxCategories: cached proposals are truncated to the first N categories in proposal order. maxDepth counts split levels below the root (root = 0; maxDepth 2 means a depth-2 section is not split further). Join floor = minimum absolute cosine to the target group's centroid, applied on top of the bar; margin over runner-up fixed at 0.01.", "");
+  for (const v of verdicts) S.push(`- ${nice[v.d]}: needsClaude (first-pass + leftover) ranges up to ${v.maxN}, spread ${v.needs} across settings${v.maxN > 0 ? " → measurement incomplete" : " → complete"}.`);
+  S.push("", "## All settings", "", "Changed = entries whose section differs from the default run. Loose/level = loose entries in non-leaf sections at each depth (d0 = root).", "", "| Dial | Setting | Loose | Loose per level | Sections | Max depth | Max children | Changed vs default | needsClaude (split / leftover) |", "|---|---|---|---|---|---|---|---|---|");
+  rows.forEach((r) => S.push(`| ${r.dial} | ${r.setting} | ${r.lt} | ${r.perLevel} | ${r.secs} | ${r.depth} | ${r.kids} | ${r.changed} | ${r.needs} / ${r.needs2} |`));
+  S.push("", `## Join floor examples (weakest-member bar; floor ${FLOOR_EX})`, "", `${pl.length} entries join with no floor; ${joined.length} have a score ≥ ${FLOOR_EX} (join at this floor), ${refused.length} are below it (refused).`, "", "Join at floor:", ...pick(joined, 6).map(ex), "", "Refused by floor (would join with no floor):", ...pick(refused, 6).map(ex), "");
+  S.push("## Timing (one planning pass from cache, median of 5)", "", `- defaults: ${tDefault.toFixed(0)} ms; heaviest setting (${heavy.dial} ${heavy.setting}): ${tHeavy.toFixed(0)} ms (this machine).`, `- sfo-01 estimate at 3–4×: defaults ${(tDefault * 3 / 1000).toFixed(2)}–${(tDefault * 4 / 1000).toFixed(2)} s; heaviest ${(tHeavy * 3 / 1000).toFixed(2)}–${(tHeavy * 4 / 1000).toFixed(2)} s. Under 1.5 s there: ${tHeavy * 4 < 1500 ? "yes" : "NO"} (worst case 4×).`, "");
+  if (claudeCalls !== 0) throw new Error("sweep made Claude calls");
+  const outPath = join(OUT, "dials-sweep-report.md");
+  writeFileSync(outPath, S.join("\n") + "\n");
+  console.log(`wrote ${outPath}; claude calls ${claudeCalls}`);
+  process.exit(0);
+}
 const results: Result[] = [];
 const base = await run({ label: "Baseline (current rules)", delta: 0 });
 results.push(base);

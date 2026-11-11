@@ -5,7 +5,7 @@
  * pass `details` through (a 429 carries `retryAfterSeconds`, a number).
  */
 import type { ConsoleClient } from "@wolfpack/client";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { getConsoleClient } from "../thread/console-client.ts";
 import type { ClientSource } from "../thread/thread-api.ts";
 

@@ -4,7 +4,7 @@
  * (since, before, limit, domain) passes through; the hub validates it.
  */
 
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { getConsoleClient } from "../thread/console-client.ts";
 import type { ClientSource } from "../thread/thread-api.ts";
 

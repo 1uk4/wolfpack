@@ -1,0 +1,119 @@
+/**
+ * Storage ports (the hexagonal seams — vision §1 "storage stays swappable").
+ *
+ * One port per ENTITY, with domain operations — never one generic
+ * key/value interface. Core and the service layer that orbits it code
+ * against these types only; concrete adapters live in src/store/ (fs
+ * JSON/JSONL today, SQLite drop-in later) and are wired exactly once, in
+ * the composition root (src/server/stores.ts). Dependencies point one way:
+ * adapters may import core; core NEVER imports an adapter.
+ */
+
+import type { LhMessage } from "../thread/native-messages.ts";
+import type {
+	ChatRecord,
+	ChatSettings,
+	ChatSummary,
+	JobKind,
+	JobRecord,
+	TurnUsage,
+} from "../contracts.ts";
+import type { UserSettings } from "../settings/settings.ts";
+
+// ─── ChatStore — the session record's home (data/chats) ─────────────────────
+
+export interface ChatStore {
+	/** Create a session record (persisted immediately). */
+	createChat(title: string): ChatRecord;
+	/** The full record, or null if unknown id / corrupt file. */
+	getChat(id: string): ChatRecord | null;
+	/** All sessions, newest activity first (the sidebar's list view). */
+	listChats(): ChatSummary[];
+	/** Persist the full native message list (the record IS the agent
+	 * state — Wave B, owner-approved 2026-09-26). */
+	saveMessages(id: string, messages: LhMessage[]): void;
+	/** Append one usage entry to the record's turn log (the money channel,
+	 * 2026-09): idempotent per turn id — each request carries its own, so
+	 * a turn persisted twice appends once while continuation turns (which
+	 * share a response message id) each keep their usage. */
+	appendTurnUsage(id: string, entry: TurnUsage): void;
+	/** Persist the per-chat model/thinking settings (the model control).
+	 *  Replace-whole: the picker sends the complete settings object. */
+	saveSettings(id: string, settings: ChatSettings): void;
+	/** Rename a session (the header's click-to-edit title, 2026-09-17).
+	 * Like saveSettings: a rename is NOT conversation activity — updatedAt
+	 * stays put, so sidebar order never churns on a rename. */
+	renameChat(id: string, title: string): ChatRecord;
+	/** Delete the session record entirely (session-deletion wave 6, owner
+	 *  2026-09-22). False when the id is unknown. The job cleanup is the caller's choreography (the DELETE route), not the store's. */
+	deleteChat(id: string): boolean;
+}
+
+// ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────
+
+export interface CreateJobInit {
+	kind: JobKind;
+	chatId: string;
+	toolCallId: string;
+	/** First activity line (defaults to "starting"). */
+	activity?: string;
+}
+
+/** Mergeable fields — identity (id, kind, chatId, toolCallId, createdAt) is immutable. */
+export type JobPatch = Partial<Omit<JobRecord, "id" | "kind" | "chatId" | "toolCallId" | "createdAt">>;
+
+export interface JobStore {
+	/** Create a running job (keyed by toolCallId for spawn dedup). */
+	createJob(init: CreateJobInit): JobRecord;
+	getJob(id: string): JobRecord | null;
+	/** Merge a patch into the record; null if unknown id. */
+	updateJob(id: string, patch: JobPatch): JobRecord | null;
+	/** All jobs for a chat, newest activity first. */
+	listJobs(chatId: string): JobRecord[];
+	/** The job fulfilling a given tool part, if any (spawn-hook dedup). */
+	findJobByToolCallId(chatId: string, toolCallId: string): JobRecord | null;
+	/** Delete every job record for a chat — running or finished (session-
+	 *  deletion wave 6). Returns how many files were removed. The deletion
+	 *  route refuses while jobs are still running, so by the time this
+	 *  fires every record is terminal. */
+	deleteJobsForChat(chatId: string): number;
+}
+
+// ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──
+
+/**
+ * The one record for every non-secret product preference (core/settings.ts
+ * UserSettings — delta semantics, see that module's doc). The store is
+ * replace-whole on the RECORD; per-section scoping is a server-band concern
+ * (single process, no stale-client hazard to defend against at this seam).
+ * Schema-version lazy migration happens inside readSettings, never in
+ * the callers. (The legacy default-settings.json fold died with the chat
+ * section — per-session models, owner 2026-09-28.)
+ */
+export interface SettingsStore {
+	/** The sanitized record, or null when none exists yet (first boot). */
+	readSettings(): UserSettings | null;
+	/** Persist the record (replace-whole). Callers pass a SANITIZED record. */
+	writeSettings(settings: UserSettings): void;
+}
+
+// ─── AuthStore — BYOK provider keys (auth-keys wave, 2026-09-19) ────────────
+
+/**
+ * The long-standing flat {VAR: value} auth.json map (config.AUTH_FILE) —
+ * the same file the Electron app has always hand-edited, now first-class
+ * server-managed. Values are opaque strings: shape validation is a
+ * server-band concern (core/auth-keys.ts validateKeyShape — the store
+ * persists what it is given); env precedence is a server-band concern
+ * too (src/server/keys.ts). Unknown vars ride along verbatim.
+ */
+export interface AuthStore {
+	/** The whole map — absent or corrupt file = {} ("no keys yet", the
+	 *  documented first-boot state). Never throws. */
+	authVars(): Record<string, string>;
+	/** Set one VAR (atomic write, mode 0600 always, other vars preserved). */
+	setAuthVar(name: string, value: string): void;
+	/** Remove one VAR if present (absent = no-op, still a silent success). */
+	deleteAuthVar(name: string): void;
+}
+

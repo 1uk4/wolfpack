@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
-import { blurAfterPointerClick } from "@/components/focus-hygiene";
+import { blurAfterPointerClick } from "@/components/shell/focus-hygiene";
 import { cn } from "@/lib/utils";
 
 /** The unified user-thinking row (owner round, 2026-10-05): ONE visual

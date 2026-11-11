@@ -4,11 +4,11 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import { SquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
-import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
-import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { useOptionalServerEvent, useOptionalServerResync } from "@/components/shell/server-events";
 import { useChatSession } from "@/components/thread/session";
 import { threadBase, threadTransport } from "@/components/thread/thread-transport";
 import { SPEAKER, speakerBlock, type Speaker } from "@/components/thread/speaker-colors";

@@ -6,7 +6,7 @@
  * (stale etag), 413 too_large, 401 with the hub-auth marker for an unpaired browser.
  */
 import type { ConsoleClient } from "@wolfpack/client";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { getConsoleClient } from "../thread/console-client.ts";
 import type { ClientSource } from "../thread/thread-api.ts";
 

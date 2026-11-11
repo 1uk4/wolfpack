@@ -15,8 +15,8 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../../../components/ai-elements/message.tsx";
 import { ThinkingBlock, setAllUserThinkingOpen } from "@/components/thread/thinking-block";
-import { MermaidOverlay, SessionMermaidContext, chartSize } from "../../../components/session-overlay.tsx";
-import { MarkdownCode, codeSource } from "../../../components/md-blocks.tsx";
+import { MermaidOverlay, SessionMermaidContext, chartSize } from "../../../components/shell/session-overlay.tsx";
+import { MarkdownCode, codeSource } from "../../../components/shell/md-blocks.tsx";
 
 function render(md: string): string {
 	return renderToStaticMarkup(<MessageResponse mode="static">{md}</MessageResponse>);
@@ -205,7 +205,7 @@ describe("md-blocks — key-idea callouts (GitHub alerts, owner round 2026-10-07
 
 describe("parseAlertMarker (pure)", () => {
 	it("non-paragraph openers and marker-less text return null", async () => {
-		const { parseAlertMarker } = await import("../../../components/md-blocks.tsx");
+		const { parseAlertMarker } = await import("../../../components/shell/md-blocks.tsx");
 		assert.equal(parseAlertMarker("just text"), null);
 		assert.equal(parseAlertMarker(null), null);
 		// a leading <em> node, not a paragraph: no crash, no alert

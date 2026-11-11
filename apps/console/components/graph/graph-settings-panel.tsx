@@ -9,7 +9,7 @@
 
 import { useRef, useState } from "react";
 import { SettingsIcon } from "lucide-react";
-import { usePopoverDismiss } from "@/components/popover-dismiss";
+import { usePopoverDismiss } from "@/components/shell/popover-dismiss";
 import { Hint } from "@/components/ui/hint";
 import {
 	CHARGE_RANGE,

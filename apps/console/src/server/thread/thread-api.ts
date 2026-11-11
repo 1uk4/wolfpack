@@ -16,7 +16,7 @@
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { DIAGRAM_ID_RE } from "@wolfpack/protocol";
 import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { resolveThreadId } from "../../core/thread/thread-adapter.ts";
 import { workspaceGraph } from "./branch-graph.ts";
 import { getConsoleClient } from "./console-client.ts";

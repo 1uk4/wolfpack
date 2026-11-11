@@ -7,7 +7,7 @@
  * pairing page (the URL comes from /api/hub-url, set at runtime by HUBD_PUBLIC_URL). The pasted text is never logged or echoed.
  */
 import { useEffect, useRef, useState } from "react";
-import { saveHubToken, tokenFromHash, tokenFromPairingInput } from "@/src/core/hub-auth";
+import { saveHubToken, tokenFromHash, tokenFromPairingInput } from "@/src/core/ui/hub-auth";
 
 export default function PairPage() {
 	const [stored, setStored] = useState<boolean | undefined>();

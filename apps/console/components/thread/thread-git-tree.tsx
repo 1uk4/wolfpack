@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CheckIcon, CopyIcon, GitBranchIcon, Loader2Icon } from "lucide-react";
-import { usePopoverDismiss } from "@/components/popover-dismiss";
-import { useOptionalServerEvent } from "@/components/server-events";
+import { usePopoverDismiss } from "@/components/shell/popover-dismiss";
+import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { threadBase } from "@/components/thread/thread-transport";
 import { CARD_FIT_W, FitSwimlanes, MomentList, ScrollEnd, Swimlanes, useRings } from "@/components/thread/branch-graph";
-import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { graphKey, headerStatus, newestRequest, type GitOverview } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
 

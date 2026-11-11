@@ -3,11 +3,11 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDownIcon, Maximize2Icon } from "lucide-react";
-import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { useOptionalMemoryEvents } from "@/components/memory/memory-events";
 import { useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { PlanGraphView } from "@/components/thread/plan-graph-view";
-import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { useOptionalServerEvent, useOptionalServerResync } from "@/components/shell/server-events";
 import { PANEL_PROGRESS, closePanel, setOpenPanel, togglePanel, useOpenPanel } from "@/components/thread/pin-store";
 import { sessionFindHasForegroundLayer } from "@/components/thread/session-find";
 import { cn } from "@/lib/utils";

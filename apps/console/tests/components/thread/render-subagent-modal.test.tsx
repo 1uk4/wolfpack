@@ -35,8 +35,8 @@ type LedgerEntry = import("@wolfpack/client").LedgerEntry;
 const { BusyError } = await import("@wolfpack/client");
 const { threadFetch } = await import("../../helpers/thread-fetch.ts");
 const { SubagentModal, SubagentModalProvider, useSubagentModal, ledgerSender, userMessageSenders, messageHint, formatElapsed, formatTokens } = await import("../../../components/thread/subagent-modal.tsx");
-const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
-const { PANELS } = await import("../../../components/panel-host.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
+const { PANELS } = await import("../../../components/shell/panel-host.tsx");
 
 const CHILD = "w/sub-1";
 const base: ThreadSummary = { id: CHILD, wolf: "w", kind: "subagent", title: "Audit the routes", agent: "scout", parentThreadId: "w/home", state: "running", startedAt: new Date(Date.now() - 65_000).toISOString(), tokens: 12_345, taskId: "work-w-abc" };

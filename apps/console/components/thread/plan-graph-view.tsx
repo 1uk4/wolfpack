@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import type { GraphData, GraphNodeStatus } from "@wolfpack/protocol/objects";
 import { CLICK_SLOP } from "@/components/graph/graph-canvas";
 import { layoutGraph } from "@/src/core";
-import { fitFloorView, zoomedGraphView } from "@/components/pan-zoom";
+import { fitFloorView, zoomedGraphView } from "@/components/shell/pan-zoom";
 
 /** Zoomable graphs never fit smaller than this (below it they fit the height and pan), and never zoom out past ZOOM_FLOOR. */
 const FIT_MIN_SCALE = 0.5;

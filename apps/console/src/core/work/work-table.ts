@@ -6,7 +6,7 @@
  * draws. Stage text comes from the graph pane's `stageLabel`, so both surfaces say "shipped · ready to graduate" alike.
  */
 
-import { fuzzyScore } from "../fuzzy.ts";
+import { fuzzyScore } from "../ui/fuzzy.ts";
 import { stageLabel } from "../graph/kb-graph-model.ts";
 import { graduateState, NO_GRADUATE, type GraduateState } from "../kb/graduate.ts";
 import type { WorkListItem } from "../kb/kb.ts";

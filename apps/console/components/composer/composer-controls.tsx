@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { MenuShell } from "@/components/menu-shell";
+import { MenuShell } from "@/components/shell/menu-shell";
 import { Toggle } from "@/components/settings/controls";
 import { changeSettings, DEFAULT_SETTINGS, fetchSettings, putSettings, TIERS, type SettingsPatch, type Tier, type ThreadSettingsState } from "@/components/composer/composer-settings";
 import { settingsUrl } from "@/components/thread/thread-transport";

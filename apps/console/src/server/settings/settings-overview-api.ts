@@ -6,7 +6,7 @@
  * times out carries `error` and the response still succeeds.
  */
 import type { ConsoleClient, HubSettings, PromptView, WolfSettingsView } from "@wolfpack/client";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { getConsoleClient, isHubAuthError } from "../thread/console-client.ts";
 import type { ClientSource } from "../thread/thread-api.ts";
 

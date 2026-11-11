@@ -33,7 +33,7 @@ import {
 import { usePathname, useSearchParams } from "next/navigation";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime.js";
 import { createPortal } from "react-dom";
-import { useBackdropDismiss } from "@/components/backdrop-dismiss";
+import { useBackdropDismiss } from "@/components/shell/backdrop-dismiss";
 import {
 	CURRENT_SETTINGS_VERSION,
 	type AppearanceSettings,
@@ -41,7 +41,7 @@ import {
 } from "@/src/core";
 import { useAppearance } from "./appearance.tsx";
 import { SettingsSection } from "./controls.tsx";
-import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
+import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/shell/menu-shell";
 import { notifySettingsSaved } from "@/components/settings/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";

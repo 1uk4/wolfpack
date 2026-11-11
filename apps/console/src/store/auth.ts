@@ -17,7 +17,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AUTH_FILE } from "../../config.ts";
-import type { AuthStore } from "../core/ports.ts";
+import type { AuthStore } from "../core/ui/ports.ts";
 
 /** The flat string→string map, or {} for absent/corrupt/non-object. */
 function readMap(): Record<string, string> {

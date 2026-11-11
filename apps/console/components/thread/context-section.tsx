@@ -1,6 +1,6 @@
 "use client";
 
-import { BrailleSpinner } from "@/components/braille-spinner";
+import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ContextBar, compactionDetail, formatTokens, pastStartAt, useThreadContext } from "@/components/thread/thread-context";
 import { Button } from "@/components/ui/button";
 

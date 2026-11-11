@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SWITCHER_RECENT, ATTACHED_KEY, buildSwitcher, loadAttached, saveAttached, pickOwnerWolf, type BarThread, type KeyValueStore } from "../../../src/core/thread/chat-bar.ts";
-import { KEYBOARD_ACTIONS, actionForBinding, bindingForAction, loadOverrides, saveOverrides } from "../../../src/core/keyboard.ts";
+import { KEYBOARD_ACTIONS, actionForBinding, bindingForAction, loadOverrides, saveOverrides } from "../../../src/core/ui/keyboard.ts";
 import { nextOverrides } from "../../../components/settings/keyboard-section.tsx";
 
 const mem = () => {

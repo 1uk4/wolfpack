@@ -32,9 +32,9 @@ const { createActivityBridge } = await import("../../../src/server/thread/needs-
 const { SubagentModalProvider } = await import("../../../components/thread/subagent-modal.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../../../components/thread/subagent-strip.tsx");
 const strip = await import("../../../components/thread/subagent-strip.tsx");
-const { SessionRow, SessionsSidebar } = await import("../../../components/sidebar.tsx");
-const { SidebarProvider } = await import("../../../components/sidebar.tsx");
-const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
+const { SessionRow, SessionsSidebar } = await import("../../../components/shell/sidebar.tsx");
+const { SidebarProvider } = await import("../../../components/shell/sidebar.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const core = await import("../../../src/core/index.ts");
 

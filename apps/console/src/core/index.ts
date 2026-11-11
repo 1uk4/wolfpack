@@ -14,9 +14,9 @@
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
 export * from "./contracts.ts";
-export * from "./ports.ts";
+export * from "./ui/ports.ts";
 export * from "./graph/render-settings.ts";
-export * from "./mobile-layout.ts";
+export * from "./ui/mobile-layout.ts";
 
 export * from "./thread/question-core.ts";
 // The event bus (push architecture, 2026-10-02): vocabulary + emit/subscribe
@@ -27,7 +27,7 @@ export * from "./graph/layout.ts";
 export * from "./graph/route-layout.ts";
 export * from "./thread/pending.ts";
 export * from "./thread/math-delims.ts";
-export * from "./escape-html.ts";
+export * from "./ui/escape-html.ts";
 // Wave B (owner-approved 2026-09-26): the native record (LhMessage),
 // compaction and the input-events contract — all pure logic, browser-safe.
 export * from "./thread/native-messages.ts";
@@ -39,9 +39,9 @@ export * from "./thread/input-events.ts";
 export * from "./thread/view.ts";
 export * from "./thread/tool-parts.ts";
 export * from "./settings/prices.ts";
-export * from "./fuzzy.ts";
+export * from "./ui/fuzzy.ts";
 export * from "./thread/subagents.ts";
-export * from "./palette.ts";
+export * from "./ui/palette.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved
 // view. Browser-safe — the Wave-4 panel imports these directly.
@@ -54,7 +54,7 @@ export * from "./thread/session-navigation.ts";
 // /api/keys routes built on it).
 export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
-export * from "./keyboard.ts";
+export * from "./ui/keyboard.ts";
 // Pure, browser-safe.
 // thread-adapter.ts: the ConsoleClient (@wolfpack/client) ↔ session-model
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
@@ -82,11 +82,11 @@ export * from "./kb/entry-view.ts";
 export * from "./work/work-view.ts";
 export * from "./kb/item-document.ts";
 export * from "./kb/memory-panel-model.ts";
-export * from "./panel-host.ts";
+export * from "./ui/panel-host.ts";
 export * from "./work/task-graph.ts";
 export * from "./work/task-graph-layout.ts";
 export * from "./work/feature-progress.ts";
-export { coalescedRefresh } from "./coalesced-refresh.ts";
+export { coalescedRefresh } from "./ui/coalesced-refresh.ts";
 export * from "./thread/thread-lists.ts";
 export * from "./thread/thread-color.ts";
 export * from "./work/work-table.ts";

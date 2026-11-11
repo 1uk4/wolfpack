@@ -9,7 +9,7 @@
 import Link from "next/link";
 import { isValidElement, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { MessageResponse } from "@/components/ai-elements/message";
-import { mdComponents } from "@/components/md-blocks";
+import { mdComponents } from "@/components/shell/md-blocks";
 import { WorkIdChip } from "@/components/work/work-id-chip";
 import { UNRESOLVED_HREF, headingSlug, workIdFromHref } from "@/src/core";
 

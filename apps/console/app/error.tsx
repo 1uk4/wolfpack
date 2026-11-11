@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { HUB_COOKIE, HUB_COOKIE_HOST, readHubToken } from "@/src/core/hub-auth";
+import { HUB_COOKIE, HUB_COOKIE_HOST, readHubToken } from "@/src/core/ui/hub-auth";
 
 /**
  * Route error boundary. A server-rendered page that failed because the hub rejected the browser's token cannot tell the browser why (Next

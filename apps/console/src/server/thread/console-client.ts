@@ -10,7 +10,7 @@
  */
 
 import { HttpConsoleClient, MockConsoleClient, ProtocolError, type ConsoleClient } from "@wolfpack/client";
-import { bearerOf } from "../../core/hub-auth.ts";
+import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { defaultDirectRoute, type DirectRoute } from "../pack/direct-path.ts";
 import { isRelayMode } from "./relay-mode.ts";
 import { sessionWitness } from "./session-witness.ts";

@@ -13,7 +13,7 @@ import {
 	type MathPlugin,
 	type PluginConfig,
 } from "streamdown";
-import { mdComponents, mdComponentsInline } from "@/components/md-blocks";
+import { mdComponents, mdComponentsInline } from "@/components/shell/md-blocks";
 import { cn } from "@/lib/utils";
 import type { LhViewMessage } from "@/src/core";
 import { escapeRawHtml, linkifyWorkIds, transformMathDelimiters } from "@/src/core";

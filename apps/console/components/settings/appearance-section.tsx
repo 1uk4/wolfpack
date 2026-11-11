@@ -28,7 +28,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AppearanceSettings } from "@/src/core";
-import { MenuShell } from "@/components/menu-shell";
+import { MenuShell } from "@/components/shell/menu-shell";
 import { Hint } from "@/components/ui/hint";
 import { useAppearance } from "./appearance.tsx";
 import { FontMenuList } from "./model-menu";

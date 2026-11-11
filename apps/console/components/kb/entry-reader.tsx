@@ -6,10 +6,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRightIcon } from "lucide-react";
 import { isDictationActive } from "@/components/composer/dictation";
-import { hasInAppHistory } from "@/components/nav-tracker";
+import { hasInAppHistory } from "@/components/shell/nav-tracker";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb/kb-client";
-import { TopBar } from "@/components/top-bar";
+import { TopBar } from "@/components/shell/top-bar";
 import {
 	entryBreadcrumb,
 	entryFacts,

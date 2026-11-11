@@ -25,7 +25,7 @@ import {
 	type ThreadsByWolf,
 	type WolfLite,
 } from "@/src/core";
-import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { useOptionalServerEvent, useOptionalServerResync } from "@/components/shell/server-events";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 
 export interface AttachedThreadApi {

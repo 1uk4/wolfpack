@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/thread/events.ts";
-import type { ChatStore } from "../core/ports.ts";
+import type { ChatStore } from "../core/ui/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/thread/native-messages.ts";

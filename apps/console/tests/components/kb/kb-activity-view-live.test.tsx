@@ -23,7 +23,7 @@ Object.assign(globalThis, {
 });
 
 const { KbActivityView } = await import("../../../components/kb/kb-activity-view.tsx");
-const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { kbActivityFixture } = await import("../../fixtures/kb-activity.ts");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

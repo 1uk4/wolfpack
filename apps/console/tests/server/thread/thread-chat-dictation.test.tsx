@@ -44,7 +44,7 @@ function RouterGrab() {
 	goTo = useRouter().push;
 	return null;
 }
-const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { ATTACHED_KEY } = await import("../../../src/core/thread/chat-bar.ts");

@@ -12,7 +12,7 @@
 import type { ConsoleClient, WolfEvent } from "@wolfpack/client";
 import { buildNeedsYou, type WolfNeedsYou } from "../../core/thread/needs-you.ts";
 import { emit, type ServerEvents } from "../../core/thread/events.ts";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { getConsoleClient, isHubAuthError } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 

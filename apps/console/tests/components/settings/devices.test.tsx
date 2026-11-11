@@ -13,9 +13,9 @@ import { createDevicesApi, pairLink } from "../../../src/server/pack/devices-api
 import { createConsoleClient, makeRequestToken } from "../../../src/server/thread/console-client.ts";
 import { eventsResponse, eventsRoute } from "../../../src/server/thread/events-stream.ts";
 import { setConsoleClient } from "../../../src/server/thread/console-client.ts";
-import { wireSource, createNotifyHub, type NotifySource } from "../../../components/server-events.tsx";
-import { withHubAuth } from "../../../src/core/hub-auth.ts";
-import { HUB_AUTH_HEADER } from "../../../src/core/hub-auth.ts";
+import { wireSource, createNotifyHub, type NotifySource } from "../../../components/shell/server-events.tsx";
+import { withHubAuth } from "../../../src/core/ui/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../../src/core/ui/hub-auth.ts";
 
 const NOW = Date.parse("2026-11-02T12:00:00Z");
 const rows: DeviceRow[] = [

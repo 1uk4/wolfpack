@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BrailleSpinner } from "@/components/braille-spinner";
-import { usePanelHost, usePanelState } from "@/components/panel-host";
-import { useOptionalServerEvent } from "@/components/server-events";
+import { BrailleSpinner } from "@/components/shell/braille-spinner";
+import { usePanelHost, usePanelState } from "@/components/shell/panel-host";
+import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { compactUrl, contextUrl } from "@/components/thread/thread-transport";
 import type { ThreadContext } from "@wolfpack/client";
 

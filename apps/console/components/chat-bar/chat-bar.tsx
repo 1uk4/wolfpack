@@ -16,7 +16,7 @@ import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPicture2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { BrailleSpinner } from "@/components/braille-spinner";
+import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/chat-bar/chat-bar-io";
@@ -27,7 +27,7 @@ import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards
 import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
-import { useOptionalServerEvent } from "@/components/server-events";
+import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { attachable, BAR_EXTRAS, kbdEventForAction, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";

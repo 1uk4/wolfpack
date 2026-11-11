@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
-import { InertImage, mdComponents } from "@/components/md-blocks";
+import { InertImage, mdComponents } from "@/components/shell/md-blocks";
 import { CardTextInput, isOther, otherText } from "@/components/ask/card-fields/shared";
 import { attachmentUrl, diagramUrl } from "@/components/thread/thread-transport";
 import { imagesOf } from "@/components/ask/ask-images";

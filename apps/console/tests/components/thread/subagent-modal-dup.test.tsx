@@ -32,7 +32,7 @@ Object.defineProperty(dom.document, "activeElement", { get: () => focused ?? dom
 type ConsoleClient = import("@wolfpack/client").ConsoleClient;
 const { threadFetch } = await import("../../helpers/thread-fetch.ts");
 const { SubagentModal } = await import("../../../components/thread/subagent-modal.tsx");
-const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { withoutEchoes } = await import("../../../components/thread/session-core.ts");
 
 const CHILD = "w/sub-1";

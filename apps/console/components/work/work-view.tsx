@@ -17,10 +17,10 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
-import { TopBar } from "@/components/top-bar";
+import { TopBar } from "@/components/shell/top-bar";
 import { useWorkReader } from "./work-reader";
-import { MenuShell } from "@/components/menu-shell";
-import { WolfpackMark } from "@/components/wolfpack-mark";
+import { MenuShell } from "@/components/shell/menu-shell";
+import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import {
 	DEFAULT_WORK_SORT,
 	LANE_COLOR,

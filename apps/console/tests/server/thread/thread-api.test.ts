@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 import { MockConsoleClient, FIXTURE_THREAD } from "@wolfpack/client";
 import { createThreadApi, resumeCursor } from "../../../src/server/thread/thread-api.ts";
 import { createConsoleClient, getConsoleClient, setConsoleClient } from "../../../src/server/thread/console-client.ts";
-import { HUB_AUTH_HEADER } from "../../../src/core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../../src/core/ui/hub-auth.ts";
 
 const ref = { wolf: "1uk4", slug: "home" };
 

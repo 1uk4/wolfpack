@@ -24,7 +24,7 @@ import {
 	sanitizeUserSettings,
 	type UserSettings,
 } from "../core/settings/settings.ts";
-import type { SettingsStore } from "../core/ports.ts";
+import type { SettingsStore } from "../core/ui/ports.ts";
 
 /** The persisted record, or null when none exists (first boot). Runs the
  *  migration chain on every read — cheap: a no-op file check when current. */

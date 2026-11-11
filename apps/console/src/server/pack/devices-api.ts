@@ -4,7 +4,7 @@
  * the hub-auth marker (the browser signs out); a 403 (a worker token) and 404 pass through; a client without a hub answers 501.
  */
 import type { ConsoleClient } from "@wolfpack/client";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { getConsoleClient } from "../thread/console-client.ts";
 import { hubPublicUrl } from "./hub-public-url.ts";
 import type { ClientSource } from "../thread/thread-api.ts";

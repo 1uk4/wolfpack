@@ -15,8 +15,8 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { BrailleSpinner } from "@/components/braille-spinner";
-import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import { BrailleSpinner } from "@/components/shell/braille-spinner";
+import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import {
 	closePackHealth,
 	focusPackHealthOpener,

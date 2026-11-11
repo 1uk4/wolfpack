@@ -10,7 +10,7 @@ import { TaskGraph } from "@/components/work/task-graph";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
-import { TopBar } from "@/components/top-bar";
+import { TopBar } from "@/components/shell/top-bar";
 import { WorkBadges } from "@/components/work/work-badges";
 import { useLibrarian } from "@/components/kb/use-librarian";
 import { buildTaskGraph, featureThreadWolves, resolveWork, threadHref, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";

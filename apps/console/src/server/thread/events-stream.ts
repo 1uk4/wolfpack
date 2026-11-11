@@ -27,7 +27,7 @@
 import { subscribe, type ServerEvent } from "../../core/thread/events.ts";
 import type { ConsoleClient } from "@wolfpack/client";
 import { createConsoleClient, getConsoleClient, nextRequestToken } from "./console-client.ts";
-import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
+import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
 import { createActivityBridge } from "./needs-you-api.ts";
 import { createHubEventsBridge } from "./hub-events-bridge.ts";
 

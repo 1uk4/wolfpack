@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { threadHref } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
-import { SidebarToggle } from "@/components/sidebar";
+import { SidebarToggle } from "@/components/shell/sidebar";
 
 export const dynamic = "force-dynamic";
 

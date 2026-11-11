@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useBackdropDismiss } from "@/components/backdrop-dismiss";
+import { useBackdropDismiss } from "@/components/shell/backdrop-dismiss";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { graduationWolf, type GraduateState, type GraduationObservations, type GraduationPreview } from "@/src/core";
 import type { GraduateClient } from "./graduate-client";

@@ -25,7 +25,7 @@ Object.assign(globalThis, {
 
 type Card = import("@wolfpack/client").Card;
 const { AskCard } = await import("../../../components/ask/ask-card.tsx");
-const { escapeRawHtml } = await import("../../../src/core/escape-html.ts");
+const { escapeRawHtml } = await import("../../../src/core/ui/escape-html.ts");
 
 describe("escapeRawHtml", () => {
 	it("escapes tag-like text but not code, fences or autolinks", () => {

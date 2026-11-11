@@ -7,7 +7,7 @@ import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemor
 import { WorkIdChip } from "@/components/work/work-id-chip";
 import { ContextSection } from "@/components/thread/context-section";
 import { useMemoryEvents } from "@/components/memory/memory-events";
-import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { useOptionalServerEvent, useOptionalServerResync } from "@/components/shell/server-events";
 import {
 	BUSY_TEXT,
 	MEMORY_PANEL_OPEN_KEY,

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Handle, MarkerType, Position, ReactFlow, Controls, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import { CheckIcon, MaximizeIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { layoutTaskGraph, type TaskGraphModel, type TaskNode, type TaskStatus } from "@/src/core";
 
 type GraphModel = Extract<TaskGraphModel, { kind: "graph" }>;

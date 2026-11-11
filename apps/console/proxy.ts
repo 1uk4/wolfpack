@@ -9,7 +9,7 @@
  *      A warning is logged once at startup, since a client-supplied header is then in play.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { withCookieBearer } from "@/src/core/hub-auth";
+import { withCookieBearer } from "@/src/core/ui/hub-auth";
 
 let warned = false;
 /** https as the browser saw it. `env` is injectable for tests. */

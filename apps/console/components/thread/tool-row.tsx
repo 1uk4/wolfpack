@@ -2,7 +2,7 @@
 
 import { useState, type ComponentType, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import { BrailleSpinner } from "@/components/braille-spinner";
+import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { summarizeGroup, type ArtifactPartProps, type ToolEntry } from "@/src/core";
 

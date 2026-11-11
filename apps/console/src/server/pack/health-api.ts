@@ -29,7 +29,7 @@
  * rate_limited (Retry-After 5 s for the in-flight cap, until the window frees a slot for the per-minute one) and no hub call is made.
  * The bearer must be the header: the cookie mirror (proxy.ts) never applies to a POST, so a cross-site form cannot restart anything.
  */
-import { bearerOf } from "../../core/hub-auth.ts";
+import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
 import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler } from "./updates-api.ts";

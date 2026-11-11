@@ -33,7 +33,7 @@ const { SettingsDialogProvider } = await import("../../../components/settings/se
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
-const { ServerEventsProvider } = await import("../../../components/server-events.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 /** The notification channel's source: tests fire named frames through `frames`. */
 const frames = new Map<string, (data: string) => void>();
 const eventsSource = () => ({

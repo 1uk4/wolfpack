@@ -39,7 +39,7 @@ const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldO
 const { WorkReaderHost } = await import("../../../components/work/work-reader.tsx");
 const { PlanGraphCard } = await import("../../../components/thread/plan-graph-card.tsx");
 const { nodeClickAction } = await import("../../../components/graph/graph-view.tsx");
-const { NavTracker, hasInAppHistory } = await import("../../../components/nav-tracker.tsx");
+const { NavTracker, hasInAppHistory } = await import("../../../components/shell/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../../../components/work/work-nav-link.tsx");
 const { WorkItemView } = await import("../../../components/work/work-item-page.tsx");
 const { EntryReaderView, shouldGoBackOnEscape } = await import("../../../components/kb/entry-reader.tsx");
@@ -383,7 +383,7 @@ describe("a graph node click: the reader only", () => {
 
 describe("sidebar", () => {
 	it("has two plain links: Graph to /graph and Work to /work", () => {
-		const bar = src("../../../components/sidebar.tsx");
+		const bar = src("../../../components/shell/sidebar.tsx");
 		assert.match(bar, /href="\/graph"[\s\S]{0,120}data-testid="nav-graph"/);
 		assert.match(bar, /<WorkNavEntry \/>/);
 		const nav = src("../../../components/work/work-nav-link.tsx");
@@ -405,8 +405,8 @@ describe("deep links", () => {
 	});
 
 	it("exactly one WorkReaderHost is mounted, in the shell every page (threads included) renders under", () => {
-		const mounts = ["../../../components/sidebar.tsx", "../../../app/page.tsx", "../../../app/graph/page.tsx", "../../../app/work/page.tsx", "../../../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
-		assert.deepEqual(mounts, ["../../../components/sidebar.tsx"]);
+		const mounts = ["../../../components/shell/sidebar.tsx", "../../../app/page.tsx", "../../../app/graph/page.tsx", "../../../app/work/page.tsx", "../../../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
+		assert.deepEqual(mounts, ["../../../components/shell/sidebar.tsx"]);
 	});
 });
 

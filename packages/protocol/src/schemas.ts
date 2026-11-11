@@ -1365,8 +1365,8 @@ export const MemoryTreeSchema = z.object({
   })),
   /** Tagged work whose item could not be fetched or has no feature. */
   other: z.array(z.object({ id: z.string(), pending: nn, archived: nn })),
-  /** Untagged observations still in the pool. */
-  den: z.object({ pending: nn }),
+  /** Untagged observations: still in the pool (pending) and promoted in the last 7 days (archived; absent from an older wolfd). */
+  den: z.object({ pending: nn, archived: nn.optional() }),
 });
 export type MemoryTree = z.infer<typeof MemoryTreeSchema>;
 

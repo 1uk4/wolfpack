@@ -41,7 +41,7 @@ describe("readMemoryTree", () => {
       obs("f", { work: "work-d-GONE" }),
     ]);
     const t = await readMemoryTree(den, work, NOW);
-    expect(t.den).toEqual({ pending: 1 });
+    expect(t.den).toEqual({ pending: 1, archived: 0 });
     expect(t.other).toEqual([{ id: "work-d-GONE", pending: 1, archived: 0 }]);
     expect(t.features).toEqual([{
       id: "work-d-FEAT", title: "Feature", stage: "build", own: { pending: 2, archived: 0 },
@@ -58,6 +58,13 @@ describe("readMemoryTree", () => {
     archive([arch("in1", "2026-11-05T00:00:00Z", { work: "work-d-TASK", feature: "work-d-FEAT" })], "archive-1.jsonl");
     const t = await readMemoryTree(den, work, NOW);
     expect(t.features[0]!.tasks[0]).toMatchObject({ pending: 1, archived: 1 });
+  });
+
+  it("counts the den as live pool entries only and reports promoted untagged ones as archived", async () => {
+    pool([obs("a")]);
+    archive([arch("p1", "2026-11-08T00:00:00Z", { target: "den" }), arch("p2", "2026-11-08T01:00:00Z"), arch("p3", "2026-11-09T00:00:00Z")]);
+    const t = await readMemoryTree(den, work, NOW);
+    expect(t.den).toEqual({ pending: 1, archived: 3 });
   });
 
   it("reads at most the three newest archive files", async () => {

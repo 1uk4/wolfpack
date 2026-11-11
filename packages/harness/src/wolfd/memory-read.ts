@@ -476,7 +476,7 @@ export async function readMemoryTree(den: string, work?: { endpoint?: string; to
   const { buckets, info } = await bucketize([...pending, ...archived], treeApi(work), now);
   const features = new Map<string, MemoryTree["features"][number]>();
   const other = new Map<string, { id: string; pending: number; archived: number }>();
-  let denPending = 0;
+  const denCount = { pending: 0, archived: 0 };
   const feature = (id: string) => {
     let f = features.get(id);
     if (!f) {
@@ -488,7 +488,7 @@ export async function readMemoryTree(den: string, work?: { endpoint?: string; to
   };
   buckets.forEach((b, i) => {
     const key = i < pending.length ? "pending" : "archived";
-    if (b.t === "den") denPending++;
+    if (b.t === "den") denCount[key]++;
     else if (b.t === "own") feature(b.f).own[key]++;
     else if (b.t === "other") {
       const o = other.get(b.w) ?? { id: b.w, pending: 0, archived: 0 };
@@ -505,7 +505,7 @@ export async function readMemoryTree(den: string, work?: { endpoint?: string; to
       t[key]++;
     }
   });
-  return { features: [...features.values()], other: [...other.values()], den: { pending: denPending } };
+  return { features: [...features.values()], other: [...other.values()], den: denCount };
 }
 
 /**

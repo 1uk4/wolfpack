@@ -52,7 +52,7 @@ export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
 	return [
 		...features,
 		...[...tree.other].sort(busiest).map((o): MemoryTreeRow => ({ kind: "other", id: o.id, pending: o.pending, archived: o.archived })),
-		{ kind: "den", id: "den", pending: tree.den.pending, archived: 0 },
+		{ kind: "den", id: "den", pending: tree.den.pending, archived: tree.den.archived ?? 0 },
 	];
 }
 

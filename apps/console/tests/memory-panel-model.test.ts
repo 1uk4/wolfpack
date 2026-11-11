@@ -203,14 +203,16 @@ describe("memory panel model", () => {
 				] },
 			],
 			other: [{ id: "work-d-x", pending: 1, archived: 0 }],
-			den: { pending: 4 },
+			den: { pending: 4, archived: 2 },
 		});
 		assert.deepEqual(rows.map((r) => [r.kind, r.id, r.pending, r.archived]), [
 			["feature", "work-d-f2", 3, 4],
 			["feature", "work-d-f1", 0, 1],
 			["other", "work-d-x", 1, 0],
-			["den", "den", 4, 0],
+			["den", "den", 4, 2],
 		]);
+		const older = buildMemoryTreeRows({ features: [], other: [], den: { pending: 1 } });
+		assert.deepEqual(older.map((r) => [r.kind, r.pending, r.archived]), [["den", 1, 0]]);
 		const busy = rows[0]!;
 		assert.equal(busy.kind === "feature" && busy.own.pending, 1);
 		assert.deepEqual(busy.kind === "feature" && busy.tasks.map((t) => t.id), ["work-d-t2", "work-d-t1"]);

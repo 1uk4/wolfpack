@@ -31,7 +31,6 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
-const { migrateLegacyUserData } = require("./userdata-migrate.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
@@ -67,13 +66,6 @@ function serverEntry() {
 if (process.env.WOLFPACK_DEV_URL || undefined) {
 	app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
-// One-time copy from the pre-rename userData folder (see userdata-migrate.cjs).
-try {
-	migrateLegacyUserData(app.getPath("userData"), log);
-} catch (err) {
-	log(`userData migration error: ${err?.message ?? err}`);
-}
-
 if (!app.requestSingleInstanceLock()) {
 	app.quit();
 } else {

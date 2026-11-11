@@ -9,8 +9,6 @@ import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
-// A selection saved by the pre-rename build, present before the console modules load (the boot-time key copy).
-store.set("lh" + ".right-panel.v1", JSON.stringify({ t1: "a" }));
 Object.assign(globalThis, {
 	window: dom.window,
 	self: globalThis, // next/link (the Status panel's item link) reads `self` when it mounts
@@ -38,7 +36,6 @@ const { PanelHostProvider, RightPanelHost, usePanelHost, usePanelState, PANELS }
 const { MemoryPanel } = await import("../components/memory-panel.tsx");
 const { parseSelections, resolveSelected, withSelection, RIGHT_PANEL_KEY } = await import("../src/core/index.ts");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
-const migratedAtBoot = store.get("wolfpack.right-panel.v1"); // beforeEach clears the store, so read it now
 type PanelDef = (typeof PANELS)[number];
 
 let emit: (frame: unknown) => void = () => {};
@@ -238,12 +235,6 @@ describe("panel host", () => {
 		await mount([note("memory"), note("subagent", false)]);
 		assert.equal(state.selected, "memory");
 		assert.ok(q('[data-testid="body-memory"]'));
-	});
-
-	it("restores the selection saved under the pre-rename storage key", async () => {
-		store.set(RIGHT_PANEL_KEY, migratedAtBoot!); // what the boot-time copy wrote
-		await mount([note("memory"), note("a")], "t1");
-		assert.equal(state.selected, "a");
 	});
 
 	it("only non-default selections are stored, merged with what storage already holds", async () => {

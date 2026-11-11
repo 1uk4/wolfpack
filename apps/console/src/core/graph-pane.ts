@@ -3,7 +3,6 @@
  * the Record/log text the pane shows, the lazy-fetch cache). No React here.
  */
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 import { composeItemDocument } from "./item-document.ts";
 import type { WorkRecordResponse } from "./kb.ts";
 

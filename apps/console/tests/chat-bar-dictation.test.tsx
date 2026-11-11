@@ -99,7 +99,6 @@ const { useComposerDraft, appendToDraft, draftKey, writeDraft, useRereadDraftWhe
 const { AttachedThreadProvider, useAttachedThread } = await import("../components/attached-thread.tsx");
 const { ChatBar } = await import("../components/chat-bar.tsx");
 const { useAttachedStripRow } = await import("../components/attached-strip-row.ts");
-const { NewSession } = await import("../components/new-session.tsx");
 const { SubagentStripView } = await import("../components/subagent-strip.tsx");
 const { useDictation, DictationBar, joinDictation, useBarShown } = await import("../components/dictation.tsx");
 const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
@@ -601,7 +600,6 @@ const StripOnB = () => {
 	const row = useAttachedStripRow("w", "w/b");
 	return usePathname() === "/wolf/w/thread/b" ? <SubagentStripView items={[]} now={0} onOpen={() => {}} onStop={() => {}} attached={row} /> : null;
 };
-const NewOnNew = () => (usePathname() === "/chat/new" ? <NewSession initialConfigured /> : null);
 const OnPages = () => {
 	const p = usePathname();
 	return p === "/wolf/w/thread/a" ? <ThreadPage slug="a" /> : p === "/wolf/w/thread/b" ? <ThreadPage slug="b" /> : p === "/chat/new" ? <NewPage /> : null;
@@ -818,29 +816,6 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		}
 	});
 
-	it("phone /chat/new: a live run for another thread shows in the page's strip with the chat row and a Stop that ends it (no pill, no dock)", async () => {
-		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-		try {
-			await mount("/kb", A, <NewOnNew />);
-			await fire(barToggle(), "click", { detail: 1 });
-			await wait();
-			const ws = await say("words for A");
-			await act(async () => go("/chat/new"));
-			await wait();
-			assert.equal(q('[data-testid="chat-bar"]'), null, "no dock over the new-session composer");
-			assert.equal(q('[data-testid="chat-bar-listening-pill"]'), null);
-			const row = q('[data-testid="subagent-strip"] [data-testid="attached-row"]')!;
-			assert.equal(row.getAttribute("data-listening"), "true", "a visible live-run indicator");
-			await fire(q('[data-testid="attached-stop"]')!, "click");
-			await endRun(ws);
-			await wait(400);
-			assert.equal(mem.get("wolfpack:draft:w:w/a"), "words for A", "Stop ended the run and saved the words");
-			assert.equal(q('[data-testid="attached-stop"]'), null);
-		} finally {
-			delete w.matchMedia;
-		}
-	});
 
 	it("phone: docking from the sheet clears the sheet request, so a later attach on a thread page is the row again, not a sheet over the composer", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
@@ -890,20 +865,6 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 	});
 
-	it("wide /chat/new: a live run for another thread shows as the strip row with a Stop that ends it and saves the words", async () => {
-		await mount("/kb", A, <NewOnNew />);
-		await fire(barToggle(), "click", { detail: 1 });
-		await wait();
-		const ws = await say("wide words for A");
-		await act(async () => go("/chat/new"));
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "no bar over the new-session composer");
-		assert.equal(q('[data-testid="subagent-strip"] [data-testid="attached-row"]')?.getAttribute("data-listening"), "true");
-		await fire(q('[data-testid="attached-stop"]')!, "click");
-		await endRun(ws);
-		await wait(400);
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "wide words for A");
-	});
 
 	it("wide: pages with no page composer keep the floating bar", async () => {
 		await mount("/kb", A, <StripOnB />);

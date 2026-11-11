@@ -16,7 +16,8 @@
 		"dev": "concurrently -k -n console,electron \"pnpm --filter @wolfpack/console run dev -p 3210\" \"until curl -sf -o /dev/null http://localhost:3210; do sleep 1; done; WOLFPACK_DEV_URL=http://localhost:3210 electron .\"",
 		"electron:dev": "WOLFPACK_DEV_URL=${WOLFPACK_DEV_URL:-http://localhost:3000} electron .",
 		"build:server": "pnpm --filter @wolfpack/console run build && node scripts/build-server.mjs && node scripts/smoke-server.mjs",
-		"dist": "pnpm run build:server && electron-builder --mac --arm64 --publish never -c.mac.identity=null"
+		"dist": "node scripts/dist.mjs",
+		"dist:signed": "node scripts/dist.mjs --signed"
 	},
 	"dependencies": {
 		"electron-updater": "^6.8.11"

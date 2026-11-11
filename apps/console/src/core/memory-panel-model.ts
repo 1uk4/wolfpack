@@ -7,7 +7,6 @@
  */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 import type { ConsolidateResponse, MemoryEventFrame, MemoryNodeObservations, MemoryPoolStatus, MemoryStatus, MemoryTree, WorkRecordResponse } from "./kb.ts";
 
 /** One task under a feature in the memory tree. */

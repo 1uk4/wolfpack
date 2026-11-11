@@ -33,8 +33,7 @@ export interface ModelPrice {
  *  script 2026-09-20): pre-wave records stamped with bare slugs render
  *  unpriced.
  *  Context-window limits are NOT a table (owner amendment, 2026-09-23):
- *  every meter's denominator reads pi's LIVE catalog (GET /api/models /
- *  the activity feed's server-side join) — missing model, usage-only.
+ *  every meter's denominator reads pi's LIVE catalog — missing model, usage-only.
  *  Refresh: bump @earendil-works/pi-ai, then npx tsx scripts/sync-pricing.ts
  *  (reads pi-ai's shipped catalogs — the same source the engine and the
  *  picker use). Forgetting the re-run is exactly how models go unpriced
@@ -1718,9 +1717,8 @@ export function sessionCost(record: Pick<ChatRecord, "turns">): { cost: number; 
  *
  *  DENOMINATOR (owner ruling, 2026-09-23 — the amendment): the live
  *  catalog is the ONLY source — `limits`, when given, is the index of
- *  provider:id → contextWindow straight from pi's catalog (GET
- *  /api/models serves it per model; the server's catalogContextLimits
- *  builds the same index). No hardcoded fallback: a model missing from
+ *  provider:id → contextWindow straight from pi's catalog (the
+ *  server's catalogContextLimits builds it). No hardcoded fallback: a model missing from
  *  the live index (historical session, package update removed it, a
  *  failed catalog fetch) resolves limit null and the meter renders
  *  usage-only — the honest-render precedent (never a fake window,

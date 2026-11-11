@@ -23,7 +23,9 @@
     "dev:stack": "node scripts/dev-stack.mjs",
     "stack": "node scripts/stack.mjs",
     "check:deps": "node scripts/check-deps.mjs .",
-    "check:lockfiles": "node scripts/check-lockfiles.mjs ."
+    "check:lockfiles": "node scripts/check-lockfiles.mjs .",
+    "desktop:dist": "pnpm --filter @wolfpack/desktop dist",
+    "desktop:dist:signed": "pnpm --filter @wolfpack/desktop dist:signed"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.321",

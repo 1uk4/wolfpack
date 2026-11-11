@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -44,6 +44,13 @@ test("keyboardShellHeight shrinks the shell only for an open keyboard, not a sma
 	assert.equal(keyboardShellHeight({ height: 740 }, 852), null); // 112px short: stale/chrome, use 100dvh
 	assert.equal(keyboardShellHeight({ height: 852 }, 852), null);
 	assert.equal(keyboardShellHeight(null, 852), null);
+});
+
+test("keyboardShellTop follows the visual viewport's pan offset only while the keyboard is open", () => {
+	assert.equal(keyboardShellTop({ height: 500, offsetTop: 120.4 }, 852), 120); // iOS panned the page: the fixed shell must move down with it
+	assert.equal(keyboardShellTop({ height: 500, offsetTop: 0 }, 852), 0);
+	assert.equal(keyboardShellTop({ height: 800, offsetTop: 30 }, 852), 0); // no keyboard: stay pinned to the top
+	assert.equal(keyboardShellTop(null, 852), 0);
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

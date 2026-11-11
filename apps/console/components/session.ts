@@ -113,10 +113,6 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 			void model.submitAnswer(tool, toolCallId, output),
 		[model],
 	);
-	const dismissQuestion = useCallback(
-		(toolCallId: string, answer: QuestionAnswerData) => void model.dismissQuestion(toolCallId, answer),
-		[model],
-	);
 	const setMessages = useCallback((record: LhMessage[]) => model.setMessages(record), [model]);
 	const adoptRecord = useCallback((record: LhMessage[]) => model.adoptRecord(record), [model]);
 	const loadEarlier = useCallback((limit?: number) => model.loadEarlier(limit), [model]);
@@ -135,11 +131,9 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 		status: state.status,
 		turnStartedAt: state.turnStartedAt,
 		error: state.error,
-		steerQueue: state.steerQueue,
 		send,
 		steer,
 		submitAnswer,
-		dismissQuestion,
 		setMessages,
 		adoptRecord,
 		stop,

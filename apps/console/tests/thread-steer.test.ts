@@ -36,6 +36,5 @@ describe("thread steer", () => {
 		const s = model.getState();
 		assert.equal(s.messages.filter((m) => m.role === "user").length, 1);
 		assert.equal(s.status, "ready");
-		assert.equal(s.steerQueue.length, 0);
 	});
 });

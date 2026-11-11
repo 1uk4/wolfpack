@@ -16,9 +16,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SessionRow, WolfBadge, WolfHeaderRow, timeAgo } from "../components/sidebar.tsx";
 import type { ChatListItem } from "../src/core/index.ts";
 
-function item(overrides: Partial<ChatListItem>): ChatListItem {
+function item(overrides: Partial<ChatListItem>): ChatListItem & { href: string } {
 	return {
 		id: "c1",
+		href: "/t/c1",
 		title: "Test session",
 		createdAt: "2026-01-01T00:00:00.000Z",
 		updatedAt: "2026-01-02T00:00:00.000Z",
@@ -30,7 +31,7 @@ function item(overrides: Partial<ChatListItem>): ChatListItem {
 	};
 }
 
-function render(chat: ChatListItem, active = false) {
+function render(chat: ChatListItem & { href: string }, active = false) {
 	return renderToStaticMarkup(<SessionRow chat={chat} active={active} onOpen={() => {}} />);
 }
 

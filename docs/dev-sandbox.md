@@ -281,8 +281,7 @@ Beyond the switch itself:
   (`apps/console/.next/standalone/apps/console/server.js`, with `.next/static` and `public` copied in) on `127.0.0.1:3230`
   (`PREVIEW_CONSOLE_PORT`), with `WOLFPACK_API_URL=http://127.0.0.1:7141`. It runs as its own launchd agent,
   `com.wolfpack.preview-console` (plist in `~/Library/LaunchAgents`), so it outlives the wolf session and the CLI, and survives a
-  reboot; its log is `~/.wolfpack/preview/console.log`. Then, in each of `~/Library/Application Support/LearnHarness` and
-  `Wolfpack Console` that exists, `console.json` is backed up (`console.json.preview-backup`), its old `consoleUrl` (or its
+  reboot; its log is `~/.wolfpack/preview/console.log`. Then, in `~/Library/Application Support/Wolfpack Console`, if it exists, `console.json` is backed up (`console.json.preview-backup`), its old `consoleUrl` (or its
   absence) is recorded in the state file, and `consoleUrl` is set to the local console; other keys are kept. **Quit and reopen
   Wolfpack Console** (the app is never killed). `off` restores each file exactly (or removes the key), stops the agent and
   removes its plist. `PREVIEW_USERDATA_ROOT` overrides the userData root (tests use it).

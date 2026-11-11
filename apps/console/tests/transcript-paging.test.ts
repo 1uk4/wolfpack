@@ -62,7 +62,7 @@ describe("transcript paging", () => {
 	});
 
 	it("a transport without paging never loads earlier", async () => {
-		const m = new SessionModel({ chatId: "c", initialMessages: native(range(0, 3)), initialHasMore: true, transport: { submitUrl: "/s", submitBody: () => "", recordUrl: "/r", parseRecord: () => null, streamUrl: "/st", retryOnBusy: false, createWire: () => (raw) => [raw] } });
+		const m = new SessionModel({ chatId: "c", initialMessages: native(range(0, 3)), initialHasMore: true, transport: { submitUrl: "/s", submitBody: () => "", recordUrl: "/r", parseRecord: () => null, streamUrl: "/st", createWire: () => (raw) => [raw] } });
 		assert.equal(await m.loadEarlier(), 0);
 	});
 

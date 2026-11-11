@@ -6,20 +6,21 @@
 #     because native .node/dylib can't dlopen from a read-only archive and
 #     server.js process.chdir()s into its own dir;
 #   - the asar holds only the shell (electron/main.cjs + package.json);
-#   - signed + notarized since 2026-10-08 (Developer ID Application cert in
-#     the login keychain; notary credentials in the WOLFPACK_NOTARY keychain
-#     profile; the profile + team env vars are baked into desktop:dist).
+#   - two local mac builds (scripts/dist.mjs): `pnpm dist` is unsigned and
+#     skips notarization; `pnpm dist:signed` signs with the Developer ID
+#     Application cert in the login keychain and notarizes through the
+#     WOLFPACK_NOTARY keychain profile (APPLE_KEYCHAIN_PROFILE).
 appId: com.wolfpack.Console
 productName: Wolfpack Console
 directories:
   output: dist
 # Icons (owner ruling, 2026-10-13) — per-platform sources in build/:
 #   mac   build/icon.icon  — the Icon Composer document (layered Liquid
-#         Glass); actool (Xcode 26+) compiles Assets.car (CFBundleIconName,
+#         Glass); actool (Xcode 26+, macOS 26+ host) compiles Assets.car (CFBundleIconName,
 #         macOS 26+ renders the true layered icon) + an actool fallback icns
 #         capped at 256px, which scripts/after-pack.cjs swaps for the
 #         hand-packed full-res build/icon.icns (pre-Tahoe keeps 16→1024).
-#         Requires actool ≥ 26: desktop:dist injects DEVELOPER_DIR locally;
+#         Requires actool ≥ 26: scripts/dist.mjs sets DEVELOPER_DIR to an Xcode 26+ locally;
 #         the release workflow's mac job runs setup-xcode.
 #   win   build/icon.ico  — generated (16→256) from the flat design by
 #         scripts/make-icons.mjs.
@@ -58,7 +59,7 @@ files:
   # re-included explicitly. The negation above excludes node_modules, and
   # the shell's bare positives can't re-include them — these explicit
   # node_modules positives do (gitignore order: the LAST matching pattern
-  # wins; verified post-build by listing the asar — see desktop:dist notes).
+  # wins; verified post-build by listing the asar — see apps/desktop/README.md).
   # Tree fact-checked via each package's declared dependencies:
   # electron-updater → fs-extra, js-yaml, lazy-val, lodash.escaperegexp,
   # lodash.isequal, semver, tiny-typed-emitter, builder-util-runtime;
@@ -175,7 +176,7 @@ publish:
   # zip/blockmap live on releases; electron-updater reads them anonymously.
   # REQUIRES THE REPO TO BE PUBLIC before 0.3.0 ships — anonymous downloads
   # from a private repo are impossible, and a token baked into the app
-  # would be a leak. desktop:dist passes no --publish flag, so builds never
+  # would be a leak. dist and dist:signed pass --publish never, so builds never
   # upload; publishing happens at release time (GH_TOKEN + --publish).
   - provider: github
     owner: 1uk4

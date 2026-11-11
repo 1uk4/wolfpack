@@ -1,5 +1,4 @@
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "@/src/core/legacy-storage-boot.ts";
 import type { NeedsYouNotification } from "@/src/core";
 import { desktopBridge } from "@/components/sidebar";
 

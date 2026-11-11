@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkerdServer } from "./proxy.js";
 import { Supervisor, backoffDelay, defaultWolfdCommand } from "./supervisor.js";
 import { FAKE_COMMAND, FAKE_WOLF, makeWolves, until } from "./testing/helpers.js";
@@ -43,6 +43,19 @@ describe("Supervisor (fake wolf)", { timeout: 20_000 }, () => {
     await sup.stop();
     expect(sup.status().every((s) => s.state === "stopped")).toBe(true);
     expect(sup.upstream("alpha")).toBeUndefined();
+  });
+
+  it("timestamps every wolf line on the default stderr log, which is stack.log (work-wolfpack-F3glHLg)", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(((c: string | Uint8Array) => (written.push(String(c)), true)) as never);
+    try {
+      sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND });
+      sup.start();
+      await sup.whenSettled();
+    } finally { spy.mockRestore(); }
+    expect(written.find((l) => l.includes("[alpha] ") && l.includes("serving http://"))).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z \[alpha\] /);
   });
 
   it("restarts a crashed child with backoff and counts restarts", async () => {

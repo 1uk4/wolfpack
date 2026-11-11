@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const CONSOLE_LABEL = "com.wolfpack.preview-console";
-const APP_FOLDERS = ["LearnHarness", "Wolfpack Console"];
+const APP_FOLDERS = ["Wolfpack Console"];
 const xml = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** The directory holding Next's standalone server.js (monorepo trace first), with .next/static and public copied in as Next requires. */

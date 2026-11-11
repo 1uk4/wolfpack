@@ -13,7 +13,6 @@
  */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
-import "./legacy-storage-boot.ts";
 export * from "./contracts.ts";
 export * from "./ports.ts";
 export * from "./render-settings.ts";
@@ -56,9 +55,7 @@ export * from "./session-navigation.ts";
 export * from "./auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./keyboard.ts";
-// session-markdown.ts: the ONE session→markdown formatter (the export).
 // Pure, browser-safe.
-export * from "./session-markdown.ts";
 // thread-adapter.ts: the ConsoleClient (@wolfpack/client) ↔ session-model
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
 export * from "./thread-adapter.ts";

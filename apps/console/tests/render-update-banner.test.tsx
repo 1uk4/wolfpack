@@ -27,7 +27,7 @@ const dom = parseHTML("<html><body></body></html>");
 
 describe("update banner (Wave C)", () => {
 	afterEach(() => {
-		delete (window as { lh?: unknown }).lh;
+		delete (window as { wolfpack?: unknown }).wolfpack;
 	});
 
 	it("renders nothing with no bridge (browser / SSR)", () => {
@@ -37,7 +37,7 @@ describe("update banner (Wave C)", () => {
 
 	it("renders nothing when the bridge exists but no status has arrived", () => {
 		const listeners: Array<(s: { status: string; version: string | null }) => void> = [];
-		(window as { lh?: unknown }).lh = {
+		(window as { wolfpack?: unknown }).wolfpack = {
 			onUpdateStatus: (cb: (s: { status: string; version: string | null }) => void) => {
 				listeners.push(cb);
 				return () => {};
@@ -52,7 +52,7 @@ describe("update banner (Wave C)", () => {
 	it("shows the version + Restart once the downloaded push arrives, and Restart installs", async () => {
 		let pushed: ((s: { status: string; version: string | null }) => void) | null = null;
 		let installed = 0;
-		(window as { lh?: unknown }).lh = {
+		(window as { wolfpack?: unknown }).wolfpack = {
 			onUpdateStatus: (cb: (s: { status: string; version: string | null }) => void) => {
 				pushed = cb;
 				return () => {};

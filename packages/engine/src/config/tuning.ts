@@ -314,6 +314,12 @@ export const SECTION_TREE = {
     nInit: 20,
     /** Permutation-null replicates and the p-value a split must beat. */
     nullReplicates: 100,
+    /**
+     * Largest section the k-means comparison line in a rebuild proposal is computed for. The diagnostic runs the full chooseSplit
+     * (k up to maxKFor, nullReplicates fits per k, silhouettes), which for a 276-member root took 19+ minutes on one core and
+     * blocked hubd's event loop. Above this the proposal says it was skipped; the split decision never depends on it.
+     */
+    diagnosticsMaxMembers: 60,
     nullAlpha: 0.05,
     /** Seed/bootstrap stability: mean ARI between re-clusterings must reach this. */
     minAri: 0.7,

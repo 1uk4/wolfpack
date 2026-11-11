@@ -100,6 +100,8 @@ export interface SplitVerdict {
   fallbackReason?: string;
   /** k-means result beside the LLM one (diagnostics) or in its place (fallback). */
   kmeans?: SplitDecision | SplitRejected;
+  /** Set when diagnostics were asked for but the section is above rules.diagnosticsMaxMembers. */
+  kmeansSkipped?: string;
   cached?: boolean;
 }
 
@@ -167,24 +169,26 @@ export async function judgeSplit(
     members: proposal.categories.map((c) => asIdx(c.ids, c.name)),
     doesntFit: asIdx(proposal.doesntFit, "doesn't fit"),
   }, rules);
-  const diag = deps.diagnostics ? kmeans() : undefined;
+  const diagSkipped = deps.diagnostics && members.length > rules.diagnosticsMaxMembers
+    ? `k-means comparison skipped: ${members.length} members > ${rules.diagnosticsMaxMembers}` : undefined;
+  const diag = deps.diagnostics && !diagSkipped ? kmeans() : undefined;
   if (!isPartition(result) && result.single) {
     // One category survived: the leftovers may hold its partner.
     const two = await secondPass(deps, rules, args, members, vectors, result.single);
     if (two.d.k >= 2) return {
       source: "llm", decision: { labels: two.d.labels, k: two.d.k, names: two.d.names, leftovers: two.d.leftovers },
-      categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached: cached && !two.asked,
+      categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached: cached && !two.asked,
     };
   }
   if (!isPartition(result)) {
     deps.notify?.(`no split: ${result.reason}`);
-    return { source: "llm", reason: result.reason, categories: result.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached };
+    return { source: "llm", reason: result.reason, categories: result.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached };
   }
   const final = await secondPass(deps, rules, args, members, vectors, result);
   return {
     source: "llm",
     decision: { labels: final.d.labels, k: final.d.k, names: final.d.names, leftovers: final.d.leftovers },
-    categories: final.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, cached: cached && !final.asked,
+    categories: final.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached: cached && !final.asked,
   };
 }
 

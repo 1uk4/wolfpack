@@ -329,6 +329,7 @@ function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): stri
   if (v.kmeans && v.source === "llm") {
     out.push("k-means diagnostic: " + ("split" in v.kmeans ? `no split (${v.kmeans.reason})` : `k=${v.kmeans.k}, p=${v.kmeans.p.toFixed(3)}, stability=${v.kmeans.stability.toFixed(2)}, ${v.kmeans.leftovers.length} leftover`));
   }
+  if (v.kmeansSkipped && v.source === "llm") out.push(v.kmeansSkipped);
   return out;
 }
 

@@ -533,6 +533,29 @@ describe("dry run and --yes share a file-backed split cache", () => {
   }, 120_000);
 });
 
+describe("k-means diagnostic cap (diagnosticsMaxMembers)", () => {
+  it("above the cap the diagnostic is skipped and recorded, and the verdict is the same as without diagnostics", async () => {
+    const sizes = [22, 22, 22];
+    const es = make(sizes);
+    const part: Partitioner = async () => ideal(es, sizes);
+    const args = { domain: "wp", parentTitle: "P", members: members(es) };
+    const withDiag = await judgeSplit({ partitioner: part, diagnostics: true }, args);
+    const without = await judgeSplit({ partitioner: part }, args);
+    expect(withDiag.kmeans).toBeUndefined();
+    expect(withDiag.kmeansSkipped).toBe("k-means comparison skipped: 66 members > 60");
+    expect(withDiag.source).toBe("llm");
+    expect(withDiag.decision).toEqual(without.decision);
+    expect(withDiag.decision?.k).toBe(3);
+  });
+
+  it("at or below the cap the diagnostic still runs", async () => {
+    const es = make(SIZES);
+    const v = await judgeSplit({ partitioner: async () => ideal(es), diagnostics: true }, { domain: "wp", parentTitle: "P", members: members(es) });
+    expect(v.kmeans).toBeDefined();
+    expect(v.kmeansSkipped).toBeUndefined();
+  });
+});
+
 describe("category cap keeps the largest categories; prompt pin", () => {
   it("when the model returns more than 5 categories the 5 LARGEST are honoured, not the first 5", () => {
     const sizes = [3, 3, 3, 3, 3, 9, 8];

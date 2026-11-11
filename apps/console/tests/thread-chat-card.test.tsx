@@ -836,6 +836,9 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 			await settle();
 			const layer = q('[data-testid="ask-sheet-host"]')!;
 			assert.equal(layer.getAttribute("data-layout"), "fullscreen");
+			// sized to its content, capped below the safe-area top; sits on the composer card instead of being pinned to the screen
+			assert.doesNotMatch(layer.getAttribute("class") ?? "", /\b(fixed|top-0|h-full|h-dvh)\b/);
+			assert.match(layer.getAttribute("style") ?? "", /max-height:[^;]*env\(safe-area-inset-top\)/);
 			assert.equal(layer.getAttribute("role"), "dialog");
 			assert.equal(layer.getAttribute("aria-modal"), "false");
 			assert.equal(layer.getAttribute("aria-label"), "Questions");

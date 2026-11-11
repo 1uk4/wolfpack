@@ -161,7 +161,7 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 				<div className="flex items-baseline justify-between gap-2">
 					<span className="flex min-w-0 items-center gap-1">
 						{pageIndex > 0 && (
-							<button type="button" data-testid="ask-back" disabled={session.busy} onClick={session.back} className={cn("-ml-1.5 flex shrink-0 items-center gap-0.5 self-center rounded-md px-1.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40", FOCUS)}>
+							<button type="button" data-testid="ask-back" disabled={session.busy} onClick={session.back} className={cn("-ml-1.5 flex shrink-0 items-center gap-0.5 self-center rounded-md px-1.5 py-1 max-md:min-h-11 max-md:min-w-11 max-md:justify-center max-md:px-2 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40", FOCUS)}>
 								<ChevronLeftIcon aria-hidden className="size-3.5" />
 								Back
 							</button>
@@ -183,7 +183,7 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 							</span>
 						)}
 						<span data-testid="ask-page-count" className="font-ui text-xs text-muted-foreground">page {pageIndex + 1} of {steps.length}</span>
-						<button type="button" data-testid="ask-collapse" aria-label="Collapse the questions" onClick={session.collapse} className={cn("flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)}>
+						<button type="button" data-testid="ask-collapse" aria-label="Collapse the questions" onClick={session.collapse} className={cn("flex size-6 max-md:min-h-11 max-md:min-w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)}>
 							<ChevronDownIcon aria-hidden className="size-4" />
 						</button>
 					</span>
@@ -218,7 +218,7 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 									{f.optional && <span className="rounded-full bg-accent px-1.5 py-px font-ui text-[10px] font-normal uppercase tracking-wider text-muted-foreground">optional</span>}
 								</div>
 								{(skipped || f.optional) && (
-									<button type="button" data-testid={skipped ? "ask-unskip" : "ask-skip"} className={cn("-mt-1 shrink-0 rounded-md px-1.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skipped ? unskip(f.id) : skip(f.id); }}>
+									<button type="button" data-testid={skipped ? "ask-unskip" : "ask-skip"} className={cn("-mt-1 shrink-0 rounded-md px-1.5 py-1 max-md:-mt-3 max-md:flex max-md:min-h-11 max-md:min-w-11 max-md:items-center max-md:justify-center max-md:px-3 font-ui text-xs text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)} onClick={(e) => { e.stopPropagation(); skipped ? unskip(f.id) : skip(f.id); }}>
 										{skipped ? "Answer" : "Skip question"}
 									</button>
 								)}

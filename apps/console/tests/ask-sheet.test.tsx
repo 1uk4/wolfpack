@@ -128,6 +128,15 @@ describe("ask sheet", () => {
 		assert.equal(q('[data-testid="press"]')!.textContent, "Submit");
 	});
 
+	it("on phones Back, the page collapse control and Skip question have 44px tap targets", async () => {
+		await render(pending({ pageIndex: 1 }));
+		for (const id of ["ask-back", "ask-collapse", "ask-skip"]) {
+			const cls = q(`[data-testid="${id}"]`)!.getAttribute("class") ?? "";
+			assert.match(cls, /max-md:min-h-11/, `${id} height`);
+			assert.match(cls, /max-md:min-w-11/, `${id} width`);
+		}
+	});
+
 	it("sends this page's answers only: skipped questions and an untouched slider are omitted", async () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[1]!);

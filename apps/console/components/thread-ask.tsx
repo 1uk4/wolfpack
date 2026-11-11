@@ -68,11 +68,11 @@ export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: num
 	return {
 		pending: true,
 		sheet: (
-			<div data-testid="ask-sheet-host" data-layout="fullscreen" data-composing={composing ? "true" : undefined} role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto fixed inset-x-0 top-0 z-40 flex flex-col bg-background px-1.5 pt-1" style={{ bottom: composing ? 0 : (dockHeight ?? 160) }}>
-				<button type="button" aria-label="Put the questions away" data-testid="ask-sheet-close" onClick={() => setOpen(false)} className="flex min-h-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+			<div data-testid="ask-sheet-host" data-layout="fullscreen" data-composing={composing ? "true" : undefined} role="dialog" aria-modal="false" aria-label="Questions" onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); setOpen(false); } }} className="pointer-events-auto flex flex-col" style={{ maxHeight: `calc(100dvh - env(safe-area-inset-top) - 0.5rem - ${composing ? "1rem" : "10rem"})` }}>
+				<button type="button" aria-label="Put the questions away" data-testid="ask-sheet-close" onClick={() => setOpen(false)} className="flex min-h-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
 					<ChevronDownIcon aria-hidden className="size-5" />
 				</button>
-				<div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl border border-b-0 bg-card${composing ? "" : " border-(color:--thread-accent)"}`}>{sheet}</div>
+				<div className={`flex min-h-0 flex-col overflow-hidden rounded-t-2xl border border-b-0 bg-card${composing ? "" : " border-(color:--thread-accent)"}`}>{sheet}</div>
 			</div>
 		),
 		composing,

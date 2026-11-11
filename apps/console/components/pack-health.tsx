@@ -29,6 +29,8 @@ import {
 } from "@/components/pack-health-store";
 import { cn } from "@/lib/utils";
 import { DomainsTab } from "@/components/pack-domains";
+import { fetchKbActivity } from "@/components/kb-activity-client";
+import { curatorStuck, kbRelativeTime } from "@/src/core/kb-activity-model";
 import { groupByHost, type HostCard } from "@/src/core/pack-hosts";
 import type { PackMapHost } from "@/src/core/pack-map";
 import {
@@ -193,6 +195,7 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 				</div>
 				{tab === "domains" && <div role="tabpanel" aria-labelledby="pack-tab-domains"><DomainsTab /></div>}
 				{tab === "health" && <>
+				<CuratorStuck now={now} />
 				{!reachable && (
 					<p data-testid="pack-health-unreachable" className="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300">
 						This console's server is not answering. The rows below are its last report{lastSeenAt !== null ? ` (${ageText(now - lastSeenAt)})` : ""}; restarts need it back.
@@ -211,6 +214,30 @@ function PackHealthModal({ onClose }: { onClose: () => void }) {
 			</div>
 		</OverlayShell>
 	);
+}
+
+/** The hub curator is stuck (hub `sweep.stuckSince`): shown in the Health tab as a warning row. Presentational; CuratorStuck fetches. */
+export function CuratorStuckWarning({ stuckSince, now }: { stuckSince: string; now: number }) {
+	return (
+		<p data-testid="pack-curator-stuck" role="alert" className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-300">
+			Hub curator stuck since {kbRelativeTime(stuckSince, now).replace(/ ago$/, " ago")}: its sweep ran past the time budget and hasn't stopped, so new sweeps are skipped until it does.
+		</p>
+	);
+}
+
+/** One KB activity fetch (limit 1) when the Health tab opens; shows nothing on any failure or when the hub does not report stuckSince. */
+function CuratorStuck({ now }: { now: number }) {
+	const [since, setSince] = useState<string | null>(null);
+	useEffect(() => {
+		let live = true;
+		void fetchKbActivity({ limit: 1 }).then((r) => {
+			if (live) setSince(r.ok ? curatorStuck(r.data) : null);
+		});
+		return () => {
+			live = false;
+		};
+	}, []);
+	return since ? <CuratorStuckWarning stuckSince={since} now={now} /> : null;
 }
 
 function durationText(s: number): string {

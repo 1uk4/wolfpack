@@ -67,6 +67,7 @@ import {
 	threadAccentStyle,
 	threadTintSolid,
 	type ThreadColorSource,
+	shouldAutoFocusComposer,
 } from "@/src/core";
 import { useThreadColor } from "@/components/use-thread-color";
 import type { CardAnswers } from "@wolfpack/client";
@@ -889,7 +890,7 @@ function ThreadChatInner({
 											chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : removeAttachment} />}
 											inputRef={inputRef}
 											controls={noteMode ? null : threadSettings.loaded ? <ComposerControls settings={threadSettings.settings} error={threadSettings.error} onChange={(p) => void threadSettings.change(p)} /> : null}
-											autoFocus
+											autoFocus={shouldAutoFocusComposer({ coarse: typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches })}
 											placeholder={noteMode ? "Add a note for the agent…" : busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>
 										{/* Dictation sits under the message field (owner, 2026-10-27). */}

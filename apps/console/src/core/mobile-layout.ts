@@ -52,6 +52,10 @@ export function shellBottomInset(vv: { height: number } | null | undefined, inne
 	return keyboardShellHeight(vv, innerHeight) === null ? "env(safe-area-inset-bottom)" : "0px";
 }
 
+/** Whether the thread composer takes focus when the page loads. A touch device (coarse pointer) must not: focusing on load opens the iOS
+ *  keyboard, which pans the standalone PWA and leaves a body-coloured band under the page (owner, 2026-11-11). Desktop keeps it. */
+export const shouldAutoFocusComposer = ({ coarse }: { coarse: boolean }): boolean => !coarse;
+
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
 

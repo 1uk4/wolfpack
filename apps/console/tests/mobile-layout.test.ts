@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset, shouldAutoFocusComposer } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -62,6 +62,11 @@ test("shellBottomInset drops the home-indicator inset while the keyboard is open
 	assert.equal(shellBottomInset({ height: 500 }, 852), "0px"); // keyboard open: the composer sits on the keyboard
 	assert.equal(shellBottomInset({ height: 740 }, 852), "env(safe-area-inset-bottom)"); // small gap: not a keyboard
 	assert.equal(shellBottomInset(null, 852), "env(safe-area-inset-bottom)");
+});
+
+test("the composer takes focus on load only with a fine pointer; on a phone the keyboard would open and pan the standalone page", () => {
+	assert.equal(shouldAutoFocusComposer({ coarse: true }), false);
+	assert.equal(shouldAutoFocusComposer({ coarse: false }), true);
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

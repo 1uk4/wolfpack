@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { errorText, historySummary, logsOutcome, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, rowActions, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, type HealthLink } from "../src/core/pack-health-view.ts";
+import { errorText, machineServices, offersOwnControls, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, type HealthLink } from "../src/core/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-09T14:10:00Z");
 const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink> = {}): HealthLink => ({
@@ -42,6 +42,59 @@ describe("service cards (one per service in the pack panel)", () => {
 			],
 		);
 		assert.equal(serviceCards(links, { systemd: false, rollback: [] }, units).some((c) => c.canUpdate || c.rollbackTo !== null), false);
+	});
+});
+
+describe("service rows per machine (the inventory panel)", () => {
+	const inv = (kind: "workerd" | "wolfd" | "hubd", id: string, over: Record<string, unknown> = {}) => ({ machine: "sfo-01", kind, id, ageS: 4, latest: null, ...over }) as Parameters<typeof machineServices>[1][number];
+	const remote = { console: false, hub: null, wolves: [] };
+
+	it("lists wolves under their workerd with their own version, folds the hub link into the workerd row, and rounds ms to whole numbers; response shows only where measured", () => {
+		const card = { ...remote, workerds: [{ link: link("hub-link@sfo", "ok", { kind: "hublink", version: null }), wolves: [] }] };
+		const rows = machineServices(card, [
+			inv("workerd", "sfo", { version: "0.1.20", channel: "stable", uptimeS: 90, lagMs: 3.6 }),
+			inv("wolfd", "hal", { parent: "sfo", version: "0.1.19", channel: "stable", responseMs: 11.4, lagMs: 2.2, latest: "0.1.20" }),
+			inv("wolfd", "ada", { parent: "sfo" }),
+		], null);
+		assert.equal(rows.length, 1);
+		assert.deepEqual([rows[0]!.name, rows[0]!.version, rows[0]!.channel, rows[0]!.verdict, rows[0]!.response, rows[0]!.lag, rows[0]!.status], ["sfo", "0.1.20", "stable", "up to date", "—", "4 ms", "ok"]);
+		assert.deepEqual(rows[0]!.children.map((c) => [c.name, c.version, c.verdict, c.response, c.lag]), [["hal", "0.1.19", "behind → v0.1.20", "11 ms", "2 ms"], ["ada", null, "version unknown", "—", "—"]]);
+	});
+
+	it("shows response in whole ms on the hub, a local workerd and its wolves, where the console measured a round trip", () => {
+		const card = { console: false, hub: link("hubd", "ok", { responseMs: 70.6 }), workerds: [{ link: link("workerd", "ok", { responseMs: 4.2 }), wolves: [link("wolfd@hal", "ok", { responseMs: 9.4 })] }], wolves: [] };
+		const rows = machineServices(card, [], null);
+		assert.deepEqual(rows.map((r) => [r.name, r.response]), [["Hub", "71 ms"], ["workerd", "4 ms"]]);
+		assert.equal(rows[1]!.children[0]!.response, "9 ms");
+	});
+
+	it("the own machine's Console row takes version, channel, uptime and lag from the console's own entry, and the newer version from the update units", () => {
+		const row = (version: string) => machineServices({ ...remote, console: true, workerds: [] }, [], { channel: "main", latest: { console: "0.1.21" }, consoleVersion: null, self: { machine: "luka-air", kind: "console", id: "console", version, channel: "main", uptimeS: 90, lagMs: 3.6 } })[0]!;
+		const r = row("0.1.20");
+		assert.deepEqual([r.version, r.channel, r.verdict, r.uptime, r.lag, r.response], ["0.1.20", "main", "behind → v0.1.21", "1m", "4 ms", "—"]);
+		assert.equal(row("0.1.0-dev").verdict, "dev build");
+	});
+
+	it("says 'dev build' only for an unpublished checkout, and gives no verdict to a row that reports no channel", () => {
+		const card = { ...remote, workerds: [{ link: link("workerd", "ok"), wolves: [] }, { link: link("workerd-b", "ok"), wolves: [] }] };
+		const rows = machineServices(card, [inv("workerd", "workerd", { version: "0.1.0-dev", channel: "main" }), inv("workerd", "workerd-b", { version: "0.1.5" })], null);
+		assert.deepEqual(rows.map((r) => r.verdict), ["dev build", ""]);
+	});
+});
+
+describe("machines that go quiet", () => {
+	it("a machine with hub presence but no inventory still lists its workerd (version unknown); a mapped machine nothing knows lists its mapped services as 'no report' with an unknown status", () => {
+		const seen = machineServices({ console: false, hub: null, workerds: [{ link: link("hub-link@sfo", "ok", { kind: "hublink", version: null }), wolves: [] }], wolves: [] }, [], null);
+		assert.deepEqual(seen.map((r) => [r.name, r.status, r.verdict, r.noReport ?? false]), [["sfo", "ok", "version unknown", false]]);
+		const facts = { host: "Mac", services: [{ name: "console", at: "", what: "" }, { name: "workerd", at: "", what: "" }], stores: [], backups: "" };
+		const gone = machineServices({ console: false, hub: null, workerds: [], wolves: [], facts }, [], null);
+		assert.deepEqual(gone.map((r) => [r.name, r.status, r.version, r.uptime, r.noReport]), [["Console", "unknown", null, "—", true], ["workerd", "unknown", null, "—", true]]);
+	});
+
+	it("the Update / Roll back controls belong only to a checked card on the console's own machine", () => {
+		assert.equal(offersOwnControls({ console: true, checked: true }), true);
+		assert.equal(offersOwnControls({ console: false, checked: true }), false);
+		assert.equal(offersOwnControls({ console: true, checked: false }), false);
 	});
 });
 
@@ -93,25 +146,6 @@ describe("pack health summary (the sidebar bar)", () => {
 	});
 });
 
-describe("history summary", () => {
-	it("reads the recent transitions oldest first, with local HH:MM and no time on the passing recovering step", () => {
-		const at = (hm: string) => new Date(`2026-11-09T${hm}:00`).toISOString(); // local time, as the console shows it
-		const h: HealthLink["history"] = [
-			{ status: "ok", at: at("13:00") },
-			{ status: "down", at: at("14:02") },
-			{ status: "restarting", at: at("14:03") },
-			{ status: "recovering", at: at("14:03") },
-			{ status: "ok", at: at("14:04") },
-		];
-		assert.equal(historySummary(h, 4), "down 14:02 → restarting 14:03 → recovering → ok 14:04");
-	});
-
-	it("says nothing when the link has only ever had one state", () => {
-		assert.equal(historySummary([{ status: "ok", at: "2026-11-09T13:00:00Z" }]), "");
-		assert.equal(historySummary([]), "");
-	});
-});
-
 describe("restart response handling", () => {
 	it("turns 202 into issued and any other failure into an error the row shows", () => {
 		assert.deepEqual(restartOutcome(202, null), { kind: "issued" });
@@ -135,31 +169,22 @@ describe("error codes in plain words", () => {
 });
 
 describe("service actions per row", () => {
-	it("offers roll back only for hubd and the workerd link unit with a kept previous release, naming the target version", () => {
-		const actions = { systemd: true, rollback: [{ service: "hubd", from: "0.1.14", to: "0.1.13" }, { service: "workerd", from: "0.1.5", to: null }] };
-		assert.deepEqual(rowActions(link("hubd", "ok"), actions), { logs: true, rollback: { service: "hubd", to: "0.1.13" }, macCommands: null, restart: true });
-		assert.deepEqual(rowActions(link("workerd", "ok"), actions), { logs: true, rollback: { service: "workerd", to: null }, macCommands: null, restart: true });
-		assert.deepEqual(rowActions(link("workerd-wolves", "ok"), actions), { logs: true, rollback: null, macCommands: null, restart: true });
-		assert.deepEqual(rowActions(link("wolfd@hal", "ok"), actions), { logs: true, rollback: null, macCommands: null, restart: true });
-		assert.deepEqual(rowActions(link("hubd", "ok", { restartable: false }), actions), { logs: false, rollback: { service: "hubd", to: "0.1.13" }, macCommands: null, restart: false });
-	});
-
 	it("never offers a roll back that would go to a newer release (after a rollback, previous is the release just left); unknown versions stay offered", () => {
-		const on = (from: string | null, to: string | null) => rowActions(link("hubd", "ok"), { systemd: true, rollback: [{ service: "hubd", from, to }] }).rollback;
-		assert.equal(on("0.1.13", "0.1.14+abc"), null);
-		assert.equal(on("0.1.9", "0.1.10"), null);
-		assert.deepEqual(on("0.1.10", "0.1.9"), { service: "hubd", to: "0.1.9" });
-		assert.deepEqual(on("0.1.18+b", "0.1.18+a"), { service: "hubd", to: "0.1.18+a" });
-		assert.deepEqual(on(null, "0.1.20"), { service: "hubd", to: "0.1.20" });
-		assert.deepEqual(on("0.1.20", null), { service: "hubd", to: null });
+		const on = (from: string | null, to: string | null) => rollbackOffered({ from, to });
+		assert.equal(on("0.1.13", "0.1.14+abc"), false);
+		assert.equal(on("0.1.9", "0.1.10"), false);
+		assert.equal(on("0.1.10", "0.1.9"), true);
+		assert.equal(on("0.1.18+b", "0.1.18+a"), true);
+		assert.equal(on(null, "0.1.20"), true);
+		assert.equal(on("0.1.20", null), true);
 	});
 
 	it("orders main prereleases below their release when deciding the roll back", () => {
-		const on = (from: string | null, to: string | null) => rowActions(link("hubd", "ok"), { systemd: true, rollback: [{ service: "hubd", from, to }] }).rollback;
-		assert.deepEqual(on("0.1.21", "0.1.21-main.3"), { service: "hubd", to: "0.1.21-main.3" });
-		assert.equal(on("0.1.21-main.3", "0.1.21"), null);
-		assert.deepEqual(on("0.1.21-main.10", "0.1.21-main.9"), { service: "hubd", to: "0.1.21-main.9" });
-		assert.equal(on("0.1.21-main.9", "0.1.21-main.10"), null);
+		const on = (from: string | null, to: string | null) => rollbackOffered({ from, to });
+		assert.equal(on("0.1.21", "0.1.21-main.3"), true);
+		assert.equal(on("0.1.21-main.3", "0.1.21"), false);
+		assert.equal(on("0.1.21-main.10", "0.1.21-main.9"), true);
+		assert.equal(on("0.1.21-main.9", "0.1.21-main.10"), false);
 		assert.equal(rollbackQuestion("hubd", "0.1.21", "0.1.21-main.3"), "Roll hubd back to v0.1.21-main.3?");
 	});
 
@@ -170,20 +195,6 @@ describe("service actions per row", () => {
 		assert.equal(rollbackQuestion("hubd", null, "0.1.13"), "Roll hubd back to v0.1.13 (the running version is unknown)?");
 	});
 
-	it("off systemd (the Mac stack) offers no restart, logs or rollback, only copyable stack commands on workerd and wolf rows; an older server without actions counts as off", () => {
-		const mac = { systemd: false, rollback: [] };
-		const cmds = ["pnpm stack restart", "tail -n 100 ~/wolves/local/logs/stack.log"];
-		assert.deepEqual(rowActions(link("workerd", "ok"), mac), { logs: false, rollback: null, macCommands: cmds, restart: false });
-		assert.deepEqual(rowActions(link("wolfd@hal", "down"), undefined), { logs: false, rollback: null, macCommands: cmds, restart: false });
-		assert.deepEqual(rowActions(link("hubd", "ok"), mac), { logs: false, rollback: null, macCommands: null, restart: false });
-	});
-
-	it("offers nothing on a row known only from the hub, even under systemd", () => {
-		const actions = { systemd: true, rollback: [{ service: "workerd", from: "0.1.5", to: "0.1.4" }] };
-		const none = { logs: false, rollback: null, macCommands: null, restart: false };
-		assert.deepEqual(rowActions(link("wolfd@ada", "ok", { source: "hub" }), actions), none);
-		assert.deepEqual(rowActions(link("hub-link@lap", "ok", { kind: "hublink", source: "hub", restartable: false }), { systemd: false, rollback: [] }), none);
-	});
 });
 
 describe("rollback unit result", () => {
@@ -253,15 +264,6 @@ describe("update button", () => {
 });
 
 describe("logs and rollback response handling", () => {
-	it("shows the lines on 200 and names a denied journal, a host without journalctl and a refused sign-in in plain words", () => {
-		assert.deepEqual(logsOutcome(200, { lines: ["a", "b"], truncated: true }, null), { kind: "lines", lines: ["a", "b"], truncated: true });
-		assert.deepEqual(logsOutcome(502, { code: "journal_denied" }, null), { kind: "error", message: "The console cannot read the system journal (add its user to systemd-journal)" });
-		assert.deepEqual(logsOutcome(501, { code: "unsupported" }, null), { kind: "error", message: "No system journal on this host" });
-		assert.deepEqual(logsOutcome(401, { code: "unauthorized" }, null), { kind: "error", message: "Sign in with the console once while the hub is up" });
-		assert.deepEqual(logsOutcome(429, null, "3"), { kind: "wait", retryS: 3 });
-		assert.deepEqual(logsOutcome(0, null, null), { kind: "error", message: "Console unreachable; logs not loaded" });
-	});
-
 	it("turns a rollback 202 into started, 409 into nothing to go back to (or a newer kept release), and waits up to the full 10 min on 429", () => {
 		assert.deepEqual(rollbackOutcome(202, null), { kind: "issued" });
 		assert.deepEqual(rollbackOutcome(409, null), { kind: "error", message: "No previous release is kept on this host" });

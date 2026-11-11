@@ -49,8 +49,9 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { machineName, normaliseMachine } from "@wolfpack/protocol/health-lag";
 import { join } from "node:path";
+import type { InventoryView, RemoteService } from "./inventory.ts";
 import { hostId, hostLabel, parseHostLabels, type HostInfo } from "../core/pack-hosts.ts";
-import { probeHealth, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
+import { probeHealth, type InventoryEntry, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
 
 export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct" | "hublink";
 export type HubPresence = "online" | "asleep" | "offline";
@@ -157,6 +158,10 @@ export interface HealthActions {
 }
 
 export interface HealthSnapshot {
+	/** This console's own inventory entry (the heartbeat's), present whether or not the hub has an inventory; absent from older servers. */
+	self?: InventoryEntry | null;
+	/** Other machines' services as the hub lists them (this console's own machine is covered by local probes); null when the hub has no inventory. */
+	inventory: { rows: RemoteService[]; stale: boolean; hubMachine: string | null } | null;
 	checkedAt: string | null;
 	intervalMs: number;
 	/** Where the console's client goes right now (see DIRECT PATH). */
@@ -423,6 +428,10 @@ export interface PackHealthOptions {
 	platform?: string;
 	/** WOLFPACK_HEALTH_HOST_LABELS: `<host>=<label>,...` label overrides. */
 	hostLabels?: string;
+	/** The hub's pack inventory (src/server/inventory.ts); null/absent: none (older hub), the snapshot then has local probes and presence only. */
+	inventory?: () => InventoryView | null;
+	/** This console's own inventory entry (the same builder as its heartbeat). */
+	self?: () => InventoryEntry;
 }
 
 export interface PackHealth {
@@ -605,6 +614,19 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		} catch {
 			/* the snapshot never fails over its extras */
 		}
+		let inventory: HealthSnapshot["inventory"] = null;
+		try {
+			const v = o.inventory?.();
+			if (v) inventory = { ...v, rows: v.rows.filter((r) => normaliseMachine(r.machine) !== selfHost) };
+		} catch {
+			/* the snapshot never fails over its extras */
+		}
+		let self: InventoryEntry | null = null;
+		try {
+			self = o.self?.() ?? null;
+		} catch {
+			/* the snapshot never fails over its extras */
+		}
 		return {
 			checkedAt,
 			intervalMs,
@@ -631,6 +653,8 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 				lastRestart: l.lastRestart,
 				restartable: hubRows.get(l.id) !== l && can.has(l.id),
 			})),
+			inventory,
+			self,
 		};
 	};
 

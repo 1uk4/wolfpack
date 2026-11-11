@@ -13,7 +13,7 @@
  *     no `host` yet), is the map host that runs hubd: its links move to that host's card (label and facts with them).
  * A map host no live link runs on still gets a card with its facts, marked not checked from here.
  */
-import type { HealthLink, HealthSnapshotView } from "./pack-health-view.ts";
+import type { HealthLink, HealthSnapshotView, InventoryRowView } from "./pack-health-view.ts";
 import { PACK_MAP, type PackMapHost } from "./pack-map.ts";
 
 export interface HostInfo {
@@ -83,6 +83,10 @@ export interface HostCard {
 	workerds: { link: HealthLink; wolves: HealthLink[] }[];
 	/** Wolves on this host not under a workerd shown here (probed directly). */
 	wolves: HealthLink[];
+	/** The hub's inventory rows for this machine (other machines only; empty without an inventory). */
+	inventory: InventoryRowView[];
+	/** This console's own entry (only on the console's card). */
+	self?: HealthSnapshotView["self"];
 }
 
 const CONSOLE_FALLBACK: HostInfo = { id: "this-console", label: "This console", isThisConsole: true };
@@ -100,12 +104,12 @@ export function groupByHost(snapshot: HealthSnapshotView): HostCard[] {
 		let c = cards.get(id);
 		if (!c) {
 			const h = hosts.get(id) ?? { id, label: id, isThisConsole: false };
-			c = { id, label: h.label, checked: true, console: h.isThisConsole, facts: factsFor(h), hub: null, workerds: [], wolves: [] };
+			c = { id, label: h.label, checked: true, console: h.isThisConsole, facts: factsFor(h), hub: null, workerds: [], wolves: [], inventory: [] };
 			cards.set(id, c);
 		}
 		return c;
 	};
-	card(self.id);
+	card(self.id).self = snapshot.self ?? null;
 	const links = snapshot.links.filter((l) => l.kind === "hubd" || l.kind === "workerd" || l.kind === "wolfd" || l.kind === "hublink");
 	// THE HUB RULE (header): the hub's host with no map name is the map host that runs hubd.
 	const alias = new Map<string, string>();
@@ -134,12 +138,16 @@ export function groupByHost(snapshot: HealthSnapshotView): HostCard[] {
 		const under = l.via ? c.workerds.find((w) => w.link.id === l.via) : undefined;
 		(under ? under.wolves : c.wolves).push(l);
 	}
+	for (const e of snapshot.inventory?.rows ?? []) {
+		const id = hostId(e.machine);
+		card(alias.get(id) ?? id).inventory.push(e);
+	}
 	const hubHost = links.find((l) => l.kind === "hubd");
 	const rank = (c: HostCard) => (c.console ? 0 : hubHost && c.id === hostOf(hubHost) ? 1 : 2);
 	const live = [...cards.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 	const used = new Set(live.map((c) => c.facts?.host));
 	const mapOnly: HostCard[] = PACK_MAP.filter((h) => !used.has(h.host))
-		.map((h) => ({ id: h.host.toLowerCase(), label: h.host, checked: false, console: false, facts: h, hub: null, workerds: [], wolves: [] }))
+		.map((h) => ({ id: h.host.toLowerCase(), label: h.host, checked: false, console: false, facts: h, hub: null, workerds: [], wolves: [], inventory: [] }))
 		.sort((a, b) => a.label.localeCompare(b.label));
 	return [...live, ...mapOnly];
 }

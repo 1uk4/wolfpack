@@ -864,4 +864,12 @@ describe("ThreadChat surface", () => {
 		const style = q('[data-testid="thread-chat"]')!.getAttribute("style") ?? "";
 		assert.match(style, /background-color:\s*color-mix\(in srgb,[^)]*5%,\s*var\(--background\)\)/);
 	});
+
+	it("has no extra padding under the composer on a phone (only the home-indicator inset from the root remains); desktop keeps 1rem", async () => {
+		await mount(new CardClient(SINGLE));
+		const dock = q('[data-testid="dock-fade"]')!.nextElementSibling as HTMLElement;
+		const cls = dock.className.split(/\s+/);
+		assert.ok(cls.includes("max-md:pb-0"), `dock classes: ${dock.className}`);
+		assert.ok(cls.includes("pb-4"), "desktop padding kept");
+	});
 });

@@ -77,7 +77,7 @@ export function createLagMonitor(opts: LagMonitorOptions = {}): LagMonitor {
 export function stampedVersion(stamps: URL[], pkg: URL, release: { releaseFile?: string; head?: string } = {}): string | undefined {
   for (const s of stamps) {
     try {
-      const v = readFileSync(s, "utf8").trim();
+      const v = readFileSync(/*turbopackIgnore: true*/ s, "utf8").trim();
       if (v) return v;
     } catch {
       /* not stamped here */
@@ -107,7 +107,7 @@ export function readMachineChannel(env: Record<string, string | undefined> = pro
   const file = subscriptionFile(env);
   let text: string;
   try {
-    text = readFileSync(file, "utf8");
+    text = readFileSync(/*turbopackIgnore: true*/ file, "utf8");
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === "ENOENT" ? "stable" : undefined;
   }
@@ -130,8 +130,8 @@ const COMPONENT_OF_PACKAGE: Record<string, string> = { "@wolfpack/console": "con
 function runtimeReleaseVersion(pkg: URL, o: { releaseFile?: string; head?: string }): string | undefined {
   try {
     const file = o.releaseFile ?? (process.env.WOLFPACK_RUNTIME_RELEASE_FILE?.trim() || join(homedir(), ".wolfpack", "runtime-release.json"));
-    const rel = JSON.parse(readFileSync(file, "utf8")) as { sha?: unknown; versions?: Record<string, unknown> };
-    const name = (JSON.parse(readFileSync(pkg, "utf8")) as { name?: unknown }).name;
+    const rel = JSON.parse(readFileSync(/*turbopackIgnore: true*/ file, "utf8")) as { sha?: unknown; versions?: Record<string, unknown> };
+    const name = (JSON.parse(readFileSync(/*turbopackIgnore: true*/ pkg, "utf8")) as { name?: unknown }).name;
     const component = typeof name === "string" ? COMPONENT_OF_PACKAGE[name] : undefined;
     const version = component ? rel.versions?.[component] : undefined;
     if (typeof rel.sha !== "string" || typeof version !== "string" || !version) return undefined;
@@ -145,7 +145,7 @@ function runtimeReleaseVersion(pkg: URL, o: { releaseFile?: string; head?: strin
 /** `version` from the package.json at `url` (e.g. `new URL("../package.json", import.meta.url)`); undefined when unreadable. */
 export function packageVersion(url: URL): string | undefined {
   try {
-    const v = (JSON.parse(readFileSync(url, "utf8")) as { version?: unknown }).version;
+    const v = (JSON.parse(readFileSync(/*turbopackIgnore: true*/ url, "utf8")) as { version?: unknown }).version;
     return typeof v === "string" ? v : undefined;
   } catch {
     return undefined;

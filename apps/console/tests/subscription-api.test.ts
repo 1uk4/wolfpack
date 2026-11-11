@@ -33,4 +33,18 @@ describe("/api/health/subscription", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("on a Mac a PUT creates ~/.wolfpack and writes the file the Mac updater reads", async () => {
+		const home = mkdtempSync(join(tmpdir(), "subscription-mac-"));
+		try {
+			const h = createSubscriptionHandler({ env: {}, platform: "darwin", home, gate: async () => "device abc" });
+			const res = await h.put(req("PUT", { channel: "main", mode: "auto" }));
+			assert.equal(res.status, 200);
+			// The Mac updater reads this file in this shape (scripts/auto-update-mac.test.ts writes the same JSON and follows it).
+			assert.deepEqual(JSON.parse(readFileSync(join(home, ".wolfpack", "release-channel.json"), "utf8")), { schema: 1, channel: "main", mode: "auto" });
+			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: true, channel: "main", mode: "auto" });
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
 });

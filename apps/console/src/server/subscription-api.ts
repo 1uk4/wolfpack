@@ -7,8 +7,8 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { subscriptionFile } from "@wolfpack/protocol/health-lag";
 
-export const DEFAULT_SUBSCRIPTION_FILE = "/var/lib/wolfpack-subscription/subscription.json";
 const CHANNELS = ["stable", "main"] as const;
 const MODES = ["off", "button", "auto"] as const;
 export interface Subscription {
@@ -19,7 +19,7 @@ export interface Subscription {
 const NO_STORE = { "Cache-Control": "no-store" };
 
 /** The saved subscription; invalid or missing parts fall back to stable + button. */
-export function readSubscription(file: string = process.env.WOLFPACK_SUBSCRIPTION_FILE?.trim() || DEFAULT_SUBSCRIPTION_FILE): Subscription {
+export function readSubscription(file: string = subscriptionFile()): Subscription {
 	try {
 		const s = JSON.parse(readFileSync(file, "utf8")) as Partial<Subscription> | null;
 		return { channel: CHANNELS.find((c) => c === s?.channel) ?? "stable", mode: MODES.find((m) => m === s?.mode) ?? "button" };
@@ -38,9 +38,9 @@ function readFileSub(file: string): Subscription | null {
 	}
 }
 
-export function createSubscriptionHandler(o: { gate: (req: Request) => Promise<string | Response>; file?: string; env?: Record<string, string | undefined> }) {
+export function createSubscriptionHandler(o: { gate: (req: Request) => Promise<string | Response>; file?: string; env?: Record<string, string | undefined>; platform?: string; home?: string }) {
 	const env = o.env ?? process.env;
-	const file = o.file ?? (process.env.WOLFPACK_SUBSCRIPTION_FILE?.trim() || DEFAULT_SUBSCRIPTION_FILE);
+	const file = o.file ?? subscriptionFile(env, o.platform, o.home);
 	return {
 		async get(req: Request): Promise<Response> {
 			const g = await o.gate(req);

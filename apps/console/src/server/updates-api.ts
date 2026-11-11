@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_MANIFEST_URL, checkUpdates, createManifestFetcher, probeHealth, type ManifestResult, type UpdateRow } from "@wolfpack/protocol";
-import { stampedVersion } from "@wolfpack/protocol/health-lag";
+import { stampedVersion, subscriptionFile } from "@wolfpack/protocol/health-lag";
 import { readSubscription } from "./subscription-api.ts";
 
 export type UpdateState = "idle" | "updating" | "updated" | "failed" | "disabled";
@@ -161,9 +161,9 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): () => Promise<Upda
 	const off = url === "off";
 	const stableManifest = off ? async (): Promise<ManifestResult> => ({ manifest: null, error: "update check is off (WOLFPACK_UPDATE_MANIFEST_URL=off)" }) : createManifestFetcher({ url });
 	const mainManifest = off ? stableManifest : createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
-	const subscriptionFile = env.WOLFPACK_SUBSCRIPTION_FILE?.trim() || undefined;
+	const subFile = subscriptionFile(env);
 	// The subscribed channel (read on every request) picks the manifest; an injected `manifest` replaces both.
-	const manifest = () => (o.manifest ?? (readSubscription(subscriptionFile).channel === "main" ? mainManifest : stableManifest))();
+	const manifest = () => (o.manifest ?? (readSubscription(subFile).channel === "main" ? mainManifest : stableManifest))();
 	const timeoutMs = o.probeTimeoutMs ?? 3_000;
 	const own = consoleVersion(o.consoleDir);
 	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || DEFAULT_AUTO_UPDATE_STATUS;

@@ -1,6 +1,6 @@
 # learnharness provenance
 
-> Snapshot against upstream `6cba9c8` taken on 2026-11-05; totals refreshed after work-wolfpack-63WjMQd (see Removed in work-wolfpack-63WjMQd).
+> Snapshot against upstream `6cba9c8` taken on 2026-11-05; totals refreshed after work-wolfpack-63WjMQd (see Removed in work-wolfpack-63WjMQd). Measured figures for `apps/console` and `apps/desktop` were retaken on 2026-11-11 after work-wolfpack-xWID29J (see the section at the end): 33354 of 101930 text lines (33%) are still upstream text; the per-class tables below predate that and are not recomputed.
 
 Inventory of what `apps/console` and `apps/desktop` took from **learnharness** (https://github.com/amosblomqvist/learnharness, Copyright (c) Amos Blomqvist, AGPL-3.0-only; all 712 upstream commits are by him).
 
@@ -891,3 +891,26 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `tests/web-search.test.ts`
 
 </details>
+
+## Removed in work-wolfpack-xWID29J
+
+Measured against `060c20cf` (upstream `6cba9c8`) with the same method: every tracked text file under `apps/console` and `apps/desktop` compared by git blob hash with the mapped upstream blob; modified files diffed with `git diff --numstat`; upstream-derived lines = current lines minus lines added vs upstream.
+
+| | Before | After |
+|---|---|---|
+| Tracked text lines | 103636 | 101930 |
+| Upstream-derived lines | 35348 | 33354 |
+| Share upstream-derived | 34% | 33% |
+| Files unchanged / modified / new | 54 / 143 / 428 | 35 / 157 / 428 |
+
+(Binary files count in file totals only.)
+
+What changed:
+
+- Unused exports (nothing live imports them) and the code only they needed were deleted from 22 copied files (knip, run from outside the repo with a config that treats `app/`, `proxy.ts`, `scripts/` and the tests as entry points), then barrels and tests re-checked. 884 lines removed.
+- `components/ui/{button,button-group,collapsible,input,separator}.tsx` and `lib/utils.ts` are now the shadcn/ui `new-york-v4` registry sources (MIT, Copyright (c) 2023 shadcn). `tooltip.tsx` is the registry file with Wolfpack's tuning kept as a labelled edit. Noted in NOTICE.
+- `components/ai-elements/*` were rewritten small from what the call sites use; Vercel AI Elements is Apache-2.0 and is credited in NOTICE. Unused branch, action, toolbar, download and scroll-button pieces are gone; shimmer is now plain CSS (`.wp-shimmer` in `globals.css`).
+- `eslint.config.mjs`, `postcss.config.mjs`, `tsconfig.json`, `next.config.ts` and the console `.gitignore` were rewritten fresh.
+- `apps/desktop/build/background.png` and `background@2x.png` (upstream dmg artwork) were deleted with the `dmg.background` setting. `entitlements.mac.plist` was rewritten with two keys: `allow-jit` (V8) and `device.audio-input` (dictation).
+- Deleted as unreferenced: `apps/console/public/fonts/cmunbx.ttf`, `OFL.txt` (no CSS, code or build reference; NOTICE paragraph removed) and `apps/console/components.json` (shadcn CLI config only). Without `components.json`, `npx shadcn add` no longer works; recreate it first if you need the CLI.
+- Kept on purpose: `public/worklets/pcm-capture.js` (knip calls it unused, but `components/dictation.tsx` loads it with `audioWorklet.addModule`), and `apps/console/docs/keyboard.md` and `desktop-release.md` (linked from both READMEs).

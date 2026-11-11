@@ -34,8 +34,8 @@ beforeEach(() => {
 	tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rtprev-")));
 	home = path.join(tmp, "home");
 	fs.mkdirSync(home);
-	fs.mkdirSync(path.join(tmp, "Application Support", "LearnHarness"), { recursive: true });
-	fs.writeFileSync(path.join(tmp, "Application Support", "LearnHarness", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
+	fs.mkdirSync(path.join(tmp, "Application Support", "Wolfpack Console"), { recursive: true });
+	fs.writeFileSync(path.join(tmp, "Application Support", "Wolfpack Console", "console.json"), JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
 	origin = path.join(tmp, "origin.git");
 	g(tmp, "init", "-q", "--bare", "-b", "main", origin);
 	main = path.join(tmp, "main");
@@ -310,8 +310,8 @@ describe("runtime-preview", () => {
 
 	it("on, helper, on again, helper, off ends with the owner's original consoleUrl", async () => {
 		const ud = path.join(tmp, "Application Support");
-		fs.mkdirSync(path.join(ud, "LearnHarness"), { recursive: true });
-		const cj = path.join(ud, "LearnHarness", "console.json");
+		fs.mkdirSync(path.join(ud, "Wolfpack Console"), { recursive: true });
+		const cj = path.join(ud, "Wolfpack Console", "console.json");
 		fs.writeFileSync(cj, JSON.stringify({ consoleUrl: "https://sfo-01.example" }));
 		const app = path.join(rtWt, "apps", "console");
 		fs.mkdirSync(path.join(app, ".next", "standalone", "apps", "console"), { recursive: true });
@@ -366,7 +366,7 @@ describe("runtime-preview", () => {
 			expect(t).toContain("<key>WOLFPACK_API_URL</key><string>http://127.0.0.1:7141</string>");
 			expect(t).toContain("<key>HOSTNAME</key><string>127.0.0.1</string>");
 			expect(t).toContain("<key>PORT</key><string>3230</string>");
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(readConsoleJson("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 			expect(readState()).toMatchObject({ console: { mode: "dev", dir: fs.realpathSync(d) }, consolePort: 3230 });
 			expect(readState().apps).toBeUndefined();
 			expect(h.logs.join("\n")).not.toContain("reopen");
@@ -419,7 +419,7 @@ describe("runtime-preview", () => {
 		it("fails when no wolf is listed in time: the agent is stopped, the app untouched and the state removed", async () => {
 			const h = harness({ noWolves: true });
 			expect((await h.run(["dev", devDir("wt")])).exitCode).toBe(1);
-			expect(readConsoleJson("LearnHarness").consoleUrl).toBe("https://sfo-01.example");
+			expect(readConsoleJson("Wolfpack Console").consoleUrl).toBe("https://sfo-01.example");
 			expect(h.lc.at(-1)).toEqual(["bootout", `gui/${process.getuid?.()}/com.wolfpack.preview-console`]);
 			expect(fs.existsSync(stateFile())).toBe(false);
 		});
@@ -430,7 +430,7 @@ describe("runtime-preview", () => {
 			expect((await h.run(["dev", devDir("wt2")])).exitCode).toBe(0);
 			expect(plistText()).toContain(`<key>WorkingDirectory</key><string>${path.join(fs.realpathSync(tmp), "wt2", "apps", "console")}</string>`);
 			expect(readState()).toMatchObject({ console: { mode: "dev", dir: path.join(fs.realpathSync(tmp), "wt2") } });
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(readConsoleJson("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 		});
 
 		it("dev run again in the same dir is a restart: agent reloaded, state unchanged", async () => {
@@ -468,7 +468,7 @@ describe("runtime-preview", () => {
 		it("off with only a dev console stops the agent, undoes an old pointing and clears the state, never touching the wolves", async () => {
 			const h = harness();
 			await h.run(["dev", devDir("wt1")]);
-			const cj = path.join(ud(), "LearnHarness", "console.json"); // an app pointed by an older preview
+			const cj = path.join(ud(), "Wolfpack Console", "console.json"); // an app pointed by an older preview
 			fs.writeFileSync(`${cj}.preview-backup`, JSON.stringify({ consoleUrl: "https://sfo-01.example", theme: "dark" }));
 			fs.writeFileSync(cj, JSON.stringify({ consoleUrl: "http://127.0.0.1:3230", theme: "dark" }));
 			h.lc.length = 0;
@@ -477,7 +477,7 @@ describe("runtime-preview", () => {
 			expect(h.lc.map((a) => a.join(" ").replace(/gui\/\d+/, "gui/U"))).toEqual(["bootout gui/U/com.wolfpack.preview-console"]);
 			expect(h.gitCalls.filter((a) => a[0] === "checkout" || a[0] === "merge")).toEqual([]);
 			expect(h.calls).toEqual([]);
-			expect(readConsoleJson("LearnHarness")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
+			expect(readConsoleJson("Wolfpack Console")).toEqual({ consoleUrl: "https://sfo-01.example", theme: "dark" });
 			expect(fs.existsSync(stateFile())).toBe(false);
 			expect(fs.existsSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"))).toBe(false);
 		});

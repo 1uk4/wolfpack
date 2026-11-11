@@ -667,7 +667,7 @@ function ThreadChatInner({
 			data-testid="thread-chat"
 			data-thread={threadId}
 			data-dragging={dragging || undefined}
-			style={threadAccentStyle(tintHex) as CSSProperties}
+			style={{ ...(threadAccentStyle(tintHex) as CSSProperties), backgroundColor: tintSolid }}
 			onDragOver={(e) => {
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault(); // take the drop instead of the browser opening the file

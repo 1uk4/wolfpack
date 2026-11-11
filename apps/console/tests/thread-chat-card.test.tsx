@@ -857,3 +857,11 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 		}
 	});
 });
+
+describe("ThreadChat surface", () => {
+	it("paints the thread root with the tint, so the phone's home-indicator padding is not a band of body colour under the composer", async () => {
+		await mount(new CardClient(SINGLE));
+		const style = q('[data-testid="thread-chat"]')!.getAttribute("style") ?? "";
+		assert.match(style, /background-color:\s*color-mix\(in srgb,[^)]*5%,\s*var\(--background\)\)/);
+	});
+});

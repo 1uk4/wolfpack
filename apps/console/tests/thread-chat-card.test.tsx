@@ -862,7 +862,11 @@ describe("ThreadChat surface", () => {
 	it("publishes its tint as the page canvas colour while mounted and clears it on unmount", async () => {
 		const root = document.documentElement;
 		await mount(new CardClient(SINGLE));
-		assert.match(root.style.getPropertyValue("--wp-canvas-bg"), /^color-mix\(in srgb,[^)]*5%,\s*var\(--background\)\)$/);
+		const canvas = root.style.getPropertyValue("--wp-canvas-bg");
+		assert.match(canvas, /^color-mix\(in srgb,[^)]*5%,\s*var\(--background\)\)$/);
+		// the strip must match what is painted above the composer: the root's colour, with no second tint layered over it
+		assert.equal(q('[data-testid="thread-chat"]')!.style.backgroundColor, canvas);
+		assert.equal(q('[data-testid="thread-tint"]')!.style.backgroundColor, "");
 		await unmount();
 		assert.equal(root.style.getPropertyValue("--wp-canvas-bg"), "");
 	});

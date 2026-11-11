@@ -185,7 +185,7 @@ html {
 }
 
 body {
-	background: var(--color-background);
+	background: var(--wp-canvas-bg, var(--color-background)); /* iOS's home-screen app paints the strip below the viewport from body, not html */
 	color: var(--color-foreground);
 	font-family: var(--font-ui);
 }

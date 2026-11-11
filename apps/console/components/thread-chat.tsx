@@ -63,7 +63,6 @@ import {
 	type ThreadCards,
 	type ToolItem,
 	ATTACHMENTS_PART,
-	threadTint,
 	threadAccentStyle,
 	threadTintSolid,
 	type ThreadColorSource,
@@ -264,7 +263,6 @@ function ThreadChatInner({
 	const colorApi = useAttachedThread();
 	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
 	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads, colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor).hex;
-	const tint = threadTint(tintHex);
 	const tintSolid = threadTintSolid(tintHex);
 	// The page canvas (html background) takes the chat colour while a thread is open, so the strip the iOS home-screen app leaves under the viewport matches it
 	useEffect(() => {
@@ -702,7 +700,7 @@ function ThreadChatInner({
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
-				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex} style={{ backgroundColor: tint }}>
+				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex}>
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
 							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>

@@ -25,10 +25,10 @@ Object.assign(globalThis, {
 });
 
 const { reconcileCursor, routeForNode, toRouteSelection, workNodesFromGraph, featureTaskModel } = await import("../../../src/core/graph/dep-route-adapter.ts");
-const { startCursor, cursorNext } = await import("../../../src/core/work-route.ts");
+const { startCursor, cursorNext } = await import("../../../src/core/work/work-route.ts");
 const { RouteNav } = await import("../../../components/graph/graph-route-nav.tsx");
 import type { KbGraph } from "../../../src/core/kb/kb.ts";
-import type { RouteCursor } from "../../../src/core/work-route.ts";
+import type { RouteCursor } from "../../../src/core/work/work-route.ts";
 
 const n = (id: string, workKind: string, stage: string, label = id) => ({ id: `work:${id}`, kind: "work" as const, label, depth: 3, domain: "d", workKind, stage });
 // F: a(shipped) -> b, c (parallel) -> e ; e partOf F

@@ -40,12 +40,12 @@ const focusedId = () => focusedEl?.getAttribute("data-testid") ?? null;
 dom.window.HTMLElement.prototype.focus = function (this: Element) { focusedEl = this; };
 Object.defineProperty(dom.document, "activeElement", { get: () => focusedEl });
 
-const { WorkList, WORK_DOMAIN_KEY } = await import("../components/work-view.tsx");
-const { WorkReaderHost } = await import("../components/work-reader.tsx");
-const { FakeNav, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
-import type { WorkClient } from "../components/work-client.ts";
-import type { WorkListItem } from "../src/core/kb/kb.ts";
-import { NOTE_H, WORK_ROW_H } from "../src/core/work-connectors.ts";
+const { WorkList, WORK_DOMAIN_KEY } = await import("../../../components/work/work-view.tsx");
+const { WorkReaderHost } = await import("../../../components/work/work-reader.tsx");
+const { FakeNav, currentUrl, historyBack, historyForward } = await import("../../helpers/fake-nav.tsx");
+import type { WorkClient } from "../../../components/work/work-client.ts";
+import type { WorkListItem } from "../../../src/core/kb/kb.ts";
+import { NOTE_H, WORK_ROW_H } from "../../../src/core/work/work-connectors.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "wolfpack", dependsOn: [], ...over });
 const ITEMS: WorkListItem[] = [
@@ -60,7 +60,7 @@ const ITEMS: WorkListItem[] = [
 const GRADUATED: WorkListItem[] = [item("old", "feature", { stage: "archived", graduated: "2026-10-03", title: "Old one", created: "2026-09-01" })];
 
 interface Fake extends WorkClient { calls: { domain: string; graduated: boolean }[]; items: WorkListItem[] }
-const fake = (over: Partial<WorkClient> = {}): Fake => {
+const fake = (over: Partial<Fake> = {}): Fake => {
 	const f: Fake = {
 		calls: [],
 		items: ITEMS,
@@ -584,7 +584,7 @@ describe("the assignee column", () => {
 		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
 		focusedEl = null;
 		await click(cell("f1"));
-		await evt(document, "keydown", { key: "Escape" });
+		await evt(document as unknown as Element, "keydown", { key: "Escape" });
 		assert.equal(q("work-assignee-menu-f1"), null);
 		assert.equal(focusedId(), cell("f1")!.getAttribute("data-testid"));
 	});

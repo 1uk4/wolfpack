@@ -3,7 +3,7 @@
  * releases, landed work). The thread's branch is the bold lane; children, sibling features, the home branch and stable
  * are the others. Pure; src/server/branch-graph.ts feeds it from read-only git.
  */
-import { WORK_DOMAINS, WORK_ID_SOURCE, workIdDomain } from "../work-id-link.ts";
+import { WORK_DOMAINS, WORK_ID_SOURCE, workIdDomain } from "../work/work-id-link.ts";
 
 /** One `git log` row (newest first). */
 export interface RawCommit {

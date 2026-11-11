@@ -36,19 +36,19 @@ Object.assign(globalThis, {
 	},
 });
 
-const { WorkList } = await import("../components/work-view.tsx");
-const { FakeNav } = await import("./helpers/fake-nav.tsx");
-const { GraphPane, clearPaneCache } = await import("../components/graph/graph-pane.tsx");
-const { GraduateStartDialog, GraduateToasts } = await import("../components/kb/graduate-dialog.tsx");
-const { graduateStore } = await import("../components/kb/graduate-store.ts");
-const { graduateState, graduationWolf } = await import("../src/core/kb/graduate.ts");
-const { buildWorkTable } = await import("../src/core/work-table.ts");
-const { describeNode } = await import("../src/core/graph/kb-graph-model.ts");
-import type { GraduateClient } from "../components/kb/graduate-client.ts";
-import type { KbResult } from "../components/kb/kb-client.ts";
-import type { WorkClient } from "../components/work-client.ts";
-import type { GraduationObservations, GraduationPreview, GraduationResult, GraduationStatus, KbGraph, WorkListItem } from "../src/core/kb/kb.ts";
-import type { NodeCard } from "../src/core/graph/kb-graph-model.ts";
+const { WorkList } = await import("../../../components/work/work-view.tsx");
+const { FakeNav } = await import("../../helpers/fake-nav.tsx");
+const { GraphPane, clearPaneCache } = await import("../../../components/graph/graph-pane.tsx");
+const { GraduateStartDialog, GraduateToasts } = await import("../../../components/kb/graduate-dialog.tsx");
+const { graduateStore } = await import("../../../components/kb/graduate-store.ts");
+const { graduateState, graduationWolf } = await import("../../../src/core/kb/graduate.ts");
+const { buildWorkTable } = await import("../../../src/core/work/work-table.ts");
+const { describeNode } = await import("../../../src/core/graph/kb-graph-model.ts");
+import type { GraduateClient } from "../../../components/kb/graduate-client.ts";
+import type { KbResult } from "../../../components/kb/kb-client.ts";
+import type { WorkClient } from "../../../components/work/work-client.ts";
+import type { GraduationObservations, GraduationPreview, GraduationResult, GraduationStatus, KbGraph, WorkListItem } from "../../../src/core/kb/kb.ts";
+import type { NodeCard } from "../../../src/core/graph/kb-graph-model.ts";
 
 // ---- pure -----------------------------------------------------------------------
 

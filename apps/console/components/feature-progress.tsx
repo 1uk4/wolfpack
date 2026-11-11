@@ -5,7 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDownIcon, Maximize2Icon } from "lucide-react";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import { useOptionalMemoryEvents } from "@/components/memory-events";
-import { useOpenWorkItem } from "@/components/work-reader-nav";
+import { useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { PlanGraphView } from "@/components/plan-graph-view";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { PANEL_PROGRESS, closePanel, setOpenPanel, togglePanel, useOpenPanel } from "@/components/pin-store";

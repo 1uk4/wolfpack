@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildTaskGraph, featureIdFor, type WorkRecordResponse } from "../src/core/index.ts";
+import { buildTaskGraph, featureIdFor, type WorkRecordResponse } from "../../../src/core/index.ts";
 
 type Child = NonNullable<WorkRecordResponse["children"]>[number];
 const child = (id: string, stage: string, dependsOn: string[] = [], kind = "task"): Child => ({ id, title: `T-${id}`, kind, stage, dependsOn });

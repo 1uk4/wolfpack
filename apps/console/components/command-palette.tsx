@@ -11,7 +11,7 @@
  * first open and cached for the session.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useOpenWorkItem } from "@/components/work-reader-nav";
+import { useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { Command } from "cmdk";
 import { DialogTitle } from "@radix-ui/react-dialog";
 import { usePathname, useRouter } from "next/navigation";

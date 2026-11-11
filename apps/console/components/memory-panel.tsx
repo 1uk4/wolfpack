@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
-import { WorkIdChip } from "@/components/work-id-chip";
+import { WorkIdChip } from "@/components/work/work-id-chip";
 import { ContextSection } from "@/components/context-section";
 import { useMemoryEvents } from "@/components/memory-events";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";

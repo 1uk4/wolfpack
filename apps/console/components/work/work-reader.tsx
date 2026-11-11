@@ -13,10 +13,10 @@
  * (3) Otherwise the reader closes, including with focus in the chat bar composer or a bar card (neither handles Esc).
  */
 import { Suspense, useEffect, useRef } from "react";
-import { WorkItemPage } from "@/components/work-item-page";
+import { WorkItemPage } from "@/components/work/work-item-page";
 
-export { ITEM_PARAM, readerUrl, useWorkReader } from "@/components/work-reader-nav";
-import { useWorkReader } from "@/components/work-reader-nav";
+export { ITEM_PARAM, readerUrl, useWorkReader } from "@/components/work/work-reader-nav";
+import { useWorkReader } from "@/components/work/work-reader-nav";
 
 const OVERLAY = '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[aria-modal="true"]';
 /** An overlay that is really up: connected and not hidden by an attribute or inline style (a persistent closed list must not swallow Esc forever). */

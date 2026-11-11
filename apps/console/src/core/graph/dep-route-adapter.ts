@@ -7,8 +7,8 @@
 
 import type { DepRouteSelection } from "./dep-draw-list.ts";
 import type { KbGraph } from "../kb/kb.ts";
-import { buildTaskGraph, type TaskGraphModel } from "../task-graph.ts";
-import { ROUTE_PARENT_MODE, computeWorkRoute, startCursor, type RouteCursor, type WorkNode, type WorkRoute, type RouteParentMode as WorkRouteParentMode } from "../work-route.ts";
+import { buildTaskGraph, type TaskGraphModel } from "../work/task-graph.ts";
+import { ROUTE_PARENT_MODE, computeWorkRoute, startCursor, type RouteCursor, type WorkNode, type WorkRoute, type RouteParentMode as WorkRouteParentMode } from "../work/work-route.ts";
 
 const WORK = "work:";
 export const rawWorkId = (graphId: string): string | null =>

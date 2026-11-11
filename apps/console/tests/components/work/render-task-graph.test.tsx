@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TaskCard, TaskGraphCompact, taskNodeView } from "../components/task-graph.tsx";
-import { buildTaskGraph, type WorkRecordResponse } from "../src/core/index.ts";
+import { TaskCard, TaskGraphCompact, taskNodeView } from "../../../components/work/task-graph.tsx";
+import { buildTaskGraph, type WorkRecordResponse } from "../../../src/core/index.ts";
 
 const kid = (id: string, stage: string, dependsOn: string[] = [], title = `Task ${id}`) => ({ id, title, kind: "task", stage, dependsOn });
 const feat = { id: "F", kind: "feature", title: "Feat", stage: "in_build", plan: "", record: "", children: [kid("a", "shipped"), kid("b", "in_build", ["a"]), kid("c", "idea", ["b"]), kid("d", "idea")] };

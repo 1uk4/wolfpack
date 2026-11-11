@@ -8,7 +8,7 @@
  * cursor state.
  */
 import { useEffect } from "react";
-import { cursorChoose, cursorNext, cursorPrev, type RouteCursor, type WorkRoute } from "@/src/core/work-route";
+import { cursorChoose, cursorNext, cursorPrev, type RouteCursor, type WorkRoute } from "@/src/core/work/work-route";
 
 export interface RouteNavModel {
 	route: WorkRoute;

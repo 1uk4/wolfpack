@@ -6,12 +6,12 @@ import { useRouter } from "next/navigation";
 import { XIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { TaskGraph } from "@/components/task-graph";
+import { TaskGraph } from "@/components/work/task-graph";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
-import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
+import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { TopBar } from "@/components/top-bar";
-import { WorkBadges } from "@/components/work-badges";
+import { WorkBadges } from "@/components/work/work-badges";
 import { useLibrarian } from "@/components/kb/use-librarian";
 import { buildTaskGraph, featureThreadWolves, resolveWork, threadHref, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 

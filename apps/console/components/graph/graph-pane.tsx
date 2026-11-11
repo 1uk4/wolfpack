@@ -17,7 +17,7 @@
  * pane's content follows the cursor's node because the view hands it that
  * node's card.
  */
-import { openWorkHrefLink, useOpenWorkItem } from "@/components/work-reader-nav";
+import { openWorkHrefLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "lucide-react";

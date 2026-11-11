@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { WorkList } from "@/components/work-view";
+import { WorkList } from "@/components/work/work-view";
 
 export const dynamic = "force-dynamic"; // like the other data pages: the production build refuses unexpected prerendered routes
 

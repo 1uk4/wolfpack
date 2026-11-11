@@ -7,7 +7,7 @@
  */
 
 import type { GraphNodeStatus } from "@wolfpack/protocol/objects";
-import type { WorkRecordResponse } from "./kb/kb.ts";
+import type { WorkRecordResponse } from "../kb/kb.ts";
 
 export type TaskStatus = "shipped" | "building" | "ready" | "blocked" | "archived";
 

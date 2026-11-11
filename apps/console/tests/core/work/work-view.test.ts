@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { resolveWork, workRecordView, workWolfCandidates, type WorkLookup } from "../src/core/work-view.ts";
+import { resolveWork, workRecordView, workWolfCandidates, type WorkLookup } from "../../../src/core/work/work-view.ts";
 
 describe("workWolfCandidates", () => {
 	const wolves = [

@@ -152,7 +152,7 @@ describe("routeLineForce", () => {
 	});
 });
 
-import { computeWorkRoute as computeEntryRoute } from "../../../src/core/work-route.ts";
+import { computeWorkRoute as computeEntryRoute } from "../../../src/core/work/work-route.ts";
 import { toRouteSelection } from "../../../src/core/graph/dep-route-adapter.ts";
 import { routeLinkSet as linkSetForEntry } from "../../../src/core/graph/route-layout.ts";
 

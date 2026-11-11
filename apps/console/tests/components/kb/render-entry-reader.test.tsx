@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EntryReaderView, entryReaderState } from "../../../components/kb/entry-reader.tsx";
 import { KbMarkdown } from "../../../components/kb/kb-markdown.tsx";
-import { WorkItemView } from "../../../components/work-item-page.tsx";
+import { WorkItemView } from "../../../components/work/work-item-page.tsx";
 
 const ENTRY = {
 	id: "e1",

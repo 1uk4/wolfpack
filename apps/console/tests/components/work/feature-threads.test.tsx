@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MockConsoleClient } from "@wolfpack/client";
-import { WorkItemView } from "../components/work-item-page.tsx";
-import { featureThreadWolves, foldWolfThreads, resolveThreadId, threadHref } from "../src/core/index.ts";
-import { createThreadApi } from "../src/server/thread-api.ts";
+import { WorkItemView } from "../../../components/work/work-item-page.tsx";
+import { featureThreadWolves, foldWolfThreads, resolveThreadId, threadHref } from "../../../src/core/index.ts";
+import { createThreadApi } from "../../../src/server/thread-api.ts";
 
 const feat = { id: "work-x-F", title: "Feat", kind: "feature", stage: "in_build", domain: "wolfpack", partOf: null, dependsOn: [], plan: "the plan", record: "", children: [] };
 const post = (body: unknown) => new Request("http://t/api/wolves/1uk4/threads", { method: "POST", body: JSON.stringify(body) });

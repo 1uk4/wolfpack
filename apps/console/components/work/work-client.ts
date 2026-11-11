@@ -4,7 +4,7 @@
  * tries them for one item (the librarian, then every other online wolf; only "unavailable" moves on). Tests inject a fake.
  */
 import { findLibrarian, workWolfCandidates, type WorkListResponse } from "@/src/core";
-import { fetchKbGraph, fetchWolves, fetchWorkList, patchWorkItem, type KbResult } from "./kb/kb-client";
+import { fetchKbGraph, fetchWolves, fetchWorkList, patchWorkItem, type KbResult } from "../kb/kb-client";
 
 export interface WorkDomain {
 	name: string;

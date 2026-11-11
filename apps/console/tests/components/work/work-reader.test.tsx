@@ -33,16 +33,16 @@ let focused: Element | null = null;
 };
 Object.defineProperty(dom.document, "activeElement", { get: () => focused ?? dom.document.body, configurable: true });
 
-const { FakeNav, navLog, currentUrl, historyBack, historyForward } = await import("./helpers/fake-nav.tsx");
-const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../components/work-reader.tsx");
-const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../components/work-reader-nav.ts");
-const { WorkReaderHost } = await import("../components/work-reader.tsx");
-const { PlanGraphCard } = await import("../components/plan-graph-card.tsx");
-const { nodeClickAction } = await import("../components/graph/graph-view.tsx");
-const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
-const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
-const { WorkItemView } = await import("../components/work-item-page.tsx");
-const { EntryReaderView, shouldGoBackOnEscape } = await import("../components/kb/entry-reader.tsx");
+const { FakeNav, navLog, currentUrl, historyBack, historyForward } = await import("../../helpers/fake-nav.tsx");
+const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../../../components/work/work-reader.tsx");
+const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../../../components/work/work-reader-nav.ts");
+const { WorkReaderHost } = await import("../../../components/work/work-reader.tsx");
+const { PlanGraphCard } = await import("../../../components/plan-graph-card.tsx");
+const { nodeClickAction } = await import("../../../components/graph/graph-view.tsx");
+const { NavTracker, hasInAppHistory } = await import("../../../components/nav-tracker.tsx");
+const { WorkNavEntry } = await import("../../../components/work/work-nav-link.tsx");
+const { WorkItemView } = await import("../../../components/work/work-item-page.tsx");
+const { EntryReaderView, shouldGoBackOnEscape } = await import("../../../components/kb/entry-reader.tsx");
 
 const src = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -187,7 +187,7 @@ describe("Esc order", () => {
 		assert.equal(closed, 1);
 	});
 	it("leaves Esc to the REAL id hover card (a role=dialog portal) and ignores hidden or closed overlays", async () => {
-		const { WorkIdChip } = await import("../components/work-id-chip.tsx");
+		const { WorkIdChip } = await import("../../../components/work/work-id-chip.tsx");
 		let closed = 0;
 		const host = document.createElement("div");
 		document.body.appendChild(host);
@@ -241,7 +241,7 @@ describe("phones", () => {
 		assert.ok(html.includes("max-md:min-h-11") && html.includes("max-md:min-w-11"));
 	});
 	it("the Work list is a full-height page with no column mode", () => {
-		const list = src("../components/work-view.tsx");
+		const list = src("../../../components/work/work-view.tsx");
 		assert.match(list, /h-dvh/);
 		assert.ok(!/column=|colWidth|WORK_EXPANDED_KEY|publishPane|yieldEsc/.test(list));
 	});
@@ -353,14 +353,14 @@ describe("Esc and dialogs above the reader", () => {
 
 describe("decoupling", () => {
 	it("the graph knows nothing of the Work list", () => {
-		const g = src("../components/graph/graph-view.tsx");
+		const g = src("../../../components/graph/graph-view.tsx");
 		for (const bad of ["useWorkView", "WorkButton", "publishPane", "publishRoute", "yieldEsc", "colWidth", "splitWidth", "workSel"]) assert.ok(!g.includes(bad), bad);
-		const entry = src("../components/kb/entry-reader.tsx");
+		const entry = src("../../../components/kb/entry-reader.tsx");
 		assert.ok(!entry.includes("useWorkView") && !entry.includes("left:"));
 	});
 	it("no Work provider or layer state is left", () => {
-		assert.ok(!src("../components/work-nav-link.tsx").includes("WorkViewContext"));
-		assert.ok(!/WORK_EXPANDED_KEY|work-view-col-width/.test(src("../components/work-view.tsx") + src("../src/core/work-select.ts")));
+		assert.ok(!src("../../../components/work/work-nav-link.tsx").includes("WorkViewContext"));
+		assert.ok(!/WORK_EXPANDED_KEY|work-view-col-width/.test(src("../../../components/work/work-view.tsx") + src("../../../src/core/work/work-select.ts")));
 	});
 });
 
@@ -371,7 +371,7 @@ describe("a graph node click: the reader only", () => {
 		assert.deepEqual(nodeClickAction("fac:d"), { kind: "select" });
 	});
 	it("the click handler neither expands collapsed features nor selects for a work node; no double-click overlay competes", () => {
-		const g = src("../components/graph/graph-view.tsx");
+		const g = src("../../../components/graph/graph-view.tsx");
 		const handler = g.slice(g.indexOf("onSelect: (nodeId)"), g.indexOf("onStageClick"));
 		assert.match(handler, /openWorkRef\.current\(act\.id\)/);
 		assert.ok(!/setExpanded|expanded/.test(g), "the expand-in-place state is gone");
@@ -383,10 +383,10 @@ describe("a graph node click: the reader only", () => {
 
 describe("sidebar", () => {
 	it("has two plain links: Graph to /graph and Work to /work", () => {
-		const bar = src("../components/sidebar.tsx");
+		const bar = src("../../../components/sidebar.tsx");
 		assert.match(bar, /href="\/graph"[\s\S]{0,120}data-testid="nav-graph"/);
 		assert.match(bar, /<WorkNavEntry \/>/);
-		const nav = src("../components/work-nav-link.tsx");
+		const nav = src("../../../components/work/work-nav-link.tsx");
 		assert.match(nav, /href="\/work"/);
 		assert.match(nav, /data-testid="nav-work"/);
 		assert.equal(typeof WorkNavEntry, "function");
@@ -395,18 +395,18 @@ describe("sidebar", () => {
 
 describe("deep links", () => {
 	it("/kb/work/<id> still renders the full WorkItemPage", () => {
-		assert.match(src("../app/kb/work/[id]/page.tsx"), /<WorkItemPage id=\{decodeURIComponent\(id\)\} \/>/);
+		assert.match(src("../../../app/kb/work/[id]/page.tsx"), /<WorkItemPage id=\{decodeURIComponent\(id\)\} \/>/);
 		const html = renderToStaticMarkup(<WorkItemView id="f1" state={{ kind: "loading" }} />);
 		assert.ok(html.includes('data-testid="work-item-page"') && html.includes("h-dvh") && !html.includes("work-reader-close"));
 	});
 	it("/kb/entry/<id> is a standalone page outside the (home) graph layout; / and /work both mount the reader host", () => {
-		assert.match(src("../app/kb/entry/[id]/page.tsx"), /EntryReaderPage/);
+		assert.match(src("../../../app/kb/entry/[id]/page.tsx"), /EntryReaderPage/);
 		assert.ok(!existsSync(new URL("../app/(home)/kb/entry", import.meta.url)));
 	});
 
 	it("exactly one WorkReaderHost is mounted, in the shell every page (threads included) renders under", () => {
-		const mounts = ["../components/sidebar.tsx", "../app/page.tsx", "../app/graph/page.tsx", "../app/work/page.tsx", "../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
-		assert.deepEqual(mounts, ["../components/sidebar.tsx"]);
+		const mounts = ["../../../components/sidebar.tsx", "../../../app/page.tsx", "../../../app/graph/page.tsx", "../../../app/work/page.tsx", "../../../app/layout.tsx"].filter((f) => /<WorkReaderHost\b/.test(src(f)));
+		assert.deepEqual(mounts, ["../../../components/sidebar.tsx"]);
 	});
 });
 
@@ -549,6 +549,6 @@ describe("entry page Esc", () => {
 	});
 	it("back vs home: hasInAppHistory is false on a deep link", () => {
 		assert.equal(hasInAppHistory(), false);
-		assert.match(src("../components/kb/entry-reader.tsx"), /hasInAppHistory\(\)\) router\.back\(\);\s*else router\.push\("\/"\)/);
+		assert.match(src("../../../components/kb/entry-reader.tsx"), /hasInAppHistory\(\)\) router\.back\(\);\s*else router\.push\("\/"\)/);
 	});
 });

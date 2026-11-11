@@ -275,7 +275,7 @@ describe("ChatBar on a phone", () => {
 	});
 
 	it("the sheet is a modal: dialog semantics, focus in and back, no page scroll, Esc closes it before the work reader", async () => {
-		const { WorkReaderPanel } = await import("../components/work-reader.tsx");
+		const { WorkReaderPanel } = await import("../components/work/work-reader.tsx");
 		let readerClosed = 0;
 		await mount(A, <WorkReaderPanel id="f1" onClose={() => void readerClosed++} />);
 		const opener = q('[data-testid="bar-sheet-open"]')!;

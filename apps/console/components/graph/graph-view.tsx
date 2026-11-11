@@ -28,7 +28,7 @@
 
 import type { DepRouteSelection } from "../../src/core/graph/dep-draw-list.ts";
 import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../../src/core/graph/dep-route-adapter.ts";
-import { startCursor, type RouteCursor } from "../../src/core/work-route.ts";
+import { startCursor, type RouteCursor } from "../../src/core/work/work-route.ts";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -48,7 +48,7 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
-import { useWorkReader } from "../work-reader.tsx";
+import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 
 /** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,

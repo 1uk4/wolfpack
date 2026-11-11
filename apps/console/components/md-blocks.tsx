@@ -37,7 +37,7 @@ import {
 	useIsCodeFenceIncomplete,
 	defaultComponents,
 } from "streamdown";
-import { WorkIdChip } from "@/components/work-id-chip";
+import { WorkIdChip } from "@/components/work/work-id-chip";
 import { isFullWorkId, workIdFromHref } from "@/src/core";
 import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/mermaid-render";

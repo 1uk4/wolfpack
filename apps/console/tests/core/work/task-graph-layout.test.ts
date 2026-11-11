@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { layoutTaskGraph, taskComponents, taskNodeHeight, type TaskNode, type TaskStatus } from "../src/core/index.ts";
+import { layoutTaskGraph, taskComponents, taskNodeHeight, type TaskNode, type TaskStatus } from "../../../src/core/index.ts";
 
 const n = (id: string, status: TaskStatus = "ready", title = `T ${id}`): TaskNode => ({ id, title, kind: "task", stage: "", status });
 const opts = { nodeWidth: 200, maxWidth: 650, gapX: 20, gapY: 40 };

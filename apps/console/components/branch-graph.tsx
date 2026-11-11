@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { WorkIdChip, lookupWorkItem } from "@/components/work-id-chip";
+import { WorkIdChip, lookupWorkItem } from "@/components/work/work-id-chip";
 import { agentName, branchShortId, buildMoments, candidateWorkIds, collapseRows, featureOfItem, landedMoments, mergeNear, middleClip, placeBandLabel, placeLabels, preferredDomain, shipMoments, swimLanes, timeScale, type GitOverview, type Moment, type ShipSubject, type SwimLane } from "@/src/core";
 
 const LANE_H = 22;

@@ -8,7 +8,7 @@
  * A row is WORK_ROW_H high, plus NOTE_H when it has a link line, so a row's y is the sum of the heights above it.
  */
 
-import { DEP_COLORS, ROUTE_DONE_COLOR } from "./graph/dep-palette.ts";
+import { DEP_COLORS, ROUTE_DONE_COLOR } from "../graph/dep-palette.ts";
 import type { WorkRouteView } from "./work-select.ts";
 import type { TableRow } from "./work-table.ts";
 

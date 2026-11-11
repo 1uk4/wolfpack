@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { cn } from "@/lib/utils";
 import { fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "@/components/kb/kb-client";
-import { openWorkItem } from "@/components/work-reader-nav";
+import { openWorkItem } from "@/components/work/work-reader-nav";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
 

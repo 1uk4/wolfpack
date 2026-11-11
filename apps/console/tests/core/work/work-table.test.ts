@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_WORK_SORT, NO_INITIATIVE_KEY, buildWorkTable, moveOptions, nextWorkSort, stageRank, type WorkSort } from "../src/core/work-table.ts";
-import type { WorkListItem } from "../src/core/kb/kb.ts";
+import { DEFAULT_WORK_SORT, NO_INITIATIVE_KEY, buildWorkTable, moveOptions, nextWorkSort, stageRank, type WorkSort } from "../../../src/core/work/work-table.ts";
+import type { WorkListItem } from "../../../src/core/kb/kb.ts";
 
 const item = (id: string, kind: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind, stage: "plan", domain: "d", dependsOn: [], ...over });
 

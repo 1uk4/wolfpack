@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ARROW_W, GUTTER_PAD, LANE_W, WORK_ROW_H, allocateLanes, groupConnectors, laneState, lanePath, LANE_COLOR } from "../src/core/work-connectors.ts";
-import { buildWorkTable, type TableRow } from "../src/core/work-table.ts";
-import { workRouteView } from "../src/core/work-select.ts";
-import type { WorkListItem } from "../src/core/kb/kb.ts";
+import { ARROW_W, GUTTER_PAD, LANE_W, WORK_ROW_H, allocateLanes, groupConnectors, laneState, lanePath, LANE_COLOR } from "../../../src/core/work/work-connectors.ts";
+import { buildWorkTable, type TableRow } from "../../../src/core/work/work-table.ts";
+import { workRouteView } from "../../../src/core/work/work-select.ts";
+import type { WorkListItem } from "../../../src/core/kb/kb.ts";
 
 const item = (id: string, over: Partial<WorkListItem> = {}): WorkListItem => ({ id, title: id.toUpperCase(), kind: "task", stage: "plan", domain: "d", dependsOn: [], created: "2026-10-01", ...over });
 const group = (specs: [string, string[]][], over: Record<string, Partial<WorkListItem>> = {}): TableRow =>

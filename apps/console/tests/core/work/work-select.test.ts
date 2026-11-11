@@ -1,9 +1,9 @@
 /** The Work view's selection model (pure): route view, row state, ancestor keys, the column width clamp. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { computeWorkRoute } from "../src/core/work-route.ts";
-import { ancestorKeys, rowRouteState, workRouteView } from "../src/core/work-select.ts";
-import { buildWorkTable } from "../src/core/work-table.ts";
+import { computeWorkRoute } from "../../../src/core/work/work-route.ts";
+import { ancestorKeys, rowRouteState, workRouteView } from "../../../src/core/work/work-select.ts";
+import { buildWorkTable } from "../../../src/core/work/work-table.ts";
 
 const nodes = [
 	{ id: "f", kind: "feature", stage: "in_build" },

@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { SquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
-import { openReaderLink, useOpenWorkItem } from "@/components/work-reader-nav";
+import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";

@@ -10,7 +10,7 @@
  *   den topic wolf + summary, minimal
  * Presentational: placement is the graph view's job.
  */
-import { openWorkHrefLink, useOpenWorkItem } from "@/components/work-reader-nav";
+import { openWorkHrefLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import Link from "next/link";
 import { stageLabel, type CardLink, type NodeCard } from "@/src/core";
 import { RouteNav, type RouteNavModel } from "./graph-route-nav.tsx";

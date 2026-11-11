@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   ROUTE_PARENT_MODE, ROUTE_ROOT, computeWorkRoute as computeRoute, cursorChoose, cursorNext, cursorPrev, startCursor, type WorkNode,
-} from "../src/core/work-route.ts";
+} from "../../../src/core/work/work-route.ts";
 
 // The legacy suites below pin today's behaviour (flag off).
 const computeWorkRoute = (nodes: readonly WorkNode[], target: string) =>

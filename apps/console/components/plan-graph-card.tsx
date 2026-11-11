@@ -1,7 +1,7 @@
 import { parseObjectData } from "@wolfpack/protocol/objects";
 import type { ObjectCardProps } from "@/components/card-registry";
 import { ObjectCardFrame } from "@/components/object-card";
-import { useOpenWorkItem } from "@/components/work-reader-nav";
+import { useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { PlanGraphView } from "@/components/plan-graph-view";
 import { isWorkItemId } from "@/src/core";
 

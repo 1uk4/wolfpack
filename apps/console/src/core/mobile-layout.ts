@@ -46,6 +46,12 @@ export function keyboardShellTop(vv: { height: number; offsetTop: number } | nul
 	return Math.max(0, Math.round(vv.offsetTop));
 }
 
+/** Bottom padding of the thread, as a CSS length: iOS keeps reporting the home-indicator inset (~34pt) while the keyboard is open, but the
+ *  keyboard covers the indicator, so an open keyboard gets 0 (the composer sits on it); otherwise exactly one inset. */
+export function shellBottomInset(vv: { height: number } | null | undefined, innerHeight: number): string {
+	return keyboardShellHeight(vv, innerHeight) === null ? "env(safe-area-inset-bottom)" : "0px";
+}
+
 /** Label for the control that returns to the list on a phone. */
 export const MOBILE_BACK_LABEL = "Back to list";
 

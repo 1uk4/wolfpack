@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { MOBILE_QUERY, keyboardShellHeight, keyboardShellTop } from "@/src/core";
+import { MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset } from "@/src/core";
 
 /** Publishes --wp-vvh (the visible height above the on-screen keyboard) on <html>, phones only. iOS Safari does not shrink the layout
  *  viewport when the keyboard opens, so `dvh` alone leaves the composer under it; globals.css sizes the thread to this var. */
@@ -13,11 +13,14 @@ export function ViewportVars() {
 		const root = document.documentElement;
 		let last = "";
 		let lastTop = "";
+		let lastInset = "";
 		const apply = () => {
 			if (!mq.matches) {
 				last = "";
 				lastTop = "";
+				lastInset = "";
 				root.style.removeProperty("--wp-vvt");
+				root.style.removeProperty("--wp-safe-bottom");
 				return void root.style.removeProperty("--wp-vvh");
 			}
 			const h = keyboardShellHeight(vv, window.innerHeight);
@@ -29,6 +32,11 @@ export function ViewportVars() {
 			const nextTop = top > 0 ? `${top}px` : "";
 			if (nextTop !== lastTop) nextTop ? root.style.setProperty("--wp-vvt", nextTop) : root.style.removeProperty("--wp-vvt");
 			lastTop = nextTop;
+			// keyboard open: no home-indicator padding under the composer (css falls back to env(...) when the var is unset)
+			const inset = shellBottomInset(vv, window.innerHeight);
+			const nextInset = inset === "0px" ? inset : "";
+			if (nextInset !== lastInset) nextInset ? root.style.setProperty("--wp-safe-bottom", nextInset) : root.style.removeProperty("--wp-safe-bottom");
+			lastInset = nextInset;
 		};
 		apply();
 		vv?.addEventListener("resize", apply);
@@ -51,6 +59,7 @@ export function ViewportVars() {
 			cancelAnimationFrame(raf);
 			root.style.removeProperty("--wp-vvh");
 			root.style.removeProperty("--wp-vvt");
+			root.style.removeProperty("--wp-safe-bottom");
 		};
 	}, []);
 	return null;

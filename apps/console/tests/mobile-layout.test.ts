@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop } from "../src/core/mobile-layout.ts";
+import { initialListOpen, isMobileWidth, listOpenAfterSelect, needsFloatingBack, storedListOpen, MOBILE_QUERY, keyboardShellHeight, keyboardShellTop, shellBottomInset } from "../src/core/mobile-layout.ts";
 import manifest from "../app/manifest.ts";
 
 test("breakpoint: 767 is a phone, 768 is desktop (matches Tailwind md and the CSS @media)", () => {
@@ -51,6 +51,12 @@ test("keyboardShellTop follows the visual viewport's pan offset only while the k
 	assert.equal(keyboardShellTop({ height: 500, offsetTop: 0 }, 852), 0);
 	assert.equal(keyboardShellTop({ height: 800, offsetTop: 30 }, 852), 0); // no keyboard: stay pinned to the top
 	assert.equal(keyboardShellTop(null, 852), 0);
+});
+
+test("shellBottomInset drops the home-indicator inset while the keyboard is open and keeps exactly one otherwise", () => {
+	assert.equal(shellBottomInset({ height: 500 }, 852), "0px"); // keyboard open: the composer sits on the keyboard
+	assert.equal(shellBottomInset({ height: 740 }, 852), "env(safe-area-inset-bottom)"); // small gap: not a keyboard
+	assert.equal(shellBottomInset(null, 852), "env(safe-area-inset-bottom)");
 });
 
 test("manifest: installable, theme matches the console, icons exist on disk", () => {

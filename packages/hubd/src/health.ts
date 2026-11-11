@@ -1,4 +1,5 @@
-import { baseHealth, createLagMonitor, normaliseMachine, type LagMonitor } from "@wolfpack/protocol/health-lag";
+import type { InventoryEntry } from "@wolfpack/protocol";
+import { baseHealth, createLagMonitor, machineName, normaliseMachine, readMachineChannel, type LagMonitor } from "@wolfpack/protocol/health-lag";
 import { HUB_HEALTH_MAX_HOSTS, HUB_HEALTH_MAX_WOLVES, type HealthBody, type HubHealthHost, type LinkPresence } from "@wolfpack/protocol";
 import { hubVersion } from "./settings.js";
 
@@ -10,12 +11,19 @@ import { hubVersion } from "./settings.js";
  */
 export interface HubHealth {
   body(): HealthBody;
+  /** hubd's own inventory entry (version, channel, uptime, lag). */
+  self(): InventoryEntry;
   stop(): void;
 }
 
 export function createHubHealth(hosts?: () => HubHealthHost[]): HubHealth {
   const monitor: LagMonitor = createLagMonitor();
-  return { body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }), stop: () => monitor.stop() };
+  const channel = readMachineChannel();
+  return {
+    body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }),
+    self: () => ({ machine: machineName(), kind: "hubd", id: "hubd", version: hubVersion(), ...(channel ? { channel } : {}), uptimeS: Math.round(process.uptime()), lagMs: Math.round(monitor.sample().p99Ms) }),
+    stop: () => monitor.stop(),
+  };
 }
 
 /** A pairing label is sent on /healthz only when it looks like a hostname. */

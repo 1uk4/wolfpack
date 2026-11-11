@@ -71,7 +71,8 @@ import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
-import { LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
+import { INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
+import { createInventory, type Inventory } from "./inventory.js";
 import { createRelay, type Relay } from "./relay.js";
 import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
@@ -316,6 +317,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   });
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
+  const inventory: Inventory = createInventory(opts.now);
   let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
@@ -513,7 +515,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       seenMax: opts.linkSeenMax,
       faults: opts.linkFaults,
     });
-    link = createLink({ authenticate, registry, timers: opts.linkTimers, onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
+    link = createLink({ authenticate, registry, timers: opts.linkTimers, onReport: (h, m, entries) => inventory.setHost(h, m, entries.slice(0, INVENTORY_MAX_ENTRIES)), onHostGone: (h) => inventory.clearHost(h), onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     linkRef = link;
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
     packSummary = createPackSummary({
@@ -883,6 +885,21 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const mb = q.get("maxBytes");
           if (mb !== null && !/^[1-9]\d{0,12}$/.test(mb)) throw new HubError("invalid_request", "maxBytes must be a positive integer");
           return send(res, 200, revisions.changesSince(params.domain, sinceRaw === null ? 0 : Number(sinceRaw), q.get("epoch") ?? undefined, mb === null ? undefined : Math.min(Number(mb), KB_COMMIT_BODY_LIMIT)));
+        }
+        case "hubInventory": {
+          deviceCaller(identity);
+          return send(res, 200, { entries: inventory.list(health!.self()), hubMachine: health!.self().machine });
+        }
+        case "hubInventoryReport": {
+          // A heartbeat, not a ledger event: no actor, no ledger. Console/browser tokens only; the row is bound to the token.
+          const caller = deviceCaller(identity);
+          const body = parseBody(InventoryReportBodySchema, await readJson(req, { maxBytes: INVENTORY_REPORT_MAX_BYTES, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          if (body.entry.kind !== "console") throw new HubError("invalid_request", "only console entries can be reported over HTTP");
+          const r = inventory.setConsole(caller.tokenId, body.entry);
+          if (r === "invalid") throw new HubError("invalid_request", "entry.machine is not a valid machine name");
+          if (r === "forbidden") throw new HubError("forbidden", "this console entry belongs to another token");
+          if (r === "full") throw new HubError("busy", "too many console entries");
+          return send(res, 200, { ok: true });
         }
         case "hubSettings": {
           deviceCaller(identity); // console / browser tokens only

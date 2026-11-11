@@ -51,6 +51,7 @@ import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffReques
 
 import * as R from "./registry.js";
 import { HubSettingsSchema } from "./hub-settings.js";
+import { InventoryEntrySchema, InventoryReportBodySchema } from "./inventory.js";
 import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
@@ -559,6 +560,10 @@ export const ROUTES = {
    * The hub's settings (read-only): `prompts` (every engine prompt hubd's KB sweep uses, `{id, group, label, text}`, raw text), `config`
    * (hubd's effective config; credentials come back as `{set: true}`, never the value) and `version`. Console/browser tokens only (a worker token gets 403).
    */
+  /** The pack inventory (work-wolfpack-ZproKxi): every reporting service with its version, channel and age. Console/browser tokens only. */
+  hubInventory: { scope: "hub", method: "GET", path: "/v1/inventory", response: { kind: "json", schema: z.object({ entries: z.array(InventoryEntrySchema.extend({ ageS: z.number() })), hubMachine: z.string() }) }, status: [200], error: err },
+  /** A console's heartbeat `{entry}` (kind console only, body <= 4 KB). The row is bound to the token that wrote it (403 for another token). */
+  hubInventoryReport: { scope: "hub", method: "POST", path: "/v1/inventory/report", body: InventoryReportBodySchema, response: { kind: "json", schema: z.object({ ok: z.literal(true) }) }, status: [200], error: err },
   hubSettings: { scope: "hub", method: "GET", path: "/v1/settings", response: { kind: "json", schema: HubSettingsSchema }, status: [200], error: err },
   /**
    * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker

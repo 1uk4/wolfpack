@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
+import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { HealthBody } from "./health.js";
 
@@ -82,6 +83,36 @@ export function stampedVersion(stamps: URL[], pkg: URL): string | undefined {
   }
   const v = packageVersion(pkg);
   return v ? `${v}-dev` : undefined;
+}
+
+export const DEFAULT_SUBSCRIPTION_FILE = "/var/lib/wolfpack-subscription/subscription.json";
+
+/**
+ * The subscription file this machine's updater reads: `WOLFPACK_SUBSCRIPTION_FILE` if set, else ~/.wolfpack/release-channel.json on a Mac
+ * (scripts/auto-update-mac.mjs), else the sfo-01 path. Platform and home are injectable for tests.
+ */
+export function subscriptionFile(env: Record<string, string | undefined> = process.env, platform: string = process.platform, home: string = homedir()): string {
+  return env.WOLFPACK_SUBSCRIPTION_FILE?.trim() || (platform === "darwin" ? join(home, ".wolfpack", "release-channel.json") : DEFAULT_SUBSCRIPTION_FILE);
+}
+
+/**
+ * The release channel this machine follows, from the subscription file the updater reads (`WOLFPACK_SUBSCRIPTION_FILE`, else the sfo-01 path,
+ * else ~/.wolfpack/release-channel.json on a Mac). No file at all: "stable". A file that exists but cannot be read or parsed: undefined.
+ */
+export function readMachineChannel(env: Record<string, string | undefined> = process.env): "stable" | "main" | undefined {
+  const file = subscriptionFile(env);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? "stable" : undefined;
+  }
+  try {
+    const c = (JSON.parse(text) as { channel?: unknown } | null)?.channel;
+    return c === "main" ? "main" : "stable";
+  } catch {
+    return undefined;
+  }
 }
 
 /** `version` from the package.json at `url` (e.g. `new URL("../package.json", import.meta.url)`); undefined when unreadable. */

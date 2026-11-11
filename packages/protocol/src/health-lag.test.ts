@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { machineName, normaliseMachine, stampedVersion } from "./health-lag.js";
+import { machineName, normaliseMachine, stampedVersion, subscriptionFile } from "./health-lag.js";
+
+describe("subscriptionFile", () => {
+  it("WOLFPACK_SUBSCRIPTION_FILE wins; a Mac uses ~/.wolfpack/release-channel.json; other hosts use the sfo-01 path", () => {
+    expect(subscriptionFile({ WOLFPACK_SUBSCRIPTION_FILE: " /x/s.json " }, "darwin", "/Users/me")).toBe("/x/s.json");
+    expect(subscriptionFile({}, "darwin", "/Users/me")).toBe("/Users/me/.wolfpack/release-channel.json");
+    expect(subscriptionFile({}, "linux", "/home/me")).toBe("/var/lib/wolfpack-subscription/subscription.json");
+  });
+});
 
 describe("normaliseMachine", () => {
   it("lowercases, trims and keeps the first dot-label; rejects anything that is not a hostname label", () => {

@@ -1,8 +1,8 @@
 import type { ComponentType } from "react";
 import type { CardAnswers, CardClosed, Card } from "@wolfpack/client";
 import type { ArtifactPartProps, QuestionAnswerData } from "@/src/core";
-import { AnsweredCard } from "@/components/answered-card";
-import { AskCard } from "@/components/ask-card";
+import { AnsweredCard } from "@/components/ask/answered-card";
+import { AskCard } from "@/components/ask/ask-card";
 import { ToolCallCard } from "@/components/artifacts/tool-call-card";
 import { DecisionCard } from "@/components/decision-card";
 import { ChecklistCard } from "@/components/checklist-card";

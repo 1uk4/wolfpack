@@ -30,8 +30,8 @@ Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {}
 
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
-const { AttachedThreadProvider } = await import("../components/attached-thread.tsx");
-const { ChatBar } = await import("../components/chat-bar.tsx");
+const { AttachedThreadProvider } = await import("../components/chat-bar/attached-thread.tsx");
+const { ChatBar } = await import("../components/chat-bar/chat-bar.tsx");
 const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/chat-bar.ts");
 // The extras (cards, peek, badge, switcher) are off in the shipped floating chat; this file covers their kept code, so it switches them on.
 Object.assign(BAR_EXTRAS, { cards: true, peek: true, badge: true, switcher: true });
@@ -660,9 +660,9 @@ describe("architecture", () => {
 				if (dep) walk(dep);
 			}
 		};
-		walk(resolve(root, "components/chat-bar.tsx"));
+		walk(resolve(root, "components/chat-bar/chat-bar.tsx"));
 		const names = [...seen].map((f) => f.slice(root.length + 1));
-		assert.ok(names.includes("components/chat-bar-composer.tsx") && names.includes("components/bar-card-surface.tsx"), "the walk reaches the lazy halves");
+		assert.ok(names.includes("components/chat-bar/chat-bar-composer.tsx") && names.includes("components/chat-bar/bar-card-surface.tsx"), "the walk reaches the lazy halves");
 		const bad = names.filter((n) => /(^|\/)(session|session-core|use-chat-session)\.tsx?$/.test(n));
 		assert.deepEqual(bad, []);
 	});

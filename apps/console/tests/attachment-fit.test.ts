@@ -5,8 +5,8 @@ import { ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol/attachments";
 import { GET as limitRoute } from "../app/api/attachment-limit/route.ts";
 import { attachmentLimit, RELAY_ATTACHMENT_BYTES } from "../src/server/attachment-limit.ts";
 import { isRelayMode } from "../src/server/relay-mode.ts";
-import { chipFor, fetchAttachmentLimit, fitFailureMessage, FALLBACK_LIMIT, friendlyUploadError, precheckFile, tooLargeMessage } from "../components/attachments.ts";
-import { fitImage, fitImageWithTimeout, planSteps, scaledSize, type FitDeps, type FitResult } from "../components/image-fit.ts";
+import { chipFor, fetchAttachmentLimit, fitFailureMessage, FALLBACK_LIMIT, friendlyUploadError, precheckFile, tooLargeMessage } from "../components/composer/attachments.ts";
+import { fitImage, fitImageWithTimeout, planSteps, scaledSize, type FitDeps, type FitResult } from "../components/composer/image-fit.ts";
 
 const MB = 1024 * 1024;
 const big = (n: number, type = "image/jpeg", name = "IMG_1.HEIC.jpeg") => new File([new Uint8Array(n)], name, { type });

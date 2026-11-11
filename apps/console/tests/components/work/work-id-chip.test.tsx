@@ -27,7 +27,7 @@ Object.assign(globalThis, {
 
 const { MessageResponse } = await import("../../../components/ai-elements/message.tsx");
 const { WorkIdChip, WorkItemCard, lookupWorkItem, resetWorkLookupCache, criteriaExcerpt } = await import("../../../components/work/work-id-chip.tsx");
-const { AskCard } = await import("../../../components/ask-card.tsx");
+const { AskCard } = await import("../../../components/ask/ask-card.tsx");
 const { linkifyWorkIds, workIdFromHref } = await import("../../../src/core/index.ts");
 const { KbMarkdown } = await import("../../../components/kb/kb-markdown.tsx");
 type Card = import("@wolfpack/client").Card;

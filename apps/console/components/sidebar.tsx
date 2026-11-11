@@ -10,7 +10,7 @@ import { UpdateNotice } from "@/components/update-notice";
 import { PackHealthBar, PackHealthHost } from "@/components/pack/pack-health";
 import { WolfpackMark } from "@/components/wolfpack-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
-import { ChatBar } from "@/components/chat-bar";
+import { ChatBar } from "@/components/chat-bar/chat-bar";
 import { WorkReaderHost } from "@/components/work/work-reader";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { shouldOpenInReader, useOpenWorkItem } from "@/components/work/work-reader-nav";

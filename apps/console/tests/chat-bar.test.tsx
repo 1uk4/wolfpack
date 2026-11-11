@@ -29,8 +29,8 @@ const { ServerEventsProvider } = await import("../components/server-events.tsx")
 const { KeyboardShortcuts } = await import("../components/keyboard-shortcuts.tsx");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
-const { AttachedThreadProvider, useAttachedThread } = await import("../components/attached-thread.tsx");
-const { ChatBar, submitToThread } = await import("../components/chat-bar.tsx");
+const { AttachedThreadProvider, useAttachedThread } = await import("../components/chat-bar/attached-thread.tsx");
+const { ChatBar, submitToThread } = await import("../components/chat-bar/chat-bar.tsx");
 const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/chat-bar.ts");
 
 type Call = { url: string; body?: any };

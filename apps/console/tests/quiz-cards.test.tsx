@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { lookupCard, lookupInteractionCard } from "../components/card-registry.tsx";
-import { AskCard } from "../components/ask-card.tsx";
+import { AskCard } from "../components/ask/ask-card.tsx";
 import { buildAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 
 type Card = import("@wolfpack/client").Card;

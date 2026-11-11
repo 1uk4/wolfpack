@@ -9,7 +9,7 @@ import { GraduateToasts } from "@/components/kb/graduate-dialog";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
-import { AttachedThreadProvider } from "@/components/attached-thread";
+import { AttachedThreadProvider } from "@/components/chat-bar/attached-thread";
 import { NavTracker } from "@/components/nav-tracker";
 import HubAuth from "@/components/hub-auth";
 import UpdateBanner from "@/components/update-banner";

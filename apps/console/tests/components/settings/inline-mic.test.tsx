@@ -25,8 +25,8 @@ Object.assign(globalThis, {
 });
 
 const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
-const { AskCard } = await import("../../../components/ask-card.tsx");
-const { useDictation, joinDictation, useFieldMic, InlineMic } = await import("../../../components/dictation.tsx");
+const { AskCard } = await import("../../../components/ask/ask-card.tsx");
+const { useDictation, joinDictation, useFieldMic, InlineMic } = await import("../../../components/composer/dictation.tsx");
 
 /** A prose field with an inline dictation mic: the host for the mic claim tests (the prompt-override editor that used to host them is gone). */
 function OverrideTextarea({ value, onChange, onAppend, micKey }: { value: string; onChange: (v: string) => void; onAppend: (t: string) => void; micKey: string }) {

@@ -28,8 +28,8 @@ Object.assign(globalThis, {
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
 const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
-const { AskCard } = await import("../../../components/ask-card.tsx");
-const { useDictation, InlineMic } = await import("../../../components/dictation.tsx");
+const { AskCard } = await import("../../../components/ask/ask-card.tsx");
+const { useDictation, InlineMic } = await import("../../../components/composer/dictation.tsx");
 
 const CARD = {
 	tool: "ask_user_question",

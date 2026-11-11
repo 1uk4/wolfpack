@@ -1,5 +1,5 @@
 import type { ThreadEvent } from "@wolfpack/client";
-import { withHistoryAttachments } from "@/components/attachments";
+import { withHistoryAttachments } from "@/components/composer/attachments";
 import { ThreadEventAdapter, threadMessagesToNative } from "@/src/core";
 import type { SessionTransport } from "@/components/session-core";
 

@@ -35,7 +35,7 @@ import {
 	kbdEventForAction,
 	KEYBOARD_ACTIONS,
 } from "@/src/core";
-import { isDictationActive } from "@/components/dictation";
+import { isDictationActive } from "@/components/composer/dictation";
 import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 
 // Re-exported for the contract pin (tests/keyboard-toggle-sidebar.test.ts):

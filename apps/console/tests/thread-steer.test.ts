@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SessionModel } from "../components/session-core.ts";
 import { threadTransport } from "../components/thread-transport.ts";
-import { enterAction } from "../components/composer.tsx";
+import { enterAction } from "../components/composer/composer.tsx";
 
 describe("thread steer", () => {
 	it("enterAction while busy with text sends (steer), empty stops", () => {

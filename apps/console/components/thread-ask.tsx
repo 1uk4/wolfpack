@@ -10,14 +10,14 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import { useBarCards } from "@/components/chat-bar-cards";
-import { useWide } from "@/components/chat-bar";
-import { askQueue, useAskQueue, useAskSession, type AskSession, type NoteState } from "@/components/ask-session";
-import type { Answering } from "@/components/ask-sheet";
-import type { Dictation } from "@/components/dictation";
+import { useBarCards } from "@/components/chat-bar/chat-bar-cards";
+import { useWide } from "@/components/chat-bar/chat-bar";
+import { askQueue, useAskQueue, useAskSession, type AskSession, type NoteState } from "@/components/ask/ask-session";
+import type { Answering } from "@/components/ask/ask-sheet";
+import type { Dictation } from "@/components/composer/dictation";
 import { BAR_EXTRAS, type AttachedRef } from "@/src/core";
 
-const AskSheet = dynamic(() => import("@/components/ask-sheet").then((m) => m.AskSheet), { ssr: false });
+const AskSheet = dynamic(() => import("@/components/ask/ask-sheet").then((m) => m.AskSheet), { ssr: false });
 
 export interface OwnAsk {
 	/** The sheet (or, on a phone with the sheet put away, the strip that reopens it); null with no pending paged card. */

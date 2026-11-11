@@ -45,8 +45,8 @@ function RouterGrab() {
 	return null;
 }
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
-const { AttachedThreadProvider } = await import("../components/attached-thread.tsx");
-const { ChatBar } = await import("../components/chat-bar.tsx");
+const { AttachedThreadProvider } = await import("../components/chat-bar/attached-thread.tsx");
+const { ChatBar } = await import("../components/chat-bar/chat-bar.tsx");
 const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 

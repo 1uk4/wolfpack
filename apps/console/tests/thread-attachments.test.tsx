@@ -11,8 +11,8 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ATTACHMENT_MAX_BYTES, FIXTURE_THREAD, MockConsoleClient } from "@wolfpack/client";
 import { createThreadApi } from "../src/server/thread-api.ts";
-import { canSendWith, pastedImages, readyRefs, uploadFile, type PendingAttachment } from "../components/attachments.ts";
-import { AttachmentChips } from "../components/composer.tsx";
+import { canSendWith, pastedImages, readyRefs, uploadFile, type PendingAttachment } from "../components/composer/attachments.ts";
+import { AttachmentChips } from "../components/composer/composer.tsx";
 import { threadTransport } from "../components/thread-transport.ts";
 import { threadFetch } from "./helpers/thread-fetch.ts";
 

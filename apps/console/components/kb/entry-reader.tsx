@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRightIcon } from "lucide-react";
-import { isDictationActive } from "@/components/dictation";
+import { isDictationActive } from "@/components/composer/dictation";
 import { hasInAppHistory } from "@/components/nav-tracker";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb/kb-client";

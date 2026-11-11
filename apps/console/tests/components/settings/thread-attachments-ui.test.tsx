@@ -32,13 +32,13 @@ const { AppRouterContext } = await import("next/dist/shared/lib/app-router-conte
 const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
 const { ThreadChat } = await import("../../../components/thread-chat.tsx");
-const { AttachmentChips, Composer } = await import("../../../components/composer.tsx");
+const { AttachmentChips, Composer } = await import("../../../components/composer/composer.tsx");
 const { SessionModel } = await import("../../../components/session-core.ts");
 const { threadTransport } = await import("../../../components/thread-transport.ts");
 const { threadMessagesToNative } = await import("../../../src/core/index.ts");
 const { createThreadApi } = await import("../../../src/server/thread-api.ts");
 const { threadFetch } = await import("../../helpers/thread-fetch.ts");
-const A = await import("../../../components/attachments.ts");
+const A = await import("../../../components/composer/attachments.ts");
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const png = (name = "a.png") => new File([PNG], name, { type: "image/png" });

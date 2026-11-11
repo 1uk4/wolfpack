@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BotIcon, MicIcon, SquareIcon } from "lucide-react";
-import { LiveMeter } from "@/components/dictation";
-import type { AttachedRow } from "@/components/attached-strip-row";
+import { LiveMeter } from "@/components/composer/dictation";
+import type { AttachedRow } from "@/components/chat-bar/attached-strip-row";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useSubagentModal } from "@/components/subagent-modal";

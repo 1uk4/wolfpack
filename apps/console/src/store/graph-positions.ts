@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { POSITIONS_FILE } from "../../config.ts";
-import { sanitizePositions, type PositionMap } from "../core/graph-persistence.ts";
+import { sanitizePositions, type PositionMap } from "../core/graph/graph-persistence.ts";
 
 /** The stored positions; empty when absent or unreadable. */
 export function readGraphPositions(): PositionMap {

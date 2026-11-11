@@ -15,7 +15,7 @@
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
 export * from "./contracts.ts";
 export * from "./ports.ts";
-export * from "./render-settings.ts";
+export * from "./graph/render-settings.ts";
 export * from "./mobile-layout.ts";
 
 export * from "./question-core.ts";
@@ -23,8 +23,8 @@ export * from "./question-core.ts";
 // for every layer; the browser shell consumes the types + the runtime names
 // through this barrel (shell law: pure core via @/src/core only).
 export * from "./events.ts";
-export * from "./layout.ts";
-export * from "./route-layout.ts";
+export * from "./graph/layout.ts";
+export * from "./graph/route-layout.ts";
 export * from "./pending.ts";
 export * from "./math-delims.ts";
 export * from "./escape-html.ts";
@@ -66,17 +66,17 @@ export * from "./reply-notify.ts";
 
 // chat-bar.ts: the floating chat bar's attached-thread model + switcher list. Pure.
 export * from "./chat-bar.ts";
-export * from "./graph-layout.ts";
+export * from "./graph/graph-layout.ts";
 export * from "./thread-cards.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
-export * from "./graph-activity.ts";
+export * from "./graph/graph-activity.ts";
 // The KB graph (graph home): the librarian's graph payload → canvas data,
 // domain colours, node styles, cards; and the console's own persistence
 // rules (positions, camera). Pure, browser-safe.
-export * from "./kb-graph-model.ts";
-export * from "./graph-persistence.ts";
-export * from "./graph-pane.ts";
+export * from "./graph/kb-graph-model.ts";
+export * from "./graph/graph-persistence.ts";
+export * from "./graph/graph-pane.ts";
 export * from "./kb-activity-model.ts";
 export * from "./entry-view.ts";
 export * from "./work-view.ts";
@@ -93,7 +93,7 @@ export * from "./work-table.ts";
 export * from "./graduate.ts";
 export * from "./work-select.ts";
 export * from "./work-connectors.ts";
-export * from "./branch-graph.ts";
-export { graphKey, newestRequest } from "./graph-fetch.ts";
+export * from "./graph/branch-graph.ts";
+export { graphKey, newestRequest } from "./graph/graph-fetch.ts";
 export * from "./work-id-link.ts";
 export * from "./wolf-settings-form.ts";

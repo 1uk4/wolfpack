@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent 
 import { CheckIcon, FocusIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { GraphData, GraphNodeStatus } from "@wolfpack/protocol/objects";
-import { CLICK_SLOP } from "@/components/graph-canvas";
+import { CLICK_SLOP } from "@/components/graph/graph-canvas";
 import { layoutGraph } from "@/src/core";
 import { fitFloorView, zoomedGraphView } from "@/components/pan-zoom";
 

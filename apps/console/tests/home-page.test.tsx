@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WolfHomeView } from "../components/wolf-home.tsx";
 import GraphPage from "../app/graph/page.tsx";
-import { GraphHome } from "../components/graph-home.tsx";
+import { GraphHome } from "../components/graph/graph-home.tsx";
 
 const read = (f: string) => readFileSync(new URL(f, import.meta.url), "utf8");
 

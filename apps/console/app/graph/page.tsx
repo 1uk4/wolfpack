@@ -1,4 +1,4 @@
-import { GraphHome } from "@/components/graph-home";
+import { GraphHome } from "@/components/graph/graph-home";
 
 export const dynamic = "force-dynamic"; // like the other data pages: the production build refuses unexpected prerendered routes
 

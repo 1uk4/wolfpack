@@ -7,7 +7,7 @@
  */
 
 import { fuzzyScore } from "./fuzzy.ts";
-import { stageLabel } from "./kb-graph-model.ts";
+import { stageLabel } from "./graph/kb-graph-model.ts";
 import { graduateState, NO_GRADUATE, type GraduateState } from "./graduate.ts";
 import type { WorkListItem } from "./kb.ts";
 

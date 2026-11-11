@@ -1,7 +1,7 @@
 /** Read-only git for the popover's overview: ref discovery, one bounded first-parent log and a few cheap counts per child branch. */
 import { execFile } from "node:child_process";
 import { dirname, sep } from "node:path";
-import { branchShortId, createdAt, EMPTY_OVERVIEW, groupRuns, isVersionTag, landingsFrom, parseReflog, type GitOverview, type Landing, type OverviewBranch, type PrMerge, type RawCommit, type ReleaseTag, type Span } from "../core/branch-graph.ts";
+import { branchShortId, createdAt, EMPTY_OVERVIEW, groupRuns, isVersionTag, landingsFrom, parseReflog, type GitOverview, type Landing, type OverviewBranch, type PrMerge, type RawCommit, type ReleaseTag, type Span } from "../core/graph/branch-graph.ts";
 
 export type GitRunner = (cwd: string, args: string[]) => Promise<string>;
 

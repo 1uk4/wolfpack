@@ -38,7 +38,7 @@ const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../component
 const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../components/work-reader-nav.ts");
 const { WorkReaderHost } = await import("../components/work-reader.tsx");
 const { PlanGraphCard } = await import("../components/plan-graph-card.tsx");
-const { nodeClickAction } = await import("../components/graph-view.tsx");
+const { nodeClickAction } = await import("../components/graph/graph-view.tsx");
 const { NavTracker, hasInAppHistory } = await import("../components/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../components/work-nav-link.tsx");
 const { WorkItemView } = await import("../components/work-item-page.tsx");
@@ -353,7 +353,7 @@ describe("Esc and dialogs above the reader", () => {
 
 describe("decoupling", () => {
 	it("the graph knows nothing of the Work list", () => {
-		const g = src("../components/graph-view.tsx");
+		const g = src("../components/graph/graph-view.tsx");
 		for (const bad of ["useWorkView", "WorkButton", "publishPane", "publishRoute", "yieldEsc", "colWidth", "splitWidth", "workSel"]) assert.ok(!g.includes(bad), bad);
 		const entry = src("../components/entry-reader.tsx");
 		assert.ok(!entry.includes("useWorkView") && !entry.includes("left:"));
@@ -371,7 +371,7 @@ describe("a graph node click: the reader only", () => {
 		assert.deepEqual(nodeClickAction("fac:d"), { kind: "select" });
 	});
 	it("the click handler neither expands collapsed features nor selects for a work node; no double-click overlay competes", () => {
-		const g = src("../components/graph-view.tsx");
+		const g = src("../components/graph/graph-view.tsx");
 		const handler = g.slice(g.indexOf("onSelect: (nodeId)"), g.indexOf("onStageClick"));
 		assert.match(handler, /openWorkRef\.current\(act\.id\)/);
 		assert.ok(!/setExpanded|expanded/.test(g), "the expand-in-place state is gone");

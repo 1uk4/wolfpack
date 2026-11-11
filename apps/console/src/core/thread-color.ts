@@ -5,7 +5,7 @@
  * color, so the home thread's subagents follow it. Feature threads keep their automatic colors.
  */
 import { THREAD_COLORS, THREAD_COLOR_KEYS, type ThreadColor } from "@wolfpack/protocol";
-import { hashString } from "./kb-graph-model.ts";
+import { hashString } from "./graph/kb-graph-model.ts";
 
 export { THREAD_COLORS, THREAD_COLOR_KEYS };
 export type { ThreadColor };

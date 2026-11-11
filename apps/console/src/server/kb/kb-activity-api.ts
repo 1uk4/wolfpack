@@ -5,8 +5,8 @@
  */
 
 import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
-import { getConsoleClient } from "../console-client.ts";
-import type { ClientSource } from "../thread-api.ts";
+import { getConsoleClient } from "../thread/console-client.ts";
+import type { ClientSource } from "../thread/thread-api.ts";
 
 const STATUS_BY_CODE: Record<string, number> = {
 	busy: 409,

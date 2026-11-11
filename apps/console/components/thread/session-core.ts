@@ -1,0 +1,796 @@
+/**
+ * THE SESSION MODEL (Wave D): the chat session's state machine, extracted
+ * PURE — no React, one injectable fetch — so the attach/replay/settle/
+ * error/abort paths are testable in the repo's node:test world. The React
+ * hook (components/session.ts) is a thin adapter: it re-renders on change
+ * and projects the view (core/view.ts).
+ *
+ * ONE VIEW PROTOCOL: every turn is a server-side background process (owner
+ * ruling 2026-09-25); this model is a view. Sends POST one explicit input
+ * event ({chatId, input}); the response and the reattach stream
+ * (the thread stream) are the SAME verbatim AgentEvent SSE,
+ * applied by the same function. Status vocabulary (pre-Wave-D parity):
+ * ready | submitted | streaming | error.
+ */
+
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import {
+	needsContinuation,
+	newAnswerResult,
+	newUserMessage,
+	type UiAttachment,
+	projectView,
+	type ChatInput,
+	type LhMarkerMessage,
+	type LhMessage,
+	type LhViewMessage,
+	type LiveExecution,
+	type QuestionAnswerData,
+} from "../../src/core";
+
+export type SessionStatus = "ready" | "submitted" | "streaming" | "error";
+
+/**
+ * THE WIRE SEAM: where a session's turn traffic goes and how its events are
+ * read. A thread session (ConsoleClient-backed) supplies its routes and a `createWire`
+ * that maps each raw SSE payload to AgentEvent-shaped events (fresh per
+ * consume: the adapter is stateful).
+ */
+export interface SessionTransport {
+	submitUrl: string;
+	submitBody(input: ChatInput, opts?: { whenBusy?: "steer" }): string;
+	recordUrl: string;
+	/** Paged transcript fetch: the `limit` messages before message id `before` (absent: transport does not page). */
+	/** Raw JSON of a loaded older page (side data such as card calls). */
+	onPage?: (json: unknown) => void;
+	pageUrl?: (before: string, limit: number) => string;
+	/** Raw record JSON → native messages (null: shape not recognized). */
+	parseRecord(json: unknown): LhMessage[] | null;
+	/** The record says no turn is running: it already holds everything a replay would add (a late attach to a finished turn). */
+	recordIdle?(json: unknown): boolean;
+	streamUrl: string;
+	/** Attachment upload route (POST raw bytes); absent: this transport takes no attachments. */
+	uploadUrl?: string;
+	/** URL of an uploaded attachment's bytes (thumbnails); absent: no attachments. */
+	attachmentUrl?: (id: string) => string;
+	/** Abort route (POST); absent: the legacy global abort is the caller's. */
+	abortUrl?: string;
+	createWire(): (raw: Record<string, unknown>) => Record<string, unknown>[];
+}
+
+/** The sync response's own `hasMore` (a paged thread record), when it carries one. */
+function hasMoreOf(json: unknown): boolean | undefined {
+	const v = (json as { hasMore?: unknown } | null)?.hasMore;
+	return typeof v === "boolean" ? v : undefined;
+}
+
+export interface SessionModelDeps {
+	/** Injectable fetch (tests); defaults to the global. */
+	fetch?: typeof globalThis.fetch;
+	/** Where the turn traffic goes (the wolf thread routes). */
+	transport: SessionTransport;
+}
+
+/** One attachment on a text input: the wire ref is the id; the rest feeds the optimistic bubble. */
+export type ChatAttachment = UiAttachment;
+
+/** A local optimistic id (never a server stamp — absorption and the
+ *  settle swap both key on this prefix). */
+let localSeq = 0;
+function localId(): string {
+	return `c_${Date.now().toString(36)}_${(localSeq++).toString(36)}`;
+}
+
+/** One wire event off the SSE body: parsed JSON, or the [DONE] terminal. */
+async function* sseEvents(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
+	const decoder = new TextDecoder();
+	let buf = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) return;
+		buf += decoder.decode(value, { stream: true });
+		for (;;) {
+			const end = buf.indexOf("\n\n");
+			if (end === -1) break;
+			const event = buf.slice(0, end);
+			buf = buf.slice(end + 2);
+			const dataLine = event.split("\n").find((l) => l.startsWith("data: "));
+			if (!dataLine) continue;
+			const data = dataLine.slice("data: ".length);
+			if (data === "[DONE]") return;
+			yield JSON.parse(data) as Record<string, unknown>;
+		}
+	}
+}
+
+/** The dangling question call's tool name (the optimistic answer result's
+ *  toolName — the server stamps the same from its own record scan). */
+export function pendingCallTool(messages: readonly LhMessage[], toolCallId: string): string | null {
+	for (const m of messages) {
+		if ((m as { role?: string }).role !== "assistant") continue;
+		const content = (m as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content as Array<{ type?: string; id?: string; name?: string }>) {
+			if (block.type === "toolCall" && block.id === toolCallId) return block.name ?? null;
+		}
+	}
+	return null;
+}
+
+/**
+ * Has the record ABSORBED this optimistic tail entry? The write-ahead
+ * persists content-identical copies with server-stamped ids — match on the
+ * content, not the (local) id; only `c_`-prefixed local entries are ever
+ * absorbed (live turn content is never dropped).
+ */
+export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
+	if (typeof m.id !== "string" || !m.id.startsWith("c_")) return false;
+	const role = (m as { role?: string }).role;
+	if (role === "user") {
+		const content = (m as { content?: unknown }).content;
+		return record.some(
+			(r) => (r as { role?: string }).role === "user" && (r as { content?: unknown }).content === content,
+		);
+	}
+	if (role === "toolResult") {
+		const toolCallId = (m as ToolResultMessage).toolCallId;
+		return record.some(
+			(r) =>
+				(r as { role?: string }).role === "toolResult" &&
+				(r as ToolResultMessage).toolCallId === toolCallId,
+		);
+	}
+	if (role === "custom") {
+		// Markers: TOTAL over roles by identity key — a marker is itself
+		// when its customType AND structured details match; types that never
+		// appear optimistically simply never reach here.
+		const marker = m as LhMarkerMessage;
+		return record.some(
+			(r) =>
+				(r as { role?: string }).role === "custom" &&
+				(r as LhMarkerMessage).customType === marker.customType &&
+				sameDetails((r as LhMarkerMessage).details, marker.details),
+		);
+	}
+	return false;
+}
+
+/** What a message says, ignoring ids, timestamps and thinking: the key a streamed copy shares with its record copy. */
+function echoKey(m: LhMessage): string | null {
+	const role = (m as { role?: string }).role;
+	if (role === "toolResult") return `r:${(m as ToolResultMessage).toolCallId}`;
+	if (role !== "assistant") return null;
+	const content = (m as { content?: unknown }).content;
+	if (!Array.isArray(content)) return null;
+	const parts = content.flatMap((b: { type?: string; text?: string; id?: string }) =>
+		b.type === "text" ? [`t:${b.text ?? ""}`] : b.type === "toolCall" ? [`c:${b.id ?? ""}`] : [],
+	);
+	return parts.length > 0 ? `a:${parts.join("\u0000")}` : null;
+}
+
+/**
+ * The live tail minus what the record already holds. The stream replays a whole turn from its first event with
+ * client-minted ids, so a turn that finished before the attach (or between the record fetch and the attach) arrives
+ * in BOTH the record and the tail: the record's copy wins. Only the leading run of the tail is compared, against the
+ * record's messages after its last user message; a user message in the tail (this client's own optimistic send) ends
+ * the run, so a genuinely new turn that repeats an earlier reply is never swallowed.
+ */
+export function withoutEchoes(base: readonly LhMessage[], tail: readonly LhMessage[]): LhMessage[] {
+	if (tail.length === 0 || base.length === 0) return tail as LhMessage[];
+	let from = base.length;
+	while (from > 0 && (base[from - 1] as { role?: string }).role !== "user") from--;
+	const pool = new Map<string, number>();
+	for (const m of base.slice(from)) {
+		const k = echoKey(m);
+		if (k !== null) pool.set(k, (pool.get(k) ?? 0) + 1);
+	}
+	if (pool.size === 0) return tail as LhMessage[];
+	const out: LhMessage[] = [];
+	let leading = true;
+	for (const m of tail) {
+		if ((m as { role?: string }).role === "user") leading = false;
+		const k = leading ? echoKey(m) : null;
+		const n = k === null ? 0 : (pool.get(k) ?? 0);
+		if (k !== null && n > 0) pool.set(k, n - 1);
+		else out.push(m);
+	}
+	return out;
+}
+
+/** Structural deep-equal for marker details (JSON-stable payloads — the
+ *  constructors mint plain data). */
+function sameDetails(a: unknown, b: unknown): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export interface SessionState {
+	messages: LhViewMessage[];
+	nativeMessages: LhMessage[];
+	status: SessionStatus;
+	/** Server start of the turn now running (ISO), when the server sent one; undefined while idle and for older servers. */
+	turnStartedAt: string | undefined;
+	error: { message: string } | null;
+	/** Transcript paging: older messages exist on the server beyond those loaded. */
+	hasMore: boolean;
+	/** An older page is being fetched. */
+	loadingEarlier: boolean;
+	/** How many earlier (paged-in) messages precede the record: grows only when a page prepends rows. */
+	earlierCount: number;
+}
+
+export interface SessionModelOptions extends SessionModelDeps {
+	chatId: string;
+	initialMessages: LhMessage[];
+	/** The seeded messages are only the newest page; older ones load through `loadEarlier`. */
+	initialHasMore?: boolean;
+	/** Fires on every state change (the hook re-renders). */
+	onChange?: () => void;
+	/** The reattach settled terminal (turn-settled): no turn running, the
+	 *  record is current — the caller refetches it. */
+	onReattachSettled?: () => void;
+}
+
+export class SessionModel {
+	readonly chatId: string;
+	readonly transport: SessionTransport;
+	/** Injectable fetch (tests); defaults to the global. */
+	fetch: typeof globalThis.fetch;
+	private onReattachSettled?: () => void;
+	/** The hook's re-render trigger (set by the adapter). */
+	onChange?: () => void;
+
+	// THE STATE: the record (server canon) + the live tail (this client's
+	// optimistic appends and the streaming turn's messages). The tail dies
+	// at every full sync; the write-ahead absorbs the optimistic entries.
+	private base: LhMessage[];
+	private tail: LhMessage[] = [];
+	/** Paged-in earlier messages, oldest first: everything before `base` that the record (a newest page) no longer holds. */
+	private older: LhMessage[] = [];
+	private hasMoreValue: boolean;
+	private loadingEarlierValue = false;
+	/** The view unmounted: late fetches must not touch state or notify. */
+	private disposed = false;
+
+	setDisposed(v: boolean): void {
+		this.disposed = v;
+	}
+	// The live turn's execution layer (view model mid-turn states):
+	private executions = new Map<string, LiveExecution>();
+	private streamingIds = new Set<string>();
+	/** The in-flight assistant message's client id (see applyWireEvent). */
+	private streamingMessageId: string | null = null;
+	private statusValue: SessionStatus = "ready";
+	/** The running turn's server start (ISO), from its agent_start / snapshot; cleared when the turn settles. */
+	private turnStartedAtValue: string | undefined;
+	private errorValue: { message: string } | null = null;
+	// The single live consume (POST response or reattach stream): a newer
+	// consume cancels the older — one reader at a time.
+	private consumeAbort: AbortController | null = null;
+	/** Synchronous ready check for the gate (send/read mount logic). */
+	readyRef = true;
+
+	constructor(opts: SessionModelOptions) {
+		this.chatId = opts.chatId;
+		this.transport = opts.transport;
+		this.base = opts.initialMessages;
+		this.hasMoreValue = opts.initialHasMore ?? false;
+		// BOUND: the browser's native fetch is a Window method — storing it
+		// unbound makes every call throw "Illegal invocation" in the browser
+		// (Node's undici doesn't care, so the tests never saw it). Always go
+		// through a receiver-preserving wrapper.
+		this.fetch = opts.fetch ?? ((...args) => globalThis.fetch(...args));
+		this.onChange = opts.onChange;
+		this.onReattachSettled = opts.onReattachSettled;
+	}
+
+	/** Injectable settle hook (the adapter wires its ref). */
+	setReattachSettled(fn: () => void): void {
+		this.onReattachSettled = fn;
+	}
+
+	getState(): SessionState {
+		const live =
+			this.statusValue === "submitted" || this.statusValue === "streaming"
+				? { executions: this.executions, inFlight: true, streamingIds: this.streamingIds }
+				: undefined;
+		const all = [...this.older, ...this.base, ...withoutEchoes(this.base, this.tail)];
+		return {
+			messages: projectView(all, live),
+			nativeMessages: all,
+			status: this.statusValue,
+			turnStartedAt: this.turnStartedAtValue,
+			error: this.errorValue,
+			hasMore: this.hasMoreValue,
+			earlierCount: this.older.length,
+			loadingEarlier: this.loadingEarlierValue,
+		};
+	}
+
+	/**
+	 * A fresh record (the newest page, or everything) becomes the base. Loaded messages the record no longer holds
+	 * (it is the newest page: it starts later than what the operator paged in) move to the earlier prefix, so a
+	 * settle sync never makes the history the operator scrolled into vanish.
+	 * GAP: when the record's first message is not among those loaded (a long reattach: more arrived than a page holds)
+	 * the loaded history no longer joins the record; the stale prefix is dropped and `hasMore` is true so Show earlier
+	 * refetches the missing stretch. `hasMore` comes from the sync response when it carries one; with a joined prefix the
+	 * prefix's own state (from its last page) stands.
+	 */
+	private swapBase(record: LhMessage[], hasMore?: boolean): void {
+		const idOf = (m: LhMessage) => (m as { id?: string }).id;
+		const ids = new Set(record.map(idOf));
+		const firstId = record[0] ? idOf(record[0]) : undefined;
+		const loaded = [...this.older, ...this.base];
+		const joined = firstId === undefined || loaded.length === 0 || loaded.some((m) => idOf(m) === firstId);
+		if (joined) {
+			this.older = loaded.filter((m) => !ids.has(idOf(m)));
+			if (this.older.length === 0 && hasMore !== undefined) this.hasMoreValue = hasMore;
+		} else {
+			this.older = [];
+			this.hasMoreValue = hasMore ?? true;
+		}
+		this.base = record;
+	}
+
+	/** Load the next older page; resolves to how many messages were added (0: nothing more / failed). */
+	async loadEarlier(limit = 50): Promise<number> {
+		const first = (this.older[0] ?? this.base[0]) as { id?: string } | undefined;
+		if (!this.hasMoreValue || this.loadingEarlierValue || !first?.id || !this.transport.pageUrl) return 0;
+		this.mutate(() => {
+			this.loadingEarlierValue = true;
+		});
+		let added = 0;
+		try {
+			const res = await this.fetch(this.transport.pageUrl(first.id, limit));
+			if (this.disposed) return 0;
+			if (res.ok) {
+				const json = await res.json();
+				if (this.disposed) return 0;
+				const page = this.transport.parseRecord(json);
+				if (page) {
+					const have = new Set([...this.older, ...this.base].map((m) => (m as { id?: string }).id));
+					const fresh = page.filter((m) => !have.has((m as { id?: string }).id));
+					added = fresh.length;
+					this.transport.onPage?.(json);
+					this.mutate(() => {
+						this.older = [...fresh, ...this.older];
+						this.hasMoreValue = (json as { hasMore?: unknown }).hasMore === true;
+					});
+				}
+			}
+		} catch {
+			/* the divider stays; the operator can retry */
+		} finally {
+			this.loadingEarlierValue = false;
+			if (!this.disposed) this.onChange?.();
+		}
+		return added;
+	}
+
+	get status(): SessionStatus {
+		return this.statusValue;
+	}
+
+	/** Mutate model state + notify (the hook re-renders). */
+	private mutate(fn: () => void): void {
+		fn();
+		this.onChange?.();
+	}
+
+	private setStatus(status: SessionStatus): void {
+		this.statusValue = status;
+		if (status === "ready" || status === "error") this.turnStartedAtValue = undefined; // the next turn brings its own
+		this.readyRef = status === "ready";
+		this.onChange?.();
+	}
+
+	private setError(message: string | null): void {
+		this.errorValue = message === null ? null : { message };
+		this.onChange?.();
+	}
+
+	/** The 409 identity-retry fetch (the Wave B contract): the event was
+	 *  never persisted (write-ahead happens only on acceptance), so the
+	 *  retry waits out the running turn and re-POSTs the SAME body. */
+	async postInputEvent(input: ChatInput, signal?: AbortSignal): Promise<Response> {
+		const body = this.transport.submitBody(input);
+		const init: RequestInit = {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body,
+			signal,
+		};
+		const response = await this.fetch(this.transport.submitUrl, init);
+		return response;
+	}
+
+	/**
+	 * ONE event application for both the POST stream and the reattach
+	 * replay (pi's events carry the FULL partial message — a view REPLACES,
+	 * never assembles deltas). Returns whether the event did VIEW WORK:
+	 * the consume flips submitted→streaming on the first ACTED event, not
+	 * the first wire byte — agent_start/turn_start release nothing, so
+	 * the Thinking… placeholder (gated on submitted) covers the whole
+	 * provider-connect gap (owner, optimistic round 3, 2026-10-02).
+	 */
+	applyWireEvent(event: Record<string, unknown>): boolean {
+		if (event.type === "error") {
+			// Loop-level failure (agent.continue threw outside the stream) —
+			// raw text (owner ruling, Wave D): the banner shows exactly this.
+			this.setError(String(event.errorText ?? "An error occurred."));
+			return false;
+		}
+		if ((event.type === "agent_start" || event.type === "turn_clock") && typeof event.turnStartedAt === "string" && this.turnStartedAtValue !== event.turnStartedAt) {
+			this.turnStartedAtValue = event.turnStartedAt;
+			this.onChange?.();
+		}
+		const agent = event as unknown as AgentEvent;
+		switch (agent.type) {
+			case "message_start":
+			case "message_update":
+			case "message_end": {
+				const message = agent.message as LhMessage & {
+					role?: string;
+					id?: string;
+				};
+				if ((message as { role?: string }).role !== "assistant") {
+					// Wave C: markers injected mid-run (pi's follow-up delivery)
+					// arrive as custom-role message_start/message_end events -
+					// UPSERT by id (markers always carry steer_<id> ids; id-less
+					// non-assistant events never occur - injected messages emit
+					// start+end only, no streaming partials). Without this the
+					// live stream dropped the marker until the settle sync.
+					const mid = message.id;
+					if (mid === undefined) return false;
+					this.mutate(() => {
+						const idx = this.tail.findIndex((m) => m.id === mid);
+						this.tail =
+							idx === -1 ? [...this.tail, message as LhMessage] : this.tail.with(idx, message as LhMessage);
+					});
+					return true;
+				}
+				// pi streams AssistantMessages with NO id — the id exists only
+				// once the server's persistTurn stamps the record (the live
+				// streaming bug, 2026-09-26: minting a fresh id per event made
+				// every message_update APPEND a full copy — a divider + thinking
+				// block per chunk, cleaned up only by the settle sync). The
+				// in-flight message is tracked by SLOT instead: message_start
+				// mints and remembers the id; updates and the end REPLACE that
+				// same tail entry. Exactly one assistant message streams at a
+				// time (pi's strict start → updates → end ordering per step; the
+				// reattach replay replays the same sequence), so the slot is
+				// unambiguous. An explicit message.id (if one ever appears on
+				// the wire) still wins.
+				const id = message.id ?? this.streamingMessageId ?? localId();
+				const withId = { ...message, id } as LhMessage;
+				if (agent.type === "message_start") {
+					this.streamingMessageId = id;
+					this.streamingIds.add(id);
+					this.mutate(() => {
+						this.tail = [...this.tail, withId];
+					});
+				} else {
+					this.mutate(() => {
+						const idx = this.tail.findIndex((m) => m.id === id);
+						this.tail = idx === -1 ? [...this.tail, withId] : this.tail.with(idx, withId);
+					});
+				}
+				if (agent.type === "message_end") {
+					this.streamingMessageId = null; // slot done — next start mints fresh
+					// (fallthrough: returns true below — the message landed)
+					const stop = (message as { stopReason?: string }).stopReason;
+					if (stop === "error") {
+						// Provider error, verbatim (owner ruling) — the record
+						// persists the same message; no masking anywhere.
+						this.setError(
+							String((message as { errorMessage?: string }).errorMessage ?? "An error occurred."),
+						);
+					}
+				}
+				return true; // a message event is view work, even empty content
+			}
+			case "tool_execution_end": {
+				// The execution layer: clean question placeholders are IGNORED
+				// downstream (view.ts fork 2); errors keep their validation text.
+				const result = agent.result as
+					| { content?: Array<{ type?: string; text?: string }>; details?: unknown }
+					| null;
+				const text = result?.content?.find((c) => c.type === "text")?.text ?? "The tool call failed.";
+				this.mutate(() => {
+					this.executions = new Map(this.executions).set(agent.toolCallId, {
+						isError: agent.isError,
+						output: result?.details,
+						errorText: text,
+					});
+				});
+				return true; // the execution layer updated the tool part's card
+			}
+			case "turn_end": {
+				// The results batch: append as native messages (client-stamped
+				// ids — the settle sync lands the server canon).
+				this.mutate(() => {
+					this.tail = [
+						...this.tail,
+						...(agent.toolResults as ToolResultMessage[]).map(
+							(r) => ({ ...r, id: localId() }) as unknown as LhMessage,
+						),
+					];
+				});
+				return true;
+			}
+			default:
+				return false; // agent_start/turn_start/tool_execution_start|update: no view work
+		}
+	}
+
+	/** Consume one SSE body to its [DONE] terminal. The turn-settled
+	 *  terminal (stream-route only) fires the settle hook and ends. */
+	async consumeStream(res: Response): Promise<void> {
+		if (!res.body) throw new Error("The turn stream body is empty.");
+		const reader = res.body.getReader();
+		let sawEvent = false;
+		const wire = this.transport.createWire();
+		try {
+			for await (const raw of sseEvents(reader)) {
+				if (raw.type === "turn-settled") {
+					// The raced-settle terminal: no turn to attach to — the
+					// record is current; the settle hook refetches.
+					await reader.cancel().catch(() => {});
+					this.onReattachSettled?.();
+					return;
+				}
+				for (const event of wire(raw)) {
+					const acted = this.applyWireEvent(event);
+					if (!sawEvent && acted) {
+						sawEvent = true;
+						if (this.statusValue !== "error") this.setStatus("streaming");
+					}
+				}
+			}
+		} finally {
+			this.streamingIds = new Set();
+			this.executions = new Map();
+			if (this.statusValue !== "error") this.setStatus("ready");
+		}
+	}
+
+	/**
+	 * Reattach (the wake/handoff/mount path): a server-side turn with no
+	 * live view of ours. ATTACH-FIRST (owner, reattach round 2026-10-02):
+	 * a fresh-mount reattach passes refetchRecordFirst=false — the page
+	 * render just read the record, so the blocking record round-trip only
+	 * added handshake latency before the instant replay; the running
+	 * turn's partial lives solely in the server event log, and the replay
+	 * rebuilds it regardless of the refetch. Mid-session callers (the
+	 * handoff watch) keep the default: their base may trail the record,
+	 * and the refetch absorbs it (write-ahead adoption) before the replay
+	 * lands on top. The stream then replays the turn from its first event
+	 * through the SAME consume path.
+	 */
+	async resumeStream(refetchRecordFirst = true, skipIfRecordIdle = false): Promise<void> {
+		this.consumeAbort?.abort();
+		const controller = new AbortController();
+		this.consumeAbort = controller;
+		// REPLAY ONTO A CLEAN SLATE (owner, optimistic round 3, 2026-10-02):
+		// the reattach stream replays the turn from its FIRST event — an
+		// aborted earlier attempt (React StrictMode's simulated remount)
+		// must not leave partials the replay would DOUBLE onto. The old
+		// record refetch provided this reset accidentally; attach-first
+		// made it explicit.
+		//
+		// THE FLICKER FIX (owner, 2026-10-10 — connection-diet B follow-up):
+		// on the REFETCH path the clear must NOT precede the fetch — send()
+		// just landed the optimistic answer/note cards in the tail, and any
+		// refetch latency (dev-compile stalls measured at 1.7s) re-showed
+		// the answered-away question for the whole window: card vanished,
+		// dock returned, both snapped back only when the record landed.
+		// The refetch block below swaps base+tail ATOMICALLY when the record
+		// arrives (and clears on failure — the clean-slate guard holds on
+		// every path that actually replays onto a stale tail).
+		if (!refetchRecordFirst) {
+			this.mutate(() => {
+				this.tail = [];
+				this.streamingMessageId = null;
+			});
+		}
+		this.setStatus("submitted");
+		try {
+			if (refetchRecordFirst) {
+				const recordRes = await this.fetch(this.transport.recordUrl, {
+					signal: controller.signal,
+				});
+				if (recordRes.ok) {
+					const json = await recordRes.json();
+					const record = this.transport.parseRecord(json);
+					if (record) {
+						this.mutate(() => {
+							this.swapBase(record, hasMoreOf(json));
+							this.tail = [];
+						});
+						// A turn that ended before we attached is already in the record: replaying it would double its messages.
+						if (skipIfRecordIdle && this.transport.recordIdle?.(json)) {
+							this.setStatus("ready");
+							return;
+						}
+					}
+				} else {
+					// The record did not land — restore the clean-slate guard
+					// before the replay (no atomic swap is coming).
+					this.mutate(() => {
+						this.tail = [];
+						this.streamingMessageId = null;
+					});
+				}
+			}
+			const res = await this.fetch(this.transport.streamUrl, {
+				signal: controller.signal,
+			});
+			if (!res.ok) throw new Error((await res.text()) || "Failed to attach to the running turn.");
+			await this.consumeStream(res);
+		} catch (err) {
+			if ((err as Error).name === "AbortError") return; // a newer consume won
+			this.setError((err as Error).message);
+			this.setStatus("error");
+		}
+	}
+
+	/**
+	 * SEND: one explicit input event. Optimistic appends first (the instant
+	 * answer/note UX — the server's write-ahead persists the canon), then
+	 * POST + consume. Ready-gated: one turn per client at a time (the
+	 * server's 409 + identity retry covers the wake-race window).
+	 */
+	async send(input: ChatInput): Promise<void> {
+		if (!this.readyRef) return;
+		this.consumeAbort?.abort();
+		const controller = new AbortController();
+		this.consumeAbort = controller;
+		this.setError(null);
+		this.setStatus("submitted");
+		// The optimistic appends — exactly the messages the server's
+		// write-ahead will persist (inputAppends), with LOCAL ids so
+		// adoption can tell them from the record's absorbed copies.
+		const optimistic: LhMessage[] = [];
+		if (input.type === "text") {
+			// Attachments ride the optimistic message so its bubble shows the thumbnails at once (the record's
+			// copy carries the same list; adoption matches on content only).
+			optimistic.push({ ...newUserMessage(input.text, input.attachments), id: localId() });
+		}
+		else if (input.type === "answer") {
+			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
+			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
+		}
+		if (optimistic.length > 0) this.mutate(() => {
+			this.tail = [...this.tail, ...optimistic];
+		});
+		try {
+			// SUBMITS ARE NOT ABORTABLE BY VIEW TEARDOWN (owner, 2026-10-10 —
+			// the dead-session-start postmortem): the POST must NOT ride
+			// consumeAbort. Diet A's abort-on-unmount (session.ts's stop())
+			// fires on React StrictMode's simulated remount in dev — it killed
+			// the ?prompt first send ~8ms in (POST aborted, never retried:
+			// the page's sentInitial guard had already flipped), leaving the
+			// session dead until a second message, which then persisted
+			// WITHOUT the first — the optimistic tail rode a record that never
+			// contained it. The POST is a ~100ms ack since Diet B; it cannot
+			// starve the connection pool, so it needs no teardown guard. The
+			// STREAM consume stays on the controller — releasing that held
+			// connection is Diet A's whole job.
+			const res = await this.postInputEvent(input);
+			if (res.status === 409) {
+				this.setError("A turn is already running — try again in a moment.");
+				this.setStatus("error");
+				return;
+			}
+			if (!res.ok) {
+				// Refusal envelopes (503 BYOK/key gates) and 400s: the RAW body
+				// text rides the error message — the banner shows it, and the
+				// page's refusal flow JSON-parses the envelope out of it.
+				throw new Error((await res.text()) || `The send failed (${res.status}).`);
+			}
+			// CONNECTION DIET B (owner, 2026-10-10 — parallel-session freeze
+			// postmortem): the POST acknowledges and closes; there is no stream
+			// on this response to consume. Attach through the SAME reattach wire
+			// a returning visitor uses (refetch-first: the record refetch absorbs
+			// the server's write-ahead copy of our optimistic messages, then the
+			// replay lands on top). One live view connection per page, always —
+			// the browser's 6-per-origin pool is the scarce resource.
+			await res.text().catch(() => {}); // drain the tiny ack; release the socket
+			// A stop() or a newer send/consume won while the ack was in
+			// flight: the turn is live server-side either way — do not attach
+			// a stream from a view that is gone or superseded.
+			if (this.consumeAbort !== controller) return;
+			await this.resumeStream(true);
+		} catch (err) {
+			if ((err as Error).name === "AbortError") return; // stop() or a newer consume won
+			this.setError((err as Error).message);
+			this.setStatus("error");
+		}
+	}
+
+	/** STEER: the learner's mid-turn message. The text is recorded in history inside the running turn,
+	 *  so echo it as a normal user message (local id; adoptRecord drops it
+	 *  once the record carries the server copy) and submit whenBusy "steer". */
+	async steer(text: string, attachments?: ChatAttachment[]): Promise<void> {
+		const t = text.trim();
+		if (!t && !attachments?.length) return;
+		const echo: LhMessage = { ...newUserMessage(t, attachments), id: localId() };
+		const dropEcho = () =>
+			this.mutate(() => {
+				this.tail = this.tail.filter((m) => m !== echo);
+			});
+		this.mutate(() => {
+			this.tail = [...this.tail, echo];
+		});
+		try {
+			const res = await this.fetch(this.transport.submitUrl, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: this.transport.submitBody({ type: "text", text: t, ...(attachments?.length ? { attachments } : {}) }, { whenBusy: "steer" }),
+			});
+			if (res.ok) {
+				await res.text().catch(() => {});
+				return;
+			}
+			dropEcho();
+			this.setError((await res.text()) || `The steer failed (${res.status}).`);
+		} catch (err) {
+			dropEcho();
+			this.setError((err as Error).message);
+		}
+	}
+
+	/** The answer path (the dock): the answer IS the question call's tool
+	 *  result (fork 1), riding as its input event. */
+	submitAnswer(tool: string, toolCallId: string, output: QuestionAnswerData): Promise<void> {
+		void tool;
+		return this.send({ type: "answer", toolCallId, answer: output });
+	}
+
+	/** Local detach: cancel the consume, keep the partial tail. The page's
+	 *  settle watch adopts the record when the server turn finishes. */
+	stop(): void {
+		this.consumeAbort?.abort();
+		this.consumeAbort = null;
+		this.streamingIds = new Set();
+		this.streamingMessageId = null;
+		this.executions = new Map();
+		this.setStatus("ready");
+	}
+
+	/** Full snapshot swap (the idle settle sync — server canon). */
+	setMessages(record: LhMessage[], hasMore?: boolean): void {
+		this.mutate(() => {
+			this.swapBase(record, hasMore);
+			this.tail = [];
+			this.streamingMessageId = null; // the tail (and its slot) is gone
+		});
+	}
+
+	/**
+	 * Append-only adoption (the mid-turn steer/artifact ground rule): swap
+	 * in the record — every current base message must still be present
+	 * (the server appends only) — keeping the live tail, minus the
+	 * optimistic entries the record has absorbed (their server-stamped
+	 * copies just landed; without this the input bubble would double).
+	 */
+	adoptRecord(record: LhMessage[], hasMore?: boolean): void {
+		const recordIds = new Set(record.map((m) => (m as { id?: string }).id));
+		// A paged record starts later than the base: only base messages from the record's first one on must still be in it.
+		const firstId = (record[0] as { id?: string } | undefined)?.id;
+		const from = Math.max(0, this.base.findIndex((m) => (m as { id?: string }).id === firstId));
+		const baseAbsorbed = this.base.slice(from).some((m) => !recordIds.has((m as { id?: string }).id));
+		if (baseAbsorbed) return; // not a pure append — the idle full sync is the net
+		this.mutate(() => {
+			this.swapBase(record, hasMore);
+			this.tail = this.tail.filter((m) => !absorbed(m, record));
+		});
+	}
+
+	/** The mount/sync continuation fold (native-messages.ts). */
+	static needsContinuation = needsContinuation;
+
+	clearError(): void {
+		this.setError(null);
+	}
+}

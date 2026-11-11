@@ -26,7 +26,7 @@ import {
 	type WolfLite,
 } from "@/src/core";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
-import { FEATURE_GRADUATED } from "@/components/thread-closed";
+import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 
 export interface AttachedThreadApi {
 	attached: AttachedRef | null;

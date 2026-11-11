@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ConfidenceRail } from "@/components/ask/confidence-rail";
 import { GlyphMark } from "@/components/ui/glyph-mark";
-import { ThinkingBlock } from "@/components/thinking-block";
+import { ThinkingBlock } from "@/components/thread/thinking-block";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";

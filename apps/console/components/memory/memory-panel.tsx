@@ -5,7 +5,7 @@ import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon 
 import { Button } from "@/components/ui/button";
 import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
 import { WorkIdChip } from "@/components/work/work-id-chip";
-import { ContextSection } from "@/components/context-section";
+import { ContextSection } from "@/components/thread/context-section";
 import { useMemoryEvents } from "@/components/memory/memory-events";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import {

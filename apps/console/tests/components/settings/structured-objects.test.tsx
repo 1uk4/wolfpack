@@ -34,15 +34,15 @@ Object.assign(globalThis, {
 
 const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
-const { ThreadChat } = await import("../../../components/thread-chat.tsx");
+const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
-const { lookupCard } = await import("../../../components/card-registry.tsx");
-const { DecisionCard } = await import("../../../components/decision-card.tsx");
-const { ChecklistCard } = await import("../../../components/checklist-card.tsx");
-const { PinnedChecklist } = await import("../../../components/pinned-checklist.tsx");
-const { resetDismissedCache, resetOpenPanels } = await import("../../../components/pin-store.ts");
-const { SessionModel } = await import("../../../components/session-core.ts");
-const { threadTransport } = await import("../../../components/thread-transport.ts");
+const { lookupCard } = await import("../../../components/thread/card-registry.tsx");
+const { DecisionCard } = await import("../../../components/thread/decision-card.tsx");
+const { ChecklistCard } = await import("../../../components/thread/checklist-card.tsx");
+const { PinnedChecklist } = await import("../../../components/thread/pinned-checklist.tsx");
+const { resetDismissedCache, resetOpenPanels } = await import("../../../components/thread/pin-store.ts");
+const { SessionModel } = await import("../../../components/thread/session-core.ts");
+const { threadTransport } = await import("../../../components/thread/thread-transport.ts");
 const { renderItems, threadMessagesToNative, collapseObjects, activeChecklist } = await import("../../../src/core/index.ts");
 
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });

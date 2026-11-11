@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import { LockIcon, PencilIcon } from "lucide-react";
 import type { GraphData } from "@wolfpack/protocol/objects";
 import { cn } from "@/lib/utils";
-import { PlanGraphView } from "@/components/plan-graph-view";
+import { PlanGraphView } from "@/components/thread/plan-graph-view";
 import { dependencyEdges, HOST_LABEL, type GraphNodeDef, type PromptGraph } from "../../src/core/settings/prompt-flows.ts";
 
 /** The marker as an icon (the words stay in the node's aria-label): a pen when it can be edited, a lock when read-only, nothing for a step with no prompt. */

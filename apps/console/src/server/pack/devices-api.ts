@@ -5,9 +5,9 @@
  */
 import type { ConsoleClient } from "@wolfpack/client";
 import { HUB_AUTH_HEADER } from "../../core/hub-auth.ts";
-import { getConsoleClient } from "../console-client.ts";
+import { getConsoleClient } from "../thread/console-client.ts";
 import { hubPublicUrl } from "./hub-public-url.ts";
-import type { ClientSource } from "../thread-api.ts";
+import type { ClientSource } from "../thread/thread-api.ts";
 
 const STATUS: Record<string, number> = { unauthorized: 401, forbidden: 403, not_found: 404, invalid_request: 400, busy: 409, conflict: 409 };
 

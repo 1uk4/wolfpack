@@ -1,0 +1,313 @@
+"use client";
+
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { CheckIcon, CopyIcon, GitBranchIcon, Loader2Icon } from "lucide-react";
+import { usePopoverDismiss } from "@/components/popover-dismiss";
+import { useOptionalServerEvent } from "@/components/server-events";
+import { threadBase } from "@/components/thread/thread-transport";
+import { CARD_FIT_W, FitSwimlanes, MomentList, ScrollEnd, Swimlanes, useRings } from "@/components/thread/branch-graph";
+import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import { graphKey, headerStatus, newestRequest, type GitOverview } from "@/src/core";
+import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
+
+/** The header's repo · base → branch label (a home thread has no base). */
+export function gitTreeLabel(ws: Pick<ThreadWorkspace, "repo" | "base" | "branch">): string {
+	return `${ws.repo} · ${ws.base ? `${ws.base} → ` : ""}${ws.branch}`;
+}
+
+/** Branch names longer than this get their middle elided (the full name stays in the title). */
+export const BRANCH_MAX_CHARS = 56;
+
+/** Elide the middle of a long name: `feat/abc…ents-x`. Short names pass through. */
+export function middleTruncate(name: string, max = BRANCH_MAX_CHARS): string {
+	if (name.length <= max) return name;
+	if (max < 2) return "…";
+	const keep = max - 1;
+	const head = Math.ceil(keep / 2);
+	return `${name.slice(0, head)}…${name.slice(name.length - (keep - head))}`;
+}
+
+/** Refresh at most once per this many ms while events keep coming (a trailing call always lands). */
+const REFRESH_GAP_MS = 1000;
+
+/**
+ * The thread's live git status, for the header: fetched on mount, on `refreshKey` (a turn ended), on a thread-updated
+ * of this thread or one of its subagents, and on window focus. Calls close together are coalesced.
+ */
+export function useWorkspaceStatus(wolf: string, slug: string, threadId: string, enabled: boolean, refreshKey?: unknown): WorkspaceStatus | undefined {
+	const [status, setStatus] = useState<WorkspaceStatus>();
+	const seq = useRef(0);
+	const last = useRef(0);
+	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const fetchNow = useCallback(async () => {
+		const n = ++seq.current;
+		last.current = Date.now();
+		try {
+			const res = await fetch(`${threadBase(wolf, slug)}/workspace`);
+			if (!res.ok || n !== seq.current) return;
+			setStatus((await res.json()) as WorkspaceStatus);
+		} catch {
+			/* the next trigger refetches */
+		}
+	}, [wolf, slug]);
+	const refresh = useCallback(() => {
+		if (!enabled || timer.current) return;
+		const wait = Math.max(0, last.current + REFRESH_GAP_MS - Date.now());
+		timer.current = setTimeout(() => {
+			timer.current = undefined;
+			void fetchNow();
+		}, wait);
+	}, [enabled, fetchNow]);
+	useEffect(() => {
+		refresh();
+	}, [refresh, refreshKey]);
+	useEffect(
+		() => () => {
+			if (timer.current) clearTimeout(timer.current);
+			timer.current = undefined;
+		},
+		[],
+	);
+	useEffect(() => {
+		if (!enabled) return;
+		window.addEventListener("focus", refresh);
+		return () => window.removeEventListener("focus", refresh);
+	}, [enabled, refresh]);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf === wolf && (p.thread.id === threadId || p.thread.parentThreadId === threadId)) refresh();
+	});
+	return status;
+}
+
+type GraphState = "loading" | "ready" | "error";
+
+/**
+ * The branch graph for the popover: fetched while it is open and again when the git state (`graphKey`) changes, not on
+ * every status refresh. The last good graph stays while a refetch runs; only a superseded response is dropped.
+ */
+function useBranchGraph(wolf: string, slug: string, enabled: boolean, key: string): { graph: GitOverview | undefined; state: GraphState } {
+	const [graph, setGraph] = useState<GitOverview>();
+	const [state, setState] = useState<GraphState>("loading");
+	const ticket = useRef(newestRequest());
+	useEffect(() => {
+		if (!enabled) return;
+		const current = ticket.current();
+		void (async () => {
+			try {
+				const res = await fetch(`${threadBase(wolf, slug)}/workspace/graph`);
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = (await res.json()) as GitOverview;
+				if (!current()) return;
+				if (!data.main?.name) throw new Error("empty overview (git read failed or timed out)");
+				setGraph(data);
+				setState("ready");
+			} catch (err) {
+				if (!current()) return;
+				console.warn("branch graph failed to load", err);
+				setState("error");
+			}
+		})();
+	}, [wolf, slug, enabled, key]);
+	return { graph, state };
+}
+
+async function copyPath(text: string): Promise<boolean> {
+	try {
+		await navigator.clipboard.writeText(text);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The chat header's git tree: `repo · base → branch` with a worktree badge and dirty / ahead / behind counts. Click
+ * opens the popover (path with copy, branch, dirty files, last commits, running subagents' worktrees). Draws nothing
+ * for a thread without a git workspace.
+ */
+export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, title }: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown; title?: string }) {
+	const status = useWorkspaceStatus(wolf, slug, threadId, workspace !== undefined, refreshKey);
+	const [open, setOpen] = useState(false);
+	const [copied, setCopied] = useState(false);
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [full, setFull] = useState(false);
+	const titleId = useId();
+	const { graph, state: graphState } = useBranchGraph(wolf, slug, open || full, graphKey(status));
+	const nowSec = Math.floor(Date.now() / 1000);
+	const rings = useRings(graph?.main.name ? graph : undefined, nowSec);
+	usePopoverDismiss(rootRef, open, () => setOpen(false));
+	if (!workspace) return null;
+	const branch = status?.branch ?? workspace.branch;
+	return (
+		<div ref={rootRef} className="min-w-0 shrink" data-testid="git-tree">
+			<button
+				type="button"
+				data-testid="git-tree-button"
+				aria-expanded={open}
+				aria-haspopup="dialog"
+				aria-label={gitTreeLabel({ ...workspace, branch })}
+				title={gitTreeLabel({ ...workspace, branch })}
+				onClick={() => setOpen((v) => !v)}
+				className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent"
+			>
+				<GitBranchIcon className="size-3 shrink-0" />
+				<span data-testid="git-tree-label" className="flex min-w-0 items-center overflow-hidden whitespace-pre font-mono">
+					<span title={workspace.repo} className="min-w-0 shrink truncate text-foreground/80">{workspace.repo}</span>
+					<span className="shrink-0 text-muted-foreground/60">{" · "}</span>
+					{workspace.base && (
+						<>
+							<span data-testid="git-tree-base" title={workspace.base} className="min-w-0 shrink truncate rounded border border-border px-1">{middleTruncate(workspace.base)}</span>
+							<span data-testid="git-tree-arrow" aria-hidden className="shrink-0 text-foreground/70">{" → "}</span>
+						</>
+					)}
+					<span data-testid="git-tree-current" title={branch} className="min-w-0 truncate rounded border border-border bg-accent/40 px-1 text-foreground">{middleTruncate(branch)}</span>
+				</span>
+				{workspace.isWorktree && (
+					<span data-testid="git-tree-worktree" className="shrink-0 rounded border border-border px-1 text-[10px] uppercase tracking-wide">
+						worktree
+					</span>
+				)}
+				{status && status.dirty.length > 0 && (
+					<span data-testid="git-tree-dirty" title="uncommitted files" className="shrink-0 tabular-nums">
+						±{status.dirty.length}
+					</span>
+				)}
+				{status && status.ahead > 0 && (
+					<span data-testid="git-tree-ahead" title={`ahead of ${workspace.base ?? "base"}`} className="shrink-0 tabular-nums">
+						↑{status.ahead}
+					</span>
+				)}
+				{status && status.behind > 0 && (
+					<span data-testid="git-tree-behind" title={`behind ${workspace.base ?? "base"}`} className="shrink-0 tabular-nums">
+						↓{status.behind}
+					</span>
+				)}
+			</button>
+			{open && (
+				<div className="absolute inset-x-0 top-full z-50 mt-1 px-3" data-testid="git-tree-popover-wrap">
+					<div role="dialog" aria-label="Git workspace" data-testid="git-tree-popover" className="mx-auto flex w-full max-w-[46rem] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs shadow-lg">
+						<div className="flex items-center gap-1.5">
+							<span data-testid="git-tree-title" className="min-w-0 truncate text-sm font-medium text-foreground">
+								{graph?.main.kind === "wolf" ? `Home · ${graph.main.name}` : (title ?? branch)}
+							</span>
+							<button
+								type="button"
+								data-testid="git-tree-copy"
+								aria-label="Copy path"
+								title={workspace.path}
+								className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
+								onClick={() => {
+									void copyPath(workspace.path).then((ok) => {
+										setCopied(ok);
+										if (ok) setTimeout(() => setCopied(false), 1500);
+									});
+								}}
+							>
+								{copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+							</button>
+						</div>
+						<div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+							<span data-testid="git-tree-branch" title={branch} className="min-w-0 truncate">
+								{graph?.main.name && status
+									? headerStatus(graph, status.dirty.length > 0)
+									: `${middleTruncate(branch)}${workspace.base ? ` ← ${workspace.base}` : ""}`}
+							</span>
+							{graph?.main.name && (
+								<button type="button" data-testid="git-tree-open-link" className="shrink-0 hover:text-foreground" onClick={() => setFull(true)}>
+									open ↗
+								</button>
+							)}
+						</div>
+						{!status ? (
+							<div className="text-muted-foreground">Loading…</div>
+						) : (
+							<>
+								{graph?.main.name ? (
+									<section data-testid="git-tree-graph" className="py-1">
+										<ScrollEnd
+											watch={`${graph.main.name}-card`}
+											className="cursor-pointer overflow-x-auto rounded hover:bg-accent/30"
+											onClick={() => setFull(true)}
+										>
+											<Swimlanes overview={graph} rings={rings} days={7} nowSec={nowSec} fitWidth={CARD_FIT_W} />
+										</ScrollEnd>
+									</section>
+								) : graphState === "error" ? (
+									<div data-testid="git-tree-graph-error" className="text-muted-foreground">
+										Couldn't load the branch graph
+									</div>
+								) : (
+									<div data-testid="git-tree-graph-loading" role="status" aria-label="Loading the branch graph" className="flex h-16 items-center justify-center text-muted-foreground">
+										<Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+									</div>
+								)}
+								{status.dirty.length > 0 && (
+									<section data-testid="git-tree-dirty-files" className="font-mono">
+										<details>
+											<summary className="cursor-pointer text-muted-foreground">
+												Changes: {status.dirty.length} {status.dirty.length === 1 ? "file" : "files"} changed
+											</summary>
+											{status.dirty.map((f) => (
+												<div key={f.path} className="flex gap-2">
+													<span className="w-5 shrink-0 whitespace-pre text-muted-foreground">{f.status}</span>
+													<span className="min-w-0 break-all">{f.path}</span>
+												</div>
+											))}
+										</details>
+									</section>
+								)}
+								{!graph?.main.name && status.children.length > 0 && (
+									<section data-testid="git-tree-children">
+										<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Subagent worktrees</div>
+										{status.children.map((c) => (
+											<div key={c.threadId} className="flex flex-col">
+												<span>{c.name}</span>
+												<span className="break-all font-mono text-muted-foreground">{c.branch}</span>
+											</div>
+										))}
+									</section>
+								)}
+							</>
+						)}
+					</div>
+				</div>
+			)}
+			{full && graph?.main.name && typeof document !== "undefined" &&
+				createPortal(
+					<OverlayShell
+						labelledBy={titleId}
+						testId="git-large-modal"
+						closeTestId="git-large-modal-close"
+						onClose={() => setFull(false)}
+						header={(close) => (
+							<OverlayHeader className="flex items-center gap-2 pl-7 pb-3">
+								<h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium">
+									{graph.main.kind === "wolf" ? `Home · ${graph.main.name}` : (title ?? graph.main.name)} · last 30 days
+								</h2>
+								{close}
+							</OverlayHeader>
+						)}
+					>
+						<div className="min-h-0 flex-1 space-y-4 overflow-auto" data-testid="git-large-body">
+							<ScrollEnd watch={`${graph.main.name}-large`} className="overflow-x-auto rounded-xl border p-3">
+								<FitSwimlanes overview={graph} rings={rings} days={30} nowSec={nowSec} />
+							</ScrollEnd>
+							<MomentList overview={graph} rings={rings} days={30} nowSec={nowSec} />
+						</div>
+					</OverlayShell>,
+					document.body,
+				)}
+		</div>
+	);
+}
+
+/** The header's second row: the git tree on its own full-width line; renders nothing (no gap) for a non-git thread. */
+export function ThreadGitRow(props: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown; title?: string }) {
+	if (!props.workspace) return null;
+	return (
+		<div data-testid="thread-header-row2" className="relative flex h-7 shrink-0 items-center border-b border-border/60 px-3">
+			<ThreadGitTree wolf={props.wolf} slug={props.slug} threadId={props.threadId} workspace={props.workspace} refreshKey={props.refreshKey} title={props.title} />
+		</div>
+	);
+}

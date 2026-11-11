@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
-import { threadBase } from "@/components/thread-transport";
+import { threadBase } from "@/components/thread/thread-transport";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/composer/attachments";
 import { DictationBar, joinDictation, setDictationFocus, recordingAt, type Dictation } from "@/components/composer/dictation";

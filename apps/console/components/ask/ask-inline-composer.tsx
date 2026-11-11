@@ -14,7 +14,7 @@ import { postReply } from "@/components/ask/ask-reply-send";
 import { mergeRestored } from "@/components/composer/composer-restore";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/composer/attachments";
-import { threadBase } from "@/components/thread-transport";
+import { threadBase } from "@/components/thread/thread-transport";
 import type { AttachedRef } from "@/src/core";
 
 export interface InlineDraft {

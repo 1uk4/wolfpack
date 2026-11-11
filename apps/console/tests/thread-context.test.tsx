@@ -23,8 +23,8 @@ Object.assign(globalThis, {
 const { MockConsoleClient, FIXTURE_THREAD } = await import("@wolfpack/client");
 type ThreadContext = import("@wolfpack/client").ThreadContext;
 const { PanelHostProvider, RightPanelHost } = await import("../components/panel-host.tsx");
-const { ContextSection } = await import("../components/context-section.tsx");
-const { ThreadContextChip, formatTokens, contextLabel, pastStartAt } = await import("../components/thread-context.tsx");
+const { ContextSection } = await import("../components/thread/context-section.tsx");
+const { ThreadContextChip, formatTokens, contextLabel, pastStartAt } = await import("../components/thread/thread-context.tsx");
 const { threadFetch } = await import("./helpers/thread-fetch.ts");
 
 const BASE: ThreadContext = { tokens: 312_000, window: 1_000_000, startAt: 400_000, waitAt: 983_616, compactions: { count: 0 }, compacting: false };

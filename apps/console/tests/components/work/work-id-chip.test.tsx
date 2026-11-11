@@ -209,7 +209,7 @@ describe("hover card", () => {
 
 	it("a moments-list row with only a work id shows the item's title once the lookup resolves", async () => {
 		respond({ [ID]: record({ title: "Resolved row title", partOf: null }) });
-		const { MomentList } = await import("../../../components/branch-graph.tsx");
+		const { MomentList } = await import("../../../components/thread/branch-graph.tsx");
 		const { EMPTY_OVERVIEW } = await import("../../../src/core/index.ts");
 		const NOW = 1_800_000_000;
 		const ring = { at: NOW - 600, kind: "landed" as const, lane: "main", label: "", workId: ID };
@@ -222,7 +222,7 @@ describe("hover card", () => {
 	});
 
 	it("a home lane label shows the branch name first and updates to the work item title once the lookup resolves, even after a transient failure", async () => {
-		const { Swimlanes } = await import("../../../components/branch-graph.tsx");
+		const { Swimlanes } = await import("../../../components/thread/branch-graph.tsx");
 		const { EMPTY_OVERVIEW } = await import("../../../src/core/index.ts");
 		const NOW = 1_800_000_000;
 		const branch = "feat/bOm8itk-browser-slot-pair";

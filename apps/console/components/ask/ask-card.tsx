@@ -7,7 +7,7 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { addCustomEntry, escapeRawHtml, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
-import type { InteractionCardProps } from "@/components/card-registry";
+import type { InteractionCardProps } from "@/components/thread/card-registry";
 import { fieldRenderer } from "@/components/ask/card-fields";
 import { CardTextInput, otherText, type FieldDictation } from "@/components/ask/card-fields/shared";
 import { BriefHeader } from "@/components/ask/brief-header";

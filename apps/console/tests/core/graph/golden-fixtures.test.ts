@@ -37,8 +37,8 @@ const { jobStore } = await import("../../../src/store/jobs.ts");
 const { settingsStore } = await import("../../../src/store/settings.ts");
 const { readRenderSettings } = await import("../../../src/store/render-settings.ts");
 const { sanitizeRenderSettings } = await import("../../../src/core/graph/render-settings.ts");
-const { toLlmMessages } = await import("../../../src/core/native-messages.ts");
-const { danglingQuestionOf } = await import("../../../src/core/native-messages.ts");
+const { toLlmMessages } = await import("../../../src/core/thread/native-messages.ts");
+const { danglingQuestionOf } = await import("../../../src/core/thread/native-messages.ts");
 
 const TEACH = "chat_mv27rrra_feff23b6";
 const PRACTICE = "chat_mv293wv5_10656952";

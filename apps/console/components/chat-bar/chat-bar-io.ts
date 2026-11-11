@@ -1,4 +1,4 @@
-import { threadBase } from "@/components/thread-transport";
+import { threadBase } from "@/components/thread/thread-transport";
 import { threadHref, type AttachedRef } from "@/src/core";
 
 /** What a send does: a running turn takes the message as a steer, an idle thread starts a turn. */

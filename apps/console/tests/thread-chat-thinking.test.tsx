@@ -23,7 +23,7 @@ Object.assign(globalThis, {
 const { KeyboardShortcuts } = await import("../components/keyboard-shortcuts.tsx");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
-const { ThreadChat } = await import("../components/thread-chat.tsx");
+const { ThreadChat } = await import("../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory/memory-events.tsx");
 // ThreadChat slots the MemoryPanel, which subscribes to memory events: an inert source keeps EventSource out of linkedom.
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });

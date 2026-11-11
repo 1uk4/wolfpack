@@ -99,9 +99,9 @@ const { useComposerDraft, appendToDraft, draftKey, writeDraft, useRereadDraftWhe
 const { AttachedThreadProvider, useAttachedThread } = await import("../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../components/chat-bar/chat-bar.tsx");
 const { useAttachedStripRow } = await import("../components/chat-bar/attached-strip-row.ts");
-const { SubagentStripView } = await import("../components/subagent-strip.tsx");
+const { SubagentStripView } = await import("../components/thread/subagent-strip.tsx");
 const { useDictation, DictationBar, joinDictation, useBarShown } = await import("../components/composer/dictation.tsx");
-const { ATTACHED_KEY } = await import("../src/core/chat-bar.ts");
+const { ATTACHED_KEY } = await import("../src/core/thread/chat-bar.ts");
 
 let posts: string[] = [];
 let pagedAsk = false;

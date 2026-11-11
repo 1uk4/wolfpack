@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { attachedThreadTitle } from "@/components/chat-bar/chat-bar";
 import { useBarDictation, type Dictation } from "@/components/composer/dictation";
-import { useThreadColor } from "@/components/use-thread-color";
+import { useThreadColor } from "@/components/thread/use-thread-color";
 
 export interface AttachedRow {
 	title: string;

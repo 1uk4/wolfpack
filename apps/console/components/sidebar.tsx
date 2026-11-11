@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
-import { useSubagentModal } from "@/components/subagent-modal";
+import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/needs-you";
 import { UpdateNotice } from "@/components/update-notice";
 import { PackHealthBar, PackHealthHost } from "@/components/pack/pack-health";
@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
-import { settingsUrl } from "@/components/thread-transport";
+import { settingsUrl } from "@/components/thread/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
 

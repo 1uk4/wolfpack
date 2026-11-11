@@ -4,7 +4,7 @@
  * here; nothing under app/ touches src/store or src/agent directly.
  */
 
-export * from "./events-stream.ts";
+export * from "./thread/events-stream.ts";
 export * from "./kb/graph-positions.ts";
 export * from "./settings/stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
@@ -27,11 +27,11 @@ export * from "./settings/model-catalog.ts";
 
 // The ConsoleClient seam (client-rewire wave): the factory + the thin
 // Response handlers the /api/wolves routes and the wolf pages share.
-export * from "./console-client.ts";
-export * from "./thread-api.ts";
+export * from "./thread/console-client.ts";
+export * from "./thread/thread-api.ts";
 export * from "./kb/memory-api.ts";
 export * from "./kb/kb-activity-api.ts";
-export * from "./needs-you-api.ts";
+export * from "./thread/needs-you-api.ts";
 export * from "./pack/devices-api.ts";
 export * from "./settings/prompts-api.ts";
 export * from "./settings/settings-overview-api.ts";
@@ -40,5 +40,5 @@ export * from "./settings/wolf-settings-api.ts";
 export * from "./pack/health-api.ts";
 export * from "./pack/pack-health.ts";
 export * from "./pack/pack-actions.ts";
-export * from "./session-witness.ts";
+export * from "./thread/session-witness.ts";
 export * from "./pack/domains-api.ts";

@@ -1,4 +1,4 @@
-import { cardTextUrl } from "@/components/thread-transport";
+import { cardTextUrl } from "@/components/thread/thread-transport";
 
 /**
  * Reply mode: POST a question's typed answer (text and/or bound image ids) to the card. Resolves to null when saved, else the

@@ -6,11 +6,11 @@
  */
 
 import { fuzzyScore } from "./fuzzy.ts";
-import { isSettled, type SubagentState } from "./subagents.ts";
+import { isSettled, type SubagentState } from "./thread/subagents.ts";
 import { KB_ACTIVITY_HREF } from "./kb/kb.ts";
 import type { KbGraphNode } from "./kb/kb.ts";
-import { threadColor } from "./thread-color.ts";
-import { threadHref, threadLabel } from "./thread-adapter.ts";
+import { threadColor } from "./thread/thread-color.ts";
+import { threadHref, threadLabel } from "./thread/thread-adapter.ts";
 
 export type PaletteKind = "command" | "wolf" | "thread" | "entry" | "work";
 

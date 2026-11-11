@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { XIcon } from "lucide-react";
 import { AskCard } from "@/components/ask/ask-card";
 import { MessageResponse } from "@/components/ai-elements/message";
-import { cardAnswerUrl, cardSkipUrl } from "@/components/thread-transport";
+import { cardAnswerUrl, cardSkipUrl } from "@/components/thread/thread-transport";
 import type { BarCards } from "@/components/chat-bar/chat-bar-cards";
 import { threadHref, type AttachedRef } from "@/src/core";
 import type { CardAnswers } from "@wolfpack/client";

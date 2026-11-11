@@ -6,8 +6,8 @@ import { MockConsoleClient } from "@wolfpack/client";
 import { Composer } from "../../../components/composer/composer.tsx";
 import { ComposerControls, TierMenuList } from "../../../components/composer/composer-controls.tsx";
 import { changeSettings, fetchSettings, putSettings, type ThreadSettingsState } from "../../../components/composer/composer-settings.ts";
-import { settingsUrl } from "../../../components/thread-transport.ts";
-import { createThreadApi } from "../../../src/server/thread-api.ts";
+import { settingsUrl } from "../../../components/thread/thread-transport.ts";
+import { createThreadApi } from "../../../src/server/thread/thread-api.ts";
 
 const MODELS = { main: "claude-opus-x", smart: "claude-sonnet-x", fast: "claude-haiku-x" };
 const noop = () => {};

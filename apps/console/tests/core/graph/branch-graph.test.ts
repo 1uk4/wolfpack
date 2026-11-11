@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { ageLabel, agentName, featureOfItem, candidateWorkIds, collapseRows, preferredDomain, buildMoments, createdAt, headerStatus, branchShortId, groupRuns, isVersionTag, landedMoments, landingsFrom, mergeNear, middleClip, placeBandLabel, parseReflog, placeLabels, shipMoments, swimLanes, tagLabel, timeScale, workIdOfSubject, type GitOverview, type Landing, type Moment, type OverviewBranch, type RawCommit } from "../../../src/core/graph/branch-graph.ts";
-import { parseLog, parsePrs, workspaceGraph } from "../../../src/server/branch-graph.ts";
+import { parseLog, parsePrs, workspaceGraph } from "../../../src/server/thread/branch-graph.ts";
 
 const raw = (...subjects: string[]): RawCommit[] => subjects.map((subject, i) => ({ sha: `s${i}`, parents: [], subject }));
 

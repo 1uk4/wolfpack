@@ -18,11 +18,11 @@ import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPi
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
-import { FEATURE_GRADUATED } from "@/components/thread-closed";
+import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
-import { useThreadColor } from "@/components/use-thread-color";
+import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";

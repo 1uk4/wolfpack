@@ -6,7 +6,7 @@
  * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { LhMessage } from "../native-messages.ts";
+import type { LhMessage } from "../thread/native-messages.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 

@@ -9,7 +9,7 @@
  */
 
 import type { UiAttachment } from "@/src/core";
-import { RELAY_ATTACHMENT_BYTES } from "@/src/core/attachment-budget";
+import { RELAY_ATTACHMENT_BYTES } from "@/src/core/thread/attachment-budget";
 import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_NAME_HEADER } from "@wolfpack/protocol/attachments";
 
 export interface PendingAttachment {

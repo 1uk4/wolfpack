@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Card, PendingCard } from "@wolfpack/client";
 import { useOptionalServerEvent } from "@/components/server-events";
-import { threadBase } from "@/components/thread-transport";
+import { threadBase } from "@/components/thread/thread-transport";
 import { isSupersedable } from "@/components/ask/ask-session";
 import { parseThreadCards, type AttachedRef } from "@/src/core";
 

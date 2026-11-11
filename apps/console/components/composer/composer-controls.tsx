@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { MenuShell } from "@/components/menu-shell";
 import { Toggle } from "@/components/settings/controls";
 import { changeSettings, DEFAULT_SETTINGS, fetchSettings, putSettings, TIERS, type SettingsPatch, type Tier, type ThreadSettingsState } from "@/components/composer/composer-settings";
-import { settingsUrl } from "@/components/thread-transport";
+import { settingsUrl } from "@/components/thread/thread-transport";
 
 /** The thread's settings from the wolf, with an optimistic `change` that rolls back (and reports) when the wolf refuses. */
 export function useThreadSettings(wolf: string, slug: string) {

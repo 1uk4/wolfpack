@@ -22,7 +22,7 @@ import {
 	normalizeOptions,
 	resolveCorrect,
 	type QuestionData,
-} from "../../../src/core/question-core.ts";
+} from "../../../src/core/thread/question-core.ts";
 
 const quizInput = {
 	question: "Which planet is closest to the sun?",

@@ -47,7 +47,7 @@ const { ServerEventsProvider } = await import("../components/server-events.tsx")
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { AttachedThreadProvider } = await import("../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../components/chat-bar/chat-bar.tsx");
-const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/chat-bar.ts");
+const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/thread/chat-bar.ts");
 // The extras (cards, peek, badge, switcher) are off in the shipped floating chat; this file covers their kept code, so it switches them on.
 Object.assign(BAR_EXTRAS, { cards: true, peek: true, badge: true, switcher: true });
 

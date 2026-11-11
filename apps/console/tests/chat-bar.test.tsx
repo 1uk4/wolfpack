@@ -31,7 +31,7 @@ const { SettingsDialogProvider } = await import("../components/settings/settings
 const { FakeNav } = await import("./helpers/fake-nav.tsx");
 const { AttachedThreadProvider, useAttachedThread } = await import("../components/chat-bar/attached-thread.tsx");
 const { ChatBar, submitToThread } = await import("../components/chat-bar/chat-bar.tsx");
-const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/chat-bar.ts");
+const { ATTACHED_KEY, BAR_EXTRAS } = await import("../src/core/thread/chat-bar.ts");
 
 type Call = { url: string; body?: any };
 let calls: Call[] = [];

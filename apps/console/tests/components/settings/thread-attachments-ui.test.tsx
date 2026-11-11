@@ -31,12 +31,12 @@ const { ATTACHMENT_MAX_BYTES, FIXTURE_THREAD, MockConsoleClient } = await import
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
-const { ThreadChat } = await import("../../../components/thread-chat.tsx");
+const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { AttachmentChips, Composer } = await import("../../../components/composer/composer.tsx");
-const { SessionModel } = await import("../../../components/session-core.ts");
-const { threadTransport } = await import("../../../components/thread-transport.ts");
+const { SessionModel } = await import("../../../components/thread/session-core.ts");
+const { threadTransport } = await import("../../../components/thread/thread-transport.ts");
 const { threadMessagesToNative } = await import("../../../src/core/index.ts");
-const { createThreadApi } = await import("../../../src/server/thread-api.ts");
+const { createThreadApi } = await import("../../../src/server/thread/thread-api.ts");
 const { threadFetch } = await import("../../helpers/thread-fetch.ts");
 const A = await import("../../../components/composer/attachments.ts");
 

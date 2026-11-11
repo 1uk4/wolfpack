@@ -1,0 +1,535 @@
+"use client";
+
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { SquareIcon } from "lucide-react";
+import { createPortal } from "react-dom";
+import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
+import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
+import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
+import { MessageResponse } from "@/components/ai-elements/message";
+import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
+import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
+import { useChatSession } from "@/components/thread/session";
+import { threadBase, threadTransport } from "@/components/thread/thread-transport";
+import { SPEAKER, speakerBlock, type Speaker } from "@/components/thread/speaker-colors";
+import { PROSE_BLOCK_CLASS, renderItems, separateTurnMs, threadSlug, workHref, type LhMessage } from "@/src/core";
+
+const STATE_CLASS: Record<SubagentState, string> = {
+	queued: "text-muted-foreground",
+	running: "text-emerald-600 dark:text-emerald-400",
+	waiting: "text-amber-600 dark:text-amber-400",
+	done: "text-foreground",
+	failed: "text-destructive",
+	stopped: "text-muted-foreground",
+};
+
+export const formatElapsed = (ms: number): string => {
+	const s = Math.max(0, Math.floor(ms / 1000));
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+export const formatTokens = (n: number): string => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`);
+
+const PARTY: Record<LedgerEntry["from"], string> = { parent: "parent", child: "child", owner: "you", system: "system" };
+/** Who spoke, to whom, in the ledger's words ("parent → child"). */
+export const ledgerSender = (e: Pick<LedgerEntry, "from" | "to">): string => `${PARTY[e.from]} → ${PARTY[e.to]}`;
+
+/**
+ * Who sent each user-role message of the child thread. The child's ledger records every hand-off to it with its sender
+ * (parent: brief/steer, owner: steer); a message is matched to the first unused entry with the same text. A message with
+ * no match (e.g. a brief rewritten for the worktree) defaults to the parent.
+ */
+export const userMessageSenders = (texts: readonly string[], entries: readonly LedgerEntry[] | null): Speaker[] => {
+	const pool = [...(entries ?? [])].filter((e) => e.to === "child" && (e.from === "parent" || e.from === "owner")).sort((a, b) => a.id - b.id);
+	return texts.map((t) => {
+		const i = pool.findIndex((e) => e.text.trim() === t.trim());
+		return i < 0 ? "parent" : pool.splice(i, 1)[0]!.from;
+	});
+};
+
+/** The hint under the message field: what sending does right now. */
+export const messageHint = (state: SubagentState | undefined): { mode: "steer" | "resume"; text: string } =>
+	state === "running" || state === "queued"
+		? { mode: "steer", text: "The subagent is running: your message steers it." }
+		: { mode: "resume", text: "The subagent is not running: your message resumes it." };
+
+export type SubagentPane = "ledger" | "transcript";
+const PANES: { id: SubagentPane; label: string }[] = [
+	{ id: "ledger", label: "Ledger" },
+	{ id: "transcript", label: "Transcript" },
+];
+
+/** The Ledger | Transcript segmented switch. Below 900px one pane shows at a time; from 900px both sit side by side, so it hides. */
+export function PaneSwitch({ value, onChange }: { value: SubagentPane; onChange: (v: SubagentPane) => void }) {
+	return (
+		<div role="tablist" aria-label="Subagent view" data-testid="subagent-switch" className="flex w-full gap-0.5 rounded-lg bg-muted p-0.5 min-[900px]:hidden max-md:order-last max-md:basis-full md:w-auto">
+			{PANES.map((p) => (
+				<button
+					key={p.id}
+					type="button"
+					role="tab"
+					id={`subagent-tab-${p.id}`}
+					aria-selected={value === p.id}
+					aria-controls={`subagent-pane-${p.id}`}
+					data-testid={`subagent-tab-${p.id}`}
+					className={`min-h-9 flex-1 rounded-md px-3 text-xs font-medium md:min-h-7 ${value === p.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+					onClick={() => onChange(p.id)}
+				>
+					{p.label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function Header({ summary, now, titleId, close, pane, onPane, onLeave }: { /** Called when a link in the header opens the work reader: the modal closes so the reader is not hidden behind it. */ onLeave?: () => void; summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; pane: SubagentPane; onPane: (v: SubagentPane) => void }) {
+	const openWork = useOpenWorkItem();
+	const state = summary?.state;
+	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
+	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
+	const turnMs = summary ? separateTurnMs(summary, now) : undefined;
+	return (
+		<OverlayHeader className="mb-3 flex items-center gap-x-3 gap-y-2 pr-4 max-md:-ml-0 max-md:flex-wrap max-md:pr-0" data-testid="subagent-header">
+			<div id={titleId} className="min-w-0 shrink truncate font-sans text-sm font-medium max-md:flex-1" title={summary?.title} data-testid="subagent-title">
+				{summary ? summary.title : "Subagent"}
+			</div>
+			{summary && (
+				<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 font-mono max-md:order-last max-md:basis-full text-[11px] text-muted-foreground" data-testid="subagent-meta">
+					{summary.agent && <span data-testid="subagent-agent">{summary.agent}</span>}
+					{state && (
+						<span data-testid="subagent-state" data-state={state} className={`rounded-full border border-border px-1.5 ${STATE_CLASS[state]}`}>
+							{state === "queued" && summary.queuePosition ? `queued #${summary.queuePosition}` : state}
+						</span>
+					)}
+					{started !== undefined && (
+						<span data-testid="subagent-elapsed">
+							{turnMs === undefined ? formatElapsed(ended - started) : `turn ${formatElapsed(turnMs)} · total ${formatElapsed(ended - started)}`}
+						</span>
+					)}
+					{summary.tokens !== undefined && <span data-testid="subagent-tokens">{formatTokens(summary.tokens)} tokens</span>}
+					{summary.taskId && (
+						<a data-testid="subagent-task" href={workHref(summary.taskId)} onClick={(e) => openReaderLink(e, (id) => { onLeave?.(); /* state-only close (setOpen(null)), so it cannot undo the reader push */ openWork(id); }, summary.taskId!)} className="underline underline-offset-2">
+							{summary.taskId}
+						</a>
+					)}
+				</div>
+			)}
+			{close}
+			<PaneSwitch value={pane} onChange={onPane} />
+		</OverlayHeader>
+	);
+}
+
+function LedgerEntryRow({ e }: { e: LedgerEntry }) {
+	const [open, setOpen] = useState(false);
+	return (
+		<li data-testid="ledger-entry" data-kind={e.kind} data-from={e.from} className={`flex flex-col gap-0.5 rounded-r py-1 pl-2 pr-1.5 ${speakerBlock(e.from)}`}>
+			<div className="flex items-baseline gap-1.5 text-[11px]">
+				<span data-testid="ledger-entry-sender" className={`font-medium ${SPEAKER[e.from].text}`}>
+					{SPEAKER[e.from].label}
+				</span>
+				<span data-testid="ledger-entry-kind" className="font-mono text-muted-foreground">
+					{e.kind}
+				</span>
+			</div>
+			<button
+				type="button"
+				data-testid="ledger-entry-text"
+				aria-expanded={open}
+				className={`w-full cursor-pointer whitespace-pre-wrap break-words text-left ${open ? "" : "line-clamp-3"}`}
+				onClick={() => setOpen((v) => !v)}
+			>
+				{e.text}
+			</button>
+		</li>
+	);
+}
+
+/** The ledger column: always visible, its own scroll; stacks above the transcript below 900px. */
+function Ledger({ entries, shown }: { entries: readonly LedgerEntry[] | null; shown: boolean }) {
+	return (
+		<aside
+			id="subagent-pane-ledger"
+			role="tabpanel"
+			aria-labelledby="subagent-tab-ledger"
+			className={`${shown ? "flex" : "hidden"} min-h-0 w-full flex-1 flex-col min-[900px]:flex min-[900px]:max-h-none min-[900px]:w-[340px] min-[900px]:flex-none min-[900px]:border-r`}
+			data-testid="subagent-ledger"
+			aria-label="Ledger"
+		>
+			<div className="px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Ledger{entries ? ` (${entries.length})` : ""}</div>
+			<div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2 text-xs" data-testid="subagent-ledger-scroll">
+				{entries === null ? (
+					<div className="text-muted-foreground" data-testid="subagent-ledger-missing">
+						This wolf has no subagent ledger.
+					</div>
+				) : entries.length === 0 ? (
+					<div className="text-muted-foreground" data-testid="subagent-ledger-empty">
+						No hand-offs yet.
+					</div>
+				) : (
+					<ol className="flex flex-col gap-2.5">
+						{[...entries]
+							.sort((a, b) => a.id - b.id)
+							.map((e) => (
+								<LedgerEntryRow key={e.id} e={e} />
+							))}
+					</ol>
+				)}
+			</div>
+		</aside>
+	);
+}
+
+/** The child's transcript, read-only: text and tool rows (no cards, no composer). */
+function Transcript({ messages, streaming, entries }: { messages: ReturnType<typeof useChatSession>["messages"]; streaming: boolean; entries: readonly LedgerEntry[] | null }) {
+	const userText = (m: (typeof messages)[number]) => m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+	const senders = userMessageSenders(messages.filter((m) => m.role === "user").map(userText), entries);
+	let userIndex = 0;
+	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
+	const setOpen = (key: string) => (open: boolean) => setOpenRows((p) => ({ ...p, [key]: open }));
+	return (
+		<div className="flex flex-col gap-3" data-testid="subagent-transcript">
+			{messages.map((m, mi) => {
+				if (m.role === "user") {
+					const who = senders[userIndex++]!;
+					return (
+						<div key={m.id || mi} data-testid="subagent-user-message" data-speaker={who} className={`rounded-r py-1 pl-2 pr-2 text-xs ${speakerBlock(who)}`}>
+							<div className={`font-medium uppercase tracking-wide ${SPEAKER[who].text}`}>{SPEAKER[who].label}</div>
+							<div className="whitespace-pre-wrap">{userText(m)}</div>
+						</div>
+					);
+				}
+				return (
+					<div key={m.id || mi} data-testid="subagent-assistant-message" data-speaker="child" className="flex flex-col gap-2">
+						{renderItems(m.parts, streaming && mi === messages.length - 1).map((item) => {
+							switch (item.kind) {
+								case "text":
+									return (
+										<div key={item.part.id || item.index} data-testid="subagent-child-text" data-speaker="child" className={`rounded-r py-1 pl-2 pr-2 ${speakerBlock("child")}`}>
+											<div className={`text-xs font-medium uppercase tracking-wide ${SPEAKER.child.text}`}>{SPEAKER.child.label}</div>
+											<div className={PROSE_BLOCK_CLASS}>
+												<MessageResponse>{item.part.text}</MessageResponse>
+											</div>
+										</div>
+									);
+								case "tool":
+									return <ToolRow key={item.key} entry={item.entry} open={openRows[item.key]} onOpenChange={setOpen(item.key)} />;
+								case "group":
+									return (
+										<ToolGroup key={item.key} entries={item.items.map((t) => t.entry)} open={openRows[item.key]} onOpenChange={setOpen(item.key)}>
+											{item.items.map((t) => (
+												<ToolRow key={t.key} entry={t.entry} open={openRows[t.key]} onOpenChange={setOpen(t.key)} />
+											))}
+										</ToolGroup>
+									);
+								default:
+									return null;
+							}
+						})}
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+interface Loaded {
+	summary: ThreadSummary & { busy?: boolean };
+	messages: LhMessage[];
+}
+
+function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop, pane }: { onStop: () => void; pane: SubagentPane; wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void }) {
+	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
+	const { messages, status, error, clearError, resumeStream } = useChatSession({
+		chatId: childThreadId,
+		initialMessages: loaded.messages,
+		initiallyInFlight: loaded.summary.busy,
+		transport,
+	});
+	const busy = status === "submitted" || status === "streaming";
+	const summary = loaded.summary;
+	// A turn that started elsewhere (a parent's resume): attach to it. Right after our own turn settles the summary is
+	// still the stale "running" one: wait for the refetched summary before attaching again.
+	const state = summary.state;
+	const wasRunning = useRef(false);
+	const settledSummary = useRef<ThreadSummary | null>(null);
+	useEffect(() => {
+		if (state === "running" && !busy && settledSummary.current !== summary) resumeStream();
+	}, [state, busy, summary, resumeStream]);
+	useEffect(() => {
+		if (wasRunning.current && !busy) {
+			settledSummary.current = summary;
+			onSettled();
+		}
+		wasRunning.current = busy;
+	}, [busy, onSettled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Steer or resume from the live truth first (a running stream), then the summary: either can be stale, so a 409
+	// from the wrong guess is retried once the other way.
+	const hint = messageHint(busy ? "running" : state);
+	const [text, setText] = useState("");
+	// One action button: Stop while the child runs and the field is empty, Steer (or Resume) once there is text.
+	const stopMode = (state === "running" || state === "queued") && !text.trim(); // the summary, as the old header Stop was
+	const [sendError, setSendError] = useState<string | null>(null);
+	const sending = useRef(false);
+	const post = (input: string, whenBusy: "steer" | "reject") =>
+		fetch(transport.submitUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: transport.submitBody({ type: "text", text: input }, { whenBusy: whenBusy as "steer" }) });
+	const submit = async () => {
+		const t = text.trim();
+		if (!t || sending.current) return;
+		sending.current = true;
+		setSendError(null);
+		try {
+			let res = await post(t, hint.mode === "steer" ? "steer" : "reject");
+			if (res.status === 409) res = await post(t, hint.mode === "steer" ? "reject" : "steer");
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				return void setSendError(body?.error ?? `Could not send the message (${res.status}).`);
+			}
+			setText("");
+			onSettled();
+			resumeStream();
+		} catch (err) {
+			setSendError(err instanceof Error ? err.message : "Could not send the message.");
+		} finally {
+			sending.current = false;
+		}
+	};
+	return (
+		<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border min-[900px]:flex-row" data-testid="subagent-columns">
+			<Ledger entries={entries} shown={pane === "ledger"} />
+			<section
+				id="subagent-pane-transcript"
+				role="tabpanel"
+				aria-labelledby="subagent-tab-transcript"
+				className={`${pane === "transcript" ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col min-[900px]:flex`}
+				data-testid="subagent-transcript-column"
+				aria-label="Transcript"
+			>
+				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="subagent-transcript-scroll">
+					<Transcript messages={messages} streaming={status === "streaming"} entries={entries} />
+					{error && (
+						<div data-testid="subagent-error" className="mt-2 flex justify-between rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs">
+							<span>{error.message}</span>
+							<button type="button" className="underline" onClick={clearError}>
+								Dismiss
+							</button>
+						</div>
+					)}
+				</div>
+				<div className="flex flex-col gap-1 border-t border-border px-3 py-2 text-xs" data-testid="subagent-message">
+					<div data-testid="subagent-hint" data-mode={hint.mode} className="text-muted-foreground">
+						{hint.text}
+					</div>
+					{sendError && (
+						<div data-testid="subagent-send-error" className="text-destructive">
+							{sendError}
+						</div>
+					)}
+					<textarea
+						data-testid="subagent-input"
+						aria-label="Message subagent"
+						className="min-h-14 w-full resize-none rounded border border-border bg-background p-1.5"
+						value={text}
+						onChange={(e) => setText(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.shiftKey) {
+								e.preventDefault();
+								void submit();
+							}
+						}}
+					/>
+					{stopMode ? (
+						<button type="button" data-testid="subagent-stop" aria-label="Stop subagent" className="flex min-w-[4.5rem] items-center justify-center gap-1 self-end rounded border border-border px-2 py-0.5 hover:bg-accent" onClick={onStop}>
+							<SquareIcon className="size-3" aria-hidden="true" fill="currentColor" />
+							Stop
+						</button>
+					) : (
+						<button type="button" data-testid="subagent-send" aria-label={hint.mode === "steer" ? "Steer subagent" : "Resume subagent"} disabled={!text.trim()} className="flex min-w-[4.5rem] items-center justify-center self-end rounded border border-border px-2 py-0.5 hover:bg-accent disabled:opacity-50" onClick={() => void submit()}>
+							{hint.mode === "steer" ? "Steer" : "Resume"}
+						</button>
+					)}
+				</div>
+			</section>
+		</div>
+	);
+}
+
+/** A clock that ticks each second while `active`. */
+function useNow(active: boolean): number {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		setNow(Date.now());
+		if (!active) return;
+		const t = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(t);
+	}, [active]);
+	return now;
+}
+
+/**
+ * The Subagent view: one child thread — header (agent, state, elapsed, tokens, task, Stop), the
+ * ledger of hand-offs, the child's transcript (read-only, live via the thread stream) and a message field that
+ * steers a running child or resumes a finished one.
+ */
+function SubagentView({ wolf, childThreadId, titleId, close, onLeave }: { wolf: string; childThreadId: string; titleId: string; close: ReactNode; onLeave?: () => void }) {
+	const slug = threadSlug(wolf, childThreadId);
+	const base = threadBase(wolf, slug);
+	const [loaded, setLoaded] = useState<Loaded | null>(null);
+	const [entries, setEntries] = useState<LedgerEntry[] | null>([]);
+	const [note, setNote] = useState<string | null>(null);
+	const [stopNote, setStopNote] = useState<string | null>(null);
+	const loadedRef = useRef(false);
+	const [failed, setFailed] = useState<string | null>(null);
+	const seq = useRef(0);
+	const summaryRef = useRef<ThreadSummary | null>(null);
+	const loadLedger = useCallback(async () => {
+		try {
+			const res = await fetch(`${base}/ledger`);
+			if (res.ok) setEntries(((await res.json()) as { entries?: LedgerEntry[] }).entries ?? []);
+			else if (res.status === 501) setEntries(null);
+		} catch {
+			/* the next change refetches */
+		}
+	}, [base]);
+	// The first load reads the whole thread once (the transcript seed); afterwards the summary arrives by event.
+	const load = useCallback(async () => {
+		const mine = ++seq.current;
+		try {
+			const [detail, ledger] = await Promise.all([fetch(base), fetch(`${base}/ledger`)]);
+			if (mine !== seq.current) return;
+			if (!detail.ok) return void setFailed(detail.status === 404 ? "This subagent no longer exists." : `Could not load the subagent (${detail.status}).`);
+			const json = (await detail.json()) as ThreadSummary & { busy?: boolean; messages?: unknown };
+			const messages = threadTransport(wolf, slug).parseRecord?.(json) ?? [];
+			const led = ledger.ok ? ((await ledger.json()) as { entries?: LedgerEntry[] }).entries ?? [] : ledger.status === 501 ? null : undefined;
+			if (mine !== seq.current) return;
+			loadedRef.current = true;
+			summaryRef.current = json;
+			setFailed(null);
+			setNote(null);
+			setLoaded({ summary: json, messages });
+			if (led !== undefined) setEntries(led);
+		} catch {
+			setFailed("Could not load the subagent.");
+		}
+	}, [base, wolf, slug]);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	const applySummary = useCallback((next: ThreadSummary) => {
+		const prev = summaryRef.current;
+		summaryRef.current = { ...prev, ...next };
+		setLoaded((l) => (l ? { ...l, summary: { ...l.summary, ...next } } : l));
+		return prev?.state !== next.state;
+	}, []);
+	// A light refresh without the messages: the summary from the parent's children list, and the ledger.
+	// Used after our own send/settle/stop and on a reconnect; a transient error keeps the view with a note.
+	const refresh = useCallback(async () => {
+		const parent = summaryRef.current?.parentThreadId;
+		try {
+			if (parent) {
+				const res = await fetch(`${threadBase(wolf, threadSlug(wolf, parent))}/children`);
+				if (res.ok) {
+					const mine = ((await res.json()) as { threads?: ThreadSummary[] }).threads?.find((t) => t.id === childThreadId);
+					if (mine) applySummary(mine);
+					setNote(null);
+				} else setNote(`Could not refresh the subagent (${res.status}).`);
+			}
+		} catch {
+			setNote("Could not refresh the subagent; showing the last view.");
+		}
+		await loadLedger();
+	}, [wolf, childThreadId, applySummary, loadLedger]);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf !== wolf || p.thread.id !== childThreadId || !loadedRef.current) return;
+		if (applySummary(p.thread as ThreadSummary)) void loadLedger(); // a state change is a hand-off (result, error, stop, resume)
+	});
+	// The wolf stream's baseline (no thread named): events may have been missed.
+	useOptionalServerEvent("needs-you-changed", (p) => {
+		if (p.wolf === wolf && p.threadId === undefined && loadedRef.current) void refresh();
+	});
+	useOptionalServerResync(() => {
+		if (loadedRef.current) void refresh();
+	});
+	const stop = useCallback(() => {
+		fetch(`${base}/abort`, { method: "POST" })
+			.then(async (res) => {
+				if (res.ok) return setStopNote(null);
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				setStopNote(body?.error ?? `Could not stop the subagent (${res.status}).`);
+			})
+			.catch((err) => setStopNote(err instanceof Error ? err.message : "Could not stop the subagent."))
+			.finally(() => void refresh());
+	}, [base, refresh]);
+
+	const [pane, setPane] = useState<SubagentPane>("transcript");
+	const now = useNow(loaded?.summary.state === "running");
+	return (
+		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-view" data-child={childThreadId}>
+			{/* One Header for every state, so the close button keeps its place (and focus) through loading. */}
+			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} pane={pane} onPane={setPane} onLeave={onLeave} />
+			{(note ?? stopNote) && (
+				<div className="mb-2 text-xs text-destructive" data-testid="subagent-note">
+					{note ?? stopNote}
+				</div>
+			)}
+			{failed ? (
+				<div className="text-xs text-muted-foreground" data-testid="subagent-failed">
+					{failed}
+				</div>
+			) : !loaded ? (
+				<div className="text-xs text-muted-foreground">Loading…</div>
+			) : (
+				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} onStop={stop} pane={pane} />
+			)}
+		</div>
+	);
+}
+
+interface SubagentOpener {
+	/** Open the subagent modal over the current page: the child's thread id ("wolf/slug") and the wolf that owns it. */
+	openSubagent: (childThreadId: string, wolf?: string) => void;
+	closeSubagent: () => void;
+}
+const OpenerContext = createContext<SubagentOpener | null>(null);
+let warned = false;
+
+/** `openSubagent(childThreadId, wolf)` from anywhere under <SubagentModalProvider>; outside one it does nothing. */
+export function useSubagentModal(): SubagentOpener {
+	const o = useContext(OpenerContext);
+	if (!o && !warned && process.env.NODE_ENV !== "production") {
+		warned = true;
+		console.warn("useSubagentModal() used outside <SubagentModalProvider>: openSubagent is a no-op");
+	}
+	return o ?? { openSubagent: () => {}, closeSubagent: () => {} };
+}
+
+/** The wolf a child thread id is prefixed with ("wolf/slug"): the fallback when the caller does not know it. */
+export const wolfOfThread = (threadId: string): string => threadId.split("/")[0] ?? "";
+
+/** The modal: the task graph's full-screen overlay holding the header (title, close), ledger, transcript and the steer/resume field. */
+export function SubagentModal({ wolf, childThreadId, onClose }: { wolf: string; childThreadId: string; onClose: () => void }) {
+	const titleId = useId();
+	return (
+		<OverlayShell labelledBy={titleId} testId="subagent-modal" closeTestId="subagent-modal-close" onClose={onClose}>
+			{(close) => <SubagentView key={childThreadId} wolf={wolf} childThreadId={childThreadId} titleId={titleId} close={close} onLeave={onClose} />}
+		</OverlayShell>
+	);
+}
+/**
+ * App-level opener: any component calls `useSubagentModal().openSubagent(childThreadId)` and the modal opens over the
+ * current page, whichever page that is. One modal at a time; opening another child replaces it.
+ */
+export function SubagentModalProvider({ children }: { children: ReactNode }) {
+	const [open, setOpen] = useState<{ id: string; wolf: string } | null>(null);
+	const openSubagent = useCallback((id: string, wolf?: string) => setOpen({ id, wolf: wolf || wolfOfThread(id) }), []);
+	const closeSubagent = useCallback(() => setOpen(null), []);
+	const value = useMemo(() => ({ openSubagent, closeSubagent }), [openSubagent, closeSubagent]);
+	return (
+		<OpenerContext.Provider value={value}>
+			{children}
+			{open && typeof document !== "undefined" && createPortal(<SubagentModal wolf={open.wolf} childThreadId={open.id} onClose={closeSubagent} />, document.body)}
+		</OpenerContext.Provider>
+	);
+}

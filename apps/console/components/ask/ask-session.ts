@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CardField, CardFieldAnswer, PendingCard } from "@wolfpack/client";
 import { stepsKey } from "@wolfpack/protocol";
-import { cardNoteUrl, cardPageDraftUrl, cardSubmitUrl, threadBase } from "@/components/thread-transport";
+import { cardNoteUrl, cardPageDraftUrl, cardSubmitUrl, threadBase } from "@/components/thread/thread-transport";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { readyRefs, type PendingAttachment } from "@/components/composer/attachments";
 import { imagesOf, withImages } from "@/components/ask/ask-images";

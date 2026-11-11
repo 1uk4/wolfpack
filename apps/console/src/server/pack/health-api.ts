@@ -36,7 +36,7 @@ import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler } from 
 import { createInventoryClient, type InventoryClient } from "./inventory.ts";
 import { DEFAULT_MANIFEST_URL, createManifestFetcher, type InventoryEntry } from "@wolfpack/protocol";
 import { createLagMonitor, machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
-import { sessionWitness, type SessionWitness } from "../session-witness.ts";
+import { sessionWitness, type SessionWitness } from "../thread/session-witness.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 

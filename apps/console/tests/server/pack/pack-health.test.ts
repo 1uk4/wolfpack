@@ -11,9 +11,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type CommandRunner, type HealthSnapshot, type LinkSnapshot } from "../../../src/server/pack/pack-health.ts";
-import { createSessionWitness, setSessionWitness } from "../../../src/server/session-witness.ts";
+import { createSessionWitness, setSessionWitness } from "../../../src/server/thread/session-witness.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type UpdateUnit } from "../../../src/server/pack/pack-actions.ts";
-import { createConsoleClient, makeRequestToken } from "../../../src/server/console-client.ts";
+import { createConsoleClient, makeRequestToken } from "../../../src/server/thread/console-client.ts";
 
 type Mode = "ok" | "hang" | "slow-lag" | "http500" | "http401" | "wrong-service" | "bad-body" | "legacy";
 

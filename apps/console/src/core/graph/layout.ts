@@ -33,7 +33,7 @@ import {
 	type SimulationNodeDatum,
 } from "d3-force";
 import type { Position } from "../contracts.ts";
-import { seededRandom } from "../question-core.ts";
+import { seededRandom } from "../thread/question-core.ts";
 import { DEP_SPRING_STRENGTH } from "./dep-palette.ts";
 
 /** A node the d3 simulation mutates (x/y/vx/vy; fx/fy = pinned). */

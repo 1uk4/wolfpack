@@ -2,9 +2,9 @@ import { notFound } from "next/navigation";
 import { cardsOfThread, resolveThreadId, threadLabel, threadMessagesToNative } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
 import { withHistoryAttachments } from "@/components/composer/attachments";
-import { THREAD_PAGE_SIZE } from "@/components/thread-transport";
-import { ThreadChat } from "@/components/thread-chat";
-import { FEATURE_GRADUATED } from "@/components/thread-closed";
+import { THREAD_PAGE_SIZE } from "@/components/thread/thread-transport";
+import { ThreadChat } from "@/components/thread/thread-chat";
+import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 
 export const dynamic = "force-dynamic";
 

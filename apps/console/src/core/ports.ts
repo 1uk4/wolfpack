@@ -9,7 +9,7 @@
  * adapters may import core; core NEVER imports an adapter.
  */
 
-import type { LhMessage } from "./native-messages.ts";
+import type { LhMessage } from "./thread/native-messages.ts";
 import type {
 	ChatRecord,
 	ChatSettings,

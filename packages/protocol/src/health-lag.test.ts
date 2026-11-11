@@ -49,6 +49,20 @@ describe("stampedVersion", () => {
     expect(stampedVersion([at("dist", "VERSION"), at("VERSION")], at("package.json"))).toBe("0.1.14+90091017");
   });
 
+  it("a runtime-release.json whose sha matches the checkout's HEAD gives the component's release version; a different sha keeps -dev", () => {
+    dir = mkdtempSync(join(tmpdir(), "stamp-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@wolfpack/harness", version: "0.1.0" }));
+    const file = join(dir, "runtime-release.json");
+    writeFileSync(file, JSON.stringify({ sha: "a".repeat(40), channel: "main", versions: { console: "0.2.0", wolfd: "0.1.15" } }));
+    expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: file, head: "a".repeat(40) })).toBe("0.1.15");
+    expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: file, head: "b".repeat(40) })).toBe("0.1.0-dev");
+    expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: join(dir, "none.json"), head: "a".repeat(40) })).toBe("0.1.0-dev");
+    for (const bad of ["{not json", "null", JSON.stringify({ sha: 5, versions: { wolfd: 7 } }), JSON.stringify({ sha: "a".repeat(40) })]) {
+      writeFileSync(file, bad);
+      expect(stampedVersion([at("VERSION")], at("package.json"), { releaseFile: file, head: "a".repeat(40) })).toBe("0.1.0-dev");
+    }
+  });
+
   it("falls back to <package.json version>-dev when nothing is stamped, and undefined when neither is readable", () => {
     dir = mkdtempSync(join(tmpdir(), "stamp-"));
     writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "0.1.0" }));

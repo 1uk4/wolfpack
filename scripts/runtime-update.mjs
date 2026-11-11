@@ -173,7 +173,8 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 	const dryRun = argv.includes("--dry-run");
 	const shaAt = argv.indexOf("--sha");
 	const sha = shaAt >= 0 ? argv[shaAt + 1] : undefined; // main channel: the exact commit the manifest names
-	const branch = argv.find((a, i) => !a.startsWith("--") && (shaAt < 0 || i !== shaAt + 1));
+	const versionsAt = argv.indexOf("--versions");
+	const branch = argv.find((a, i) => !a.startsWith("--") && (shaAt < 0 || i !== shaAt + 1) && (versionsAt < 0 || i !== versionsAt + 1));
 	const runtime = env.RUNTIME_BRANCH || "stable";
 	const wolvesDir = env.WOLVES_DIR || path.join(os.homedir(), "wolves", "local");
 	const tag = dryRun ? "[dry-run] " : "";
@@ -212,6 +213,18 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 		if (!dryRun) {
 			const co = tryGit(rtWt, "checkout", "--detach", full.out);
 			if (!co.ok) return fail(`cannot check out ${sha}: ${co.out.split("\n")[0]}`);
+			// The services built from this checkout report these release versions (stampedVersion reads the file while its sha is HEAD).
+			const vAt = argv.indexOf("--versions");
+			if (vAt >= 0) {
+				const versions = Object.fromEntries((argv[vAt + 1] ?? "").split(",").map((p) => p.split("=")).filter(([k, v]) => k && v));
+				const file = env.WOLFPACK_RUNTIME_RELEASE_FILE || path.join(os.homedir(), ".wolfpack", "runtime-release.json");
+				try {
+					fs.mkdirSync(path.dirname(file), { recursive: true });
+					fs.writeFileSync(file, `${JSON.stringify({ sha: full.out, channel: "main", versions })}\n`);
+				} catch (err) {
+					warn(`runtime:update: could not write ${file}: ${err.message}`);
+				}
+			}
 			try {
 				st.build(rtWt);
 			} catch (err) {

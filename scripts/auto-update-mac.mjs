@@ -76,6 +76,7 @@ async function healthVersion(port) {
 /** Real Mac deps. runtime:update and stack restart run from the runtime checkout (the same scripts a person would run). */
 export function macDeps(p, env = process.env, channel = "stable") {
 	let sha = null; // main channel: the commit the manifest names
+	let versions = ""; // its per-component versions, `console=…,hubd=…`: runtime-update records them so the services report the release version
 	const node = (script, args) => spawnSync(process.execPath, [path.join(p.runtime, "scripts", script), ...args], { cwd: p.runtime, env: { ...env, STACK_RUNTIME: p.runtime }, stdio: "inherit" }).status;
 	return {
 		fetchManifest: async () => {
@@ -83,6 +84,7 @@ export function macDeps(p, env = process.env, channel = "stable") {
 			if (!r.ok) throw new Error(`HTTP ${r.status}`);
 			const m = await r.json();
 			sha = channel === "main" && typeof m?.sha === "string" ? m.sha : null;
+			versions = Object.entries(m?.components ?? {}).filter(([, e]) => typeof e?.version === "string" && /^[\w.+-]+$/.test(e.version)).map(([k, e]) => `${k}=${e.version}`).join(",");
 			return m;
 		},
 		currentVersion: () => healthVersion(p.port),
@@ -90,7 +92,7 @@ export function macDeps(p, env = process.env, channel = "stable") {
 			// runtime:update quietly falls back to npm without pnpm; under launchd that means a wrong install, so stop here instead.
 			const pnpm = spawnSync("pnpm", ["--version"], { env, stdio: "ignore" });
 			if (pnpm.error || pnpm.status !== 0) return { ok: false, code: "no-pnpm", message: `pnpm not found on PATH (${env.PATH ?? "unset"}); reinstall the plist: node scripts/auto-update-mac.mjs install` };
-			if (node("runtime-update.mjs", channel === "main" && sha ? ["--sha", sha] : []) !== 0) return { ok: false, code: "refresh-failed", message: "pnpm runtime:update failed (dirty or diverged runtime, fetch or build error); see the log" };
+			if (node("runtime-update.mjs", channel === "main" && sha ? ["--sha", sha, ...(versions ? ["--versions", versions] : [])] : []) !== 0) return { ok: false, code: "refresh-failed", message: "pnpm runtime:update failed (dirty or diverged runtime, fetch or build error); see the log" };
 			const stamped = firstLine(path.join(p.runtime, "packages/workerd/VERSION"));
 			if (!atLeast(stamped, entry.version)) return { ok: false, code: "behind-stable", message: `Mac behind stable: merge stable back (checkout stamps ${stamped ?? "no version"}, stable is ${entry.version})` };
 			if (node("stack.mjs", ["restart"]) !== 0) return { ok: false, code: "restart-failed", message: "pnpm stack restart failed" };

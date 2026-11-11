@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { HealthBody } from "./health.js";
 
@@ -72,7 +74,7 @@ export function createLagMonitor(opts: LagMonitorOptions = {}): LagMonitor {
  * scripts/release-version.mjs from the `<component>/vX.Y.Z` tag: "X.Y.Z" or "X.Y.Z+<sha>"), else `<package.json version>-dev`
  * (tests, unbuilt checkouts: a -dev version never prompts an update), else undefined. Read once at startup.
  */
-export function stampedVersion(stamps: URL[], pkg: URL): string | undefined {
+export function stampedVersion(stamps: URL[], pkg: URL, release: { releaseFile?: string; head?: string } = {}): string | undefined {
   for (const s of stamps) {
     try {
       const v = readFileSync(s, "utf8").trim();
@@ -81,6 +83,8 @@ export function stampedVersion(stamps: URL[], pkg: URL): string | undefined {
       /* not stamped here */
     }
   }
+  const rel = runtimeReleaseVersion(pkg, release);
+  if (rel) return rel;
   const v = packageVersion(pkg);
   return v ? `${v}-dev` : undefined;
 }
@@ -110,6 +114,29 @@ export function readMachineChannel(env: Record<string, string | undefined> = pro
   try {
     const c = (JSON.parse(text) as { channel?: unknown } | null)?.channel;
     return c === "main" ? "main" : "stable";
+  } catch {
+    return undefined;
+  }
+}
+
+const COMPONENT_OF_PACKAGE: Record<string, string> = { "@wolfpack/console": "console", "@wolfpack/hubd": "hubd", "@wolfpack/workerd": "workerd", "@wolfpack/harness": "wolfd" };
+
+/**
+ * The release version of a checkout built from a published commit (the Mac on the main channel): scripts/runtime-update.mjs writes
+ * ~/.wolfpack/runtime-release.json `{sha, channel, versions:{console,hubd,workerd,wolfd}}` (or WOLFPACK_RUNTIME_RELEASE_FILE) when it checks out
+ * the manifest's sha. It applies only while that sha is the checkout's HEAD; otherwise (or without the file) undefined and the caller keeps `-dev`.
+ * It runs `git rev-parse` synchronously, so callers cache the result at startup and never call it per request.
+ */
+function runtimeReleaseVersion(pkg: URL, o: { releaseFile?: string; head?: string }): string | undefined {
+  try {
+    const file = o.releaseFile ?? (process.env.WOLFPACK_RUNTIME_RELEASE_FILE?.trim() || join(homedir(), ".wolfpack", "runtime-release.json"));
+    const rel = JSON.parse(readFileSync(file, "utf8")) as { sha?: unknown; versions?: Record<string, unknown> };
+    const name = (JSON.parse(readFileSync(pkg, "utf8")) as { name?: unknown }).name;
+    const component = typeof name === "string" ? COMPONENT_OF_PACKAGE[name] : undefined;
+    const version = component ? rel.versions?.[component] : undefined;
+    if (typeof rel.sha !== "string" || typeof version !== "string" || !version) return undefined;
+    const head = o.head ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: dirname(fileURLToPath(pkg)), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }).trim();
+    return head === rel.sha ? version : undefined;
   } catch {
     return undefined;
   }

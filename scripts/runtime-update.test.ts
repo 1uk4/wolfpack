@@ -94,6 +94,22 @@ describe("runtime-update", () => {
 		expect((await run(["--sha", sha.slice(0, 7)])).r.exitCode).toBe(1);
 	});
 
+	it("--sha with --versions records the manifest's per-component versions for the checked-out sha in runtime-release.json", async () => {
+		const clone = path.join(tmp, "owner3");
+		g(tmp, "clone", "-q", "-b", "stable", origin, clone);
+		g(clone, "config", "user.email", "o@o");
+		g(clone, "config", "user.name", "o");
+		g(clone, "checkout", "-q", "-b", "wolf/1uk4");
+		commit(clone, "apps/console/r.tsx", "r");
+		const sha = g(clone, "rev-parse", "HEAD");
+		g(clone, "push", "-q", "origin", "wolf/1uk4");
+		const file = path.join(tmp, "runtime-release.json");
+		const logs: string[] = [];
+		const r = await runUpdate({ argv: ["--sha", sha, "--versions", "console=0.1.20-main.3,hubd=0.1.15,workerd=0.1.6,wolfd=0.1.15"], env: { WOLVES_DIR: path.join(tmp, "wolves"), WOLFPACK_RUNTIME_RELEASE_FILE: file }, cwd: intWt, steps: steps(), log: (m: string) => logs.push(m), warn: () => {} });
+		expect(r.exitCode).toBe(0);
+		expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ sha, channel: "main", versions: { console: "0.1.20-main.3", hubd: "0.1.15", workerd: "0.1.6", wolfd: "0.1.15" } });
+	});
+
 	it("--sha refuses a commit that exists locally but is on no origin branch any more", async () => {
 		const clone = path.join(tmp, "owner3");
 		g(tmp, "clone", "-q", "-b", "stable", origin, clone);

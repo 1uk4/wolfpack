@@ -14,7 +14,7 @@ else
 fi
 if [ "$#" -eq 0 ]; then
   # tests/ mirrors the source tree, so collect recursively.
-  set -- $(find tests -name '*.test.ts' -o -name '*.test.tsx' | sort)
+  set -- $(find tests -type f -name '*.test.ts' -o -name '*.test.tsx' | sort)
 fi
 # Per-file limit; keep the default equal to CONSOLE_FILE_TIMEOUT_MS in packages/cli/src/test-runner.ts.
 NODE_ENV=test exec "$TSX" --test --test-timeout="${CONSOLE_TEST_TIMEOUT_MS:-120000}" "$@"

@@ -47,7 +47,7 @@
  * per-frame work when idle is a dirty-flag check (no rAF is scheduled at
  * all until something changes).
  *
- * Unit tests cover the pure helpers (tests/graph-canvas.test.ts); the
+ * Unit tests cover the pure helpers (tests/components/graph/graph-canvas.test.ts); the
  * class itself is DOM-bound and exercised live. Module scope stays
  * DOM-free so the file imports cleanly under Node.
  */
@@ -86,7 +86,7 @@ export type { GraphRenderSettings };
 // ─── Public data contract ──────────────────────────────────────────────────
 
 /** One node to draw: world-space position, the short glanceable label and
- *  the draw style (src/core/kb-graph-model.ts nodeStyle / domain colour). */
+ *  the draw style (src/core/graph/kb-graph-model.ts nodeStyle / domain colour). */
 export interface CanvasNode {
 	id: string;
 	x: number;

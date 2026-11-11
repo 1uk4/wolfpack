@@ -402,7 +402,7 @@ body {
    advance (every session ends in Teaching), so phase-as-signal was
    decoration; the --phase-* tokens and every phase-dot state are gone.
    What state deserved — "a turn is in flight" — is carried by MOTION
-   alone: the terminal braille spinner (components/braille-spinner.tsx),
+   alone: the terminal braille spinner (components/shell/braille-spinner.tsx),
    monochrome, existing only while true. */
 
 /* One keyframes, all ten frames: each frame <g> holds opacity 1 for its
@@ -649,8 +649,8 @@ body {
 }
 
 /* ---- Phone layout (< 768px, Tailwind md). Desktop is untouched: everything below lives in this one media block. ----
-   One column (the sidebar is the full-screen list layer; see src/core/mobile-layout.ts), 44px tap targets, no horizontal scroll,
-   the thread sized to the VISIBLE viewport (--wp-vvh from components/viewport-vars.tsx, so the composer clears the keyboard),
+   One column (the sidebar is the full-screen list layer; see src/core/ui/mobile-layout.ts), 44px tap targets, no horizontal scroll,
+   the thread sized to the VISIBLE viewport (--wp-vvh from components/shell/viewport-vars.tsx, so the composer clears the keyboard),
    safe-area insets for the iOS notch / home bar. */
 @media (max-width: 767px) {
 	/* P12: the document never scrolls on a phone (no iOS rubber-band, no gap under the composer). The shell is a fixed-height

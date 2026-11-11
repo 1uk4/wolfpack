@@ -108,7 +108,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
-	// Phone (< 768px): the sidebar is the full-screen LIST layer, not a persisted side panel (see src/core/mobile-layout.ts).
+	// Phone (< 768px): the sidebar is the full-screen LIST layer, not a persisted side panel (see src/core/ui/mobile-layout.ts).
 	const [mobile, setMobile] = useState(false);
 	const [toggles, setToggles] = useState(0);
 	const pathname = usePathname();

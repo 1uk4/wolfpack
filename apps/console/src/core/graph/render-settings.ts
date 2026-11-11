@@ -1,6 +1,6 @@
 /**
  * Graph render settings: the shape, the defaults, the sanitizer, and the
- * slider mapping (log-scaled, default-centered) — shared by the client (components/graph-canvas.ts,
+ * slider mapping (log-scaled, default-centered) — shared by the client (components/graph/graph-canvas.ts,
  * graph-view.tsx), the server store (src/store/render-settings.ts, which
  * persists them to data/graph/render-settings.json), and the API route.
  * Besides the display knobs they carry the KB-graph VIEW choices: what the

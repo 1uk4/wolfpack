@@ -3,7 +3,7 @@
  * which feature the panel graphs, each node's status, the dependency edges
  * and the "x/y shipped" progress. Input is the records the panel already
  * fetches (the bound item and its feature's record with `children`); the
- * layout and drawing live in components/task-graph.tsx.
+ * layout and drawing live in components/work/task-graph.tsx.
  */
 
 import type { GraphNodeStatus } from "@wolfpack/protocol/objects";

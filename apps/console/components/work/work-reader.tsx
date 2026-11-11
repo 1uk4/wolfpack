@@ -5,7 +5,7 @@
  * `?item=<id>` on the page you are on. Opening pushes that URL (Back closes, Forward re-opens), the page underneath
  * stays mounted so closing returns to it exactly as it was. Neither page knows about the other.
  * Desktop: a right-side panel. Phone (<768px, Tailwind `max-md`): full screen, h-dvh, safe-area padded.
- * Mounted ONCE, in AppShell (components/sidebar.tsx): `?item=<id>` opens it over whichever page is showing.
+ * Mounted ONCE, in AppShell (components/shell/sidebar.tsx): `?item=<id>` opens it over whichever page is showing.
  *
  * Esc order, topmost first: (1) anything with role dialog/alertdialog/menu/listbox or aria-modal other than the reader
  * itself (the id hover card, the chat bar's thread switcher, the command palette, the subagent modal, the graduate dialog)

@@ -204,7 +204,7 @@ export function GraphSettingsControl({
 						</div>
 							{/* Size/zoom/region sliders: LADDER-mapped 0-100, step 10 (11
 							    stops, every DEFAULT dead-center at 50, every value a nice
-							    number — src/core/render-settings.ts). Physics keeps the
+							    number — src/core/graph/render-settings.ts). Physics keeps the
 							    fine-grained log sliders (step 5). */}
 							<SettingSlider
 								label="Node size"
@@ -369,7 +369,7 @@ export function GraphSettingsControl({
 						    engine the server settle runs (createGraphSimulation);
 						    changing one rebuilds the sim from the current positions —
 						    drag mid-settle re-anneals, pins survive. Sliders over
-						    sweep-validated ranges (src/core/render-settings.ts):
+						    sweep-validated ranges (src/core/graph/render-settings.ts):
 						    range ends and all four corners settle cleanly — no NaN,
 						    no explosion, no non-settle. Repulsion is displayed as
 						    the negative it is; cluster pull's far left = off.

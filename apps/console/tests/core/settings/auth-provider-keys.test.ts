@@ -71,7 +71,7 @@ describe("AUTH_PROVIDER_KEYS — the no-drift pin against pi-ai", () => {
 		assert.deepEqual(
 			mine.map((p) => [p.id, p.envVar, p.label]),
 			truth.map((p) => [p.id, p.envVar, p.label]),
-			"pi-ai's provider env-key table changed — regenerate AUTH_PROVIDER_KEYS (src/core/auth-keys.ts) from the derivation in this test",
+			"pi-ai's provider env-key table changed — regenerate AUTH_PROVIDER_KEYS (src/core/settings/auth-keys.ts) from the derivation in this test",
 		);
 	});
 

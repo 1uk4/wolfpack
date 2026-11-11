@@ -136,7 +136,7 @@ export function codeSource(children: ReactNode): string {
 }
 
 /** Mermaid, in the message flow: the bare chart (dark theme, rendered via
- *  the app's own plugin — components/mermaid-render.ts), the hover corner
+ *  the app's own plugin — components/shell/mermaid-render.ts), the hover corner
  *  with copy + expand, the house error fallback. No container chrome, no
  *  zoom pill — the zoom/pan home is the session overlay. While the fence is
  *  still streaming (the trailing open fence), a quiet skeleton instead of a
@@ -570,7 +570,7 @@ export function InertImage(props: ComponentProps<"img"> & ExtraProps) {
 	return <span data-streamdown="inert-image">{props.alt ?? ""}</span>;
 }
 
-/** Links: a rewritten work id (src/core/work-id-link) → chip; any other link is Streamdown's default. */
+/** Links: a rewritten work id (src/core/work/work-id-link) → chip; any other link is Streamdown's default. */
 export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
 	const id = workIdFromHref(props.href);
 	if (id) return <WorkIdChip id={id} />;

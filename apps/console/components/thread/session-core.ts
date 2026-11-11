@@ -2,7 +2,7 @@
  * THE SESSION MODEL (Wave D): the chat session's state machine, extracted
  * PURE — no React, one injectable fetch — so the attach/replay/settle/
  * error/abort paths are testable in the repo's node:test world. The React
- * hook (components/session.ts) is a thin adapter: it re-renders on change
+ * hook (components/thread/session.ts) is a thin adapter: it re-renders on change
  * and projects the view (core/view.ts).
  *
  * ONE VIEW PROTOCOL: every turn is a server-side background process (owner

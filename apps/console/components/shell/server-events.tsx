@@ -6,7 +6,7 @@
  * the window's lifetime — the channel that retires the app's poll
  * lattice. Every server-initiated change arrives as a named SSE frame;
  * consumers respond by fetching truth (notify → fetch, the architecture's
- * whole trick — see src/core/events.ts and server/events-stream.ts).
+ * whole trick — see src/core/thread/events.ts and server/events-stream.ts).
  *
  * This file is the ONE place in the app that knows EventSource exists.
  * Auto-reconnect is EventSource's own — never fought, always exploited:
@@ -22,7 +22,7 @@
  * TEST SEAM: `connect` injects the source factory — the hub + wiring are
  * plain functions the tests drive directly (no React, no server); the
  * React glue is an adapter seam like wolfpack:turn-state (untested by
- * precedent, components/session.ts).
+ * precedent, components/thread/session.ts).
  */
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { clearHubToken, PAIR_PATH } from "@/src/core/ui/hub-auth";

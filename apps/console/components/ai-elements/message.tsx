@@ -54,7 +54,7 @@ export function MessageContent({ className, ...props }: HTMLAttributes<HTMLDivEl
 // \(..\) / \[..\] form. remark-breaks goes in the cjk plugin's remarkPluginsAfter
 // slot because Streamdown's `remarkPlugins` prop would replace its defaults
 // (GFM, code-fence metadata). Mermaid fences are rendered by the md-blocks `code`
-// override (components/mermaid-render.ts). The cast covers a types-only skew:
+// override (components/shell/mermaid-render.ts). The cast covers a types-only skew:
 // @streamdown/code ships shiki@3 types, streamdown expects shiki@4.
 export const streamdownPlugins = {
 	cjk: { ...cjk, remarkPluginsAfter: [...cjk.remarkPluginsAfter, remarkBreaks] },

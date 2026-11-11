@@ -1,5 +1,5 @@
 /**
- * SESSION MODEL tests (components/session-core.ts — Wave D): the pure state
+ * SESSION MODEL tests (components/thread/session-core.ts — Wave D): the pure state
  * machine that replaced useChat + the AI-SDK transport. Everything the old
  * transport/merge suites pinned survives here on the native wire:
  *

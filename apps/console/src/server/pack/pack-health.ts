@@ -428,7 +428,7 @@ export interface PackHealthOptions {
 	platform?: string;
 	/** WOLFPACK_HEALTH_HOST_LABELS: `<host>=<label>,...` label overrides. */
 	hostLabels?: string;
-	/** The hub's pack inventory (src/server/inventory.ts); null/absent: none (older hub), the snapshot then has local probes and presence only. */
+	/** The hub's pack inventory (src/server/pack/inventory.ts); null/absent: none (older hub), the snapshot then has local probes and presence only. */
 	inventory?: () => InventoryView | null;
 	/** This console's own inventory entry (the same builder as its heartbeat). */
 	self?: () => InventoryEntry;

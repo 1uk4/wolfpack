@@ -7,7 +7,7 @@
  * rows; the provider dropdown is the discovery surface. `providers`
  * carries it: {id, envVar, label} for every pi-ai plain-key provider,
  * derived from pi-ai's own provider→env-var table (no-drift pin in
- * tests/auth-provider-keys.test.ts) — the settings UI reads it optionally
+ * tests/core/settings/auth-provider-keys.test.ts) — the settings UI reads it optionally
  * with a graceful fallback.
  *
  * Masked only — last 4 + length; PLAINTEXT NEVER LEAVES THE STORE THROUGH

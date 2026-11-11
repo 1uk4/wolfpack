@@ -1,5 +1,5 @@
 /**
- * Unit tests — the UI parse seam (src/core/tool-parts.ts).
+ * Unit tests — the UI parse seam (src/core/thread/tool-parts.ts).
  *
  * The rule born of the 2026-09-12 live crashes: model-authored tool input
  * is consumed only through these parsers, each running the SAME zod schema

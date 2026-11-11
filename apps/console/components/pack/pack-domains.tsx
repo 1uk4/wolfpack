@@ -2,9 +2,9 @@
 
 /**
  * The Domains tab of the Pack panel (work-wolfpack-I2AysMu): list, add, edit (label, description, colour) and delete KB domains
- * through this console's /api/pack/domains (owner gate + hub call; src/server/domains-api.ts). The name cannot change.
+ * through this console's /api/pack/domains (owner gate + hub call; src/server/pack/domains-api.ts). The name cannot change.
  * Subscriptions are not here: they stay in each wolf's settings.
- * dev: ?packFixture=domains | domains-delete-subscribed | domains-hub-down | domains-duplicate (components/pack-domains-fixtures.ts).
+ * dev: ?packFixture=domains | domains-delete-subscribed | domains-hub-down | domains-duplicate (components/pack/pack-domains-fixtures.ts).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";

@@ -3,7 +3,7 @@
  *
  * Failure mode this kills: bumping @earendil-works/pi-ai adds new models
  * (and price corrections) to the shipped catalogs, but nobody re-runs
- * scripts/sync-pricing.ts — src/core/prices.ts stays a stale generation
+ * scripts/sync-pricing.ts — src/core/settings/prices.ts stays a stale generation
  * and every run on a new model renders cost as "—" (deepseek-v4.1-flash,
  * 2026-09-29, commit df654fb). The table must stay a generated static
  * file (core is client-safe: activity-dock and stats-bar fold costs in

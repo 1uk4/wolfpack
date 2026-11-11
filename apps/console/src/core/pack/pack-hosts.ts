@@ -1,6 +1,6 @@
 /**
  * Pack health BY HOST (work-wolfpack-w7RPvtd): which machine each link runs on, and the modal's one card per host.
- * Pure; the server (src/server/pack-health.ts) uses hostId/hostLabel to resolve a link's host, the modal uses groupByHost.
+ * Pure; the server (src/server/pack/pack-health.ts) uses hostId/hostLabel to resolve a link's host, the modal uses groupByHost.
  *
  * Host ids: lowercase, a trailing `.local` and any domain suffix dropped ("Luka-Air.local" → "luka-air",
  * "sfo-01.tail9c2.ts.net" → "sfo-01"). An IP stays as is: a raw tailnet IP shows until a newer build reports its name

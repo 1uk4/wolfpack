@@ -6,7 +6,7 @@
  * is BOOT-TIME (initAuthEnv deletes the managed env vars once per
  * process), so the switched boot can only be pinned in a process that
  * starts with the switch set. The UNSET behavior (env wins, fill-gap,
- * shadow semantics) is pinned byte-for-byte by tests/server-keys.test.ts
+ * shadow semantics) is pinned byte-for-byte by tests/server/settings/server-keys.test.ts
  * — that file IS the visible case; this file is the hidden one.
  *
  * The engine path is the critical subtlety this file pins: pi-ai reads
@@ -97,7 +97,7 @@ describe("the fresh-user switch (boot under WOLFPACK_IGNORE_ENV_KEYS=1)", () => 
 	it("unset switch = today's env-wins behavior (the read seam, live-checked)", () => {
 		// The dynamic half of the seam: WITHOUT the switch, keyValue reads
 		// env first — today's behavior, byte-for-byte (the boot-snapshot
-		// half is pinned in tests/server-keys.test.ts, the visible case).
+		// half is pinned in tests/server/settings/server-keys.test.ts, the visible case).
 		process.env.WOLFPACK_IGNORE_ENV_KEYS = undefined;
 		process.env.OPENROUTER_API_KEY = "sk-or-env-wins";
 		try {

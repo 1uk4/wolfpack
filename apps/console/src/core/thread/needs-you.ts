@@ -3,7 +3,7 @@
  * model, and the pure logic that decides when an OS notification fires. PURE: no React, no IO.
  *
  * Truth is the wolves' lists (GET cards + threads); the activity stream only pokes ("needs-you-changed") and the
- * console refetches (notify → fetch, src/core/events.ts).
+ * console refetches (notify → fetch, src/core/thread/events.ts).
  */
 
 import type { Card, PendingCard } from "@wolfpack/client";

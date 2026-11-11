@@ -4,14 +4,14 @@
  * PACK HEALTH in the sidebar (work-wolfpack-6imFEq7): a one-line status bar, and the full-screen health modal it opens.
  * The data is the console's own /api/health (no hub call), so it keeps working with the hub down; if the console itself stops
  * answering, the bar says so from the last snapshot and never goes blank.
- *   data:  one shared, ref-counted subscription (components/pack-health-store.ts → src/core/pack-health-connection.ts), so
+ *   data:  one shared, ref-counted subscription (components/pack/pack-health-store.ts → src/core/pack/pack-health-connection.ts), so
  *          the desktop and phone sidebars share one stream.
  *   modal: rendered once by <PackHealthHost/> (in the app shell), its open state in the store, so closing the phone list
  *          layer under it doesn't unmount it.
  *   actions (work-wolfpack-yM3uTlj): per row Restart, Logs (inline panel: refresh, copy) and Roll back (hubd, the workerd link unit; the
  *          console itself in its own row), all through this console server (/api/health/{restart,logs,rollback}), never a wolf. Off systemd
  *          (the Mac stack) a row shows copyable `pnpm stack` commands instead.
- *   dev:   ?healthFixture=<name>, ?healthRestart= / ?healthLogs= / ?healthRollback=<status> (components/pack-health-fixtures.ts; not in production).
+ *   dev:   ?healthFixture=<name>, ?healthRestart= / ?healthLogs= / ?healthRollback=<status> (components/pack/pack-health-fixtures.ts; not in production).
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -266,7 +266,7 @@ function useAction(url: string, service: string, outcome: (status: number, retry
 			retry = fake === 429 ? "8" : null;
 		} else {
 			try {
-				// The hub-auth fetch wrapper (components/hub-auth.tsx) adds the device bearer to every /api/ call.
+				// The hub-auth fetch wrapper (components/shell/hub-auth.tsx) adds the device bearer to every /api/ call.
 				const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: service }) });
 				status = r.status;
 				retry = r.headers.get("Retry-After");

@@ -20,7 +20,7 @@ import UpdateBanner from "../../../components/shell/update-banner.tsx";
 
 // linkedom as the DOM for the interactive pass (first createRoot test in
 // the repo — the banner's push→render→click flow needs real effects).
-// The window.wolfpack bridge type is declared globally by components/sidebar.tsx.
+// The window.wolfpack bridge type is declared globally by components/shell/sidebar.tsx.
 const dom = parseHTML("<html><body></body></html>");
 (globalThis as Record<string, unknown>).window = dom.window;
 (globalThis as Record<string, unknown>).document = dom.document;

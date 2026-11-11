@@ -1,7 +1,7 @@
 /**
  * The graph's stored node positions: data/graph/positions.json, a plain
  * JSON map nodeId → {x, y} in the console's own data dir (the KB is never
- * written). Shape rules live in src/core/graph-persistence.ts; this module
+ * written). Shape rules live in src/core/graph/graph-persistence.ts; this module
  * only moves bytes. Whatever comes off disk is sanitized; writes go to a
  * temp file and rename over, so a crash never tears the file.
  */

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Installs the hub sign-in fetch wrapper (src/core/hub-auth.ts) on `window.fetch` at MODULE LOAD, not in an effect: children's effects
+ * Installs the hub sign-in fetch wrapper (src/core/ui/hub-auth.ts) on `window.fetch` at MODULE LOAD, not in an effect: children's effects
  * run before a parent's, so an effect would let the first /api requests go out without the token. Idempotent (HMR-safe).
  */
 import { PAIR_PATH, syncHubCookie, withHubAuth } from "@/src/core/ui/hub-auth";

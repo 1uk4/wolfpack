@@ -8,10 +8,10 @@ second pillar of input).
 
 ## Architecture
 
-- **Registry**: `src/core/keyboard.ts` — `KEYBOARD_ACTIONS` holds every
+- **Registry**: `src/core/ui/keyboard.ts` — `KEYBOARD_ACTIONS` holds every
   action: `{ id, label, scope, binding }`. The cheat sheet renders FROM
   the registry, so it can never list a non-functional shortcut.
-- **Provider**: `components/keyboard-shortcuts.tsx` — one window-level
+- **Provider**: `components/shell/keyboard-shortcuts.tsx` — one window-level
   keydown listener (bubble phase, mounted once in AppShell). Normalizes
   keys to `mod+d`-style strings, resolves overrides, dispatches
   `wolfpack:kbd-<action-id>` window CustomEvents. Surfaces listen for their

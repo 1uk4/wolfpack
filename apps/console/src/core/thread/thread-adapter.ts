@@ -179,7 +179,7 @@ export class ThreadEventAdapter {
 			case "object-upsert":
 				// Lands in the open message by arrival (the server emits it just before the call's tool-end, so it
 				// shares the call's step); `textOffset` only matters on reload. projectView folds revisions
-				// (max rev wins, first position — src/core/objects.ts).
+				// (max rev wins, first position — src/core/thread/objects.ts).
 				return this.grow(at, (blocks) => [
 					...blocks,
 					{ type: "object", objectId: ev.objectId, objectType: ev.objectType, rev: ev.rev, data: ev.data } as unknown as Block,

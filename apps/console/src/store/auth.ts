@@ -5,7 +5,7 @@
  * zero migration). 0600, atomic writes, hand-edits keep working (the file
  * is re-read from disk on every access).
  *
- * The server (src/server/keys.ts) is the only intended writer: it applies
+ * The server (src/server/settings/keys.ts) is the only intended writer: it applies
  * shape validation before setAuthVar and env precedence on top of
  * authVars(). This adapter persists what it is given, never throws
  * (absent/corrupt file = {} = "no keys yet", the documented first-boot

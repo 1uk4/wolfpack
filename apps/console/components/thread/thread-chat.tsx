@@ -191,7 +191,7 @@ function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; op
  * view (session-core / core view) driven by the thread transport — history
  * seeded from getThread(), sends through submit(), the turn rendered from
  * the watch() stream. Server-agnostic: it only knows the /api/wolves routes
- * (components/thread-transport.ts).
+ * (components/thread/thread-transport.ts).
  *
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.

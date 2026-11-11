@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { desktopBridge } from "@/components/shell/sidebar";
 
-// The desktop bridge type lives in components/sidebar.tsx (the incumbent
+// The desktop bridge type lives in components/shell/sidebar.tsx (the incumbent
 // declare-global) — onUpdateStatus/installUpdate are declared there too.
 
 type UpdateStatus = { status: string; version: string | null };

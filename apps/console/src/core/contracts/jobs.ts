@@ -77,7 +77,7 @@ export interface JobUsage {
  *     single re-sync when a job settles.
  *
  *  3. On completion the runner builds a STEER MESSAGE (buildSubagentSteer)
- *     and hands it to the wake pipeline (src/server/jobs.ts): a user-role
+ *     and hands it to the wake pipeline (src/store/jobs.ts): a user-role
  *     result-carrying native marker whose content is what the MODEL needs;
  *     `details` carries what the UI renders.
  *

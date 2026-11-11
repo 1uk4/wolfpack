@@ -2,7 +2,7 @@
 
 /**
  * The graph's detail card — one body per node kind (the model is
- * describeNode in src/core/kb-graph-model.ts):
+ * describeNode in src/core/graph/kb-graph-model.ts):
  *   entry     title, summary, domain, section, maturity + "open"
  *   work      stage, parent, dependencies + "open"
  *   section   summary + "focus" (frames the section's entries)

@@ -175,7 +175,7 @@ describe("request token fails closed", () => {
 	});
 });
 
-// ---- cookie mirror: read-only navigations only (see the COOKIE MIRROR note in src/core/hub-auth.ts) ----
+// ---- cookie mirror: read-only navigations only (see the COOKIE MIRROR note in src/core/ui/hub-auth.ts) ----
 const CK = `${HUB_COOKIE}=tok-123`;
 /** What the server sees for a request: the proxy's header rewrite, then makeRequestToken (bearer only). */
 const serverToken = async (method: string, h: Record<string, string>, https = false) => {

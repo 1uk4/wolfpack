@@ -5,7 +5,7 @@
  * fit (whichever axis binds), panning locks at the floor (nothing to move),
  * wheel zooms to the cursor. Pure on purpose: the overlays are render-tested
  * in static markup (no live pointer events), so the math lives here where
- * tests can pin it (tests/pan-zoom.test.ts).
+ * tests can pin it (tests/components/shell/pan-zoom.test.ts).
  */
 
 /** Zoom ceiling for every surface that uses this math (raised 2×→4× for

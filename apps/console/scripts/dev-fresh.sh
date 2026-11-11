@@ -13,7 +13,7 @@
 # WHY A SWITCH, NOT AN ENV SCRUB: a script cannot merely unset shell
 # *_API_KEY vars — Next injects .env.local (the dev secrets) into the
 # server env at boot, so a "fresh" instance would silently federate the
-# real keys. WOLFPACK_IGNORE_ENV_KEYS=1 (the keys seam, src/server/keys.ts)
+# real keys. WOLFPACK_IGNORE_ENV_KEYS=1 (the keys seam, src/server/settings/keys.ts)
 # deletes every managed key var from the process after Next's env load:
 # pi-ai reads provider keys from process.env NATIVELY at every request,
 # so deletion hides keys from the whole app, model engines included.

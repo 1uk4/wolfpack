@@ -1,5 +1,5 @@
 /**
- * Graph persistence: the pure rules (src/core/graph-persistence.ts) and the
+ * Graph persistence: the pure rules (src/core/graph/graph-persistence.ts) and the
  * console-store round trip (positions.json under an isolated WOLFPACK_DATA_DIR).
  */
 import assert from "node:assert/strict";

@@ -4,7 +4,7 @@ import type { HostCard, HostInfo } from "./pack-hosts.ts";
 export type HealthStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
 export type Tone = "red" | "amber" | "grey" | "green";
 
-/** One link as GET /api/health returns it (src/server/pack-health.ts LinkSnapshot). */
+/** One link as GET /api/health returns it (src/server/pack/pack-health.ts LinkSnapshot). */
 export interface HealthLink {
 	id: string;
 	/** hublink: a host's link to the hub, as the hub reports it (no local workerd checks that host from here). */
@@ -21,7 +21,7 @@ export interface HealthLink {
 	history: { status: HealthStatus; at: string }[];
 	lastRestart: { at: string; ok: boolean } | null;
 	restartable: boolean;
-	/** The host id it runs on (src/core/pack-hosts.ts); absent from older servers. */
+	/** The host id it runs on (src/core/pack/pack-hosts.ts); absent from older servers. */
 	host?: string;
 	/** "hub": known only from the hub's /healthz (no restart, logs or rollback). */
 	source?: "hub";
@@ -34,7 +34,7 @@ export interface HealthLink {
 	hubStatus?: "online" | "offline";
 }
 
-/** What the console offers besides restart (src/server/pack-health.ts HealthActions; absent from older servers). */
+/** What the console offers besides restart (src/server/pack/pack-health.ts HealthActions; absent from older servers). */
 export interface HealthActionsView {
 	systemd: boolean;
 	rollback: { service: string; from: string | null; to: string | null; last?: { result: string; exitStatus: number | null; at: string | null } | null }[];
@@ -133,7 +133,7 @@ export function machineServiceCards(
 	return serviceCards(links, actions, units);
 }
 
-/** One inventory row as the panel gets it (src/server/inventory.ts RemoteService). */
+/** One inventory row as the panel gets it (src/server/pack/inventory.ts RemoteService). */
 export interface InventoryRowView {
 	machine: string;
 	kind: "hubd" | "workerd" | "wolfd" | "console";

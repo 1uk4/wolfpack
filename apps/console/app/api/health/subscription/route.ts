@@ -3,7 +3,7 @@ import { createSubscriptionHandler } from "@/src/server/pack/subscription-api";
 
 export const dynamic = "force-dynamic";
 
-/** This host's release channel and update mode (src/server/subscription-api.ts). Both verbs need a verified device bearer. */
+/** This host's release channel and update mode (src/server/pack/subscription-api.ts). Both verbs need a verified device bearer. */
 const sub = () => createSubscriptionHandler({ gate: (req) => healthApi().gate(req, "subscription") });
 
 export const GET = (req: Request): Promise<Response> => sub().get(req);

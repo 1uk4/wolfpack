@@ -8,7 +8,7 @@
  *   - camera: {k, x, y} in localStorage (per-device view state).
  *
  * This module only validates, merges and seeds; reading/writing bytes is
- * src/server/graph-positions.ts and graph-view.tsx.
+ * src/server/kb/graph-positions.ts and graph-view.tsx.
  */
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.

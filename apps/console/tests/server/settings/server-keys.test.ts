@@ -7,7 +7,7 @@
  *  - unknown file vars are preserved and surfaced, never editable.
  *
  * WOLFPACK_AUTH_FILE redirects to a fresh tmp dir BEFORE the imports (the seam is
- * module-load bound); the \"real env\" var is set before src/server/keys.ts
+ * module-load bound); the \"real env\" var is set before src/server/settings/keys.ts
  * first loads so the boot snapshot treats it as real environment. All
  * values here are throwaway test strings — never real secrets.
  */

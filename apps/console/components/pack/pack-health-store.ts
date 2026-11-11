@@ -2,10 +2,10 @@
 
 /**
  * The one pack-health subscription per page (work-wolfpack-6imFEq7). Every bar and the modal host read this store through
- * useSyncExternalStore; the first subscriber opens the connection (src/core/pack-health-connection.ts) and the last one to
+ * useSyncExternalStore; the first subscriber opens the connection (src/core/pack/pack-health-connection.ts) and the last one to
  * leave closes it, so the desktop and phone sidebars share one stream. The modal's open state lives here too, so the modal
  * survives the phone list layer closing under it.
- *   dev: ?healthFixture=<name> / ?healthRestart= / ?healthLogs= / ?healthRollback=<status> load components/pack-health-fixtures.ts with a dynamic import, only
+ *   dev: ?healthFixture=<name> / ?healthRestart= / ?healthLogs= / ?healthRollback=<status> load components/pack/pack-health-fixtures.ts with a dynamic import, only
  *        outside production, so the fixtures stay out of the production bundle.
  */
 import { createHealthConnection, type HealthConnectionDeps } from "@/src/core/pack/pack-health-connection";

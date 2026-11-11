@@ -1,6 +1,6 @@
 /**
  * COMMAND PALETTE CORE (⌘K) — pure item building + ranking. No DOM, no IO.
- * The component (components/command-palette.tsx) gathers the sources
+ * The component (components/shell/command-palette.tsx) gathers the sources
  * (wolves, threads, the librarian graph) and renders what rankPalette
  * returns; everything decidable lives here so it is testable.
  */

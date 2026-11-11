@@ -1,7 +1,7 @@
 /**
  * Git overview model for the header popover: time swimlanes of significant moments only (splits, PRs merged to stable,
  * releases, landed work). The thread's branch is the bold lane; children, sibling features, the home branch and stable
- * are the others. Pure; src/server/branch-graph.ts feeds it from read-only git.
+ * are the others. Pure; src/server/thread/branch-graph.ts feeds it from read-only git.
  */
 import { WORK_DOMAINS, WORK_ID_SOURCE, workIdDomain } from "../work/work-id-link.ts";
 

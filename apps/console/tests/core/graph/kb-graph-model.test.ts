@@ -1,5 +1,5 @@
 /**
- * The KB graph model (src/core/kb-graph-model.ts): domain colours, node
+ * The KB graph model (src/core/graph/kb-graph-model.ts): domain colours, node
  * styles, glow groups, canvas mapping, search, cards, the focus param.
  * Pure — no DOM.
  */

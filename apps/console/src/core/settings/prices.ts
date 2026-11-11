@@ -38,7 +38,7 @@ export interface ModelPrice {
  *  (reads pi-ai's shipped catalogs — the same source the engine and the
  *  picker use). Forgetting the re-run is exactly how models go unpriced
  *  (deepseek-v4.1-flash, 2026-09-29) — the drift-guard test
- *  (tests/prices-sync.test.ts) fails the gates until you do. */
+ *  (tests/core/settings/prices-sync.test.ts) fails the gates until you do. */
 export const PRICES: Record<string, ModelPrice> = {
 	"amazon-bedrock:amazon.nova-2-lite-v1:0": { input: 0.33, output: 2.75, cacheRead: 0.0825, cacheWrite: 0.33 },
 	"amazon-bedrock:amazon.nova-lite-v1:0": { input: 0.06, output: 0.24, cacheRead: 0.015, cacheWrite: 0.06 },

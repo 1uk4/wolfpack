@@ -2,7 +2,7 @@
  * Graph-adjacent contracts: a node's stored position and the chat auto-title
  * helper. (The original proposition/chain/snapshot model is gone; the
  * knowledge graph is the KB graph served by the librarian — see
- * src/core/kb-graph-model.ts.)
+ * src/core/graph/kb-graph-model.ts.)
  *
  * Part of the domain-split contracts (src/core/contracts/): pure types +
  * tiny pure helpers.

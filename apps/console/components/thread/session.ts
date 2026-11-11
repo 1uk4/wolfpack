@@ -2,7 +2,7 @@
 
 /**
  * THE SESSION HOOK (Wave D, owner-approved 2026-09-26): the React adapter
- * over the pure SessionModel (components/session-core.ts — the state
+ * over the pure SessionModel (components/thread/session-core.ts — the state
  * machine, testable without a renderer). All mechanics live in the model;
  * this hook re-renders on change and derives the view (core/view.ts
  * projectView — the golden-master grouping, client-side).

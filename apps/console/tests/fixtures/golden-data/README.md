@@ -3,10 +3,10 @@
 **The law (owner ruling, 2026-10-10):** this directory is a REAL data dir —
 verbatim records written by the real application code, never hand-edited. Any
 intentional on-disk format change updates these fixtures IN THE SAME COMMIT;
-an unintentional change fails `tests/golden-fixtures.test.ts`. When schema
+an unintentional change fails `tests/core/graph/golden-fixtures.test.ts`. When schema
 stamps land (Wave D), the stamping commit updates these files with it.
 
-`tests/golden-fixtures.test.ts` copies this dir to a temp dir, points the
+`tests/core/graph/golden-fixtures.test.ts` copies this dir to a temp dir, points the
 production stores at it via the `WOLFPACK_DATA_DIR` seam, and reads EVERYTHING
 through the real read paths — chat records (contract folds + the LLM wire
 flattening), graph render settings, jobs,

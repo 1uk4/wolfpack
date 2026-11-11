@@ -178,7 +178,7 @@ for (const name of ["read", "ls", "find", "grep"]) {
 	registerCard("tool", name, { Renderer: ToolCallCard, threadRow: true });
 }
 
-// Structured objects, keyed by object type (src/core/objects.ts folds the
+// Structured objects, keyed by object type (src/core/thread/objects.ts folds the
 // object-upsert / history objects into one part per object).
 registerCard("object", "decision", { Renderer: DecisionCard });
 registerCard("object", "checklist", { Renderer: ChecklistCard });

@@ -12,7 +12,7 @@ type GraphModel = Extract<TaskGraphModel, { kind: "graph" }>;
 /**
  * The feature's task graph, drawn by React Flow (HTML cards, so titles wrap
  * and clamp; real edges; pan/zoom) over the pure placement in
- * src/core/task-graph-layout (dagre per connected component, chains stacked,
+ * src/core/work/task-graph-layout (dagre per connected component, chains stacked,
  * single tasks packed into a wrapped grid). Status → look: shipped = muted +
  * check; building = sky border + dot; ready = normal; blocked = dashed;
  * archived = faded. The bound task wears a yellow ring and "current". Edges

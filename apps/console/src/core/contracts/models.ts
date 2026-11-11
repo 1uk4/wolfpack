@@ -1,7 +1,7 @@
 /**
  * Model-catalog contracts (model-control wave, 2026-09-12) — the client-safe
  * shapes of GET /api/models and PUT /api/chats/[id]/settings responses.
- * Pure types; the server projection lives in src/server/model-catalog.ts
+ * Pure types; the server projection lives in src/server/settings/model-catalog.ts
  * (which OWNS these shapes — the contract is defined here only so client
  * components never import from the server band).
  */

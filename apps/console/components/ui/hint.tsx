@@ -33,7 +33,7 @@ interface HintProps {
 }
 
 /** The composition itself, pure — "Dictate" + ⌘D → "Dictate (⌘D)". Exported
- *  for the mechanism pins (tests/tooltip-mechanism.test.tsx). */
+ *  for the mechanism pins (tests/core/ui/tooltip-mechanism.test.tsx). */
 export function hintText(label: string, action?: KeyAction, binding?: string): string {
 	const live = action
 		? formatBinding(bindingForAction(action))

@@ -5,7 +5,7 @@ import { HUB_COOKIE, HUB_COOKIE_HOST, readHubToken } from "@/src/core/ui/hub-aut
 
 /**
  * Route error boundary. A server-rendered page that failed because the hub rejected the browser's token cannot tell the browser why (Next
- * redacts the message in production), so probe once: the hub-auth fetch wrapper (components/hub-auth.tsx) clears the stored token + cookie
+ * redacts the message in production), so probe once: the hub-auth fetch wrapper (components/shell/hub-auth.tsx) clears the stored token + cookie
  * and goes to /pair on a hub-auth 401, and otherwise this just shows the retry.
  */
 export default function RouteError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {

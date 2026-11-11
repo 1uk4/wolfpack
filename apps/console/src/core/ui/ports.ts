@@ -5,7 +5,7 @@
  * key/value interface. Core and the service layer that orbits it code
  * against these types only; concrete adapters live in src/store/ (fs
  * JSON/JSONL today, SQLite drop-in later) and are wired exactly once, in
- * the composition root (src/server/stores.ts). Dependencies point one way:
+ * the composition root (src/server/settings/stores.ts). Dependencies point one way:
  * adapters may import core; core NEVER imports an adapter.
  */
 
@@ -105,7 +105,7 @@ export interface SettingsStore {
  * server-managed. Values are opaque strings: shape validation is a
  * server-band concern (core/auth-keys.ts validateKeyShape — the store
  * persists what it is given); env precedence is a server-band concern
- * too (src/server/keys.ts). Unknown vars ride along verbatim.
+ * too (src/server/settings/keys.ts). Unknown vars ride along verbatim.
  */
 export interface AuthStore {
 	/** The whole map — absent or corrupt file = {} ("no keys yet", the

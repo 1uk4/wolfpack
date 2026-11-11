@@ -7,7 +7,7 @@
  * The renderer (./graph-canvas.ts) is a dumb draw function over plain data
  * with ONE requestAnimationFrame loop and a dirty flag; this component's job
  * is everything AROUND drawing: turn the KbGraph payload into canvas data
- * (src/core/kb-graph-model.ts — domain colours, node styles, glow groups),
+ * (src/core/graph/kb-graph-model.ts — domain colours, node styles, glow groups),
  * give every node a position (stored positions, then the shared d3-force
  * layout for the rest), resolve theme colours to hex, filter via the search
  * box, and own the docked detail pane / settings panel.

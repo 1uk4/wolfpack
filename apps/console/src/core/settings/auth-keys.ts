@@ -57,7 +57,7 @@ export interface AuthProviderInfo {
  * THE MODEL-PROVIDER KEY TABLE (provider-keys interlude, 2026-09-19):
  * every pi-ai provider that takes a PLAIN api-key env var — derived from
  * pi-ai's own provider→env-var table at generation time, so it can never
- * drift from what pi actually reads: tests/auth-provider-keys.test.ts
+ * drift from what pi actually reads: tests/core/settings/auth-provider-keys.test.ts
  * re-derives the truth from pi-ai (builtinProviders + findEnvKeys via a
  * truthy-for-every-var proxy env) and asserts EXACT equality with this
  * table — a pi-ai upgrade that adds/renames a provider key fails the gate

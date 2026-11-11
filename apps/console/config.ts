@@ -41,13 +41,13 @@ export const PATHS = {
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** The graph's stored node positions: a plain JSON map nodeId → {x,y}
- *  (src/core/graph-persistence.ts). The console's own store; the KB is
+ *  (src/core/graph/graph-persistence.ts). The console's own store; the KB is
  *  never written. */
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
 /**
  * Graph render settings (the settings-panel controls): one small JSON blob,
- * read-modify-write. Shared shape/sanitizer: src/core/render-settings.ts.
+ * read-modify-write. Shared shape/sanitizer: src/core/graph/render-settings.ts.
  */
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
@@ -57,7 +57,7 @@ export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json
  * non-secret product preference — general, agent (background
  * model/thinking overrides + tool toggles + prompt-override switches),
  * appearance, graph. Explicit user choices only: ABSENT keys resolve to the
- * factory defaults compiled into src/core/settings.ts (FACTORY_SETTINGS), so
+ * factory defaults compiled into src/core/settings/settings.ts (FACTORY_SETTINGS), so
  * a software update that adds a knob (new tool, new role, new appearance
  * field) needs no migration — old records simply lack the new keys. The
  * version field is a PRIVATE schema counter for breaking shape changes
@@ -79,7 +79,7 @@ export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
  * The SERVER reads/writes this file directly at call time (no restart to
  * change a key); it reflects the values into process.env at boot with
  * FILL-GAP precedence — real environment variables (incl. .env.local in
- * dev) always win (src/server/keys.ts). Hand-edits still work: the file is
+ * dev) always win (src/server/settings/keys.ts). Hand-edits still work: the file is
  * re-read from disk on every API access. Secrets NEVER go in settings.json
  * — this file keeps that role, alongside .env.local.
  */

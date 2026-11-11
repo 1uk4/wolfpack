@@ -1,6 +1,6 @@
 /**
  * Structured objects in the thread view (decision now; checklist and graph add a type in the protocol's objects.ts
- * and a card in components/card-registry). PURE — no React, no IO.
+ * and a card in components/thread/card-registry). PURE — no React, no IO.
  *
  * Transport: the protocol's `object-upsert` event (live) and `ThreadMessage.objects` (history/reload) — the adapter
  * and threadMessagesToNative turn both into the SAME native block, `{type:"object", objectId, objectType, rev, data}`

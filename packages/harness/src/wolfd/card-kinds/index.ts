@@ -1,7 +1,7 @@
 /**
  * wolfd's field-kind registry: validate / isEmpty / answerText per card answer kind, one module per kind.
  * To add a kind: write `<kind>.ts` exporting a `FieldKind`, add it to BUILTIN below (or `registerFieldKind` at startup),
- * and add the protocol module (packages/protocol/src/card-kinds) and console renderer (apps/console/components/card-fields).
+ * and add the protocol module (packages/protocol/src/card-kinds) and console renderer (apps/console/components/ask/card-fields).
  * A kind this build does not know is handled like free text, so a card from a newer wolf still gets an answer.
  */
 import { confirmFieldKind } from "./confirm.js";

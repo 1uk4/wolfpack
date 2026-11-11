@@ -1,5 +1,5 @@
 /**
- * Cookie -> bearer for read-only navigations (see the COOKIE MIRROR note in src/core/hub-auth.ts for the rules). Runs before every page and
+ * Cookie -> bearer for read-only navigations (see the COOKIE MIRROR note in src/core/ui/hub-auth.ts for the rules). Runs before every page and
  * route; the rest of the server only ever reads `Authorization: Bearer`. It never touches a request that already has an Authorization
  * header, never acts on non-GET/HEAD, and never on a cross-site request that is not a top-level navigation.
  *

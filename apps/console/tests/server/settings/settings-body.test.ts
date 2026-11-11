@@ -1,6 +1,6 @@
 /**
  * Tests for the section parsers (settings-storage wave, 2026-09-19):
- * src/server/settings-body.ts — general/agent/appearance strictness.
+ * src/server/settings/settings-body.ts — general/agent/appearance strictness.
  * Same discipline as parseSettingsBody (its tests live in
  * default-settings.test.ts): every known field is strict (bad type/shape
  * → 400-style error, never a silent clamp), unknown keys drop, absent

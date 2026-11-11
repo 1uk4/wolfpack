@@ -4,7 +4,7 @@
  * The node card's route section: step indicator, ← / → buttons (and the same
  * keys while the card is mounted, i.e. while the graph holds the selection),
  * and a dropdown of the step's nodes at a parallel step. Presentational over
- * the route + cursor models (src/core/work-route.ts); the graph view owns the
+ * the route + cursor models (src/core/work/work-route.ts); the graph view owns the
  * cursor state.
  */
 import { useEffect } from "react";

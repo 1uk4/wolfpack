@@ -149,7 +149,7 @@ export function renderItems(parts: readonly LhViewPart[], streaming: boolean): R
 			const placeholder = streaming && index === parts.length - 1;
 			if (!isEmptyThinking(part) || placeholder) item = { kind: "reasoning", part, index };
 		} else if (part.type === "object") {
-			// Cards come from object-upsert / history objects (components/card-registry, kind "object").
+			// Cards come from object-upsert / history objects (components/thread/card-registry, kind "object").
 			item = { kind: "object", part, index };
 		} else if (isToolPart(part)) {
 			// The object tools' own rows stay hidden (their card is the UX) unless the call failed: then a compact error row.

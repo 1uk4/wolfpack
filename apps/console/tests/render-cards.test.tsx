@@ -16,10 +16,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
-import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
-import { JobsContext } from "../components/jobs-context.ts";
-import { ChatActionsContext } from "../components/chat-actions-context.ts";
-import type { JobRecord } from "../src/core/contracts.ts";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import {
 	buildAnswer,
@@ -60,65 +56,6 @@ function askQD(): QuestionData {
 		createdAt: new Date().toISOString(),
 	};
 }
-
-describe("DispatchCard — the BYOK refusal tone (owner, 2026-09-22)", () => {
-	const job = (over: Partial<JobRecord>): JobRecord => ({
-		id: "j1",
-		kind: "research",
-		chatId: "c1",
-		toolCallId: "t1",
-		status: "error",
-		activity: "",
-		createdAt: new Date().toISOString(),
-		updatedAt: new Date().toISOString(),
-		...over,
-	});
-	const inJobs = (jobs: JobRecord[]) => (
-		<JobsContext.Provider value={jobs}>
-			<ChatActionsContext.Provider
-				value={{ chatId: "c1", syncFromServer: async () => {}, sendText: () => {}, openSetup: () => {} }}
-			>
-				<DispatchCard toolCallId="t1" kind="research" />
-			</ChatActionsContext.Provider>
-		</JobsContext.Provider>
-	);
-
-	it("a models-refused job is INFO: quiet card, 'needs model setup', deep-link to the dialog", () => {
-		const html = renderToStaticMarkup(
-			inJobs([job({ error: "No model configured — set up your models first (missing: cheap)" })]),
-		);
-		assert.ok(html.includes('data-testid="dispatch-refused"'));
-		assert.ok(html.includes("needs model setup"));
-		assert.ok(html.includes('data-testid="dispatch-setup-link"'));
-		assert.ok(html.includes("Set up models"));
-		assert.ok(!html.includes("failed"));
-		assert.ok(!html.includes("text-red-500"));
-	});
-
-	it("a key-refused job is INFO: 'needs a provider key', 'Add a key' (zero-keys wave, 66dbea9)", () => {
-		const html = renderToStaticMarkup(
-			inJobs([job({ error: "No OpenRouter key is set — add one in Settings → Keys" })]),
-		);
-		assert.ok(html.includes('data-testid="dispatch-refused"'));
-		assert.ok(html.includes("needs a provider key"));
-		assert.ok(html.includes("Add a key"));
-		assert.ok(html.includes('data-testid="dispatch-setup-link"'));
-		assert.ok(!html.includes("failed"));
-	});
-
-	it("a real failure keeps the honest red failure", () => {
-		const html = renderToStaticMarkup(inJobs([job({ error: "FAILED: headless crashed" })]));
-		assert.ok(html.includes('data-testid="dispatch-settled"'));
-		assert.ok(html.includes("failed"));
-		assert.ok(html.includes("text-red-500"));
-		assert.ok(!html.includes("dispatch-refused"));
-	});
-
-	it("a delivered job reads delivered, untouched by the wave", () => {
-		const html = renderToStaticMarkup(inJobs([job({ status: "done", error: undefined })]));
-		assert.ok(html.includes("delivered"));
-	});
-});
 
 describe("render smoke tests", () => {
 

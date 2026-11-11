@@ -4,7 +4,6 @@
  * here; nothing under app/ touches src/store or src/agent directly.
  */
 
-export * from "./chat-handler.ts";
 export * from "./events-stream.ts";
 export * from "./chats.ts";
 export * from "./graph-positions.ts";

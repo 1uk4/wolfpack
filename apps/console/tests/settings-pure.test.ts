@@ -8,12 +8,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
-import { composeSlotModel } from "../components/model-slot.ts";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, visibleKeyGroups, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
 import type { AuthKeyStatus, ModelsSettings } from "../src/core";
 import { slotsConfigured } from "../src/core";
-import { setupStage } from "../components/setup-dialog.tsx";
 
 describe("resolveAppearance — delta over factory", () => {
 	it("absent everything = the factory view", () => {
@@ -135,40 +133,6 @@ describe("staleVarNames — the removal half of application (owner repro: resets
 	});
 });
 
-describe("agent section compose helpers — the replace-whole PUT body", () => {
-	it("composeSlotModel: empty+empty REMOVES the slot (absent = factory pin)", () => {
-		const after = composeSlotModel(
-			{ strong: { model: { provider: "openrouter", id: "x" } }, cheap: {} },
-			"strong",
-			"",
-			"",
-			"",
-		);
-		assert.equal(after.strong, undefined, "slot dropped");
-		assert.deepEqual(after.cheap, {}, "sibling untouched");
-	});
-
-	it("composeSlotModel: model alone, thinking alone, and both — provider rides the swap (federation)", () => {
-		assert.deepEqual(composeSlotModel(undefined, "strong", "zai", "glm-4.7-flash", "").strong, {
-			model: { provider: "zai", id: "glm-4.7-flash" },
-		});
-		assert.deepEqual(composeSlotModel(undefined, "cheap", "", "", "low").cheap, { thinkingLevel: "low" });
-		assert.deepEqual(composeSlotModel(undefined, "vision", "openai", "gpt-5.2", "high").vision, {
-			model: { provider: "openai", id: "gpt-5.2" },
-			thinkingLevel: "high",
-		});
-	});
-
-	it("composeSlotModel: per-field independence — clearing the model keeps the thinking pin", () => {
-		const prev: ModelsSettings = { strong: { model: { provider: "zai", id: "glm-4.7-flash" }, thinkingLevel: "high" } };
-		const after = composeSlotModel(prev, "strong", "", "", "high");
-		assert.deepEqual(after.strong, { model: { provider: "zai", id: "glm-4.7-flash" }, thinkingLevel: "high" }, "model carried, thinking kept");
-		// clearing thinking keeps the model
-		const after2 = composeSlotModel(prev, "strong", "zai", "glm-4.7-flash", "");
-		assert.deepEqual(after2.strong, { model: { provider: "zai", id: "glm-4.7-flash" } }, "thinking dropped, model kept");
-	});
-});
-
 describe("nextOverrides — the rebind persistence map", () => {
 	it("a rebind sets the action's override, keeping the others", () => {
 		const next = nextOverrides({ "toggle-sidebar": "mod+b" }, "open-settings", "mod+shift+s");
@@ -277,7 +241,7 @@ describe("keyStatusLine — the minimal at-a-glance state", () => {
 	});
 });
 
-describe("first-run gate — slotsConfigured + setupStage (model-slots wave)", () => {
+describe("first-run gate — slotsConfigured (model-slots wave)", () => {
 	it("slotsConfigured: all three slot models required — thinking levels are optional", () => {
 		assert.equal(slotsConfigured(undefined), false, "no record = unconfigured");
 		assert.equal(slotsConfigured({}), false, "empty models section");
@@ -306,11 +270,5 @@ describe("first-run gate — slotsConfigured + setupStage (model-slots wave)", (
 		);
 	});
 
-	it("setupStage: keys before models (owner's dependency ordering)", () => {
-		assert.equal(setupStage(null), "keys", "fetch failed → the honest fallback");
-		assert.equal(setupStage([]), "keys", "no providers = keys");
-		assert.equal(setupStage([{ id: "zai", keyPresent: false }]), "keys", "provider present but keyless");
-		assert.equal(setupStage([{ id: "zai", keyPresent: false }, { id: "openai", keyPresent: true }]), "pickers", "one keyed provider widens the pickers");
-	});
 });
 

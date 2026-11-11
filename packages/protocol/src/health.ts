@@ -12,6 +12,8 @@ export interface HealthBody {
   version?: string;
   /** os.hostname() of the machine the service runs on. Additive: older services omit it. */
   host?: string;
+  /** Machine name (WOLFPACK_MACHINE, else hostname, normalised). Additive: older services omit it. */
+  machine?: string;
   uptimeS?: number;
   /** Event-loop delay over the service's rolling window (about the last 20 s), ms beyond the sampler's own interval: p99 and max. */
   lag?: { p99Ms: number; maxMs: number };
@@ -25,6 +27,8 @@ export interface HubHealthHost {
   /** The worker token's label: the operator's `hubd pair --label`, else the os.hostname() workerd sent when it paired. */
   label?: string;
   presence: "online" | "asleep" | "offline";
+  /** The machine this host's worker reported in its hello (several host ids can share one machine). Absent: older worker, or never connected. */
+  machine?: string;
   /** When presence last changed, as seen by this hubd process (absent: unchanged since it started). */
   since?: string;
   wolves: { name: string; status: "online" | "offline" }[];

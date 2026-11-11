@@ -28,10 +28,12 @@ import {
   type LinkErrorCode,
   type LinkFrame,
   type LinkHello,
+  type LinkReport,
   type LinkContribute,
   type LinkContributeAck,
   type LinkPresence,
 } from "@wolfpack/protocol";
+import { normaliseMachine } from "@wolfpack/protocol/health-lag";
 import type { AuthIdentity } from "./auth.js";
 import type { Registry } from "./registry.js";
 
@@ -56,6 +58,10 @@ export interface LinkOptions {
     onContribute: (hostId: string, f: LinkContribute) => LinkContributeAck | Promise<LinkContributeAck>;
     onReceiptAck: (hostId: string, id: string) => void;
   };
+  /** A `report` frame arrived from a registered host (its machine = the hello's, undefined for an older worker). Setting this makes the welcome advertise `inventory`. */
+  onReport?: (hostId: string, machine: string | undefined, entries: LinkReport["entries"]) => void;
+  /** A host's current link closed (not a replaced one). */
+  onHostGone?: (hostId: string) => void;
   /** A relay frame (res/chunk/end/rerr) arrived from a registered host's live link. */
   onRelayFrame?: (hostId: string, epoch: number, frame: LinkFrame) => void;
   /** A registered link (identified by its epoch) closed, for whatever reason (including being replaced). */
@@ -84,6 +90,8 @@ export interface Link {
   sendToWolf(wolf: string, frame: LinkFrame): boolean;
   /** Identity of the host's live link (changes on every reconnect); undefined when there is none. */
   epoch(hostId: string): number | undefined;
+  /** The machine the host last reported in its hello (kept while it is offline); undefined for an older worker. */
+  machine(hostId: string): string | undefined;
   readonly relayHeadTimeoutMs: number;
 }
 
@@ -135,6 +143,7 @@ export function createLink(opts: LinkOptions): Link {
   };
   /** What each live host was last told, so a grants frame goes out only when the union really changed. Pruned on disconnect. */
   const sentGrants = new Map<string, string>();
+  const machines = new Map<string, string>();
   const pushGrants = (hostIds: Iterable<string>) => {
     const all = grantedAll();
     if (!all) return; // skip: never send or cache [] on error
@@ -217,6 +226,8 @@ export function createLink(opts: LinkOptions): Link {
     if (byHost.get(c.hostId) !== c) return; // replaced or never registered: presence belongs to the newer link
     byHost.delete(c.hostId);
     sentGrants.delete(c.hostId);
+    machines.delete(c.hostId);
+    opts.onHostGone?.(c.hostId);
     const laptop = c.hello?.laptop ?? false;
     const asleep = !c.hubClosed && (c.sleeping || ((code === 1000 || c.bye) && laptop));
     setPresence(c.hostId, asleep ? "asleep" : "offline");
@@ -246,6 +257,9 @@ export function createLink(opts: LinkOptions): Link {
     }
     byHost.set(c.hostId, c);
     c.hello = h;
+    const machine = normaliseMachine(h.machine);
+    if (machine) machines.set(c.hostId, machine);
+    else machines.delete(c.hostId); // an older worker reconnecting clears the stale value
     // Hello accepted: now allow full-size frames (ws keeps the limit on the receiver; there is no public setter).
     const receiver = (c.ws as unknown as { _receiver?: { _maxPayload?: number } })._receiver;
     if (receiver && typeof receiver._maxPayload === "number") receiver._maxPayload = LINK_MAX_PAYLOAD;
@@ -253,7 +267,7 @@ export function createLink(opts: LinkOptions): Link {
     if (result.rejected.length) log(`hubd: link ${c.hostId}: rejected wolves ${result.rejected.map(q).join(", ")}`);
     const all = grantedAll();
     const granted = all ? (all.get(c.hostId) ?? []) : undefined;
-    send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired: result.retired, rejected: result.rejected, domainMismatch: result.domainMismatch, hubRevisions: {}, ...(granted ? { grantedDomains: granted } : {}) });
+    send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired: result.retired, rejected: result.rejected, domainMismatch: result.domainMismatch, hubRevisions: {}, ...(granted ? { grantedDomains: granted } : {}), ...(opts.onReport ? { inventory: true } : {}) });
     if (granted) sentGrants.set(c.hostId, JSON.stringify(granted));
     else sentGrants.delete(c.hostId);
     setPresence(c.hostId, "online");
@@ -320,6 +334,8 @@ export function createLink(opts: LinkOptions): Link {
         return;
       case "wolf.remove":
         return opts.registry.removeWolf(c.hostId, f.name);
+      case "report":
+        return opts.onReport?.(c.hostId, machines.get(c.hostId), f.entries);
       case "contribute":
         if (opts.contributions) send(c, await opts.contributions.onContribute(c.hostId, f));
         return;
@@ -413,6 +429,7 @@ export function createLink(opts: LinkOptions): Link {
     },
     sendToHost,
     epoch: (hostId) => byHost.get(hostId)?.epoch,
+    machine: (hostId) => machines.get(hostId),
     relayHeadTimeoutMs: t.relayHeadTimeoutMs,
     pushKbChanged,
     sendToWolf(wolf, frame) {

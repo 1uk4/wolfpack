@@ -49,6 +49,22 @@ describe("pack health by host", () => {
 		]);
 	});
 
+	it("puts sfo-01's hub, its workerd-wolves (a different hub host id) and wolfd@hal in ONE sfo-01 card when they report the machine sfo-01, while the console stays on its own machine", () => {
+		const snap: HealthSnapshotView = {
+			checkedAt: null,
+			intervalMs: 5000,
+			hosts: [
+				{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin" },
+				{ id: "sfo-01", label: "sfo-01", isThisConsole: false },
+			],
+			links: [link("hubd", "sfo-01"), link("workerd-wolves", "sfo-01"), link("wolfd@hal", "sfo-01", { via: "workerd-wolves" })],
+		};
+		assert.deepEqual(
+			shape(groupByHost(snap)).filter((c) => c.checked).map((c) => [c.id, c.console, c.hub, c.workerds]),
+			[["luka-air", true, null, []], ["sfo-01", false, "hubd", [["workerd-wolves", ["wolfd@hal"]]]]],
+		);
+	});
+
 	it("on the Mac orders this console's host first, then the hub's host, then the rest by label; a wolf without a workerd sits loose in its host", () => {
 		const snap: HealthSnapshotView = {
 			checkedAt: null,
@@ -96,5 +112,12 @@ describe("pack health by host", () => {
 			{ id: "sfo-01", label: "sfo-01", checked: true, console: false, facts: "sfo-01", hub: "hubd", workerds: [["hub-link@sfo", ["wolfd@hal"]]], wolves: [] },
 			{ id: "sfo-010", label: "sfo-010", checked: true, console: false, facts: null, hub: null, workerds: [["hub-link@x", []]], wolves: [] },
 		]);
+	});
+
+	it("always yields exactly one console card (the update controls live there), with an empty host list or a host list that omits the console", () => {
+		for (const hosts of [undefined, [], [{ id: "sfo-01", label: "sfo-01", isThisConsole: false }]]) {
+			const snap: HealthSnapshotView = { checkedAt: null, intervalMs: 5000, ...(hosts ? { hosts } : {}), links: [link("workerd", "sfo-01")] };
+			assert.equal(groupByHost(snap).filter((c) => c.console).length, 1, JSON.stringify(hosts));
+		}
 	});
 });

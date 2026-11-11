@@ -1,5 +1,5 @@
 /** Pack health view model (work-wolfpack-6imFEq7): pure wording and colour for the sidebar bar and the health modal. */
-import type { HostInfo } from "./pack-hosts.ts";
+import type { HostCard, HostInfo } from "./pack-hosts.ts";
 
 export type HealthStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
 export type Tone = "red" | "amber" | "grey" | "green";
@@ -41,59 +41,253 @@ export interface HealthActionsView {
 }
 
 export interface HealthSnapshotView {
+	/** This console's own inventory entry (version, channel, uptime, lag); absent from older servers. */
+	self?: Omit<InventoryRowView, "ageS" | "latest"> | null;
 	checkedAt: string | null;
 	intervalMs: number;
 	links: HealthLink[];
 	actions?: HealthActionsView;
 	/** The hosts the links run on, this console's own included (absent from older servers). */
 	hosts?: HostInfo[];
+	/** Other machines' services as the hub lists them; null/absent: the hub has no inventory (older hub). */
+	inventory?: { rows: InventoryRowView[]; stale: boolean; hubMachine: string | null } | null;
 }
 
-/** The Mac live stack has no systemd: these are what the owner can run by hand (scripts/stack.mjs). */
-export const MAC_STACK_COMMANDS = ["pnpm stack restart", "tail -n 100 ~/wolves/local/logs/stack.log"];
-
-/** The rollback targets, by the link that represents them (hubd; the link-only workerd unit). The console row is the modal's own. */
-const ROLLBACK_LINK: Record<string, string> = { hubd: "hubd", workerd: "workerd" };
-
-/**
- * What a row offers (work-wolfpack-yM3uTlj). Under systemd: Restart and Logs for a unit the console may restart, Roll back for hubd and
- * the workerd link unit when a previous release is kept. Off systemd (the Mac stack, or an older server without `actions`): no Restart, nothing that
- * would fail, just the stack commands to copy on the workerd and wolf rows (the hub runs elsewhere).
- */
-export function rowActions(
-	l: Pick<HealthLink, "id" | "kind" | "restartable"> & { source?: "hub" },
-	actions: HealthActionsView | undefined,
-): { logs: boolean; rollback: { service: string; to: string | null } | null; macCommands: string[] | null; restart: boolean } {
-	if (l.source === "hub" || l.kind === "hublink") return { logs: false, rollback: null, macCommands: null, restart: false }; // seen only through the hub: nothing to act on from here
-	if (!actions?.systemd) return { logs: false, rollback: null, macCommands: l.kind === "hubd" ? null : [...MAC_STACK_COMMANDS], restart: false };
-	const svc = ROLLBACK_LINK[l.id];
-	const rb = svc ? actions.rollback.find((r) => r.service === svc) : undefined;
-	return { logs: l.restartable, rollback: rb && rollbackOffered(rb) ? { service: rb.service, to: rb.to } : null, macCommands: null, restart: l.restartable };
-}
-
-/** The X.Y.Z core of a version as numbers, or null when it has none. */
-const coreOf = (v: string | null): [number, number, number] | null => {
-	const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
-	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+/** X.Y.Z[-pre] of a version (any +build ignored), or null when it has none. */
+const parseV = (v: string | null): { core: number[]; pre: string[] } | null => {
+	const m = v ? /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(v) : null;
+	return m ? { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ? m[4].split(".") : [] } : null;
 };
-const cmpCore = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+/** Semver order of X.Y.Z[-pre] (`0.1.21-main.3` < `0.1.21`); builds ignored. null when either has no version. */
+function cmpV(a: string | null, b: string | null): number | null {
+	const x = parseV(a);
+	const y = parseV(b);
+	if (!x || !y) return null;
+	for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i]! - y.core[i]!;
+	if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length;
+	for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+		const p = x.pre[i];
+		const q = y.pre[i];
+		if (p === undefined) return -1;
+		if (q === undefined) return 1;
+		if (p === q) continue;
+		return /^\d+$/.test(p) && /^\d+$/.test(q) ? Number(p) - Number(q) : p < q ? -1 : 1;
+	}
+	return 0;
+}
+
+/** True when `to` is newer than `from`; equal versions (another build) and unknown versions are not. Shared with the server's rollback guard. */
+export const isNewerVersion = (to: string | null, from: string | null): boolean => (cmpV(to, from) ?? 0) > 0;
 
 /**
- * Whether Roll back is offered: never when `to` is newer than `from` on the X.Y.Z core (after a rollback, `previous` is the release just
- * left, so "rolling back" would go forward). Equal cores (another build) and unknown versions stay offered.
+ * Whether Roll back is offered: never when `to` is newer than `from` (after a rollback, `previous` is the release just
+ * left, so "rolling back" would go forward). Equal versions (another build) and unknown versions stay offered.
  */
 export function rollbackOffered(r: { from: string | null; to: string | null }): boolean {
-	const a = coreOf(r.from);
-	const b = coreOf(r.to);
-	return !(a && b && cmpCore(b, a) > 0);
+	return !isNewerVersion(r.to, r.from);
+}
+
+export interface ServiceCard {
+	component: "console" | "hubd" | "wolfd" | "workerd";
+	running: string | null;
+	/** The subscribed channel's newer version, when this service is behind. */
+	latest: string | null;
+	tone: Tone;
+	canUpdate: boolean;
+	/** The kept previous release, when Roll back is offered. */
+	rollbackTo: string | null;
+}
+
+const CARD_ORDER = ["console", "hubd", "wolfd", "workerd"] as const;
+
+/** One card per service for the pack panel. Update and Roll back need systemd. */
+export function serviceCards(links: HealthLink[], actions: HealthActionsView | undefined, units: UpdateUnitView[]): ServiceCard[] {
+	const systemd = !!actions?.systemd;
+	return CARD_ORDER.map((component) => {
+		const rb = actions?.rollback.find((r) => r.service === component);
+		const ls = links.filter((l) => l.kind === component);
+		const unit = units.find((u) => u.component === component);
+		const worst = ls.map((l) => toneOf(l.status)).reduce<Tone>((a, t) => (RANK[t] > RANK[a] ? t : a), "green");
+		return {
+			component,
+			running: component === "console" ? (rb?.from ?? null) : (ls[0]?.version ?? null),
+			latest: unit?.to ?? null,
+			tone: component === "console" ? "green" : ls.length ? worst : "grey",
+			canUpdate: systemd && !!unit,
+			rollbackTo: systemd && rb && rollbackOffered(rb) ? rb.to : null,
+		};
+	});
+}
+
+/**
+ * The update controls of one machine card. The updater and the subscription file are per machine, so only the console's own machine
+ * has them (built from the links on that machine); other machines show status and version only.
+ */
+export function machineServiceCards(
+	m: Pick<HostCard, "console" | "hub" | "workerds" | "wolves">,
+	actions: HealthActionsView | undefined,
+	units: UpdateUnitView[],
+): ServiceCard[] {
+	if (!m.console) return [];
+	const links = [...(m.hub ? [m.hub] : []), ...m.workerds.flatMap((w) => [w.link, ...w.wolves]), ...m.wolves];
+	return serviceCards(links, actions, units);
+}
+
+/** One inventory row as the panel gets it (src/server/inventory.ts RemoteService). */
+export interface InventoryRowView {
+	machine: string;
+	kind: "hubd" | "workerd" | "wolfd" | "console";
+	id: string;
+	parent?: string;
+	version?: string;
+	channel?: "stable" | "main";
+	uptimeS?: number;
+	lagMs?: number;
+	responseMs?: number;
+	ageS: number;
+	/** The channel's newer version when this row is behind. */
+	latest: string | null;
+}
+
+/** What the console knows about its own machine: its channel, the newer versions its update units name, and the console's own version. */
+export interface OwnMachineView {
+	channel: string | null;
+	latest: Partial<Record<InventoryRowView["kind"], string | null>>;
+	consoleVersion: string | null;
+	/** The console's own entry from the snapshot (absent: older server, then consoleVersion is all there is). */
+	self?: Omit<InventoryRowView, "ageS" | "latest"> | null;
+}
+
+/** One line of a machine card: a service with its release. `children`: the wolves under a workerd. */
+export interface ServiceRow {
+	key: string;
+	kind: InventoryRowView["kind"];
+	name: string;
+	/** The local probe (or hub presence) behind the row, when there is one: actions and errors hang off it. */
+	link: HealthLink | null;
+	status: HealthStatus;
+	version: string | null;
+	channel: string | null;
+	/** "up to date", "behind → vX", "version unknown", "dev build", or "" when the row reports no channel. */
+	verdict: string;
+	uptime: string;
+	/** Whole ms, only where it is measured (wolfd); else "—". */
+	response: string;
+	lag: string;
+	children: ServiceRow[];
+	/** True on a machine nothing reports for: the row is a placeholder from the pack map. */
+	noReport?: boolean;
+}
+
+/** The Update / Roll back / auto controls belong only to a checked card on the console's own machine. */
+export function offersOwnControls(card: Pick<HostCard, "console" | "checked">): boolean {
+	return card.console && card.checked;
+}
+
+const ms = (n: number | null | undefined): string => (n === null || n === undefined ? "—" : `${Math.round(n)} ms`);
+
+function verdictOf(version: string | null, channel: string | null, latest: string | null): string {
+	if (!version) return "version unknown";
+	if (/-dev(?:[.+]|$)/.test(version)) return "dev build";
+	if (!channel) return "";
+	return latest ? `behind → v${latest}` : "up to date";
+}
+
+const upText = (s: number | null | undefined): string => {
+	if (s === null || s === undefined) return "—";
+	if (s < 60) return `${Math.floor(s)}s`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m`;
+	const h = Math.floor(m / 60);
+	return h < 24 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+};
+
+const bare = (id: string): string => id.replace(/^hub-link@/, "").replace(/^wolfd@/, "");
+
+/**
+ * The rows of one machine card: the hub, each workerd (its hub link folded into the row) with its wolves nested under it, and this console.
+ * Versions, channels and verdicts come from the inventory entries (`inv`: this machine's); a row with only a probe or hub presence says
+ * "version unknown". On the console's own machine (`own`) the local probes supply version, channel (the machine's) and the newer version.
+ */
+export function machineServices(card: Pick<HostCard, "console" | "hub" | "workerds" | "wolves"> & { facts?: HostCard["facts"] }, inv: InventoryRowView[], own: OwnMachineView | null): ServiceRow[] {
+	const mk = (kind: ServiceRow["kind"], id: string, name: string, link: HealthLink | null, e: InventoryRowView | undefined): ServiceRow => {
+		const version = e?.version ?? link?.version ?? null;
+		const channel = e?.channel ?? (own && link ? own.channel : null);
+		const latest = e ? e.latest : (own?.latest[kind] ?? null);
+		return {
+			key: `${kind}:${id}`,
+			kind,
+			name,
+			link,
+			status: link?.status ?? (e && e.ageS <= 90 ? "ok" : "unknown"),
+			version,
+			channel,
+			verdict: verdictOf(version, channel, latest),
+			uptime: upText(e?.uptimeS ?? link?.uptimeS),
+			response: kind === "wolfd" ? ms(e?.responseMs ?? link?.responseMs) : link && link.kind !== "hublink" ? ms(link.responseMs) : "—",// the console's own round trip; a hub-reported link has none
+			lag: ms(e?.lagMs ?? link?.lagMs),
+			children: [],
+		};
+	};
+	const rows: ServiceRow[] = [];
+	const hubE = inv.find((e) => e.kind === "hubd");
+	if (card.hub || hubE) rows.push(mk("hubd", hubE?.id ?? "hubd", "Hub", card.hub, hubE));
+	const used = new Set<InventoryRowView>();
+	const workerE = inv.filter((e) => e.kind === "workerd");
+	const wolvesOf = (w: { link: HealthLink; wolves: HealthLink[] } | undefined, parent: string): ServiceRow[] => {
+		const out: ServiceRow[] = [];
+		for (const e of inv.filter((x) => x.kind === "wolfd" && x.parent === parent)) {
+			used.add(e);
+			out.push(mk("wolfd", e.id, e.id, w?.wolves.find((l) => bare(l.id) === e.id) ?? null, e));
+		}
+		for (const l of w?.wolves ?? []) if (!out.some((r) => r.name === bare(l.id))) out.push(mk("wolfd", l.id, bare(l.id), l, undefined));
+		return out;
+	};
+	const linked = new Set<string>();
+	for (const w of card.workerds) {
+		const e = workerE.find((x) => x.id === bare(w.link.id) || x.id === w.link.id);
+		if (e) linked.add(e.id);
+		const row = mk("workerd", e?.id ?? w.link.id, e?.id ?? bare(w.link.id), w.link, e);
+		row.children = wolvesOf(w, e?.id ?? bare(w.link.id));
+		rows.push(row);
+	}
+	for (const e of workerE) {
+		if (linked.has(e.id)) continue;
+		const row = mk("workerd", e.id, e.id, null, e);
+		row.children = wolvesOf(undefined, e.id);
+		rows.push(row);
+	}
+	for (const l of card.wolves) rows.push(mk("wolfd", l.id, bare(l.id), l, undefined));
+	for (const e of inv.filter((x) => x.kind === "wolfd" && !used.has(x) && !rows.some((r) => r.children.some((c) => c.name === x.id)))) rows.push(mk("wolfd", e.id, e.id, null, e));
+	for (const e of inv.filter((x) => x.kind === "console")) rows.push(mk("console", e.id, "Console", null, e));
+	if (card.console && !inv.some((x) => x.kind === "console")) {
+		const r = mk("console", "console", "Console", null, undefined);
+		r.status = "ok";
+		const s = own?.self;
+		r.version = s?.version ?? own?.consoleVersion ?? null;
+		r.channel = s?.channel ?? own?.channel ?? null;
+		r.uptime = upText(s?.uptimeS);
+		r.lag = ms(s?.lagMs);
+		r.verdict = verdictOf(r.version, r.channel, own?.latest.console ?? null);
+		rows.push(r);
+	}
+	if (rows.length === 0 && card.facts) {
+		// A mapped machine no link, presence or inventory reports on: keep its card, with the services the map says it runs as "no report".
+		for (const s of card.facts.services) {
+			const kind = s.name === "hubd" || s.name === "console" || s.name === "workerd" ? s.name : null;
+			if (!kind) continue;
+			const r = mk(kind, s.name, kind === "hubd" ? "Hub" : s.name === "console" ? "Console" : s.name, null, undefined);
+			r.noReport = true;
+			rows.push(r);
+		}
+	}
+	return rows;
 }
 
 /** The confirm text: the target's X.Y.Z, with the build only when both cores are equal; says when a version is unknown. */
 export function rollbackQuestion(name: string, from: string | null, to: string | null): string {
 	if (!to) return `Roll ${name} back to the previous release (its version is unknown)?`;
-	const a = coreOf(from);
-	const b = coreOf(to);
-	const shown = a && b && cmpCore(a, b) === 0 ? to : (/^\d+\.\d+\.\d+/.exec(to)?.[0] ?? to);
+	const shown = cmpV(from, to) === 0 ? to : (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/.exec(to)?.[0] ?? to);
 	return from ? `Roll ${name} back to v${shown}?` : `Roll ${name} back to v${shown} (the running version is unknown)?`;
 }
 
@@ -128,7 +322,6 @@ const RANK: Record<Tone, number> = { green: 0, grey: 1, amber: 2, red: 3 };
 export function linkName(l: Pick<HealthLink, "id" | "kind">): string {
 	if (l.kind === "hubd") return "Hub";
 	if (l.kind === "wolfd") return l.id.replace(/^wolfd@/, "");
-	if (l.kind === "hublink") return "Hub link";
 	return l.id;
 }
 
@@ -162,23 +355,6 @@ export function errorText(code: string | null): string | null {
 	return code;
 }
 
-const hhmm = (iso: string): string => {
-	const d = new Date(iso);
-	return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-};
-
-/**
- * The last `max` transitions, oldest first: "down 14:02 → restarting 14:03 → recovering → ok 14:04". "recovering" is a passing
- * step (the lag window draining), so it carries no time. A link that has only ever had one state has no story: "".
- */
-export function historySummary(history: HealthLink["history"], max = 6): string {
-	if (history.length < 2) return "";
-	return history
-		.slice(-max)
-		.map((h) => (h.status === "recovering" ? statusWord(h.status).replace(/…$/, "") : `${statusWord(h.status).replace(/…$/, "")} ${hhmm(h.at)}`))
-		.join(" → ");
-}
-
 export type RestartOutcome = { kind: "issued" } | { kind: "wait"; retryS: number } | { kind: "error"; message: string };
 
 /**
@@ -204,21 +380,6 @@ const waitOf = (retryAfter: string | null, cap: number) => {
 	const n = Number(retryAfter);
 	return Number.isFinite(n) && n > 0 ? Math.min(Math.ceil(n), cap) : 5;
 };
-
-export type LogsOutcome = { kind: "lines"; lines: string[]; truncated: boolean } | { kind: "wait"; retryS: number } | { kind: "error"; message: string };
-
-/** What the logs panel shows after GET /api/health/logs (`body` its JSON, null when unreadable; `status` 0 = never reached the console). */
-export function logsOutcome(status: number, body: unknown, retryAfter: string | null): LogsOutcome {
-	const b = (body ?? {}) as { lines?: unknown; truncated?: unknown; code?: unknown };
-	if (status === 200 && Array.isArray(b.lines)) return { kind: "lines", lines: b.lines.filter((x): x is string => typeof x === "string"), truncated: b.truncated === true };
-	if (status === 429) return { kind: "wait", retryS: waitOf(retryAfter, 60) };
-	if (status === 401) return { kind: "error", message: SIGN_IN };
-	if (b.code === "journal_denied") return { kind: "error", message: "The console cannot read the system journal (add its user to systemd-journal)" };
-	if (b.code === "unsupported") return { kind: "error", message: "No system journal on this host" };
-	if (status === 400) return { kind: "error", message: "The console doesn't know this service" };
-	if (status === 0) return { kind: "error", message: "Console unreachable; logs not loaded" };
-	return { kind: "error", message: `Logs failed (HTTP ${status})` };
-}
 
 /**
  * What a row shows after POST /api/health/rollback (`body` its JSON when read). A 429 can ask for up to 10 min (one rollback per service per

@@ -25,7 +25,7 @@ export interface WorkerdServerOptions {
 }
 
 /** Release version: the VERSION beside the bundle (workerd.mjs) or the package root (`pnpm runtime:update` stamp), else <package.json>-dev. */
-const VERSION = stampedVersion([new URL("./VERSION", import.meta.url), new URL("../VERSION", import.meta.url)], new URL("../package.json", import.meta.url));
+export const VERSION = stampedVersion([new URL("./VERSION", import.meta.url), new URL("../VERSION", import.meta.url)], new URL("../package.json", import.meta.url));
 
 /** A loopback peer address (IPv4, IPv6 and IPv4-mapped IPv6). */
 export const isLoopbackPeer = (a: string | undefined): boolean => !!a && (a === "::1" || /^(::ffff:)?127\./.test(a));

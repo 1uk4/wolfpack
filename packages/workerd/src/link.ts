@@ -7,6 +7,7 @@
  * incompatible every 15 min, replaced every 30 min +-20%) until a welcome arrives.
  */
 import WebSocket from "ws";
+import { machineName } from "@wolfpack/protocol/health-lag";
 import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWelcome, type LinkWolf } from "@wolfpack/protocol";
 import type { Outbox } from "./outbox.js";
 
@@ -309,7 +310,7 @@ export class HubLink {
       if (this.ws !== ws) return;
       const wolves = this.o.wolves();
       this.sentWolves = new Map(wolves.map((w) => [w.name, JSON.stringify(w.domains)]));
-      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, wolves, kbRevisions: this.o.kbRevisions?.() ?? {} }));
+      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {} }));
       this.welcomeTimer = setTimeout(() => {
         if (this.ws !== ws) return;
         this.log("no welcome from the hub in time; reconnecting");

@@ -48,6 +48,15 @@ describe("resolveVersion", () => {
 		expect(resolveVersion("wolfd", repo, { release: "0.2.0" })).toBe(`0.2.0+${sha}`);
 	});
 
+	it("keeps the -main.N prerelease in the version, bare at its tag and with +<sha> past it", () => {
+		commit("one");
+		tag("hubd/v0.1.15-main.2");
+		expect(resolveVersion("hubd", repo)).toBe("0.1.15-main.2");
+		expect(resolveVersion("hubd", repo, { release: "0.1.15-main.2" })).toBe("0.1.15-main.2");
+		const sha = commit("two");
+		expect(resolveVersion("hubd", repo)).toBe(`0.1.15-main.2+${sha}`);
+	});
+
 	it("is null when the component has never been tagged", () => {
 		commit("one");
 		tag("hubd/v0.1.14");

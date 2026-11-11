@@ -2,7 +2,8 @@
 // Auto-tag for pushes to stable (.github/workflows/release-stable.yml): tag every component changed since its last
 // <component>/vX.Y.Z tag at +1 patch, push each tag on its own, print the new tags as JSON to $GITHUB_OUTPUT (`tags=[...]`).
 // Same planner as `wolfpack release` (packages/cli/src/release.ts, loaded via Node's type stripping, no CLI build needed).
-// Usage: node scripts/auto-tag.mjs [--dry-run]   (needs full history + tags; run from the repo)
+// --channel main --ref <ref>: tag the commit <ref> names (default HEAD) as <component>/vX.Y.Z-main.N instead (release-main.yml).
+// Usage: node scripts/auto-tag.mjs [--dry-run] [--channel stable|main] [--ref <ref>]   (needs full history + tags; run from the repo)
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -12,16 +13,19 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const git = (...a) => execFileSync("git", a, { cwd: root, encoding: "utf8", maxBuffer: 1 << 26 }).trim();
 const lines = (s) => s.split("\n").filter(Boolean);
 const dryRun = process.argv.includes("--dry-run");
+const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined; };
+const channel = arg("--channel") ?? "stable";
+if (channel !== "stable" && channel !== "main") { console.error(`--channel must be stable or main, got ${channel}`); process.exit(2); }
 
 const { planRelease, pushTagsSeparately } = await import(pathToFileURL(path.join(root, "packages/cli/src/release.ts")).href);
 const aff = await import(pathToFileURL(path.join(root, "scripts/affected.mjs")).href);
 const catalog = JSON.parse(readFileSync(path.join(root, "scripts/release-components.json"), "utf8"));
 const components = Object.keys(catalog).filter((k) => !k.startsWith("_"));
 const workspaces = aff.loadWorkspaces(root);
-const head = git("rev-parse", "HEAD");
+const head = git("rev-parse", `${arg("--ref") ?? "HEAD"}^{commit}`);
 
 const items = planRelease(
-  { components, bump: "patch" },
+  { components, bump: "patch", channel },
   {
     tags: () => lines(git("tag", "--list")),
     headTags: () => lines(git("tag", "--points-at", head)),

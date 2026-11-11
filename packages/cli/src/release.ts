@@ -14,17 +14,24 @@ export interface Semver {
   major: number;
   minor: number;
   patch: number;
+  /** N of a `-main.N` prerelease (the main channel); absent on a stable release. */
+  main?: number;
 }
 
-const TAG_RE = /^([a-z0-9]+)\/v(\d+)\.(\d+)\.(\d+)$/;
+export type Channel = "stable" | "main";
+
+const TAG_RE = /^([a-z0-9]+)\/v(\d+)\.(\d+)\.(\d+)(?:-main\.([1-9]\d*))?$/;
 
 export function parseTag(tag: string): { component: string; version: Semver } | null {
   const m = TAG_RE.exec(tag);
-  return m ? { component: m[1]!, version: { major: +m[2]!, minor: +m[3]!, patch: +m[4]! } } : null;
+  if (!m) return null;
+  const version: Semver = { major: +m[2]!, minor: +m[3]!, patch: +m[4]! };
+  if (m[5]) version.main = +m[5];
+  return { component: m[1]!, version };
 }
 
 export function formatVersion(v: Semver): string {
-  return `${v.major}.${v.minor}.${v.patch}`;
+  return `${v.major}.${v.minor}.${v.patch}${v.main ? `-main.${v.main}` : ""}`;
 }
 
 export function parseVersion(s: string): Semver {
@@ -33,16 +40,20 @@ export function parseVersion(s: string): Semver {
   return { major: +m[1]!, minor: +m[2]!, patch: +m[3]! };
 }
 
+/** Semver order; `X.Y.Z-main.N` ranks below `X.Y.Z` and above any lower core. */
 export function compareSemver(a: Semver, b: Semver): number {
-  return a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+  const core = a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+  if (core) return core;
+  if (a.main === undefined || b.main === undefined) return (b.main === undefined ? 0 : 1) - (a.main === undefined ? 0 : 1);
+  return a.main - b.main;
 }
 
-/** Highest `<component>/vX.Y.Z` tag among `tags`, by semver (not string) order; undefined if none. */
-export function lastTag(component: string, tags: string[]): string | undefined {
+/** Highest `<component>/vX.Y.Z[-main.N]` tag among `tags`, by semver order; undefined if none. `stableOnly` ignores main prereleases. */
+export function lastTag(component: string, tags: string[], stableOnly = false): string | undefined {
   let best: { tag: string; v: Semver } | undefined;
   for (const tag of tags) {
     const p = parseTag(tag);
-    if (!p || p.component !== component) continue;
+    if (!p || p.component !== component || (stableOnly && p.version.main !== undefined)) continue;
     if (!best || compareSemver(p.version, best.v) > 0) best = { tag, v: p.version };
   }
   return best?.tag;
@@ -73,7 +84,9 @@ export interface ReleaseOptions {
   components: string[]; // all releasable components
   only?: string[]; // restrict to these
   bump?: Bump;
-  version?: string; // explicit, applies to every selected component
+  version?: string; // explicit X.Y.Z core, applies to every selected component
+  /** stable (default): tag X.Y.Z, taking the core a main prerelease already used. main: tag X.Y.Z-main.N. */
+  channel?: Channel;
 }
 
 export interface ReleaseItem {
@@ -128,7 +141,8 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
   for (const component of opts.components) {
     if (opts.only?.length && !opts.only.includes(component)) continue;
     if (headTags.some((t) => parseTag(t)?.component === component)) continue;
-    const prev = lastTag(component, tags) ?? null;
+    const main = opts.channel === "main";
+    const prev = lastTag(component, tags, !main) ?? null; // stable diffs against the last stable tag, main against the newest tag of either channel
     // No tag yet counts as changed.
     if (prev) {
       const changed = deps.changedFiles(prev);
@@ -137,7 +151,17 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
       if (!shipsDeploy && !deps.affected(releaseFiles(changed)).includes(component)) continue;
     }
     const prevV = prev ? parseTag(prev)!.version : undefined;
-    const next = explicit ?? (prevV ? bumpVersion(prevV, opts.bump ?? "patch") : FIRST_VERSION);
+    const mains = tags.map((t) => parseTag(t)).filter((p) => p?.component === component && p.version.main !== undefined).map((p) => p!.version);
+    let next: Semver;
+    if (main) {
+      const core = explicit ?? (prevV?.main !== undefined ? prevV : prevV ? bumpVersion(prevV, opts.bump ?? "patch") : FIRST_VERSION);
+      const used = mains.filter((v) => v.major === core.major && v.minor === core.minor && v.patch === core.patch).map((v) => v.main!);
+      next = { major: core.major, minor: core.minor, patch: core.patch, main: Math.max(0, ...used) + 1 };
+    } else {
+      // Stable takes the core of the newest main prerelease above the last stable tag, else bumps.
+      const pre = mains.filter((v) => !prevV || compareSemver({ ...v, main: undefined }, prevV) > 0).sort(compareSemver).pop();
+      next = explicit ?? (pre ? { major: pre.major, minor: pre.minor, patch: pre.patch } : prevV ? bumpVersion(prevV, opts.bump ?? "patch") : FIRST_VERSION);
+    }
     if (prevV && compareSemver(next, prevV) <= 0) throw new Error(`${component}: version ${formatVersion(next)} is not above ${prev}`);
     const version = formatVersion(next);
     const tag = `${component}/v${version}`;

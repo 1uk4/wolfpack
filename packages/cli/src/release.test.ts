@@ -84,6 +84,30 @@ describe("auto-tag on stable (patch plan)", () => {
   });
 });
 
+describe("main channel tags", () => {
+  const plan = (tags: string[], channel: "stable" | "main") =>
+    planRelease({ components: ["wolfd"], channel }, deps(tags, Object.fromEntries(tags.map((t) => [t, ["wolfd"]])))).map((i) => i.tag);
+  it("parses -main.N tags and orders them below their release", () => {
+    expect(parseTag("wolfd/v0.1.5-main.2")?.version).toEqual({ major: 0, minor: 1, patch: 5, main: 2 });
+    expect(lastTag("wolfd", ["wolfd/v0.1.5", "wolfd/v0.1.5-main.2", "wolfd/v0.1.4-main.9"])).toBe("wolfd/v0.1.5");
+    expect(lastTag("wolfd", ["wolfd/v0.1.4", "wolfd/v0.1.5-main.10", "wolfd/v0.1.5-main.9"])).toBe("wolfd/v0.1.5-main.10");
+    expect(lastTag("wolfd", ["wolfd/v0.1.4", "wolfd/v0.1.5-main.1"], true)).toBe("wolfd/v0.1.4");
+  });
+  it("main starts a new core at .1 after a stable tag, then counts up on the same core", () => {
+    expect(plan(["wolfd/v0.1.4"], "main")).toEqual(["wolfd/v0.1.5-main.1"]);
+    expect(plan(["wolfd/v0.1.4", "wolfd/v0.1.5-main.1", "wolfd/v0.1.5-main.2"], "main")).toEqual(["wolfd/v0.1.5-main.3"]);
+    expect(plan([], "main")).toEqual(["wolfd/v0.1.0-main.1"]);
+  });
+  it("main moves to the next core once stable shipped the one it was pre-releasing", () => {
+    expect(plan(["wolfd/v0.1.4", "wolfd/v0.1.5-main.2", "wolfd/v0.1.5"], "main")).toEqual(["wolfd/v0.1.6-main.1"]);
+  });
+  it("stable takes the core main pre-released, else bumps a patch", () => {
+    expect(plan(["wolfd/v0.1.4", "wolfd/v0.1.5-main.1", "wolfd/v0.1.5-main.2"], "stable")).toEqual(["wolfd/v0.1.5"]);
+    expect(plan(["wolfd/v0.1.4"], "stable")).toEqual(["wolfd/v0.1.5"]);
+    expect(plan(["wolfd/v0.1.5", "wolfd/v0.1.5-main.2"], "stable")).toEqual(["wolfd/v0.1.6"]);
+  });
+});
+
 describe("release filter: only files a component ships make a tag", () => {
   const ws = (name: string, dir: string, deps: string[] = []) => ({ name, dir, deps, inTsRoot: true, hasTest: true, distImports: [] });
   const workspaces = [

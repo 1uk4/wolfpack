@@ -21,11 +21,13 @@ const open: WebSocket[] = [];
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "hubd-link-"));
   hubClosed = false;
+  process.env.WOLFPACK_MACHINE = "Hub-Box";
   seedTokens(dir);
   hub = await createHubServer({ dataDir: dir, port: 0, authPollMs: 30, linkTimers: { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 400, asleepOfflineMs: 600 } });
   store = createTokenStore(dir);
 });
 afterEach(async () => {
+  delete process.env.WOLFPACK_MACHINE;
   for (const w of open.splice(0)) w.terminate();
   try {
     chmodSync(dirname(registryFile(dir)), 0o755);
@@ -305,7 +307,7 @@ describe("hubd /healthz pack summary", () => {
   it("lists every host with its presence, pairing label and non-retired wolves, sorted, without a token", async () => {
     for (const w of ["beta", "alpha", "old", "lappy"]) await register(w);
     const pair = (hostId: string, label: string) => store.redeem(store.mintPairingCode({ kind: "worker", hostId }).code, label, "worker", hostId).token;
-    const box = await join_(pair("sfo", "sfo-01"), "sfo", { wolves: [{ name: "beta", domains: [] }, { name: "alpha", domains: [] }, { name: "old", domains: [] }] });
+    const box = await join_(pair("sfo", "sfo-01"), "sfo", { machine: "sfo-01", wolves: [{ name: "beta", domains: [] }, { name: "alpha", domains: [] }, { name: "old", domains: [] }] });
     expect((await fetch(`${hub.url}/v1/registry/wolves/old/retire`, { method: "POST", headers: OP })).status).toBe(200);
     const lap = await join_(pair("mac", "Lukas MBP"), "mac", { laptop: true, wolves: [{ name: "lappy", domains: [] }] });
     lap.send({ t: "sleep" });
@@ -314,11 +316,12 @@ describe("hubd /healthz pack summary", () => {
     const gone = await join_(pair("cron", "cron-box"), "cron");
     gone.ws.close(1000);
     await gone.until(() => hub.link.presence("cron") === "offline", "offline");
-    const body = (await (await fetch(hub.url + "/healthz")).json()) as { hosts: { id: string; label?: string; presence: string; since?: string; wolves: unknown[] }[] };
+    const body = (await (await fetch(hub.url + "/healthz")).json()) as { machine?: string; hosts: { id: string; label?: string; machine?: string; presence: string; since?: string; wolves: unknown[] }[] };
+    expect(body.machine).toBe("hub-box"); // the hub's own machine (WOLFPACK_MACHINE, normalised)
     expect(body.hosts.map(({ since: _s, ...h }) => h)).toEqual([
       { id: "cron", label: "cron-box", presence: "offline", wolves: [] },
       { id: "mac", presence: "asleep", wolves: [{ name: "lappy", status: "offline" }] },
-      { id: "sfo", label: "sfo-01", presence: "online", wolves: [{ name: "alpha", status: "online" }, { name: "beta", status: "online" }] },
+      { id: "sfo", label: "sfo-01", machine: "sfo-01", presence: "online", wolves: [{ name: "alpha", status: "online" }, { name: "beta", status: "online" }] },
     ]);
     for (const h of body.hosts) expect(Number.isNaN(Date.parse(h.since ?? ""))).toBe(false); // each presence change is timestamped
     // A label that is not hostname-like (a space, a person's name) is never sent on the unauthenticated /healthz.
@@ -331,6 +334,19 @@ describe("hubd /healthz pack summary", () => {
     await box.until(() => hub.link.presence("sfo") === "offline", "sfo offline");
     const after = (await (await fetch(hub.url + "/healthz")).json()) as typeof body;
     expect(after.hosts.find((h) => h.id === "sfo")).toMatchObject({ presence: "offline", wolves: [{ name: "alpha", status: "offline" }, { name: "beta", status: "offline" }] }); // a change shows at once, not after the cache
+  });
+});
+
+describe("hubd worker link: machine", () => {
+  it("stores the normalised machine, ignores an invalid one, and an older worker reconnecting clears the stale value", async () => {
+    const token = (await mint("worker", "box")).token;
+    const a = await join_(token, "box", { machine: "SFO-01.local" });
+    expect(hub.link.machine("box")).toBe("sfo-01");
+    a.ws.close(1000);
+    await a.until(() => hub.link.presence("box") === "offline", "offline");
+    const b = await join_(token, "box", { machine: "my_box" });
+    expect(hub.link.machine("box")).toBeUndefined();
+    b.ws.close(1000);
   });
 });
 

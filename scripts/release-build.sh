@@ -7,7 +7,7 @@
 set -euo pipefail
 COMP=${1:?component}; VER=${2:?version}; OUT=${3:?out dir}
 cd "$(dirname "$0")/.."
-[[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be X.Y.Z, got $VER" >&2; exit 2; }
+[[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-main\.[1-9][0-9]*)?$ ]] || { echo "version must be X.Y.Z or X.Y.Z-main.N, got $VER" >&2; exit 2; }
 ASSET=$(node -e 'const c=require("./scripts/release-components.json")[process.argv[1]];if(!c){console.error("unknown component "+process.argv[1]);process.exit(2)};console.log(c.asset.replace("{version}",process.argv[2]))' "$COMP" "$VER")
 STAMP=$(node scripts/release-version.mjs "$COMP" --release "$VER")
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)

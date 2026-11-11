@@ -46,10 +46,12 @@
  */
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
+import { machineName, normaliseMachine } from "@wolfpack/protocol/health-lag";
 import { join } from "node:path";
+import type { InventoryView, RemoteService } from "./inventory.ts";
 import { hostId, hostLabel, parseHostLabels, type HostInfo } from "../core/pack-hosts.ts";
-import { probeHealth, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
+import { probeHealth, type InventoryEntry, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
 
 export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct" | "hublink";
 export type HubPresence = "online" | "asleep" | "offline";
@@ -156,6 +158,10 @@ export interface HealthActions {
 }
 
 export interface HealthSnapshot {
+	/** This console's own inventory entry (the heartbeat's), present whether or not the hub has an inventory; absent from older servers. */
+	self?: InventoryEntry | null;
+	/** Other machines' services as the hub lists them (this console's own machine is covered by local probes); null when the hub has no inventory. */
+	inventory: { rows: RemoteService[]; stale: boolean; hubMachine: string | null } | null;
 	checkedAt: string | null;
 	intervalMs: number;
 	/** Where the console's client goes right now (see DIRECT PATH). */
@@ -190,6 +196,8 @@ const HUB_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$/;
 interface HubHost {
 	id: string;
 	label?: string;
+	/** The machine the host's worker reported (normalised); absent from an older hub or worker. */
+	machine?: string;
 	presence: HubPresence;
 	since?: string;
 	wolves: { name: string; status: "online" | "offline" }[];
@@ -204,18 +212,19 @@ function parseHubHosts(raw: unknown): HubHost[] | null {
 		if (typeof o.id !== "string" || !HUB_ID_RE.test(o.id)) continue;
 		const presence: HubPresence = o.presence === "online" || o.presence === "asleep" ? o.presence : "offline";
 		const label = typeof o.label === "string" && HUB_LABEL_RE.test(o.label.trim()) ? o.label.trim() : ""; // hostname-like only: an older hub may still send free text
+		const machine = normaliseMachine(o.machine) ?? "";
 		const since = typeof o.since === "string" && !Number.isNaN(Date.parse(o.since)) ? new Date(Date.parse(o.since)).toISOString() : undefined;
 		const wolves = (Array.isArray(o.wolves) ? o.wolves : []).slice(0, MAX_WOLVES_PER_WORKERD).flatMap((w) => {
 			const x = (w && typeof w === "object" ? w : {}) as Record<string, unknown>;
 			return typeof x.name === "string" && WOLF_RE.test(x.name) ? [{ name: x.name, status: x.status === "online" ? ("online" as const) : ("offline" as const) }] : [];
 		});
-		out.push({ id: o.id, ...(label ? { label } : {}), presence, ...(since ? { since } : {}), wolves });
+		out.push({ id: o.id, ...(label ? { label } : {}), ...(machine ? { machine } : {}), presence, ...(since ? { since } : {}), wolves });
 	}
 	return out;
 }
 
 /** The host card id for a hub host no local workerd claims: its label (the pairing hostname) normalised, else its hub id. */
-const hubCardHost = (h: HubHost): string => hostId(h.label ?? h.id).replace(/[^a-z0-9.:-]+/g, "-") || h.id;
+const hubCardHost = (h: HubHost): string => hostId(normaliseMachine(h.machine) ?? h.label ?? h.id).replace(/[^a-z0-9.:-]+/g, "-") || h.id;
 const UNIT_RE = /^[a-z0-9][a-z0-9-]*$/;
 const WOLF_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKERD_UNIT_RE = /^workerd(-[a-z0-9]+)*$/;
@@ -371,10 +380,18 @@ const fromProbe = (r: ProbeResult, timeoutMs: number, healthz = true): Observati
 		error: code ?? (r.status === "degraded" ? (r.body?.ok === false ? "reports_not_ok" : "slow") : null),
 		version: typeof r.body?.version === "string" ? r.body.version : null,
 		uptimeS: typeof r.body?.uptimeS === "number" ? r.body.uptimeS : null,
-		...(typeof r.body?.host === "string" && r.body.host.trim() ? { host: hostId(r.body.host.slice(0, 253)) } : {}),
+		...(machineOrHost(r.body) ? { host: machineOrHost(r.body)! } : {}),
 		...(typeof r.body?.hubHostId === "string" && HUB_ID_RE.test(r.body.hubHostId) ? { hubHostId: r.body.hubHostId } : {}),
 		...(r.error !== undefined ? { rawError: r.error } : {}),
 	};
+};
+
+/** The host key of a /healthz body: the machine it reports, else (an older build) its hostname. */
+const machineOrHost = (b: { machine?: unknown; host?: unknown } | undefined): string | undefined => {
+	const m = normaliseMachine(b?.machine);
+	if (m) return m;
+	const v = b?.host;
+	return typeof v === "string" && v.trim() ? hostId(v.slice(0, 253)) : undefined;
 };
 
 const WOLF_STATES = new Set(["online", "starting", "restarting", "failed", "stopped"]);
@@ -411,6 +428,10 @@ export interface PackHealthOptions {
 	platform?: string;
 	/** WOLFPACK_HEALTH_HOST_LABELS: `<host>=<label>,...` label overrides. */
 	hostLabels?: string;
+	/** The hub's pack inventory (src/server/inventory.ts); null/absent: none (older hub), the snapshot then has local probes and presence only. */
+	inventory?: () => InventoryView | null;
+	/** This console's own inventory entry (the same builder as its heartbeat). */
+	self?: () => InventoryEntry;
 }
 
 export interface PackHealth {
@@ -436,7 +457,7 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 	const timeoutMs = o.timeoutMs ?? 3000;
 	const now = o.now ?? Date.now;
 	const log = o.log ?? ((m: string) => console.warn(m));
-	const selfHost = hostId(o.consoleHost ?? hostname()) || "this-console";
+	const selfHost = hostId(o.consoleHost ?? machineName()) || "this-console";
 	const platform = o.platform ?? process.platform;
 	const labels = parseHostLabels(o.hostLabels);
 	const links = new Map<string, LinkState>();
@@ -581,7 +602,7 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		// Labels: an operator override, then the hub's label, then the host id rules (hostLabel).
 		const info = (id: string, isThisConsole: boolean): HostInfo => {
 			const h = hubOfHost.get(id);
-			const label = labels.get(id) ?? h?.label ?? hostLabel(id, { isThisConsole, platform }, labels);
+			const label = labels.get(id) ?? (h?.machine ? undefined : h?.label) ?? hostLabel(id, { isThisConsole, platform }, labels);
 			return { id, label, isThisConsole, ...(isThisConsole ? { platform } : {}), ...(h ? { hubId: h.id } : {}) };
 		};
 		const hosts: HostInfo[] = [info(selfHost, true)];
@@ -590,6 +611,19 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		let actions: HealthActions = { systemd: false, rollback: [] };
 		try {
 			if (o.actions) actions = o.actions();
+		} catch {
+			/* the snapshot never fails over its extras */
+		}
+		let inventory: HealthSnapshot["inventory"] = null;
+		try {
+			const v = o.inventory?.();
+			if (v) inventory = { ...v, rows: v.rows.filter((r) => normaliseMachine(r.machine) !== selfHost) };
+		} catch {
+			/* the snapshot never fails over its extras */
+		}
+		let self: InventoryEntry | null = null;
+		try {
+			self = o.self?.() ?? null;
 		} catch {
 			/* the snapshot never fails over its extras */
 		}
@@ -619,6 +653,8 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 				lastRestart: l.lastRestart,
 				restartable: hubRows.get(l.id) !== l && can.has(l.id),
 			})),
+			inventory,
+			self,
 		};
 	};
 

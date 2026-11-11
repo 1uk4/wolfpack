@@ -32,6 +32,24 @@ describe("buildManifest", () => {
 		});
 	});
 
+
+	it("stable ignores -main.N prereleases; the main manifest has top-level sha/channel/ref and the newest version across both channels", () => {
+		const tags = [
+			t("hubd/v0.1.4", "a1", "2026-11-01T00:00:00Z"),
+			t("hubd/v0.1.5-main.2", "a2", "2026-11-02T00:00:00Z"),
+			t("hubd/v0.1.5-main.10", "a3", "2026-11-03T00:00:00Z"),
+			t("console/v0.1.9", "c1", "2026-11-01T00:00:00Z"),
+			t("console/v0.1.9-main.4", "c0", "2026-10-30T00:00:00Z"),
+		];
+		const opts = { repo: REPO, components: ["console", "hubd"], now: at };
+		const stable = buildManifest(tags, opts);
+		expect(Object.values(stable.components).map((e) => e.version)).toEqual(["0.1.9", "0.1.4"]);
+		expect(stable).not.toHaveProperty("sha");
+		const main = buildManifest(tags, { ...opts, channel: "main", ref: "wolf/1uk4", sha: "deadbeef" });
+		expect(main).toMatchObject({ schema: 1, channel: "main", ref: "wolf/1uk4", sha: "deadbeef" });
+		expect(main.components.hubd).toMatchObject({ version: "0.1.5-main.10", tag: "hubd/v0.1.5-main.10", sha: "a3" });
+		expect(main.components.console?.version).toBe("0.1.9");
+	});
 });
 
 // The gh runner is the GitHub boundary: `(args) => { status, stdout, stderr }`, as `gh release view <tag> --json isDraft --jq .isDraft`.

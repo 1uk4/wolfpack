@@ -9,17 +9,22 @@
  *    Resources/runtime. Nothing is started. A missing package (the Agent SDK once was) fails here, not at first launch.
  *    Also: no bundle holds the subscription bridge's code or statically imports the Agent SDK.
  * 3. --signed: codesign --verify --deep --strict, spctl -a -vv, xcrun stapler validate.
+ *    --sign-only (a signed build that is not notarized yet): codesign --verify --deep --strict; Developer ID Application authority; hardened runtime;
+ *    the main binary's entitlements equal build/entitlements.mac.plist; every nested .app/.framework/.node/.dylib validly signed by the same team;
+ *    spctl is run but its rejection ("Unnotarized Developer ID") is informational; no stapler.
  * Exit 0 = all pass.
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { REQUIRED_EXTERNALS } from "./runtime-externals.mjs";
+import { parseSignature, sameEntitlements } from "./sign-plan.mjs";
 
 const app = path.resolve(process.argv[2] ?? "");
 const signed = process.argv.includes("--signed");
+const signOnly = process.argv.includes("--sign-only");
 if (!process.argv[2] || !app.endsWith(".app") || !fs.existsSync(app)) {
-	console.error("usage: check-app.mjs <path to .app> [--signed]");
+	console.error("usage: check-app.mjs <path to .app> [--signed | --sign-only]");
 	process.exit(2);
 }
 const runtime = path.join(app, "Contents", "Resources", "runtime");
@@ -113,6 +118,68 @@ if (signed) {
 		if (r.status === 0) ok(label);
 		else bad(`${label}: ${(r.stderr || r.stdout).trim().split("\n").pop()}`);
 	}
+}
+
+signOnly: if (signOnly) {
+	const sh = (cmd, a, input) => {
+		const r = spawnSync(cmd, a, { encoding: "utf8", input });
+		return { ...r, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+	};
+	const v = sh("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
+	if (v.error) {
+		bad(`codesign is not available (${v.error.code ?? v.error.message}): the --sign-only checks need macOS`);
+		break signOnly;
+	}
+	if (v.status === 0) ok("codesign --verify --deep --strict");
+	else bad(`codesign: ${(v.stderr || v.stdout).trim().split("\n").pop()}`);
+
+	const sig = parseSignature(sh("codesign", ["-dvv", bin]).stderr);
+	if (sig.developerId) ok("authority is Developer ID Application");
+	else bad("signature authority is not Developer ID Application");
+	if (sig.hardenedRuntime) ok("hardened runtime flag set (flags=0x10000(runtime))");
+	else bad("hardened runtime flag is not set");
+	if (!sig.team) bad("main binary has no TeamIdentifier");
+
+	const toJson = (xml) => {
+		const r = sh("plutil", ["-convert", "json", "-o", "-", "-"], xml);
+		return r.status === 0 && r.stdout ? JSON.parse(r.stdout) : null;
+	};
+	const want = toJson(fs.readFileSync(path.resolve(import.meta.dirname, "..", "build", "entitlements.mac.plist"), "utf8"));
+	const got = toJson(sh("codesign", ["-d", "--entitlements", "-", "--xml", bin]).stdout);
+	if (!want) bad("could not read build/entitlements.mac.plist");
+	else if (want && got && sameEntitlements(want, got)) ok("embedded entitlements match build/entitlements.mac.plist");
+	else bad(`embedded entitlements differ from build/entitlements.mac.plist (embedded: ${JSON.stringify(got)}, expected: ${JSON.stringify(want)})`);
+
+	// Nested code: bundles (helpers, frameworks) and loose natives, none of them symlinks.
+	const nested = [];
+	const find = (dir) => {
+		for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+			if (e.isSymbolicLink()) continue;
+			const p = path.join(dir, e.name);
+			if (e.isDirectory()) {
+				if (/\.(app|framework)$/.test(e.name)) nested.push(p);
+				find(p);
+			} else if (/\.(node|dylib)$/.test(e.name)) nested.push(p);
+		}
+	};
+	find(path.join(app, "Contents"));
+	let nestedBad = 0;
+	for (const p of nested) {
+		const rel = path.relative(app, p);
+		const nv = sh("codesign", ["--verify", "--strict", p]);
+		const ns = parseSignature(sh("codesign", ["-dvv", p]).stderr);
+		if (nv.status !== 0) bad(`${rel}: not validly signed (${(nv.stderr || nv.stdout).trim().split("\n").pop()})`);
+		else if (sig.team && ns.team !== sig.team) bad(`${rel}: team ${ns.team ?? "none"} is not the app's team ${sig.team}`);
+		else continue;
+		nestedBad++;
+	}
+	if (!sig.team && nested.length) bad("nested team comparison skipped: the main binary has no TeamIdentifier");
+	if (nested.length && !nestedBad && sig.team) ok(`${nested.length} nested helpers/natives validly signed by team ${sig.team}`);
+	if (!nested.length) bad("found no nested helpers or natives to check");
+
+	// Not notarized yet: Gatekeeper is expected to reject. Informational only.
+	const sp = sh("spctl", ["--assess", "--type", "execute", "-vv", app]);
+	console.log(`info spctl ${sp.status === 0 ? "accepts the app (already notarized?)" : `rejects the app as expected before notarization: ${(sp.stderr || sp.stdout).trim().split("\n")[0]}`}`);
 }
 
 if (problems.length) {

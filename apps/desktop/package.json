@@ -17,7 +17,8 @@
 		"electron:dev": "WOLFPACK_DEV_URL=${WOLFPACK_DEV_URL:-http://localhost:3000} electron .",
 		"build:server": "pnpm --filter @wolfpack/console run build && node scripts/build-server.mjs && node scripts/smoke-server.mjs",
 		"dist": "node scripts/dist.mjs",
-		"dist:signed": "node scripts/dist.mjs --signed"
+		"dist:signed": "node scripts/dist.mjs --signed",
+		"dist:sign-only": "node scripts/dist.mjs --sign-only"
 	},
 	"dependencies": {
 		"electron-updater": "^6.8.11"

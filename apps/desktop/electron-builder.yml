@@ -6,9 +6,10 @@
 #     because native .node/dylib can't dlopen from a read-only archive and
 #     server.js process.chdir()s into its own dir;
 #   - the asar holds only the shell (electron/main.cjs + package.json);
-#   - two local mac builds (scripts/dist.mjs): `pnpm dist` is unsigned and
-#     skips notarization; `pnpm dist:signed` signs with the Developer ID
-#     Application cert in the login keychain and notarizes through the
+#   - three local mac builds (scripts/dist.mjs): `pnpm dist` is unsigned and
+#     skips notarization; `pnpm dist:sign-only` signs with the Developer ID
+#     Application cert (hardened runtime, entitlements) but never notarizes;
+#     `pnpm dist:signed` signs and notarizes through the
 #     WOLFPACK_NOTARY keychain profile (APPLE_KEYCHAIN_PROFILE).
 appId: com.wolfpack.Console
 productName: Wolfpack Console

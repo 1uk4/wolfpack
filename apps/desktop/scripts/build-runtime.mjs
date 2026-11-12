@@ -17,6 +17,14 @@ const root = path.resolve(here, "../../..");
 const out = path.resolve(process.argv[2] ?? path.join(here, "../runtime"));
 mkdirSync(out, { recursive: true });
 
+// The app is API-key only: the subscription bridge is replaced by a stub that throws (check-app.mjs fails if its code is in the runtime).
+const stubBridge = {
+	name: "stub-subscription-bridge",
+	setup(build) {
+		build.onResolve({ filter: /^pi-claude-bridge(-stateless)?(\/.*)?$/ }, () => ({ path: path.join(here, "subscription-stub.mjs") }));
+	},
+};
+
 const entries = {
 	hubd: "packages/hubd/src/cli.ts",
 	workerd: "packages/workerd/src/bin/workerd.ts",
@@ -37,6 +45,7 @@ for (const [name, entry] of Object.entries(entries)) {
 		banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url); if (process.env.WOLFPACK_EXIT_WITH_PARENT === '1') { const __p = process.ppid; setInterval(() => { if (process.ppid !== __p) { process.kill(process.pid, 'SIGTERM'); setTimeout(() => process.exit(1), 3000).unref(); } }, 1000).unref(); }" },
 		// Shipped in <out>/node_modules by stage-runtime-assets.mjs, or optional; the list lives in runtime-externals.mjs, which check-app.mjs verifies.
 		external: EXTERNALS,
+		plugins: [stubBridge],
 		logLevel: "error",
 	});
 	console.log(`${bundleFile(name)} ${(statSync(path.join(out, bundleFile(name))).size / 1e6).toFixed(1)} MB`);

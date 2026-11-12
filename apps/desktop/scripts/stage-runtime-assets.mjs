@@ -6,8 +6,7 @@
  *   <runtime>/node_modules/onnxruntime-node      JS + the darwin-arm64 natives only (binding + libonnxruntime.1.dylib, ~45 MB; linux/win32 left out)
  *   <runtime>/node_modules/onnxruntime-common    its one dependency
  *   <runtime>/node_modules/@huggingface/tokenizers
- *   <runtime>/node_modules/@anthropic-ai/claude-agent-sdk   JS only (5 MB). wolfd/wolfd.mjs imports it statically, so without it wolfd dies at
- *                                                  start anywhere outside the repo tree. Its 309 MB darwin-arm64 CLI package is NOT shipped (subscription sign-in ticket)
+ *   (The Claude Agent SDK and the subscription bridge are NOT shipped: the app is API-key only, work-wolfpack-66JSDus.)
  *   <runtime>/embed-model/                       tokenizer.json, tokenizer_config.json, model.onnx (fp32 nomic-embed-text, 547 MB)
  *
  * The bundles in <runtime> import onnxruntime-node and @huggingface/tokenizers as externals; Node finds them in
@@ -72,10 +71,7 @@ cpSync(path.join(ort, native), path.join(nm, "onnxruntime-node", native), { recu
 rmSync(path.join(nm, "onnxruntime-node", native, "libonnxruntime.1.31.1.dylib"), { force: true });
 copy(ortCommon, path.join(nm, "onnxruntime-common"), ["package.json", "dist", ...(existsSync(path.join(ortCommon, "lib")) ? ["lib"] : [])]);
 copy(tok, path.join(nm, "@huggingface", "tokenizers"), ["package.json", "dist", ...(existsSync(path.join(tok, "LICENSE")) ? ["LICENSE"] : [])]);
-const sdk = pkgDir("@anthropic-ai/claude-agent-sdk", createRequire(path.join(root, "packages/engine/package.json")));
-mkdirSync(path.join(nm, "@anthropic-ai"), { recursive: true });
-cpSync(sdk, path.join(nm, "@anthropic-ai", "claude-agent-sdk"), { recursive: true, dereference: true, filter: (p) => path.basename(p) !== "node_modules" });
-console.log("node_modules: onnxruntime-node (darwin-arm64), onnxruntime-common, @huggingface/tokenizers, @anthropic-ai/claude-agent-sdk (JS)");
+console.log("node_modules: onnxruntime-node (darwin-arm64), onnxruntime-common, @huggingface/tokenizers");
 
 const modelDir = path.join(runtime, "embed-model");
 mkdirSync(modelDir, { recursive: true });

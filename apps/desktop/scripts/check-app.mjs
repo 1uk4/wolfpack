@@ -3,10 +3,11 @@
  * Post-build smoke for the packaged app (work-wolfpack-07v3AmE):
  *   node apps/desktop/scripts/check-app.mjs <path to Wolfpack Console.app> [--signed]
  *
- * 1. The natives, the embedding model and the Agent SDK are inside Contents/Resources/runtime.
+ * 1. The natives and the embedding model are inside Contents/Resources/runtime.
  * 2. With the app's own binary as Node (ELECTRON_RUN_AS_NODE=1), every required external a runtime bundle
  *    imports (scripts/runtime-externals.mjs) resolves from that bundle's folder to a package inside
  *    Resources/runtime. Nothing is started. A missing package (the Agent SDK once was) fails here, not at first launch.
+ *    Also: no bundle holds the subscription bridge's code or statically imports the Agent SDK.
  * 3. --signed: codesign --verify --deep --strict, spctl -a -vv, xcrun stapler validate.
  * Exit 0 = all pass.
  */
@@ -35,7 +36,6 @@ const mustExist = [
 	"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.dylib",
 	"node_modules/onnxruntime-common/package.json",
 	"node_modules/@huggingface/tokenizers/package.json",
-	"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 	"embed-model/model.onnx",
 	"embed-model/tokenizer.json",
 	"embed-model/tokenizer_config.json",
@@ -77,6 +77,19 @@ for (const bundle of bundles) {
 		if (r.status === 0) ok(`${rel} imports ${spec} -> ${path.relative(runtime, r.stdout.trim())}`);
 		else bad(`${rel} imports ${spec}, which does not resolve inside Resources/runtime (${(r.stdout || r.stderr).trim()})`);
 	}
+}
+
+// The app is API-key only: the subscription bridge and the Agent SDK must not be in the packaged runtime.
+if (fs.existsSync(path.join(runtime, "node_modules/@anthropic-ai/claude-agent-sdk"))) bad("runtime ships the Claude Agent SDK (the app is API-key only)");
+// BRIDGE_MARKER is a string literal from the bridge's own code (stateless/errors.ts); minifiers keep string literals, and the build stub never contains it.
+const BRIDGE_MARKER = "Claude request failed (fatal, do not retry)";
+const SDK_IMPORT = /(?:from|import)\s*["']@anthropic-ai\/claude-agent-sdk["']/;
+for (const bundle of bundles) {
+	const text = fs.readFileSync(bundle, "utf8");
+	const rel = path.relative(runtime, bundle);
+	if (text.includes(BRIDGE_MARKER)) bad(`${rel} contains the Claude subscription bridge (the app is API-key only)`);
+	// A static import of the SDK makes the bundle die at start when the SDK is not shipped.
+	if (SDK_IMPORT.test(text)) bad(`${rel} has a static import of @anthropic-ai/claude-agent-sdk, which the app does not ship`);
 }
 
 // The onnx native must load under the app's own binary: proves library validation and @loader_path work (signed mode).

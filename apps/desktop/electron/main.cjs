@@ -96,9 +96,6 @@ let chatWolf = "wolf"; // the wolf whose chat the window opens on (chosen in the
 let wizardWindow = null; // the first-run setup window, closed once the main window is up
 let wizardFinishing = false; // finish has started: closing the wizard window must not quit the app (set until the chat window exists)
 
-/** Build-time switch for the subscription sign-in option (ships off; its flow is work-wolfpack-66JSDus). */
-const SUBSCRIPTION_SIGNIN = process.env.WOLFPACK_APP_SUBSCRIPTION === "1";
-
 /** Suggested wolf name: the macOS user's first name + "'s wolf". */
 function suggestedWolfName() {
 	let first = "";
@@ -150,7 +147,6 @@ function runWizard(opts) {
 			const stored = readSetup(opts.stateDir);
 			// The key never reaches the page: only whether one is saved.
 			return {
-				subscription: SUBSCRIPTION_SIGNIN,
 				keyEnv: !!envKey,
 				keySaved: !!storedKey(opts.stateDir),
 				prefill: stored ? { wolfName: stored.wolfName, domains: stored.domains } : null,

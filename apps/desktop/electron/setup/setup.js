@@ -2,7 +2,7 @@
  * without it (a plain browser, scripts/serve-setup.mjs) a stub bridge stands in. */
 (() => {
 	const stub = {
-		info: async () => ({ subscription: true, keyEnv: false, keySaved: false, prefill: null }),
+		info: async () => ({ keyEnv: false, keySaved: false, prefill: null }),
 		suggestedName: async () => "Maya's wolf",
 		checkKey: async (key) => (key === "sk-ok" ? { ok: true } : { ok: false, error: "That key didn't work" }),
 		openExternal: async (url) => void window.open(url, "_blank"),
@@ -102,7 +102,6 @@
 
 	(async () => {
 		const info = (await bridge.info?.()) ?? {};
-		$("#subscription").hidden = !info.subscription;
 		nameInput.value = info.prefill?.wolfName || (await bridge.suggestedName()) || "My wolf";
 		for (const d of info.prefill?.domains ?? []) if (d.name !== "personal") addRow(d.name, d.description);
 		if (info.keyEnv) {

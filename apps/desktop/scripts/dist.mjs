@@ -8,7 +8,7 @@
  *                                   (CSC_LINK, CSC_KEY_PASSWORD, APPLE_API_KEY = path to the .p8, APPLE_API_KEY_ID, APPLE_API_ISSUER),
  *                                   no keychain profile. Same steps as --signed; only the credential source differs.
  *
- * Every mode ends with scripts/check-app.mjs on the built .app (natives, model, Agent SDK present; every bare import of
+ * Every mode ends with scripts/check-app.mjs on the built .app (natives and model present, no Agent SDK or subscription bridge; every bare import of
  * the runtime bundles resolves inside Resources/runtime; signed modes also codesign/spctl/stapler). It never publishes:
  * the release job uploads afterwards with `electron-builder publish`.
  *
@@ -100,11 +100,10 @@ if (process.env.WOLFPACK_SKIP_RUNTIME !== "1") {
 	run(process.execPath, ["scripts/build-runtime.mjs"]);
 	run(process.execPath, ["scripts/stage-runtime-assets.mjs"]);
 } else {
-	// Reusing runtime/ is only allowed when it is complete: the onnx binding, the model and the Agent SDK.
+	// Reusing runtime/ is only allowed when it is complete: the onnx binding, and the model.
 	const need = [
 		"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node",
 		"embed-model/model.onnx",
-		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 	].filter((f) => !fs.existsSync(path.join(root, "runtime", f)));
 	if (need.length) fail(`WOLFPACK_SKIP_RUNTIME=1 but runtime/ lacks: ${need.join(", ")}. Run without it (or scripts/stage-runtime-assets.mjs).`);
 }

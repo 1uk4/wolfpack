@@ -18,7 +18,8 @@ describe("dev-stack", () => {
 		expect(e.WOLF_DEN).toBeUndefined();
 		expect(e.WOLFPACK_X).toBeUndefined();
 		expect(e.WOLFPACK_Y).toBeUndefined();
-		for (const p of [e.HOME, e.WORKERD_CONFIG_DIR]) expect(p.startsWith(cfg.wolves + path.sep)).toBe(true);
+		for (const p of [e.HOME, e.WORKERD_CONFIG_DIR, e.WORKERD_KEY_FILE, e.WOLFPACK_KEY_FILE]) expect(p.startsWith(cfg.wolves + path.sep)).toBe(true);
+		expect(e.WORKERD_KEY_FILE).toBe(e.WOLFPACK_KEY_FILE); // workerd writes it, the dev console reads it
 	});
 	it("keeps pnpm's store and corepack's cache at the real home, so the sandbox HOME does not duplicate them", () => {
 		const cfg = dev.resolveConfig({ DEV_WOLVES_DIR: path.join(tmp, "w") }, tmp);

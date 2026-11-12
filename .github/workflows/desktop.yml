@@ -18,7 +18,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15   # Apple silicon
+    # Apple silicon. macos-26, not macos-15: on macos-15 (Xcode 26.3 on macOS 15.8) actool's
+    # AssetCatalogAgent crashed compiling build/icon.icon from 2026-11-12, same image and commit that passed earlier.
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -59,7 +61,7 @@ jobs:
 
   release:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/stable'
-    runs-on: macos-15
+    runs-on: macos-26   # same as build: actool needs Xcode 26 on macOS 26 to compile build/icon.icon
     timeout-minutes: 90
     environment: desktop-release
     permissions:

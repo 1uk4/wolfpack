@@ -5,6 +5,7 @@ import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
 import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
+import { createCommandRunner } from "./commands.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
@@ -227,8 +228,15 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       send: (entries) => link!.sendFrame({ t: "report", entries }),
       enabled: () => inventoryOn,
     });
+    const commands = createCommandRunner({
+      log,
+      // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
+      logSources: () => Object.fromEntries(supervisor.status().map((c) => [c.name, { file: c.logFile }])),
+    });
     link = new HubLink({
       ...hubCfg,
+      commands: () => commands.supported(),
+      onCommand: (c) => commands.handle(c),
       kbRevisions: () => kbSync!.revisions(),
       onWelcome: (w) => {
         kbSync!.applyWelcome(w.grantedDomains);

@@ -9,6 +9,7 @@
 import WebSocket from "ws";
 import { machineName } from "@wolfpack/protocol/health-lag";
 import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWelcome, type LinkWolf } from "@wolfpack/protocol";
+import type { CommandKind, LinkCmd, LinkCmdResult } from "@wolfpack/protocol";
 import type { Outbox } from "./outbox.js";
 
 export type LinkState = "idle" | "connecting" | "online" | "backoff" | "incompatible" | "unauthorized" | "replaced" | "stopped";
@@ -41,6 +42,10 @@ export interface HubLinkOptions {
   onKbChanged?: (domain: string, rev: number, epoch: string) => void;
   /** Called with the welcome's retired wolf names. */
   onRetired?: (names: string[]) => void;
+  /** Command kinds this machine can run, advertised in hello. Absent or empty = none (the hub answers not_sent_unsupported). */
+  commands?: () => CommandKind[];
+  /** A `cmd` frame arrived from the hub. The returned result is sent back as `cmd.result`; a throw is answered `internal`. */
+  onCommand?: (cmd: LinkCmd) => Promise<LinkCmdResult>;
   /** Called with the welcome's rejected wolf names (unknown to the hub, or owned by another host). */
   onRejected?: (names: string[]) => void;
   /** Relay: called for `req` / `cancel` / `pause` / `resume` frames from the hub. */
@@ -310,7 +315,7 @@ export class HubLink {
       if (this.ws !== ws) return;
       const wolves = this.o.wolves();
       this.sentWolves = new Map(wolves.map((w) => [w.name, JSON.stringify(w.domains)]));
-      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {} }));
+      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {}, ...(this.o.commands?.().length ? { commands: this.o.commands() } : {}) }));
       this.welcomeTimer = setTimeout(() => {
         if (this.ws !== ws) return;
         this.log("no welcome from the hub in time; reconnecting");
@@ -432,6 +437,13 @@ export class HubLink {
         } catch (e) {
           this.log(`relay handler failed: ${(e as Error).message}`);
         }
+      }
+    } else if (f.t === "cmd") {
+      const h = this.o.onCommand;
+      if (h && this.st === "online") {
+        void h(f)
+          .catch((): LinkCmdResult => ({ t: "cmd.result", id: f.id, ok: false, code: "internal", message: "the command failed" }))
+          .then((r) => this.send(r));
       }
     } else if (f.t === "error") {
       // Never overwrite a sticky reason; a rejected wolf.add is informational.

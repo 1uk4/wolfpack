@@ -76,8 +76,8 @@ export function canRestartSelf(env: NodeJS.ProcessEnv = process.env, platform: N
 }
 
 /** Refusal codes a KeyHandler may return; they pass through to the hub unchanged. */
-export type KeyFailCode = "rejected_key" | "bad_seal" | "replay" | "store_failed";
-export type KeyResult = { ok: true } | { ok: false; code: KeyFailCode; message?: string };
+export type KeyFailCode = "rejected_key" | "bad_seal" | "replay" | "store_failed" | "check_unreachable";
+export type KeyResult = { ok: true; data?: unknown } | { ok: false; code: KeyFailCode; message?: string };
 
 /**
  * Stores and removes keys on this machine. The command channel only forwards to it and never sees, keeps or logs a key: `sealed` is
@@ -259,7 +259,7 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
           } catch {
             return fail(cmd.id, "store_failed", "the key store failed"); // never echo the error: it may quote key material
           }
-          return r.ok ? ok(cmd.id) : fail(cmd.id, r.code, r.message ?? r.code);
+          return r.ok ? ok(cmd.id, r.data) : fail(cmd.id, r.code, r.message ?? r.code);
         }
         if (cmd.kind === "workerd.restart" && o.restartSelf) return ok(cmd.id);
         return fail(cmd.id, "internal", "command not supported on this machine");

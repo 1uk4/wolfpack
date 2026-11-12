@@ -189,6 +189,23 @@ export function createRegistry(opts: RegistryOptions): Registry {
   // registry.json is the source of truth; domains.yaml is derived. Regenerate it at every startup so a crash between the two
   // renames, or a lost or hand-edited domains.yaml, is repaired. Skipped for a brand-new empty registry (no file yet).
   if (existsSync(file)) writeYaml(yamlFile, renderDomainsYaml(reg));
+  // A registry domain with no KB folder at all (seeded domains, installs made before this existed) gets one at start, because KB
+  // revisions only know domains that have a folder, so the wolf's kb sync would get 404 forever. A folder that already exists is
+  // never touched (no entries/, no stub INDEX.md: revisions would commit it). Failures are logged; startup never crashes.
+  const startKbBase = hubRoots(opts.dataDir).kbBase;
+  for (const d of reg.domains) {
+    const shown = JSON.stringify(String(d.name).slice(0, 64));
+    if (!DOMAIN_NAME.test(d.name)) {
+      log(`hubd: could not create the KB folder for domain ${shown}: not a valid domain name`);
+      continue;
+    }
+    if (existsSync(join(startKbBase, "domains", d.name))) continue;
+    try {
+      makeDomainFolder(startKbBase, d.name);
+    } catch (e) {
+      log(`hubd: could not create the KB folder for domain ${shown}: ${(e as Error).message}`);
+    }
+  }
 
   /** Persist registry.json (the commit point). The caller flips in-memory state right after; domains.yaml is derived and best effort. */
   function persist(next: RegistryFile): void {

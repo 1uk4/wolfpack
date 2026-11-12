@@ -109,3 +109,4 @@ export * from "./pack/pack-devices.ts";
 export * from "./pack/machine-commands.ts";
 export * from "./pack/keys-model.ts";
 export * from "./pack/keys-seal.ts";
+export * from "./pack/wolves-model.ts";

@@ -40,16 +40,16 @@ export const CommandArgsSchemas = {
 
 const AnyArgs = z.union([CommandArgsSchemas["logs.fetch"], CommandArgsSchemas["key.set"], CommandArgsSchemas["wolves.restart"], CommandArgsSchemas["workerd.restart"]]);
 
-export const LinkCmdSchema = z
-  .object({
-    t: z.literal("cmd"),
-    id: CommandIdSchema,
+const CmdBase = z.object({
     kind: CommandKindSchema,
     args: AnyArgs.default({}),
     /** Opaque to the channel; for key.set only. */
     sealed: z.string().max(64 * 1024).optional(),
-  })
-  .refine((f) => CommandArgsSchemas[f.kind].safeParse(f.args).success, { message: "args do not match kind" });
+  });
+const argsMatchKind = (f: { kind: CommandKind; args: unknown }) => CommandArgsSchemas[f.kind].safeParse(f.args).success;
+export const LinkCmdSchema = CmdBase.extend({ t: z.literal("cmd"), id: CommandIdSchema }).refine(argsMatchKind, { message: "args do not match kind" });
+/** Console -> hub body of POST /v1/machines/:hostId/commands. The hub assigns the command id. */
+export const CommandRequestSchema = CmdBase.refine(argsMatchKind, { message: "args do not match kind" });
 
 export const CommandResultCodeSchema = z.enum([
   "not_sent_offline",
@@ -74,6 +74,16 @@ export const LinkCmdResultSchema = z.object({
   message: z.string().max(2000).optional(),
   data: z.unknown().optional(),
 });
+
+/** The hub's answer: 200 when the machine ran it (ok true or false), 409 for not_sent_*, 504 for timeout. Never carries the request body. */
+export const CommandResponseSchema = z.object({
+  id: CommandIdSchema,
+  ok: z.boolean(),
+  code: CommandResultCodeSchema.optional(),
+  message: z.string().max(2000).optional(),
+  data: z.unknown().optional(),
+});
+export type CommandResponse = z.infer<typeof CommandResponseSchema>;
 
 export interface RestartedWolf {
   wolf: string;

@@ -51,6 +51,7 @@ import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffReques
 
 import * as R from "./registry.js";
 import { HubSettingsSchema } from "./hub-settings.js";
+import { CommandRequestSchema, CommandResponseSchema } from "./command.js";
 import { InventoryEntrySchema, InventoryReportBodySchema } from "./inventory.js";
 import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
@@ -564,6 +565,8 @@ export const ROUTES = {
   hubInventory: { scope: "hub", method: "GET", path: "/v1/inventory", response: { kind: "json", schema: z.object({ entries: z.array(InventoryEntrySchema.extend({ ageS: z.number() })), hubMachine: z.string() }) }, status: [200], error: err },
   /** A console's heartbeat `{entry}` (kind console only, body <= 4 KB). The row is bound to the token that wrote it (403 for another token). */
   hubInventoryReport: { scope: "hub", method: "POST", path: "/v1/inventory/report", body: InventoryReportBodySchema, response: { kind: "json", schema: z.object({ ok: z.literal(true) }) }, status: [200], error: err },
+  /** Command channel (work-wolfpack-8jLJ4on): run one command on a connected machine and wait for its result. Console/browser tokens only. 200 = the machine answered (ok true/false), 409 = not sent (not_sent_offline / not_sent_unsupported), 504 = timeout (outcome unknown; never retry automatically). Nothing is stored; the body (key bytes) is never logged. */
+  hubMachineCommand: { scope: "hub", method: "POST", path: "/v1/machines/:id/commands", body: CommandRequestSchema, response: { kind: "json", schema: CommandResponseSchema }, status: [200, 409, 504], error: err },
   hubSettings: { scope: "hub", method: "GET", path: "/v1/settings", response: { kind: "json", schema: HubSettingsSchema }, status: [200], error: err },
   /**
    * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker

@@ -39,4 +39,12 @@ describe("Pack > This device", () => {
 		assert.match(html, /sign-in/);
 		assert.match(html, /removed where they can be recognised/);
 	});
+
+	it("in the Mac app lists the wolves folder next to app data (kept from the old Data and support tab)", () => {
+		const html = render({ resetAppUi: async () => ({ ok: true }) } as unknown as AppBridge);
+		const folders = html.slice(html.indexOf('data-testid="this-device-folders"'), html.indexOf('data-testid="this-device-login"'));
+		assert.match(folders, /App data/);
+		assert.match(folders, /Your wolves/);
+		assert.match(folders, /data-testid="this-device-wolves-button"/);
+	});
 });

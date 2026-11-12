@@ -44,6 +44,9 @@ export function MacAppGroups({ bridge }: { bridge: AppBridge }) {
 				<SettingsRow label="App data" hint={paths?.state ?? "…"}>
 					<button type="button" className={BTN} onClick={() => openFolder("state")}>Show in Finder</button>
 				</SettingsRow>
+				<SettingsRow label="Your wolves" hint={paths?.wolves ?? "…"}>
+					<button type="button" data-testid="this-device-wolves-button" className={BTN} onClick={() => openFolder("wolves")}>Show in Finder</button>
+				</SettingsRow>
 				{paths?.logs && (
 					<SettingsRow label="Logs" hint={paths.logs}>
 						<button type="button" data-testid="this-device-logs-button" className={BTN} onClick={() => openFolder("logs")}>Show in Finder</button>

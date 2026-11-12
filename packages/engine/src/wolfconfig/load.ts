@@ -133,6 +133,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
     },
     extensions: v.extensions,
+    plugins: v.plugins,
     extensionConfig: Object.fromEntries(
       v.extensions.flatMap((n) => {
         const block = (doc as Record<string, unknown>)[n];

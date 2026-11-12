@@ -10,6 +10,7 @@
  *   tiers:                  # capability: per-tier overrides on the models file
  *     fast: { model: claude-sonnet-5-5, thinking: low }
  *   workspace: ~/Code/x     # capability: home-thread cwd (default: the wolf's dir)
+ *   plugins: [my-provider]  # provider plug-ins loaded from <WOLFPACK_HOME>/plugins/<id>/ (default none)
  *   extensions: [memory]    # extensions loaded from <den>/extensions/<name>/index.js (default none)
  *   serve:                  # all optional
  *     socket: ~/.wolfpack/run/1uk4.sock   # default shown
@@ -91,6 +92,8 @@ export const WolfFileSchema = z.object({
   color: z.string().min(1).optional(),
   workspace: z.string().min(1).optional(),
   extensions: z.array(z.string().min(1)).default([]),
+  /** Provider plug-ins to load from the plugins folder, by folder name. A folder alone never runs. */
+  plugins: z.array(z.string().min(1)).default([]),
   serve: z
     .object({
       socket: z.string().min(1).optional(),
@@ -146,6 +149,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "color",
   "workspace",
   "extensions",
+  "plugins",
   "serve",
   "subagents",
   "sandbox",
@@ -227,6 +231,8 @@ export interface WolfConfig {
    * the harness's; the same list drives createWolfHarness and wolfd.
    */
   extensions: string[];
+  /** Provider plug-ins to load (wolf.yaml `plugins:`), by folder name under the plugins dir. */
+  plugins: string[];
   /** The raw wolf.yaml block of each listed extension that has one (`memory:` etc.), as the loader hands it over. */
   extensionConfig: Record<string, Record<string, unknown>>;
   /** Derived: <dir>/den. */

@@ -56,3 +56,23 @@ Engine steps (memory, consolidation, KB sweep, librarian) reach it through the `
 `"piProvider": "claude-bridge"` / `"piModel": "claude-bridge/<model>"`, and `provider: claude-bridge` in config, are aliased to
 `claude-stateless` when the table is loaded (one log line; regenerate with `wolfpack sync` to drop it). Stored conversation
 refs `claude-bridge/<model>` still resolve (a lookup-only entry in `LOOKUP_MODELS`).
+
+## Provider plug-ins
+
+A provider (and its engine adapter) can plug in from outside the repo. A plug-in is a folder
+`<plugins dir>/<id>/` (default `<WOLFPACK_HOME>/plugins`, override `WOLFPACK_PLUGINS_DIR`) whose `package.json` has:
+
+```json
+{ "wolfpack": { "apiVersion": 1, "entry": "./dist/index.js", "requiredEnv": ["MY_TOKEN"],
+                "providers": ["my-provider"], "engineProviders": ["my-provider"] } }
+```
+
+The entry's default export is `{ apiVersion: 1, createProvider?(ctx), createEngineAdapter?({ env, config }), models?(ctx) }`
+(types `PluginModule` / `PluginContext`, exported from `@wolfpack/harness`). `ctx.env` holds only the names in `requiredEnv`.
+
+Enable it in wolf.yaml: `plugins: [my-provider]` (the folder name). A folder alone never runs code. `loadPlugins()` runs once at
+wolfd startup, before the model table is resolved, and registers through `registerProviderFactory` / `registerAdapter`, the
+same registries the built-ins use. A wrong `apiVersion`, a missing `requiredEnv` variable, an id that clashes with a built-in
+or another plug-in, or an entry that is missing or fails to import stops startup with a message naming the plug-in. No fallback.
+
+**Trust.** Enabling a plug-in means trusting it like any code you install. It runs inside the wolf's process, outside any sandbox. `ctx.env` is what wolfpack hands it, not a security boundary. `WOLFPACK_PLUGINS_DIR` decides where code is loaded from; the entry and folder must resolve inside that folder (symlinks are followed, then checked). A plug-in needs its own provider id: built-in and legacy ids (`anthropic`, `claude-stateless`, `claude-bridge`) are taken. In the Mac app, `claude-stateless` is a stub. Plug-in tiers are checked when the wolf starts, not by `wolfpack sync` or `wolf-config` in the CLI. Engine plug-ins serve steps that run in the wolf process (memory, consolidation and KB sweep run on the wolfd main thread through the memory extension, not in a worker or child process), because the adapter registry lives on `globalThis`; a step moved to a worker thread or child process would not see them.

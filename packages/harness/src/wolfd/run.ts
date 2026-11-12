@@ -39,6 +39,7 @@ import { AskBridge, createAskExtension } from "../extensions/ask.js";
 import { diagramProblem } from "../diagrams.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
+import { loadPlugins } from "../plugins.js";
 import { buildWolfModels, storedProviderIds } from "./models.js";
 import { WolfServer } from "./server.js";
 import { SubagentBridge, createSubagentExtension } from "./subagent-tools.js";
@@ -168,6 +169,9 @@ async function startConfigured(
   restoreEnv: () => void,
 ): Promise<RunningWolf> {
   if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, kbBase: env.KB_BASE, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
+
+  // Provider plug-ins (wolf.yaml `plugins:`) register before the model table is resolved, so a plug-in provider is a valid tier choice. A failing one stops startup.
+  if (config.plugins?.length) log(`plugins: loaded ${(await loadPlugins({ enabled: config.plugins, env })).join(", ")}`);
 
   // wolf.yaml `models:` is the source of truth for a wolfd wolf's models.json: regenerate it (only if changed) before
   // reading it. A handed-over WOLFPACK_MODELS_FILE wins and is never rewritten; no `models:` block leaves the file alone.

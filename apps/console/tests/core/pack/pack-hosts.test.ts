@@ -114,6 +114,11 @@ describe("pack health by host", () => {
 		]);
 	});
 
+	it("carries the commands a host advertised onto its card", () => {
+		const snap: HealthSnapshotView = { checkedAt: null, intervalMs: 5000, hosts: [{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin" }, { id: "sfo-01", label: "sfo-01", isThisConsole: false, commands: ["wolves.restart"] }], links: [link("workerd", "luka-air"), link("workerd-x", "sfo-01")] };
+		assert.deepEqual(groupByHost(snap).map((c) => [c.id, c.commands]), [["luka-air", undefined], ["sfo-01", ["wolves.restart"]]]);
+	});
+
 	it("always yields exactly one console card (the update controls live there), with an empty host list or a host list that omits the console", () => {
 		for (const hosts of [undefined, [], [{ id: "sfo-01", label: "sfo-01", isThisConsole: false }]]) {
 			const snap: HealthSnapshotView = { checkedAt: null, intervalMs: 5000, ...(hosts ? { hosts } : {}), links: [link("workerd", "sfo-01")] };

@@ -24,6 +24,8 @@ export interface HostInfo {
 	platform?: string;
 	/** The hub's id for this host, when the hub's /healthz lists it. */
 	hubId?: string;
+	/** Command kinds this host's worker advertised to the hub (hubd /healthz). Absent: older worker or hub. */
+	commands?: string[];
 }
 
 const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
@@ -73,6 +75,10 @@ function factsFor(h: HostInfo): PackMapHost | null {
 export interface HostCard {
 	id: string;
 	label: string;
+	/** Command kinds the machine advertised (see HostInfo.commands); a restart is offered only for these. */
+	commands?: string[];
+	/** The hub's id for this machine; absent when the hub does not list it (nothing can be sent to it). */
+	hubId?: string;
 	/** Some link on this host is probed from here (or this console runs here). False: map facts only. */
 	checked: boolean;
 	/** This console runs on this host. */
@@ -104,7 +110,7 @@ export function groupByHost(snapshot: HealthSnapshotView): HostCard[] {
 		let c = cards.get(id);
 		if (!c) {
 			const h = hosts.get(id) ?? { id, label: id, isThisConsole: false };
-			c = { id, label: h.label, checked: true, console: h.isThisConsole, facts: factsFor(h), hub: null, workerds: [], wolves: [], inventory: [] };
+			c = { id, label: h.label, checked: true, console: h.isThisConsole, facts: factsFor(h), ...(h.commands ? { commands: h.commands } : {}), ...(h.hubId ? { hubId: h.hubId } : {}), hub: null, workerds: [], wolves: [], inventory: [] };
 			cards.set(id, c);
 		}
 		return c;

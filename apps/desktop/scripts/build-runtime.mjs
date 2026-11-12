@@ -10,6 +10,7 @@ import { cpSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+import { EXTERNALS } from "./runtime-externals.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -34,8 +35,8 @@ for (const [name, entry] of Object.entries(entries)) {
 		// CJS deps (ws, yaml, ...) need require() inside an ESM bundle.
 		// WOLFPACK_EXIT_WITH_PARENT=1 (set by the supervisor): exit when the parent process is gone, so a crashed app never leaves orphans.
 		banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url); if (process.env.WOLFPACK_EXIT_WITH_PARENT === '1') { const __p = process.ppid; setInterval(() => { if (process.ppid !== __p) { process.kill(process.pid, 'SIGTERM'); setTimeout(() => process.exit(1), 3000).unref(); } }, 1000).unref(); }" },
-		// Optional or host-supplied: ws native addons, the ONNX embedder (ticket 6), the Telegram bot, the subscription provider's Agent SDK (API-key sign-in only for now).
-		external: ["bufferutil", "utf-8-validate", "onnxruntime-node", "@huggingface/tokenizers", "grammy", "@anthropic-ai/claude-agent-sdk"],
+		// Shipped in <out>/node_modules by stage-runtime-assets.mjs, or optional; the list lives in runtime-externals.mjs, which check-app.mjs verifies.
+		external: EXTERNALS,
 		logLevel: "error",
 	});
 	console.log(`${bundleFile(name)} ${(statSync(path.join(out, bundleFile(name))).size / 1e6).toFixed(1)} MB`);

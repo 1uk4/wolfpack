@@ -4,6 +4,13 @@
  *   node scripts/dist.mjs           unsigned dmg + zip (no identity, no notarization)
  *   node scripts/dist.mjs --signed  Developer ID signed + notarized + stapled
  *   node scripts/dist.mjs --check   preflight only (with --signed: cert + notary profile)
+ *   node scripts/dist.mjs --ci      signed + notarized on a CI runner: credentials come from the environment
+ *                                   (CSC_LINK, CSC_KEY_PASSWORD, APPLE_API_KEY = path to the .p8, APPLE_API_KEY_ID, APPLE_API_ISSUER),
+ *                                   no keychain profile. Same steps as --signed; only the credential source differs.
+ *
+ * Every mode ends with scripts/check-app.mjs on the built .app (natives, model, Agent SDK present; every bare import of
+ * the runtime bundles resolves inside Resources/runtime; signed modes also codesign/spctl/stapler). It never publishes:
+ * the release job uploads afterwards with `electron-builder publish`.
  *
  * Both modes pick an Xcode >= 26 for actool (build/icon.icon needs it) by
  * setting DEVELOPER_DIR when the active developer dir is older.
@@ -20,7 +27,8 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
-const signed = args.includes("--signed");
+const ci = args.includes("--ci");
+const signed = args.includes("--signed") || ci;
 const checkOnly = args.includes("--check");
 const profile = process.env.WOLFPACK_NOTARY_PROFILE || "WOLFPACK_NOTARY";
 
@@ -53,7 +61,13 @@ const env = { ...process.env, DEVELOPER_DIR: developerDir() };
 console.log(`dist: DEVELOPER_DIR=${env.DEVELOPER_DIR}`);
 
 const builderArgs = ["--mac", "--arm64", "--publish", "never"];
-if (signed) {
+if (ci) {
+	const missing = ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"].filter((k) => !process.env[k]);
+	if (missing.length) fail(`--ci needs ${missing.join(", ")} in the environment`);
+	if (!fs.existsSync(process.env.APPLE_API_KEY)) fail("APPLE_API_KEY must be the path of the App Store Connect .p8 file");
+	delete env.APPLE_KEYCHAIN_PROFILE;
+	builderArgs.push("-c.mac.notarize=true");
+} else if (signed) {
 	const ids = out("security", ["find-identity", "-v", "-p", "codesigning"]).stdout ?? "";
 	if (!/"Developer ID Application:/.test(ids)) {
 		fail(
@@ -76,9 +90,24 @@ if (checkOnly) {
 	process.exit(0);
 }
 
-const run = (cmd, a) => {
-	const r = spawnSync(cmd, a, { cwd: root, stdio: "inherit", env });
+const run = (cmd, a, cwd = root) => {
+	const r = spawnSync(cmd, a, { cwd, stdio: "inherit", env });
 	if (r.status !== 0) process.exit(r.status ?? 1);
 };
+// The runtime the app starts (work-wolfpack-07v3AmE): packages -> bundles -> onnx natives + embedding model. WOLFPACK_SKIP_RUNTIME=1 reuses apps/desktop/runtime as it is.
+if (process.env.WOLFPACK_SKIP_RUNTIME !== "1") {
+	run("pnpm", ["-r", "--filter", "./packages/*", "build"], path.resolve(root, "../.."));
+	run(process.execPath, ["scripts/build-runtime.mjs"]);
+	run(process.execPath, ["scripts/stage-runtime-assets.mjs"]);
+} else {
+	// Reusing runtime/ is only allowed when it is complete: the onnx binding, the model and the Agent SDK.
+	const need = [
+		"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node",
+		"embed-model/model.onnx",
+		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
+	].filter((f) => !fs.existsSync(path.join(root, "runtime", f)));
+	if (need.length) fail(`WOLFPACK_SKIP_RUNTIME=1 but runtime/ lacks: ${need.join(", ")}. Run without it (or scripts/stage-runtime-assets.mjs).`);
+}
 run("pnpm", ["run", "build:server"]);
 run("pnpm", ["exec", "electron-builder", ...builderArgs]);
+run(process.execPath, ["scripts/check-app.mjs", path.join(root, "dist", "mac-arm64", "Wolfpack Console.app"), ...(signed ? ["--signed"] : [])]);

@@ -20,7 +20,7 @@ const path = require("node:path");
 const VERSION_FILE = "app-version.json";
 const MARKER_FILE = "in-progress.json";
 
-/** Pack state: not backed up = logs and Electron caches (rebuilt on their own). Everything else is: hub/ (the KB), credentials, setup.json, hub token, seeds. */
+/** Pack state: not backed up = logs and Electron caches (rebuilt on their own). Everything else is: hub/ (the KB), keys.env (the API keys; an old credentials.json is kept too), setup.json, hub token, seeds. */
 const STATE_EXCLUDE = new Set([
 	"logs", "Cache", "Code Cache", "GPUCache", "DawnCache", "Crashpad", "tmp",
 	// The state dir defaults to Electron's userData, so Electron's own profile files live here too (and are locked while the app runs).
@@ -132,7 +132,7 @@ function listWolves(wolvesDir, log = () => {}) {
 
 /** An install from before version tracking: its pack state is there but app-version.json is not. Judged by the state dir only: after a Settings Reset the wolves stay but the state is empty, and that is a fresh install. */
 function looksInstalled(stateDir) {
-	return ["setup.json", "credentials.json", "hub"].some((n) => fs.existsSync(path.join(stateDir, n)));
+	return ["setup.json", "credentials.json", "keys.env", "hub"].some((n) => fs.existsSync(path.join(stateDir, n)));
 }
 
 async function backup({ stateDir, wolvesDir, backupDir, from, to, trash, log }) {

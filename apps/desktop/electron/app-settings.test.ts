@@ -41,7 +41,7 @@ beforeEach(() => {
 	mkdirSync(join(state, "logs"), { recursive: true });
 	mkdirSync(join(wolves, "mine"), { recursive: true });
 	writeFileSync(join(wolves, "mine", "wolf.yaml"), "id: mine\n");
-	writeFileSync(join(state, "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-old-key-0000" }), { mode: 0o600 });
+	writeFileSync(join(state, "keys.env"), "ANTHROPIC_API_KEY=sk-ant-old-key-0000\n", { mode: 0o600 });
 	writeFileSync(join(state, "hub-token.json"), JSON.stringify({ token: "hubtok-abc123" }));
 	clip = [];
 	calls = [];
@@ -50,9 +50,8 @@ beforeEach(() => {
 	opened = [];
 });
 
-function make(o: { wolves?: string; confirm?: (m: { detail: string }) => Promise<boolean>; hubHasKey?: boolean; onTrash?: (p: string) => void; stopFails?: boolean; startFails?: boolean } = {}) {
+function make(o: { wolves?: string; confirm?: (m: { detail: string }) => Promise<boolean>; onTrash?: (p: string) => void; stopFails?: boolean; startFails?: boolean; hubFails?: boolean } = {}) {
 	const sup = {
-		...(o.hubHasKey === undefined ? {} : { hubHasKey: () => o.hubHasKey as boolean }),
 		urls: {},
 		status: () => ({ running: true }),
 		stop: async () => {
@@ -63,7 +62,10 @@ function make(o: { wolves?: string; confirm?: (m: { detail: string }) => Promise
 			calls.push("start");
 			if (o.startFails) throw new Error("no start");
 		},
-		restart: async (n: string) => void calls.push(`restart:${n}`),
+		restart: async (n: string) => {
+			if (n === "hubd" && o.hubFails) throw new Error("hubd stuck");
+			calls.push(`restart:${n}`);
+		},
 	};
 	const settings = createAppSettings({
 		stateDir: state,
@@ -139,13 +141,22 @@ describe("diagnostics", () => {
 		expect(Math.max(...text.split("\n").map((l: string) => l.length))).toBeLessThanOrEqual(2001);
 		expect(text).toContain("App version: 1.2.3");
 	});
+
+	it("removes a Deepgram key from keys.env too, and the key as it is now in the file", async () => {
+		writeFileSync(join(state, "keys.env"), "DEEPGRAM_API_KEY=dgsecret-4321\nANTHROPIC_API_KEY=antsecret-8765\n", { mode: 0o600 });
+		writeFileSync(join(state, "logs", "main.log"), "dg dgsecret-4321 and anthropic antsecret-8765 here\n");
+		await make().copyDiagnostics();
+		expect(clip[0]).toContain("here");
+		expect(clip[0]).not.toContain("dgsecret-4321");
+		expect(clip[0]).not.toContain("antsecret-8765");
+	});
 });
 
 describe("reset", () => {
 	it("moves the app data to the Trash, relaunches, and leaves the wolves folder intact", async () => {
 		expect(await make().reset()).toEqual({ ok: true });
 		expect(existsSync(state)).toBe(false);
-		expect(existsSync(join(root, "Trash", "Wolfpack", "credentials.json"))).toBe(true);
+		expect(existsSync(join(root, "Trash", "Wolfpack", "keys.env"))).toBe(true);
 		expect(readFileSync(join(wolves, "mine", "wolf.yaml"), "utf8")).toBe("id: mine\n");
 		expect(calls.indexOf("trash")).toBeGreaterThanOrEqual(0);
 		expect(calls.indexOf("trash")).toBeLessThan(calls.indexOf("relaunch"));
@@ -154,7 +165,7 @@ describe("reset", () => {
 	it("does nothing when the native confirm is cancelled", async () => {
 		confirmAnswer = false;
 		expect(await make().reset()).toEqual({ ok: false, cancelled: true });
-		expect(existsSync(join(state, "credentials.json"))).toBe(true);
+		expect(existsSync(join(state, "keys.env"))).toBe(true);
 		expect(calls).toEqual([]);
 	});
 
@@ -171,7 +182,7 @@ describe("reset", () => {
 		mkdirSync(join(state, "Wolves"), { recursive: true });
 		const r = await make({ wolves: join(state, "Wolves") }).reset();
 		expect(r.ok).toBe(false);
-		expect(existsSync(join(state, "credentials.json"))).toBe(true);
+		expect(existsSync(join(state, "keys.env"))).toBe(true);
 		expect(calls).toEqual([]);
 	});
 
@@ -180,7 +191,7 @@ describe("reset", () => {
 		const r = await make().reset();
 		expect(r.ok).toBe(false);
 		expect(r.error).toContain("Nothing was changed");
-		expect(existsSync(join(state, "credentials.json"))).toBe(true);
+		expect(existsSync(join(state, "keys.env"))).toBe(true);
 		expect(existsSync(join(wolves, "mine", "wolf.yaml"))).toBe(true);
 		expect(calls).toEqual(["stop", "start"]);
 	});
@@ -188,7 +199,7 @@ describe("reset", () => {
 
 describe("reset app (This device)", () => {
 	const protectedPaths = [
-		"credentials.json", "hub-token.json", "auth.json", ".env", "data/kb/entry.md", "workerd/state.json", "logs/main.log",
+		"keys.env", "hub-token.json", "auth.json", ".env", "data/kb/entry.md", "workerd/state.json", "logs/main.log",
 		"Local Storage/leveldb/000003.log", "IndexedDB/x", "Preferences", "Cookies",
 	];
 	beforeEach(() => {
@@ -295,10 +306,10 @@ describe("show folder", () => {
 });
 
 describe("change key", () => {
-	it("keeps the other fields in credentials.json when the key changes", async () => {
-		writeFileSync(join(state, "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-old-key-0000", EXTRA: "keepme" }), { mode: 0o600 });
+	it("keeps the other lines in keys.env (a Deepgram key) when the key changes", async () => {
+		writeFileSync(join(state, "keys.env"), "DEEPGRAM_API_KEY=dg-keepme\nANTHROPIC_API_KEY=sk-ant-old-key-0000\n", { mode: 0o600 });
 		expect(await make().changeKey("sk-new-good")).toEqual({ ok: true });
-		expect(JSON.parse(readFileSync(join(state, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-new-good", EXTRA: "keepme" });
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe("DEEPGRAM_API_KEY=dg-keepme\nANTHROPIC_API_KEY=sk-new-good\n");
 	});
 
 	it("does not test the key against Anthropic when the confirm is cancelled", async () => {
@@ -309,23 +320,29 @@ describe("change key", () => {
 		expect(checks).toBe(0);
 	});
 
-	it("leaves credentials.json alone when Anthropic refuses the key", async () => {
-		const before = readFileSync(join(state, "credentials.json"), "utf8");
+	it("leaves keys.env alone when Anthropic refuses the key", async () => {
+		const before = readFileSync(join(state, "keys.env"), "utf8");
 		expect(await make().changeKey("sk-ant-bad")).toEqual({ ok: false, error: "That key didn't work" });
-		expect(readFileSync(join(state, "credentials.json"), "utf8")).toBe(before);
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe(before);
 		expect(calls).toEqual([]);
 	});
 
-	it("writes an accepted key at 0600 and restarts only the wolf, never returning the key", async () => {
+	it("writes an accepted key at 0600 and restarts hubd then the wolf, never returning the key", async () => {
 		const r = await make().changeKey("sk-new-good");
 		expect(r).toEqual({ ok: true });
-		expect(JSON.parse(readFileSync(join(state, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-new-good" });
-		expect(statSync(join(state, "credentials.json")).mode & 0o777).toBe(0o600);
-		expect(calls).toEqual(["restart:wolfd"]);
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe("ANTHROPIC_API_KEY=sk-new-good\n");
+		expect(statSync(join(state, "keys.env")).mode & 0o777).toBe(0o600);
+		expect(calls).toEqual(["restart:hubd", "restart:wolfd"]);
 	});
 
-	it("says curation starts at the next launch when hubd started with no key", async () => {
-		const r = await make({ hubHasKey: false }).changeKey("sk-new-good");
-		expect(r).toEqual({ ok: true, note: "Key saved. Memory tidying (knowledge-base curation) starts next time you open the app." });
+	it("saves a pasted key that has a trailing newline, trimmed", async () => {
+		expect(await make().changeKey("sk-new-good\n")).toEqual({ ok: true });
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe("ANTHROPIC_API_KEY=sk-new-good\n");
+	});
+
+	it("says curation starts at the next launch when hubd could not be restarted", async () => {
+		const r = await make({ hubFails: true }).changeKey("sk-new-good");
+		expect(r).toEqual({ ok: true, note: "Key saved. The wolf uses it now; memory curation starts when you reopen Wolfpack." });
+		expect(calls).toEqual(["restart:wolfd"]);
 	});
 });

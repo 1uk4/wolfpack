@@ -52,7 +52,8 @@ Both need Xcode 26+ (`actool` compiles `build/icon.icon`). `scripts/dist.mjs` se
 ## Install and verify
 
 1. Open the dmg, drag Wolfpack Console to Applications, launch it.
-2. Setup can finish without an API key ("Skip, add a key later in Settings" on the sign-in step). Chat then says to add one in Settings → Data and support; Change key there makes the next chat work.
+2. Setup can finish without an API key ("Skip, add a key later in Pack → Keys" on the sign-in step). Chat then says to add one in Pack → Keys; saving it there makes the next chat work. Keys live in `keys.env` in the app data folder (the old `credentials.json` is no longer read, and is left untouched).
+   - Settings → Change key restarts hubd (its memory curator) and the wolf, so both use the new key at once. A key saved in Pack → Keys is written by workerd: the wolf can use it after a wolf restart, but hubd's curator only sees it after the app restarts (hubd reads its key at launch).
 3. Local mode: no `console.json` in the app folder above; the git graph loads.
 4. Signed builds only:
    - `codesign --verify --deep --strict --verbose=2 "/Applications/Wolfpack Console.app"`

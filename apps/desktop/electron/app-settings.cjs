@@ -5,7 +5,7 @@
  *   folders()               { state, wolves, logs }: the paths the tab shows
  *   showFolder(name)        "state" | "wolves" | "logs" only (never a path from the page): opens it in Finder
  *   loginItem() / setLoginItem(on)   the tray's Open at login logic (tray.cjs), { openAtLogin, needsApproval }
- *   changeKey(key)          checkKey -> credentials.json (0600, atomic) -> restart wolfd only; the page gets { ok } or { ok:false, error }
+ *   changeKey(key)          checkKey -> keys.env (0600, atomic) -> restart wolfd only; the page gets { ok } or { ok:false, error }
  *   copyDiagnostics()       plain-text report on the clipboard, secrets removed first; { ok:true }
  *   reset()                 stop, move the pack state dir to the Trash, relaunch; ~/Wolves is never touched
  *   resetAppUi()            stop, move only the allowlisted Chromium cache folders to the Trash, relaunch; sign-in, drafts, keys, data untouched
@@ -13,8 +13,8 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { checkKey, storedKey, writeAtomic } = require("./setup.cjs");
-const { KEY_FILE } = require("./supervisor.cjs");
+const { checkKey, storedKey } = require("./setup.cjs");
+const { KEYS_FILE, ANTHROPIC_ENV, DEEPGRAM_ENV, readKey, writeKey } = require("./key-file.cjs");
 const { loginItemState, setLoginItem } = require("./tray.cjs");
 
 /**
@@ -81,7 +81,8 @@ function createAppSettings(opts) {
 	};
 	const dirs = { state: stateDir, wolves: wolvesDir, logs: path.join(stateDir, "logs") };
 
-	const secrets = () => [storedKey(stateDir), hubToken(stateDir)];
+	// Read fresh each time: a key saved in Pack → Keys or by changeKey is in the file, not in anything cached here.
+	const secrets = () => [ANTHROPIC_ENV, DEEPGRAM_ENV].map((n) => readKey(path.join(stateDir, KEYS_FILE), n)).concat(hubToken(stateDir));
 
 	async function showFolder(name) {
 		const dir = typeof name === "string" && Object.hasOwn(dirs, name) ? dirs[name] : "";
@@ -118,15 +119,20 @@ function createAppSettings(opts) {
 		if (!go) return { ok: false, cancelled: true };
 		const checked = await checkKey(key, { baseUrl: opts.modelBaseUrl, fetchImpl: opts.fetchImpl });
 		if (!checked.ok) return checked;
-		const file = path.join(stateDir, KEY_FILE);
-		let current = {};
 		try {
-			const v = JSON.parse(fs.readFileSync(file, "utf8"));
-			if (v && typeof v === "object" && !Array.isArray(v)) current = v; // a damaged file is replaced, a good one keeps its other fields
-		} catch {
-			/* missing or damaged */
+			writeKey(path.join(stateDir, KEYS_FILE), ANTHROPIC_ENV, key); // keeps the file's other lines (e.g. a Deepgram key)
+		} catch (err) {
+			return { ok: false, error: `The key was not saved: ${redact(String(err?.message ?? err), [key])}` };
 		}
-		writeAtomic(file, JSON.stringify({ ...current, ANTHROPIC_API_KEY: key }), 0o600);
+		// hubd's curator reads its key only at launch, so it restarts first (one at a time, as the supervisor orders them). If it
+		// cannot (it is retried once), the key is still saved and the wolf still restarts; curation then waits for the next app launch.
+		let hubRestarted = true;
+		try {
+			await sup.restart("hubd");
+		} catch (err) {
+			hubRestarted = false;
+			log?.(`hubd restart after key change failed: ${redact(err?.message ?? err, [key])}`);
+		}
 		try {
 			await sup.restart("wolfd");
 		} catch (err) {
@@ -134,8 +140,7 @@ function createAppSettings(opts) {
 			log?.(`wolf restart after key change failed: ${redact(err?.message ?? err, [key])}`);
 			return { ok: false, error: "The key was saved, but your wolf didn't restart. Quit and reopen Wolfpack." };
 		}
-		// hubd read its key at launch and had none: say when memory tidying starts (no hubd restart).
-		if (sup.hubHasKey?.() === false) return { ok: true, note: "Key saved. Memory tidying (knowledge-base curation) starts next time you open the app." };
+		if (!hubRestarted) return { ok: true, note: "Key saved. The wolf uses it now; memory curation starts when you reopen Wolfpack." };
 		return { ok: true };
 	}
 
@@ -215,7 +220,7 @@ function createAppSettings(opts) {
 
 	/**
 	 * Reset app (This device): the wolves are stopped first, then only the allowlisted Chromium caches move to the Trash, then the app relaunches. An ALLOWLIST of names directly
-	 * inside the app data folder: keys, credentials, hub-token, auth.json, .env, data/ (the KB), workerd, logs and ~/Wolves are never on it,
+	 * inside the app data folder: keys.env, hub-token, auth.json, .env, data/ (the KB), workerd, logs and ~/Wolves are never on it,
 	 * so they cannot be moved. Nothing is deleted.
 	 */
 	const resetAppUi = () => exclusive(resetAppUiNow);

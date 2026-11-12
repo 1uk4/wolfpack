@@ -193,6 +193,35 @@ describe("app runtime on one Mac", () => {
     await expect(s.restart("hubd")).rejects.toThrow(/cannot restart hubd/);
   }, 180_000);
 
+  it.sequential("starts with no API key: services run with no key in their env, the chat says to add one in Settings, and the key added later reaches the wolf after restart(\"wolfd\")", async () => {
+    const s = createSupervisor({ stateDir: join(root, "state-nokey"), wolvesDir: join(root, "Wolves4"), runtimeDir, nodeBin: nodePath, modelBaseUrl: fakeUrl });
+    made.push(s);
+    await s.start();
+    expect(s.status().running).toBe(true);
+    const before = seenKeys.length;
+    const c = new HttpConsoleClient({ baseUrl: s.urls.workerd });
+    await c.submit("wolf/home", "hello", { whenBusy: "reject" });
+    let error = "";
+    for await (const e of c.watch("wolf/home")) if (e.type === "error") error = e.message;
+    expect(error).toBe("No API key yet. Add one in Settings → Data and support, then send again.");
+    expect(seenKeys.length).toBe(before); // nothing went out to the model
+    writeFileSync(join(root, "state-nokey", "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-added-later" }), { mode: 0o600 });
+    await s.restart("wolfd");
+    expect(await say(s.urls.workerd, "hello again")).toContain("FAKE-REPLY-OK");
+    expect(seenKeys.at(-1)).toBe("sk-added-later");
+  }, 180_000);
+
+  it("started with no key, curate() skips with a reason and tells the app hubd has no key (a key added later waits for the next launch)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "app-model-"));
+    writeFileSync(join(dir, "model.onnx"), "");
+    const s = createSupervisor({ stateDir: join(root, "state-nokey-curate"), wolvesDir: join(root, "Wolves5"), runtimeDir, nodeBin: nodePath, modelBaseUrl: fakeUrl, embedModelDir: dir });
+    made.push(s);
+    await s.start();
+    expect(s.hubHasKey()).toBe(false);
+    expect(await s.curate()).toEqual({ skipped: "no API key" }); // returns at once: no SIGUSR2 window, so nothing waits for hubd's 'window done' line
+    rmSync(dir, { recursive: true, force: true });
+  }, 120_000);
+
   it.sequential("leaves no child process after stop", async () => {
     await second?.stop();
     for (const pid of secondPids) expect(alive(pid)).toBe(false);

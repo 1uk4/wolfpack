@@ -50,8 +50,9 @@ beforeEach(() => {
 	opened = [];
 });
 
-function make(o: { wolves?: string; confirm?: () => Promise<boolean> } = {}) {
+function make(o: { wolves?: string; confirm?: () => Promise<boolean>; hubHasKey?: boolean } = {}) {
 	const sup = {
+		...(o.hubHasKey === undefined ? {} : { hubHasKey: () => o.hubHasKey as boolean }),
 		urls: {},
 		status: () => ({ running: true }),
 		stop: async () => void calls.push("stop"),
@@ -213,5 +214,10 @@ describe("change key", () => {
 		expect(JSON.parse(readFileSync(join(state, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-new-good" });
 		expect(statSync(join(state, "credentials.json")).mode & 0o777).toBe(0o600);
 		expect(calls).toEqual(["restart:wolfd"]);
+	});
+
+	it("says curation starts at the next launch when hubd started with no key", async () => {
+		const r = await make({ hubHasKey: false }).changeKey("sk-new-good");
+		expect(r).toEqual({ ok: true, note: "Key saved. Memory tidying (knowledge-base curation) starts next time you open the app." });
 	});
 });

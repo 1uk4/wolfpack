@@ -13,6 +13,7 @@
 	const steps = [...document.querySelectorAll(".step")];
 	const dots = [...document.querySelectorAll(".dots li")];
 	let current = 0;
+	let skipKey = false; // Skip was chosen: Finish needs and checks no key (a stored one is kept as it is)
 	let keySaved = false; // a key is already stored (or comes from the environment): the page never holds it
 
 	const show = (n) => {
@@ -40,10 +41,19 @@
 		const btn = $("button.primary", keyForm);
 		btn.disabled = true;
 		setError(keyForm, "", keyInput);
+		skipKey = false;
 		if (keySaved) { btn.disabled = false; return show(1); }
 		const r = await bridge.checkKey(keyInput.value.trim());
 		btn.disabled = false;
 		if (!r.ok) return setError(keyForm, r.error, keyInput);
+		show(1);
+	});
+
+	// Skip: go on with no key. Whatever was typed (even a rejected key) is dropped, so nothing is stored; Settings adds one later.
+	$("#skip-key").addEventListener("click", () => {
+		keyInput.value = "";
+		skipKey = true;
+		setError(keyForm, "", keyInput);
 		show(1);
 	});
 
@@ -60,7 +70,7 @@
 	const addRow = (name = "", description = "") => {
 		const li = document.createElement("li");
 		li.className = "domain-new";
-		li.innerHTML = '<div class="row"><input type="text" class="dn" placeholder="name, e.g. recipes" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Domain name"><button type="button" class="remove" aria-label="Remove">✕</button></div><input type="text" class="dd" placeholder="One line about it" maxlength="140" autocomplete="off" aria-label="Description">';
+		li.innerHTML = '<div class="row"><input type="text" class="dn" placeholder="name, e.g. startup" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Domain name"><button type="button" class="remove" aria-label="Remove">✕</button></div><input type="text" class="dd" placeholder="One line, e.g. the company I’m starting" maxlength="140" autocomplete="off" aria-label="Description">';
 		$(".remove", li).addEventListener("click", () => li.remove());
 		list.appendChild(li);
 		$(".dn", li).value = name;
@@ -90,7 +100,7 @@
 		if (c.error) return setError(knowForm, c.error, c.input);
 		setError(knowForm, "");
 		show(3);
-		const r = await bridge.finish({ apiKey: keyInput.value.trim(), wolfName: nameInput.value.trim(), domains: c.domains });
+		const r = await bridge.finish({ skipKey, apiKey: keyInput.value.trim(), wolfName: nameInput.value.trim(), domains: c.domains });
 		if (r && r.ok === false) {
 			setError($("#working"), r.error || "Something went wrong.");
 			$("#working-back").hidden = false;
@@ -116,6 +126,7 @@
 			keyInput.hidden = true;
 			$("label[for=key]", keyForm).hidden = true;
 			$("#key-saved").hidden = false;
+			$("#skip-key").textContent = "Keep the saved key and continue";
 			$("#replace-key").addEventListener("click", () => {
 				keySaved = false;
 				keyInput.hidden = false;

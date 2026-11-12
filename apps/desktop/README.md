@@ -51,8 +51,9 @@ Both need Xcode 26+ (`actool` compiles `build/icon.icon`). `scripts/dist.mjs` se
 ## Install and verify
 
 1. Open the dmg, drag Wolfpack Console to Applications, launch it.
-2. Local mode: no `console.json` in the app folder above; the git graph loads.
-3. Signed builds only:
+2. Setup can finish without an API key ("Skip, add a key later in Settings" on the sign-in step). Chat then says to add one in Settings → Data and support; Change key there makes the next chat work.
+3. Local mode: no `console.json` in the app folder above; the git graph loads.
+4. Signed builds only:
    - `codesign --verify --deep --strict --verbose=2 "/Applications/Wolfpack Console.app"`
    - `spctl --assess --type execute --verbose "/Applications/Wolfpack Console.app"` (expect `accepted`, source `Notarized Developer ID`)
    - `xcrun stapler validate "/Applications/Wolfpack Console.app"`

@@ -42,7 +42,7 @@ export function DataSupportSection({ bridge }: { bridge: AppBridge }) {
 		setBusy(false);
 		if (r.ok) {
 			setKey(""); // the field is cleared; the key is not kept on the page
-			setKeyMsg({ ok: true, text: "Key saved. Your wolf restarted with it." });
+			setKeyMsg({ ok: true, text: r.note ?? "Key saved. Your wolf restarted with it." });
 		} else if (r.cancelled) {
 			setKeyMsg(null);
 		} else setKeyMsg({ ok: false, text: r.error ?? "Something went wrong. Try again." });

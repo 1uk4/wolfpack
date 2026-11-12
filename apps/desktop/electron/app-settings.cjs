@@ -126,6 +126,8 @@ function createAppSettings(opts) {
 			log?.(`wolf restart after key change failed: ${redact(err?.message ?? err, [key])}`);
 			return { ok: false, error: "The key was saved, but your wolf didn't restart. Quit and reopen Wolfpack." };
 		}
+		// hubd read its key at launch and had none: say when memory tidying starts (no hubd restart).
+		if (sup.hubHasKey?.() === false) return { ok: true, note: "Key saved. Memory tidying (knowledge-base curation) starts next time you open the app." };
 		return { ok: true };
 	}
 

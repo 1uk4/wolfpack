@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const { checkKey, needsSetup, runSetup } = createRequire(import.meta.url)("./setup.cjs");
+const { checkKey, needsSetup, resolveFinishKey, runSetup } = createRequire(import.meta.url)("./setup.cjs");
 const runtimeDir = join(here, "..", "runtime");
 
 let fake: Server;
@@ -19,12 +19,14 @@ let fakeUrl: string;
 let root: string;
 const seenKeys: string[] = [];
 
-/** /v1/models answers 200 for the key "sk-ok" and 401 for any other. */
+/** /v1/models answers 200 for the key "sk-ok", 403 for "sk-forbidden" and 401 (Anthropic's error body) for any other. */
 beforeAll(async () => {
   fake = createServer((req, res) => {
     seenKeys.push(String(req.headers["x-api-key"] ?? ""));
     const ok = req.headers["x-api-key"] === "sk-ok";
-    res.writeHead(ok ? 200 : 401, { "content-type": "application/json" }).end(JSON.stringify(ok ? { data: [] } : { error: { type: "authentication_error" } }));
+    const forbidden = req.headers["x-api-key"] === "sk-forbidden";
+    const body = ok ? { data: [] } : forbidden ? { error: { type: "permission_error", message: "API access is disabled" } } : { error: { type: "authentication_error", message: "invalid x-api-key" } };
+    res.writeHead(ok ? 200 : forbidden ? 403 : 401, { "content-type": "application/json" }).end(JSON.stringify(body));
   });
   await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
   fakeUrl = `http://127.0.0.1:${(fake.address() as { port: number }).port}`;
@@ -40,8 +42,14 @@ describe("key check", () => {
     expect(await checkKey("sk-ok", { baseUrl: fakeUrl })).toEqual({ ok: true });
   });
 
-  it("says \"That key didn't work\" for a 401", async () => {
-    expect(await checkKey("sk-bad", { baseUrl: fakeUrl })).toEqual({ ok: false, error: "That key didn't work" });
+  it("passes on Anthropic's reason for a 401 and a 403, and falls back when there is none", async () => {
+    expect(await checkKey("sk-bad", { baseUrl: fakeUrl })).toEqual({ ok: false, error: "Anthropic didn't accept this key: invalid x-api-key" });
+    expect(await checkKey("sk-forbidden", { baseUrl: fakeUrl })).toEqual({ ok: false, error: "This key isn't allowed to use the API: API access is disabled" });
+    const bare = async () => new Response("not json", { status: 401 });
+    expect(await checkKey("sk-bad", { fetchImpl: bare })).toEqual({ ok: false, error: "That key didn't work" });
+    // A key echoed past the 200-character cut must still be caught: the reason is dropped, not shown with the key's tail.
+    const echo = async () => new Response(JSON.stringify({ error: { message: `${"x ".repeat(120)}invalid key sk-echoed-secret` } }), { status: 401 });
+    expect(await checkKey("sk-echoed-secret", { fetchImpl: echo })).toEqual({ ok: false, error: "That key didn't work" });
   });
 
   it("says it could not reach Anthropic when the network fails", async () => {
@@ -176,6 +184,39 @@ describe("first-run setup", () => {
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
       expect(reg.domains.map((d: { name: string; description?: string }) => [d.name, d.description])).toEqual([["personal", undefined], ["recipes", "Family dinners"]]);
       expect(reg.subscriptions).toEqual([{ wolf: "mayas-wolf", domain: "personal" }, { wolf: "mayas-wolf", domain: "recipes" }]);
+    } finally {
+      await sup.stop();
+    }
+  }, 120_000);
+
+  it("finishes setup with the key skipped: complete, and a 0600 credential store with no key in it", async () => {
+    const stateDir = join(root, "state-skip");
+    const sup = await runSetup({ apiKey: "", wolfName: "No Key", domains: [] }, { stateDir, wolvesDir: join(root, "Wolves-skip"), runtimeDir, nodeBin, modelBaseUrl: fakeUrl });
+    try {
+      expect(needsSetup(stateDir)).toBe(false);
+      expect(statSync(join(stateDir, "credentials.json")).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(join(stateDir, "credentials.json"), "utf8"))).toEqual({});
+    } finally {
+      await sup.stop();
+    }
+  }, 120_000);
+
+  it("Skip with a stored key that no longer works completes without re-checking it, and keeps it as it is", async () => {
+    const stateDir = join(root, "state-skip-dead");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-dead" }), { mode: 0o600 });
+    let checks = 0;
+    const fetchImpl = async () => (checks++, new Response("{}", { status: 401 }));
+    // Without skipKey the dead stored key is re-checked and refuses (the old Finish behaviour).
+    expect((await resolveFinishKey({ apiKey: "" }, { stateDir, fetchImpl })).ok).toBe(false);
+    checks = 0;
+    const k = await resolveFinishKey({ skipKey: true, apiKey: "" }, { stateDir, fetchImpl });
+    expect(k).toEqual({ ok: true, key: "" });
+    expect(checks).toBe(0);
+    const sup = await runSetup({ apiKey: k.key, wolfName: "Dead Key", domains: [] }, { stateDir, wolvesDir: join(root, "Wolves-skip-dead"), runtimeDir, nodeBin, modelBaseUrl: fakeUrl });
+    try {
+      expect(needsSetup(stateDir)).toBe(false);
+      expect(JSON.parse(readFileSync(join(stateDir, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-dead" });
     } finally {
       await sup.stop();
     }

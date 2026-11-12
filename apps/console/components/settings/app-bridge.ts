@@ -11,6 +11,8 @@ export interface Result {
 	error?: string;
 	/** The owner said Cancel in the native confirm: not an error. */
 	cancelled?: boolean;
+	/** Shown with a success, e.g. when memory tidying waits for the next launch. */
+	note?: string;
 }
 export interface AppBridge {
 	folders(): Promise<{ state: string; wolves: string }>;

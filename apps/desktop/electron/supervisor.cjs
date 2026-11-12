@@ -141,6 +141,7 @@ function createSupervisor(opts) {
 	let stopping = false; // set by stop(), cleared by the next start(): a quit during start must not respawn anything
 	const stoppedError = () => Object.assign(new Error("supervisor stopped"), { stopped: true });
 	let secret = "";
+	let hubHadKey = false; // hubd reads its key only at launch: a key added later reaches it at the next app launch
 	const listeners = new Set();
 	let wolfUp = false; // cached: the default wolf is online (set after bring-up, refreshed by a slow poll)
 	let lastRunning = false;
@@ -285,6 +286,8 @@ function createSupervisor(opts) {
 	async function bringUp(keyFile) {
 		const creds = readCredentials(keyFile);
 		secret = creds.ANTHROPIC_API_KEY ?? "";
+		hubHadKey = !!secret;
+		if (!secret) log("no API key yet: KB curation is skipped until the app is launched with one");
 		const hubPort = await reuseOrFreePort(sup.ports.hubd);
 		const workerdPort = await reuseOrFreePort(sup.ports.workerd);
 		sup.ports = { hubd: hubPort, workerd: workerdPort };
@@ -330,6 +333,7 @@ function createSupervisor(opts) {
 		const shim = ensureShim(stateDir);
 		const workerdPort = sup.ports.workerd;
 		const env = base({
+			WOLFPACK_SINGLE_MAC: "1", // the app's wolf: the no-key message names Settings → Data and support (harness engine/events.ts)
 			WOLFPACK_APP_NODE: nodeBin,
 			WOLFPACK_APP_WOLFD: path.join(runtimeDir, "wolfd", "wolfd.mjs"),
 			WOLFPACK_MODELS_FILE: path.join(sup.wolfDir, "models.json"),
@@ -481,6 +485,8 @@ function createSupervisor(opts) {
 			return [];
 		}
 	}
+	/** False when hubd started with no key: it reads its key only at launch, so curation waits for the next app launch. */
+	sup.hubHasKey = () => hubHadKey;
 	/** True while hubd, workerd and the wolf are all up. Cheap: reads cached state only. */
 	sup.status = () => ({ running: !stopping && wolfUp && children.has("hubd") && children.has("workerd") });
 	/**
@@ -492,6 +498,7 @@ function createSupervisor(opts) {
 			const hub = children.get("hubd");
 			if (!hub || stopping) return resolve({ skipped: "hubd is not running" });
 			if (!curatorOn) return resolve({ skipped: "no embedding model" });
+			if (!hubHadKey) return resolve({ skipped: "no API key" });
 			if (windowRunning) return resolve({ skipped: "a window is already running" });
 			windowRunning = true;
 			const done = (v) => {

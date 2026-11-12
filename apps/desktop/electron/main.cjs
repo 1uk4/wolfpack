@@ -34,7 +34,7 @@ const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 const { createSupervisor } = require("./supervisor.cjs");
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
-const { needsSetup, readSetup, readWolfId, storedKey, checkKey, runSetup, wolfIdFor } = require("./setup.cjs");
+const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
@@ -167,14 +167,9 @@ function runWizard(opts) {
 				return { ok: false, error: message };
 			};
 			try {
-				// A typed key was checked at the sign-in step; the dev override and a saved key are checked here.
-				const typed = String(answers?.apiKey ?? "").trim();
-				const key = envKey || typed || storedKey(opts.stateDir);
-				if (!typed) {
-					const r = await checkKey(key, { baseUrl: opts.modelBaseUrl });
-					if (!r.ok) return fail(r.error);
-				}
-				const sup = await runSetup({ ...answers, apiKey: key }, { ...opts, onCreate: (s) => (supervisor = s) });
+				const k = await resolveFinishKey(answers, { envKey, stateDir: opts.stateDir, baseUrl: opts.modelBaseUrl });
+				if (!k.ok) return fail(k.error);
+				const sup = await runSetup({ ...answers, apiKey: k.key }, { ...opts, onCreate: (s) => (supervisor = s) });
 				chatWolf = readWolfId(opts.stateDir);
 				cleanup();
 				resolve(sup);

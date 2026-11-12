@@ -121,11 +121,39 @@ async function checkKey(key, { baseUrl, fallbackBase = ANTHROPIC_BASE, fetchImpl
 			signal: AbortSignal.timeout(15_000),
 		});
 		if (res.ok) return { ok: true };
-		if (res.status === 401 || res.status === 403) return { ok: false, error: "That key didn't work" };
+		if (res.status === 401 || res.status === 403) {
+			// Anthropic's own reason, short; the key is never echoed (it is only ever in the request header).
+			let reason = "";
+			try {
+				const m = (await res.json())?.error?.message;
+				// Whole message first: a key echoed near the end must not survive being cut at 200 characters.
+				if (typeof m === "string" && !m.includes(String(key).trim())) reason = m.replace(/\s+/g, " ").trim().slice(0, 200);
+			} catch {
+				/* no JSON body */
+			}
+			if (!reason) return { ok: false, error: "That key didn't work" };
+			return { ok: false, error: res.status === 401 ? `Anthropic didn't accept this key: ${reason}` : `This key isn't allowed to use the API: ${reason}` };
+		}
 		return { ok: false, error: `Anthropic answered ${res.status}. Try again in a moment.` };
 	} catch {
 		return { ok: false, error: "Couldn't reach Anthropic" };
 	}
+}
+
+/**
+ * The key the wizard's Finish uses (main.cjs). `skipKey` (the Skip button) needs no key and checks nothing; a stored key stays as it is
+ * (runSetup keeps it, never deletes it) even if it is dead. Otherwise: a typed key was checked at the sign-in step; the dev override and
+ * a saved key are checked here. -> { ok:true, key } | { ok:false, error }
+ */
+async function resolveFinishKey(answers, { envKey = "", stateDir, baseUrl, fetchImpl } = {}) {
+	if (answers?.skipKey === true) return { ok: true, key: "" };
+	const typed = String(answers?.apiKey ?? "").trim();
+	const key = envKey || typed || storedKey(stateDir);
+	if (!typed && key) {
+		const r = await checkKey(key, { baseUrl, fetchImpl });
+		if (!r.ok) return r;
+	}
+	return { ok: true, key };
 }
 
 /** Normalise and validate the wizard's answers (key optional: the stored one is reused). Throws an Error with a plain message. */
@@ -234,11 +262,11 @@ async function runSetup(answers, opts) {
 		// Setup made this folder on an earlier attempt: this attempt's domains replace its line.
 		rewrite = fs.readFileSync(wolfYamlPath, "utf8").replace(/^domains:.*$/m, `domains: [${chosen.map((d) => d.name).join(", ")}]`);
 	}
+	// No key is allowed (the wizard's "Skip"): the file then holds no ANTHROPIC_API_KEY and the key is added later in Settings.
 	const key = apiKey || storedKey(opts.stateDir);
-	if (!key) throw new Error("An API key is required.");
 	fs.mkdirSync(opts.stateDir, { recursive: true, mode: 0o700 });
 	fs.chmodSync(opts.stateDir, 0o700);
-	writeAtomic(path.join(opts.stateDir, KEY_FILE), JSON.stringify({ ANTHROPIC_API_KEY: key }), 0o600);
+	writeAtomic(path.join(opts.stateDir, KEY_FILE), JSON.stringify(key ? { ANTHROPIC_API_KEY: key } : {}), 0o600);
 	const record = { wolf: wolfId, wolfName, domains };
 	writeAtomic(path.join(opts.stateDir, SETUP_FILE), JSON.stringify({ ...record, complete: false, folderPreexisted, hubWasFresh }));
 	if (rewrite) writeAtomic(wolfYamlPath, rewrite);
@@ -256,4 +284,4 @@ async function runSetup(answers, opts) {
 	return sup;
 }
 
-module.exports = { writeAtomic, needsSetup, readSetup, readWolfId, storedKey, checkKey, runSetup, wolfIdFor, domainNameProblem, ANTHROPIC_BASE, MAX_DESCRIPTION, MAX_DOMAINS };
+module.exports = { writeAtomic, needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor, domainNameProblem, ANTHROPIC_BASE, MAX_DESCRIPTION, MAX_DOMAINS };

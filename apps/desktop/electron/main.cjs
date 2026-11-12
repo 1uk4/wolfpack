@@ -264,6 +264,7 @@ function createWindow(url) {
 			sandbox: true,
 			nodeIntegration: false,
 			preload: path.join(__dirname, "preload.cjs"),
+			additionalArguments: supervisor ? ["--wolfpack-single-mac"] : [], // app runtime: preload exposes singleMac (work-wolfpack-TdmbaV4)
 		},
 		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
 		// the native window surface changes size before Chromium's compositor

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore }
 import { Loader2Icon, MicIcon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { Hint } from "@/components/ui/hint";
+import { useSingleMac } from "@/components/shell/single-mac";
 import { cn } from "@/lib/utils";
 
 /**
@@ -441,6 +442,9 @@ export type Dictation = {
  * question waits.
  */
 export function useDictation({ append, kind = "page", enabled = true, onOrphan, interceptStart }: { append: (text: string) => void; kind?: "page" | "bar"; enabled?: boolean; onOrphan?: (text: string) => void; interceptStart?: () => boolean }): Dictation {
+	// Single-Mac app: Deepgram is an outbound host it must not contact, so dictation never enables (no token fetch, no shortcut).
+	const singleMac = useSingleMac();
+	enabled = enabled && !singleMac;
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string | null>(null);
 	/** Latest RMS from the worklet — the meter samples this (dictate pattern). */
@@ -899,6 +903,7 @@ export function CompactMeter({ dictation }: { dictation: Dictation }) {
 export function DictationBar({ dictation }: { dictation: Dictation }) {
 	const { phase, error, levelRef, toggle, active, clearError } = dictation;
 	const { open: openSettings } = useSettingsDialog();
+	const singleMac = useSingleMac();
 	/** The keyless click (zero-keys wave, owner dictation trio): the errored
 	 *  idle button deep-links Settings → Keys → the Deepgram row and clears
 	 *  the error — the surface is clean when the user returns. Any other
@@ -906,6 +911,7 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 	const keyless = error === DICTATION_KEYLESS;
 	const recording = phase === "recording" || phase === "stopping";
 
+	if (singleMac) return null;
 	if (!active) {
 		return (
 			<Hint
@@ -987,7 +993,8 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 	const state = useDictationUi();
 	const { open: openSettings } = useSettingsDialog();
 	const errId = `${useId()}-mic-error`;
-	if (!state.available) return null;
+	const singleMac = useSingleMac();
+	if (!state.available || singleMac) return null;
 	const mine = state.targetKey === key;
 	const running = state.phase !== "idle";
 	const listening = mine && running;

@@ -12,7 +12,6 @@ export const SINGLE_MAC_HIDDEN_PREFIXES = [
 	"/api/hub-url", // the hub's public address for pairing
 	"/api/health", // pack health, other hosts, restart / rollback / update channel
 	"/api/updates", // pack component update notices
-	"/api/pack", // pack domains
 	"/api/stt", // voice dictation token (Deepgram)
 ] as const;
 

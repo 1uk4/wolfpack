@@ -43,13 +43,21 @@ describe("single-Mac mode (WOLFPACK_SINGLE_MAC=1, work-wolfpack-TdmbaV4)", () =>
 			else process.env.WOLFPACK_SINGLE_MAC = before;
 		}
 	};
-	it("answers 404 on multi-machine API routes and redirects their pages home, leaving chat and KB routes alone", () => {
+	it("answers 404 on multi-machine API routes", () => {
 		withFlag("1", () => {
-			for (const p of ["/api/devices", "/api/devices/pairing-code", "/api/hub-url", "/api/health/update", "/api/updates", "/api/pack/domains", "/api/stt/token"]) assert.equal(proxy(at(p)).status, 404, p);
+			for (const p of ["/api/devices", "/api/devices/pairing-code", "/api/hub-url", "/api/health/update", "/api/updates", "/api/stt/token"]) assert.equal(proxy(at(p)).status, 404, p);
+		});
+	});
+	it("redirects the pairing page home", () => {
+		withFlag("1", () => {
 			const pair = proxy(at("/pair"));
 			assert.equal(pair.status, 307);
 			assert.equal(new URL(pair.headers.get("location") ?? "").pathname, "/");
-			for (const p of ["/", "/api/wolves", "/api/wolves/hal/kb/graph", "/api/healthy-sibling", "/graph", "/settings"]) assert.equal(proxy(at(p)).status, 200, p);
+		});
+	});
+	it("leaves chat, KB and the domains API (the setup wizard's Knowledge step) reachable", () => {
+		withFlag("1", () => {
+			for (const p of ["/", "/api/wolves", "/api/wolves/hal/kb/graph", "/api/pack/domains", "/api/healthy-sibling", "/graph", "/settings"]) assert.equal(proxy(at(p)).status, 200, p);
 		});
 	});
 	it("changes nothing with the flag unset", () => {

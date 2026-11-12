@@ -71,9 +71,9 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 const VISIBLE_SECTIONS = SECTIONS.filter((s) => !("hidden" in s && s.hidden));
 /** Tabs that only make sense for a multi-machine pack; the single-Mac app drops them (work-wolfpack-TdmbaV4). */
 const SINGLE_MAC_HIDDEN_TABS: readonly string[] = ["devices"];
+const visibleSections = (singleMac: boolean) => VISIBLE_SECTIONS.filter((s) => !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(s.id)));
 /** A deep link to a hidden or unknown tab lands on Keys. */
-const landing = (id: string, singleMac = false): SectionId =>
-	VISIBLE_SECTIONS.some((s) => s.id === id) && !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(id)) ? (id as SectionId) : "keys";
+const landing = (id: string, singleMac = false): SectionId => (visibleSections(singleMac).some((s) => s.id === id) ? (id as SectionId) : "keys");
 
 /** `open(section?, row?)` — the optional ROW deep-links into the Keys
  *  section with that row unfolded (zero-keys wave: the dictation error's
@@ -247,7 +247,7 @@ export function SettingsDialogBody({
 	// nothing.
 	useEffect(() => {
 		setActive(landing(initialSection, singleMac));
-	}, [initialSection]);
+	}, [initialSection, singleMac]);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
 	// (no record = factory everything), not a failure — the error state is
@@ -367,7 +367,7 @@ export function SettingsDialogBody({
 					data-testid="settings-nav"
 					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:border-b max-md:border-r-0"
 				>
-					{VISIBLE_SECTIONS.filter((s) => !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(s.id))).map((s) => (
+					{visibleSections(singleMac).map((s) => (
 						<button
 							key={s.id}
 							type="button"

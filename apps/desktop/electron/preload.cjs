@@ -33,8 +33,10 @@
  */
 const { contextBridge, ipcRenderer } = require("electron");
 
+// main.cjs passes --wolfpack-single-mac when the app runs its own runtime (work-wolfpack-TdmbaV4): the console hides multi-machine UI.
 const api = {
 	platform: process.platform,
+	singleMac: process.argv.includes("--wolfpack-single-mac"),
 	expandWindow: () => ipcRenderer.send("wolfpack:expand-window"),
 	onZoom: (cb) => {
 		const listener = (_event, factor) => cb(factor);

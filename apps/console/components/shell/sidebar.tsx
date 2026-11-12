@@ -8,6 +8,7 @@ import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/shell/needs-you";
 import { UpdateNotice } from "@/components/shell/update-notice";
 import { PackHealthBar, PackHealthHost } from "@/components/pack/pack-health";
+import { useSingleMac } from "@/components/shell/single-mac";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ChatBar } from "@/components/chat-bar/chat-bar";
@@ -520,6 +521,7 @@ export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
 const ROSTER_POLL_MS = 20_000;
 
 export function SessionsSidebar() {
+	const singleMac = useSingleMac();
 	const { open, toggle, closeList, mobile } = useSidebar();
 	const [chats, setChats] = useState<SessionItem[] | null>(null);
 	const [roster, setRoster] = useState<WolfStatus[]>([]);
@@ -962,10 +964,10 @@ export function SessionsSidebar() {
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
 					<div className="px-3 pb-3 pt-1">
-						<UpdateNotice />
+						{!singleMac && <UpdateNotice />}
 						<NotifyToggle />
 						{/* Pack health at a glance (work-wolfpack-6imFEq7): works with the hub down; opens the health modal. */}
-						<PackHealthBar onOpen={closeList} />
+						{!singleMac && <PackHealthBar onOpen={closeList} />}
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
@@ -989,6 +991,7 @@ export function SessionsSidebar() {
 
 /** The app frame: sidebar inline + content. Rendered once in the root layout. */
 export function AppShell({ children }: { children: React.ReactNode }) {
+	const singleMac = useSingleMac();
 	return (
 		<SettingsDialogProvider>
 			<SessionsSidebar />
@@ -998,7 +1001,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			{/* The one work reader: `?item=<id>` opens it over whichever page this is. */}
 			<WorkReaderHost />
 			{/* The one pack-health modal and its live region (work-wolfpack-6imFEq7): outlives the phone list layer. */}
-			<PackHealthHost />
+			{!singleMac && <PackHealthHost />}
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}

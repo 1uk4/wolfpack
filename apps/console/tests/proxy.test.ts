@@ -29,3 +29,32 @@ describe("proxy cookie -> bearer", () => {
 		assert.equal(isHttps(req("GET", { "x-forwarded-proto": "http, https" }), {}), true);
 	});
 });
+
+describe("single-Mac mode (WOLFPACK_SINGLE_MAC=1, work-wolfpack-TdmbaV4)", () => {
+	const at = (path: string) => req("GET", {}, `http://127.0.0.1:3210${path}`);
+	const withFlag = (value: string | undefined, fn: () => void) => {
+		const before = process.env.WOLFPACK_SINGLE_MAC;
+		if (value === undefined) delete process.env.WOLFPACK_SINGLE_MAC;
+		else process.env.WOLFPACK_SINGLE_MAC = value;
+		try {
+			fn();
+		} finally {
+			if (before === undefined) delete process.env.WOLFPACK_SINGLE_MAC;
+			else process.env.WOLFPACK_SINGLE_MAC = before;
+		}
+	};
+	it("answers 404 on multi-machine API routes and redirects their pages home, leaving chat and KB routes alone", () => {
+		withFlag("1", () => {
+			for (const p of ["/api/devices", "/api/devices/pairing-code", "/api/hub-url", "/api/health/update", "/api/updates", "/api/pack/domains", "/api/stt/token"]) assert.equal(proxy(at(p)).status, 404, p);
+			const pair = proxy(at("/pair"));
+			assert.equal(pair.status, 307);
+			assert.equal(new URL(pair.headers.get("location") ?? "").pathname, "/");
+			for (const p of ["/", "/api/wolves", "/api/wolves/hal/kb/graph", "/api/healthy-sibling", "/graph", "/settings"]) assert.equal(proxy(at(p)).status, 200, p);
+		});
+	});
+	it("changes nothing with the flag unset", () => {
+		withFlag(undefined, () => {
+			for (const p of ["/api/devices", "/api/health", "/pair"]) assert.equal(proxy(at(p)).status, 200, p);
+		});
+	});
+});

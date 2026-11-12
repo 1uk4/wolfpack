@@ -13,6 +13,8 @@ import { AttachedThreadProvider } from "@/components/chat-bar/attached-thread";
 import { NavTracker } from "@/components/shell/nav-tracker";
 import HubAuth from "@/components/shell/hub-auth";
 import UpdateBanner from "@/components/shell/update-banner";
+import { SingleMacProvider } from "@/components/shell/single-mac";
+import { isSingleMac } from "@/src/core/single-mac";
 import { ViewportVars } from "@/components/shell/viewport-vars";
 
 // Chrome, prose and titles = Inter; code = Geist Mono.
@@ -40,12 +42,15 @@ export const viewport: Viewport = {
 	interactiveWidget: "resizes-content",
 };
 
+export const dynamic = "force-dynamic"; // the single-Mac flag is read at runtime, never baked into the build
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 	return (
 		<html lang="en" className={`dark ${ui.variable} ${prose.variable}`}>
 			<body className="min-h-dvh antialiased">
 			{/* The notification channel rides OUTSIDE everything: sidebar, dock,
 				 and pages all subscribe as the polls retire (push S3, 2026-10-02). */}
+			<SingleMacProvider value={isSingleMac()}>
 			<HubAuth />
 			<ViewportVars />
 			<NavTracker />
@@ -65,6 +70,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 			</ServerEventsProvider>
 			{/* Auto-update banner (Wave C): fixed card, Electron-only pushes. */}
 			<UpdateBanner />
+			</SingleMacProvider>
 		</body>
 		</html>
 	);

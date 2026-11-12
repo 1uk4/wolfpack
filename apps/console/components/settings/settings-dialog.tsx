@@ -47,6 +47,7 @@ import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";
 import { AppearanceSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
+import { useSingleMac } from "@/components/shell/single-mac";
 import { DevicesSection } from "./devices-section.tsx";
 import { PromptsView } from "@/components/settings/prompts-view";
 import { WolfSettingsView } from "@/components/settings/wolf-settings-view";
@@ -68,8 +69,11 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 
 /** Hidden tabs (Appearance, Keyboard) keep their components and saved settings; dropping `hidden: true` brings a tab back. */
 const VISIBLE_SECTIONS = SECTIONS.filter((s) => !("hidden" in s && s.hidden));
+/** Tabs that only make sense for a multi-machine pack; the single-Mac app drops them (work-wolfpack-TdmbaV4). */
+const SINGLE_MAC_HIDDEN_TABS: readonly string[] = ["devices"];
 /** A deep link to a hidden or unknown tab lands on Keys. */
-const landing = (id: string): SectionId => (VISIBLE_SECTIONS.some((s) => s.id === id) ? (id as SectionId) : "keys");
+const landing = (id: string, singleMac = false): SectionId =>
+	VISIBLE_SECTIONS.some((s) => s.id === id) && !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(id)) ? (id as SectionId) : "keys";
 
 /** `open(section?, row?)` — the optional ROW deep-links into the Keys
  *  section with that row unfolded (zero-keys wave: the dictation error's
@@ -197,6 +201,7 @@ export function SettingsDialogBody({
 	 *  retargets follow it exactly like initialSection below. */
 	initialRow?: string | null;
 }) {
+	const singleMac = useSingleMac();
 	const { onAppearanceChange } = useAppearance();
 	const [record, setRecord] = useState<UserSettings | null | undefined>(
 		undefined,
@@ -234,14 +239,14 @@ export function SettingsDialogBody({
 			window.removeEventListener(MENU_CLOSE_EVENT, onClose);
 		};
 	}, []);
-	const [active, setActive] = useState<SectionId>(landing(initialSection));
+	const [active, setActive] = useState<SectionId>(landing(initialSection, singleMac));
 	// A deep-link fired while the dialog is ALREADY open (first exercised by
 	// the wave-6 embedding picker's "Add a provider key first…" link — the
 	// picker itself died with wave 7, the mechanism is general) changes
 	// initialSection under our feet — follow it, or the link silently does
 	// nothing.
 	useEffect(() => {
-		setActive(landing(initialSection));
+		setActive(landing(initialSection, singleMac));
 	}, [initialSection]);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
@@ -362,7 +367,7 @@ export function SettingsDialogBody({
 					data-testid="settings-nav"
 					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:border-b max-md:border-r-0"
 				>
-					{VISIBLE_SECTIONS.map((s) => (
+					{VISIBLE_SECTIONS.filter((s) => !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(s.id))).map((s) => (
 						<button
 							key={s.id}
 							type="button"

@@ -10,6 +10,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { withCookieBearer } from "@/src/core/ui/hub-auth";
+import { isHiddenInSingleMac, isSingleMac } from "@/src/core/single-mac";
 
 let warned = false;
 /** https as the browser saw it. `env` is injectable for tests. */
@@ -31,6 +32,11 @@ export const isHttps = (req: Pick<NextRequest, "headers" | "nextUrl">, env: Reco
 };
 
 export function proxy(req: NextRequest): NextResponse {
+	// Single-Mac app: multi-machine features do not exist (work-wolfpack-TdmbaV4). API: 404; pages: home.
+	if (isSingleMac() && isHiddenInSingleMac(req.nextUrl.pathname)) {
+		if (req.nextUrl.pathname.startsWith("/api/")) return NextResponse.json({ error: "not found" }, { status: 404 });
+		return NextResponse.redirect(new URL("/", req.url));
+	}
 	const headers = withCookieBearer(req.method, req.headers, isHttps(req));
 	return headers ? NextResponse.next({ request: { headers } }) : NextResponse.next();
 }

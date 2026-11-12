@@ -15,6 +15,7 @@ import { AppearanceSection } from "../../../components/settings/appearance-secti
 import { KeysSection } from "../../../components/settings/keys-section.tsx";
 import { KeyboardSection } from "../../../components/settings/keyboard-section.tsx";
 import { SettingsDialogBody, SettingsDialogProvider } from "../../../components/settings/settings-dialog.tsx";
+import { AppBridgeContext, type AppBridge } from "../../../components/settings/app-bridge.ts";
 import { SingleMacContext } from "../../../components/shell/single-mac.tsx";
 import { KEYBOARD_ACTIONS } from "../../../src/core/index.ts";
 
@@ -45,6 +46,23 @@ describe("SettingsDialog in the single-Mac app", () => {
 		);
 		for (const id of ["keys", "devices"]) assert.ok(!html.includes(`data-testid="settings-nav-${id}"`), id);
 		assert.ok(tagOf(html, "settings-nav-wolf").includes('aria-current="true"'));
+	});
+});
+
+describe("SettingsDialog Data and support tab", () => {
+	const bridge = {} as AppBridge;
+	const render = (singleMac: boolean, b: AppBridge | null) =>
+		renderToStaticMarkup(
+			<SingleMacContext.Provider value={singleMac}>
+				<AppBridgeContext.Provider value={b}>
+					<SettingsDialogBody onClose={() => {}} />
+				</AppBridgeContext.Provider>
+			</SingleMacContext.Provider>,
+		);
+	it("shows only in the single-Mac app with the desktop bridge", () => {
+		assert.ok(render(true, bridge).includes('data-testid="settings-nav-data"'));
+		assert.ok(!render(false, bridge).includes('data-testid="settings-nav-data"'));
+		assert.ok(!render(true, null).includes('data-testid="settings-nav-data"'));
 	});
 });
 

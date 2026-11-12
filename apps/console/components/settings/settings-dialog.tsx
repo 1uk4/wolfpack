@@ -48,6 +48,8 @@ import { Hint } from "@/components/ui/hint";
 import { AppearanceSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { useSingleMac } from "@/components/shell/single-mac";
+import { useAppBridge } from "./app-bridge.ts";
+import { DataSupportSection } from "./data-support-section.tsx";
 import { DevicesSection } from "./devices-section.tsx";
 import { PromptsView } from "@/components/settings/prompts-view";
 import { WolfSettingsView } from "@/components/settings/wolf-settings-view";
@@ -64,6 +66,8 @@ const SECTIONS = [
 	// The last two are routed: /settings and /prompts open the dialog on them (settings-route.ts).
 	{ id: "wolf", label: "Wolf settings" },
 	{ id: "prompts", label: "Prompts" },
+	// Single-Mac app only, and only when the desktop bridge is there (work-wolfpack-B97I0Gv).
+	{ id: "data", label: "Data and support", hidden: true },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
@@ -71,9 +75,13 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 const VISIBLE_SECTIONS = SECTIONS.filter((s) => !("hidden" in s && s.hidden));
 /** Tabs that only make sense for a multi-machine pack; the single-Mac app drops them (work-wolfpack-TdmbaV4). */
 const SINGLE_MAC_HIDDEN_TABS: readonly string[] = ["devices", "keys"]; // Keys: the desktop setup wizard owns the API key (work-wolfpack-UpMwxPl)
-const visibleSections = (singleMac: boolean) => VISIBLE_SECTIONS.filter((s) => !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(s.id)));
+const DATA_TAB = SECTIONS.find((s) => s.id === "data")!;
+const visibleSections = (singleMac: boolean, hasAppBridge = false) => [
+	...VISIBLE_SECTIONS.filter((s) => !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(s.id))),
+	...(singleMac && hasAppBridge ? [DATA_TAB] : []),
+];
 /** A deep link to a hidden or unknown tab lands on Keys (the first visible tab in the single-Mac app). */
-const landing = (id: string, singleMac = false): SectionId => (visibleSections(singleMac).some((s) => s.id === id) ? (id as SectionId) : singleMac ? (visibleSections(true)[0]?.id ?? "wolf") : "keys");
+const landing = (id: string, singleMac = false, hasAppBridge = false): SectionId => (visibleSections(singleMac, hasAppBridge).some((s) => s.id === id) ? (id as SectionId) : singleMac ? (visibleSections(true)[0]?.id ?? "wolf") : "keys");
 
 /** `open(section?, row?)` — the optional ROW deep-links into the Keys
  *  section with that row unfolded (zero-keys wave: the dictation error's
@@ -202,6 +210,7 @@ export function SettingsDialogBody({
 	initialRow?: string | null;
 }) {
 	const singleMac = useSingleMac();
+	const appBridge = useAppBridge();
 	const { onAppearanceChange } = useAppearance();
 	const [record, setRecord] = useState<UserSettings | null | undefined>(
 		undefined,
@@ -239,15 +248,15 @@ export function SettingsDialogBody({
 			window.removeEventListener(MENU_CLOSE_EVENT, onClose);
 		};
 	}, []);
-	const [active, setActive] = useState<SectionId>(landing(initialSection, singleMac));
+	const [active, setActive] = useState<SectionId>(landing(initialSection, singleMac, !!appBridge));
 	// A deep-link fired while the dialog is ALREADY open (first exercised by
 	// the wave-6 embedding picker's "Add a provider key first…" link — the
 	// picker itself died with wave 7, the mechanism is general) changes
 	// initialSection under our feet — follow it, or the link silently does
 	// nothing.
 	useEffect(() => {
-		setActive(landing(initialSection, singleMac));
-	}, [initialSection, singleMac]);
+		setActive(landing(initialSection, singleMac, !!appBridge));
+	}, [initialSection, singleMac, appBridge]);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
 	// (no record = factory everything), not a failure — the error state is
@@ -367,7 +376,7 @@ export function SettingsDialogBody({
 					data-testid="settings-nav"
 					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:border-b max-md:border-r-0"
 				>
-					{visibleSections(singleMac).map((s) => (
+					{visibleSections(singleMac, !!appBridge).map((s) => (
 						<button
 							key={s.id}
 							type="button"
@@ -410,6 +419,10 @@ export function SettingsDialogBody({
 					)}
 					{active === "prompts" ? (
 						<PromptsView />
+					) : active === "data" && appBridge ? (
+						<SettingsSection title="Data and support" testid="section-data">
+							<DataSupportSection bridge={appBridge} />
+						</SettingsSection>
 					) : active === "wolf" ? (
 						<WolfSettingsView />
 					) : record === undefined ? (

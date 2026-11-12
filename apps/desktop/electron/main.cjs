@@ -891,6 +891,7 @@ async function main() {
 		on("change-key", (k) => settings.changeKey(String(k ?? "")));
 		on("copy-diagnostics", () => settings.copyDiagnostics());
 		on("reset", () => settings.reset());
+		on("reset-app-ui", () => settings.resetAppUi());
 		const sup = supervisor;
 		tray = createTray({
 			app, Tray, Menu, nativeImage, log,

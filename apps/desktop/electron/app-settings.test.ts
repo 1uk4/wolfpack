@@ -50,13 +50,19 @@ beforeEach(() => {
 	opened = [];
 });
 
-function make(o: { wolves?: string; confirm?: () => Promise<boolean>; hubHasKey?: boolean } = {}) {
+function make(o: { wolves?: string; confirm?: (m: { detail: string }) => Promise<boolean>; hubHasKey?: boolean; onTrash?: (p: string) => void; stopFails?: boolean; startFails?: boolean } = {}) {
 	const sup = {
 		...(o.hubHasKey === undefined ? {} : { hubHasKey: () => o.hubHasKey as boolean }),
 		urls: {},
 		status: () => ({ running: true }),
-		stop: async () => void calls.push("stop"),
-		start: async () => void calls.push("start"),
+		stop: async () => {
+			calls.push("stop");
+			if (o.stopFails) throw new Error("stuck");
+		},
+		start: async () => {
+			calls.push("start");
+			if (o.startFails) throw new Error("no start");
+		},
 		restart: async (n: string) => void calls.push(`restart:${n}`),
 	};
 	const settings = createAppSettings({
@@ -71,6 +77,10 @@ function make(o: { wolves?: string; confirm?: () => Promise<boolean>; hubHasKey?
 		shell: {
 			openPath: async (p: string) => (opened.push(p), ""),
 			trashItem: async (p: string) => {
+				if (o.onTrash) {
+					o.onTrash(p);
+					return;
+				}
 				if (trashFails) throw new Error("no trash");
 				mkdirSync(join(root, "Trash"), { recursive: true });
 				// Move, like the real Trash: nothing is deleted.
@@ -176,6 +186,97 @@ describe("reset", () => {
 	});
 });
 
+describe("reset app (This device)", () => {
+	const protectedPaths = [
+		"credentials.json", "hub-token.json", "auth.json", ".env", "data/kb/entry.md", "workerd/state.json", "logs/main.log",
+		"Local Storage/leveldb/000003.log", "IndexedDB/x", "Preferences", "Cookies",
+	];
+	beforeEach(() => {
+		for (const p of protectedPaths) {
+			mkdirSync(join(state, p, ".."), { recursive: true });
+			writeFileSync(join(state, p), "keep");
+		}
+		for (const d of ["Cache", "GPUCache", "Code Cache"]) {
+			mkdirSync(join(state, d), { recursive: true });
+			writeFileSync(join(state, d, "x"), "ui");
+		}
+	});
+
+	it("moves only cache items to the Trash; keys, sign-in state, data, workerd, wolves and logs stay", async () => {
+		const moved: string[] = [];
+		const s = make({ onTrash: (p: string) => moved.push(p) });
+		expect(await s.resetAppUi()).toEqual({ ok: true });
+		expect(moved.sort()).toEqual(["Cache", "Code Cache", "GPUCache"].map((n) => join(state, n)).sort());
+		for (const p of protectedPaths) expect(readFileSync(join(state, p), "utf8")).toBe("keep");
+		expect(readFileSync(join(wolves, "mine", "wolf.yaml"), "utf8")).toBe("id: mine\n");
+	});
+
+	it("stops the wolf runtime before it relaunches, and the confirm says running replies stop", async () => {
+		let shown = "";
+		const s = make({ onTrash: () => {}, confirm: async (m: { detail: string }) => ((shown = m.detail), true) });
+		await s.resetAppUi();
+		// The order is the safety property: the wolves are stopped before the relaunch.
+		expect(calls).toEqual(["stop", "relaunch", "exit"]);
+		expect(shown).toContain("A reply it is writing right now will stop");
+	});
+
+	it("moves nothing when the confirm is cancelled, and names what it will move and what stays", async () => {
+		let shown = "";
+		const moved: string[] = [];
+		const s = make({ onTrash: (p: string) => moved.push(p), confirm: async (m: { detail: string }) => ((shown = m.detail), false) });
+		expect(await s.resetAppUi()).toEqual({ ok: false, cancelled: true });
+		expect(moved).toEqual([]);
+		expect(calls).toEqual([]);
+		expect(shown).toContain("GPUCache");
+		expect(shown).toContain("keyboard");
+	});
+
+	it("says so and does not confirm or relaunch when there is nothing to move", async () => {
+		for (const d of ["Cache", "GPUCache", "Code Cache"]) rmSync(join(state, d), { recursive: true });
+		let asked = false;
+		const s = make({ confirm: async () => ((asked = true), true) });
+		expect(await s.resetAppUi()).toEqual({ ok: true, note: "Nothing to reset: no cache items were found." });
+		expect(asked).toBe(false);
+		expect(calls).toEqual([]);
+	});
+
+	it("refuses when the wolves folder and app data folder overlap", async () => {
+		const s = make({ wolves: join(state, "Wolves"), onTrash: () => {} });
+		expect((await s.resetAppUi()).ok).toBe(false);
+		expect(calls).toEqual([]);
+	});
+
+	it("when the wolves cannot be stopped, restarts them, trashes nothing and does not relaunch", async () => {
+		const moved: string[] = [];
+		const r = await make({ stopFails: true, onTrash: (p: string) => moved.push(p) }).resetAppUi();
+		expect(r.ok).toBe(false);
+		expect(r.error).toContain("Nothing was changed");
+		expect(moved).toEqual([]);
+		expect(calls).toEqual(["stop", "start"]);
+	});
+
+	it("says the wolves could not be restarted when stop and the restart both fail", async () => {
+		const r = await make({ stopFails: true, startFails: true, onTrash: () => {} }).resetAppUi();
+		expect(r.ok).toBe(false);
+		expect(r.error).toContain("could not be restarted");
+		expect(calls).toEqual(["stop", "start"]);
+	});
+
+	it("when one item fails to move, carries on, reports moved and failed names, restarts the wolf and does not relaunch", async () => {
+		const s = make({
+			onTrash: (p: string) => {
+				if (p.endsWith("GPUCache")) throw new Error("no trash");
+			},
+		});
+		const r = await s.resetAppUi();
+		expect(r.ok).toBe(false);
+		expect([...r.moved].sort()).toEqual(["Cache", "Code Cache"]);
+		expect(r.failed).toEqual(["GPUCache"]);
+		expect(r.error).toContain("GPUCache");
+		expect(calls).toEqual(["stop", "start"]);
+	});
+});
+
 describe("show folder", () => {
 	it("opens only the two known folders, never a path or a prototype name from the page", async () => {
 		expect((await make().showFolder("/etc")).ok).toBe(false);
@@ -183,6 +284,13 @@ describe("show folder", () => {
 		expect(opened).toEqual([]);
 		expect((await make().showFolder("wolves")).ok).toBe(true);
 		expect(opened).toEqual([wolves]);
+	});
+
+	it("opens the log folder, and reports it with the other folders", async () => {
+		expect(make().folders().logs).toBe(join(state, "logs"));
+		opened.length = 0;
+		expect((await make().showFolder("logs")).ok).toBe(true);
+		expect(opened).toEqual([join(state, "logs")]);
 	});
 });
 

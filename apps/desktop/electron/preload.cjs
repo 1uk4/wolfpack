@@ -63,11 +63,12 @@ if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
 	const call = (name, arg) => ipcRenderer.invoke(`wolfpack:app:${name}`, arg);
 	api.app = {
 		folders: () => call("folders"),
-		showFolder: (name) => call("show-folder", name), // "state" | "wolves"
+		showFolder: (name) => call("show-folder", name), // "state" | "wolves" | "logs"
 		loginItem: { get: () => call("login-item"), set: (on) => call("set-login-item", on === true) },
 		changeKey: (key) => call("change-key", key),
 		copyDiagnostics: () => call("copy-diagnostics"),
 		reset: () => call("reset"),
+		resetAppUi: () => call("reset-app-ui"), // This device > Reset app: stops the wolves first, then moves Chromium caches only
 	};
 }
 

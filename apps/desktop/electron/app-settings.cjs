@@ -1,13 +1,14 @@
 /**
- * The console's "Data and support" settings tab, main side (work-wolfpack-B97I0Gv). Nothing here imports Electron: main.cjs passes
+ * The console's "Data and support" settings tab and Pack > This device, main side (work-wolfpack-B97I0Gv, work-wolfpack-5lSw5c1). Nothing here imports Electron: main.cjs passes
  * `shell`, `clipboard` and `app` in, so a plain Node test drives it with stand-ins and temp dirs.
  *
- *   folders()               { state, wolves }: the two paths the tab shows
- *   showFolder(name)        "state" | "wolves" only (never a path from the page): opens it in Finder
+ *   folders()               { state, wolves, logs }: the paths the tab shows
+ *   showFolder(name)        "state" | "wolves" | "logs" only (never a path from the page): opens it in Finder
  *   loginItem() / setLoginItem(on)   the tray's Open at login logic (tray.cjs), { openAtLogin, needsApproval }
  *   changeKey(key)          checkKey -> credentials.json (0600, atomic) -> restart wolfd only; the page gets { ok } or { ok:false, error }
  *   copyDiagnostics()       plain-text report on the clipboard, secrets removed first; { ok:true }
  *   reset()                 stop, move the pack state dir to the Trash, relaunch; ~/Wolves is never touched
+ *   resetAppUi()            stop, move only the allowlisted Chromium cache folders to the Trash, relaunch; sign-in, drafts, keys, data untouched
  */
 const fs = require("node:fs");
 const os = require("node:os");
@@ -15,6 +16,13 @@ const path = require("node:path");
 const { checkKey, storedKey, writeAtomic } = require("./setup.cjs");
 const { KEY_FILE } = require("./supervisor.cjs");
 const { loginItemState, setLoginItem } = require("./tray.cjs");
+
+/**
+ * Chromium cache folders; missing ones are skipped. Directly inside userData. Allowlist only: add a name here only if losing it is harmless.
+ * Deliberately NOT here: Local Storage, Session Storage and IndexedDB (the console keeps its hub sign-in token, drafts and keyboard
+ * bindings in them), Preferences (Chromium rewrites it on exit), Cookies, and anything the app writes itself (window-state.json is never written).
+ */
+const UI_STATE_ITEMS = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache"];
 
 const LOG_LINES = 200;
 const MARK = "[removed]";
@@ -71,7 +79,7 @@ function createAppSettings(opts) {
 		const r = path.relative(path.resolve(a), path.resolve(b));
 		return r === "" || (!r.startsWith("..") && !path.isAbsolute(r));
 	};
-	const dirs = { state: stateDir, wolves: wolvesDir };
+	const dirs = { state: stateDir, wolves: wolvesDir, logs: path.join(stateDir, "logs") };
 
 	const secrets = () => [storedKey(stateDir), hubToken(stateDir)];
 
@@ -205,7 +213,65 @@ function createAppSettings(opts) {
 		return { ok: true };
 	}
 
+	/**
+	 * Reset app (This device): the wolves are stopped first, then only the allowlisted Chromium caches move to the Trash, then the app relaunches. An ALLOWLIST of names directly
+	 * inside the app data folder: keys, credentials, hub-token, auth.json, .env, data/ (the KB), workerd, logs and ~/Wolves are never on it,
+	 * so they cannot be moved. Nothing is deleted.
+	 */
+	const resetAppUi = () => exclusive(resetAppUiNow);
+	async function resetAppUiNow() {
+		if (inside(stateDir, wolvesDir) || inside(wolvesDir, stateDir)) {
+			return { ok: false, error: "Your wolves folder and the app data folder overlap, so reset won't touch them. Nothing was changed." };
+		}
+		const present = UI_STATE_ITEMS.filter((n) => fs.existsSync(path.join(stateDir, n)));
+		if (!present.length) return { ok: true, note: "Nothing to reset: no cache items were found." };
+		const go = await confirm({
+			message: "Reset the app's caches?",
+			detail: `These move to the Trash: ${present.join(", ")}. Your wolves, knowledge base, keys, sign-in, logs, drafts and keyboard bindings are not touched. The app restarts. A reply it is writing right now will stop.`,
+			button: "Move to Trash and restart",
+		});
+		if (!go) return { ok: false, cancelled: true };
+		const sup = opts.getSup();
+		try {
+			if (sup) await sup.stop(); // app.exit skips before-quit, so stop the children here
+		} catch (err) {
+			log?.(`reset app: could not stop the app: ${err?.message ?? err}`);
+			let restarted = true;
+			if (sup) {
+				await sup.start().catch((e) => {
+					restarted = false;
+					log?.(`reset app: restart failed: ${e?.message ?? e}`);
+				});
+			}
+			return {
+				ok: false,
+				error: restarted
+					? "Couldn't stop the app to reset it. Nothing was changed."
+					: "Couldn't stop the app to reset it, and the wolves could not be restarted. Nothing was moved; restart the app.",
+			};
+		}
+		const moved = [];
+		const failed = [];
+		for (const n of present) {
+			try {
+				await shell.trashItem(path.join(stateDir, n));
+				moved.push(n);
+			} catch (err) {
+				log?.(`reset app: could not move ${n} to the Trash: ${err?.message ?? err}`);
+				failed.push(n);
+			}
+		}
+		if (failed.length) {
+			if (sup) await sup.start().catch((e) => log?.(`reset app: restart failed: ${e?.message ?? e}`));
+			return { ok: false, moved, failed, error: `Couldn't move ${failed.join(", ")} to the Trash.${moved.length ? ` Moved: ${moved.join(", ")}.` : ""}` };
+		}
+		app.relaunch();
+		app.exit(0);
+		return { ok: true };
+	}
+
 	return {
+		resetAppUi,
 		folders: () => ({ ...dirs }),
 		showFolder,
 		loginItem: () => loginItemState(app),

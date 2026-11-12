@@ -12,6 +12,7 @@ export * from "./hub-settings.js";
 export * from "./prompts.js";
 export * from "./wolf-settings.js";
 export * from "./link.js";
+export * from "./command.js";
 export * from "./inventory.js";
 export * from "./ledger-time.js";
 export * from "./health.js";

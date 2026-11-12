@@ -257,6 +257,8 @@ async function startRuntime() {
 		stateDir,
 		wolvesDir,
 		runtimeDir,
+		// The bundled nomic model (staged by dist); without model.onnx there the supervisor leaves KB curation off.
+		embedModelDir: process.env.WOLFPACK_APP_EMBED_MODEL_DIR || path.join(runtimeDir, "embed-model"),
 		nodeBin: process.execPath,
 		// Same override the harness honours (https or loopback http only); tests point it at a fake server.
 		modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined,

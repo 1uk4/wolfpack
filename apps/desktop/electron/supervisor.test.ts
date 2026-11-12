@@ -6,8 +6,9 @@
  * The three tests share one run: start, chat, stop, start again (test 1); inspect it while up (test 2); stop it (test 3).
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -125,6 +126,41 @@ describe("app runtime on one Mac", () => {
     expect(pidsAtStop).toEqual([]);
   }, 60_000);
 
+  it("comes up on another port when the picked port is taken before the child binds it", async () => {
+    const squatter = createNetServer((sock) => sock.destroy()); // holds the port; drops any health probe so close() can finish
+    await new Promise<void>((r) => squatter.listen(0, "127.0.0.1", r));
+    const taken = (squatter.address() as { port: number }).port;
+    let calls = 0;
+    // The 2nd pick (workerd's) hands out the occupied port: the port is taken between pick and bind.
+    const pickPort = async (free: () => Promise<number>) => (++calls === 2 ? taken : free());
+    const s = createSupervisor({ stateDir: join(root, "state-busy"), wolvesDir: join(root, "WolvesBusy"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl, pickPort });
+    made.push(s);
+    try {
+      await s.start();
+      expect(s.status().running).toBe(true);
+      expect(s.ports.workerd).not.toBe(taken);
+      expect(s.ports.hubd).not.toBe(taken);
+      expect(s.urls.workerd).toBe(`http://127.0.0.1:${s.ports.workerd}`);
+      expect((await fetch(`${s.urls.workerd}/healthz`)).ok).toBe(true);
+    } finally {
+      await s.stop();
+      await new Promise((r) => squatter.close(r));
+    }
+  }, 120_000);
+
+  it("does not retry a child that exits early for a reason other than a taken port", async () => {
+    const stateDir = join(root, "state-crash");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "hub-token.json"), JSON.stringify({ token: "t" })); // skips the pairing step, which would fail first
+    let calls = 0;
+    const pickPort = async (free: () => Promise<number>) => (calls++, free());
+    // An invalid NODE_OPTIONS makes every child exit at once with its own error, not a bind error.
+    const s = createSupervisor({ stateDir, wolvesDir: join(root, "WolvesCrash"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl, extraEnv: { NODE_OPTIONS: "--no-such-flag" }, pickPort });
+    made.push(s);
+    await expect(s.start()).rejects.toThrow(/exited before it came up/);
+    expect(calls).toBe(2); // hubd's and workerd's picks, once: no second attempt
+  }, 60_000);
+
   it.sequential("replies and remembers across a restart", async () => {
     const first = make();
     await first.start();
@@ -191,6 +227,41 @@ describe("app runtime on one Mac", () => {
     expect(await say(s.urls.workerd, "hello again")).toContain("FAKE-REPLY-OK");
     expect(seenKeys.at(-1)).toBe("sk-newer-key");
     await expect(s.restart("hubd")).rejects.toThrow(/cannot restart hubd/);
+  }, 180_000);
+
+  it.sequential("restart(\"wolfd\") with the old workerd port taken and the first new pick taken too comes up on another port and reports PORT_MOVED", async () => {
+    const squatters: Server[] = [];
+    const squat = async (port = 0) => {
+      const sq = createNetServer((sock) => sock.destroy());
+      await new Promise<void>((r) => sq.listen(port, "127.0.0.1", r));
+      squatters.push(sq);
+      return (sq.address() as { port: number }).port;
+    };
+    const takenPick = await squat();
+    let restarting = false;
+    let restartPicks = 0;
+    const pickPort = async (free: () => Promise<number>) => (restarting && ++restartPicks === 1 ? takenPick : free());
+    const s = createSupervisor({ stateDir: join(root, "state-restart-busy"), wolvesDir: join(root, "Wolves4"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl, pickPort });
+    made.push(s);
+    try {
+      await s.start();
+      const old = s.ports.workerd;
+      const hub = s.ports.hubd;
+      const oldWorkerd = s.allPids()[1];
+      process.kill(oldWorkerd, "SIGTERM");
+      for (let i = 0; i < 50 && alive(oldWorkerd); i++) await new Promise((r) => setTimeout(r, 100));
+      await squat(old); // someone else grabbed the old port
+      restarting = true;
+      await expect(s.restart("wolfd")).rejects.toMatchObject({ code: "PORT_MOVED" });
+      expect(s.ports.hubd).toBe(hub);
+      expect(s.ports.workerd).not.toBe(old);
+      expect(s.ports.workerd).not.toBe(takenPick);
+      expect(s.urls.workerd).toBe(`http://127.0.0.1:${s.ports.workerd}`);
+      expect((await fetch(`${s.urls.workerd}/healthz`)).ok).toBe(true);
+    } finally {
+      await s.stop();
+      for (const sq of squatters) await new Promise((r) => sq.close(r));
+    }
   }, 180_000);
 
   it.sequential("starts with no API key: services run with no key in their env, the chat says to add one in Settings, and the key added later reaches the wolf after restart(\"wolfd\")", async () => {

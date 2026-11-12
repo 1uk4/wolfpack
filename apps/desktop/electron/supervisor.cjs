@@ -40,7 +40,7 @@ const freePort = () =>
 	});
 
 /** The port picked last time when it is still free (a restart keeps the console server's URLs valid), else a new free port. */
-const reuseOrFreePort = async (prev) => {
+const reuseOrFreePort = async (prev, pickFree = freePort) => {
 	if (prev) {
 		const ok = await new Promise((resolve) => {
 			const srv = net.createServer();
@@ -49,7 +49,7 @@ const reuseOrFreePort = async (prev) => {
 		});
 		if (ok) return prev;
 	}
-	return freePort();
+	return pickFree();
 };
 
 const tier = (model) => ({ model, modelSource: "default", provider: "anthropic", piModel: `anthropic/${model}` });
@@ -120,6 +120,9 @@ function createSupervisor(opts) {
 	// The wizard's domains ({ name, description }); `personal` alone when none are given.
 	const domains = opts.domains?.length ? opts.domains : [{ name: "personal", description: "" }];
 	const log = opts.log ?? (() => {});
+	// Test seam: opts.pickPort(freePort) may return a port (e.g. one already taken) in place of a free one.
+	const pickFree = () => (opts.pickPort ? opts.pickPort(freePort) : freePort());
+	const MAX_BIND_ATTEMPTS = 3; // a port taken between pick and bind: pick a new one and relaunch, this many tries in all
 	// Allowlist, not process.env: nothing from the owner's shell (proxy, ANTHROPIC_*, tokens) reaches a child.
 	const base = (extra) => ({
 		PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -234,7 +237,7 @@ function createSupervisor(opts) {
 		const end = Date.now() + ms;
 		const fail = (why) => {
 			const e = new Error(`${what} ${why}${rec?.tail.length ? `. Last output:\n${rec.tail.join("\n")}` : ""}`);
-			e.bind = !!rec && (rec.exited || rec.tail.some((l) => /listen EADDRINUSE/.test(l)));
+			e.bind = !!rec && rec.tail.some((l) => /listen EADDRINUSE/.test(l)); // only a taken port is worth a retry on new ports; any other early exit fails with its own reason
 			return e;
 		};
 		for (;;) {
@@ -250,9 +253,12 @@ function createSupervisor(opts) {
 			await new Promise((r) => setTimeout(r, 150));
 		}
 	}
-	const healthy = (url) => async () => (await fetch(`${url}/healthz`)).ok;
+	const healthy = (url) => async () => (await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok; // a squatter that accepts but never answers must not hang the wait
 
-	/** A single-use pairing code for a console token, from the hubd CLI (file based: hubd is not up yet). Null when a token is already stored. */
+	/**
+	 * A single-use pairing code for a console token, from the hubd CLI (file based: hubd is not up yet). Null when a token is already stored.
+	 * Safe to run again on a start retry: a token file that was redeemed is skipped, and a fresh code is minted only while none is stored.
+	 */
 	function mintHubToken(hubDir) {
 		const file = path.join(stateDir, HUB_TOKEN_FILE);
 		if (fs.existsSync(file)) {
@@ -288,8 +294,8 @@ function createSupervisor(opts) {
 		secret = creds.ANTHROPIC_API_KEY ?? "";
 		hubHadKey = !!secret;
 		if (!secret) log("no API key yet: KB curation is skipped until the app is launched with one");
-		const hubPort = await reuseOrFreePort(sup.ports.hubd);
-		const workerdPort = await reuseOrFreePort(sup.ports.workerd);
+		const hubPort = await reuseOrFreePort(sup.ports.hubd, pickFree);
+		const workerdPort = await reuseOrFreePort(sup.ports.workerd, pickFree);
 		sup.ports = { hubd: hubPort, workerd: workerdPort };
 		sup.urls = { hubd: `http://127.0.0.1:${hubPort}`, workerd: `http://127.0.0.1:${workerdPort}` };
 		// hubd: the app's own hub. Its curator timer is OFF (HUBD_CURATOR_POLL_MS=0): the gate in main.cjs decides when, and
@@ -356,7 +362,7 @@ function createSupervisor(opts) {
 
 	/**
 	 * Restart the wolf ("wolfd") so it picks up a changed credentials.json: workerd owns wolfd and hands it its own env, so workerd is
-	 * relaunched (same port, hubd untouched) with the key read afresh. Anything else is refused.
+	 * relaunched (same port, hubd untouched; a new port if the old one is taken, which throws PORT_MOVED) with the key read afresh. Anything else is refused.
 	 */
 	let restarting = null;
 	sup.restart = (name) => {
@@ -383,16 +389,22 @@ function createSupervisor(opts) {
 		for (const p of pids) if (alive(p)) try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
 		secret = readCredentials(path.join(stateDir, KEY_FILE)).ANTHROPIC_API_KEY ?? "";
 		const prev = sup.ports.workerd;
-		const port = await reuseOrFreePort(prev);
-		sup.ports = { ...sup.ports, workerd: port };
-		sup.urls = { ...sup.urls, workerd: `http://127.0.0.1:${port}` };
-		try {
-			await startWorkerd();
-		} catch (e) {
-			// never leave a half-started workerd, or the wolfd it spawned, behind
-			const left = new Set([...(children.get("workerd") ? [children.get("workerd").pid] : []), ...wolfdPids()]);
-			for (const p of left) try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
-			throw e;
+		let port = await reuseOrFreePort(prev, pickFree);
+		for (let attempt = 1; ; attempt++) {
+			sup.ports = { ...sup.ports, workerd: port };
+			sup.urls = { ...sup.urls, workerd: `http://127.0.0.1:${port}` };
+			try {
+				await startWorkerd();
+				break;
+			} catch (e) {
+				// never leave a half-started workerd, or the wolfd it spawned, behind
+				const left = new Set([...(children.get("workerd") ? [children.get("workerd").pid] : []), ...wolfdPids()]);
+				for (const p of left) try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
+				if (stopping || !e.bind || attempt >= MAX_BIND_ATTEMPTS) throw e;
+				log(`restart failed (${e.message.split("\n")[0]}); retrying workerd on a new port`);
+				do port = await pickFree();
+				while (port === sup.ports.hubd); // a new port, and never hubd's
+			}
 		}
 		wolfUp = true;
 		changed();
@@ -434,9 +446,10 @@ function createSupervisor(opts) {
 			} catch (e) {
 				await killAll();
 				if (stopping) throw stoppedError();
-				// A port taken between pick and bind, or a child that died at once: one more try on new ports.
-				if (attempt >= 2 || !e.bind) throw e;
+				// A port taken between pick and bind: one more try on new ports. Any other failure is final.
+				if (attempt >= MAX_BIND_ATTEMPTS || !e.bind) throw e;
 				log(`start failed (${e.message.split("\n")[0]}); retrying on new ports`);
+				sup.ports = {}; // the old picks may be the taken ones: pick both afresh (nothing has used them yet)
 			}
 		}
 	};

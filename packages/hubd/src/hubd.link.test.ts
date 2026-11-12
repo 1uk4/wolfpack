@@ -307,7 +307,7 @@ describe("hubd /healthz pack summary", () => {
   it("lists every host with its presence, pairing label and non-retired wolves, sorted, without a token", async () => {
     for (const w of ["beta", "alpha", "old", "lappy"]) await register(w);
     const pair = (hostId: string, label: string) => store.redeem(store.mintPairingCode({ kind: "worker", hostId }).code, label, "worker", hostId).token;
-    const box = await join_(pair("sfo", "sfo-01"), "sfo", { machine: "sfo-01", wolves: [{ name: "beta", domains: [] }, { name: "alpha", domains: [] }, { name: "old", domains: [] }] });
+    const box = await join_(pair("sfo", "sfo-01"), "sfo", { machine: "sfo-01", commands: ["key.set", "wolves.restart", "workerd.restart", "key.remove", "logs.fetch"], wolves: [{ name: "beta", domains: [] }, { name: "alpha", domains: [] }, { name: "old", domains: [] }] });
     expect((await fetch(`${hub.url}/v1/registry/wolves/old/retire`, { method: "POST", headers: OP })).status).toBe(200);
     const lap = await join_(pair("mac", "Lukas MBP"), "mac", { laptop: true, wolves: [{ name: "lappy", domains: [] }] });
     lap.send({ t: "sleep" });
@@ -321,9 +321,12 @@ describe("hubd /healthz pack summary", () => {
     expect(body.hosts.map(({ since: _s, ...h }) => h)).toEqual([
       { id: "cron", label: "cron-box", presence: "offline", wolves: [] },
       { id: "mac", presence: "asleep", wolves: [{ name: "lappy", status: "offline" }] },
-      { id: "sfo", label: "sfo-01", machine: "sfo-01", presence: "online", wolves: [{ name: "alpha", status: "online" }, { name: "beta", status: "online" }] },
+      { id: "sfo", label: "sfo-01", machine: "sfo-01", commands: ["wolves.restart", "workerd.restart", "logs.fetch"], presence: "online", wolves: [{ name: "alpha", status: "online" }, { name: "beta", status: "online" }] },
     ]);
     for (const h of body.hosts) expect(Number.isNaN(Date.parse(h.since ?? ""))).toBe(false); // each presence change is timestamped
+    // Key kinds are advertised to the hub but never listed on the unauthenticated /healthz.
+    expect(body.hosts.find((h) => h.id === "sfo")?.commands).not.toContain("key.set");
+    expect(body.hosts.find((h) => h.id === "sfo")?.commands).not.toContain("key.remove");
     // A label that is not hostname-like (a space, a person's name) is never sent on the unauthenticated /healthz.
     expect(body.hosts.find((h) => h.id === "mac")).not.toHaveProperty("label");
     // A host removed from the registry that is not linked any more leaves the list.

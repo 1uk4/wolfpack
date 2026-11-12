@@ -436,12 +436,12 @@ export function updateFinished(last: UpdateLast | null | undefined, sentAfter: s
 }
 
 /** What the button shows after POST /api/health/update (`body` its JSON when read). */
-export function updateOutcome(status: number, retryAfter: string | null, body?: unknown): RestartOutcome {
+export function updateOutcome(status: number, retryAfter: string | null, body?: unknown, machine?: string): RestartOutcome {
 	if (status === 202) return { kind: "issued" };
 	if (status === 429) return { kind: "wait", retryS: waitOf(retryAfter, 300) };
 	if (status === 401) return { kind: "error", message: SIGN_IN };
 	if (status === 409 && (body as { code?: unknown } | null | undefined)?.code === "running") return { kind: "error", message: "An update is already running" };
-	if (status === 409) return { kind: "error", message: "Nothing is behind the latest stable release" };
+	if (status === 409) return { kind: "error", message: machine ? `Already up to date on ${machine}` : "Already up to date" };
 	if (status === 502) return { kind: "error", message: "systemctl refused the update (is the update unit and polkit rule installed?)" };
 	if (status === 0) return { kind: "error", message: "Console unreachable; update not sent" };
 	return { kind: "error", message: `Update failed (HTTP ${status})` };
@@ -484,4 +484,25 @@ export function packSummary(o: { snapshot: HealthSnapshotView | null; reachable:
 	if (issues.every((l) => l.status === "recovering")) return { tone, label: issues.length === 1 ? `${linkName(issues[0]!)} recovering…` : "Recovering…" };
 	if (issues.length === 1) return { tone, label: `${linkName(issues[0]!)} ${statusWord(issues[0]!.status)}` };
 	return { tone, label: `${issues.length} issues` };
+}
+
+type WarnRow = { updateStatus?: { host?: string; lastCheck?: string; stale?: boolean; manual?: boolean } };
+
+/**
+ * The sidebar notice's warning lines, one per machine and always naming it: "Manual updates: auto-update is off on <machine>" when the
+ * machine's timer is off (never the stale warning), else "Auto-update hasn't run on <machine> for 40m" when its timer went quiet.
+ */
+export function updateWarnings(rows: WarnRow[], nowMs: number): string[] {
+	const seen = new Map<string, string>();
+	for (const { updateStatus: u } of rows) {
+		if (!u) continue;
+		const host = u.host || "this machine";
+		if (u.manual) seen.set(host, `Manual updates: auto-update is off on ${host}`);
+		else if (u.stale && u.lastCheck && !seen.has(host)) {
+			const min = Math.max(0, Math.floor((nowMs - Date.parse(u.lastCheck)) / 60_000));
+			const age = min < 60 ? `${min}m` : min < 48 * 60 ? `${Math.floor(min / 60)}h` : `${Math.floor(min / 1440)}d`;
+			seen.set(host, `Auto-update hasn't run on ${host} for ${age} — see deploy/auto-update/RUNBOOK.md`);
+		}
+	}
+	return [...seen.values()];
 }

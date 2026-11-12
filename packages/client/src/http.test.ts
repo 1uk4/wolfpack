@@ -190,6 +190,34 @@ describe("HttpConsoleClient", () => {
     expect(snaps[0].thread.messages.at(-1)?.text).toBe("the full text");
   });
 
+  it("watch reconnects from the last id when the stream goes silent past idleMs, and a keepalive keeps it open", async () => {
+    const ev = (o: object) => JSON.stringify({ threadId: "t", at: "2026-01-01T00:00:00Z", actor: { id: "w", kind: "wolf" }, ...o });
+    const enc = new TextEncoder();
+    const requests: Array<string | null> = [];
+    const c = new HttpConsoleClient({
+      baseUrl: "http://x",
+      retryDelayMs: 1,
+      fetch: async (_i, init) => {
+        requests.push(new Headers(init?.headers).get("Last-Event-ID"));
+        if (requests.length === 1) {
+          // One frame, then silence until the client aborts (a half-open connection).
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(ctl) {
+                ctl.enqueue(enc.encode(`id: 1\ndata: ${ev({ id: 1, type: "turn-start", turnId: "a" })}\n\n`));
+                init?.signal?.addEventListener("abort", () => ctl.error(new TypeError("aborted")));
+              },
+            }),
+          );
+        }
+        return sseResponse([`id: 2\ndata: ${ev({ id: 2, type: "turn-end", turnId: "a", reason: "complete" })}`, "data: [DONE]"]);
+      },
+    });
+    const events = await collect(c.watch("t", { idleMs: 40 }));
+    expect(events.map((e) => e.type)).toEqual(["turn-start", "turn-end"]);
+    expect(requests).toEqual([null, "1"]);
+  });
+
   it("skips unknown event types and throws on invalid known events", async () => {
     const ev = (o: object) => JSON.stringify({ id: 1, threadId: "t", at: "2026-01-01T00:00:00Z", actor: { id: "w", kind: "wolf" }, ...o });
     const good = ev({ type: "turn-start", turnId: "a" });

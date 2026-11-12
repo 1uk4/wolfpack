@@ -26,7 +26,7 @@ import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import { guardProviderStreams } from "./guard.js";
-import { withDroppedCallNet } from "./dropped-call.js";
+import { CONTINUE_PROMPT, withDroppedCallNet } from "./dropped-call.js";
 import { withMaxTurnsAsTurnEnd } from "./max-turns.js";
 import type { ProviderFactory } from "./types.js";
 
@@ -147,6 +147,7 @@ export const claudeStatelessFactory: ProviderFactory = (ctx) => {
     sessionDir,
     env: { ...ctx.env, ...NO_TOOL_SEARCH },
     debug: true,
+    continuePrompt: CONTINUE_PROMPT,
     debugLogPath,
     // Always wrapped, whoever builds the registry (wolfd passes no seams; the pi entry injects the host query).
     queryFn: withMaxTurnsAsTurnEnd(withFreshSystemPrompt((seams.queryFn ?? lazySdkQuery()) as (args: any) => any)) as never,

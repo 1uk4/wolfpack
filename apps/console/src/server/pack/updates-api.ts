@@ -37,8 +37,10 @@ export interface UpdateStatus {
 	message?: string;
 	/** When the update started (updating) or finished (updated, failed). */
 	at?: string;
-	/** true when `lastCheck` is older than STALE_AFTER_MS: the timer is not running, or every run finds the lock held. */
+	/** true when `lastCheck` is older than STALE_AFTER_MS: the timer is not running, or every run finds the lock held. Never set with `manual`. */
 	stale?: true;
+	/** true when auto-update is switched off on the host (status file `enabled:false` with no kill-switch reason): updates are manual, so a quiet timer is expected. */
+	manual?: true;
 }
 
 export interface UpdateComponent extends UpdateRow {
@@ -75,7 +77,7 @@ export const DEFAULT_AUTO_UPDATE_STATUS = "/var/lib/wolfpack-auto-update/status.
 export const STALE_AFTER_MS = 2 * 35 * 60_000;
 
 type StatusUnit = { component?: string; state?: string; code?: string; message?: string; startedAt?: string; finishedAt?: string };
-type StatusFile = { host?: string; lastCheck?: string; disabledReason?: string; units?: Record<string, StatusUnit> };
+type StatusFile = { host?: string; enabled?: boolean; lastCheck?: string; disabledReason?: string; units?: Record<string, StatusUnit> };
 
 function readStatusFile(file: string): StatusFile | undefined {
 	try {
@@ -98,7 +100,8 @@ export function componentStatus(s: StatusFile, component: string, nowMs: number 
 	const at = state === "updating" ? u.startedAt : state === "updated" || state === "failed" ? u.finishedAt : undefined;
 	const message = state === "disabled" ? s.disabledReason : u.message;
 	const checked = Date.parse(s.lastCheck ?? "");
-	const stale = Number.isFinite(checked) && nowMs - checked > STALE_AFTER_MS;
+	const manual = s.enabled === false && !s.disabledReason;
+	const stale = !manual && Number.isFinite(checked) && nowMs - checked > STALE_AFTER_MS;
 	return {
 		state,
 		host: s.host ?? "unknown",
@@ -108,6 +111,7 @@ export function componentStatus(s: StatusFile, component: string, nowMs: number 
 		...((state === "failed" || state === "disabled") && message ? { message } : {}),
 		...(at ? { at } : {}),
 		...(stale ? { stale: true as const } : {}),
+		...(manual ? { manual: true as const } : {}),
 	};
 }
 
@@ -143,8 +147,8 @@ export interface UpdatesOptions {
 	probeTimeoutMs?: number;
 	/** Clock in ms (default Date.now); decides `updateStatus.stale`. */
 	now?: () => number;
-	/** The manifest reader (default: one built from the env, cached for the life of the handler). */
-	manifest?: () => Promise<ManifestResult>;
+	/** The manifest reader (default: one built from the env, cached for the life of the handler). `force` skips the cache. */
+	manifest?: (o?: { force?: boolean }) => Promise<ManifestResult>;
 }
 
 const base = (u: string | undefined) => u?.trim().replace(/\/+$/, "") || undefined;
@@ -155,7 +159,7 @@ async function serviceVersion(url: string | undefined, service: string, timeoutM
 	return r.status !== "down" && typeof r.body?.version === "string" ? r.body.version : undefined;
 }
 
-export function createUpdatesHandler(o: UpdatesOptions = {}): () => Promise<UpdatesBody> {
+export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: boolean }) => Promise<UpdatesBody> {
 	const env = o.env ?? process.env;
 	const url = env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL;
 	const off = url === "off";
@@ -163,14 +167,14 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): () => Promise<Upda
 	const mainManifest = off ? stableManifest : createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
 	const subFile = subscriptionFile(env);
 	// The subscribed channel (read on every request) picks the manifest; an injected `manifest` replaces both.
-	const manifest = () => (o.manifest ?? (readSubscription(subFile).channel === "main" ? mainManifest : stableManifest))();
+	const manifest = (q?: { refresh?: boolean }) => (o.manifest ?? (readSubscription(subFile).channel === "main" ? mainManifest : stableManifest))({ force: q?.refresh === true });
 	const timeoutMs = o.probeTimeoutMs ?? 3_000;
 	const own = consoleVersion(o.consoleDir);
 	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || DEFAULT_AUTO_UPDATE_STATUS;
-	return async () => {
+	return async (q) => {
 		const hostStatus = readStatusFile(statusFile);
 		const [m, hubd, workerd] = await Promise.all([
-			manifest(),
+			manifest(q),
 			serviceVersion(base(env.WOLFPACK_HUB_URL), "hubd", timeoutMs),
 			serviceVersion(base(env.WOLFPACK_API_URL), "workerd", timeoutMs),
 		]);

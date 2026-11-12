@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { errorText, machineServices, offersOwnControls, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, type HealthLink } from "../../../src/core/pack/pack-health-view.ts";
+import { errorText, machineServices, offersOwnControls, packSummary, restartOutcome, rollbackFinished, rollbackOutcome, rollbackQuestion, machineServiceCards, serviceCards, updateFinished, updateOffered, updateOutcome, updateQuestion, updateWarnings, rollbackOffered, type HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-09T14:10:00Z");
 const link = (id: string, status: HealthLink["status"], over: Partial<HealthLink> = {}): HealthLink => ({
@@ -256,10 +256,20 @@ describe("update button", () => {
 
 	it("turns the POST status into started, nothing to update, already running, or a countdown", () => {
 		assert.deepEqual(updateOutcome(202, null), { kind: "issued" });
-		assert.deepEqual(updateOutcome(409, null, { code: "no_update" }), { kind: "error", message: "Nothing is behind the latest stable release" });
+		assert.deepEqual(updateOutcome(409, null, { code: "no_update" }, "sfo-01"), { kind: "error", message: "Already up to date on sfo-01" });
+		assert.deepEqual(updateOutcome(409, null, { code: "up_to_date" }), { kind: "error", message: "Already up to date" });
 		assert.deepEqual(updateOutcome(409, null, { code: "running" }), { kind: "error", message: "An update is already running" });
 		assert.deepEqual(updateOutcome(429, "240"), { kind: "wait", retryS: 240 });
 		assert.deepEqual(updateOutcome(502, null), { kind: "error", message: "systemctl refused the update (is the update unit and polkit rule installed?)" });
+	});
+});
+
+describe("update warnings (sidebar notice)", () => {
+	const now = Date.parse("2026-11-09T12:00:00Z");
+	const st = (over: object) => ({ updateStatus: { state: "idle", lastCheck: "2026-11-09T11:20:00Z", ...over } });
+	it("names the machine on a stale warning and says manual mode, not stale, when auto-update is off; one line per machine", () => {
+		const rows = [st({ host: "sfo-01", stale: true }), st({ host: "sfo-01", stale: true }), st({ host: "hal", manual: true }), {}];
+		assert.deepEqual(updateWarnings(rows, now), ["Auto-update hasn't run on sfo-01 for 40m — see deploy/auto-update/RUNBOOK.md", "Manual updates: auto-update is off on hal"]);
 	});
 });
 

@@ -82,8 +82,32 @@ function localId(): string {
 	return `c_${Date.now().toString(36)}_${(localSeq++).toString(36)}`;
 }
 
-/** One wire event off the SSE body: parsed JSON, or the [DONE] terminal. */
-async function* sseEvents(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
+/** Reconnect policy for a broken thread stream: attempts with no new frame before the error shows. */
+const STREAM_MAX_RETRIES = 5;
+const STREAM_BACKOFF_MS = 500;
+const STREAM_BACKOFF_MAX_MS = 4000;
+
+/** Abortable sleep; rejects with AbortError when the signal fires. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+		const onAbort = () => {
+			clearTimeout(t);
+			reject(new DOMException("Aborted", "AbortError"));
+		};
+		const t = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/** One wire event off the SSE body: parsed JSON, or the [DONE] terminal. `track` records the last frame `id:` and whether [DONE] arrived. */
+async function* sseEvents(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	track?: { lastId?: string; done?: boolean },
+): AsyncGenerator<Record<string, unknown>> {
 	const decoder = new TextDecoder();
 	let buf = "";
 	for (;;) {
@@ -95,10 +119,16 @@ async function* sseEvents(reader: ReadableStreamDefaultReader<Uint8Array>): Asyn
 			if (end === -1) break;
 			const event = buf.slice(0, end);
 			buf = buf.slice(end + 2);
-			const dataLine = event.split("\n").find((l) => l.startsWith("data: "));
-			if (!dataLine) continue;
+			const lines = event.split("\n");
+			const dataLine = lines.find((l) => l.startsWith("data: "));
+			if (!dataLine) continue; // keepalive comment
 			const data = dataLine.slice("data: ".length);
-			if (data === "[DONE]") return;
+			if (data === "[DONE]") {
+				if (track) track.done = true;
+				return;
+			}
+			const idLine = lines.find((l) => l.startsWith("id: "));
+			if (idLine && track) track.lastId = idLine.slice("id: ".length).trim();
 			yield JSON.parse(data) as Record<string, unknown>;
 		}
 	}
@@ -220,6 +250,8 @@ export interface SessionState {
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
+	/** First stream-reconnect delay in ms (doubles per failed attempt, capped); tests pass 0. */
+	streamBackoffMs?: number;
 	chatId: string;
 	initialMessages: LhMessage[];
 	/** The seeded messages are only the newest page; older ones load through `loadEarlier`. */
@@ -270,7 +302,10 @@ export class SessionModel {
 	/** Synchronous ready check for the gate (send/read mount logic). */
 	readyRef = true;
 
+	private readonly backoffMs: number;
+
 	constructor(opts: SessionModelOptions) {
+		this.backoffMs = opts.streamBackoffMs ?? STREAM_BACKOFF_MS;
 		this.chatId = opts.chatId;
 		this.transport = opts.transport;
 		this.base = opts.initialMessages;
@@ -524,26 +559,64 @@ export class SessionModel {
 	}
 
 	/** Consume one SSE body to its [DONE] terminal. The turn-settled
-	 *  terminal (stream-route only) fires the settle hook and ends. */
+	 *  terminal (stream-route only) fires the settle hook and ends.
+	 *  A read error or an EOF without a terminal is a BREAK, not an end:
+	 *  the stream is re-fetched with Last-Event-ID (the server replays
+	 *  id > from; the tail is kept) with bounded backoff, and the error
+	 *  surfaces only after STREAM_MAX_RETRIES consecutive attempts that
+	 *  delivered no new frame. */
 	async consumeStream(res: Response): Promise<void> {
-		if (!res.body) throw new Error("The turn stream body is empty.");
-		const reader = res.body.getReader();
 		let sawEvent = false;
 		const wire = this.transport.createWire();
+		const track: { lastId?: string; done?: boolean } = {};
+		const signal = this.consumeAbort?.signal;
+		let failures = 0;
 		try {
-			for await (const raw of sseEvents(reader)) {
-				if (raw.type === "turn-settled") {
-					// The raced-settle terminal: no turn to attach to — the
-					// record is current; the settle hook refetches.
-					await reader.cancel().catch(() => {});
-					this.onReattachSettled?.();
-					return;
+			for (;;) {
+				if (!res.body) throw new Error("The turn stream body is empty.");
+				const reader = res.body.getReader();
+				const before = track.lastId;
+				let broke: unknown = null;
+				try {
+					for await (const raw of sseEvents(reader, track)) {
+						if (raw.type === "turn-settled") {
+							// The raced-settle terminal: no turn to attach to — the
+							// record is current; the settle hook refetches.
+							await reader.cancel().catch(() => {});
+							this.onReattachSettled?.();
+							return;
+						}
+						for (const event of wire(raw)) {
+							const acted = this.applyWireEvent(event);
+							if (!sawEvent && acted) {
+								sawEvent = true;
+								if (this.statusValue !== "error") this.setStatus("streaming");
+							}
+						}
+					}
+				} catch (err) {
+					if (signal?.aborted || (err as Error).name === "AbortError") throw err;
+					broke = err;
 				}
-				for (const event of wire(raw)) {
-					const acted = this.applyWireEvent(event);
-					if (!sawEvent && acted) {
-						sawEvent = true;
-						if (this.statusValue !== "error") this.setStatus("streaming");
+				if (track.done) return;
+				if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+				// A break: reconnect from the last frame id.
+				if (track.lastId !== before) failures = 0;
+				for (;;) {
+					if (++failures > STREAM_MAX_RETRIES) {
+						throw broke instanceof Error ? broke : new Error("The turn stream ended unexpectedly.");
+					}
+					await sleep(Math.min(STREAM_BACKOFF_MAX_MS, this.backoffMs * 2 ** (failures - 1)), signal);
+					try {
+						const headers: Record<string, string> = {};
+						if (track.lastId !== undefined) headers["Last-Event-ID"] = track.lastId;
+						const next = await this.fetch(this.transport.streamUrl, { signal, headers });
+						if (!next.ok) throw new Error((await next.text()) || "Failed to re-attach to the running turn.");
+						res = next;
+						break;
+					} catch (err) {
+						if (signal?.aborted || (err as Error).name === "AbortError") throw err;
+						broke = err;
 					}
 				}
 			}

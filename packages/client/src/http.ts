@@ -280,6 +280,7 @@ export class HttpConsoleClient implements ConsoleClient {
     // lastId: highest id yielded (or the snapshot baseline); events <= it are dropped.
     let lastId: number | undefined = opts.from;
     let failures = 0;
+    const idleMs = opts.idleMs ?? 60_000; // wolfd sends a keepalive every 15s
 
     for (;;) {
       const ctl = new AbortController();
@@ -289,7 +290,15 @@ export class HttpConsoleClient implements ConsoleClient {
         const res = await this.request("streamThread", { id: threadId }, { headers, signal: ctl.signal }, threadId);
         if (!res.body) throw new TypeError("stream response has no body");
 
-        for await (const frame of sseFrames(res.body)) {
+        // Half-open guard: any bytes (frame or keepalive) re-arm it; silence aborts the request and we reconnect.
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        const arm = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => ctl.abort(), idleMs);
+        };
+        arm();
+        try {
+        for await (const frame of sseFrames(res.body, arm)) {
           if (frame.data === SSE_DONE) return;
           let json: unknown;
           try {
@@ -312,6 +321,9 @@ export class HttpConsoleClient implements ConsoleClient {
           failures = 0;
           yield ev as ThreadEvent;
           if (ev.type === "turn-end") return;
+        }
+        } finally {
+          clearTimeout(idle);
         }
         // Clean EOF without [DONE]: treat as a dropped connection.
         throw new TypeError("stream ended without [DONE]");

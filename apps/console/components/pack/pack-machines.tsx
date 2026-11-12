@@ -76,7 +76,7 @@ export function MachineCard(p: {
 					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}</span>
 				)}
 				{view.channel.note && <span className="text-muted-foreground/70">{view.channel.note}</span>}
-				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check for updates</button>}
+				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
 			</div>
 			{p.checkNote && <p data-testid="machine-check-note" className="mt-1 text-muted-foreground">{p.checkNote}</p>}
 		</section>
@@ -177,13 +177,14 @@ export function MachinesSection() {
 			setBusyKey(key, false);
 		}
 	};
-	const check = async (id: string) => {
+	const check = async (id: string, label: string) => {
 		setChecks((c) => ({ ...c, [id]: "Checking…" }));
 		try {
-			const r = await fetch("/api/health/update", { cache: "no-store" });
+			// ?refresh=1: the server re-reads the release manifest instead of using its cache.
+			const r = await fetch("/api/health/update?refresh=1", { cache: "no-store" });
 			const b = (await r.json()) as { units?: { component: string; to: string }[] };
 			const u = b.units ?? [];
-			setChecks((c) => ({ ...c, [id]: u.length ? `Update available: ${u.map((x) => `${x.component} v${x.to}`).join(", ")}` : "Up to date" }));
+			setChecks((c) => ({ ...c, [id]: u.length ? `Update available: ${u.map((x) => `${x.component} v${x.to}`).join(", ")}` : `Already up to date on ${label}` }));
 		} catch {
 			setChecks((c) => ({ ...c, [id]: "Could not check for updates" }));
 		}
@@ -218,7 +219,7 @@ export function MachinesSection() {
 						busy={new Set([...busy].filter((k) => k.startsWith(`${v.id}/`)).map((k) => k.slice(v.id.length + 1)))}
 						checkNote={checks[v.id]}
 						onRestart={(s) => void restart(v, s)}
-						onCheck={cards[i]!.console ? () => void check(v.id) : undefined}
+						onCheck={cards[i]!.console ? () => void check(v.id, v.label) : undefined}
 						onRefreshLog={(s) => void fetchLog(v.id, s)}
 						onChannel={(c) => void setChannel(c)}
 					/>

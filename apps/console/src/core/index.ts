@@ -113,3 +113,4 @@ export * from "./pack/keys-seal.ts";
 export * from "./pack/wolves-model.ts";
 export * from "./pack/wolf-prompt-scopes.ts";
 export { buildGraphs, type FlowRow, type PromptGraph } from "./settings/prompt-flows.ts";
+export { updateWarnings } from "./pack/pack-health-view.ts";

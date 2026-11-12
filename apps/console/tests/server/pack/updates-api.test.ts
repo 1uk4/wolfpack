@@ -146,6 +146,44 @@ describe("GET /api/updates", () => {
 		}
 	});
 
+	it("a host with auto-update switched off (enabled:false) is manual, not stale, however old its last check", async () => {
+		const manifestBase = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.18") } });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
+		const statusFile = join(dir, "status.json");
+		writeFileSync(statusFile, JSON.stringify({ schema: 1, host: "hal", enabled: false, lastCheck: "2026-11-01T09:00:00.000Z", result: "ok", units: { console: { component: "console", current: "0.1.18", target: "0.1.18", state: "idle" } } }));
+		try {
+			const body = await createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now: () => Date.parse("2026-11-09T12:00:00.000Z") })();
+			assert.deepEqual(body.components[0]?.updateStatus, { state: "idle", host: "hal", lastCheck: "2026-11-01T09:00:00.000Z", manual: true });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refresh re-reads the manifest at once; without it the cached manifest is served", async () => {
+		let hits = 0;
+		const s = createServer((_req, res) => {
+			hits += 1;
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.18") } }));
+		});
+		servers.push(s);
+		await new Promise<void>((r) => s.listen(0, "127.0.0.1", () => r()));
+		const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/stable.json`;
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
+		try {
+			const get = createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: url }, consoleDir: dir });
+			await get();
+			await get();
+			assert.equal(hits, 1);
+			await get({ refresh: true });
+			assert.equal(hits, 2);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("with the manifest unreachable, answers with the running versions, nothing outdated, and the reason", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
 		writeFileSync(join(dir, "VERSION"), "0.1.17\n");

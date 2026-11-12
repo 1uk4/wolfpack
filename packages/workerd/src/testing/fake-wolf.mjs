@@ -1,11 +1,13 @@
 // Fake wolfd for workerd tests: `node fake-wolf.mjs --config <wolf.yaml> --port N`. No engine, no model.
 import { createServer } from "node:http";
-import { readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const arg = (k) => args[args.indexOf(k) + 1];
 const name = /^name:\s*(\S+)/m.exec(readFileSync(arg("--config"), "utf8"))[1];
 if (process.env.FAKE_EXIT_IMMEDIATELY) process.exit(3);
+// Test hook: write the named env variable's value to a file, so a test can see what a child was spawned with.
+if (process.env.FAKE_DUMP_ENV_FILE) writeFileSync(process.env.FAKE_DUMP_ENV_FILE, process.env[process.env.FAKE_DUMP_ENV_NAME] ?? "<unset>");
 
 const json = (res, status, body) => {
   res.writeHead(status, { "content-type": "application/json" });

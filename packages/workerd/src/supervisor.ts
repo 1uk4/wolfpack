@@ -5,6 +5,8 @@ import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { WolfConfig } from "@wolfpack/engine";
 import { UNIX_PREFIX, getJson, probeSocket } from "./socket.js";
+import { readKeyFileEnv } from "./key-store.js";
+import { wolfTransport } from "./wolf-transport.js";
 import type { WolfEntry, WolfRegistry } from "./registry.js";
 
 export type ChildState = "starting" | "online" | "restarting" | "failed" | "stopped";
@@ -45,6 +47,8 @@ export interface SupervisorOptions {
   /** SIGTERM → SIGKILL grace on shutdown. Default 5000. */
   graceMs?: number;
   env?: NodeJS.ProcessEnv;
+  /** The Pack key file: its keys are merged over `env` for every wolfd spawn, read fresh each time (so a key.set then restart picks up the new key). */
+  keyFile?: string;
   /** Surfaced lines, already prefixed with `[name]`. Default: process.stderr. */
   log?: (line: string) => void;
 }
@@ -305,10 +309,20 @@ export class Supervisor implements WolfRegistry {
     c.adoptTimer.unref();
   }
 
+  /**
+   * The Pack key file's env for one wolf. Only API-key wolves get ANTHROPIC_API_KEY: a subscription wolf (and any wolf whose transport
+   * cannot be determined, see wolfTransport) never receives the metered key.
+   */
+  private packKeysFor(config: WolfConfig): Record<string, string> {
+    const env = readKeyFileEnv(this.opts.keyFile!);
+    if (wolfTransport(config, this.opts.env ?? process.env) !== "api") delete env.ANTHROPIC_API_KEY;
+    return env;
+  }
+
   private launch(c: Child, listenArgs: string[]): void {
     const [cmd, ...lead] = this.command;
     const proc = spawn(cmd, [...lead, "--config", c.config.file, ...listenArgs], {
-      env: { ...(this.opts.env ?? process.env), WOLFPACK_SUPERVISED: "workerd" },
+      env: { ...(this.opts.env ?? process.env), ...(this.opts.keyFile ? this.packKeysFor(c.config) : {}), WOLFPACK_SUPERVISED: "workerd" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     c.proc = proc;

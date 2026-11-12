@@ -379,3 +379,62 @@ describe("Supervisor.restartWolf", { timeout: 20_000 }, () => {
     expect(sc.calls).toEqual([]);
   });
 });
+
+describe("Supervisor (Pack key file)", { timeout: 20_000 }, () => {
+  it("spawns each wolfd with the key file merged over the inherited env, read fresh on every restart", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    writeFileSync(join(root, "alpha", "models.json"), '{"transport": "api"}');
+    const keyFile = join(root, "keys.env");
+    const dump = join(root, "seen.txt");
+    writeFileSync(keyFile, "ANTHROPIC_API_KEY=pack-one\nDEEPGRAM_API_KEY=dg-one\n");
+    sup = new Supervisor({
+      wolves: m.wolves,
+      command: FAKE_COMMAND,
+      keyFile,
+      env: { ...process.env, ANTHROPIC_API_KEY: "inherited", FAKE_DUMP_ENV_FILE: dump, FAKE_DUMP_ENV_NAME: "ANTHROPIC_API_KEY" },
+      log: () => {},
+    });
+    sup.start();
+    await sup.whenSettled();
+    expect(readFileSync(dump, "utf8")).toBe("pack-one");
+    writeFileSync(keyFile, "ANTHROPIC_API_KEY=pack-two\n");
+    await sup.restartWolf("alpha");
+    await until(() => readFileSync(dump, "utf8") === "pack-two", 8000, "new key in the respawned child");
+  });
+
+  it("never hands the Pack's Anthropic key to a subscription wolf, nor to one whose transport is unknown", async () => {
+    const m = makeWolves("sub", "unknown", "api");
+    root = m.root;
+    writeFileSync(join(root, "sub", "models.json"), '{"transport": "subscription"}');
+    writeFileSync(join(root, "api", "models.json"), '{"transport": "api"}');
+    const keyFile = join(root, "keys.env");
+    writeFileSync(keyFile, "ANTHROPIC_API_KEY=pack-one\n");
+    const seen: Record<string, string> = {};
+    for (const w of m.wolves) {
+      const dump = join(root, `${w.identity.name}.txt`);
+      const s2 = new Supervisor({ wolves: [w], command: FAKE_COMMAND, keyFile, env: { ...process.env, ANTHROPIC_API_KEY: "", FAKE_DUMP_ENV_FILE: dump, FAKE_DUMP_ENV_NAME: "ANTHROPIC_API_KEY" }, log: () => {} });
+      s2.start();
+      await s2.whenSettled();
+      seen[w.identity.name] = readFileSync(dump, "utf8");
+      await s2.stop();
+    }
+    expect(seen).toEqual({ sub: "", unknown: "", api: "pack-one" });
+  });
+
+  it("falls back to the inherited env when the key file is missing or lacks the key", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const dump = join(root, "seen.txt");
+    sup = new Supervisor({
+      wolves: m.wolves,
+      command: FAKE_COMMAND,
+      keyFile: join(root, "absent.env"),
+      env: { ...process.env, ANTHROPIC_API_KEY: "inherited", FAKE_DUMP_ENV_FILE: dump, FAKE_DUMP_ENV_NAME: "ANTHROPIC_API_KEY" },
+      log: () => {},
+    });
+    sup.start();
+    await sup.whenSettled();
+    expect(readFileSync(dump, "utf8")).toBe("inherited");
+  });
+});

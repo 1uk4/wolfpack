@@ -52,6 +52,17 @@ function readFileEnv(file: string): Map<string, string> {
   }
 }
 
+/** The key slots stored in `file`, as env variables (name -> value). Missing or unreadable file = empty. For spawning processes: never log it. */
+export function readKeyFileEnv(file: string): Record<string, string> {
+  const all = readFileEnv(file);
+  const out: Record<string, string> = {};
+  for (const name of Object.values(SLOT_ENV)) {
+    const v = all.get(name);
+    if (v) out[name] = v;
+  }
+  return out;
+}
+
 export interface KeyPresence {
   slot: string;
   present: boolean;

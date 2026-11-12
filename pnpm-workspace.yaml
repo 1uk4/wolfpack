@@ -20,5 +20,6 @@ allowBuilds:
   esbuild: true
   "@google/genai": false
   electron-winstaller: false
+  onnxruntime-node: false
   protobufjs: false
   unrs-resolver: false

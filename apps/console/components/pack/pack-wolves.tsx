@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PromptGraphCanvas } from "@/components/settings/prompt-graph-view";
+import { WolfAllSettings, type WolfSettingsView } from "@/components/pack/wolf-all-settings";
 import {
 	buildGraphs,
 	filterByScope,
@@ -42,14 +43,7 @@ const liveFetch: Fetcher = (u, i) => fetch(u, i);
 const BTN = "rounded-sm border px-2.5 py-1 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 max-md:min-h-11 max-md:px-3 max-md:py-2";
 const SELECT = "rounded-sm border bg-background px-2 py-1 text-xs max-md:py-2 max-md:min-h-11 max-md:text-base";
 
-interface SettingsView {
-	etag: string;
-	config: Record<string, unknown>;
-	editable: string[];
-	restartNeeded: boolean;
-	/** The pi provider each tier runs on (absent on older wolves). */
-	tierProviders?: Record<string, string>;
-}
+type SettingsView = WolfSettingsView;
 interface PromptRow {
 	id: string;
 	group: string;
@@ -85,7 +79,7 @@ function PickerField({ label, picker, current, editable, onPick, testid, hint, n
 	);
 }
 
-function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; catalog: PickerModel[]; reach: ConsoleReach | undefined; call: Fetcher; onBack: () => void }) {
+export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; catalog: PickerModel[]; reach: ConsoleReach | undefined; call: Fetcher; onBack: () => void }) {
 	const { machine, wolf, catalog, call } = props;
 	const access = wolfAccess(props.reach, machine, wolf.name);
 	const base = `/api/wolves/${encodeURIComponent(wolf.name)}/settings`;
@@ -160,6 +154,14 @@ function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; catalog: Pi
 				{access.reachable ? <PickerField label="Memory" testid="picker-memory" hint="Used for memory's main steps; quick steps keep the fast model." picker={pickers.memory} current={String(getAt(view?.config ?? {}, "memory.model") ?? "")} editable={canEdit("memory.model") && !memoryIgnored} note={memoryIgnored ? `Memory runs on ${memoryIgnored} for this wolf; this setting has no effect.` : undefined} onPick={(id) => void save("memory.model", id)} /> : null}
 				{saved ? <p data-testid="wolf-saved" className="text-muted-foreground">Saved for {wolf.name} only. It takes effect when {wolf.name} restarts.</p> : null}
 			</section>
+			{access.reachable ? (
+				<details className="rounded-md border p-3" data-testid="wolf-all-settings">
+					<summary className="cursor-pointer font-medium text-foreground max-md:min-h-11">All settings</summary>
+					<div className="mt-3">
+						{view ? <WolfAllSettings wolfName={wolf.name} view={view} call={call} onView={setView} onReload={() => void load()} /> : error ? <p role="alert" className="text-destructive" data-testid="wolf-all-settings-error">{error}</p> : <p className="text-muted-foreground">Loading…</p>}
+					</div>
+				</details>
+			) : null}
 			<section className="flex flex-col gap-1 rounded-md border p-3" data-testid="wolf-domains">
 				<h4 className="font-medium text-foreground">Domains</h4>
 				<p>{domains.length ? domains.join(", ") : "None subscribed."}</p>

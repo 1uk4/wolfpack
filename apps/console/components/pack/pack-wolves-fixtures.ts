@@ -32,14 +32,41 @@ const PROMPTS = [
 	{ id: "standard.testing", group: "Workspace", label: "testing", editable: false, text: "Test first.", source: "default", file: "packages/agents/standards/testing.md" },
 ];
 
+/** Typed out here, mirroring harness EDITABLE_KEYS (packages/harness/src/wolfd/wolf-settings.ts); not imported from harness. */
+const EDITABLE_KEYS = [
+	...(["main", "smart", "fast"] as const).flatMap((t) => [`models.${t}.provider`, `models.${t}.model`, `models.${t}.thinking`, `tiers.${t}.model`, `tiers.${t}.thinking`]),
+	"color",
+	"prompts.structuredOutput",
+	"subagents.maxRunning",
+	"compaction.enabled",
+	"compaction.startAt",
+	"compaction.reserveTokens",
+	"compaction.keepRecentTokens",
+	"memory.defaultDomain",
+	"memory.model",
+	"memory.sweepInterval",
+	"memory.consolidation.threshold",
+	"memory.consolidation.poolTarget",
+	"memory.consolidation.trigger",
+	"memory.consolidation.interval",
+];
+const ENV = [
+	{ name: "WORK_ENDPOINT", set: true, secret: false, purpose: "Work API base URL" },
+	{ name: "WORK_TOKEN", set: true, secret: true, purpose: "Work API token" },
+	{ name: "WOLFPACK_HUB_TOKEN", set: false, secret: true, purpose: "hub worker token" },
+];
+
 export function fixtureWolvesFetch(mode: "local" | "relay" = "local"): typeof fetch {
 	const config: Record<string, Record<string, unknown>> = {
 		hal: { name: "hal", domains: ["wolfpack", "personal"], models: { main: { model: "claude-opus-5-5" } } },
 		dewey: { name: "dewey", domains: ["wolfpack"], models: { main: { model: "claude-sonnet-5-5" } }, memory: { model: "claude-haiku-5-5" } },
 		scout: { name: "scout", domains: ["snapjack"], models: { main: { model: "claude-sonnet-5-5" } } },
 	};
+	// Values for the All settings form, so it is not empty in the browser. Spread under each wolf's own config below.
+	const FORM_DEFAULTS = { color: "blue", tiers: { smart: { model: "claude-sonnet-5-5" } }, subagents: { maxRunning: 3 }, compaction: { enabled: true } };
+	for (const w of Object.keys(config)) config[w] = { ...FORM_DEFAULTS, ...config[w] };
 	let n = 1;
-	const view = (w: string) => ({ etag: `e${n}`, config: config[w] ?? {}, editable: ["models.main.model", "memory.model"], tierModels: {}, env: [], restartNeeded: n > 1, restartable: true, restartAvailableInSeconds: 0 });
+	const view = (w: string) => ({ etag: `e${n}`, config: config[w] ?? {}, editable: EDITABLE_KEYS, tierModels: { main: "claude-opus-5-5", smart: "claude-sonnet-5-5", fast: "claude-haiku-5-5" }, env: ENV, restartNeeded: n > 1, restartable: true, restartAvailableInSeconds: 0 });
 	return (async (url: RequestInfo | URL, init?: RequestInit) => {
 		await new Promise((r) => setTimeout(r, 200));
 		const u = String(url);

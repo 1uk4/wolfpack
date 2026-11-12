@@ -1,5 +1,5 @@
 /** Link-only mode: hub link + KB sync + announce, and NOTHING supervised or spawned. */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +52,40 @@ describe("runWorkerd link-only", () => {
     expect(lines.some((l) => l.includes("link-only"))).toBe(true);
   });
 
+  it("a corrupt machine-key.pem is logged and workerd starts without a pubkey or key commands; the file is not regenerated", async () => {
+    const r: LinkRig = await startLinkRig({ wolves: ["hal"], noHub: true });
+    cleanup.push(() => r.close());
+    const tmp = mkdtempSync(join(tmpdir(), "badkey-"));
+    cleanup.push(() => rmSync(tmp, { recursive: true, force: true }));
+    const pem = join(tmp, "cfg", "machine-key.pem");
+    mkdirSync(join(tmp, "cfg"), { recursive: true });
+    writeFileSync(pem, "garbage", { mode: 0o600 });
+    const lines: string[] = [];
+    const w = await runWorkerd({
+      wolvesDir: r.wolvesDir,
+      port: 0,
+      linkOnly: true,
+      announce: ["hal"],
+      configDir: join(tmp, "cfg"),
+      keyFile: join(tmp, "keys.env"),
+      hub: { hubUrl: r.hub.url, token: r.token, hostId: r.hostId },
+      linkOptions: { baseMs: 20, capMs: 200, rand: () => 0.5 },
+      kbMirrorDir: join(tmp, "mirror"),
+      kbMirrorLayout: "base",
+      kbSync: { baseMs: 20, capMs: 200, pollMs: 0 },
+      wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
+      kbOps: join(tmp, "ops"),
+      outboxDir: join(tmp, "outbox"),
+      log: (l) => void lines.push(l),
+    });
+    cleanup.push(() => w.close());
+    await r.waitPresence("online");
+    expect(lines.some((l) => l.includes("machine key") && l.includes("key.set and key.remove are off"))).toBe(true);
+    expect(readFileSync(pem, "utf8")).toBe("garbage");
+    const res = await fetch(`${r.hub.url}/v1/machines/keys`, { headers: r.operator });
+    expect(((await res.json()) as { keys: Record<string, unknown> }).keys[r.hostId]).toBeUndefined();
+  });
+
   it("refuses link-only with nothing to announce or without a hub", async () => {
     await expect(runWorkerd({ linkOnly: true, announce: [], hub: false, port: 0 })).rejects.toThrow(/announced wolf/);
     await expect(runWorkerd({ linkOnly: true, announce: ["hal"], hub: false, port: 0 })).rejects.toThrow(/hub link/);
@@ -91,6 +125,11 @@ describe("workerd CLI args", () => {
   });
   it("runWorkerd link-only throws on a non-loopback host", async () => {
     await expect(runWorkerd({ linkOnly: true, announce: ["hal"], host: "0.0.0.0", port: 0, hub: { hubUrl: "http://127.0.0.1:1", token: "t", hostId: "h" } })).rejects.toThrow(/loopback/);
+  });
+  it("has no key file unless --key-file or WORKERD_KEY_FILE names one (no silent default location)", () => {
+    expect((parseServeArgs([], {}) as { opts: { keyFile?: string } }).opts.keyFile).toBeUndefined();
+    expect(parseServeArgs([], { WORKERD_KEY_FILE: "/k/env.keys" })).toMatchObject({ opts: { keyFile: "/k/env.keys" } });
+    expect(parseServeArgs(["--key-file", "/k/flag.keys"], { WORKERD_KEY_FILE: "/k/env.keys" })).toMatchObject({ opts: { keyFile: "/k/flag.keys" } });
   });
   it("--announce without link-only is an error", () => {
     expect(parseServeArgs(["--announce", "hal"], {})).toHaveProperty("error");

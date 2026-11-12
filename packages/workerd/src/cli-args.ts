@@ -19,6 +19,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
         host: { type: "string" },
         "link-only": { type: "boolean" },
         announce: { type: "string", multiple: true },
+        "key-file": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     }));
@@ -43,8 +44,14 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
     return { error: e instanceof Error ? e.message : String(e) };
   }
   if (!Number.isInteger(port) || port < 0 || port > 65535) return { error: `invalid --port ${values.port ?? env.WORKERD_PORT}` };
+  // Explicit only: no key file means no key.set/key.remove and no Pack key presence (never a silent default location).
+  const keyFile = values["key-file"] || env.WORKERD_KEY_FILE?.trim() || undefined;
+  const modeRaw = env.WORKERD_KEY_FILE_MODE?.trim();
+  if (modeRaw && !/^[0-7]{3,4}$/.test(modeRaw)) return { error: `invalid WORKERD_KEY_FILE_MODE ${JSON.stringify(modeRaw)} (expected octal like 600 or 640)` };
   return {
     opts: {
+      ...(keyFile ? { keyFile } : {}),
+      ...(modeRaw ? { keyFileMode: parseInt(modeRaw, 8) } : {}),
       wolvesDir: values.wolves,
       port,
       host,

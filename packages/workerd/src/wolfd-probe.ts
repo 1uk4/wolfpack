@@ -85,6 +85,8 @@ export interface InventoryReporterOptions {
   send: (entries: InventoryEntry[]) => boolean;
   /** True once the hub's welcome advertised inventory. Nothing is sent before. */
   enabled: () => boolean;
+  /** Key presence per slot for the workerd entry (masks only, never values). */
+  keys?: () => InventoryEntry["keys"];
   intervalMs?: number;
   probeTimeoutMs?: number;
 }
@@ -107,7 +109,7 @@ export function createInventoryReporter(o: InventoryReporterOptions): InventoryR
     const kids = o.children();
     const probed = await Promise.all(kids.map((c) => (c.url && c.state === "online" ? probeWolfd(c.url, timeoutMs) : Promise.resolve(undefined))));
     const entries: InventoryEntry[] = [
-      { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()) },
+      { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()), ...(o.keys ? { keys: o.keys() } : {}) },
       ...kids.map((c, i): InventoryEntry => ({ ...base, kind: "wolfd", id: c.name, parent: o.hostId, ...probed[i] })),
     ];
     o.send(entries.slice(0, 128));

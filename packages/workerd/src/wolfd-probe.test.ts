@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InventoryEntry } from "@wolfpack/protocol";
+import { InventoryEntrySchema, type InventoryEntry } from "@wolfpack/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInventoryReporter } from "./wolfd-probe.js";
 
@@ -21,7 +21,7 @@ function stub(listen: number | string): Promise<Server> {
 }
 const child = (name: string, url: string | null) => ({ name, state: "online" as const, pid: 1, url, adopted: false, restarts: 0, failures: 0, nextRestartInMs: null, logFile: "" });
 
-function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolean } = {}) {
+function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolean; keys?: () => InventoryEntry["keys"] } = {}) {
   const sent: InventoryEntry[][] = [];
   const r = createInventoryReporter({
     hostId: "sfo-01-wolves",
@@ -31,6 +31,7 @@ function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolea
     children: () => children,
     send: (entries) => (sent.push(entries), true),
     enabled: () => over.enabled ?? true,
+    ...(over.keys ? { keys: over.keys } : {}),
     probeTimeoutMs: 300,
     intervalMs: 3_600_000,
   });
@@ -58,6 +59,16 @@ describe("workerd inventory reporter", () => {
     expect(wolfd("deadwolf").responseMs).toBeUndefined();
     expect(wolfd("nourl")).toMatchObject({ parent: "sfo-01-wolves" });
     expect(wolfd("nourl").version).toBeUndefined();
+  });
+
+  it("reports per-slot key presence on the workerd entry only, and the entry schema accepts it", async () => {
+    const keys = [{ slot: "anthropic", present: true, masked: "••••abcd", source: "pack" as const, shadowsEnv: true }, { slot: "deepgram", present: false }];
+    const { r, sent } = reporter([child("nourl", null)], { keys: () => keys });
+    await r.report();
+    const e = sent.at(-1)!;
+    expect(e[0]!.keys).toEqual(keys);
+    expect(e[1]!.keys).toBeUndefined();
+    expect(InventoryEntrySchema.safeParse(e[0]).success).toBe(true);
   });
 
   it("gives up on a wolfd that drips its response past the overall deadline, ignores an oversized body, and a non-http url", async () => {

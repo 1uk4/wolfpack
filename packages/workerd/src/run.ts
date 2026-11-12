@@ -5,7 +5,9 @@ import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
 import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
-import { canRestartSelf, createCommandRunner, type KeyHandler } from "./commands.js";
+import { canRestartSelf, createCommandRunner, restartWolves, type KeyHandler, type WolfControl } from "./commands.js";
+import { createKeyStore, readKeyPresence } from "./key-store.js";
+import { KeyChecker, type FetchLike } from "@wolfpack/protocol";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
@@ -25,6 +27,14 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   wolvesDir?: string;
   /** Key storage for key.set / key.remove (the Keys task injects it). Absent = those commands are not advertised. */
   keys?: KeyHandler;
+  /**
+   * The machine's key file (explicit; never inferred). With it, workerd stores keys sent by key.set there and reports key presence.
+   * Set only by --key-file / WORKERD_KEY_FILE; there is no default location. Without it key.set/key.remove are not advertised and no Pack keys are reported.
+   * sfo-01: the shared /var/lib/workerd-wolves/keys.env (0640, group-readable). Dev stack: set by scripts/dev-stack.mjs inside the sandbox.
+   */
+  keyFile?: string;
+  /** Mode of the key file (default 0600; sfo-01 uses 0o640 with a shared group). Env WORKERD_KEY_FILE_MODE (octal). */
+  keyFileMode?: number;
   port?: number;
   host?: string;
   only?: string[];
@@ -230,30 +240,53 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       children: () => supervisor.status(),
       send: (entries) => link!.sendFrame({ t: "report", entries }),
       enabled: () => inventoryOn,
+      // Key presence (masks only, never values) so the Pack's Keys grid can show it.
+      ...(opts.keyFile ? { keys: () => readKeyPresence(opts.keyFile!, opts.env ?? process.env) } : {}),
     });
     // The machine key is created on first start; the public half goes in every hello.
-    const machineKey = await loadOrCreateMachineKey(opts.configDir ?? workerdConfigDir());
+    const cfgDir = opts.configDir ?? workerdConfigDir();
+    // A corrupt or unreadable machine-key.pem is never regenerated (that would silently change the machine's identity): log it and
+    // run without a pubkey and without key.set / key.remove.
+    let machineKey: Awaited<ReturnType<typeof loadOrCreateMachineKey>> | undefined;
+    try {
+      machineKey = await loadOrCreateMachineKey(cfgDir);
+    } catch (e) {
+      log(`[workerd] machine key unusable (${(e as Error).message.split("\n")[0]}); key.set and key.remove are off and no public key is sent. Fix or remove machine-key.pem by hand.`);
+    }
+    const wolfControl: WolfControl = {
+      names: () => supervisor.configs().map((c) => c.identity.name),
+      status: async (n) => ({ wasActive: supervisor.status().some((s) => s.name === n && s.state === "online"), midReply: await supervisor.wolfBusy(n) }),
+      restart: async (n) => ((await supervisor.restartWolf(n)).unconfirmed ? { unconfirmed: true } : undefined),
+    };
+    // An explicit keys handler wins; otherwise an explicit keyFile gets the file store. Neither = key.set/remove are not advertised.
+    const keys: KeyHandler | undefined =
+      opts.keys ??
+      (opts.keyFile && machineKey
+        ? createKeyStore({
+            file: opts.keyFile,
+            seenFile: join(cfgDir, "key-seen.json"),
+            privateKeyPkcs8: machineKey.privateKeyPkcs8,
+            checker: new KeyChecker({ fetch: globalThis.fetch as unknown as FetchLike }),
+            mode: opts.keyFileMode,
+            // Only the Anthropic key feeds the wolves; Deepgram feeds the console, which reads the file itself.
+            restartWolvesUsing: async (slot) => (slot === "anthropic" && !linkOnly ? ((await restartWolves(wolfControl)).data.restarted) : []),
+          })
+        : undefined);
     const commands = createCommandRunner({
       log,
       // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
       logSources: () => Object.fromEntries(supervisor.status().map((c) => [c.name, { file: c.logFile }])),
-      ...(opts.keys ? { keys: opts.keys, hostId: hubCfg.hostId } : {}),
+      ...(keys ? { keys, hostId: hubCfg.hostId } : {}),
       ...(canRestartSelf() ? { restartSelf: { stop: () => shutdown(), exit: (code: number) => process.exit(code) } } : {}),
       // Link-only supervises no wolves (they run from their own units), so there is nothing to restart: wolves.restart is not advertised.
       ...(linkOnly
         ? {}
-        : {
-            wolves: {
-              names: () => supervisor.configs().map((c) => c.identity.name),
-              status: async (n) => ({ wasActive: supervisor.status().some((s) => s.name === n && s.state === "online"), midReply: await supervisor.wolfBusy(n) }),
-              restart: async (n) => ((await supervisor.restartWolf(n)).unconfirmed ? { unconfirmed: true } : undefined),
-            },
-          }),
+        : { wolves: wolfControl }),
     });
     link = new HubLink({
       ...hubCfg,
       commands: () => commands.supported(),
-      pubkey: () => machineKey.publicKey,
+      pubkey: () => machineKey?.publicKey,
       onCommand: (c) => commands.handle(c),
       onCommandSent: (c, r) => commands.afterSend(c, r),
       kbRevisions: () => kbSync!.revisions(),

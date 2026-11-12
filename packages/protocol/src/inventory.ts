@@ -22,6 +22,19 @@ export const InventoryEntrySchema = z.object({
   lagMs: z.number().nonnegative().optional(),
   /** Measured round trip of a /healthz probe, ms (only where someone probes: workerd -> wolfd). */
   responseMs: z.number().nonnegative().optional(),
+  /** Key presence per slot (workerd entries only, work-wolfpack-6EmU8pu). Never the value: only a mask. */
+  keys: z
+    .array(
+      z.object({
+        slot: z.string().min(1).max(64),
+        present: z.boolean(),
+        masked: z.string().max(32).optional(),
+        source: z.enum(["pack", "env"]).optional(),
+        shadowsEnv: z.boolean().optional(),
+      }),
+    )
+    .max(16)
+    .optional(),
 });
 export type InventoryEntry = z.infer<typeof InventoryEntrySchema>;
 

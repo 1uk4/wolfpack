@@ -355,7 +355,12 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
         if (msg?.stopReason === "aborted") s.hint = "aborted";
         else if (msg?.stopReason === "error") {
           s.hint = "error";
-          out.push({ type: "error", turnId: s.turnId, message: msg.errorMessage ?? "model error" });
+          // pi-ai's own text when no key is set (either phrasing, maybe wrapped). The desktop app (WOLFPACK_SINGLE_MAC=1) lets setup finish without one, so it names the exact place.
+          const noKey = /(Provider is not configured|No API key for provider): anthropic/.test(msg.errorMessage ?? "");
+          const noKeyText = process.env.WOLFPACK_SINGLE_MAC === "1"
+            ? "No API key yet. Add one in Settings → Data and support, then send again."
+            : "No Anthropic API key is set for this wolf. Add one in Settings, then send again.";
+          out.push({ type: "error", turnId: s.turnId, message: noKey ? noKeyText : (msg.errorMessage ?? "model error") });
         }
         return;
       }

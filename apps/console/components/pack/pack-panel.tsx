@@ -13,7 +13,6 @@ import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { usePackHealth } from "@/components/pack/pack-health";
 import { PACK_SECTION_BODIES } from "@/components/pack/pack-section-bodies";
 import { closePackHealth, openPackHealth, requestedPackSection } from "@/components/pack/pack-health-store";
-import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { cn } from "@/lib/utils";
 import { PACK_SECTIONS, packEntrySummary, sectionBadges, type PackBadge, type PackSectionId, type Tone } from "@/src/core";
 
@@ -53,32 +52,9 @@ export function PackSettingsEntry({ onOpen }: { onOpen?: () => void }) {
 	);
 }
 
-/**
- * Old settings: open the Settings dialog only after the Pack has unmounted (next frame). Opened in the same tick, the Pack's
- * unmount dropped focus to BODY after the dialog had taken it. Then focus the dialog's first control, and when the dialog goes
- * away (Esc, close) put focus back on the sidebar Settings entry.
- */
-function openSettingsAfterPack(open: () => void): void {
-	requestAnimationFrame(() => {
-		open();
-		requestAnimationFrame(() => {
-			const backdrop = document.querySelector<HTMLElement>('[data-testid="settings-backdrop"]');
-			if (!backdrop) return;
-			if (!backdrop.contains(document.activeElement)) backdrop.querySelector<HTMLElement>('[role="dialog"] button, [role="dialog"] a[href], [role="dialog"] input, [role="dialog"] select, [role="dialog"] textarea')?.focus();
-			const watch = new MutationObserver(() => {
-				if (backdrop.isConnected) return;
-				watch.disconnect();
-				Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-entry"]')).find((el) => el.getClientRects().length > 0)?.focus();
-			});
-			watch.observe(document.body, { childList: true, subtree: true });
-		});
-	});
-}
-
 export function PackPanel() {
 	const [section, setSection] = useState<PackSectionId>(requestedPackSection);
 	const h = usePackHealth();
-	const settings = useSettingsDialog();
 	const badges = sectionBadges({ snapshot: h.snapshot, reachable: h.reachable, now: h.now });
 	// Sections that fetch their own badge data: PACK_SECTIONS is a constant list, so the hooks run in a fixed order.
 	for (const s of PACK_SECTIONS) {
@@ -133,19 +109,6 @@ export function PackPanel() {
 						{main.map((s) => item(s.id, s.label))}
 						{item(thisDevice.id, thisDevice.label, true)}
 					</nav>
-					<div className="mt-auto flex flex-col gap-1 pt-3 max-md:mt-0 max-md:flex-row max-md:pt-0">
-						<button
-							type="button"
-							data-testid="pack-open-old-settings"
-							onClick={() => {
-								closePackHealth();
-								openSettingsAfterPack(settings.open);
-							}}
-							className="rounded-sm px-3 py-1.5 text-left text-[11px] text-muted-foreground/70 underline-offset-2 hover:underline max-md:flex max-md:min-h-11 max-md:shrink-0 max-md:items-center max-md:whitespace-nowrap max-md:py-2"
-						>
-							Old settings
-						</button>
-					</div>
 				</div>
 				<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pb-6">
 					<Body />

@@ -73,10 +73,6 @@ export const DEFAULT_THINKING_ORDER = [
 	"max",
 ] as const satisfies readonly ThinkingLevel[];
 
-/** The refusal wording's invariant tail — the matcher below keys on it
- * (the label prefix varies by provider). */
-const PROVIDER_KEY_MISSING_TAIL = "key is set — add one in Settings → Keys";
-
 /** One slot's stored state. BYOK (owner, 2026-09-22): the WRITE side
  *  requires model (a level alone can never run — no factory floor); the
  *  sanitizer keeps whatever is on disk, but RESOLUTION treats a slot

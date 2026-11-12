@@ -12,7 +12,7 @@ import { bindingForAction, formatBinding, type KeyAction } from "@/src/core"
  * as too much air.
  *
  * The binding is override-aware: pass `action` for registry shortcuts (a
- * user rebind in Settings → Keyboard changes the suffix live), or
+ * user rebind in Pack → This device → Keyboard changes the suffix live), or
  * `binding` for surface-owned keys with no registry entry ("escape" for a
  * dialog close, "enter" for a form submit).
  *

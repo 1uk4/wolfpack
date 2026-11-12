@@ -1239,7 +1239,7 @@ describe("agent slots through `wolfpack preview slot`", () => {
 			for (const o of [{ fileToken: null }, { mintStatus: 403 }]) {
 				const r = await pair(["3231", "--print-url"], o);
 				expect({ code: r.code, out: r.out, opened: r.opened }).toEqual({ code: 1, out: [], opened: [] });
-				expect(r.err.join("\n")).toMatch(/Settings.*add device/);
+				expect(r.err.join("\n")).toMatch(/Pack → Devices → add device/);
 				expect(r.err.join("\n")).toContain("wolfpack preview token");
 				expect(r.err.join("\n")).not.toContain("FILE-TOKEN-0123456789");
 			}
@@ -1257,7 +1257,7 @@ describe("agent slots through `wolfpack preview slot`", () => {
 		const none = await get("wt-a");
 		// Key parts only, not the whole wording: the console route, the hubd pair command for a browser token, and the command to run here.
 		for (const text of [none.err, JSON.parse(none.out[0]).tokenSetup.join("\n")]) {
-			expect(text).toMatch(/Settings.*add device/);
+			expect(text).toMatch(/Pack → Devices → add device/);
 			expect(text).toMatch(/hubd pair --kind browser --label "preview [^"]+"/);
 			expect(text).not.toContain("--kind console");
 			expect(text).toContain("wolfpack preview token");

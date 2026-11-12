@@ -461,7 +461,7 @@ export default function createMemoryExtension(
     if (!warnedNoKey) {
       warnedNoKey = true;
       console.warn(process.env.WOLFPACK_SINGLE_MAC === "1"
-        ? "[memory] No Anthropic API key: not observing until one is added (Settings → Data and support)"
+        ? "[memory] No Anthropic API key: not observing until one is added (Pack → Keys)"
         : "[memory] No Anthropic API key: not observing until one is added.");
     }
     return true;

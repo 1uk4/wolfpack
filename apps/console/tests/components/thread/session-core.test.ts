@@ -723,6 +723,70 @@ describe("resumeStream (the reattach path)", () => {
 		assert.equal(m.getState().messages.at(-1)!.parts.at(-1)!.text, "hi");
 	});
 
+	it("a stream that breaks mid-body reconnects with Last-Event-ID, never doubles, and never shows an error", async () => {
+		const frame = (id: number, e: unknown) => `id: ${id}\ndata: ${JSON.stringify(e)}\n\n`;
+		const streamHeaders: Array<string | undefined> = [];
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url === "/api/wolves/w/threads/chat_x") return Response.json({ messages: [] });
+			if (url === "/api/wolves/w/threads/chat_x/stream") {
+				streamHeaders.push((init?.headers as Record<string, string> | undefined)?.["Last-Event-ID"]);
+				if (streamHeaders.length === 1) {
+					const enc = new TextEncoder();
+					let sent = false;
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							pull(c) {
+								// Frames first, then the break on the NEXT read (error() in the same tick would drop the queue).
+								if (sent) return c.error(new TypeError("Failed to fetch"));
+								sent = true;
+								c.enqueue(enc.encode(frame(1, { type: "message_start", message: { role: "assistant", content: [] } }) + frame(2, partial([{ type: "text", text: "hi" }]))));
+							},
+						}),
+					);
+				}
+				return new Response(
+					frame(3, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }], stopReason: "stop" } }) +
+						"data: [DONE]\n\n",
+				);
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch;
+		const statuses: string[] = [];
+		const m: SessionModel = model({ streamBackoffMs: 0, onChange: () => statuses.push(m.getState().status) });
+		await m.resumeStream(false);
+		assert.deepEqual(streamHeaders, [undefined, "2"]);
+		const state = m.getState();
+		assert.equal(state.error, null);
+		assert.ok(!statuses.includes("error"));
+		assert.equal(state.status, "ready");
+		assert.equal(state.messages.length, 1);
+		assert.equal(state.messages[0]!.parts.filter((p) => p.type === "text").length, 1);
+	});
+
+	it("gives up with the error after repeated failed reconnects that deliver no frame", async () => {
+		let streamCalls = 0;
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === "/api/wolves/w/threads/chat_x/stream") {
+				streamCalls++;
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(c) {
+							c.error(new TypeError("Failed to fetch"));
+						},
+					}),
+				);
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch;
+		const m = model({ streamBackoffMs: 0 });
+		await m.resumeStream(false);
+		assert.equal(m.getState().status, "error");
+		assert.match(m.getState().error!.message, /Failed to fetch/);
+		assert.equal(streamCalls, 6, "the first attach plus five retries");
+	});
+
 	it("an unhappy endpoint surfaces the error banner", async () => {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);

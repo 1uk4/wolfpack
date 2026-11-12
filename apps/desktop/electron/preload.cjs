@@ -58,4 +58,15 @@ const api = {
 	},
 };
 
+// The setup wizard window only (main.cjs passes --wolfpack-setup); the console never sees it.
+if (process.argv.includes("--wolfpack-setup")) {
+	api.setup = {
+		info: () => ipcRenderer.invoke("wolfpack:setup:info"),
+		suggestedName: () => ipcRenderer.invoke("wolfpack:setup:name"),
+		checkKey: (key) => ipcRenderer.invoke("wolfpack:setup:check-key", key),
+		openExternal: (url) => ipcRenderer.invoke("wolfpack:setup:open-external", url),
+		finish: (answers) => ipcRenderer.invoke("wolfpack:setup:finish", answers),
+	};
+}
+
 contextBridge.exposeInMainWorld("wolfpack", api);

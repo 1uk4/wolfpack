@@ -56,3 +56,8 @@ Both need Xcode 26+ (`actool` compiles `build/icon.icon`). `scripts/dist.mjs` se
    - `codesign --verify --deep --strict --verbose=2 "/Applications/Wolfpack Console.app"`
    - `spctl --assess --type execute --verbose "/Applications/Wolfpack Console.app"` (expect `accepted`, source `Notarized Developer ID`)
    - `xcrun stapler validate "/Applications/Wolfpack Console.app"`
+
+## Upgrades and existing wolves
+
+- There is no upgrade path from a pre-wizard build: the app has never been released, so nobody has one. Later layout changes go through the migrations in work-wolfpack-u6Z4dRY.
+- Reusing an existing `~/Wolves/<id>` keeps its old domains.

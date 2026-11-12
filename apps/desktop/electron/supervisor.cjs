@@ -47,11 +47,11 @@ function modelsJson() {
 }
 
 /** Default wolf: memory, KB and work items on, no browser tool. */
-function wolfYaml(name, dir) {
+function wolfYaml(name, dir, domains) {
 	return [
 		`id: ${name}`,
 		`name: ${name}`,
-		"domains: [personal]",
+		`domains: [${domains.map((d) => d.name).join(", ")}]`,
 		`workspace: ${path.join(dir, "workspace")}`,
 		"extensions: [memory]",
 		"memory:",
@@ -104,6 +104,8 @@ const alive = (pid) => {
 
 function createSupervisor(opts) {
 	const { stateDir, wolvesDir, runtimeDir, nodeBin, wolfName = "wolf" } = opts;
+	// The wizard's domains ({ name, description }); `personal` alone when none are given.
+	const domains = opts.domains?.length ? opts.domains : [{ name: "personal", description: "" }];
 	const log = opts.log ?? (() => {});
 	// Allowlist, not process.env: nothing from the owner's shell (proxy, ANTHROPIC_*, tokens) reaches a child.
 	const base = (extra) => ({
@@ -153,12 +155,16 @@ function createSupervisor(opts) {
 		fs.chmodSync(stateDir, 0o700);
 		fs.chmodSync(wolfDir, 0o700);
 		writeIfMissing(path.join(wolfDir, "models.json"), JSON.stringify(modelsJson(), null, 2));
-		writeIfMissing(path.join(wolfDir, "wolf.yaml"), wolfYaml(wolfName, wolfDir));
+		writeIfMissing(path.join(wolfDir, "wolf.yaml"), wolfYaml(wolfName, wolfDir, domains));
+		// hubd's one-time registry seed (read only while the hub has no registry yet): the domains, plus the wolf.yaml above.
+		const seedDir = path.join(stateDir, "seed");
+		fs.mkdirSync(seedDir, { recursive: true });
+		// JSON strings are valid YAML scalars, so a description needs no escaping of its own.
+		const domainLines = domains.flatMap((d) => (d.description ? [`  ${d.name}:`, `    description: ${JSON.stringify(d.description)}`] : [`  ${d.name}: {}`]));
+		fs.writeFileSync(path.join(seedDir, "domains.yaml"), ["domains:", ...domainLines, ""].join("\n"));
 		const ext = path.join(wolfDir, "den", "extensions", "wolfpack-memory");
 		fs.mkdirSync(ext, { recursive: true });
 		fs.copyFileSync(path.join(runtimeDir, "extensions", "wolfpack-memory", "index.js"), path.join(ext, "index.js"));
-		// One-time registry seed for the app's hubd (ignored once its registry exists): the wolf and its domain.
-		writeIfMissing(path.join(stateDir, "seed", "domains.yaml"), "domains:\n  personal:\n    label: Personal\n");
 		const keyFile = path.join(stateDir, KEY_FILE);
 		if (opts.apiKey) {
 			try {

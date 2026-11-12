@@ -34,6 +34,7 @@ const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 const { createSupervisor } = require("./supervisor.cjs");
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
+const { needsSetup, readSetup, readWolfId, storedKey, checkKey, runSetup, wolfIdFor } = require("./setup.cjs");
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, createTray } = require("./tray.cjs");
 
@@ -89,21 +90,154 @@ let appRuntime = false; // true once the app runs its own services (menu-bar app
 let tray = null;
 let systemShutdown = false; // set by powerMonitor "shutdown": before-quit must not hold the quit
 
-/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). First-run API key: WOLFPACK_APP_API_KEY (the wizard replaces this). */
+let chatWolf = "wolf"; // the wolf whose chat the window opens on (chosen in the setup wizard)
+let wizardWindow = null; // the first-run setup window, closed once the main window is up
+let wizardFinishing = false; // finish has started: closing the wizard window must not quit the app (set until the chat window exists)
+
+/** Build-time switch for the subscription sign-in option (ships off; its flow is work-wolfpack-66JSDus). */
+const SUBSCRIPTION_SIGNIN = process.env.WOLFPACK_APP_SUBSCRIPTION === "1";
+
+/** Suggested wolf name: the macOS user's first name + "'s wolf". */
+function suggestedWolfName() {
+	let first = "";
+	try {
+		first = String(require("node:child_process").execFileSync("id", ["-F"], { encoding: "utf8" })).trim().split(/\s+/)[0];
+	} catch {
+		/* fall back to the login name */
+	}
+	if (!first) first = require("node:os").userInfo().username;
+	first = first.replace(/[^\p{L}\p{N}]/gu, "");
+	return wolfIdFor(first) ? `${first.charAt(0).toUpperCase()}${first.slice(1)}'s wolf` : "My wolf";
+}
+
+/**
+ * First launch (or a relaunch after an unfinished setup): show the setup wizard, prefilled with what was stored; resolve to the running
+ * supervisor once the user finishes. No runtime service (hubd, workerd, wolfd) starts before the wizard finishes; only the console page host does. Once finish has begun, closing the window is fine: the chat
+ * window opens when the runtime is ready (and a failure after that shows the start-error dialog).
+ */
+function runWizard(opts) {
+	return new Promise((resolve, reject) => {
+		const envKey = process.env.WOLFPACK_APP_API_KEY || ""; // dev/test override: skips the sign-in step
+		const win = new BrowserWindow({
+			width: 560,
+			height: 680,
+			title: PRODUCT_NAME,
+			backgroundColor: "#0f141a",
+			...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" } : {}),
+			webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, "preload.cjs"), additionalArguments: ["--wolfpack-setup"] },
+		});
+		wizardWindow = win;
+		const wc = win.webContents;
+		wc.on("will-navigate", (e) => e.preventDefault()); // the wizard page never goes anywhere else
+		wc.setWindowOpenHandler(() => ({ action: "deny" }));
+		let finishing = false;
+		const ch = ["info", "name", "check-key", "open-external", "finish"].map((c) => `wolfpack:setup:${c}`);
+		const cleanup = () => ch.forEach((c) => ipcMain.removeHandler(c));
+		// Only the wizard window's own top frame, showing our setup page from disk, may call these.
+		const fromWizard = (e) => {
+			if (e.sender !== wc || e.senderFrame !== wc.mainFrame) return false;
+			try {
+				const u = new URL(e.senderFrame.url);
+				return u.protocol === "file:" && u.pathname.endsWith("/setup/index.html");
+			} catch {
+				return false;
+			}
+		};
+		ipcMain.handle("wolfpack:setup:info", (e) => {
+			if (!fromWizard(e)) return null;
+			const stored = readSetup(opts.stateDir);
+			// The key never reaches the page: only whether one is saved.
+			return {
+				subscription: SUBSCRIPTION_SIGNIN,
+				keyEnv: !!envKey,
+				keySaved: !!storedKey(opts.stateDir),
+				prefill: stored ? { wolfName: stored.wolfName, domains: stored.domains } : null,
+			};
+		});
+		ipcMain.handle("wolfpack:setup:name", (e) => (fromWizard(e) ? suggestedWolfName() : ""));
+		ipcMain.handle("wolfpack:setup:check-key", (e, key) => (fromWizard(e) ? checkKey(String(key ?? ""), { baseUrl: opts.modelBaseUrl }) : { ok: false, error: "Not allowed" }));
+		ipcMain.handle("wolfpack:setup:open-external", (e, url) => {
+			if (fromWizard(e) && url === "https://console.anthropic.com/settings/keys") void shell.openExternal(url);
+		});
+		ipcMain.handle("wolfpack:setup:finish", async (e, answers) => {
+			if (!fromWizard(e) || finishing) return { ok: false, error: "Setup is already running." };
+			finishing = true;
+			wizardFinishing = true;
+			const fail = (message) => {
+				finishing = false;
+				wizardFinishing = false;
+				return { ok: false, error: message };
+			};
+			try {
+				// A typed key was checked at the sign-in step; the dev override and a saved key are checked here.
+				const typed = String(answers?.apiKey ?? "").trim();
+				const key = envKey || typed || storedKey(opts.stateDir);
+				if (!typed) {
+					const r = await checkKey(key, { baseUrl: opts.modelBaseUrl });
+					if (!r.ok) return fail(r.error);
+				}
+				const sup = await runSetup({ ...answers, apiKey: key }, { ...opts, onCreate: (s) => (supervisor = s) });
+				chatWolf = readWolfId(opts.stateDir);
+				cleanup();
+				resolve(sup);
+				return { ok: true };
+			} catch (err) {
+				const failed = supervisor;
+				supervisor = null;
+				if (err?.stopped) {
+					// Quit while starting: normal, quiet. startRuntime sees the same rejection.
+					cleanup();
+					reject(err);
+					return { ok: false, error: "Cancelled." };
+				}
+				log(`setup failed: ${err?.stack ?? err}`);
+				const message = String(err?.message ?? err).split("\n")[0];
+				if (win.isDestroyed()) {
+					// The user closed the wizard while it was starting: nobody to show the error to, so the start-error dialog does.
+					await failed?.stop?.().catch(() => {}); // runSetup already stopped it; make sure
+					cleanup();
+					reject(new Error(message));
+					return { ok: false, error: message };
+				}
+				return fail(message);
+			}
+		});
+		win.on("closed", () => {
+			if (wizardWindow === win) wizardWindow = null;
+			if (finishing) return; // the chat window opens when the runtime is ready
+			cleanup();
+			reject(Object.assign(new Error("setup closed"), { stopped: true }));
+			app.quit(); // closing the wizard before finishing quits: nothing was started
+		});
+		void win.loadFile(path.join(__dirname, "setup", "index.html"));
+	});
+}
+
+/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
 async function startRuntime() {
 	// A dev run from the repo must not touch the owner's real folders: on a case-insensitive Mac the packaged default ~/Wolves IS the live ~/wolves.
 	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
 		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
 	}
 	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
-	supervisor = createSupervisor({
-		stateDir: process.env.WOLFPACK_APP_HOME || app.getPath("userData"),
+	const stateDir = process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+	const opts = {
+		stateDir,
 		wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
 		runtimeDir,
 		nodeBin: process.execPath,
-		apiKey: process.env.WOLFPACK_APP_API_KEY || undefined,
+		// Same override the harness honours (https or loopback http only); tests point it at a fake server.
+		modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined,
 		log: (l) => log(`runtime: ${l}`),
-	});
+	};
+	if (needsSetup(stateDir)) {
+		await runWizard(opts); // sets `supervisor` and chatWolf; the runtime is already up when this returns
+		log(`runtime up: workerd ${supervisor.urls.workerd} hubd ${supervisor.urls.hubd}`);
+		startCurationGate(supervisor);
+		return;
+	}
+	chatWolf = readWolfId(stateDir);
+	supervisor = createSupervisor({ ...opts, wolfName: chatWolf, domains: readSetup(stateDir)?.domains });
 	await supervisor.start();
 	log(`runtime up: workerd ${supervisor.urls.workerd} hubd ${supervisor.urls.hubd}`);
 	startCurationGate(supervisor);
@@ -270,7 +404,7 @@ function killServer() {
  *    external links go to the real browser via shell.openExternal. */
 let remoteUrl = ""; // remote console URL (remote mode)
 let remoteTarget = false; // set in main(); remote mode adds the unreachable page
-function createWindow(url) {
+function createWindow(url, landing = url) {
 	const win = new BrowserWindow({
 		width: 1440,
 		height: 900,
@@ -356,7 +490,7 @@ function createWindow(url) {
 
 	// Menu-bar app: a visible window brings the Dock icon back (it is hidden while no window is open).
 	if (appRuntime && process.platform === "darwin") void app.dock?.show();
-	void win.loadURL(url);
+	void win.loadURL(landing);
 	if (remoteTarget) {
 		// Remote unreachable (Tailscale off…): swap the blank window for a local
 		// static page. did-fail-load fires for the main frame only when errorCode
@@ -594,6 +728,7 @@ function installMenu() {
 async function main() {
 	app.on("window-all-closed", () => {
 		// App runtime: closing the window never quits; the wolves keep running and the menu-bar item stays. The Dock icon goes.
+		if (wizardFinishing) return; // the setup wizard closed while the wolf starts: the chat window is about to open
 		const action = windowAllClosedAction({ appRuntime, platform: process.platform });
 		if (action === "hide") {
 			if (process.platform === "darwin") app.dock?.hide();
@@ -670,6 +805,8 @@ async function main() {
 		log(`dev mode: ${devUrl}`);
 	}
 
+	// App runtime: open on the chosen wolf's chat; every other mode opens the root exactly as before.
+	const landingUrl = appRuntime ? `${url}/wolf/${encodeURIComponent(chatWolf)}/thread/home` : url;
 	installMenu();
 
 	// Auto-update (Wave C): wire the updater before the window so the
@@ -698,7 +835,7 @@ async function main() {
 		if (width < target) win.setBounds({ x, y, width: target, height });
 	});
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
+		if (BrowserWindow.getAllWindows().length === 0) createWindow(url, landingUrl);
 	});
 	if (appRuntime && supervisor) {
 		const sup = supervisor;
@@ -707,7 +844,7 @@ async function main() {
 			getStatus: () => (supervisor ? supervisor.status() : { running: false }),
 			openWindow: () => {
 				const w = BrowserWindow.getAllWindows()[0];
-				if (!w) return createWindow(url);
+				if (!w) return createWindow(url, landingUrl);
 				if (w.isMinimized()) w.restore();
 				w.show();
 				w.focus();
@@ -722,8 +859,15 @@ async function main() {
 		if (process.platform === "darwin") app.dock?.hide();
 		log("started at login: no window");
 	} else {
-		createWindow(url);
-		log(`window open: ${url}`);
+		createWindow(url, landingUrl);
+		log(`window open: ${landingUrl}`);
+	}
+	wizardFinishing = false;
+	// The setup wizard goes only after the chat window exists, so the last window never closes in between.
+	if (wizardWindow) {
+		const w = wizardWindow;
+		wizardWindow = null;
+		w.close();
 	}
 	// First update check AFTER the window exists (the downloaded-banner
 	// push needs a listener); dev builds no-op (no autoUpdater).

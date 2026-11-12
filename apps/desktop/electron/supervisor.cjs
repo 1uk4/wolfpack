@@ -10,10 +10,10 @@
  * No Electron imports: the module is driven from a plain Node test. `runtimeDir` holds the bundles from
  * scripts/build-runtime.mjs. Ports are free ports picked at start (listen on 0), so the owner's dev stack
  * (7141, 3142, 3150, 3210, 3230) is never in the way. Children get an allowlisted env (no HTTPS_PROXY, no ANTHROPIC_*, no
- * GITHUB_TOKEN from the owner's shell); the API key goes only to workerd (and so to its wolfd), never to argv, and is
+ * GITHUB_TOKEN from the owner's shell); the API key goes only to workerd (and so to its wolfd) and hubd (its curator calls Haiku), never to argv, and is
  * redacted from any child output we log. The bundles exit by themselves when this process dies (WOLFPACK_EXIT_WITH_PARENT).
  */
-const { spawn, execFileSync } = require("node:child_process");
+const { spawn, spawnSync, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -25,6 +25,9 @@ const SONNET = "claude-sonnet-5-5";
 const HAIKU = "claude-haiku-5-5";
 
 const TAIL_LINES = 20;
+const HUB_TOKEN_FILE = "hub-token.json"; // { token }, mode 0600: the wolf's loopback token for this app's own hubd
+const DEFAULT_WINDOW_MAX = 5; // curator ticks (one contribution each) per curation window
+const WINDOW_TIMEOUT_MS = 20 * 60_000;
 
 const freePort = () =>
 	new Promise((resolve, reject) => {
@@ -116,13 +119,13 @@ function createSupervisor(opts) {
 		WOLFPACK_WOLVES_ROOT: path.join(stateDir, "wolves-root"),
 		WOLFPACK_WOLVES_DIR: wolvesDir,
 		WOLFPACK_KB_OPS: path.join(stateDir, "kb", "ops"),
+		...(opts.extraEnv ?? {}), // test seam: e.g. WOLFPACK_EMBED_URL at a dead port to prove nothing calls Ollama
 		...extra,
 	});
 	const children = new Map();
 	let stopping = false; // set by stop(), cleared by the next start(): a quit during start must not respawn anything
 	const stoppedError = () => Object.assign(new Error("supervisor stopped"), { stopped: true });
 	let secret = "";
-	const redact = (s) => (secret ? s.split(secret).join("[redacted]") : s);
 	const listeners = new Set();
 	let wolfUp = false; // cached: the default wolf is online (set after bring-up, refreshed by a slow poll)
 	let lastRunning = false;
@@ -132,6 +135,16 @@ function createSupervisor(opts) {
 		lastRunning = r;
 		for (const cb of listeners) try { cb(r); } catch { /* a listener must not break the supervisor */ }
 	};
+	let curatorOn = false;
+	let embedEnv = {};
+	let windowRunning = false;
+	let hubToken = "";
+	const curateWaiters = new Set(); // done() of each pending curate(): stop() and hubd's exit resolve them
+	const endCurate = (why) => {
+		for (const f of [...curateWaiters]) f({ skipped: why });
+		windowRunning = false;
+	};
+	const redact = (s) => [secret, hubToken].reduce((t, v) => (v ? t.split(v).join("[redacted]") : t), s);
 	const sup = { urls: {}, ports: {}, wolfDir: path.join(wolvesDir, wolfName), pids: () => [...children.values()].map((c) => c.pid) };
 
 	function setup() {
@@ -144,6 +157,8 @@ function createSupervisor(opts) {
 		const ext = path.join(wolfDir, "den", "extensions", "wolfpack-memory");
 		fs.mkdirSync(ext, { recursive: true });
 		fs.copyFileSync(path.join(runtimeDir, "extensions", "wolfpack-memory", "index.js"), path.join(ext, "index.js"));
+		// One-time registry seed for the app's hubd (ignored once its registry exists): the wolf and its domain.
+		writeIfMissing(path.join(stateDir, "seed", "domains.yaml"), "domains:\n  personal:\n    label: Personal\n");
 		const keyFile = path.join(stateDir, KEY_FILE);
 		if (opts.apiKey) {
 			try {
@@ -169,7 +184,7 @@ function createSupervisor(opts) {
 	function launch(name, entry, args, env, cwd) {
 		if (stopping) throw stoppedError();
 		const child = spawn(nodeBin, [path.join(runtimeDir, entry), ...args], { env, cwd, stdio: ["ignore", "pipe", "pipe"] });
-		const rec = { name, pid: child.pid, kill: (s) => child.kill(s), tail: [], exited: false, pending: "" };
+		const rec = { name, pid: child.pid, kill: (s) => child.kill(s), tail: [], exited: false, pending: "", lineWaiters: new Set() };
 		children.set(name, rec);
 		const onData = (b) => {
 			for (const raw of String(b).split("\n")) {
@@ -178,6 +193,7 @@ function createSupervisor(opts) {
 				rec.tail.push(l);
 				if (rec.tail.length > TAIL_LINES) rec.tail.shift();
 				log(`${name}: ${l}`);
+				for (const w of rec.lineWaiters) w(l);
 			}
 		};
 		child.stdout.on("data", onData);
@@ -187,6 +203,7 @@ function createSupervisor(opts) {
 			log(`${name} exited (code=${code} signal=${sig})`);
 			children.delete(name);
 			if (name === "workerd") wolfUp = false;
+			if (name === "hubd") endCurate("hubd stopped");
 			changed();
 		});
 		return rec;
@@ -215,6 +232,37 @@ function createSupervisor(opts) {
 	}
 	const healthy = (url) => async () => (await fetch(`${url}/healthz`)).ok;
 
+	/** A single-use pairing code for a console token, from the hubd CLI (file based: hubd is not up yet). Null when a token is already stored. */
+	function mintHubToken(hubDir) {
+		const file = path.join(stateDir, HUB_TOKEN_FILE);
+		if (fs.existsSync(file)) {
+			try {
+				if (typeof JSON.parse(fs.readFileSync(file, "utf8")).token === "string") return null;
+			} catch {}
+			// Unreadable (corrupt, empty, no token): set it aside, never delete it, and mint a fresh one.
+			fs.renameSync(file, `${file}.bad-${Date.now()}`);
+			log(`${HUB_TOKEN_FILE} was unreadable: set aside, minting a new token`);
+		}
+		const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "console", "--label", "wolf", "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
+		const m = /pairing code: (\S+)/.exec(`${r.stdout}`);
+		if (!m) throw new Error(`could not mint the wolf's hub token: ${String(r.stderr || r.stdout).split("\n")[0]}`);
+		return m[1];
+	}
+
+	/** Trade the code for the token (once) and keep it in a 0600 file; later starts read it back. */
+	async function redeemHubToken(hubUrl, code) {
+		const file = path.join(stateDir, HUB_TOKEN_FILE);
+		if (!code) return JSON.parse(fs.readFileSync(file, "utf8")).token;
+		const res = await fetch(`${hubUrl}/v1/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, label: "wolf" }) });
+		if (!res.ok) throw new Error(`hubd refused the wolf's pairing code (${res.status})`);
+		const { token } = await res.json();
+		const tmp = `${file}.tmp-${process.pid}`;
+		fs.writeFileSync(tmp, JSON.stringify({ token }), { mode: 0o600 });
+		fs.chmodSync(tmp, 0o600);
+		fs.renameSync(tmp, file);
+		return token;
+	}
+
 	async function bringUp(keyFile) {
 		const creds = readCredentials(keyFile);
 		secret = creds.ANTHROPIC_API_KEY ?? "";
@@ -222,9 +270,34 @@ function createSupervisor(opts) {
 		const workerdPort = await freePort();
 		sup.ports = { hubd: hubPort, workerd: workerdPort };
 		sup.urls = { hubd: `http://127.0.0.1:${hubPort}`, workerd: `http://127.0.0.1:${workerdPort}` };
-		// hubd: the app's own hub. Curator OFF for this slice (ticket F16FFQL owns the gate).
-		const hub = launch("hubd", "hubd.mjs", ["serve", "--data-dir", path.join(stateDir, "hub"), "--port", String(hubPort), "--host", "127.0.0.1"], base({ HUBD_CURATOR: "0" }));
+		// hubd: the app's own hub. Its curator timer is OFF (HUBD_CURATOR_POLL_MS=0): the gate in main.cjs decides when, and
+		// sup.curate() sends SIGUSR2 for one bounded window. Needs the local embedding model, else curation is off (logged).
+		const modelDir = opts.embedModelDir || process.env.WOLFPACK_APP_EMBED_MODEL_DIR || "";
+		curatorOn = !!modelDir && fs.existsSync(path.join(modelDir, "model.onnx"));
+		if (!curatorOn) log(modelDir ? `KB curation is off: no model.onnx in ${modelDir}` : "KB curation is off: no embedding model dir (WOLFPACK_APP_EMBED_MODEL_DIR)");
+		// Half the cores for the embedder, so the laptop stays responsive.
+		embedEnv = curatorOn ? { WOLFPACK_EMBED_PROVIDER: "onnx", WOLFPACK_EMBED_MODEL_DIR: modelDir, WOLFPACK_EMBED_THREADS: String(opts.embedThreads ?? Math.max(1, Math.floor(os.cpus().length / 2))) } : {};
+		const hubDir = path.join(stateDir, "hub");
+		const pairCode = mintHubToken(hubDir);
+		const hub = launch(
+			"hubd",
+			"hubd.mjs",
+			["serve", "--data-dir", hubDir, "--port", String(hubPort), "--host", "127.0.0.1", "--seed-domains", path.join(stateDir, "seed", "domains.yaml"), "--seed-wolf", path.join(sup.wolfDir, "wolf.yaml")],
+			base({
+				HUBD_CURATOR: curatorOn ? "1" : "0",
+				HUBD_CURATOR_POLL_MS: "0",
+				HUBD_CURATOR_WINDOW_MAX: String(opts.curateWindowMax ?? DEFAULT_WINDOW_MAX),
+				HUBD_CURATOR_MODELS: path.join(sup.wolfDir, "models.json"),
+				...embedEnv,
+				// The curator calls the model provider (Haiku) with the user's key; proxy settings so a user behind one can reach it.
+				...(secret ? { ANTHROPIC_API_KEY: secret } : {}),
+				...proxyEnv(),
+				...(opts.modelBaseUrl ? { ANTHROPIC_BASE_URL: opts.modelBaseUrl } : {}),
+			}),
+		);
 		await until(healthy(sup.urls.hubd), "hubd", hub);
+		const wolfHubToken = await redeemHubToken(sup.urls.hubd, pairCode);
+		hubToken = wolfHubToken;
 		// workerd supervises wolfd through the shim. The wolfd env (incl. the key) is workerd's env.
 		// v1: the key stays in wolfd's env, so the wolf's shell tool can read it. It is the user's own key on their own Mac.
 		const shim = ensureShim(stateDir);
@@ -235,7 +308,12 @@ function createSupervisor(opts) {
 			KB_BASE: path.join(stateDir, "kb", "base"),
 			KB_OPS: path.join(stateDir, "kb", "ops"),
 			...(secret ? { ANTHROPIC_API_KEY: secret } : {}),
-			// Documented decision: proxy settings go to workerd (and so its wolfd) only, so a user behind a proxy can reach the model provider. hubd gets none.
+			// The wolf keeps its KB through the app's own hubd on loopback: it mirrors the KB from it and feeds its contributions to it.
+			WOLFPACK_HUB_KB: "1",
+			WOLFPACK_HUB_URL: sup.urls.hubd,
+			WOLFPACK_HUB_TOKEN: wolfHubToken,
+			...embedEnv,
+			// Proxy settings go to workerd (and so its wolfd) and to hubd (its curator calls the model provider), so a user behind a proxy can reach it.
 			...proxyEnv(),
 			...(opts.modelBaseUrl ? { WOLFPACK_ANTHROPIC_BASE_URL: opts.modelBaseUrl } : {}),
 		});
@@ -267,6 +345,7 @@ function createSupervisor(opts) {
 
 	sup.start = async () => {
 		stopping = false;
+		windowRunning = false;
 		const keyFile = setup();
 		for (let attempt = 1; ; attempt++) {
 			try {
@@ -289,6 +368,7 @@ function createSupervisor(opts) {
 		wolfUp = false;
 		if (poll) clearInterval(poll);
 		poll = null;
+		endCurate("hubd stopped");
 		changed();
 		await killAll(graceMs);
 	};
@@ -328,6 +408,35 @@ function createSupervisor(opts) {
 	}
 	/** True while hubd, workerd and the wolf are all up. Cheap: reads cached state only. */
 	sup.status = () => ({ running: !stopping && wolfUp && children.has("hubd") && children.has("workerd") });
+	/**
+	 * One bounded curation window in hubd (SIGUSR2; hubd runs up to HUBD_CURATOR_WINDOW_MAX ticks, one contribution each).
+	 * Resolves with hubd's "curator window done" line, or {skipped} with the reason. The caller (main.cjs) owns the gate.
+	 */
+	sup.curate = () =>
+		new Promise((resolve) => {
+			const hub = children.get("hubd");
+			if (!hub || stopping) return resolve({ skipped: "hubd is not running" });
+			if (!curatorOn) return resolve({ skipped: "no embedding model" });
+			if (windowRunning) return resolve({ skipped: "a window is already running" });
+			windowRunning = true;
+			const done = (v) => {
+				clearTimeout(timer);
+				hub.lineWaiters.delete(onLine);
+				curateWaiters.delete(done);
+				windowRunning = false;
+				resolve(v);
+			};
+			const onLine = (l) => {
+				// Accepted: a stale "window done" line arriving after a 20-minute timeout could resolve a later curate() early.
+				if (l.includes("curator window done")) done({ line: l.slice(l.indexOf("curator window done")) });
+				else if (l.includes("curator window skipped: busy")) done({ skipped: "busy" });
+			};
+			const timer = setTimeout(() => done({ skipped: "window timed out" }), opts.curateTimeoutMs ?? WINDOW_TIMEOUT_MS);
+			timer.unref();
+			curateWaiters.add(done);
+			hub.lineWaiters.add(onLine);
+			hub.kill("SIGUSR2");
+		});
 	sup.allPids = () => [...children.values()].map((c) => c.pid).concat(wolfdPids());
 	return sup;
 }

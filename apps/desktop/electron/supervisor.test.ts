@@ -6,7 +6,7 @@
  * The three tests share one run: start, chat, stop, start again (test 1); inspect it while up (test 2); stop it (test 3).
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -135,6 +135,7 @@ describe("app runtime on one Mac", () => {
     }
     expect(await chat).toContain("FAKE-REPLY-OK");
     await first.stop();
+    writeFileSync(join(root, "state", "hub-token.json"), "{ not json"); // a torn write: the next start must set it aside and mint a fresh one
 
     second = make();
     await second.start();
@@ -151,10 +152,31 @@ describe("app runtime on one Mac", () => {
     for (const n of established) for (const end of n.split("->")) expect(end).toMatch(loopback);
     expect(seenKeys.at(-1)).toBe("sk-test-fake-key");
     expect(statSync(join(root, "state", "credentials.json")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(root, "state", "hub-token.json")).mode & 0o777).toBe(0o600);
+    expect(typeof JSON.parse(readFileSync(join(root, "state", "hub-token.json"), "utf8")).token).toBe("string");
+    expect(readdirSync(join(root, "state")).filter((f) => f.startsWith("hub-token.json.bad-"))).toHaveLength(1);
+  });
+
+  it("a curate() still waiting when stop() runs resolves as skipped, not hung", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "app-model-"));
+    writeFileSync(join(dir, "model.onnx"), ""); // curation only needs the file to exist to be on
+    const s = createSupervisor({ stateDir: join(root, "state-curate"), wolvesDir: join(root, "Wolves2"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl, embedModelDir: dir });
+    made.push(s);
+    await s.start();
+    const p = s.curate();
+    await s.stop();
+    expect(await p).toEqual({ skipped: "hubd stopped" });
+    rmSync(dir, { recursive: true, force: true });
+  }, 120_000);
+
+  it.sequential("curate() without an embedding model skips with a reason (no model dir was given: curation is off, nothing is called)", async () => {
+    if (!second) throw new Error("the restart test did not produce a running supervisor");
+    expect(await second.curate()).toEqual({ skipped: "no embedding model" });
   });
 
   it.sequential("leaves no child process after stop", async () => {
     await second?.stop();
     for (const pid of secondPids) expect(alive(pid)).toBe(false);
+    expect(await second?.curate()).toEqual({ skipped: "hubd is not running" });
   }, 60_000);
 });

@@ -33,6 +33,7 @@ const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 const { createSupervisor } = require("./supervisor.cjs");
+const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, createTray } = require("./tray.cjs");
 
@@ -105,6 +106,38 @@ async function startRuntime() {
 	});
 	await supervisor.start();
 	log(`runtime up: workerd ${supervisor.urls.workerd} hubd ${supervisor.urls.hubd}`);
+	startCurationGate(supervisor);
+}
+
+/**
+ * KB curation gate (work-wolfpack-F16FFQL): once a minute, ask curator-gate.cjs whether a window may run (10 min idle, 60 min since the
+ * last, not on battery below 30%). Battery percent comes from `pmset -g batt`, read only while on battery. Stops with the supervisor.
+ */
+let curationGateTimer = null;
+function startCurationGate(sup) {
+	if (curationGateTimer) clearInterval(curationGateTimer); // never more than one gate
+	const { powerMonitor } = require("electron");
+	const { execFile } = require("node:child_process");
+	let lastRunAt = null;
+	let busy = false;
+	const percent = () => new Promise((resolve) => execFile("/usr/bin/pmset", ["-g", "batt"], { timeout: 5000 }, (err, out) => resolve(err ? null : parseBatteryPercent(out))));
+	const timer = (curationGateTimer = setInterval(async () => {
+		if (busy || supervisor !== sup) return clearInterval(timer);
+		busy = true;
+		try {
+			const onBattery = powerMonitor.isOnBatteryPower();
+			const gate = { idleSeconds: powerMonitor.getSystemIdleTime(), onBattery, batteryPercent: onBattery ? await percent() : null, lastRunAt, now: Date.now() };
+			if (!shouldCurate(gate)) return;
+			lastRunAt = gate.now;
+			const r = await sup.curate();
+			log(`curation: ${r.line ?? `skipped (${r.skipped})`}`);
+		} catch (e) {
+			log(`curation: failed ${e?.message ?? e}`);
+		} finally {
+			busy = false;
+		}
+	}, 60_000));
+	timer.unref();
 }
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race

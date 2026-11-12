@@ -341,6 +341,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   if (socket !== undefined) assertSocketPath(socket);
   const listen = socket !== undefined ? { socketPath: socket, ...(socketMode !== undefined ? { socketMode } : {}) } : { port: args.port, host: args.host };
   const curator = curatorFromEnv(env);
+  const windowMax = curatorWindowMax(env); // parsed before the port is bound: a bad value must fail the start
   if (curator.enabled && args.command === "dev") throw new Error("HUBD_CURATOR is not allowed in dev mode (a snapshot must never run the sweep)");
   const hub = await createHubServer({ dataDir, ...listen, curator, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
@@ -352,7 +353,56 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  // Opt-in (the desktop app sets it, with HUBD_CURATOR_POLL_MS=0): SIGUSR2 runs one bounded curation window. Unset: no handler, hubd as before.
+  // SIGUSR2 is POSIX-only (macOS, Linux). A loopback route could replace the signal later.
+  // A SIGUSR2 with no handler kills the process, so the handler must exist whenever the sender may signal: the desktop
+  // supervisor's `curatorOn` (model.onnx present) and this registration (windowMax > 0 && curator.enabled) use the same inputs.
+  if (windowMax > 0 && curator.enabled) process.on("SIGUSR2", makeWindowHandler(() => hub.runCuratorOnce(), windowMax, log));
   return hub;
+}
+
+/** The SIGUSR2 handler: one window at a time; a signal while one runs logs "skipped: busy" and does nothing else. */
+export function makeWindowHandler(runOnce: () => Promise<WindowTick>, max: number, log: (m: string) => void): () => void {
+  let inWindow = false;
+  return () => {
+    if (inWindow) {
+      log("curator window skipped: busy");
+      return;
+    }
+    inWindow = true;
+    void runCuratorWindow(runOnce, max, log).finally(() => { inWindow = false; });
+  };
+}
+
+/** HUBD_CURATOR_WINDOW_MAX: the most curator ticks (one contribution each) one SIGUSR2 window runs. 0 / unset = no signal handler. */
+export function curatorWindowMax(env: NodeJS.ProcessEnv): number {
+  const raw = env.HUBD_CURATOR_WINDOW_MAX?.trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`HUBD_CURATOR_WINDOW_MAX must be a whole number >= 0 (got ${JSON.stringify(raw)})`);
+  return n;
+}
+
+type WindowTick = { outcome: string; processed: number; remaining: number } | undefined;
+
+/** Up to `max` ticks, stopping early when the lane is empty or a tick cannot run. Logs one `curator window done` line the supervisor waits for. */
+export async function runCuratorWindow(tick: () => Promise<WindowTick>, max: number, log: (m: string) => void): Promise<void> {
+  let processed = 0;
+  let remaining = 0;
+  let why = "limit";
+  try {
+    for (let i = 0; i < max; i++) {
+      const r = await tick();
+      if (!r) { why = "off"; break; }
+      processed += r.processed;
+      remaining = r.remaining;
+      if (r.outcome !== "ran") { why = r.outcome; break; }
+      if (r.remaining === 0) { why = "empty"; break; }
+    }
+  } catch (e) {
+    why = `error: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
+  }
+  log(`curator window done: processed=${processed} remaining=${remaining} stop=${why}`);
 }
 
 /**

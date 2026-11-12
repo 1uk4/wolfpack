@@ -95,6 +95,10 @@ extraResources:
     to: server
     filter:
       - "standalone/**/*"
+  # The app's own runtime: hubd, workerd, wolfd and the memory extension (node apps/desktop/scripts/build-runtime.mjs),
+  # started by electron/supervisor.cjs under Electron's own Node.
+  - from: runtime
+    to: runtime
   # Licence files travel with the app (AGPL LICENSE, NOTICE, third-party texts).
   - from: ../../LICENSE
     to: LICENSE

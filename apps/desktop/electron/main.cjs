@@ -32,6 +32,8 @@ const net = require("node:net");
 const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
+const { createSupervisor } = require("./supervisor.cjs");
+const { consoleEnv } = require("./console-env.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -80,6 +82,26 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let serverProcess = null;
+let supervisor = null; // hubd + workerd + wolfd, this Mac only (supervisor.cjs)
+
+/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). First-run API key: WOLFPACK_APP_API_KEY (the wizard replaces this). */
+async function startRuntime() {
+	// A dev run from the repo must not touch the owner's real folders: on a case-insensitive Mac the packaged default ~/Wolves IS the live ~/wolves.
+	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
+		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
+	}
+	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
+	supervisor = createSupervisor({
+		stateDir: process.env.WOLFPACK_APP_HOME || app.getPath("userData"),
+		wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
+		runtimeDir,
+		nodeBin: process.execPath,
+		apiKey: process.env.WOLFPACK_APP_API_KEY || undefined,
+		log: (l) => log(`runtime: ${l}`),
+	});
+	await supervisor.start();
+	log(`runtime up: workerd ${supervisor.urls.workerd} hubd ${supervisor.urls.hubd}`);
+}
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race
 // in an event handler): the window + child server are the product, and
@@ -135,14 +157,15 @@ function log(line) {
 	}
 }
 
-function startServer(port) {
+function startServer(port, extraEnv = {}, { appRuntime = false } = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			process.execPath,
 			[serverEntry()],
 			{
 				cwd: path.dirname(serverEntry()),
-				env: {
+				// App runtime: allowlisted env (console-env.cjs), so nothing from the owner's shell can point the console off this Mac.
+				env: appRuntime ? consoleEnv(process.env, { PORT: String(port), WOLFPACK_DATA_DIR: DATA_DIR(), WOLFPACK_AUTH_FILE: AUTH_FILE(), ...extraEnv }) : {
 					...process.env,
 					ELECTRON_RUN_AS_NODE: "1",
 					NODE_ENV: "production",
@@ -153,6 +176,7 @@ function startServer(port) {
 					// (no env injection anymore: a spawn-time copy would shadow every
 					// settings-page key change until restart; env wins over file).
 					WOLFPACK_AUTH_FILE: AUTH_FILE(),
+					...extraEnv,
 				},
 				stdio: ["ignore", "pipe", "pipe"],
 			},
@@ -534,9 +558,19 @@ async function main() {
 	});
 
 	// The child must not outlive us — cover every quit path.
-	app.on("before-quit", killServer);
+	app.on("before-quit", (e) => {
+		killServer();
+		if (!supervisor) return;
+		// Quit stops every child: hold the quit until SIGTERM/SIGKILL are done.
+		// `supervisor` is nulled first, so the app.quit() below re-enters this handler, finds no supervisor and lets the quit through (the second-quit case).
+		e.preventDefault();
+		const s = supervisor;
+		supervisor = null;
+		s.stop().finally(() => app.quit());
+	});
 	process.on("exit", killServer);
 	process.on("SIGHUP", killServer);
+	process.on("SIGTERM", () => app.quit()); // quit cleanly: before-quit stops the children
 
 	await app.whenReady();
 
@@ -555,7 +589,22 @@ async function main() {
 	} else if (!devUrl) {
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
-		await startServer(new URL(url).port);
+		try {
+			await startRuntime();
+		} catch (err) {
+			// A quit while starting is a normal quit: no dialog.
+			if (err?.stopped) {
+				log("runtime start cancelled by quit");
+				return;
+			}
+			// No blank window: say what failed, then quit (before-quit cleans up whatever did start).
+			log(`runtime failed: ${err?.stack ?? err}`);
+			dialog.showErrorBox("Wolfpack could not start", String(err?.message ?? err));
+			app.quit();
+			return;
+		}
+		// The console talks to the app's own workerd only (loopback); no hub URL/token yet (ticket: hub token for work reads).
+		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd }, { appRuntime: true });
 		await waitUntilUp(url);
 		log(`server up: ${url}`);
 	} else {

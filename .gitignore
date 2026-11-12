@@ -56,3 +56,6 @@ dist-release/
 
 # tracer --console output (screenshots)
 infra/tracer/out/
+
+# Desktop app runtime bundles (apps/desktop/scripts/build-runtime.mjs)
+/apps/desktop/runtime/

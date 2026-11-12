@@ -12,7 +12,7 @@
 import type { HealthLink, HealthSnapshotView } from "@/src/core/pack/pack-health-view";
 import type { HostInfo } from "@/src/core/pack/pack-hosts";
 
-export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac", "two-hosts-mac-view", "hub-view-host-offline", "hub-unreachable-last-seen"] as const;
+export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac", "two-hosts-mac-view", "hub-view-host-offline", "hub-unreachable-last-seen", "workerd-down-unadvertised"] as const;
 export type HealthFixture = (typeof HEALTH_FIXTURES)[number];
 
 const iso = (msAgo: number, now: number) => new Date(now - msAgo).toISOString();
@@ -70,13 +70,16 @@ const macFromHub = (now: number, over: Partial<HealthLink> = {}): HealthLink[] =
 	hubRow("wolfd@1uk4", "luka-air", now, { via: "hub-link@luka-air", ...over }),
 	hubRow("wolfd@ada", "luka-air", now, { via: "hub-link@luka-air", ...over }),
 ];
-const SFO_HOSTS = (extra: HostInfo[] = []): HostInfo[] => [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01" }, { id: "luka-air", label: "Mac", isThisConsole: false, hubId: "luka-air" }, ...extra];
+/** What a server's worker advertises (restart wolves and the background service) and what the Mac app advertises (wolves only). */
+const SERVER_COMMANDS = ["wolves.restart", "workerd.restart", "logs.fetch"];
+const MAC_COMMANDS = ["wolves.restart", "logs.fetch"];
+const SFO_HOSTS = (extra: HostInfo[] = []): HostInfo[] => [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: SERVER_COMMANDS }, { id: "luka-air", label: "Mac", isThisConsole: false, hubId: "luka-air", commands: MAC_COMMANDS }, ...extra];
 
 /** The snapshot for a fixture, or null for "unreachable" (the console server itself is not answering). */
 export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapshotView | null {
 	let links = base(now);
 	const at = (msAgo: number) => iso(msAgo, now);
-	let hosts: HostInfo[] = [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux" }];
+	let hosts: HostInfo[] = [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: SERVER_COMMANDS }];
 	switch (name) {
 		case "ok":
 			links = [...patch(links, "wolfd@hal", { hubStatus: "online" }), ...macFromHub(now)];
@@ -117,6 +120,11 @@ export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapsho
 			links = patch(links, "workerd-wolves", { status: "down", error: "refused", responseMs: 1, lagMs: null, version: null, uptimeS: null, lastOkAt: at(60_000), history: [{ status: "ok", at: at(3_600_000) }, { status: "down", at: at(55_000) }] });
 			links = patch(links, "wolfd@hal", { status: "unknown", error: "workerd_unavailable", history: [{ status: "ok", at: at(3_600_000) }, { status: "unknown", at: at(55_000) }] });
 			break;
+		case "workerd-down-unadvertised":
+			// Same as unknown-wolf (the background service is down) but the machine advertised no workerd.restart: no Restart button, a hint instead.
+			links = patch(links, "workerd-wolves", { status: "down", error: "refused", responseMs: 1, lagMs: null, version: null, uptimeS: null, lastOkAt: at(60_000), history: [{ status: "ok", at: at(3_600_000) }, { status: "down", at: at(55_000) }] });
+			hosts = [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: ["wolves.restart", "logs.fetch"] }];
+			break;
 		case "back":
 			links = patch(links, "hubd", { uptimeS: 40, history: [{ status: "down", at: at(120_000) }, { status: "restarting", at: at(90_000) }, { status: "recovering", at: at(30_000) }, { status: "ok", at: at(1_000) }], lastRestart: { at: at(90_000), ok: true } });
 			break;
@@ -145,8 +153,8 @@ export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapsho
 			const merged = mac.map((l) => (l.kind === "workerd" ? { ...l, hubPresence: "online" as const } : l.kind === "wolfd" ? { ...l, hubStatus: "online" as const } : l));
 			merged.push(hubRow("hub-link@sfo-01", "sfo-01", now), hubRow("wolfd@hal", "sfo-01", now, { via: "hub-link@sfo-01" }));
 			const newer: HostInfo[] = [
-				{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin", hubId: "luka-air" },
-				{ id: "sfo-01", label: "sfo-01", isThisConsole: false, hubId: "sfo-01" },
+				{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin", hubId: "luka-air", commands: MAC_COMMANDS },
+				{ id: "sfo-01", label: "sfo-01", isThisConsole: false, hubId: "sfo-01", commands: SERVER_COMMANDS },
 			];
 			return { checkedAt: at(2_000), intervalMs: 5000, links: merged.filter((l) => !(l.id === "wolfd@hal" && l.source !== "hub")), hosts: newer, actions: { systemd: false, rollback: [] } };
 		}

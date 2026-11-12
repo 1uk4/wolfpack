@@ -100,6 +100,10 @@ export * from "./settings/wolf-settings-form.ts";
 // pack-sections.ts: the Pack panel sections, badges and entry summary. Pure.
 export * from "./pack/pack-sections.ts";
 export type { Tone } from "./pack/pack-health-view.ts";
+export { ageText } from "./pack/pack-health-view.ts";
+export { groupByHost } from "./pack/pack-hosts.ts";
+// machine-card.ts: the Machines section's card rules. Pure.
+export * from "./pack/machine-card.ts";
 export * from "./pack/pack-devices.ts";
 // machine-commands.ts: the browser client for the hub command channel (Machines and Keys sections).
 export * from "./pack/machine-commands.ts";

@@ -10,7 +10,7 @@
  * (that is how the pack's health stays reachable) and Domains mounts today's Domains UI unchanged.
  */
 import type { ComponentType } from "react";
-import { MachinesBody } from "@/components/pack/pack-health";
+import { MachinesSection } from "@/components/pack/pack-machines";
 import { DevicesBody } from "@/components/pack/pack-devices";
 import { DomainsTab } from "@/components/pack/pack-domains";
 import { ThisDeviceBody } from "@/components/pack/pack-this-device";
@@ -26,7 +26,7 @@ function Placeholder({ id, title, task }: { id: PackSectionId; title: string; ta
 }
 
 export const PACK_SECTION_BODIES: Record<PackSectionId, ComponentType> = {
-	machines: MachinesBody,
+	machines: MachinesSection,
 	devices: DevicesBody,
 	wolves: () => <Placeholder id="wolves" title="Wolves" task="work-wolfpack-eE5FKDy" />,
 	domains: DomainsTab,

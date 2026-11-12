@@ -13,6 +13,25 @@ function windowAllClosedAction({ appRuntime, platform }) {
 	return platform === "darwin" ? "stay" : "quit";
 }
 
+/** The Open-at-login state, shared by the tray checkbox and the console Settings switch: { openAtLogin, needsApproval }. */
+function loginItemState(app) {
+	const login = app.getLoginItemSettings();
+	return { openAtLogin: !!login.openAtLogin, needsApproval: login.status === "requires-approval" };
+}
+
+/** Turn Open at login on or off. macOS ignores `args` here (SMAppService); a login start is detected by main.cjs via wasOpenedAtLogin. Returns the state read back, plus `error` if the call threw. */
+function setLoginItem(app, on, log) {
+	let error;
+	try {
+		app.setLoginItemSettings({ openAtLogin: !!on });
+		log?.(`open at login: ${on ? "on" : "off"}`);
+	} catch (err) {
+		error = String(err?.message ?? err);
+		log?.(`open at login failed: ${error}`);
+	}
+	return { ...loginItemState(app), ...(error ? { error } : {}) };
+}
+
 /** Creates the tray. `getStatus()` -> { running }, `openWindow()`, `quit()`. Returns { refresh, destroy }: call refresh() on status changes; the menu is rebuilt only when running or openAtLogin changed. */
 function createTray({ app, Tray, Menu, nativeImage, getStatus, openWindow, quit, log }) {
 	const icon = nativeImage.createFromPath(path.join(__dirname, "tray", "trayTemplate.png"));
@@ -23,8 +42,8 @@ function createTray({ app, Tray, Menu, nativeImage, getStatus, openWindow, quit,
 
 	function refresh() {
 		const running = getStatus().running;
-		const login = app.getLoginItemSettings();
-		const needsApproval = login.status === "requires-approval";
+		const login = loginItemState(app);
+		const needsApproval = login.needsApproval;
 		const key = JSON.stringify([running, login.openAtLogin, needsApproval]);
 		if (key === shown) return;
 		shown = key;
@@ -38,13 +57,7 @@ function createTray({ app, Tray, Menu, nativeImage, getStatus, openWindow, quit,
 					type: "checkbox",
 					checked: login.openAtLogin,
 					click: (item) => {
-						// macOS ignores `args` here (SMAppService); a login start is detected by main.cjs via wasOpenedAtLogin.
-						try {
-							app.setLoginItemSettings({ openAtLogin: item.checked });
-							log?.(`open at login: ${item.checked ? "on" : "off"}`);
-						} catch (err) {
-							log?.(`open at login failed: ${err?.message ?? err}`);
-						}
+						setLoginItem(app, item.checked, log);
 						shown = ""; // always rebuild: the checkbox may have flipped without the setting taking
 						refresh();
 					},
@@ -61,4 +74,4 @@ function createTray({ app, Tray, Menu, nativeImage, getStatus, openWindow, quit,
 	return { refresh, destroy: () => tray.destroy() };
 }
 
-module.exports = { windowAllClosedAction, createTray };
+module.exports = { windowAllClosedAction, createTray, loginItemState, setLoginItem };

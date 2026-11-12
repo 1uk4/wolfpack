@@ -39,6 +39,19 @@ const freePort = () =>
 		});
 	});
 
+/** The port picked last time when it is still free (a restart keeps the console server's URLs valid), else a new free port. */
+const reuseOrFreePort = async (prev) => {
+	if (prev) {
+		const ok = await new Promise((resolve) => {
+			const srv = net.createServer();
+			srv.once("error", () => resolve(false));
+			srv.listen(prev, "127.0.0.1", () => srv.close(() => resolve(true)));
+		});
+		if (ok) return prev;
+	}
+	return freePort();
+};
+
 const tier = (model) => ({ model, modelSource: "default", provider: "anthropic", piModel: `anthropic/${model}` });
 
 /** Sonnet answers the chat; Haiku does memory and curation work. */
@@ -207,8 +220,8 @@ function createSupervisor(opts) {
 		child.on("exit", (code, sig) => {
 			rec.exited = true;
 			log(`${name} exited (code=${code} signal=${sig})`);
-			children.delete(name);
-			if (name === "workerd") wolfUp = false;
+			if (children.get(name) === rec) children.delete(name); // a restarted child must not be dropped by its predecessor's late exit
+			if (name === "workerd" && !children.has("workerd")) wolfUp = false;
 			if (name === "hubd") endCurate("hubd stopped");
 			changed();
 		});
@@ -272,8 +285,8 @@ function createSupervisor(opts) {
 	async function bringUp(keyFile) {
 		const creds = readCredentials(keyFile);
 		secret = creds.ANTHROPIC_API_KEY ?? "";
-		const hubPort = await freePort();
-		const workerdPort = await freePort();
+		const hubPort = await reuseOrFreePort(sup.ports.hubd);
+		const workerdPort = await reuseOrFreePort(sup.ports.workerd);
 		sup.ports = { hubd: hubPort, workerd: workerdPort };
 		sup.urls = { hubd: `http://127.0.0.1:${hubPort}`, workerd: `http://127.0.0.1:${workerdPort}` };
 		// hubd: the app's own hub. Its curator timer is OFF (HUBD_CURATOR_POLL_MS=0): the gate in main.cjs decides when, and
@@ -302,11 +315,20 @@ function createSupervisor(opts) {
 			}),
 		);
 		await until(healthy(sup.urls.hubd), "hubd", hub);
-		const wolfHubToken = await redeemHubToken(sup.urls.hubd, pairCode);
-		hubToken = wolfHubToken;
+		hubToken = await redeemHubToken(sup.urls.hubd, pairCode);
+		await startWorkerd();
+		wolfUp = true;
+		changed();
+		startPoll();
+	}
+
+	/** Launch workerd (it supervises wolfd) on `sup.ports.workerd` with the key and hub token as they are now. */
+	async function startWorkerd() {
+		const wolfHubToken = hubToken;
 		// workerd supervises wolfd through the shim. The wolfd env (incl. the key) is workerd's env.
 		// v1: the key stays in wolfd's env, so the wolf's shell tool can read it. It is the user's own key on their own Mac.
 		const shim = ensureShim(stateDir);
+		const workerdPort = sup.ports.workerd;
 		const env = base({
 			WOLFPACK_APP_NODE: nodeBin,
 			WOLFPACK_APP_WOLFD: path.join(runtimeDir, "wolfd", "wolfd.mjs"),
@@ -326,9 +348,56 @@ function createSupervisor(opts) {
 		const wd = launch("workerd", "workerd.mjs", ["--wolves", wolvesDir, "--port", String(workerdPort), "--host", "127.0.0.1", "--wolfd", shim.command], env, shim.dir);
 		await until(healthy(sup.urls.workerd), "workerd", wd);
 		await until(async () => ((await (await fetch(`${sup.urls.workerd}/v1/wolves`)).json()).wolves ?? []).some((w) => w.status === "online"), "the default wolf did not come online", wd);
+	}
+
+	/**
+	 * Restart the wolf ("wolfd") so it picks up a changed credentials.json: workerd owns wolfd and hands it its own env, so workerd is
+	 * relaunched (same port, hubd untouched) with the key read afresh. Anything else is refused.
+	 */
+	let restarting = null;
+	sup.restart = (name) => {
+		if (name !== "wolfd") return Promise.reject(new Error(`cannot restart ${name}`));
+		// One at a time, in order: each call waits for the one before it, then reads credentials.json fresh and reports its own result.
+		const run = (restarting ?? Promise.resolve()).catch(() => {}).then(restartWolf);
+		restarting = run;
+		const clear = () => {
+			if (restarting === run) restarting = null;
+		};
+		run.then(clear, clear);
+		return run;
+	};
+
+	async function restartWolf() {
+		if (stopping || !children.has("hubd")) throw new Error("the app is not running");
+		wolfUp = false;
+		changed();
+		const wd = children.get("workerd");
+		const pids = new Set([...(wd ? [wd.pid] : []), ...wolfdPids()]);
+		wd?.kill("SIGTERM");
+		const end = Date.now() + 8000;
+		while (Date.now() < end && [...pids].some(alive)) await new Promise((r) => setTimeout(r, 100));
+		for (const p of pids) if (alive(p)) try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
+		secret = readCredentials(path.join(stateDir, KEY_FILE)).ANTHROPIC_API_KEY ?? "";
+		const prev = sup.ports.workerd;
+		const port = await reuseOrFreePort(prev);
+		sup.ports = { ...sup.ports, workerd: port };
+		sup.urls = { ...sup.urls, workerd: `http://127.0.0.1:${port}` };
+		try {
+			await startWorkerd();
+		} catch (e) {
+			// never leave a half-started workerd, or the wolfd it spawned, behind
+			const left = new Set([...(children.get("workerd") ? [children.get("workerd").pid] : []), ...wolfdPids()]);
+			for (const p of left) try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
+			throw e;
+		}
 		wolfUp = true;
 		changed();
-		startPoll();
+		if (port !== prev) {
+			log(`workerd moved from port ${prev} to ${port} on restart; the console still points at the old one`);
+			const e = new Error("Restart the app to finish.");
+			e.code = "PORT_MOVED";
+			throw e;
+		}
 	}
 
 	// Slow, unref'd check that the wolf is still online (workerd restarts a dead wolfd by itself); the menu reads the cached value.

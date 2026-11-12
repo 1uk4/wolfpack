@@ -174,6 +174,25 @@ describe("app runtime on one Mac", () => {
     expect(await second.curate()).toEqual({ skipped: "no embedding model" });
   });
 
+  it.sequential("restart(\"wolfd\") keeps the ports and hubd, hands the new key to the wolf, and stays running after the old workerd's late exit", async () => {
+    const s = createSupervisor({ stateDir: join(root, "state-restart"), wolvesDir: join(root, "Wolves3"), runtimeDir, nodeBin: nodePath, apiKey: "sk-old-key", modelBaseUrl: fakeUrl });
+    made.push(s);
+    await s.start();
+    const ports = { ...s.ports };
+    const hubPid = s.allPids()[0]; // hubd is launched first
+    writeFileSync(join(root, "state-restart", "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-new-key" }), { mode: 0o600 });
+    const first = s.restart("wolfd");
+    writeFileSync(join(root, "state-restart", "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-newer-key" }), { mode: 0o600 });
+    await Promise.all([first, s.restart("wolfd")]); // calls run one after the other, each reading the key afresh
+    expect(s.ports).toEqual(ports);
+    expect(s.allPids()[0]).toBe(hubPid);
+    await new Promise((r) => setTimeout(r, 500)); // the old workerd's exit event may land after the new one is up
+    expect(s.status().running).toBe(true);
+    expect(await say(s.urls.workerd, "hello again")).toContain("FAKE-REPLY-OK");
+    expect(seenKeys.at(-1)).toBe("sk-newer-key");
+    await expect(s.restart("hubd")).rejects.toThrow(/cannot restart hubd/);
+  }, 180_000);
+
   it.sequential("leaves no child process after stop", async () => {
     await second?.stop();
     for (const pid of secondPids) expect(alive(pid)).toBe(false);

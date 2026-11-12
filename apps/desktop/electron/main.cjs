@@ -88,6 +88,7 @@ let serverProcess = null;
 let supervisor = null; // hubd + workerd + wolfd, this Mac only (supervisor.cjs)
 let appRuntime = false; // true once the app runs its own services (menu-bar app); remote/dev modes stay false
 let tray = null;
+let updateDialogOpen = false; // the failed-update dialog is showing: nothing is running, so a quit just exits
 let systemShutdown = false; // set by powerMonitor "shutdown": before-quit must not hold the quit
 
 let chatWolf = "wolf"; // the wolf whose chat the window opens on (chosen in the setup wizard)
@@ -213,17 +214,47 @@ function runWizard(opts) {
 	});
 }
 
+/** work-wolfpack-u6Z4dRY: back up, migrate, restore on failure (electron/migrate.cjs). On failure: plain-words dialog, then quit; throws {stopped} so no service starts. */
+async function safeUpdate(stateDir, wolvesDir) {
+	const { runUpdate } = require("./migrate.cjs");
+	const r = await runUpdate({ stateDir, wolvesDir, version: app.getVersion(), migrations: require("./migrations/index.cjs"), trash: (p) => shell.trashItem(p), log: (l) => log(l) });
+	if (r.ok) return;
+	log(`update failed (${r.stage}): ${r.error}`);
+	const short = String(r.error).slice(0, 300);
+	const message = r.restored
+		? "Wolfpack couldn't finish updating, so it put your data back the way it was."
+		: r.stage === "backup"
+			? "Wolfpack couldn't finish updating, and nothing was changed."
+			: "Wolfpack couldn't finish updating, and putting your data back also failed.";
+	const detail = `${r.restored || r.stage === "backup" ? "Your wolves are safe. " : "Your data is in the backup folder. "}Please send this to whoever gave you the app:\n\n${short}`;
+	log(`update dialog: ${message} ${detail.replace(/\n+/g, " ")}`);
+	updateDialogOpen = true;
+	let response;
+	try {
+		({ response } = await dialog.showMessageBox({ type: "error", message, detail, buttons: ["Show backup folder", "Quit"], defaultId: 1, cancelId: 1 }));
+	} finally {
+		updateDialogOpen = false;
+	}
+	if (response === 0) await shell.openPath(r.backupDir);
+	app.quit();
+	const e = new Error("update failed");
+	e.stopped = true;
+	throw e;
+}
+
 /** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
 async function startRuntime() {
 	// A dev run from the repo must not touch the owner's real folders: on a case-insensitive Mac the packaged default ~/Wolves IS the live ~/wolves.
 	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
 		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
 	}
-	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
 	const stateDir = process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+	const wolvesDir = process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves");
+	await safeUpdate(stateDir, wolvesDir); // first launch after an update: back up, migrate, or put the data back and quit
+	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
 	const opts = {
 		stateDir,
-		wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
+		wolvesDir,
 		runtimeDir,
 		nodeBin: process.execPath,
 		// Same override the harness honours (https or loopback http only); tests point it at a fake server.
@@ -738,6 +769,7 @@ async function main() {
 
 	// The child must not outlive us — cover every quit path.
 	app.on("before-quit", (e) => {
+		if (updateDialogOpen) return app.exit(0); // quit while the dialog is open: nothing was started, nothing to stop
 		killServer();
 		try { tray?.destroy(); } catch { /* already gone */ }
 		tray = null;
@@ -752,7 +784,7 @@ async function main() {
 	});
 	process.on("exit", killServer);
 	process.on("SIGHUP", killServer);
-	process.on("SIGTERM", () => app.quit()); // quit cleanly: before-quit stops the children
+	process.on("SIGTERM", () => (updateDialogOpen ? app.exit(0) : app.quit())); // quit cleanly: before-quit stops the children
 
 	await app.whenReady();
 

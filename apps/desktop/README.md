@@ -61,3 +61,11 @@ Both need Xcode 26+ (`actool` compiles `build/icon.icon`). `scripts/dist.mjs` se
 
 - There is no upgrade path from a pre-wizard build: the app has never been released, so nobody has one. Later layout changes go through the migrations in work-wolfpack-u6Z4dRY.
 - Reusing an existing `~/Wolves/<id>` keeps its old domains.
+
+## Updates and backups
+
+- Where: on the first launch after an update, the app backs up into a folder named `<state folder> Backup` next to the state folder (for the packaged app, `~/Library/Application Support/Wolfpack Console Backup`). Only the last backup is kept (`last/`); the folder and its subfolders are mode 0700.
+- Included: pack state (KB in `hub/`, credentials, `setup.json`, tokens) and, for each wolf, its `den/`, `agent/`, `session.sqlite` (with `-wal` and `-shm`, at the wolf root and in `den/`) and the other top-level files.
+- Excluded: workspaces, logs (`logs/`, `*.log`, `den/logs`), `scratch` and Electron caches.
+- A failed migration restores the backup and the app says so instead of starting. The half-migrated data is kept in a `failed-*` folder on purpose, for support; delete it by hand when done. An `in-progress.json` file in the backup folder means an update was interrupted: the next launch restores from `last/` and reports a failed update. `failed-*`, `old-*`, `superseded-*` and `in-progress.stale-*` items in the backup folder accumulate on purpose (nothing is hard-deleted); move them to the Trash by hand when you no longer need them.
+- A downgrade (data newer than the app) runs nothing and changes nothing.

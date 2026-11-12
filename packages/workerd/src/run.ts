@@ -18,6 +18,7 @@ import { WorkerRelay } from "./relay.js";
 import { KbSync, type KbSyncOptions } from "./kb-sync.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 import { ensureDirectToken } from "./direct-token.js";
+import { loadOrCreateMachineKey } from "./machine-key.js";
 
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Directory holding `<wolf>/wolf.yaml`. Default: ~/wolves/local. */
@@ -230,6 +231,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       send: (entries) => link!.sendFrame({ t: "report", entries }),
       enabled: () => inventoryOn,
     });
+    // The machine key is created on first start; the public half goes in every hello.
+    const machineKey = await loadOrCreateMachineKey(opts.configDir ?? workerdConfigDir());
     const commands = createCommandRunner({
       log,
       // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
@@ -250,6 +253,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     link = new HubLink({
       ...hubCfg,
       commands: () => commands.supported(),
+      pubkey: () => machineKey.publicKey,
       onCommand: (c) => commands.handle(c),
       onCommandSent: (c, r) => commands.afterSend(c, r),
       kbRevisions: () => kbSync!.revisions(),

@@ -44,6 +44,8 @@ export interface HubLinkOptions {
   onRetired?: (names: string[]) => void;
   /** Command kinds this machine can run, advertised in hello. Absent or empty = none (the hub answers not_sent_unsupported). */
   commands?: () => CommandKind[];
+  /** The machine's public key (base64url), sent in hello for sealed key delivery. Absent = none. */
+  pubkey?: () => string | undefined;
   /** A `cmd` frame arrived from the hub. The returned result is sent back as `cmd.result`; a throw is answered `internal`. */
   onCommand?: (cmd: LinkCmd) => Promise<LinkCmdResult>;
   /** The cmd.result was written to the socket (or could not be). workerd.restart exits from here. */
@@ -317,7 +319,7 @@ export class HubLink {
       if (this.ws !== ws) return;
       const wolves = this.o.wolves();
       this.sentWolves = new Map(wolves.map((w) => [w.name, JSON.stringify(w.domains)]));
-      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {}, ...(this.o.commands?.().length ? { commands: this.o.commands() } : {}) }));
+      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {}, ...(this.o.commands?.().length ? { commands: this.o.commands() } : {}), ...(this.o.pubkey?.() ? { pubkey: this.o.pubkey!() } : {}) }));
       this.welcomeTimer = setTimeout(() => {
         if (this.ws !== ws) return;
         this.log("no welcome from the hub in time; reconnecting");

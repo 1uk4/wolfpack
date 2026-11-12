@@ -7,6 +7,7 @@ import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
 import { canRestartSelf, createCommandRunner, restartWolves, type KeyHandler, type WolfControl } from "./commands.js";
 import { createKeyStore, readKeyPresence } from "./key-store.js";
+import { migrateKeys, type MigrateOptions } from "./key-migrate.js";
 import { KeyChecker, type FetchLike } from "@wolfpack/protocol";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
@@ -33,6 +34,8 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
    * sfo-01: the shared /var/lib/workerd-wolves/keys.env (0640, group-readable). Dev stack: set by scripts/dev-stack.mjs inside the sandbox.
    */
   keyFile?: string;
+  /** Enable the one-time copy of keys from these explicit sources into the key file (needs keyFile). Absent = migration off. */
+  keyMigration?: Pick<MigrateOptions, "wolfEnvFiles" | "serviceEnvFiles" | "authJson">;
   /** Mode of the key file (default 0600; sfo-01 uses 0o640 with a shared group). Env WORKERD_KEY_FILE_MODE (octal). */
   keyFileMode?: number;
   port?: number;
@@ -258,6 +261,11 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       status: async (n) => ({ wasActive: supervisor.status().some((s) => s.name === n && s.state === "online"), midReply: await supervisor.wolfBusy(n) }),
       restart: async (n) => ((await supervisor.restartWolf(n)).unconfirmed ? { unconfirmed: true } : undefined),
     };
+    // One-time copy of existing keys into the Pack file. Off unless explicitly enabled; sources are only read.
+    if (opts.keyMigration && opts.keyFile) {
+      const m = migrateKeys({ ...opts.keyMigration, enabled: true, keyFile: opts.keyFile, marker: join(cfgDir, "keys-migrated.json"), mode: opts.keyFileMode });
+      if (m.ran) log(`[workerd] key migration ran; copied slots: ${m.copied.join(", ") || "none"}`);
+    }
     // An explicit keys handler wins; otherwise an explicit keyFile gets the file store. Neither = key.set/remove are not advertised.
     const keys: KeyHandler | undefined =
       opts.keys ??

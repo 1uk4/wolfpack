@@ -20,6 +20,10 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
         "link-only": { type: "boolean" },
         announce: { type: "string", multiple: true },
         "key-file": { type: "string" },
+        "migrate-keys": { type: "boolean" },
+        "migrate-wolf-env-file": { type: "string", multiple: true },
+        "migrate-env-file": { type: "string", multiple: true },
+        "migrate-auth-json": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     }));
@@ -48,9 +52,20 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
   const keyFile = values["key-file"] || env.WORKERD_KEY_FILE?.trim() || undefined;
   const modeRaw = env.WORKERD_KEY_FILE_MODE?.trim();
   if (modeRaw && !/^[0-7]{3,4}$/.test(modeRaw)) return { error: `invalid WORKERD_KEY_FILE_MODE ${JSON.stringify(modeRaw)} (expected octal like 600 or 640)` };
+  // One-time copy of existing keys into the key file. Off unless asked for; the sources are explicit (read only, never changed).
+  const migrate = values["migrate-keys"] || /^(1|true|yes|on)$/i.test(env.WORKERD_MIGRATE_KEYS ?? "");
+  if (migrate && !keyFile) return { error: "--migrate-keys needs a key file: --key-file or WORKERD_KEY_FILE" };
+  const list = (flag: string[] | undefined, envVal: string | undefined): string[] | undefined => {
+    const all = flag?.length ? flag : (envVal ?? "").split(":").filter(Boolean);
+    return all.length ? all : undefined;
+  };
+  const wolfEnvFiles = list(values["migrate-wolf-env-file"], env.WORKERD_MIGRATE_WOLF_ENV_FILES);
+  const serviceEnvFiles = list(values["migrate-env-file"], env.WORKERD_MIGRATE_ENV_FILES);
+  const authJson = values["migrate-auth-json"] || env.WORKERD_MIGRATE_AUTH_JSON?.trim() || undefined;
   return {
     opts: {
       ...(keyFile ? { keyFile } : {}),
+      ...(migrate ? { keyMigration: { ...(wolfEnvFiles ? { wolfEnvFiles } : {}), ...(serviceEnvFiles ? { serviceEnvFiles } : {}), ...(authJson ? { authJson } : {}) } } : {}),
       ...(modeRaw ? { keyFileMode: parseInt(modeRaw, 8) } : {}),
       wolvesDir: values.wolves,
       port,

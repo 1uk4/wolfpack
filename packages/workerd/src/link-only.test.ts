@@ -131,6 +131,14 @@ describe("workerd CLI args", () => {
     expect(parseServeArgs([], { WORKERD_KEY_FILE: "/k/env.keys" })).toMatchObject({ opts: { keyFile: "/k/env.keys" } });
     expect(parseServeArgs(["--key-file", "/k/flag.keys"], { WORKERD_KEY_FILE: "/k/env.keys" })).toMatchObject({ opts: { keyFile: "/k/flag.keys" } });
   });
+  it("key migration is off unless --migrate-keys or WORKERD_MIGRATE_KEYS=1, needs a key file, and takes explicit sources", () => {
+    expect((parseServeArgs(["--key-file", "/k"], {}) as { opts: { keyMigration?: unknown } }).opts.keyMigration).toBeUndefined();
+    expect(parseServeArgs(["--migrate-keys"], {})).toHaveProperty("error");
+    expect(parseServeArgs(["--key-file", "/k", "--migrate-keys", "--migrate-env-file", "/a.env", "--migrate-env-file", "/b.env", "--migrate-auth-json", "/auth.json"], {})).toMatchObject({
+      opts: { keyMigration: { serviceEnvFiles: ["/a.env", "/b.env"], authJson: "/auth.json" } },
+    });
+    expect(parseServeArgs([], { WORKERD_KEY_FILE: "/k", WORKERD_MIGRATE_KEYS: "1", WORKERD_MIGRATE_ENV_FILES: "/a.env:/b.env" })).toMatchObject({ opts: { keyMigration: { serviceEnvFiles: ["/a.env", "/b.env"] } } });
+  });
   it("--announce without link-only is an error", () => {
     expect(parseServeArgs(["--announce", "hal"], {})).toHaveProperty("error");
   });
